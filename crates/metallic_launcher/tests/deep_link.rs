@@ -148,3 +148,13 @@ fn unknown_keys_are_ignored_and_raw_spaces_refused() {
     assert!(DeepLink::parse("metallic://open?path=/a b").is_err());
     assert!(DeepLink::parse("metallic://install\n--dev").is_err());
 }
+
+#[test]
+fn site_path_rejects_invisible_format_characters() {
+    for p in ["/a%E2%80%AEb", "/a%E2%80%8Bb"] {
+        assert!(
+            DeepLink::parse(&format!("metallic://open?path={p}")).is_err(),
+            "{p}"
+        );
+    }
+}

@@ -183,3 +183,34 @@ fn site_url_cannot_leave_the_origin() {
     assert_eq!(url.as_str(), "https://metallic.example:8443/games/1?a=b");
     assert!(origin.matches(&url));
 }
+
+#[test]
+fn local_page_rejects_port_userinfo_and_lookalikes() {
+    let p = policy();
+    for u in [
+        "http://metallic-app.localhost:8080/x",
+        "https://user@metallic-app.localhost/x",
+        "metallic-app://local:9/x",
+        "metallic-app://u@local/x",
+        "http://metallic-app.localhost.evil.test/x",
+        "metallic-app://local.evil.test/x",
+    ] {
+        assert_eq!(p.origin_of(u), PageOrigin::Other, "{u}");
+        assert_ne!(p.navigation(u), NavDecision::Allow, "{u}");
+    }
+    for u in [
+        "metallic-app://local/offline.html",
+        "http://metallic-app.localhost/offline.html",
+        "https://metallic-app.localhost:443/offline.html",
+    ] {
+        assert_eq!(p.origin_of(u), PageOrigin::Local, "{u}");
+    }
+}
+
+#[test]
+fn browser_links_lose_user_info() {
+    match policy().navigation("https://metallic.example@evil.test/x") {
+        NavDecision::OpenInBrowser(url) => assert_eq!(url.as_str(), "https://evil.test/x"),
+        other => panic!("{other:?}"),
+    }
+}

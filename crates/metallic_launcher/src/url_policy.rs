@@ -86,7 +86,13 @@ impl UrlPolicy {
                     NavDecision::Block
                 }
             },
-            "https" => NavDecision::OpenInBrowser(parsed),
+            "https" => {
+                // Drop user info so a fake `https://metallic.example@evil.test/` prefix is not passed on.
+                let mut parsed = parsed;
+                let _ = parsed.set_username("");
+                let _ = parsed.set_password(None);
+                NavDecision::OpenInBrowser(parsed)
+            }
             _ => NavDecision::Block,
         }
     }

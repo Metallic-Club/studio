@@ -9,7 +9,8 @@
 //! - `metallic://install`
 //!
 //! A link can come from any web page, email or second process, so [`DeepLink::parse`] treats
-//! it as hostile: it is length-limited, must be plain ASCII without spaces or quotes, and every
+//! it as hostile: it is length-limited, must be printable ASCII without spaces (anything else must be
+//! percent-encoded), and every
 //! value is checked against a narrow shape. Errors never echo the input, and a
 //! [`JoinTicket`] never shows in `Debug`.
 
@@ -115,7 +116,16 @@ impl SitePath {
             && !text.starts_with("//")
             && text.len() <= MAX_SITE_PATH_LEN
             && !text.contains('\\')
-            && !text.chars().any(char::is_control);
+            && !text.chars().any(|c| {
+                c.is_control()
+                    || matches!(
+                        c,
+                        '\u{200B}'..='\u{200F}'
+                            | '\u{202A}'..='\u{202E}'
+                            | '\u{2066}'..='\u{2069}'
+                            | '\u{FEFF}'
+                    )
+            });
         if ok {
             Ok(SitePath(text.to_string()))
         } else {

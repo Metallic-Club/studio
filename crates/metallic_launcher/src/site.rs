@@ -94,6 +94,10 @@ pub fn embedded_site_origin() -> Result<SiteOrigin, LauncherError> {
 /// True for a page bundled into the Launcher: `metallic-app://local/...`, or its
 /// `http(s)://metallic-app.localhost/...` mapping on Windows.
 pub fn is_local_page(url: &Url) -> bool {
+    // Exact match: no port (the default port parses to none), no user info.
+    if url.port().is_some() || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
     match url.scheme() {
         LOCAL_SCHEME => url.host_str() == Some("local"),
         "http" | "https" => url.host_str() == Some(LOCAL_MAPPED_HOST),
