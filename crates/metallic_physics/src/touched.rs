@@ -58,11 +58,13 @@ fn key(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
 }
 
 impl TouchTracker {
-    /// Applies Rapier events; a pair is queued only when it was not already touching.
+    /// Applies Rapier events; a pair is queued only when it was not already touching. Pairs
+    /// involving an `ignored` instance (character parts) are dropped.
     pub(crate) fn apply(
         &mut self,
         events: Vec<CollisionEvent>,
         owners: &HashMap<ColliderHandle, InstanceId>,
+        ignored: &HashSet<InstanceId>,
     ) {
         for ev in events {
             let (h1, h2) = match ev {
@@ -71,6 +73,9 @@ impl TouchTracker {
             let (Some(&a), Some(&b)) = (owners.get(&h1), owners.get(&h2)) else {
                 continue;
             };
+            if ignored.contains(&a) || ignored.contains(&b) {
+                continue;
+            }
             let k = key(a, b);
             if ev.started() {
                 if self.touching.insert(k) {

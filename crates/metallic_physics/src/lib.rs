@@ -14,8 +14,10 @@
 //!
 //! Characters: [`spawn_character`] builds a Roblox-style avatar Model for a Player and
 //! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
-//! death and respawn, checkpoints). Character parts are anchored, so the physics moves them as
-//! kinematic bodies and they report touches; they never collide with or touch each other.
+//! death and respawn, checkpoints, touches). Character parts are anchored, so the physics moves
+//! them as kinematic bodies (they push loose parts) but never reports their touches:
+//! [`PhysicsWorld::drain_touched`] skips every pair involving a character part, and the runtime
+//! gets character touches from [`CharacterEvent::Touched`] instead.
 #![warn(missing_docs)]
 
 mod avatar;
@@ -25,8 +27,8 @@ mod touched;
 
 pub use avatar::{TITANIUM, VIOLET};
 pub use character::{
-    CharacterController, CharacterEvent, HumanoidState, MAX_STEP_HEIGHT, MoveInput, RESPAWN_DELAY,
-    ROOT_HEIGHT, spawn_character,
+    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT, MoveInput,
+    RESPAWN_DELAY, ROOT_HEIGHT, spawn_character,
 };
 pub use sync::{MaterialProps, material_props};
 
@@ -82,6 +84,8 @@ pub struct PhysicsWorld {
     owners: HashMap<ColliderHandle, InstanceId>,
     collector: EventCollector,
     touches: TouchTracker,
+    /// Synced parts that belong to a character; [`Self::drain_touched`] never reports them.
+    characters: HashSet<InstanceId>,
     accumulator: f64,
 }
 
@@ -99,7 +103,7 @@ pub(crate) fn from_vector(v: Vector) -> Vec3 {
     Vec3::new(f64::from(v.x), f64::from(v.y), f64::from(v.z))
 }
 
-fn to_pose(position: Vec3, orientation: Vec3) -> Pose {
+pub(crate) fn to_pose(position: Vec3, orientation: Vec3) -> Pose {
     let [x, y, z, w] = sync::quat_from_orientation(orientation);
     Pose::from_parts(
         to_vector(position),
@@ -123,6 +127,7 @@ impl PhysicsWorld {
             owners: HashMap::new(),
             collector: EventCollector::default(),
             touches: TouchTracker::default(),
+            characters: HashSet::new(),
             accumulator: 0.0,
         }
     }
@@ -134,7 +139,7 @@ impl PhysicsWorld {
     /// after adding or removing parts or changing those properties; moving parts needs no sync.
     pub fn sync_from(&mut self, world: &World) {
         let parts = sync::collect_parts(world);
-        let alive: HashSet<InstanceId> = parts.iter().copied().collect();
+        let alive: HashSet<InstanceId> = parts.iter().map(|&(id, _)| id).collect();
         let gone: Vec<InstanceId> = self
             .entries
             .keys()
@@ -144,19 +149,19 @@ impl PhysicsWorld {
         for id in gone {
             self.remove_entry(id);
         }
-        for id in parts {
+        for (id, character) in parts {
             let Some(state) = sync::read_part(world, id) else {
                 continue;
             };
             let stale = self
                 .entries
                 .get(&id)
-                .is_some_and(|e| e.signature != state.signature());
+                .is_some_and(|e| e.signature != state.signature(character));
             if stale {
                 self.remove_entry(id);
             }
             if !self.entries.contains_key(&id) {
-                self.add_entry(id, &state);
+                self.add_entry(id, &state, character);
             }
         }
         // Refresh the broad phase so raycasts work before the first step.
@@ -164,7 +169,7 @@ impl PhysicsWorld {
         self.collect_touches();
     }
 
-    fn add_entry(&mut self, id: InstanceId, s: &PartState) {
+    fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) {
         let mat = sync::material_props(&s.material);
         let pose = to_pose(s.position, s.orientation);
         let builder = if s.anchored {
@@ -173,7 +178,7 @@ impl PhysicsWorld {
             RigidBodyBuilder::dynamic()
         }
         .pose(pose);
-        let groups = if s.character {
+        let groups = if character {
             InteractionGroups::new(
                 CHARACTER_GROUP,
                 Group::ALL.difference(CHARACTER_GROUP),
@@ -203,12 +208,15 @@ impl PhysicsWorld {
             Entry {
                 body,
                 collider,
-                signature: s.signature(),
+                signature: s.signature(character),
                 last_position: s.position,
                 last_orientation: s.orientation,
                 derived_velocity: Vec3::default(),
             },
         );
+        if character {
+            self.characters.insert(id);
+        }
     }
 
     fn remove_entry(&mut self, id: InstanceId) {
@@ -216,12 +224,13 @@ impl PhysicsWorld {
             self.owners.remove(&e.collider);
             self.rapier.remove_body(e.body);
             self.touches.forget(id);
+            self.characters.remove(&id);
         }
     }
 
     fn collect_touches(&mut self) {
         let events = self.collector.take();
-        self.touches.apply(events, &self.owners);
+        self.touches.apply(events, &self.owners, &self.characters);
     }
 
     /// Advances the simulation by `dt` seconds in fixed 1/240 s substeps (the remainder is
@@ -388,6 +397,8 @@ impl PhysicsWorld {
     /// Returns the part pairs that started touching since the last call. Each contact is
     /// reported once and again only after the parts separated and touched anew. Sensors
     /// (`CanCollide = false`) report touches with moving parts.
+    /// Pairs involving a character part are never reported; character touches come from
+    /// [`CharacterEvent::Touched`].
     pub fn drain_touched(&mut self) -> Vec<(InstanceId, InstanceId)> {
         self.touches.drain()
     }

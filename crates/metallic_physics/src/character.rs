@@ -17,7 +17,17 @@
 //!   [`MAX_STEP_HEIGHT`] (1.5) are climbed; walking down steps and slopes snaps to the ground;
 //! - standing on a part adds that part's velocity ([`PhysicsWorld::velocity`]); leaving it keeps
 //!   its horizontal velocity until landing;
-//! - a part that moved into the character pushes it out.
+//! - a part that moved into the character pushes it out, at most [`MAX_PUSH`] (0.5) studs per
+//!   step so it can never be shoved through a thin wall in one frame.
+//!
+//! Touches: after moving, the controller overlaps the whole avatar (the capsule and every avatar
+//! part, each grown by 0.1 stud) with the scene, sensors included, and reports
+//! [`CharacterEvent::Touched`] once per part when contact starts, and again only after the part
+//! separated. This is the only source of character touches: standing still on lava, or lava
+//! appearing under a standing character, is reported too, and [`PhysicsWorld::drain_touched`]
+//! never reports character parts. The runtime (Tasks 7/8) turns these events into
+//! `BasePart.Touched` on the touched part (with a character part as `hit`). Dead characters
+//! report no touches.
 //!
 //! Rules: `Health <= 0` or the root below `Workspace.FallenPartsDestroyHeight` makes the
 //! character Dead (one [`CharacterEvent::Died`], input ignored, gravity still applies); after
@@ -25,13 +35,13 @@
 //! Checkpoint whose `Order` is higher than the current `RespawnLocation`'s (any Checkpoint beats a
 //! non-Checkpoint or none) makes it the player's `RespawnLocation` and colours it violet.
 use crate::avatar::{self, ROOT_PART, VIOLET};
-use crate::{GRAVITY, PhysicsWorld, from_vector, to_vector};
+use crate::{GRAVITY, PhysicsWorld, from_vector, to_pose, to_vector};
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::parry::query::ShapeCastOptions;
-use rapier3d::parry::shape::{Capsule, Shape};
+use rapier3d::parry::shape::{Capsule, Cuboid, Shape};
 use rapier3d::prelude::{ColliderHandle, Pose, QueryFilter, Vector};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Seconds between a character's death and its respawn (the Roblox default).
 pub const RESPAWN_DELAY: f64 = 5.0;
@@ -46,20 +56,19 @@ const RADIUS: f64 = 1.0;
 const HALF_SEGMENT: f64 = 1.5;
 /// Gap the sweep keeps between the capsule and the world.
 const SKIN: f64 = 0.02;
-/// The capsule bottom is this far above the feet, so standing feet dip `FOOT_LIFT - SKIN` (0.03)
-/// into the floor: enough for the physics to report the legs touching what the character
-/// stands on (lava, checkpoints) and too little to see.
-const FOOT_LIFT: f64 = 0.05;
+/// The capsule bottom is this far above the feet; equal to [`SKIN`], so standing feet rest
+/// exactly on the floor (root 3 studs above it).
+const FOOT_LIFT: f64 = SKIN;
 /// Root centre minus capsule centre.
 const CAPSULE_DROP: f64 = ROOT_HEIGHT - FOOT_LIFT - HALF_SEGMENT - RADIUS;
 /// How far below the feet the ground probe looks.
 const GROUND_PROBE: f64 = 0.1;
 /// Walking down a drop up to this height keeps the character on the ground.
 const SNAP_DISTANCE: f64 = 1.5;
-/// Extra radius of the checkpoint overlap test.
+/// How much the touch overlap test grows the capsule and every avatar part, in studs.
 const TOUCH_MARGIN: f64 = 0.1;
-/// Upper bound on the push-out from moving parts per frame, in studs.
-const MAX_PUSH: f64 = 4.0;
+/// Most the character is pushed out of overlapping parts in one step, in studs.
+pub const MAX_PUSH: f64 = 0.5;
 
 /// Movement wish for one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -103,6 +112,14 @@ pub enum CharacterEvent {
         old: InstanceId,
         /// The new Model, now `Player.Character`.
         character: InstanceId,
+    },
+    /// The character started touching a part (once per contact, again only after separation).
+    /// The runtime fires the part's `Touched` for it.
+    Touched {
+        /// The character Model.
+        character: InstanceId,
+        /// The part touched (not a part of the character).
+        part: InstanceId,
     },
     /// A Checkpoint became the player's `RespawnLocation`.
     CheckpointReached {
@@ -150,7 +167,8 @@ impl Default for Motion {
 /// The Model is named after the player and holds the avatar parts (an invisible 2x2x1
 /// `HumanoidRootPart`, Head 2x1x1, Torso 2x2x1 with a violet `Stripe`, arms and legs 1x2x1, all
 /// titanium and Anchored) and a `Humanoid` with default properties. The root is placed
-/// [`ROOT_HEIGHT`] above the top of the player's `RespawnLocation`, else of the first
+/// [`ROOT_HEIGHT`] above the top surface (rotation included) of the player's `RespawnLocation`,
+/// even a non-colliding zone (the character then falls through it), else of the first
 /// `SpawnLocation` in Workspace, else at (0, 3, 0). A previous character of the player is
 /// destroyed. Call [`PhysicsWorld::sync_from`] afterwards.
 ///
@@ -201,7 +219,11 @@ fn spawn_point(world: &World, player: InstanceId, workspace: InstanceId) -> Vec3
     let on_top = pad.and_then(|p| {
         let pos = vec_prop(world, p, "Position")?;
         let size = vec_prop(world, p, "Size")?;
-        Some(pos + Vec3::new(0.0, size.y / 2.0 + ROOT_HEIGHT, 0.0))
+        let o = vec_prop(world, p, "Orientation")?;
+        // Half the part's world-space height: its rotated extents projected on Y.
+        let up = crate::sync::matrix_from_orientation(o)[1];
+        let half = (up[0].abs() * size.x + up[1].abs() * size.y + up[2].abs() * size.z) / 2.0;
+        Some(pos + Vec3::new(0.0, half + ROOT_HEIGHT, 0.0))
     });
     on_top.unwrap_or(Vec3::new(0.0, ROOT_HEIGHT, 0.0))
 }
@@ -253,6 +275,8 @@ fn capsule_pose(root: Vec3) -> Pose {
 #[derive(Default)]
 pub struct CharacterController {
     motions: HashMap<InstanceId, Motion>,
+    /// Parts each character touched after its last step.
+    touching: HashMap<InstanceId, HashSet<InstanceId>>,
     events: Vec<CharacterEvent>,
 }
 
@@ -294,6 +318,7 @@ impl CharacterController {
         dt: f64,
     ) {
         self.motions.retain(|&id, _| world.is_alive(id));
+        self.touching.retain(|&id, _| world.is_alive(id));
         let (Some(humanoid), Some(root)) = (
             world.find_first_child(character, "Humanoid"),
             world.find_first_child(character, ROOT_PART),
@@ -313,6 +338,7 @@ impl CharacterController {
                 && let Ok(new) = spawn_character(world, player)
             {
                 self.motions.remove(&character);
+                self.touching.remove(&character);
                 self.events.push(CharacterEvent::Respawned {
                     player,
                     old: character,
@@ -359,28 +385,33 @@ impl CharacterController {
             m.yaw = (-flat.x).atan2(-flat.z).to_degrees();
         }
         avatar::place(world, character, new_root, m.yaw);
-        if alive {
-            self.reach_checkpoints(world, physics, &own, character, new_root);
+        let now = if alive {
+            overlapping_parts(world, physics, &own, character, new_root)
+        } else {
+            HashSet::new()
+        };
+        let before = self.touching.remove(&character).unwrap_or_default();
+        let mut started: Vec<InstanceId> = now.difference(&before).copied().collect();
+        started.sort();
+        for &part in &started {
+            self.events
+                .push(CharacterEvent::Touched { character, part });
         }
+        self.reach_checkpoints(world, character, &started);
+        self.touching.insert(character, now);
         self.motions.insert(character, m);
     }
 
-    /// Applies the checkpoint rule to every Checkpoint the character overlaps.
+    /// Applies the checkpoint rule to every newly touched Checkpoint.
     fn reach_checkpoints(
         &mut self,
         world: &mut World,
-        physics: &PhysicsWorld,
-        own: &[ColliderHandle],
         character: InstanceId,
-        root: Vec3,
+        started: &[InstanceId],
     ) {
-        let skip = |h: ColliderHandle, _: &rapier3d::prelude::Collider| !own.contains(&h);
-        let filter = QueryFilter::default().predicate(&skip);
-        let queries = physics.queries(filter);
-        let probe = Capsule::new_y(HALF_SEGMENT as f32, (RADIUS + TOUCH_MARGIN) as f32);
-        let touched: Vec<InstanceId> = queries
-            .intersect_shape(capsule_pose(root), &probe)
-            .filter_map(|(h, _)| physics.owner_of(h))
+        let touched: Vec<InstanceId> = started
+            .iter()
+            .copied()
             .filter(|&p| world.is_a(p, "Checkpoint"))
             .collect();
         if touched.is_empty() {
@@ -408,6 +439,43 @@ impl CharacterController {
             }
         }
     }
+}
+
+/// Parts (not the character's own) overlapping the capsule or any avatar part, each grown by
+/// [`TOUCH_MARGIN`]; sensors included. Reads the avatar parts' pose from `world`.
+fn overlapping_parts(
+    world: &World,
+    physics: &PhysicsWorld,
+    own: &[ColliderHandle],
+    character: InstanceId,
+    root: Vec3,
+) -> HashSet<InstanceId> {
+    let skip = |h: ColliderHandle, _: &rapier3d::prelude::Collider| !own.contains(&h);
+    let queries = physics.queries(QueryFilter::default().predicate(&skip));
+    let mut out = HashSet::new();
+    let probe = Capsule::new_y(HALF_SEGMENT as f32, (RADIUS + TOUCH_MARGIN) as f32);
+    out.extend(
+        queries
+            .intersect_shape(capsule_pose(root), &probe)
+            .filter_map(|(h, _)| physics.owner_of(h)),
+    );
+    for part in parts_of(world, character) {
+        let (Some(pos), Some(o), Some(size)) = (
+            vec_prop(world, part, "Position"),
+            vec_prop(world, part, "Orientation"),
+            vec_prop(world, part, "Size"),
+        ) else {
+            continue;
+        };
+        let half = size * 0.5 + Vec3::new(TOUCH_MARGIN, TOUCH_MARGIN, TOUCH_MARGIN);
+        let shape = Cuboid::new(to_vector(half));
+        out.extend(
+            queries
+                .intersect_shape(to_pose(pos, o), &shape)
+                .filter_map(|(h, _)| physics.owner_of(h)),
+        );
+    }
+    out
 }
 
 /// Humanoid properties the movement uses.
@@ -488,15 +556,21 @@ fn move_capsule(
             .then_some(CharacterLength::Absolute(SNAP_DISTANCE as f32)),
         ..KinematicCharacterController::default()
     };
-    let moved = kcc.move_shape(
-        dt as f32,
-        &queries,
-        &shape,
-        &capsule_pose(root),
-        to_vector(desired),
-        |_| {},
-    );
-    let step = from_vector(moved.translation);
+    // With no wish to move, skip the sweep: Rapier would depenetrate on its own then, past the
+    // MAX_PUSH limit.
+    let step = if desired.magnitude() > 1e-6 {
+        let moved = kcc.move_shape(
+            dt as f32,
+            &queries,
+            &shape,
+            &capsule_pose(root),
+            to_vector(desired),
+            |_| {},
+        );
+        from_vector(moved.translation)
+    } else {
+        Vec3::default()
+    };
     let new_root = root + step;
 
     // 4. Head bump: rising but blocked from above.
@@ -559,6 +633,11 @@ fn push_out(queries: &rapier3d::prelude::QueryPipeline, shape: &Capsule, root: V
         if !pushed || total.magnitude() > MAX_PUSH {
             break;
         }
+    }
+    // A deep overlap is resolved over several steps rather than by one long jump that could
+    // carry the character through a thin wall.
+    if total.magnitude() > MAX_PUSH {
+        total = total.unit() * MAX_PUSH;
     }
     total
 }

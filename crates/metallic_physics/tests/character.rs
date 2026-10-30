@@ -1,7 +1,7 @@
 use metallic_core::{Color3, InstanceId, Value, Vec3, World};
 use metallic_physics::{
-    CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, RESPAWN_DELAY,
-    spawn_character,
+    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MoveInput, PhysicsWorld,
+    RESPAWN_DELAY, spawn_character,
 };
 
 const DT: f64 = 1.0 / 60.0;
@@ -63,6 +63,8 @@ struct Sim {
     ctl: CharacterController,
     player: InstanceId,
     events: Vec<CharacterEvent>,
+    /// Parts that kill on touch.
+    lava: Vec<InstanceId>,
 }
 
 impl Sim {
@@ -78,6 +80,7 @@ impl Sim {
             ctl: CharacterController::new(),
             player,
             events: Vec::new(),
+            lava: Vec::new(),
         }
     }
 
@@ -112,8 +115,24 @@ impl Sim {
         {
             self.phys.sync_from(&self.world);
         }
+        // The lava script: `Humanoid.Health = 0` when lava is touched.
+        for e in &new {
+            if let CharacterEvent::Touched { character, part } = *e
+                && self.lava.contains(&part)
+                && let Some(h) = self.world.find_first_child(character, "Humanoid")
+            {
+                self.world.set(h, "Health", Value::Number(0.0)).unwrap();
+            }
+        }
         self.events.extend(new);
         self.phys.step(&mut self.world, DT);
+    }
+
+    fn touched_count(&self, part: InstanceId) -> usize {
+        self.events
+            .iter()
+            .filter(|e| matches!(e, CharacterEvent::Touched { part: p, .. } if *p == part))
+            .count()
     }
 
     fn run(&mut self, seconds: f64, input: MoveInput) {
@@ -379,27 +398,99 @@ fn character_touches_anchored_lava() {
         Vec3::new(4.0, 1.0, 12.0),
     );
     let mut sim = Sim::start(world);
+    sim.lava.push(lava);
     sim.run(0.5, idle());
-    sim.phys.drain_touched();
     sim.run(1.0, walk(1.0, 0.0));
-    let ch = sim.character();
-    let hits: Vec<_> = sim
-        .phys
-        .drain_touched()
-        .into_iter()
-        .filter(|&(a, b)| a == lava || b == lava)
-        .map(|(a, b)| if a == lava { b } else { a })
-        .collect();
-    assert!(!hits.is_empty(), "lava was never touched");
-    assert!(hits.iter().all(|&h| sim.world.parent(h) == Some(ch)));
+    assert_eq!(sim.touched_count(lava), 1);
+    assert_eq!(sim.died_count(), 1);
 }
 
 #[test]
-fn own_parts_never_touch_each_other() {
+fn standing_still_on_lava_dies() {
     let mut world = World::new_with_services();
     baseplate(&mut world);
     let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    assert_eq!(sim.died_count(), 0);
+    // lava appears right under the standing character, top flush with the floor
+    let lava = part(
+        &mut sim.world,
+        "Part",
+        Vec3::new(0.0, -0.5, 0.0),
+        Vec3::new(4.0, 1.0, 4.0),
+    );
+    sim.phys.sync_from(&sim.world);
+    sim.lava.push(lava);
+    sim.run(0.25, idle());
+    assert_eq!(sim.touched_count(lava), 1);
+    assert_eq!(sim.died_count(), 1);
+    // dead characters report no further touches
+    sim.run(1.0, idle());
+    assert_eq!(sim.touched_count(lava), 1);
+    assert_eq!(sim.died_count(), 1);
+}
+
+#[test]
+fn arm_brushing_checkpoint_registers() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    // a zone beside the path: only an arm (x up to 2.0) reaches it, the body (radius 1) does not
+    let cp = part(
+        &mut world,
+        "Checkpoint",
+        Vec3::new(2.6, 3.0, 10.0),
+        Vec3::new(2.0, 6.0, 4.0),
+    );
+    world.set(cp, "CanCollide", Value::Bool(false)).unwrap();
+    world.set(cp, "Order", Value::Number(1.0)).unwrap();
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    sim.run(1.0, walk(0.0, 1.0));
+    let p = sim.root_pos();
+    assert!(p.z > 14.0 && p.x.abs() < 0.05, "path {p:?}");
+    assert_eq!(sim.touched_count(cp), 1);
+    assert_eq!(
+        reference(&sim.world, sim.player, "RespawnLocation"),
+        Some(cp)
+    );
+}
+
+#[test]
+fn touched_fires_once_until_separation() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let pad = part(
+        &mut world,
+        "Part",
+        Vec3::new(10.0, -0.5, 0.0),
+        Vec3::new(4.0, 1.0, 8.0),
+    );
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    sim.run(0.625, walk(1.0, 0.0));
+    sim.run(1.0, idle());
+    assert_eq!(sim.touched_count(pad), 1, "standing on it");
+    sim.run(1.0, walk(1.0, 0.0));
+    assert_eq!(sim.touched_count(pad), 1, "walked off");
+    sim.run(1.0, walk(-1.0, 0.0));
+    assert!((sim.root_pos().x - 10.0).abs() < 1.0);
+    assert_eq!(sim.touched_count(pad), 2, "came back");
+}
+
+#[test]
+fn physics_never_reports_character_parts() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let zone = part(
+        &mut world,
+        "Part",
+        Vec3::new(8.0, 3.0, 8.0),
+        Vec3::new(4.0, 6.0, 4.0),
+    );
+    world.set(zone, "CanCollide", Value::Bool(false)).unwrap();
+    let mut sim = Sim::start(world);
     sim.run(1.0, walk(1.0, 1.0));
+    assert_eq!(sim.touched_count(zone), 1);
     let ch = sim.character();
     let inside = |id: InstanceId| {
         let mut cur = Some(id);
@@ -412,8 +503,30 @@ fn own_parts_never_touch_each_other() {
         false
     };
     for (a, b) in sim.phys.drain_touched() {
-        assert!(!(inside(a) && inside(b)), "self touch {a:?} {b:?}");
+        assert!(!inside(a) && !inside(b), "physics touch {a:?} {b:?}");
     }
+}
+
+#[test]
+fn push_out_is_capped_per_step() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    // a wall appears 1.5 studs deep inside the character (its +X face at x = 0.5)
+    part(
+        &mut sim.world,
+        "Part",
+        Vec3::new(-2.25, 3.0, 0.0),
+        Vec3::new(5.5, 6.0, 10.0),
+    );
+    sim.phys.sync_from(&sim.world);
+    let x0 = sim.root_pos().x;
+    sim.frame(idle());
+    let d = sim.root_pos().x - x0;
+    assert!(d > 0.0 && d <= MAX_PUSH + 1e-9, "pushed {d} in one step");
+    sim.run(0.5, idle());
+    assert!(sim.root_pos().x >= 1.49, "not out: {:?}", sim.root_pos());
 }
 
 #[test]
@@ -548,4 +661,47 @@ fn checkpoint_lower_order_does_not_override_higher() {
         .filter(|e| matches!(e, CharacterEvent::CheckpointReached { .. }))
         .collect();
     assert_eq!(reached.len(), 1, "{reached:?}");
+}
+
+#[test]
+fn respawn_on_non_colliding_checkpoint_stands_on_top() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    // a tall zone whose top is at y = 6
+    let zone = part(
+        &mut world,
+        "Checkpoint",
+        Vec3::new(10.0, 3.0, 0.0),
+        Vec3::new(4.0, 6.0, 4.0),
+    );
+    world.set(zone, "CanCollide", Value::Bool(false)).unwrap();
+    // a pad lying on its side: Size.X is its height once rolled 90 degrees, top at y = 3
+    let rolled = part(
+        &mut world,
+        "Checkpoint",
+        Vec3::new(-10.0, 0.0, 0.0),
+        Vec3::new(6.0, 2.0, 4.0),
+    );
+    world
+        .set(
+            rolled,
+            "Orientation",
+            Value::Vector3(Vec3::new(0.0, 0.0, 90.0)),
+        )
+        .unwrap();
+    let player = add_player(&mut world);
+    world
+        .set(player, "RespawnLocation", Value::Ref(Some(zone)))
+        .unwrap();
+    let ch = spawn_character(&mut world, player).unwrap();
+    let root = world.find_first_child(ch, "HumanoidRootPart").unwrap();
+    let p = v3(&world, root, "Position");
+    assert!((p - Vec3::new(10.0, 9.0, 0.0)).magnitude() < 1e-9, "{p:?}");
+    world
+        .set(player, "RespawnLocation", Value::Ref(Some(rolled)))
+        .unwrap();
+    let ch = spawn_character(&mut world, player).unwrap();
+    let root = world.find_first_child(ch, "HumanoidRootPart").unwrap();
+    let p = v3(&world, root, "Position");
+    assert!((p - Vec3::new(-10.0, 6.0, 0.0)).magnitude() < 1e-9, "{p:?}");
 }
