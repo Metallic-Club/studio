@@ -8,6 +8,8 @@
 //! character controller and writes the new pose to every avatar part.
 //!
 //! Movement (units are studs and seconds):
+//! - non-finite frame times are ignored before any controller/world mutation;
+//!   finite times are clamped to 0..=[`crate::MAX_STEP`] (0.25 s);
 //! - horizontal speed is `Humanoid.WalkSpeed` (input direction longer than 1 is shortened to 1),
 //!   with instant acceleration and full air control, as in Roblox; [`MoveInput::run`] multiplies
 //!   it by [`RUN_MULTIPLIER`] (a Metallic addition) without changing `WalkSpeed`;
@@ -36,7 +38,7 @@
 //! Checkpoint whose `Order` is higher than the current `RespawnLocation`'s (any Checkpoint beats a
 //! non-Checkpoint or none) makes it the player's `RespawnLocation` and colours it violet.
 use crate::avatar::{self, ROOT_PART, VIOLET};
-use crate::{GRAVITY, PhysicsWorld, from_vector, to_pose, to_vector};
+use crate::{GRAVITY, MAX_STEP, PhysicsWorld, from_vector, to_pose, to_vector};
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::parry::query::ShapeCastOptions;
@@ -314,6 +316,8 @@ impl CharacterController {
     /// Does nothing if `character` no longer exists or lacks its `Humanoid` or
     /// `HumanoidRootPart`. After a [`CharacterEvent::Respawned`] the player's new character is
     /// in `Player.Character`; step that one from then on and call [`PhysicsWorld::sync_from`].
+    /// Non-finite `dt` is a no-op, including input, timers and events. Finite values
+    /// are clamped to 0..=[`crate::MAX_STEP`] (0.25 s), matching physics time bounds.
     pub fn step(
         &mut self,
         world: &mut World,
@@ -322,6 +326,10 @@ impl CharacterController {
         input: MoveInput,
         dt: f64,
     ) {
+        if !dt.is_finite() {
+            return;
+        }
+        let dt = dt.clamp(0.0, MAX_STEP);
         self.motions.retain(|&id, _| world.is_alive(id));
         self.touching.retain(|&id, _| world.is_alive(id));
         let (Some(humanoid), Some(root)) = (
@@ -334,8 +342,6 @@ impl CharacterController {
             return;
         };
         let mut m = self.motions.get(&character).copied().unwrap_or_default();
-        let dt = dt.max(0.0);
-
         if m.state == HumanoidState::Dead {
             m.dead_time += dt;
             if m.dead_time >= RESPAWN_DELAY
