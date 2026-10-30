@@ -313,3 +313,101 @@ fn step_clamps_huge_dt() {
     // 0.25 s of free fall is about 6.1 studs
     assert!(pos(&world, p).y > 990.0, "y = {}", pos(&world, p).y);
 }
+
+fn spin(phys: &mut PhysicsWorld, world: &mut World, id: InstanceId, deg_per_step: f64, steps: u32) {
+    for i in 1..=steps {
+        world
+            .set(
+                id,
+                "Orientation",
+                Value::Vector3(Vec3::new(0.0, f64::from(i) * deg_per_step, 0.0)),
+            )
+            .unwrap();
+        phys.step(world, 1.0 / 60.0);
+    }
+}
+
+#[test]
+fn rotating_anchored_part_has_angular_velocity() {
+    let mut world = World::new_with_services();
+    let a = part(
+        &mut world,
+        Vec3::new(0.0, 10.0, 0.0),
+        Vec3::new(4.0, 1.0, 4.0),
+        true,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    phys.step(&mut world, 1.0 / 60.0);
+    assert!(phys.angular_velocity(a).unwrap().magnitude() < 1e-6);
+    // 6 degrees per 1/60 s = 360 deg/s = 2*pi rad/s about +Y, also across the 180 deg wrap
+    spin(&mut phys, &mut world, a, 6.0, 40);
+    let w = phys.angular_velocity(a).unwrap();
+    assert!(
+        (w.y - std::f64::consts::TAU).abs() < 0.05 && w.x.abs() < 1e-3 && w.z.abs() < 1e-3,
+        "w = {w:?}"
+    );
+    assert!(phys.velocity(a).unwrap().magnitude() < 1e-6);
+    // standing still again clears it
+    phys.step(&mut world, 1.0 / 60.0);
+    assert!(phys.angular_velocity(a).unwrap().magnitude() < 1e-6);
+}
+
+#[test]
+fn rotating_anchored_bar_pushes_loose_part() {
+    let mut world = World::new_with_services();
+    part(
+        &mut world,
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(512.0, 2.0, 512.0),
+        true,
+    );
+    let bar = part(
+        &mut world,
+        Vec3::new(0.0, 2.0, 0.0),
+        Vec3::new(20.0, 2.0, 1.0),
+        true,
+    );
+    let boxy = part(
+        &mut world,
+        Vec3::new(0.0, 2.0, 7.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.25);
+    let start = pos(&world, boxy);
+    spin(&mut phys, &mut world, bar, 6.0, 60);
+    let end = pos(&world, boxy);
+    let moved = ((end.x - start.x).powi(2) + (end.z - start.z).powi(2)).sqrt();
+    assert!(
+        moved > 2.0,
+        "box moved only {moved} studs: {start:?} -> {end:?}"
+    );
+}
+
+#[test]
+fn rotating_anchored_platform_carries_rider() {
+    let mut world = World::new_with_services();
+    let plat = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(20.0, 2.0, 20.0),
+        true,
+    );
+    let rider = part(
+        &mut world,
+        Vec3::new(6.0, 1.6, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.5);
+    // a quarter turn about +Y in one second takes (6, y, 0) toward (0, y, -6)
+    spin(&mut phys, &mut world, plat, 1.5, 60);
+    let p = pos(&world, rider);
+    let turned = (-p.z).atan2(p.x).to_degrees();
+    assert!(turned > 45.0, "rider turned {turned} deg, at {p:?}");
+}

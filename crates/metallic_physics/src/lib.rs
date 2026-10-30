@@ -10,7 +10,8 @@
 //! `CanCollide = false` makes a sensor (reports touches, never blocks); `Material` picks density,
 //! friction and restitution (see [`material_props`]). An anchored part whose `Position` or
 //! `Orientation` was changed since the last step is moved as a kinematic body for that step, with
-//! velocity derived from the move, so parts standing on it are carried along.
+//! linear and angular velocity derived from the move, so parts standing on it are carried along
+//! and parts in its way are pushed, by rotating movers too.
 #![warn(missing_docs)]
 
 mod sync;
@@ -57,6 +58,8 @@ struct Entry {
     last_orientation: Vec3,
     /// Velocity derived from the last kinematic move (anchored parts only).
     derived_velocity: Vec3,
+    /// Angular velocity (radians/s) derived from the last kinematic move (anchored parts only).
+    derived_angular_velocity: Vec3,
 }
 
 /// The physics simulation for one [`World`].
@@ -89,6 +92,29 @@ fn to_pose(position: Vec3, orientation: Vec3) -> Pose {
         to_vector(position),
         Rotation::from_xyzw(x as f32, y as f32, z as f32, w as f32),
     )
+}
+
+/// Angular velocity in radians per second (world axis scaled by the rate) that turns orientation
+/// `from` into `to` (Roblox Euler degrees) in `time` seconds, along the shortest arc.
+fn angular_velocity_between(from: Vec3, to: Vec3, time: f64) -> Vec3 {
+    let [ax, ay, az, aw] = sync::quat_from_orientation(from);
+    let [bx, by, bz, bw] = sync::quat_from_orientation(to);
+    // delta = to * conj(from); the vector part is aw*b - bw*a - b x a.
+    let mut w = bw * aw + bx * ax + by * ay + bz * az;
+    let mut v = Vec3::new(
+        aw * bx - bw * ax - (by * az - bz * ay),
+        aw * by - bw * ay - (bz * ax - bx * az),
+        aw * bz - bw * az - (bx * ay - by * ax),
+    );
+    if w < 0.0 {
+        w = -w;
+        v = v * -1.0;
+    }
+    let s = v.magnitude();
+    if s < 1e-12 || time <= 0.0 {
+        return Vec3::default();
+    }
+    v * (2.0 * s.atan2(w) / (s * time))
 }
 
 fn close(a: Vec3, b: Vec3) -> bool {
@@ -181,6 +207,7 @@ impl PhysicsWorld {
                 last_position: s.position,
                 last_orientation: s.orientation,
                 derived_velocity: Vec3::default(),
+                derived_angular_velocity: Vec3::default(),
             },
         );
     }
@@ -203,8 +230,10 @@ impl PhysicsWorld {
     /// back into `world`.
     ///
     /// Before simulating, a changed `Position`/`Orientation` is applied: an anchored part is moved
-    /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`]); an
-    /// unanchored part is teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`]
+    /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`];
+    /// angular velocity = shortest-arc rotation / simulated time, see [`Self::angular_velocity`]),
+    /// so it sweeps through the move and pushes or carries loose parts; an unanchored part is
+    /// teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`]
     /// (0.25 s) so a long frame cannot spiral.
     ///
     /// Callers must call [`Self::sync_from`] after adding, removing or reconfiguring parts
@@ -236,12 +265,16 @@ impl PhysicsWorld {
             };
             if e.signature.anchored {
                 e.derived_velocity = Vec3::default();
+                e.derived_angular_velocity = Vec3::default();
                 if moved {
                     let v = (state.position - e.last_position) * (1.0 / sim_time);
+                    let w =
+                        angular_velocity_between(e.last_orientation, state.orientation, sim_time);
                     e.derived_velocity = v;
+                    e.derived_angular_velocity = w;
                     body.set_body_type(RigidBodyType::KinematicVelocityBased, true);
                     body.set_linvel(to_vector(v), true);
-                    body.set_rotation(to_pose(state.position, state.orientation).rotation, true);
+                    body.set_angvel(to_vector(w), true);
                     movers.push((id, to_pose(state.position, state.orientation)));
                 }
             } else if moved {
@@ -265,6 +298,7 @@ impl PhysicsWorld {
                 .and_then(|e| self.rapier.bodies.get_mut(e.body))
             {
                 body.set_linvel(Vector::ZERO, false);
+                body.set_angvel(Vector::ZERO, false);
                 body.set_body_type(RigidBodyType::Fixed, false);
                 body.set_position(pose, false);
             }
@@ -308,6 +342,20 @@ impl PhysicsWorld {
             from_vector(body.linvel())
         } else {
             e.derived_velocity
+        })
+    }
+
+    /// Current angular velocity of a part in radians per second (world rotation axis scaled by
+    /// the rate): the body's for unanchored parts, the one derived from the last orientation
+    /// change for anchored ones. A point `p` on the part moves at
+    /// `velocity + angular_velocity × (p - Position)`. `None` for unknown parts.
+    pub fn angular_velocity(&self, id: InstanceId) -> Option<Vec3> {
+        let e = self.entries.get(&id)?;
+        let body = self.rapier.bodies.get(e.body)?;
+        Some(if body.is_dynamic() {
+            from_vector(body.angvel())
+        } else {
+            e.derived_angular_velocity
         })
     }
 
