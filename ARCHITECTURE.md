@@ -20,7 +20,15 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
-  only non-default properties, stable order). Also `deep_clone()` used by Play.
+  only non-default properties, stable order). Scene saves preflight the tree, resolve reference indices through
+  a hash map, and sync a temporary sibling file before replacing the destination. Both directions enforce
+  `MAX_SCENE_DEPTH` (32 instance levels); loading rejects unknown fields, duplicate property names, unmatched
+  built-in markers and dangling references. Scene-specific Serde mirrors also reject unknown members inside
+  vector, color and UDim2 values. Saves require every canonical built-in exactly once at its standard location;
+  builtinless utility worlds cannot be preserved by the v1 loader and are rejected before writing. Windows
+  sharing/access-denied rename failures receive three bounded retries. Replacement changes filesystem identity:
+  symlinks/hard links, ACLs and alternate streams are not preserved (see `save_scene` docs).
+  Also `deep_clone()` used by Play.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
