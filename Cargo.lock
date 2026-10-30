@@ -3537,6 +3537,7 @@ dependencies = [
  "log",
  "metallic_asset",
  "metallic_core",
+ "naga",
  "png",
  "pollster 1.0.1",
  "wgpu",

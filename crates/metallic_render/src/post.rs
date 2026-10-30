@@ -21,8 +21,36 @@ use crate::camera::Camera;
 use std::any::Any;
 use std::borrow::Cow;
 
-/// Format of the scene target and of every HDR pass's input and output.
+/// Format of the scene target and of every HDR pass's input and output, where the adapter can
+/// render to it, filter it and (with MSAA) resolve into it. Otherwise (some GL / WebGL2
+/// adapters) the renderer falls back to [`LDR_FORMAT`]: the frame still works but light above
+/// 1 clips before the finish pass. [`PostContext::hdr_format`] is the one in use.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// The HDR target format for an adapter whose [`HDR_FORMAT`] support is `features` (`None`
+/// when unknown, as for a host-provided device) at `samples` MSAA samples.
+pub fn hdr_format_for(
+    features: Option<wgpu::TextureFormatFeatures>,
+    samples: u32,
+) -> wgpu::TextureFormat {
+    let Some(f) = features else {
+        return HDR_FORMAT;
+    };
+    use wgpu::TextureFormatFeatureFlags as F;
+    let msaa = match samples {
+        1 => F::empty(),
+        2 => F::MULTISAMPLE_X2 | F::MULTISAMPLE_RESOLVE,
+        8 => F::MULTISAMPLE_X8 | F::MULTISAMPLE_RESOLVE,
+        16 => F::MULTISAMPLE_X16 | F::MULTISAMPLE_RESOLVE,
+        _ => F::MULTISAMPLE_X4 | F::MULTISAMPLE_RESOLVE,
+    };
+    let usages = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+    if f.allowed_usages.contains(usages) && f.flags.contains(F::FILTERABLE | msaa) {
+        HDR_FORMAT
+    } else {
+        LDR_FORMAT
+    }
+}
 /// Format of LDR intermediates. They hold display-encoded (sRGB) values, not linear light.
 pub const LDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -49,9 +77,12 @@ pub struct PostContext<'a> {
     pub input: &'a wgpu::TextureView,
     /// Where to write the result, `size` pixels.
     pub output: &'a wgpu::TextureView,
-    /// Format of `output`: [`HDR_FORMAT`], [`LDR_FORMAT`] or, for the last LDR pass, the
-    /// renderer's target format.
+    /// Format of `output`: [`PostContext::hdr_format`], [`LDR_FORMAT`] or, for the last LDR
+    /// pass, the renderer's target format.
     pub output_format: wgpu::TextureFormat,
+    /// Format of the HDR targets: [`HDR_FORMAT`], or [`LDR_FORMAT`] on adapters that cannot
+    /// render to it. Passes that make their own HDR textures use this.
+    pub hdr_format: wgpu::TextureFormat,
     /// Size of `input` and `output` in pixels.
     pub size: (u32, u32),
     /// The scene depth (`Depth32Float`, 0 near .. 1 far), present when any pass in the chain
@@ -222,7 +253,19 @@ pub struct FullscreenPass {
     params_size: u64,
     gpu: Option<FullscreenGpu>,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    /// Bind groups by (input, aux), kept across frames; cleared when the frame size changes.
+    groups: Vec<CachedGroup>,
+    groups_size: (u32, u32),
 }
+
+struct CachedGroup {
+    input: wgpu::TextureView,
+    aux: wgpu::TextureView,
+    group: wgpu::BindGroup,
+}
+
+/// Most distinct (input, aux) pairs one pass keeps bind groups for (a bloom chain uses ~6).
+const MAX_CACHED_GROUPS: usize = 16;
 
 impl FullscreenPass {
     /// A pass from WGSL fragment source with a parameter block of `params_size` bytes (0 for
@@ -234,6 +277,8 @@ impl FullscreenPass {
             params_size,
             gpu: None,
             pipelines: Vec::new(),
+            groups: Vec::new(),
+            groups_size: (0, 0),
         }
     }
 
@@ -259,47 +304,50 @@ impl FullscreenPass {
         let gpu = self.gpu.get_or_insert_with(|| {
             make_fullscreen(device, &self.label, &self.source, self.params_size)
         });
-        let pipeline = match self
+        let pipeline_index = match self
             .pipelines
             .iter()
             .position(|(f, _)| *f == d.output_format)
         {
-            Some(i) => &self.pipelines[i].1,
+            Some(i) => i,
             None => {
                 let p = fullscreen_pipeline(device, &self.label, gpu, d.output_format);
                 self.pipelines.push((d.output_format, p));
-                &self.pipelines.last().expect("just pushed").1
+                self.pipelines.len() - 1
             }
         };
-        let mut entries = vec![
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(d.input),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&gpu.sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(d.aux.unwrap_or(d.input)),
-            },
-        ];
-        if let Some(buf) = &gpu.params {
-            if !params.is_empty() {
-                debug_assert_eq!(params.len() as u64, self.params_size);
-                ctx.queue.write_buffer(buf, 0, params);
-            }
-            entries.push(wgpu::BindGroupEntry {
-                binding: 3,
-                resource: buf.as_entire_binding(),
-            });
+        let pipeline = &self.pipelines[pipeline_index].1;
+        if let Some(buf) = &gpu.params
+            && !params.is_empty()
+        {
+            debug_assert_eq!(params.len() as u64, self.params_size);
+            ctx.queue.write_buffer(buf, 0, params);
         }
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(&self.label),
-            layout: &gpu.layout,
-            entries: &entries,
-        });
+        if self.groups_size != ctx.size {
+            self.groups.clear();
+            self.groups_size = ctx.size;
+        }
+        let aux = d.aux.unwrap_or(d.input);
+        let group_index = match self
+            .groups
+            .iter()
+            .position(|g| g.input == *d.input && g.aux == *aux)
+        {
+            Some(i) => i,
+            None => {
+                if self.groups.len() >= MAX_CACHED_GROUPS {
+                    self.groups.remove(0);
+                }
+                let group = fullscreen_group(device, &self.label, gpu, d.input, aux);
+                self.groups.push(CachedGroup {
+                    input: d.input.clone(),
+                    aux: aux.clone(),
+                    group,
+                });
+                self.groups.len() - 1
+            }
+        };
+        let group = &self.groups[group_index].group;
         let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(&self.label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -317,9 +365,54 @@ impl FullscreenPass {
             multiview_mask: None,
         });
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+fn fullscreen_group(
+    device: &wgpu::Device,
+    label: &str,
+    gpu: &FullscreenGpu,
+    input: &wgpu::TextureView,
+    aux: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    let base = [
+        wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(input),
+        },
+        wgpu::BindGroupEntry {
+            binding: 1,
+            resource: wgpu::BindingResource::Sampler(&gpu.sampler),
+        },
+        wgpu::BindGroupEntry {
+            binding: 2,
+            resource: wgpu::BindingResource::TextureView(aux),
+        },
+    ];
+    let with_params;
+    let entries: &[wgpu::BindGroupEntry<'_>] = match &gpu.params {
+        Some(buf) => {
+            let [a, b, c] = base;
+            with_params = [
+                a,
+                b,
+                c,
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buf.as_entire_binding(),
+                },
+            ];
+            &with_params
+        }
+        None => &base,
+    };
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout: &gpu.layout,
+        entries,
+    })
 }
 
 fn make_fullscreen(
@@ -435,6 +528,50 @@ fn fullscreen_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_prelude_validates() {
+        let source = FullscreenPass::new(
+            "test",
+            "@fragment fn fs_main(in: PostIn) -> @location(0) vec4<f32> {
+                let a = textureSampleLevel(post_aux, post_sampler, in.uv, 0.0);
+                return vec4<f32>(post_output(textureLoad(post_input, vec2<i32>(in.clip.xy), 0).rgb + a.rgb), 1.0);
+            }",
+            0,
+        )
+        .source;
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+    }
+
+    #[test]
+    fn hdr_format_falls_back_without_float_targets() {
+        use wgpu::{TextureFormatFeatureFlags as F, TextureFormatFeatures, TextureUsages as U};
+        let full = TextureFormatFeatures {
+            allowed_usages: U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+            flags: F::FILTERABLE | F::MULTISAMPLE_X4 | F::MULTISAMPLE_RESOLVE,
+        };
+        assert_eq!(hdr_format_for(None, 4), HDR_FORMAT);
+        assert_eq!(hdr_format_for(Some(full), 4), HDR_FORMAT);
+        assert_eq!(hdr_format_for(Some(full), 1), HDR_FORMAT);
+        let no_render = TextureFormatFeatures {
+            allowed_usages: U::TEXTURE_BINDING,
+            ..full
+        };
+        assert_eq!(hdr_format_for(Some(no_render), 1), LDR_FORMAT);
+        let no_msaa = TextureFormatFeatures {
+            flags: F::FILTERABLE,
+            ..full
+        };
+        assert_eq!(hdr_format_for(Some(no_msaa), 4), LDR_FORMAT);
+        assert_eq!(hdr_format_for(Some(no_msaa), 1), HDR_FORMAT);
+    }
 
     struct Named(&'static str, PostSlot);
 

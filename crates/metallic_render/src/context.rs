@@ -65,6 +65,18 @@ impl RenderContext {
         pollster::block_on(Self::from_instance(&instance, None))
     }
 
+    /// Like [`RenderContext::new_headless`], limited to `backends` (for example
+    /// `wgpu::Backends::GL` to check the GL path).
+    pub fn new_headless_with_backends(
+        backends: wgpu::Backends,
+    ) -> Result<RenderContext, RenderError> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        pollster::block_on(Self::from_instance(&instance, None))
+    }
+
     /// Wraps the device and queue of a host that already owns them (the eframe/egui
     /// Studio editor passes the ones from its `wgpu_render_state`).
     pub fn from_eframe(device: wgpu::Device, queue: wgpu::Queue) -> RenderContext {

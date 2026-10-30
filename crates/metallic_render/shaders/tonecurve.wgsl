@@ -94,9 +94,9 @@ fn apply_curve(x: vec3<f32>, curve: u32) -> vec3<f32> {
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// Inverse of a curve on neutral grey, per channel: the scene value whose grey maps to `y`
-// (0..1). Exact for the per-channel curves (Filmic, Clamp); for the others it inverts the tone
-// scale and lets the curve's own hue handling act on colours, which keeps them close.
+// Inverse of a curve: the scene colour that maps to `y` (0..1). Closed form for the per-channel
+// curves (Filmic, Clamp). The others mix channels (AgX, ACES, Neutral), so they start from the
+// per-channel inverse of the grey response and refine through the full curve.
 fn invert_curve(y_in: vec3<f32>, curve: u32) -> vec3<f32> {
     let y = clamp(y_in, vec3<f32>(0.0), vec3<f32>(0.98));
     if (curve == 5u) {
@@ -123,5 +123,12 @@ fn invert_curve(y_in: vec3<f32>, curve: u32) -> vec3<f32> {
         lo = select(lo, mid, below);
         hi = select(mid, hi, below);
     }
-    return select(exp2(0.5 * (lo + hi)), vec3<f32>(0.0), y <= vec3<f32>(0.0));
+    var x = select(exp2(0.5 * (lo + hi)), vec3<f32>(0.0), y <= vec3<f32>(0.0));
+    // Damped multiplicative steps: converges for local contrasts below 4.
+    let target_y = max(y, vec3<f32>(1e-5));
+    for (var i = 0; i < 6; i = i + 1) {
+        let f = max(apply_curve(x, curve), vec3<f32>(1e-5));
+        x = x * sqrt(target_y / f);
+    }
+    return select(x, vec3<f32>(0.0), y <= vec3<f32>(0.0));
 }
