@@ -70,6 +70,8 @@ pub(crate) struct ApiState {
     bound: RefCell<HashMap<String, input::Bound>>,
     /// `Cancel` calls for actions unbound while pressed.
     cancels: RefCell<Vec<input::PendingCancel>>,
+    /// Hidden actions to destroy once the world is free: `(action, context)`.
+    pending_destroy: RefCell<Vec<(InstanceId, InstanceId)>>,
     /// Wraps a bound handler so its `Sink`/`Pass` result reaches the host.
     bind_wrapper: Function,
     /// `UserInputService` and `ContextActionService`.
@@ -158,6 +160,7 @@ fn build(
         enums,
         bound: RefCell::new(HashMap::new()),
         cancels: RefCell::new(Vec::new()),
+        pending_destroy: RefCell::new(Vec::new()),
         bind_wrapper,
         input_services: input::InputServices::new(),
     });

@@ -31,6 +31,8 @@ use crate::vm::Context;
 pub const MAX_ACTION_EVENTS_PER_STEP: usize = 16;
 /// Most action events kept waiting; beyond this the oldest are dropped.
 const MAX_QUEUED_ACTION_EVENTS: usize = 1024;
+/// Most actions one script may have bound at a time.
+pub const MAX_BOUND_ACTIONS_PER_SCRIPT: usize = 256;
 /// Most `Sink`/`Pass` results kept for the host.
 const MAX_BOUND_RESULTS: usize = 1024;
 
@@ -580,6 +582,7 @@ impl ApiState {
 
     /// Client VM: cancels, disabled actions and up to [`MAX_ACTION_EVENTS_PER_STEP`] events.
     pub(crate) fn deliver_action_events(self: &Rc<Self>) {
+        self.flush_hidden();
         // Actions that were unbound while pressed.
         let cancels = std::mem::take(&mut *self.cancels.borrow_mut());
         for c in cancels {
@@ -694,15 +697,35 @@ impl ApiState {
         }
     }
 
+    /// Destroys a hidden action (and its context when empty). When the world is borrowed the
+    /// destroy waits in a queue that `flush_hidden` runs at the next safe point.
     fn destroy_hidden(&self, action: InstanceId, context: InstanceId) {
+        if !self.try_destroy_hidden(action, context) {
+            self.pending_destroy.borrow_mut().push((action, context));
+        }
+    }
+
+    fn try_destroy_hidden(&self, action: InstanceId, context: InstanceId) -> bool {
         let Ok(mut world) = self.world.try_borrow_mut() else {
-            return;
+            return false;
         };
         if world.is_alive(action) {
             world.destroy(action);
         }
         if world.is_alive(context) && world.children(context).is_empty() {
             world.destroy(context);
+        }
+        true
+    }
+
+    /// Runs the destroys that had to wait for the world.
+    pub(crate) fn flush_hidden(&self) {
+        if self.pending_destroy.borrow().is_empty() {
+            return;
+        }
+        let waiting = std::mem::take(&mut *self.pending_destroy.borrow_mut());
+        for (action, context) in waiting {
+            self.destroy_hidden(action, context);
         }
     }
 }
@@ -824,47 +847,48 @@ impl ApiState {
             .lua
             .try_upgrade()
             .ok_or_else(|| lua_error("the VM is gone"))?;
-        self.unbind_action(&name);
-        let (action, context) = {
-            let mut world = self.world_mut()?;
-            let context_name = format!("ContextActionService@{priority}");
-            let context = match world.find_first_child(player, &context_name) {
-                Some(c) => c,
-                None => {
-                    let c = world
-                        .create("InputContext", Some(player))
-                        .map_err(lua_error)?;
-                    world
-                        .set(c, "Name", CoreValue::String(context_name))
-                        .map_err(lua_error)?;
-                    world
-                        .set(c, "Priority", CoreValue::Number(priority))
-                        .map_err(lua_error)?;
-                    c
-                }
-            };
-            let action = world
-                .create("InputAction", Some(context))
-                .map_err(lua_error)?;
-            let ty = action_type_for(controls.first().copied()).to_string();
-            for (prop, value) in [
-                ("Name", CoreValue::String(name.clone())),
-                ("DisplayName", CoreValue::String(name.clone())),
-                ("ShowOnTouch", CoreValue::Bool(touch)),
-                ("Type", CoreValue::String(ty)),
-            ] {
-                world.set(action, prop, value).map_err(lua_error)?;
+        let owner = self.budget.current_owner();
+        {
+            let bound = self.bound.borrow();
+            let replaces = bound.get(&name).is_some_and(|b| b.owner == owner);
+            let mine = bound.values().filter(|b| b.owner == owner).count();
+            if !replaces && mine >= MAX_BOUND_ACTIONS_PER_SCRIPT {
+                return Err(lua_error(format!(
+                    "BindAction: too many bound actions (the limit is {MAX_BOUND_ACTIONS_PER_SCRIPT} per script)"
+                )));
             }
-            for key in &controls {
-                let binding = world
-                    .create("InputBinding", Some(action))
-                    .map_err(lua_error)?;
-                world
-                    .set(binding, "KeyCode", CoreValue::String((*key).to_string()))
-                    .map_err(lua_error)?;
+        }
+        // Everything that can fail happens before the old binding is touched; a failure
+        // removes what was created.
+        let (action, context) = self.create_hidden(player, &name, touch, priority, &controls)?;
+        let wrapped = match self.wrap_bound(&lua, handler, action) {
+            Ok(f) => f,
+            Err(e) => {
+                self.destroy_hidden(action, context);
+                return Err(e);
             }
-            (action, context)
         };
+        let new = Bound {
+            action,
+            context,
+            handler: wrapped,
+            owner,
+            pressed: false,
+            alive: Rc::new(Cell::new(true)),
+        };
+        let old = self.bound.borrow_mut().insert(name.clone(), new);
+        if let Some(old) = old {
+            self.retire(&name, old);
+        }
+        Ok(())
+    }
+
+    fn wrap_bound(
+        &self,
+        lua: &Lua,
+        handler: Function,
+        action: InstanceId,
+    ) -> mlua::Result<Function> {
         let (shared, now) = (self.shared.clone(), self.now.clone());
         let record = lua.create_function(move |_, sink: bool| {
             let mut results = shared.input.results.borrow_mut();
@@ -877,19 +901,71 @@ impl ApiState {
             }
             Ok(())
         })?;
-        let wrapped: Function = self.bind_wrapper.call((handler, record))?;
-        self.bound.borrow_mut().insert(
-            name,
-            Bound {
-                action,
-                context,
-                handler: wrapped,
-                owner: self.budget.current_owner(),
-                pressed: false,
-                alive: Rc::new(Cell::new(true)),
-            },
-        );
-        Ok(())
+        self.bind_wrapper.call((handler, record))
+    }
+
+    /// Creates the hidden context (if needed), action and bindings in one go; on failure
+    /// nothing stays behind.
+    fn create_hidden(
+        &self,
+        player: InstanceId,
+        name: &str,
+        touch: bool,
+        priority: f64,
+        controls: &[&'static str],
+    ) -> mlua::Result<(InstanceId, InstanceId)> {
+        let mut world = self.world_mut()?;
+        let context_name = format!("ContextActionService@{priority}");
+        let existing = world.find_first_child(player, &context_name);
+        let mut created: Vec<InstanceId> = Vec::new();
+        let result = (|| -> mlua::Result<(InstanceId, InstanceId)> {
+            let context = match existing {
+                Some(c) => c,
+                None => {
+                    let c = world
+                        .create("InputContext", Some(player))
+                        .map_err(lua_error)?;
+                    created.push(c);
+                    world
+                        .set(c, "Name", CoreValue::String(context_name))
+                        .map_err(lua_error)?;
+                    world
+                        .set(c, "Priority", CoreValue::Number(priority))
+                        .map_err(lua_error)?;
+                    c
+                }
+            };
+            let action = world
+                .create("InputAction", Some(context))
+                .map_err(lua_error)?;
+            created.push(action);
+            let ty = action_type_for(controls.first().copied()).to_string();
+            for (prop, value) in [
+                ("Name", CoreValue::String(name.to_string())),
+                ("DisplayName", CoreValue::String(name.to_string())),
+                ("ShowOnTouch", CoreValue::Bool(touch)),
+                ("Type", CoreValue::String(ty)),
+            ] {
+                world.set(action, prop, value).map_err(lua_error)?;
+            }
+            for key in controls {
+                let binding = world
+                    .create("InputBinding", Some(action))
+                    .map_err(lua_error)?;
+                world
+                    .set(binding, "KeyCode", CoreValue::String((*key).to_string()))
+                    .map_err(lua_error)?;
+            }
+            Ok((action, context))
+        })();
+        if result.is_err() {
+            for id in created.into_iter().rev() {
+                if world.is_alive(id) {
+                    world.destroy(id);
+                }
+            }
+        }
+        result
     }
 
     /// Removes a bound action; a pressed one gets `Cancel` on the next step.
@@ -897,6 +973,10 @@ impl ApiState {
         let Some(b) = self.bound.borrow_mut().remove(name) else {
             return;
         };
+        self.retire(name, b);
+    }
+
+    fn retire(&self, name: &str, b: Bound) {
         if b.pressed {
             self.cancels.borrow_mut().push(PendingCancel {
                 name: name.to_string(),
@@ -1169,4 +1249,58 @@ pub(crate) fn action_methods(lua: &Lua) -> mlua::Result<Vec<(&'static str, Funct
         Ok(f64::from(progress.clamp(0.0, 1.0)))
     })?;
     Ok(vec![("GetState", get_state), ("GetHoldProgress", hold)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vm::{OutputSink, ScriptVm};
+
+    struct Quiet;
+    impl OutputSink for Quiet {
+        fn print(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    /// An unbind that finds the world borrowed waits, and the hidden instances go at the next
+    /// safe point.
+    #[test]
+    fn unbind_while_the_world_is_borrowed_is_deferred() {
+        let world = Rc::new(RefCell::new(World::new_with_services()));
+        let player = {
+            let mut w = world.borrow_mut();
+            let players = w.root("Players").unwrap();
+            w.create("Player", Some(players)).unwrap()
+        };
+        let shared = Rc::new(super::super::HostShared::default());
+        shared.local_player.set(Some(player));
+        let sink: Rc<dyn OutputSink> = Rc::new(Quiet);
+        let mut vm = ScriptVm::with_output(Context::Client, sink.clone()).unwrap();
+        let state = super::super::install(&vm, world.clone(), shared, sink).unwrap();
+        vm.run_script(
+            "bind",
+            r#"game:GetService("ContextActionService"):BindAction("A", function() end, false, Enum.KeyCode.A)"#,
+        )
+        .unwrap();
+        let count = |w: &World| w.children(player).len();
+        assert_eq!(count(&world.borrow()), 1, "the hidden context exists");
+        {
+            let _busy = world.borrow();
+            vm.run_script(
+                "unbind",
+                r#"game:GetService("ContextActionService"):UnbindAction("A")"#,
+            )
+            .unwrap();
+            assert_eq!(state.pending_destroy.borrow().len(), 1, "queued");
+        }
+        assert_eq!(
+            count(&world.borrow()),
+            1,
+            "still there until the safe point"
+        );
+        state.flush_hidden();
+        assert_eq!(count(&world.borrow()), 0, "context and action are gone");
+        assert!(state.pending_destroy.borrow().is_empty());
+    }
 }
