@@ -128,14 +128,16 @@ NOT verified yet:
 - `cargo test --workspace -j 4`: not run (only this crate).
 - `cargo deny check licenses`: not run (new deps are MIT/Apache; `image` dev-dep has only `png`).
 - Bench numbers: not run.
-- Rebase on origin/main: not done at the freeze (branch is based on 0d5796a).
+- Rebased on origin/main (d004bc5) with git only. `Cargo.lock` had two conflicts, both pure insertions of different
+  packages; resolved by hand as a union. Not yet checked by cargo: the first build may rewrite `Cargo.lock`; commit
+  that if it does.
 - The interactive demo (window) was not run; only the headless screenshot path.
 
 ## Checks to run after the reboot
 ```
 cd <worktrees>/136-modeling   # <worktrees> = the metallic-studio-worktrees folder
 export PATH="$HOME/.cargo/bin:$PATH" CARGO_TARGET_DIR=<worktrees>/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
-git fetch origin && git rebase origin/main
+git fetch origin && git rebase origin/main   # only if main moved again
 cargo test -p metallic_modeling -j 4                      # includes the doctest
 cargo clippy --workspace --all-targets -j 4 -- -D warnings
 cargo test --workspace -j 4
