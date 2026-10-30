@@ -13,27 +13,31 @@ Calls I made without the owner are marked "assistant's call".
 
 ## 1. Summary
 
-1. **The biggest problem today is per-frame polling of the Instance tree.** The renderer (#3, in review) and the
-   physics sync (#4, merged) both re-read seven properties of every part every frame through `World::get`. On
-   `origin/main` that read costs 7.2 ms (best of three rounds; 10.3 ms in the worst) for 5,000 parts, so two readers take about 14 ms of a
-   16.7 ms frame before any simulation or drawing. The M1 stress number (463 fps with 5,000 parts) does not show this,
-   because the stress example syncs once at start-up.
+1. **Per-frame polling of the Instance tree was the biggest problem; half of it is fixed.** Reading seven properties
+   of every part through `World::get` costs 7.2 ms for 5,000 parts on the pre-fix code (best of three rounds; 10.3 ms
+   in the worst). The renderer lane merged a change journal (`World::changes_since`, PR #59) tonight, so `Scene::sync`
+   now re-reads only changed parts. The physics step (#4, merged) still reads every part every frame and should move to
+   the journal next.
 2. **Fixed in this PR (now, cheap):** `classes::find_property` built a `Vec` of the whole class chain on every
    property read and write. Walking the chain without allocating cuts the 5,000-part read to 2.4 ms (3.0x faster) and a
-   `set` from 656 ns to 145 ns. Ten lines, no interface change, all tests pass.
-3. **Next (now, cheap): a change journal in `metallic_core`.** Render and physics then touch only what changed. A
-   static 5,000-part level costs close to zero per frame instead of a full rescan.
+   `set` from 656 ns to 145 ns (4.5x). Every `World::set` the renderer's stress test makes (500 per frame) and every
+   property write a script makes gets cheaper. Ten lines, no interface change, all tests pass.
+3. **Next (now, cheap): physics on the change journal.** A static 5,000-part level then costs the physics wrapper
+   close to nothing per frame instead of a full rescan.
 4. **Physics runs four full pipeline steps per frame, each with four solver substeps.** Rapier 0.36 already splits
    one step into `num_solver_iterations` substeps (Sourced, Rapier source). Our `dt = 1/240` therefore solves at
    960 Hz and runs collision detection four times per frame. One step of `dt = 1/60` with 4 iterations gives the
-   240 Hz solver Roblox uses, at about a third of the cost while bodies move and a seventh to a tenth once they settle of the cost (Measured, 2.3).
-5. **The Luau time budget calls `Instant::now()` at every interrupt** (each loop back-edge and call). A hot loop
-   runs 2.4x to 3.1x slower than without it. A counter-gated clock or a watchdog flag removes almost all of
-   that (Measured, 2.4).
-6. Budgets for three PC tiers and the server are in section 3. The headline targets: Parkour at 60 fps on the
+   240 Hz solver Roblox uses, at about a third of the cost while bodies move and a seventh to a tenth once they
+   settle (Measured, 2.3). Behaviour changes too, so #5's character tests decide.
+5. **The Luau time budget (#6, in review) calls `Instant::now()` at every interrupt** (each loop back-edge and
+   call). A hot loop runs 2.4x to 3.1x slower than with no interrupt. Reading the clock every 1,024 interrupts
+   brings that to 1.4x-1.65x; installing the interrupt only when a watchdog sees an overrun removes it (Measured, 2.4).
+6. **Instance property reads from Luau will cost about 350 ns each** with the plain mlua userdata pattern, against
+   17 ns for a table field (Measured, 2.4). #7 should set a budget and benchmark it.
+7. Budgets for three PC tiers and the server are in section 3. The headline targets: Parkour at 60 fps on the
    dev PC with at least 2x CPU headroom, 30 fps (aim 60 at a lower internal resolution) on Iris Xe, client RAM
    at most 1.5 GB on the low tier, Play in Studio in under 250 ms, game join in 5 s with a warm cache.
-7. Measurement: criterion benches per crate (started here), instruction-count benches as the PR gate on Linux CI
+8. Measurement: criterion benches per crate (started here), instruction-count benches as the PR gate on Linux CI
    (wall time on shared runners is too noisy), a nightly wall-time and GPU run on the owner's PC, and the
    `profiling` crate with puffin in-app and Tracy for deep dives. All MIT/Apache/BSD.
 
@@ -78,9 +82,9 @@ Allocation counts (Measured, counting global allocator, 5,000 parts with 4 non-d
 | Heap allocations per `set(Position)` | 8 | 1 (the property-name key in the map) |
 | Live heap per Part | 894 B | 894 B |
 
-What is left after the fix: 2.4 ms per frame per reader for 5,000 parts is still too much to poll every frame on the
-Low tier (two readers, about 5 ms of a 33 ms budget, before scripts run). The change journal (4.1.2) removes the
-polling; typed storage (4.2.1) removes the remaining allocations. `FindFirstChild` costs about 88 ns per child
+What is left after the fix: 2.4 ms per frame for each reader that polls 5,000 parts is still too much on the Low
+tier. The change journal (PR #59) removed the polling from the renderer and can do the same for physics; typed
+storage (4.2.1) removes the remaining allocations. `FindFirstChild` costs about 88 ns per child
 scanned because each `Name` read clones a String; Luau code that indexes children by name (`script.Parent.Humanoid`)
 pays that per lookup.
 
@@ -101,7 +105,9 @@ pays that per lookup.
   1,000 siblings one by one costs about 1 ms; fine for now. (#47 covers a panic in the same `retain`.)
 - `save_scene` maps refs with `order.iter().position(..)`, O(n) per ref; harmless while only `Player.RespawnLocation`
   is a Ref, quadratic once Models carry `PrimaryPart` refs. Use a `HashMap` then.
-- No change tracking: nothing tells a consumer which instances changed since its last look.
+- Change journal (added by PR #59 tonight): `World::changes_since(cursor)` returns the ids touched since a cursor,
+  deduplicated with a fresh `HashSet` per call, bounded at 16,384 entries (`Changes::Overflow` forces a full re-read).
+  It records ids, not property names, so a consumer re-reads the whole instance; that is fine for parts.
 
 **metallic_physics (merged, #4)**
 - `PhysicsWorld::new` sets `integration_parameters.dt = 1/240` and `step` calls `step_with_events` once per
@@ -115,15 +121,18 @@ pays that per lookup.
 - `rapier3d` is used with default features; `parallel` (rayon) and `simd-stable` are off. Rapier reports up to 2x
   native speed-up across 2024-2025 with `simd-stable` on (Sourced: [Dimforge 2025 review](https://dimforge.com/blog/2026/01/09/the-year-2025-in-dimforge/)).
 
-**metallic_render (in review, #3; read-only peek)**
-- `Scene::sync` rebuilds a `Vec<PartDraw>` from the whole Workspace each call and compares it with the previous one;
-  any difference re-uploads every instance buffer. With 100 moving parts, every frame re-reads and re-uploads 5,000.
-- `examples/stress.rs` calls `renderer.sync` once before the loop, so the recorded 463 fps (about 2.2 ms per frame,
-  RTX 3060 Ti) measures drawing only. The worst single frames (1.8 to 68 fps in the first windows) point to
-  pipeline/driver warm-up.
+**metallic_render (merged tonight, PR #59)**
+- `Scene::sync` now reads the journal and re-reads only changed parts; a full rebuild happens only on overflow. The
+  lane measured `Scene::sync` of 5,000 parts with 50 changed at 97.5 µs (best of 20) and asserts under 1 ms.
+- The stress example now moves 500 parts per frame through `World::set` and syncs each frame: 349 fps average,
+  p50 2.88 ms, p99 4.29 ms, sync 1.30 ms per frame including the 500 `set` calls (RTX 3060 Ti, 1080p High; from
+  `docs/agents/m1-build.md`). Those numbers predate this PR; `set` is about 4.5x cheaper now, so the sync column
+  should drop. Not re-measured here: the stress run opens a window, and the owner's rule forbids pop-ups.
+- `Renderer::prewarm` exists. The lane found frame 0 costs 24-32 ms with or without it and blames mid-run spikes on
+  other sessions' rustc processes.
 - Pipelines are created with `cache: None`. wgpu's `PipelineCache` only works on Vulkan, and desktop drivers keep
-  their own caches (Sourced: [wgpu PipelineCache](https://docs.rs/wgpu/latest/wgpu/struct.PipelineCache.html)). On DX12
-  the fix for warm-up hitches is to create every pipeline at load and render one warm-up frame off screen.
+  their own caches (Sourced: [wgpu PipelineCache](https://docs.rs/wgpu/latest/wgpu/struct.PipelineCache.html)), so on
+  DX12 pre-warm is the right tool.
 - Transparent parts are sorted every frame; fine, the sort covers only blended parts.
 
 **metallic_script (in review, #6; read-only peek)**
@@ -185,7 +194,7 @@ mlua userdata: a script reading `part.Position` for 1,000 parts each frame spend
 
 | Tier | Reference machine | Why |
 |---|---|---|
-| Low | Intel Iris Xe (96 EU) laptop, 4 cores / 8 threads, 8-16 GB shared RAM | The spec's floor. About 2.0-2.15 FP32 TFLOPS and no dedicated memory (Sourced: TechPowerUp listing via search snippet; LaptopMedia). Roughly 1/8 of an RTX 3060 Ti |
+| Low | Intel Iris Xe (96 EU) laptop, 4 cores / 8 threads, 8-16 GB shared RAM | The spec's floor. About 2.0-2.15 FP32 TFLOPS and no dedicated memory (search snippets only: TechPowerUp, LaptopMedia; the pages returned 403). Roughly 1/8 of an RTX 3060 Ti |
 | Mid | GTX 1650 / RX 6500 class, 6 cores, 16 GB | Steam, September 2026: 16 GB RAM 37.8 %, 6 cores 27.2 %, 1080p 47.9 % of primary displays (Sourced: [Steam survey](https://store.steampowered.com/hwsurvey/)) |
 | Dev | RTX 3060 Ti, Ryzen 5 5500, 32 GB (owner's PC) | The spec's acceptance machine |
 | Server | One core of an AMD Zen 4 host per match (for example Hetzner AX42, 8 cores, EUR 79/month) | M2 game servers (3.5) |
@@ -284,27 +293,25 @@ Each item names the task it touches: #3 render, #4 physics (merged), #5 characte
 
 ### 4.1 Now, cheap
 
-1. **Allocation-free property lookup** (core; done in this PR). Helps every consumer, most of all #3 and #4.
-2. **Change journal in `World`** (core; unblocks the next two items; affects #3, #4, #7, #8). `World` appends
-   `(InstanceId, PropId)` to a `Vec` on each effective `set`, plus created, destroyed and reparented ids.
-   Consumers call `world.drain_changes(cursor)` or keep a cursor into a shared log the runtime clears once per frame.
-   Cost: one push per change. This mirrors the per-component change ticks Bevy uses (Sourced:
-   [bevy_ecs change_detection](https://docs.rs/bevy_ecs/latest/bevy_ecs/change_detection/index.html)), but stays
-   inside our Instance tree rather than adopting an ECS. Assistant's call: keep the arena (generational slots) and add
-   tracking; an ECS rewrite buys nothing at Parkour scale, and the spec forbids engine crates.
+1. **Allocation-free property lookup** (core; done in this PR). Helps every consumer: render sync, physics, scripts
+   (#7) and Studio edits.
+2. **Change journal in `World`** (core; done tonight in PR #59 by the renderer lane). Assistant's call, now also
+   the lane's: keep the arena (generational slots) and add tracking rather than adopting an ECS. Bevy tracks change
+   ticks per component (Sourced: [bevy_ecs change_detection](https://docs.rs/bevy_ecs/latest/bevy_ecs/change_detection/index.html));
+   at Parkour scale an id journal does the same job, and the spec forbids engine crates. Remaining work: physics
+   (#4 follow-up) and later replication (M2) read it too; add a `changes/changes_since_50_of_5000` bench.
 3. **Physics: one Rapier step per frame with 4 solver substeps** (#4 follow-up, affects #5 tuning). Keeps a 240 Hz
    solver like Roblox (Sourced: [adaptive timestepping](https://create.roblox.com/docs/physics/adaptive-timestepping):
    240 Hz default, adaptive mode up to 2.5x faster) and cuts collision detection to once per frame. Keep the
    accumulator so a 30 fps frame runs two steps. Re-check the character controller (#5) and the moving-platform tests
    after the switch. Then read only journaled parts in `step` instead of all of them.
-4. **Renderer: incremental instance updates** (#3). Give each part a stable slot in its mesh-kind instance buffer,
-   patch changed slots with `queue.write_buffer` ranges, and rebuild only on structural change. Add a stress variant
-   with 100 moving parts that calls `sync` each frame, so the measured fps includes sync.
-5. **Renderer: no pipeline creation after load** (#3, #8). Create every pipeline up front and draw one hidden warm-up
-   frame. Use `desired_maximum_frame_latency = 2` (wgpu's documented default and "reasonable default for most
-   applications", Sourced: [SurfaceConfiguration](https://docs.rs/wgpu/latest/wgpu/type.SurfaceConfiguration.html))
-   and `Fifo` (vsync) in the player by default; uncapped only behind a developer flag. Vsync is also the cheapest
-   battery saver on laptops.
+4. **Renderer: incremental instance updates** (#3; done in PR #59 for the CPU side). Still open: patch only changed
+   slots with ranged `queue.write_buffer` instead of re-uploading a whole mesh-kind buffer when one part moves, if the
+   stress sync column shows the upload matters.
+5. **Present settings in the player** (#8). Pre-warm landed in PR #59. Use `desired_maximum_frame_latency = 2`
+   (wgpu's documented default and "reasonable default for most applications", Sourced:
+   [SurfaceConfiguration](https://docs.rs/wgpu/latest/wgpu/type.SurfaceConfiguration.html)) and `Fifo` (vsync) in the
+   player by default; uncapped only behind a developer flag. Vsync is also the cheapest battery saver on laptops.
 6. **Luau budget check without a clock call per safepoint** (#6). Simplest step: read the clock every 1,024
    interrupts (2.4x-3.1x slowdown becomes 1.4x-1.65x, a few lines). Best step: no interrupt callback while scripts
    run within budget; a watchdog thread installs one only when a resume overruns (2.4). Budget for #7: a Luau read of
@@ -352,7 +359,7 @@ Each item names the task it touches: #3 render, #4 physics (merged), #5 characte
    first, texture budget from device memory, like Roblox's texture streaming (Sourced above). Distance-based instance
    streaming for big worlds.
 6. **Dynamic resolution** on the Low tier: lower the internal resolution when GPU time exceeds budget for a few
-   frames and upscale (bilinear first, AMD FSR 1, MIT, later). Frame pacing matters as much as average fps: a game
+   frames and upscale (bilinear first, AMD FSR 1 later; I believe FSR 1 is MIT-licensed but did not fetch it, Judgment). Frame pacing matters as much as average fps: a game
    at 30 fps on a 60 Hz display that presents unevenly shows 49/16/33 ms frames (Sourced:
    [Android frame pacing](https://developer.android.com/games/sdk/frame-pacing)); vsync plus a fixed frame cap avoids
    that.
@@ -390,10 +397,10 @@ so results can be compared over time. Status: ✓ = added in this PR.
 | core ✓ | `frame_read/seven_props_per_part/{300,5000}` | what render and physics read per frame |
 | core ✓ | `tree/find_first_child_miss_1000`, `full_name`, `create_1000_parts`, `destroy_1000_siblings_one_by_one`, `deep_clone_5000` | tree operations, Play start |
 | core ✓ | `scene/save_5000`, `scene/load_5000` | file I/O plus RON |
-| core | `changes/drain_100_of_5000` | change journal (after 4.1.2) |
+| core | `changes/changes_since_50_of_5000` | journal read cost (journal landed in PR #59) |
 | physics | `step_frame/{parkour_300_20, stress_5000_200}/{falling,settled}` | one 1/60 s frame (2.3 as a bench) |
 | physics | `sync_from/5000`, `raycast/5000` | rebuild cost, queries |
-| render | `sync/{5000_static,5000_100_moving}`, `upload/5000` | CPU side of rendering |
+| render | `sync/{5000_static,5000_500_moving}`, `upload/5000` | CPU side of rendering (the lane has a release-mode test for 50 changed) |
 | render | stress example with `--frames 3600 --json` | p50/p95/p99 frame time on a real GPU (nightly only) |
 | script | `vm/create_sandboxed`, `vm/run_script_small`, `vm/hot_loop_20m`, `vm/call_rust_from_luau_1m` | VM costs (2.4 as benches) |
 | script | `api/part_position_get_1m`, `api/touched_dispatch_1000` (#7) | API overhead |
@@ -433,33 +440,29 @@ moved by up to 2.5x. So:
 
 ## 6. Proposed issues (not created)
 
-1. **Core: change journal for render and physics sync.** Record effective property changes and structural changes in
-   `World` so consumers read only what changed. Bench `changes/drain_100_of_5000`; affects #3, #4, #8.
-2. **Core: borrow-based property reads.** Add `World::with_value(id, prop, |&Value| ..)` (or typed getters) so hot
+1. **Core: borrow-based property reads.** Add `World::with_value(id, prop, |&Value| ..)` (or typed getters) so hot
    paths read Material/Shape/Name without allocating. Measure with `frame_read`.
-3. **Physics: one Rapier step per frame with 4 solver substeps.** Switch from four `dt = 1/240` steps to one
+2. **Physics: one Rapier step per frame with 4 solver substeps.** Switch from four `dt = 1/240` steps to one
    `dt = 1/60` step (solver substeps stay at 240 Hz); re-run character and platform tests. Numbers in the perf doc 2.3.
-4. **Physics: read only changed parts in `step`.** Use the change journal instead of seven `get` calls per body per
-   frame. Blocked by issue 1.
-5. **Render: incremental instance buffers and a moving-parts stress run.** Stable slots per part, ranged
-   `write_buffer`, and a stress variant that syncs every frame with 100 moving parts.
-6. **Render: pipeline warm-up and present settings.** Create all pipelines at load, render one hidden frame, default
-   to Fifo with frame latency 2; uncapped only in developer mode.
-7. **Script: cheap execution-budget check.** Replace `Instant::now()` per interrupt (2.4x-3.1x slower hot loops)
+3. **Physics: read only changed parts in `step`.** Use the change journal instead of seven `get` calls per body per
+   frame (the journal from PR #59 already exists). Bench `step_frame` with a settled 5,000-part level.
+4. **Player: present settings and frame cap.** Default to Fifo (vsync) with frame latency 2 and call
+   `Renderer::prewarm` before the first visible frame; uncapped only in developer mode (#8).
+5. **Script: cheap execution-budget check.** Replace `Instant::now()` per interrupt (2.4x-3.1x slower hot loops)
    with a counter-gated clock now and a watchdog-installed interrupt later; keep the timeout tests green.
-8. **Script API: Instance property read budget.** Bench `part.Position` from Luau (about 350 ns today through mlua
+6. **Script API: Instance property read budget.** Bench `part.Position` from Luau (about 350 ns today through mlua
    userdata, 17 ns for a table field) and bring it under 150 ns with namecall and per-class lookup tables (#7).
-9. **Script: GC steps in frame slack and per-script memory categories.** Step the GC with leftover frame time and tag
+7. **Script: GC steps in frame slack and per-script memory categories.** Step the GC with leftover frame time and tag
    allocations per script for the profiler. Needs `mlua::ffi` for `lua_setmemcat`.
-10. **Runtime: profiling scopes and frame budgets.** Add `profiling` scopes (puffin/Tracy back ends behind features)
+8. **Runtime: profiling scopes and frame budgets.** Add `profiling` scopes (puffin/Tracy back ends behind features)
    and a headless Parkour frame bench that reports p50/p99 per subsystem.
-11. **Infra: instruction-count PR gate and nightly wall-time run.** gungraun benches on a Linux runner fail a PR at
+9. **Infra: instruction-count PR gate and nightly wall-time run.** gungraun benches on a Linux runner fail a PR at
     +5 % instructions; nightly criterion and GPU stress on the owner's PC open an issue at +10 %.
-12. **Release: `dist` profile and size/start-up tracking.** Thin LTO, one codegen unit, line-table debug info; record
+10. **Release: `dist` profile and size/start-up tracking.** Thin LTO, one codegen unit, line-table debug info; record
     exe size and cold start in each release note.
-13. **Studio: idle CPU and large trees.** Reactive repaint outside Play and drags; virtualised Explorer rows. Target:
+11. **Studio: idle CPU and large trees.** Reactive repaint outside Play and drags; virtualised Explorer rows. Target:
     under 1 % CPU idle, 5,000-instance Explorer under 1 ms.
-14. **Perf: quiet re-run of the core benches.** Tonight's numbers ran under 88-99 % CPU load from other sessions;
+12. **Perf: quiet re-run of the core benches.** Tonight's numbers ran under 88-99 % CPU load from other sessions;
     re-run on an idle PC and update the table in the perf doc.
 
 ---
