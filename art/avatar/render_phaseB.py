@@ -56,7 +56,7 @@ POSE_RES = (520, 520)
 POSES = {
     # the concept's pose panel, each seen from about the drawing's angle
     "pose_hand_on_hip": ("pose_hand_on_hip", 0, None, (0, 0, 0.78), 1.75, -18, 6, POSE_RES),
-    "pose_run": ("pose_run", 0, None, (0, -0.05, 0.80), 1.75, 80, 6, POSE_RES),
+    "pose_run": ("pose_run", 0, None, (0, -0.05, 0.80), 1.75, 55, 6, POSE_RES),
     "pose_sit_back": ("pose_sit_back", 0, None, (0.05, -0.05, 0.42), 1.75, 35, 14, POSE_RES),
 }
 
@@ -66,7 +66,8 @@ DEFORM_VIEWS = {"a": (35, 10), "b": (110, 10)}
 
 # Camera target and ortho size for clips that do not fit the standing frame.
 STRIP_FRAME = {"swim": ((0, 0.0, 0.62), 3.4)}
-STRIP_CLIPS = ["idle", "walk", "run", "jump", "fall", "land", "idle_b", "climb", "swim", "swim_idle", "sit"]
+SUFFIX = ""   # compose: appended to sheet names (--suffix _v2) so older rounds stay for comparison
+STRIP_CLIPS = ["idle", "walk_slow", "walk", "run", "jump", "fall", "land", "idle_b", "climb", "swim", "swim_idle", "sit"]
 EMOTE_CLIPS = ["wave", "point", "cheer", "dance"]
 STRIP_RES = (300, 460)
 
@@ -447,7 +448,7 @@ def blender_main(argv):
                     if a.only and clip not in a.only:
                         continue
                     views = {"side": (90, 4)}
-                    if clip in ("walk", "run"):
+                    if clip in ("walk_slow", "walk", "run", "wave", "cheer", "dance"):
                         views["front"] = (20, 6)
                     strip(clip, p, views)
     if meta:
@@ -460,6 +461,9 @@ def blender_main(argv):
 # ======================================================================== compose side (Pillow)
 
 def compose_main(argv):
+    global SUFFIX
+    if "--suffix" in argv:
+        SUFFIX = argv[argv.index("--suffix") + 1]
     from PIL import Image, ImageDraw, ImageFont
 
     os.makedirs(OUT, exist_ok=True)
@@ -537,7 +541,7 @@ def compose_main(argv):
                 if im:
                     im = fit(im, 175, 250)
                     sheet.alpha_composite(im, (cx - im.width // 2, 990 - im.height))
-            sheet.convert("RGB").save(os.path.join(OUT, f"contact_sheet_{p}.png"), optimize=True)
+            sheet.convert("RGB").save(os.path.join(OUT, f"contact_sheet_{p}{SUFFIX}.png"), optimize=True)
 
         # 2. Poses next to the concept's pose panel.
         if raw(p, "pose_run"):
@@ -552,7 +556,7 @@ def compose_main(argv):
                 if im:
                     im = fit(im, 380, 300)
                     sheet.alpha_composite(im, (cx - im.width // 2, 890 - im.height))
-            sheet.convert("RGB").save(os.path.join(OUT, f"poses_vs_concept_{p}.png"), optimize=True)
+            sheet.convert("RGB").save(os.path.join(OUT, f"poses_vs_concept_{p}{SUFFIX}.png"), optimize=True)
 
         # 3. Deformation test sheet.
         if raw(p, "test_knee_bend_a"):
@@ -567,7 +571,7 @@ def compose_main(argv):
                         im = fit(im, cw - 16, ch - 16)
                         sheet.alpha_composite(im, (20 + cw * i + (cw - im.width) // 2, 34 + ch * j + (ch - im.height)))
             label(dr, 20, ch * 2 + 50, "Deformation tests: top row 3/4 front-right, bottom row side-back.", center=False)
-            sheet.convert("RGB").save(os.path.join(OUT, f"deformation_{p}.png"), optimize=True)
+            sheet.convert("RGB").save(os.path.join(OUT, f"deformation_{p}{SUFFIX}.png"), optimize=True)
 
         # 4. Clip strips.
         mpath = os.path.join(RAW, "strips.json")
@@ -590,7 +594,7 @@ def compose_main(argv):
                     title += f", {m['speed']:.2f} m/s = {m['speed'] / STUD:.0f} studs/s; red post = fixed ground point"
                 title += ")"
                 dr.text((12, 8), title, font=font, fill=ink)
-                sheet.convert("RGB").save(os.path.join(OUT, f"strip_{clip}_{vname}_{p}.png"), optimize=True)
+                sheet.convert("RGB").save(os.path.join(OUT, f"strip_{clip}_{vname}_{p}{SUFFIX}.png"), optimize=True)
     print("composed into", OUT)
 
 

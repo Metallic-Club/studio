@@ -176,7 +176,12 @@ Scope: how good platform default characters are rigged and animated, and what `a
 - **Walk (16 studs/s = 4.48 m/s):** 16 frames (0.533 s), stride 2.39 m (8.5 studs), step 1.19 m, 225 steps a
   minute, 4.4 frames of stance (0.66 m of ground) and 3.6 frames of flight per step. **Run (24 studs/s =
   6.72 m/s):** 16 frames (0.533 s), stride 3.58 m (12.8 studs), step 1.79 m, 3.0 frames of stance (0.68 m) and 5.0
-  of flight. Longer contacts made the 0.64 m leg crouch to reach the ground at both ends (first review round). Same cycle
+  of flight. Longer contacts made the 0.64 m leg crouch to reach the ground at both ends (first review round).
+- **walk_slow (6 studs/s = 1.68 m/s), a true walk for partial stick and touch input:** 20 frames (0.667 s), stride
+  1.12 m (4.0 studs), step 0.56 m, 180 steps a minute, stance 0.60 m of ground (10.7 frames, 54% of the cycle, so
+  0.7 frames of double support per step and no flight). Hips lowest just after contact and highest at passing
+  (inverted pendulum), the reverse of the run. With a 0.64 m leg the Froude number reaches 0.5 near 6.3 studs/s (1.77 m/s),
+  so a walk without flight tops out about there; the engine blends walk_slow and walk by speed. Same cycle
   length for both, so blending walk and run is phase-locked. The planted foot is moved backward at exactly the
   speed (heel strike, flat, roll over the ball, toe-off) and the IK solves the leg, so slip is zero by construction;
   the export step measures it (under 0.1 mm a frame).
