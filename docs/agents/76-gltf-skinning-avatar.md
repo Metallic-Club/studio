@@ -40,7 +40,7 @@ the six-part figure.
 
 ## Measurements (2026-10-30)
 - Frame rate, `metallic-player templates/parkour --fps --autopilot` (1920x1080, High, no vsync, RTX 3060 Ti, avatar
-  running and jumping on the spawn island): average 1267 fps, p50 0.69 ms, p99 2.32 ms, max 63 ms (one start-up hitch).
+  running and jumping on the spawn island): average 1267 fps, p50 0.69 ms, p99 2.32 ms, max 63 ms (a single frame; not traced).
 - Foot slip of planted foot vertices (test `planted_feet_do_not_slide_at_the_authored_speeds`, median / p90):
   6 studs/s: 0.13 / 0.41; 16: 0.46 / 1.08; 24: 0.94 / 1.99 studs/s (under 5% / 10% of the speed).
 - Screenshots: `docs/agents/76-gltf-skinning-avatar/` (regenerate with
