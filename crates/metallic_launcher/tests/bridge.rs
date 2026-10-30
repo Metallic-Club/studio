@@ -826,3 +826,37 @@ fn error_of_any(script: Option<String>) -> String {
     let value = answer(&script.expect("an answer"));
     value["error"].as_str().unwrap_or("").to_string()
 }
+
+#[test]
+fn run_script_carries_the_in_page_origin_guard() {
+    // M-5: a script the shell runs (AppEvent::RunScript) gets the same guard as bridge replies.
+    let bridge = bridge();
+    let script = bridge
+        .guard_script("window.__metallicBridge.emit({})", SITE)
+        .unwrap();
+    let check = script.find(r#"["https://metallic.example"].indexOf(location.origin)"#);
+    let call = script.find("window.__metallicBridge.emit");
+    assert!(check.is_some(), "{script}");
+    assert!(check < call, "the origin check must come first: {script}");
+    // Bundled pages are guarded with their own origins, never the site's.
+    let local = bridge.guard_script("x()", LOCAL).unwrap();
+    assert!(
+        local.contains("metallic-app.localhost") && !local.contains("https://metallic.example")
+    );
+}
+
+#[test]
+fn run_script_refused_for_other_origins() {
+    let bridge = bridge();
+    for page in [
+        "https://evil.test/",
+        "http://metallic.example/",
+        "https://metallic.example.evil.test/",
+        "https://metallic.example@evil.test/",
+        "about:blank",
+        "javascript:alert(1)",
+        "file:///c:/x.html",
+    ] {
+        assert!(bridge.guard_script("x()", page).is_none(), "{page}");
+    }
+}

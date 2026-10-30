@@ -658,6 +658,16 @@ impl Bridge {
         ))
     }
 
+    /// Wraps any script the shell runs into the page so it runs only in a page whose
+    /// `location.origin` is the one now showing at `current_page_url`, or `None` when that page
+    /// may not use the bridge (another origin, a frame-less `about:` page, a dangerous scheme).
+    /// Every script the shell evaluates must go through here or through
+    /// [`deliver`](Self::deliver) / [`event_script`](Self::event_script).
+    pub fn guard_script(&self, script: &str, current_page_url: &str) -> Option<String> {
+        let guard = self.guard_origins(current_page_url)?;
+        Some(guarded_script(&guard, script))
+    }
+
     /// The script that tells the page now showing at `current_page_url` about `event`. Only the
     /// site and bundled pages get events. A sign-in state other than the five known ones is not
     /// sent.

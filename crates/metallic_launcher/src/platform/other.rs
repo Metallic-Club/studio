@@ -1,10 +1,11 @@
 //! Stubs for systems other than Windows. Linux (WebKitGTK) and the others arrive later; until
 //! then each step that needs the system says it is not supported.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use metallic_launcher::{EventSink, LauncherError, UrlPolicy};
+use metallic_launcher::{Acquired, EventSink, LauncherError, Spawner, TrayAction, UrlPolicy};
 use url::Url;
 use wry::{WebView, WebViewBuilder};
 
@@ -32,3 +33,48 @@ pub fn configure_builder(builder: WebViewBuilder<'_>, _dev_mode: bool) -> WebVie
 pub fn watch_navigation_failures(_view: &WebView, _sink: Arc<dyn EventSink>) {}
 
 pub fn watch_frame_navigations(_view: &WebView, _policy: Arc<UrlPolicy>) {}
+
+pub fn acquire_instance() -> Result<Acquired, LauncherError> {
+    Err(LauncherError::Unsupported("single instance"))
+}
+
+pub fn register_protocol(_exe: &Path) -> Result<(), LauncherError> {
+    Err(LauncherError::Unsupported("metallic:// registration"))
+}
+
+pub fn protocol_registered_to(_exe: &Path) -> bool {
+    false
+}
+
+/// Starts programs with `std::process::Command` (no shell).
+pub struct SystemSpawner;
+
+impl Spawner for SystemSpawner {
+    fn spawn(&self, exe: &Path, args: &[OsString]) -> Result<u32, LauncherError> {
+        std::process::Command::new(exe)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|child| child.id())
+            .map_err(|e| LauncherError::Platform(format!("could not start the program: {e}")))
+    }
+}
+
+/// No tray on this platform yet.
+pub struct Tray;
+
+pub fn create_tray(
+    _items: &[(TrayAction, &'static str)],
+    _icon_rgba: Vec<u8>,
+    _width: u32,
+    _height: u32,
+    _sink: Arc<dyn EventSink>,
+) -> Result<Tray, LauncherError> {
+    Err(LauncherError::Unsupported("the tray icon"))
+}
+
+pub fn run_velopack() {
+    metallic_update::velopack::VelopackApp::build().run();
+}

@@ -6,6 +6,7 @@ use crate::bridge::BridgeEvent;
 use crate::deep_link::DeepLink;
 use crate::local_pages::LocalPage;
 use crate::site_check::SiteStatus;
+use crate::tray::TrayAction;
 
 /// Something the window should do. Other parts post these through an [`EventSink`] and never
 /// touch the web view themselves.
@@ -25,7 +26,9 @@ pub enum AppEvent {
     },
     /// Tell the current page about something (sent only to the site and bundled pages).
     Bridge(BridgeEvent),
-    /// Run a script in the current page.
+    /// Run a script in the current page. The shell wraps it with the in-page origin guard
+    /// ([`Bridge::guard_script`](crate::Bridge::guard_script)) and drops it when the page on
+    /// screen is not the site or a bundled page.
     RunScript(String),
     /// A site check finished.
     SiteStatus(SiteStatus),
@@ -33,6 +36,8 @@ pub enum AppEvent {
     Navigate(Url),
     /// Show a bundled page.
     ShowLocal(LocalPage),
+    /// An entry of the tray menu was chosen (or the icon was clicked).
+    Tray(TrayAction),
     /// Close the Launcher.
     Quit,
 }

@@ -61,7 +61,18 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   `BridgeErrorCode`) and `assets/bridge.js` (`window.metallic`, main frame only): the checked path from a page to the Launcher. Only the
   site (and the development origin) and bundled pages may call it; commands are a typed enum with unknown fields refused, 16 KiB
   message limit, 32 calls in flight, one Player start per 2 s; an answer goes only to a page of the same origin as the asker. The
-  shell implements `BridgeHost` (`ShellHost`); install, Studio, sign-in and updates answer `notAvailable`/`failed` until Tasks 5-7.
+  shell implements `BridgeHost` (`ShellHost`); install, sign-in and updates answer `notAvailable`/`failed` until Tasks 5-7.
+  Task 5 adds `single_instance.rs` (hand-over message `HandoffMessage`, `encode`/`decode`, 4096-byte limit checked before the body is
+  read; `Acquired`, `HandoffListener`, `HandoffSender`; the Windows pipe is `\\.\pipe\Metallic.Launcher.<user SID>`, first-instance, no remote
+  clients, current user only, and a sender checks that the pipe's server runs as the same user before it sends), `protocol.rs` (`register`,
+  `unregister`, `is_registered_to`, `UriRegistry`, `MemoryRegistry`; `metallic://` under HKCU only, an installed copy re-registers itself
+  on start, a copy run from `target\` never does), `launch.rs` (`Spawner`, `ProductPaths`, `start_player`, `start_studio`) and `tray.rs`
+  (`TrayAction`, `tray_menu`, `CloseAction`, `on_close_requested`). The tray icon, pipe, registry and process start are in
+  `platform/windows.rs` (`tray-icon` crate, MIT/Apache-2.0; icon only from `branding/`). Every script the shell runs into a page
+  (`AppEvent::RunScript`, `Bridge::guard_script`) carries the same in-page `location.origin` guard as bridge replies.
+  **Player contract:** `metallic-player.exe <metallic://play?place=<id>&ticket=<ticket>>`: exactly one argument, the canonical link from
+  `DeepLink::to_uri`, started without a shell; the Player sits beside `Metallic.exe`. Studio is started with no arguments (a place in
+  `metallic://studio/open?place=..` is ignored for now).
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

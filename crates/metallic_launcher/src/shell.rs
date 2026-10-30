@@ -10,11 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use metallic_launcher::deep_link::SitePath;
 use metallic_launcher::{
-    AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, DeepLink,
-    EventSink, LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage,
-    NavDecision, OfflineReason, PageOrigin, PlaceId, SettingsPatch, SettingsStore, SiteOrigin,
-    SiteStatus, StartPage, UrlPolicy, check_site, local_url, serve, start_page, user_agent,
+    AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction,
+    DeepLink, EventSink, HandoffListener, HandoffMessage, LauncherConfig, LauncherError,
+    LauncherInfo, LauncherSettings, LocalPage, NavDecision, OfflineReason, PageOrigin, PlaceId,
+    SettingsPatch, SettingsStore, SiteOrigin, SiteStatus, StartPage, TrayAction, UrlPolicy,
+    check_site, local_url, on_close_requested, product_paths, serve, start_page, start_player,
+    start_studio, tray_menu, user_agent,
 };
 use metallic_update::{HttpClient, UreqClient};
 use serde_json::{Value, json};
@@ -28,7 +31,7 @@ use wry::{
     NewWindowResponse, PageLoadEvent, PermissionResponse, WebContext, WebView, WebViewBuilder,
 };
 
-use crate::platform;
+use crate::platform::{self, SystemSpawner};
 
 /// The graphite page background (`--bg-base` in the visual language), so no white shows before
 /// the first page paints.
@@ -67,8 +70,8 @@ struct Shared {
     shown: AtomicBool,
 }
 
-/// What the bridge can do in this build. Playing, installing, Studio and sign-in arrive in later
-/// steps and answer `notAvailable` until then.
+/// What the bridge can do in this build. Playing and opening Studio start the installed programs;
+/// installing, updating and sign-in arrive in later steps and answer `notAvailable` until then.
 struct ShellHost {
     dev_mode: bool,
     settings: Mutex<LauncherSettings>,
@@ -89,9 +92,11 @@ impl BridgeHost for ShellHost {
         }
     }
 
-    fn play(&self, _link: DeepLink) -> Result<(), BridgeErrorCode> {
-        log::info!("play was asked for; starting the Player arrives in a later step");
-        Err(BridgeErrorCode::NotAvailable)
+    fn play(&self, link: DeepLink) -> Result<(), BridgeErrorCode> {
+        start_the_player(&link).map_err(|error| match error {
+            LauncherError::NotInstalled(_) => BridgeErrorCode::NotInstalled,
+            _ => BridgeErrorCode::Failed,
+        })
     }
 
     fn install_status(&self) -> Value {
@@ -102,8 +107,11 @@ impl BridgeHost for ShellHost {
         Err(BridgeErrorCode::NotAvailable)
     }
 
-    fn open_studio(&self, _place: Option<PlaceId>) -> Result<(), BridgeErrorCode> {
-        Err(BridgeErrorCode::NotAvailable)
+    fn open_studio(&self, place: Option<PlaceId>) -> Result<(), BridgeErrorCode> {
+        start_the_studio(place).map_err(|error| match error {
+            LauncherError::NotInstalled(_) => BridgeErrorCode::NotInstalled,
+            _ => BridgeErrorCode::Failed,
+        })
     }
 
     fn settings(&self) -> LauncherSettings {
@@ -149,6 +157,37 @@ impl BridgeHost for ShellHost {
     fn restart_to_update(&self) -> Result<(), BridgeErrorCode> {
         log::info!("a restart to update was asked for; updates arrive in a later step");
         Err(BridgeErrorCode::Failed)
+    }
+}
+
+/// Starts the Player for a Play link and logs the outcome (never the link: it holds a ticket).
+fn start_the_player(link: &DeepLink) -> Result<(), LauncherError> {
+    match start_player(&SystemSpawner, &product_paths(), link) {
+        Ok(pid) => {
+            log::info!("started the Player (process {pid})");
+            Ok(())
+        }
+        Err(error) => {
+            log::warn!("could not start the Player: {error}");
+            Err(error)
+        }
+    }
+}
+
+/// Starts Metallic Studio. It does not take a place yet, so a place is ignored (and logged).
+fn start_the_studio(place: Option<PlaceId>) -> Result<(), LauncherError> {
+    if place.is_some() {
+        log::info!("Studio does not take a place yet; the place is ignored");
+    }
+    match start_studio(&SystemSpawner, &product_paths()) {
+        Ok(pid) => {
+            log::info!("started Studio (process {pid})");
+            Ok(())
+        }
+        Err(error) => {
+            log::warn!("could not start Studio: {error}");
+            Err(error)
+        }
     }
 }
 
@@ -203,8 +242,19 @@ fn send_bridge_event(view: &WebView, bridge: &Bridge, event: &BridgeEvent) {
     }
 }
 
-/// Decodes the placeholder icon from `branding/`.
-fn window_icon() -> Option<Icon> {
+/// Runs a script the shell itself wants in the page, with the same in-page origin guard as a
+/// bridge reply: it does nothing unless the page on screen is the site or a bundled page, and
+/// the page re-checks its `location.origin` before the script runs.
+fn run_guarded_script(view: &WebView, bridge: &Bridge, script: &str) {
+    let Ok(shown) = view.url() else { return };
+    match bridge.guard_script(script, &shown) {
+        Some(guarded) => run_script(view, &guarded),
+        None => log::info!("dropped a script: the page on screen may not receive it"),
+    }
+}
+
+/// Decodes the placeholder icon from `branding/` to RGBA pixels: (pixels, width, height).
+fn icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
     let bytes = include_bytes!("../../../branding/placeholder-icon.png");
     let mut decoder = png::Decoder::new(Cursor::new(&bytes[..]));
     decoder.set_transformations(png::Transformations::EXPAND);
@@ -222,7 +272,92 @@ fn window_icon() -> Option<Icon> {
             .collect(),
         _ => return None,
     };
-    Icon::from_rgba(rgba, info.width, info.height).ok()
+    Some((rgba, info.width, info.height))
+}
+
+/// The window icon.
+fn window_icon() -> Option<Icon> {
+    let (rgba, width, height) = icon_rgba()?;
+    Icon::from_rgba(rgba, width, height).ok()
+}
+
+/// Carries out a `metallic://` link in the first Launcher. Links from the web view and from
+/// other starts have been parsed before they get here.
+fn handle_deep_link(
+    link: DeepLink,
+    site: Option<&SiteOrigin>,
+    offline: bool,
+    sink: &dyn EventSink,
+) {
+    // The Install flow: show the window and the downloads page, or the local page when offline.
+    let show_downloads = || {
+        sink.send(AppEvent::Focus);
+        match (site, offline) {
+            (Some(site), false) => match SitePath::new("/downloads") {
+                Ok(path) => sink.send(AppEvent::Navigate(site.url(&path))),
+                Err(_) => sink.send(AppEvent::ShowLocal(LocalPage::Settings)),
+            },
+            _ => sink.send(AppEvent::ShowLocal(LocalPage::Settings)),
+        }
+    };
+    match &link {
+        DeepLink::Play { .. } => {
+            if let Err(LauncherError::NotInstalled(_)) = start_the_player(&link) {
+                show_downloads();
+            }
+        }
+        DeepLink::StudioOpen { place } => {
+            if let Err(LauncherError::NotInstalled(_)) = start_the_studio(*place) {
+                show_downloads();
+            }
+        }
+        DeepLink::Open { path } => {
+            sink.send(AppEvent::Focus);
+            let Some(site) = site else { return };
+            let target = match path {
+                Some(path) => site.url(path),
+                None => match SitePath::new("/") {
+                    Ok(root) => site.url(&root),
+                    Err(_) => return,
+                },
+            };
+            sink.send(AppEvent::Navigate(target));
+        }
+        DeepLink::Install => show_downloads(),
+    }
+}
+
+/// Reads hand-overs from later starts and posts them to the window. A link is parsed again
+/// here; a bad one is logged (without its text) and dropped.
+fn spawn_handoff_listener(mut listener: Box<dyn HandoffListener>, sink: Arc<dyn EventSink>) {
+    std::thread::spawn(move || {
+        let mut failures = 0;
+        loop {
+            match listener.accept() {
+                Ok(message) => {
+                    failures = 0;
+                    match message {
+                        HandoffMessage::Focus => sink.send(AppEvent::Focus),
+                        HandoffMessage::Link(text) => match DeepLink::parse(&text) {
+                            Ok(link) => sink.send(AppEvent::DeepLink(link)),
+                            Err(error) => {
+                                log::warn!("dropped a link from another start: {error}");
+                            }
+                        },
+                    }
+                }
+                Err(error) => {
+                    log::warn!("a hand-over from another start failed: {error}");
+                    failures += 1;
+                    if failures >= 20 {
+                        log::error!("giving up on hand-overs from other starts");
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    });
 }
 
 /// What the web view's address should be for a start page or a bundled page.
@@ -296,7 +431,11 @@ fn protocol_response(request: Request<Vec<u8>>, dev_mode: bool) -> Response<Cow<
 }
 
 /// Opens the window and runs until it closes.
-pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), LauncherError> {
+pub fn run(
+    config: LauncherConfig,
+    webview_version: &str,
+    handoffs: Option<Box<dyn HandoffListener>>,
+) -> Result<(), LauncherError> {
     let platform_error = |what: &str, error: &dyn std::fmt::Display| {
         LauncherError::Platform(format!("{what}: {error}"))
     };
@@ -335,9 +474,6 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
     };
     if let StartPage::Local(LocalPage::Offline(_)) = &start {
         shared.offline.store(true, Ordering::SeqCst);
-    }
-    if config.start_link.is_some() {
-        log::info!("started with a metallic:// link; it is handled in a later step");
     }
 
     let bridge = Bridge::new(UrlPolicy::new(&config));
@@ -436,6 +572,23 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
         });
     }
 
+    // The tray icon. Without it (an unsupported system, or an error) the close button quits.
+    let studio_installed = product_paths().studio_exe.is_some();
+    let (icon, icon_width, icon_height) = icon_rgba().unwrap_or_default();
+    let tray = match platform::create_tray(
+        &tray_menu(studio_installed),
+        icon,
+        icon_width,
+        icon_height,
+        sink.clone(),
+    ) {
+        Ok(tray) => Some(tray),
+        Err(error) => {
+            log::warn!("no tray icon: {error}");
+            None
+        }
+    };
+
     let builder = platform::configure_builder(builder, config.dev_mode);
     let view: WebView = builder
         .build(&window)
@@ -451,6 +604,13 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
     }
     if let Some(origin) = check_origin.clone() {
         spawn_recheck_loop(http.clone(), origin, sink.clone(), shared.clone());
+    }
+    // Hand-overs from later starts, and the link this start was given.
+    if let Some(listener) = handoffs {
+        spawn_handoff_listener(listener, sink.clone());
+    }
+    if let Some(link) = config.start_link.clone() {
+        sink.send(AppEvent::DeepLink(link));
     }
     // The window shows at the latest after a moment, whatever the page does.
     {
@@ -470,7 +630,14 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
-            } => *control_flow = ControlFlow::Exit,
+            } => {
+                if tray.is_some() && on_close_requested(&host.settings()) == CloseAction::HideToTray
+                {
+                    window.set_visible(false);
+                } else {
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
             Event::UserEvent(app_event) => match app_event {
                 AppEvent::Quit => *control_flow = ControlFlow::Exit,
                 AppEvent::Focus => {
@@ -479,7 +646,17 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
                     window.set_minimized(false);
                     window.set_focus();
                 }
-                AppEvent::RunScript(script) => run_script(&view, &script),
+                AppEvent::RunScript(script) => run_guarded_script(&view, &bridge, &script),
+                AppEvent::Tray(action) => match action {
+                    TrayAction::Show => sink.send(AppEvent::Focus),
+                    TrayAction::OpenStudio => {
+                        let _ = start_the_studio(None);
+                    }
+                    TrayAction::CheckUpdates => {
+                        log::info!("a check for updates was asked for; it arrives in a later step");
+                    }
+                    TrayAction::Quit => *control_flow = ControlFlow::Exit,
+                },
                 AppEvent::Navigate(url) => match policy.origin_of(url.as_str()) {
                     PageOrigin::Site => load(&view, &shared, url.as_str(), false),
                     PageOrigin::Local => {
@@ -517,9 +694,12 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
                         _ => {}
                     }
                 }
-                AppEvent::DeepLink(_) => {
-                    log::info!("received a metallic:// link; it is handled in a later step");
-                }
+                AppEvent::DeepLink(link) => handle_deep_link(
+                    link,
+                    check_origin.as_ref(),
+                    shared.offline.load(Ordering::SeqCst),
+                    sink.as_ref(),
+                ),
                 AppEvent::BridgeMessage { page_url, body } => {
                     handle_bridge_message(&view, &bridge, &host, &page_url, &body);
                 }

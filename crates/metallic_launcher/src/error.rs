@@ -20,6 +20,9 @@ pub enum LauncherError {
     /// Reading or writing a file failed.
     #[error("file error: {0}")]
     Io(String),
+    /// A message from another Launcher was refused (the text says why, never what it held).
+    #[error("bad hand-over message: {0}")]
+    BadHandoff(&'static str),
     /// This platform does not support the step.
     #[error("not supported on this platform: {0}")]
     Unsupported(&'static str),

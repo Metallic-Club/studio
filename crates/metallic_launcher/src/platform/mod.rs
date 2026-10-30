@@ -2,10 +2,10 @@
 //! this folder does. Windows is in `windows.rs`; other systems get the stubs in `other.rs`
 //! that return `LauncherError::Unsupported`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use metallic_launcher::{EventSink, LauncherError, UrlPolicy};
+use metallic_launcher::{Acquired, EventSink, LauncherError, TrayAction, UrlPolicy};
 use url::Url;
 use wry::{WebView, WebViewBuilder};
 
@@ -72,4 +72,42 @@ pub fn watch_navigation_failures(view: &WebView, sink: Arc<dyn EventSink>) {
 /// Asks `policy` about every navigation inside a frame and cancels the ones it refuses.
 pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) {
     imp::watch_frame_navigations(view, policy);
+}
+
+/// Starts programs (the Player, Studio) without a shell. See `metallic_launcher::Spawner`.
+pub use imp::SystemSpawner;
+
+/// The tray icon; it disappears when dropped.
+pub use imp::Tray;
+
+/// Becomes the only Launcher of this user, or connects to the one that runs.
+pub fn acquire_instance() -> Result<Acquired, LauncherError> {
+    imp::acquire_instance()
+}
+
+/// Registers `exe` as the handler of `metallic://` for this user.
+pub fn register_protocol(exe: &Path) -> Result<(), LauncherError> {
+    imp::register_protocol(exe)
+}
+
+/// True when `metallic://` is registered to `exe`.
+pub fn protocol_registered_to(exe: &Path) -> bool {
+    imp::protocol_registered_to(exe)
+}
+
+/// Shows the tray icon with the menu `items`; choices arrive as `AppEvent::Tray`.
+pub fn create_tray(
+    items: &[(TrayAction, &'static str)],
+    icon_rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    sink: Arc<dyn EventSink>,
+) -> Result<Tray, LauncherError> {
+    imp::create_tray(items, icon_rgba, width, height, sink)
+}
+
+/// Runs the Velopack start-up logic. On Windows an install or update registers `metallic://`
+/// for this copy, and an uninstall removes it and the Launcher's own data folders.
+pub fn run_velopack() {
+    imp::run_velopack();
 }
