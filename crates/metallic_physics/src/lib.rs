@@ -205,13 +205,22 @@ impl PhysicsWorld {
     /// Before simulating, a changed `Position`/`Orientation` is applied: an anchored part is moved
     /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`]); an
     /// unanchored part is teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`]
-    /// (0.25 s) so a long frame cannot spiral.
+    /// (0.25 s) so a long frame cannot spiral; a negative or non-finite `dt` (NaN, infinity)
+    /// counts as 0, so that call simulates nothing and later calls work normally.
     ///
     /// Callers must call [`Self::sync_from`] after adding, removing or reconfiguring parts
     /// (Size, Shape, Material, Anchored, CanCollide, reparenting); until then `step` keeps using
     /// the Anchored value the body was last synced with. Parts not yet synced are ignored.
     pub fn step(&mut self, world: &mut World, dt: f64) {
-        self.accumulator += dt.clamp(0.0, MAX_STEP);
+        let dt = if dt.is_finite() {
+            dt.clamp(0.0, MAX_STEP)
+        } else {
+            0.0
+        };
+        self.accumulator += dt;
+        if !self.accumulator.is_finite() {
+            self.accumulator = 0.0;
+        }
         let substeps = ((self.accumulator / SUBSTEP) + 1e-6).floor() as usize;
         if substeps == 0 {
             return;
