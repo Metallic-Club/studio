@@ -1,6 +1,6 @@
 # #205 Release build/publish credential isolation
 
-Status: implementation and isolated helper tests complete; full gates pending.
+Status: implemented and tested; ready for review, not accepted or released.
 Branch: `studio/205-release-credential-isolation`, from main `ebb94f3`.
 
 ## Goal
@@ -49,12 +49,22 @@ No actual release, signing, installation or publication is authorized here.
   Downloaded the official Windows tool into a task temp directory and verified
   SHA-256 `6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9`.
 - `git diff --check`: passed. No Rust, Cargo or app dependency changes.
+- Independent coordinating-agent review found no actionable issues in the phase
+  or credential boundaries. It verified the pinned actions' raw-file basename,
+  single-ID download path and fail-on-digest behavior against upstream source.
+- Ran the latest #209 lane guard with `--reset` in the verified owned worker lane.
+  It removed only local workspace outputs (1.1 GiB), preserving third-party cache.
+  All seven crate compile paths identify this #205 worktree.
+- `cargo test --workspace -j 4 -- --test-threads=1`: 212 passed, zero failed/ignored,
+  including the full Parkour route; guarded command exited 0.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed under the
+  same guard/owner without another cleanup.
+- `cargo deny check licenses`: passed; existing unused allowance warnings only.
+- `cargo fmt --all -- --check`: passed. No release was published or installed.
 
 ## Next
 
-- Independent review and full repository gates when the coordinator's Rust build
-  window is clear; use owned lane with forced local-package cleanup for provenance.
-- Rebase latest main, commit/push, open and attach one PR for #205/#236, inspect CI.
+- Inspect PR CI and reviewer feedback after opening the scoped #205/#236 PR.
   Do not publish a release or merge the PR.
 
 ## Limits
