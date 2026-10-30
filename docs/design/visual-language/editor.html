@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio Editor Frame</title>
+<link rel="stylesheet" href="assets/mockup-fonts.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<style>
+  /* One editor frame: how the start-screen language extends to docked panels.
+     Docked panels are square and sit on g-950 with 3 px gutters; only floating things (menus, toasts) get radius and shadow. */
+  html, body { margin: 0; height: 100%; background: var(--g-950); color: var(--text-1); font: 400 13px/18px var(--font); -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font: inherit; }
+  .app { display: grid; grid-template-rows: 40px 1fr 24px; height: 100vh; }
+
+  /* Title bar: menus left, mode + Play centred, command search right */
+  .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; background: var(--g-950); padding-left: 12px; }
+  .tb-left, .tb-right { display: flex; align-items: center; min-width: 0; }
+  .tb-right { justify-content: flex-end; }
+  .mark { width: 20px; height: 20px; border-radius: 5px; margin-right: 8px; }
+  .menu { height: 28px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: 500 13px/18px var(--font); cursor: pointer; }
+  .menu:hover { background: var(--g-750); color: var(--text-1); }
+  .proj { margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--g-700); display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+  .proj b { font: 600 13px/18px var(--font); font-stretch: 112.5%; color: var(--text-1); }
+  .proj span { font: 400 12px/16px var(--font); color: var(--text-3); }
+  .center { display: flex; align-items: center; gap: 12px; }
+  .seg { display: inline-flex; background: var(--bg-deep); border-radius: var(--r-sm); padding: 2px; gap: 2px; box-shadow: inset 0 0 0 1px var(--g-700); }
+  .seg button { font: 540 12px/16px var(--font); height: 26px; padding: 0 12px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .seg button .ph { font-size: 14px; }
+  .seg button:hover { color: var(--text-1); background: var(--g-750); }
+  .seg button[aria-pressed="true"] { background: var(--g-650); color: var(--text-1); }
+  .play { height: 30px; padding: 0 12px 0 10px; font-weight: 620; }
+  .play .phf { font-size: 14px; color: var(--on-accent); }
+  .iconbtn { width: 30px; height: 30px; padding: 0; justify-content: center; }
+  .iconbtn .ph, .iconbtn .phf { font-size: 15px; }
+  .cmd { width: 300px; height: 28px; margin-right: 8px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px; box-sizing: border-box;
+    background: var(--g-850); border: 1px solid var(--line-control); border-radius: var(--r-sm); color: var(--text-3); cursor: text; }
+  .cmd:hover { border-color: var(--text-3); }
+  .cmd .ph { font-size: 15px; color: var(--icon); }
+  .cmd span.t { flex: 1; font: 400 13px/18px var(--font); }
+  .wc { width: 46px; height: 40px; border: 0; background: transparent; color: var(--icon); display: grid; place-items: center; cursor: pointer; }
+  .wc .ph { font-size: 14px; }
+  .wc:hover { background: var(--g-700); }
+  .wc.close:hover { background: var(--danger-hover); color: var(--g-50); }
+
+  /* Dock */
+  .dock { display: grid; grid-template-columns: 264px 1fr 304px; grid-template-rows: 1fr 196px; gap: 3px; padding: 0 3px 3px; min-height: 0; }
+  .panel { background: var(--bg-panel); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .explorer { grid-row: 1 / 3; }
+  .props { grid-row: 1 / 3; grid-column: 3; }
+  .phead { height: 32px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
+  .phead h2 { margin: 0; flex: 1; font: 620 12px/16px var(--font); font-stretch: 112.5%; color: var(--text-1); letter-spacing: 0.01em; }
+  .pbtn { width: 24px; height: 24px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--icon); display: grid; place-items: center; cursor: pointer; }
+  .pbtn .ph { font-size: 15px; }
+  .pbtn:hover { background: var(--g-700); color: var(--text-1); }
+  .filter { margin: 8px; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--bg-deep); border: 1px solid var(--line-control); border-radius: var(--r-sm); color: var(--text-3); flex: none; }
+  .filter .ph { font-size: 14px; color: var(--icon); }
+  .filter input { all: unset; flex: 1; font: 400 12px/16px var(--font); color: var(--text-1); }
+  .filter input::placeholder { color: var(--text-3); }
+  .filter:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--focus); }
+
+  /* Explorer tree: 24 px rows, 16 px indent */
+  .tree { list-style: none; margin: 0; padding: 0 4px 8px; overflow: auto; }
+  .row { height: 24px; display: flex; align-items: center; gap: 6px; padding-right: 6px; border-radius: var(--r-xs); color: var(--text-1); cursor: default; white-space: nowrap; }
+  .row .car { width: 16px; flex: none; text-align: center; color: var(--text-3); font-size: 12px; }
+  .row .ci { font-size: 15px; color: var(--icon); width: 16px; flex: none; text-align: center; }
+  .row .nm { font: 400 13px/18px var(--font); flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .row .cls { font: 400 12px/16px var(--font); color: var(--text-3); }
+  .row .tail { font-size: 14px; color: var(--text-2); display: none; }
+  .row:hover { background: var(--bg-hover); }
+  .row:hover .cls { color: var(--text-2); }
+  .row:hover .tail.eye { display: block; }
+  .row .tail.lock { display: block; color: var(--text-3); }
+  .row[aria-selected="true"] { background: var(--select); }
+  .row[aria-selected="true"] .cls { color: var(--text-2); }
+  .row[aria-selected="true"] .ci { color: var(--v-200); }
+  .row.warn .nm::after { content: ''; }
+  .row .wi { font-size: 14px; color: var(--warning); }
+
+  /* Viewport */
+  .vp { grid-column: 2; }
+  .vbar { height: 36px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px; border-bottom: 1px solid var(--line); }
+  .tools { display: inline-flex; gap: 2px; background: var(--bg-deep); padding: 2px; border-radius: var(--r-sm); }
+  .tool { height: 26px; padding: 0 6px 0 7px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--icon); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .tool .ph { font-size: 16px; }
+  .tool .k { font: 560 11px/14px var(--mono); color: var(--text-3); }
+  .tool:hover { background: var(--g-750); color: var(--text-1); }
+  .tool[aria-pressed="true"] { background: var(--select); color: var(--g-50); }
+  .tool[aria-pressed="true"] .k { color: var(--v-200); }
+  .vsep { width: 1px; height: 20px; background: var(--g-650); margin: 0 2px; }
+  .chipbtn { height: 26px; padding: 0 8px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: 500 12px/16px var(--font); white-space: nowrap; }
+  .chipbtn .ph { font-size: 15px; color: var(--icon); }
+  .chipbtn .dd { font-size: 11px; color: var(--text-3); }
+  .chipbtn:hover { background: var(--g-700); color: var(--text-1); }
+  .chipbtn[aria-pressed="true"] { background: var(--g-650); color: var(--text-1); }
+  .chipbtn b { font: 500 12px/16px var(--mono); color: var(--text-1); }
+  .vflex { flex: 1; }
+  .view { position: relative; flex: 1; overflow: hidden; background: #a9aab9; }
+  .shot { position: absolute; top: 0; height: 100%; aspect-ratio: 16 / 9; left: 50%; transform: translateX(-50%); background: center / 100% 100% no-repeat url(assets/parkour-checkpoint-1280.jpg); }
+  /* Selection: 2 px violet-300 box with square corner handles, positioned in % of the 1280x720 still */
+  .sel { position: absolute; left: 75%; top: 47.2%; width: 10.2%; height: 36.4%; outline: 2px solid var(--v-300);
+    box-shadow: 0 0 0 3px var(--g-900), inset 0 0 0 1px var(--g-900); } /* dark 1 px edges keep the ring visible on a bright sky */
+  .sel i { box-shadow: 0 0 0 1px var(--g-900); }
+  .sel i { position: absolute; width: 6px; height: 6px; background: var(--v-300); }
+  .sel i:nth-child(1) { left: -4px; top: -4px; } .sel i:nth-child(2) { right: -4px; top: -4px; }
+  .sel i:nth-child(3) { left: -4px; bottom: -4px; } .sel i:nth-child(4) { right: -4px; bottom: -4px; }
+  .gizmo { position: absolute; left: 80.1%; top: 64%; width: 0; height: 0; overflow: visible; }
+  .gizmo svg { position: absolute; left: -120px; top: -120px; overflow: visible; }
+  .vtag { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 6px; align-items: center; padding: 4px 8px; background: rgba(17,16,21,0.82); border-radius: var(--r-sm); font: 500 12px/16px var(--font); color: var(--text-2); }
+  .vtag b { font: 500 12px/16px var(--mono); color: var(--text-1); }
+
+  /* Output */
+  .out { grid-column: 2; }
+  .tabs { height: 32px; flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line); padding-left: 4px; }
+  .tab { border: 0; background: transparent; color: var(--text-2); font: 560 12px/16px var(--font); padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; position: relative; }
+  .tab:hover { color: var(--text-1); }
+  .tab[aria-selected="true"] { color: var(--text-1); }
+  .tab[aria-selected="true"]::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--text-1); }
+  .count { font: 600 11px/14px var(--font); padding: 1px 6px; border-radius: var(--r-xs); background: var(--warning-bg); color: var(--warning); }
+  .tabs .vflex { flex: 1; }
+  .tabs .pbtn { align-self: center; margin-right: 6px; }
+  .log { list-style: none; margin: 0; padding: 4px 0; overflow: auto; font: 400 12px/22px var(--mono); }
+  .log li { display: grid; grid-template-columns: 76px 64px 1fr auto; align-items: center; padding: 0 8px 0 12px; min-height: 24px; }
+  .log .ts { color: var(--text-3); }
+  .log .src { color: var(--text-2); font-family: var(--font); font-weight: 520; font-size: 12px; }
+  .log .msg { color: var(--text-1); font: 400 13px/18px var(--font); }
+  .log li.w { background: var(--warning-bg); }
+  .log li.w .ts { color: var(--text-2); } /* text-3 drops to 4.08:1 on warning-bg, so it steps up */
+  .log li.w .src { color: var(--warning); display: flex; gap: 5px; align-items: center; }
+  .log li.w .src .phf { font-size: 13px; }
+  .log li.w .btn { height: 24px; padding: 0 8px; font-size: 12px; background: var(--g-650); }
+  .log li.w .btn:hover { background: var(--g-600); }
+
+  /* Properties */
+  .ident { display: flex; align-items: center; gap: 8px; padding: 10px 12px 2px; }
+  .ident .ph { font-size: 18px; color: var(--v-200); }
+  .ident b { font: 620 15px/20px var(--font); font-stretch: 112.5%; }
+  .ident span { font: 400 12px/16px var(--font); color: var(--text-3); margin-left: auto; }
+  .sect { border-top: 1px solid var(--line); }
+  .shd { height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 8px; font: 600 12px/16px var(--font); color: var(--text-2); cursor: pointer; }
+  .shd .ph { font-size: 12px; color: var(--text-3); width: 16px; text-align: center; }
+  .shd:hover { color: var(--text-1); }
+  .prow { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; min-height: 28px; padding: 0 12px 0 30px; }
+  .prow > label, .prow > .lbl { font: 400 12px/16px var(--font); color: var(--text-2); }
+  .prow:hover > label, .prow:hover > .lbl { color: var(--text-1); }
+  .xyz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .num { height: 22px; display: flex; align-items: center; background: var(--bg-deep); border: 1px solid var(--line-control); border-radius: var(--r-xs); overflow: hidden; }
+  .num .ax { width: 14px; flex: none; text-align: center; font: 700 10px/20px var(--font); align-self: stretch; }
+  .num .ax.x { color: #e5675e; } .num .ax.y { color: #79c46a; } .num .ax.z { color: #5d95ea; }
+  .num input { all: unset; width: 100%; min-width: 0; font: 400 12px/20px var(--mono); color: var(--text-1); padding-right: 6px; text-align: right; }
+  .num:hover { border-color: var(--text-3); }
+  .num:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--focus); }
+  .val { height: 22px; display: flex; align-items: center; gap: 8px; padding: 0 8px; background: var(--bg-deep); border: 1px solid var(--line-control); border-radius: var(--r-xs); font: 400 12px/16px var(--font); color: var(--text-1); }
+  .val.mono { font-family: var(--mono); }
+  .val .sw { width: 14px; height: 14px; border-radius: 2px; background: #5e596b; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18); }
+  .val .dd { margin-left: auto; font-size: 11px; color: var(--text-3); }
+  .chk { width: 16px; height: 16px; box-sizing: border-box; border-radius: var(--r-xs); border: 1px solid var(--line-control); background: var(--bg-deep); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .chk .ph { font-size: 12px; color: var(--g-900); visibility: hidden; font-family: 'Phosphor Bold'; }
+  .chk[aria-checked="true"] { background: var(--g-200); border-color: var(--g-200); }
+  .chk[aria-checked="true"] .ph { visibility: visible; }
+  .chk:hover { border-color: var(--text-2); }
+  .chkline { display: flex; align-items: center; gap: 8px; }
+  .hint { grid-column: 2; font: 400 12px/16px var(--font); color: var(--warning); display: flex; gap: 6px; align-items: flex-start; margin: -2px 0 6px; }
+  .hint .phf { font-size: 13px; margin-top: 1px; }
+  .addattr { margin: 2px 12px 10px 26px; height: 26px; font-size: 12px; }
+
+  /* Status bar */
+  .status { display: flex; align-items: center; gap: 18px; padding: 0 12px; background: var(--g-950); font: 400 12px/16px var(--font); color: var(--text-2); white-space: nowrap; }
+  .status .ok { color: var(--success); display: inline-flex; gap: 6px; align-items: center; }
+  .status .ok .ph { font-size: 13px; }
+  .status .grow { flex: 1; }
+  .status .mono { font-family: var(--mono); }
+
+  .toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: var(--g-700); color: var(--text-1); padding: 10px 14px; border-radius: var(--r-md); box-shadow: var(--shadow-pop), inset 0 1px 0 var(--highlight); font: 400 13px/18px var(--font); display: none; }
+  .toast.on { display: block; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="titlebar">
+    <div class="tb-left">
+      <img class="mark" src="../../../branding/placeholder-icon.png" alt="">
+      <nav aria-label="Menu" style="display:flex">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu">View</button><button class="menu">Insert</button><button class="menu">Test</button><button class="menu">Help</button>
+      </nav>
+      <div class="proj"><b>Lava Run</b><span>Parkour</span></div>
+    </div>
+    <div class="center">
+      <div class="seg" role="group" aria-label="Mode">
+        <button aria-pressed="true"><i class="ph" aria-hidden="true">&#xe80e;</i>Build</button>
+        <button aria-pressed="false"><i class="ph" aria-hidden="true">&#xe1bc;</i>Script</button>
+      </div>
+      <button class="btn btn-primary play cut-sm" data-toast="Play starts the game in this window. Press F5 again or Esc to stop."><i class="phf" aria-hidden="true">&#xe3d0;</i>Play<span class="key">F5</span></button>
+      <button class="btn btn-secondary iconbtn" disabled aria-label="Stop (not playing)"><i class="phf" aria-hidden="true">&#xe46c;</i></button>
+    </div>
+    <div class="tb-right">
+      <div class="cmd" role="button" tabindex="0" aria-label="Search or run a command" data-toast="The command bar: find objects, scripts and settings, or run any menu command."><i class="ph" aria-hidden="true">&#xe30c;</i><span class="t">Search or run a command</span><span class="key">Ctrl K</span></div>
+      <button class="wc" aria-label="Minimise"><i class="ph">&#xe32a;</i></button>
+      <button class="wc" aria-label="Maximise"><i class="ph">&#xe45e;</i></button>
+      <button class="wc close" aria-label="Close"><i class="ph">&#xe4f6;</i></button>
+    </div>
+  </header>
+
+  <div class="dock">
+    <section class="panel explorer" aria-label="Explorer">
+      <div class="phead"><h2>Explorer</h2>
+        <button class="pbtn" aria-label="Insert object" data-toast="Insert: Part, Model, Script, SpawnLocation and more."><i class="ph">&#xe3d4;</i></button>
+        <button class="pbtn" aria-label="Explorer options"><i class="ph">&#xe208;</i></button>
+      </div>
+      <label class="filter"><i class="ph" aria-hidden="true">&#xe268;</i><input placeholder="Filter objects" aria-label="Filter objects"></label>
+      <ul class="tree" role="tree" id="tree"></ul>
+    </section>
+
+    <section class="panel vp" aria-label="Viewport">
+      <div class="vbar">
+        <div class="tools" role="group" aria-label="Tools">
+          <button class="tool" aria-pressed="false" aria-label="Select (Q)"><i class="ph">&#xe1dc;</i><span class="k">Q</span></button>
+          <button class="tool" aria-pressed="true" aria-label="Move (W)"><i class="ph">&#xe0a4;</i><span class="k">W</span></button>
+          <button class="tool" aria-pressed="false" aria-label="Rotate (E)"><i class="ph">&#xe094;</i><span class="k">E</span></button>
+          <button class="tool" aria-pressed="false" aria-label="Scale (R)"><i class="ph">&#xe626;</i><span class="k">R</span></button>
+        </div>
+        <span class="vsep"></span>
+        <button class="chipbtn" aria-pressed="false"><i class="ph">&#xe28c;</i>World</button>
+        <button class="chipbtn" aria-pressed="true"><i class="ph">&#xe680;</i>Snap <b>0.5</b><i class="ph dd">&#xe136;</i></button>
+        <button class="chipbtn"><i class="ph">&#xe094;</i><b>15°</b><i class="ph dd">&#xe136;</i></button>
+        <span class="vflex"></span>
+        <button class="chipbtn"><i class="ph">&#xe472;</i>Clear Day<i class="ph dd">&#xe136;</i></button>
+        <button class="chipbtn" aria-pressed="true" aria-label="Grid"><i class="ph">&#xec8c;</i>Grid</button>
+        <button class="chipbtn"><i class="ph">&#xe10e;</i>Perspective<i class="ph dd">&#xe136;</i></button>
+      </div>
+      <div class="view">
+        <div class="shot" role="img" aria-label="The Parkour course seen from the start platform; Pillar7 on the right is selected with the move handles shown.">
+          <div class="sel"><i></i><i></i><i></i><i></i></div>
+          <div class="gizmo">
+            <svg width="240" height="240" viewBox="-120 -120 240 240" aria-hidden="true">
+              <defs>
+                <marker id="ax" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker>
+              </defs>
+              <!-- Z toward the viewer (down-left), Y up, X right. Each arrow has a letter: colour is never the only cue. -->
+              <g stroke="#111015" stroke-width="5" stroke-opacity="0.9"><line x1="0" y1="0" x2="-46" y2="42"/><line x1="0" y1="0" x2="0" y2="-82"/><line x1="0" y1="0" x2="72" y2="0"/></g>
+              <line x1="0" y1="0" x2="-48" y2="44" stroke="#5d95ea" stroke-width="3" marker-end="url(#ax)"/>
+              <line x1="0" y1="0" x2="0" y2="-84" stroke="#79c46a" stroke-width="3" marker-end="url(#ax)"/>
+              <line x1="0" y1="0" x2="74" y2="0" stroke="#e5675e" stroke-width="3" marker-end="url(#ax)"/>
+              <rect x="-6" y="-6" width="12" height="12" fill="#f4f3f7" stroke="#111015" stroke-width="1.5"/>
+              <g font-family="Archivo" font-weight="700" font-size="11" text-anchor="middle">
+                <rect x="88" y="-9" width="16" height="18" rx="3" fill="#111015" fill-opacity="0.85"/><text x="96" y="4" fill="#ef8a82">X</text>
+                <rect x="-8" y="-118" width="16" height="18" rx="3" fill="#111015" fill-opacity="0.85"/><text x="0" y="-105" fill="#8fd27f">Y</text>
+                <rect x="-74" y="50" width="16" height="18" rx="3" fill="#111015" fill-opacity="0.85"/><text x="-66" y="63" fill="#82aef0">Z</text>
+              </g>
+            </svg>
+          </div>
+        </div>
+        <div class="vtag">Moving <b>Pillar7</b></div>
+      </div>
+    </section>
+
+    <section class="panel out" aria-label="Output">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true">Output</button>
+        <button class="tab" role="tab" aria-selected="false">Problems <span class="count">1</span></button>
+        <span class="vflex"></span>
+        <button class="pbtn" aria-label="Clear output"><i class="ph">&#xe4a6;</i></button>
+      </div>
+      <ul class="log">
+        <li><span class="ts">12:41:02</span><span class="src">Studio</span><span class="msg">Opened Lava Run from the Parkour template</span><span></span></li>
+        <li><span class="ts">12:41:03</span><span class="src">Build</span><span class="msg">Loaded 214 objects in 0.31 s</span><span></span></li>
+        <li><span class="ts">12:41:30</span><span class="src">Script</span><span class="msg">Checkpoints: found 3 checkpoints and the finish gate</span><span></span></li>
+        <li class="w"><span class="ts">12:42:11</span><span class="src"><i class="phf" aria-hidden="true">&#xe4e0;</i>Check</span><span class="msg">Pillar7 has CanCollide off, so players fall through it.</span><button class="btn" data-toast="CanCollide turned on for Pillar7. Ctrl Z to undo.">Turn on</button></li>
+        <li><span class="ts">12:42:40</span><span class="src">Studio</span><span class="msg">Saved</span><span></span></li>
+      </ul>
+    </section>
+
+    <section class="panel props" aria-label="Properties">
+      <div class="phead"><h2>Properties</h2>
+        <button class="pbtn" aria-label="Properties options"><i class="ph">&#xe208;</i></button>
+      </div>
+      <div class="ident"><i class="ph" aria-hidden="true">&#xe1da;</i><b>Pillar7</b><span>Part</span></div>
+      <label class="filter"><i class="ph" aria-hidden="true">&#xe268;</i><input placeholder="Filter properties" aria-label="Filter properties"></label>
+
+      <div class="sect">
+        <div class="shd"><i class="ph">&#xe136;</i>Transform</div>
+        <div class="prow"><span class="lbl">Position</span><div class="xyz">
+          <label class="num"><span class="ax x">X</span><input value="38" aria-label="Position X"></label>
+          <label class="num"><span class="ax y">Y</span><input value="6" aria-label="Position Y"></label>
+          <label class="num"><span class="ax z">Z</span><input value="-12" aria-label="Position Z"></label></div></div>
+        <div class="prow"><span class="lbl">Orientation</span><div class="xyz">
+          <label class="num"><span class="ax x">X</span><input value="0" aria-label="Orientation X"></label>
+          <label class="num"><span class="ax y">Y</span><input value="15" aria-label="Orientation Y"></label>
+          <label class="num"><span class="ax z">Z</span><input value="0" aria-label="Orientation Z"></label></div></div>
+        <div class="prow" style="margin-bottom:6px"><span class="lbl">Size</span><div class="xyz">
+          <label class="num"><span class="ax x">X</span><input value="4" aria-label="Size X"></label>
+          <label class="num"><span class="ax y">Y</span><input value="12" aria-label="Size Y"></label>
+          <label class="num"><span class="ax z">Z</span><input value="4" aria-label="Size Z"></label></div></div>
+      </div>
+
+      <div class="sect">
+        <div class="shd"><i class="ph">&#xe136;</i>Appearance</div>
+        <div class="prow"><span class="lbl">Color</span><div class="val mono"><span class="sw"></span>94, 89, 107</div></div>
+        <div class="prow"><span class="lbl">Material</span><div class="val">Concrete<i class="ph dd">&#xe136;</i></div></div>
+        <div class="prow" style="margin-bottom:6px"><span class="lbl">Transparency</span><div class="val mono">0</div></div>
+      </div>
+
+      <div class="sect">
+        <div class="shd"><i class="ph">&#xe136;</i>Behaviour</div>
+        <div class="prow"><span class="lbl" id="l-anch">Anchored</span><div class="chkline"><button class="chk" role="checkbox" aria-checked="true" aria-labelledby="l-anch"><i class="ph">&#xe182;</i></button></div></div>
+        <div class="prow"><span class="lbl" id="l-coll">CanCollide</span><div class="chkline"><button class="chk" role="checkbox" aria-checked="false" aria-labelledby="l-coll" aria-describedby="h-coll"><i class="ph">&#xe182;</i></button></div>
+          <div class="hint" id="h-coll"><i class="phf" aria-hidden="true">&#xe4e0;</i>Off: players fall through this part.</div></div>
+        <div class="prow" style="margin-bottom:6px"><span class="lbl" id="l-shad">CastShadow</span><div class="chkline"><button class="chk" role="checkbox" aria-checked="true" aria-labelledby="l-shad"><i class="ph">&#xe182;</i></button></div></div>
+      </div>
+
+      <div class="sect">
+        <div class="shd"><i class="ph">&#xe136;</i>Attributes</div>
+        <button class="btn btn-ghost addattr" data-toast="Attributes are your own values on an object, read from scripts with GetAttribute."><i class="ph" aria-hidden="true">&#xe3d4;</i>Add attribute</button>
+      </div>
+    </section>
+  </div>
+
+  <footer class="status">
+    <span class="ok"><i class="ph" aria-hidden="true">&#xe182;</i>Saved</span>
+    <span>1 selected</span>
+    <span>Snap <span class="mono">0.5</span> studs</span>
+    <span class="grow"></span>
+    <span>Edit mode</span>
+    <span class="mono">60 fps</span>
+    <span>Metallic Studio 0.1.0</span>
+  </footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+const T = [
+  // [depth, open(null = leaf), icon, name, class, extra]
+  [0, true,  '&#xe28c;', 'Workspace', ''],
+  [1, null,  '&#xe10e;', 'Camera', ''],
+  [1, null,  '&#xe1da;', 'Baseplate', '', 'lock'],
+  [1, true,  '&#xe25a;', 'Course', 'Model'],
+  [2, null,  '&#xe1da;', 'Start', 'Part'],
+  [2, null,  '&#xe1da;', 'Checkpoint1', 'Part'],
+  [2, null,  '&#xe1da;', 'Checkpoint2', 'Part', 'hover'],
+  [2, null,  '&#xe1da;', 'Checkpoint3', 'Part'],
+  [2, null,  '&#xe622;', 'FinishGate', 'Model'],
+  [1, true,  '&#xe25a;', 'Pillars', 'Model'],
+  [2, null,  '&#xe1da;', 'Pillar6', 'Part'],
+  [2, null,  '&#xe1da;', 'Pillar7', 'Part', 'sel'],
+  [2, null,  '&#xe1da;', 'Pillar8', 'Part'],
+  [1, null,  '&#xe622;', 'SpawnLocation', ''],
+  [0, false, '&#xe68e;', 'Players', ''],
+  [0, false, '&#xe472;', 'Lighting', ''],
+  [0, false, '&#xe25a;', 'ReplicatedStorage', ''],
+  [0, true,  '&#xe1bc;', 'ServerScriptService', ''],
+  [1, null,  '&#xe914;', 'Checkpoints', 'Script'],
+  [1, null,  '&#xe914;', 'RunTimer', 'Script'],
+  [0, false, '&#xe3a8;', 'StarterPlayer', ''],
+  [0, false, '&#xec24;', 'StarterGui', ''],
+];
+document.getElementById('tree').innerHTML = T.map(([d, open, ic, nm, cls, x]) => {
+  const car = open === null ? '' : `<i class="ph">${open ? '&#xe136;' : '&#xe13a;'}</i>`;
+  const tail = x === 'lock' ? `<i class="ph tail lock" aria-label="Locked">&#xe308;</i>` : `<i class="ph tail eye" aria-hidden="true">&#xe220;</i>`;
+  return `<li class="row${x === 'hover' ? ' hv' : ''}" role="treeitem" aria-level="${d + 1}"${open === null ? '' : ` aria-expanded="${open}"`} aria-selected="${x === 'sel'}" style="padding-left:${4 + d * 16}px">
+    <span class="car">${car}</span><i class="ph ci" aria-hidden="true">${ic}</i><span class="nm">${nm}</span>${cls ? `<span class="cls">${cls}</span>` : ''}${tail}</li>`;
+}).join('');
+// Static frame shows one hovered row so the hover state is visible in the still.
+const hv = document.querySelector('.row.hv'); if (hv) { hv.style.background = 'var(--bg-hover)'; hv.querySelector('.tail').style.display = 'block'; hv.querySelector('.cls').style.color = 'var(--text-2)'; }
+document.querySelectorAll('.row').forEach(r => r.onclick = () => document.querySelectorAll('.row').forEach(x => x.setAttribute('aria-selected', x === r)));
+document.querySelectorAll('.tool').forEach(b => b.onclick = () => document.querySelectorAll('.tool').forEach(x => x.setAttribute('aria-pressed', x === b)));
+document.querySelectorAll('.seg button').forEach(b => b.onclick = () => document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b)));
+document.querySelectorAll('.chk').forEach(c => c.onclick = () => c.setAttribute('aria-checked', c.getAttribute('aria-checked') !== 'true'));
+// What the remaining controls do in Studio (this still has no menus or pickers of its own).
+const DOES = {
+  'File': 'File menu: New, Open, Save, Publish to your device, Recent games.',
+  'Edit': 'Edit menu: Undo, Redo, Copy, Paste, Duplicate, Group.',
+  'View': 'View menu: show or hide Explorer, Properties, Output and the grid.',
+  'Insert': 'Insert menu: Part, Model, Script, LocalScript, SpawnLocation, Light.',
+  'Test': 'Test menu: Play, Play here, Run with 2 players.',
+  'Help': 'Help: guides, the Luau API reference and the shortcut list (Ctrl /).',
+  'Minimise': 'In Studio this minimises the window.', 'Maximise': 'In Studio this maximises the window.', 'Close': 'In Studio this closes the window. Unsaved changes ask first.',
+  'Explorer options': 'Explorer options: collapse all, show class names, sort.',
+  'Properties options': 'Properties options: show advanced properties, reset to default.',
+  'World': 'Switches the move handles between world and local axes.',
+  'Snap 0.5': 'Snap step for moving: 0.25, 0.5, 1 or 4 studs, or off.',
+  '15°': 'Snap step for rotating: 5°, 15°, 45° or 90°, or off.',
+  'Clear Day': 'Lighting preset: Clear Day, Golden Hour, Overcast, Moonlit, Cartoon Bright.',
+  'Grid': 'Shows or hides the floor grid.',
+  'Perspective': 'Camera: Perspective, Top, Front, Side.',
+  'Output': 'Output: everything Studio and your scripts print.',
+  'Problems 1': 'Problems: things Studio found that may break your game.',
+  'Clear output': 'Clears the Output list. Problems stay until they are fixed.',
+};
+document.querySelectorAll('button:not([data-toast])').forEach(b => { const k = b.getAttribute('aria-label') || b.textContent.replace(/[-]/g, '').trim(); if (DOES[k]) b.dataset.toast = DOES[k]; });
+let tt; const toast = document.getElementById('toast');
+document.querySelectorAll('[data-toast]').forEach(el => el.addEventListener('click', () => { toast.textContent = el.dataset.toast; toast.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => toast.classList.remove('on'), 3200); }));
+addEventListener('keydown', e => {
+  const map = { q: 0, w: 1, e: 2, r: 3 };
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key.toLowerCase() in map && !e.ctrlKey) document.querySelectorAll('.tool')[map[e.key.toLowerCase()]].click();
+  if (e.key === 'F5') { e.preventDefault(); document.querySelector('.play').click(); }
+});
+</script>
+</body>
+</html>

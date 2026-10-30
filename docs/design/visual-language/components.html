@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio components</title>
+<link rel="stylesheet" href="assets/mockup-fonts.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<style>
+  html, body { margin: 0; background: var(--bg-base); color: var(--text-1); font-family: var(--font); -webkit-font-smoothing: antialiased; }
+  .page { padding: 32px 40px 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px 32px; max-width: 1520px; }
+  section { min-width: 0; }
+  section.wide { grid-column: span 2; }
+  section.full { grid-column: 1 / -1; }
+  h1 { grid-column: 1 / -1; margin: 0 0 4px; }
+  h2 { margin: 0 0 12px; }
+  .lbl { font: 400 12px/16px var(--font); color: var(--text-3); margin: 0 0 6px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 14px; }
+  .col { display: flex; flex-direction: column; gap: 4px; }
+  .panel { background: var(--bg-panel); border-radius: var(--r-lg); padding: 16px; box-shadow: inset 0 1px 0 var(--highlight); }
+  /* forced states for the sheet */
+  .is-hover.btn-primary { background: var(--accent-hover); } .is-press.btn-primary { background: var(--accent-press); transform: translateY(1px); }
+  .is-hover.btn-secondary { background: var(--bg-hover); } .is-press.btn-secondary { background: var(--bg-active); transform: translateY(1px); }
+  .is-hover.btn-ghost { background: var(--bg-hover); color: var(--text-1); }
+  .is-hover.btn-danger { background: var(--danger-hover); }
+  .is-focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .field.is-hover { border-color: var(--text-3); }
+  .field.is-focus { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--focus); }
+  .field[disabled] { color: var(--text-off); border-color: var(--g-600); background: var(--g-850); }
+  .chip { font: 520 12px/16px var(--font); padding: 4px 8px; border-radius: var(--r-xs); background: rgba(17,16,21,0.88); color: var(--text-1); display: inline-flex; gap: 6px; align-items: center; }
+  .chip .ph { font-size: 13px; color: var(--icon); }
+  .seg { display: inline-flex; background: var(--bg-deep); border-radius: var(--r-sm); padding: 2px; gap: 2px; }
+  .seg button { font: 520 12px/16px var(--font); height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2); }
+  .seg button[aria-pressed="true"] { background: var(--g-650); color: var(--text-1); }
+
+  /* toasts and banners */
+  .toast { background: var(--g-750); border-radius: var(--r-md); box-shadow: var(--shadow-pop), inset 0 1px 0 var(--highlight); padding: 12px 12px 12px 14px; display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: start; max-width: 400px; margin-bottom: 10px; }
+  .toast .phf { font-size: 18px; } .toast .msg { font: 400 13px/18px var(--font); } .toast .msg b { font-weight: 600; }
+  .toast .acts { display: flex; gap: 8px; margin-top: 8px; }
+  .toast .acts .btn { height: 26px; font-size: 12px; padding: 0 10px; background: var(--g-650); }
+  .toast .x { color: var(--icon); font-size: 14px; padding: 2px; }
+  .banner { border-radius: var(--r-md); padding: 10px 12px; display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; font: 400 13px/18px var(--font); margin-bottom: 10px; }
+  .banner .phf { font-size: 18px; }
+  .banner.error { background: var(--error-bg); } .banner.error .phf { color: var(--error); }
+  .banner.warn { background: var(--warning-bg); } .banner.warn .phf { color: var(--warning); }
+  .banner.ok { background: var(--success-bg); } .banner.ok .phf { color: var(--success); }
+  .banner.info { background: var(--info-bg); } .banner.info .phf { color: var(--info); }
+  .banner .btn { height: 26px; font-size: 12px; }
+
+  /* cards */
+  .cards { display: grid; grid-template-columns: repeat(4, 200px); gap: 16px; }
+  .card-wrap { position: relative; display: grid; }
+  .card-wrap.on::before, .card-wrap.on::after { content: ""; position: absolute; pointer-events: none; }
+  .card-wrap.on::before { inset: -4px; background: var(--accent); border-radius: 9px; clip-path: polygon(0 0, calc(100% - 15.2px) 0, 100% 15.2px, 100% 100%, 0 100%); }
+  .card-wrap.on.focus::before { inset: -5px; background: var(--v-200); clip-path: polygon(0 0, calc(100% - 16.6px) 0, 100% 16.6px, 100% 100%, 0 100%); }
+  .card-wrap.on::after { inset: -2px; background: var(--bg-base); border-radius: 7px; clip-path: polygon(0 0, calc(100% - 12.4px) 0, 100% 12.4px, 100% 100%, 0 100%); }
+  .card { position: relative; z-index: 1; background: var(--bg-panel); border-radius: var(--r-md); box-shadow: inset 0 1px 0 var(--highlight); overflow: hidden; }
+  .card.hover { background: var(--bg-raised); }
+  .on .card { background: var(--bg-raised); clip-path: polygon(0 0, calc(100% - var(--cut-md)) 0, 100% var(--cut-md), 100% 100%, 0 100%); }
+  .card .art { aspect-ratio: 16/9; position: relative; overflow: hidden; }
+  .card .txt { padding: 8px 10px 10px; }
+  .card .name { font: 600 13px/18px var(--font); font-stretch: 106%; display: flex; gap: 6px; align-items: center; }
+  .card .name .phf { color: var(--accent-text); font-size: 14px; }
+  .card .meta { font: 400 12px/16px var(--font); color: var(--text-3); }
+  .card.hover .meta { color: var(--text-2); }
+  .theme-art { position: absolute; inset: 0; background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-low) 62%, var(--sky-low) 63%, var(--ground) 63%, var(--ground-far) 100%); }
+  .theme-art .glyph { position: absolute; left: 50%; top: 63%; transform: translate(-50%, -78%); font-size: 46px; color: var(--ink); font-family: 'Phosphor Bold'; }
+  .t-titanium { --sky-top:#aeb1c2; --sky-low:#d9dae2; --ground:#7a7686; --ground-far:#5c5968; --ink:#2e2c37; }
+  .t-toybox   { --sky-top:#7fbcea; --sky-low:#cfe8f8; --ground:#69b866; --ground-far:#4f9a4d; --ink:#24467a; }
+  .t-noir     { --sky-top:#151925; --sky-low:#353c52; --ground:#14161c; --ground-far:#0d0e12; --ink:#9aa3b8; }
+  .loading-art { position: absolute; inset: 0; }
+  .loading-art .note { position: absolute; left: 8px; bottom: 8px; }
+  .shot { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* recents */
+  .recent { display: grid; grid-template-columns: 72px 1fr auto; gap: 12px; align-items: center; padding: 6px; border-radius: var(--r-md); width: 300px; }
+  .recent.hover { background: var(--bg-hover); }
+  .recent .thumb { width: 72px; height: 40px; border-radius: var(--r-xs); overflow: hidden; position: relative; }
+  .recent .theme-art .glyph { font-size: 18px; }
+  .recent .name { font: 560 13px/18px var(--font); } .recent .meta { font: 400 12px/16px var(--font); color: var(--text-3); }
+  .recent.hover .meta { color: var(--text-2); }
+  .recent .gone { background: var(--g-800); display: grid; place-items: center; color: var(--text-3); font-size: 18px; }
+  .recent.missing .meta { color: var(--warning); display: flex; gap: 4px; align-items: center; }
+  .recent .more { color: var(--icon); font-size: 16px; padding: 4px; border-radius: var(--r-xs); }
+  .rail { background: var(--bg-deep); border-radius: var(--r-lg); padding: 12px; }
+
+  .empty { padding: 20px 16px; border-radius: var(--r-md); background: var(--bg-panel); box-shadow: inset 0 1px 0 var(--highlight); max-width: 300px; }
+  .empty .ph { font-size: 22px; color: var(--icon); }
+  .empty h3 { margin: 10px 0 4px; font: 600 13px/18px var(--font); }
+  .empty p { margin: 0 0 12px; font: 400 12px/17px var(--font); color: var(--text-2); }
+
+  /* HUD banner sample (in-game) */
+  .hud-sample { position: relative; border-radius: var(--r-lg); overflow: hidden; height: 168px; }
+  .hud-sample img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 8%; display: block; }
+  .hud-banner { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); background: rgba(17,16,21,0.88); padding: 8px 22px 12px; text-align: center;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px)); }
+  .hud-banner .k { font: 600 12px/16px var(--font); font-stretch: 112.5%; color: var(--text-2); }
+  .hud-banner .v { font: 800 22px/26px var(--font); font-stretch: 125%; color: var(--g-50); }
+  .pips { display: flex; gap: 4px; justify-content: center; margin-top: 6px; }
+  .pips i { width: 26px; height: 3px; background: var(--g-600); display: block; }
+  .pips i.f { background: var(--accent); }
+
+  .swatches { display: grid; grid-template-columns: repeat(14, 1fr); gap: 4px; }
+  .sw { height: 36px; border-radius: var(--r-xs); display: flex; align-items: flex-end; padding: 3px 4px; box-sizing: border-box; font: 500 10px/12px var(--mono); }
+  .type-row { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .type-row .lbl { margin: 0; }
+  .titlebar { background: var(--g-950); height: 40px; display: flex; align-items: center; padding-left: 12px; border-radius: var(--r-md); }
+  .titlebar img { width: 20px; height: 20px; border-radius: 5px; }
+  .titlebar .word { font: 640 13px/16px var(--font); font-stretch: 112.5%; color: var(--g-200); margin-left: 10px; }
+  .titlebar .sp { flex: 1; }
+  .titlebar .wc { width: 46px; height: 40px; display: grid; place-items: center; color: var(--icon); font-size: 14px; }
+  .titlebar .wc.close { background: #a3443e; color: var(--g-50); border-radius: 0 var(--r-md) var(--r-md) 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="t-display">Components</h1>
+
+  <section class="full">
+    <h2 class="t-heading">Colour</h2>
+    <p class="lbl">Graphite 950 to 50, then violet 950 to 50. Semantic colours below.</p>
+    <div class="swatches" id="sw"></div>
+  </section>
+
+  <section>
+    <h2 class="t-heading">Type (Archivo, JetBrains Mono)</h2>
+    <div class="type-row"><span class="lbl">display 30/36 700 wdth 125</span><span class="t-display" style="font-size:26px">Make a game</span></div>
+    <div class="type-row"><span class="lbl">title 24/30 680 wdth 125</span><span class="t-title" style="font-size:22px">Parkour</span></div>
+    <div class="type-row"><span class="lbl">heading 15/20 620 wdth 112.5</span><span class="t-heading">Starting points</span></div>
+    <div class="type-row"><span class="lbl">body 13/18 400</span><span class="t-body">Every template opens ready to play.</span></div>
+    <div class="type-row"><span class="lbl">strong 13/18 560</span><span class="t-strong">Lava Run</span></div>
+    <div class="type-row"><span class="lbl">small 12/16 400</span><span class="t-small" style="color:var(--text-2)">Parkour, 12 minutes ago</span></div>
+    <div class="type-row"><span class="lbl">caption 11/14 520</span><span class="t-caption">Ctrl O</span></div>
+    <div class="type-row"><span class="lbl">mono 12/18 400</span><span class="t-mono">Lava.Script:3  0:07.04</span></div>
+  </section>
+
+  <section>
+    <h2 class="t-heading">Buttons</h2>
+    <p class="lbl">Primary: rest, hover, pressed, focus, disabled</p>
+    <div class="row">
+      <button class="btn btn-primary cut-sm">Create game <span class="key">Enter</span></button>
+      <button class="btn btn-primary cut-sm is-hover">Create game</button>
+      <button class="btn btn-primary cut-sm is-press">Create game</button>
+    </div>
+    <div class="row">
+      <span style="padding:4px"><button class="btn btn-primary is-focus">Create game</button></span>
+      <button class="btn btn-primary cut-sm" disabled>Create game</button>
+    </div>
+    <p class="lbl">Secondary: rest, hover, pressed, focus, disabled</p>
+    <div class="row">
+      <button class="btn btn-secondary"><i class="ph">&#xe256;</i>Open</button>
+      <button class="btn btn-secondary is-hover">Browse</button>
+      <button class="btn btn-secondary is-press">Browse</button>
+      <button class="btn btn-secondary is-focus">Browse</button>
+      <button class="btn btn-secondary" disabled>Browse</button>
+    </div>
+    <p class="lbl">Ghost and danger</p>
+    <div class="row">
+      <button class="btn btn-ghost"><i class="ph">&#xe272;</i>Settings</button>
+      <button class="btn btn-ghost is-hover"><i class="ph">&#xe3e8;</i>Help</button>
+      <button class="btn btn-danger">Delete game</button>
+      <button class="btn btn-danger is-hover">Delete game</button>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="t-heading">Text fields</h2>
+    <div class="col" style="margin-bottom:12px"><label class="field-label">Game name (rest)</label><input class="field" value="My Parkour"></div>
+    <div class="col" style="margin-bottom:12px"><label class="field-label">Hover</label><input class="field is-hover" value="My Parkour"></div>
+    <div class="col" style="margin-bottom:12px"><label class="field-label">Focus</label><input class="field is-focus" value="Lava Run"></div>
+    <div class="col" style="margin-bottom:12px"><label class="field-label">Error</label><input class="field" aria-invalid="true" value="C:\Games"><div class="field-error"><i class="phf">&#xe4e2;</i><span>This folder isn't empty. Choose an empty folder or a new one.</span></div></div>
+    <div class="col"><label class="field-label">Disabled</label><input class="field" disabled value="C:\Games\My Parkour"><div class="field-help">Studio creates this folder. It must be new or empty.</div></div>
+  </section>
+
+  <section class="wide">
+    <h2 class="t-heading">Template cards</h2>
+    <p class="lbl">With preview; no preview (Theme art); hover; preview still loading (Theme art shows at once, the image fades in)</p>
+    <div class="cards">
+      <div class="card-wrap on"><div class="card"><div class="art"><img class="shot" src="assets/parkour-start-1280.jpg" alt=""></div><div class="txt"><div class="name"><i class="phf">&#xe184;</i>Parkour</div><div class="meta">3D, third-person</div></div></div></div>
+      <div class="card-wrap"><div class="card"><div class="art"><div class="theme-art t-toybox"><i class="glyph">&#xe9e4;</i></div></div><div class="txt"><div class="name">Obby</div><div class="meta">3D, third-person</div></div></div></div>
+      <div class="card-wrap"><div class="card hover"><div class="art"><div class="theme-art t-noir"><i class="glyph">&#xe220;</i></div></div><div class="txt"><div class="name">Horror</div><div class="meta">3D, co-op</div></div></div></div>
+      <div class="card-wrap"><div class="card"><div class="art"><div class="loading-art"><div class="theme-art t-titanium"><i class="glyph">&#xe1da;</i></div><span class="chip note">Loading preview</span></div></div><div class="txt"><div class="name">Empty 3D world</div><div class="meta">Baseplate and a spawn</div></div></div></div>
+    </div>
+    <p class="lbl" style="margin-top:14px">Selected with keyboard focus (ring turns violet-200, 3 px)</p>
+    <div class="cards"><div class="card-wrap on focus"><div class="card"><div class="art"><img class="shot" src="assets/parkour-start-1280.jpg" alt=""></div><div class="txt"><div class="name"><i class="phf">&#xe184;</i>Parkour</div><div class="meta">3D, third-person</div></div></div></div>
+      <div style="grid-column: span 3; align-self:center" class="col">
+        <span class="lbl">Chips on art (solid backing, 0.88 alpha graphite 900)</span>
+        <div class="row"><span class="chip"><i class="ph">&#xe1da;</i>3D</span><span class="chip"><i class="ph">&#xe472;</i>Titanium look</span><span class="chip"><i class="ph">&#xe464;</i>2D</span></div>
+        <span class="lbl">Segmented filter</span>
+        <div class="seg"><button aria-pressed="true">All</button><button aria-pressed="false">3D</button><button aria-pressed="false">2D</button><button aria-pressed="false">Empty</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="t-heading">Recent games</h2>
+    <div class="rail">
+      <div class="recent"><div class="thumb"><img class="shot" src="assets/parkour-checkpoint-1280.jpg" alt=""></div><div><div class="name">Lava Run</div><div class="meta">Parkour, 12 minutes ago</div></div></div>
+      <div class="recent hover"><div class="thumb"><div class="theme-art t-toybox"><i class="glyph">&#xe9e4;</i></div></div><div><div class="name">Sky Tower</div><div class="meta">Obby, Yesterday</div></div><i class="ph more">&#xe4f6;</i></div>
+      <div class="recent missing"><div class="thumb gone"><i class="ph">&#xe24a;</i></div><div><div class="name" style="color:var(--text-2)">Arena Prototype</div><div class="meta"><i class="phf">&#xe4e0;</i>Folder moved or deleted</div></div></div>
+    </div>
+    <p class="lbl" style="margin-top:12px">Empty state</p>
+    <div class="empty"><i class="ph">&#xe24a;</i><h3>No games yet</h3><p>Games you create or open show up here, newest first. Pick a starting point to make your first one.</p><button class="btn btn-secondary"><i class="ph">&#xe256;</i>Open a game folder <span class="key">Ctrl O</span></button></div>
+  </section>
+
+  <section>
+    <h2 class="t-heading">Toasts (floating, bottom right)</h2>
+    <div class="toast"><i class="phf" style="color:var(--success)">&#xe184;</i><div class="msg">Created <b>My Parkour</b>. Opening it in Build...</div><i class="ph x">&#xe4f6;</i></div>
+    <div class="toast"><i class="phf" style="color:var(--info)">&#xe2ce;</i><div class="msg">A new dev build is ready. It installs when you close Studio.<div class="acts"><button class="btn btn-secondary">Restart now</button></div></div><i class="ph x">&#xe4f6;</i></div>
+    <div class="toast"><i class="phf" style="color:var(--error)">&#xe4f8;</i><div class="msg"><b>Could not create the game.</b> Windows denied access to C:\Games. Pick another folder.<div class="acts"><button class="btn btn-secondary">Choose folder</button></div></div><i class="ph x">&#xe4f6;</i></div>
+  </section>
+
+  <section>
+    <h2 class="t-heading">Banners (in place, inside a panel)</h2>
+    <div class="banner error"><i class="phf">&#xe4f8;</i><span>The game stopped: the server script crashed. Your edits are safe.</span><button class="btn btn-secondary">Restart</button></div>
+    <div class="banner warn"><i class="phf">&#xe4e0;</i><span>3 templates could not be read. The log has the details.</span><button class="btn btn-ghost">Open log</button></div>
+    <div class="banner ok"><i class="phf">&#xe184;</i><span>Playing. Edits here reset when you stop.</span><span></span></div>
+    <div class="banner info"><i class="phf">&#xe2ce;</i><span>No templates found in C:\Program Files\Metallic\templates.</span><button class="btn btn-secondary">Open a game folder</button></div>
+  </section>
+
+  <section>
+    <h2 class="t-heading">Title bar and HUD banner</h2>
+    <div class="titlebar"><img src="../../../branding/placeholder-icon.png" alt=""><span class="word">Metallic Studio</span><span class="sp"></span><span class="wc"><i class="ph">&#xe32a;</i></span><span class="wc"><i class="ph">&#xe45e;</i></span><span class="wc close"><i class="ph">&#xe4f6;</i></span></div>
+    <p class="lbl" style="margin-top:12px">Close button shown hovered. HUD banner, in-game (scaled down):</p>
+    <div class="hud-sample"><img src="assets/parkour-checkpoint-1280.jpg" alt=""><div class="hud-banner"><div class="k">Checkpoint</div><div class="v">2 of 3</div><div class="pips"><i class="f"></i><i class="f"></i><i></i></div></div></div>
+  </section>
+</div>
+<script>
+const G = ['#0c0b0f','#111015','#16151b','#1c1b22','#24222b','#2c2a34','#35323e','#43404d','#5f5b6b','#817d8c','#a3a0ad','#c3c0ca','#e6e4ea','#f4f3f7'];
+const GN = ['950','900','850','800','750','700','650','600','500','400','300','200','100','50'];
+const V = ['#1f1c29','#2a2638','#3a3354','#584993','#6f5cb6','#8673cf','#9d8be0','#b4a6ec','#cdc2f2','#e4def8','#f3f0fc'];
+const VN = ['950','900','800','700','600','500','400','300','200','100','50'];
+const S = [['#ec7a72','error'],['#3a2226','error.bg'],['#e0ad55','warn'],['#352c1d','warn.bg'],['#62bf91','success'],['#1d3329','succ.bg'],['#7fb0e6','info'],['#1c2a3a','info.bg'],['#8f3a35','danger'],['#a3443e','danger.h'],['#6e6a79','line.ctl'],['#2b2933','line']];
+const lum = h => { const c = [1,3,5].map(i => parseInt(h.slice(i,i+2),16)/255).map(x => x <= 0.03928 ? x/12.92 : ((x+0.055)/1.055)**2.4); return 0.2126*c[0]+0.7152*c[1]+0.0722*c[2]; };
+const fg = h => lum(h) > 0.2 ? '#111015' : '#e6e4ea';
+const sw = document.getElementById('sw');
+sw.innerHTML = G.map((c,i) => `<div class="sw" style="background:${c};color:${fg(c)}">g${GN[i]}</div>`).join('')
+  + V.map((c,i) => `<div class="sw" style="background:${c};color:${fg(c)}">v${VN[i]}</div>`).join('') + '<div></div><div></div><div></div>'
+  + S.map(([c,n]) => `<div class="sw" style="background:${c};color:${fg(c)}">${n}</div>`).join('');
+</script>
+</body>
+</html>
