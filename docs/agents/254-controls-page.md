@@ -24,6 +24,13 @@ Goal: spec `docs/design/input-actions.md` sections 8, 9 and 11 in the runtime an
   Support, XDG elsewhere; `METALLIC_PLAYER_DATA_DIR` overrides. `--no-overrides`, `--menu main|keyboard|gamepad|assist`.
 - Fixed a debug-build panic in `overlay.rs` (egui texture deltas dropped without `clear`).
 
+## Verified
+- `cargo fmt --all --check`; `cargo clippy -p metallic_runtime -p metallic_player --all-targets -- -D warnings`;
+  `cargo test -p metallic_runtime -p metallic_player` (160 passed, including `tests/input_alloc.rs`);
+  `cargo check -p metallic_studio --all-targets`; `cargo deny check licenses`.
+- Screenshots (debug build, `metallic-player templates/parkour --menu keyboard|gamepad --frames 40 --capture 30:<png>`):
+  `254-shots/keyboard.png`, `254-shots/gamepad.png`.
+
 ## Not done
 - Touch tab and touch glyphs (#252). Luau `GetGlyph`/`GetGlyphs`/`GlyphChanged` (follow-up). PlayStation shapes.
 - Shared profiles across games (spec 8.4 open question); only the `local` profile exists.
