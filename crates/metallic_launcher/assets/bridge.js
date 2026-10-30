@@ -7,7 +7,7 @@
   "use strict";
 
   var ORIGINS = __METALLIC_ORIGINS__;
-  var MAX_MESSAGE_CHARS = 16 * 1024;
+  var MAX_MESSAGE_BYTES = 16 * 1024;
   var MAX_IN_FLIGHT = 32;
   var TIMEOUT_MS = 60000;
 
@@ -50,7 +50,7 @@
     } catch (error) {
       return fail("badRequest");
     }
-    if (typeof text !== "string" || text.length > MAX_MESSAGE_CHARS) {
+    if (typeof text !== "string" || new TextEncoder().encode(text).length > MAX_MESSAGE_BYTES) {
       return fail("badRequest");
     }
     return new Promise(function (resolve, reject) {

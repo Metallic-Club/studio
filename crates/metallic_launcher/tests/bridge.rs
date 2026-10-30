@@ -114,9 +114,18 @@ fn call(bridge: &Bridge, host: &FakeHost, page: &str, body: &str) -> Option<Stri
     bridge.deliver(reply, page)
 }
 
+/// The call inside the in-page origin guard: `(function(){if(<origins>...)return;<call>})()`.
+fn call_of(script: &str) -> &str {
+    let inner = script
+        .strip_prefix("(function(){if(")
+        .expect("a guarded script");
+    let (_, call) = inner.split_once("return;").expect("the guard comes first");
+    call.strip_suffix("})()").expect("the guard closes")
+}
+
 /// The JSON argument of `window.__metallicBridge.resolve(<id>,<json>)`.
 fn answer(script: &str) -> Value {
-    let rest = script
+    let rest = call_of(script)
         .strip_prefix("window.__metallicBridge.resolve(")
         .expect("a resolve call");
     let (_, json_text) = rest.split_once(',').expect("an id and an answer");
@@ -140,7 +149,7 @@ fn site_get_info_round_trips() {
         .handle(SITE, r#"{"id":7,"cmd":"getInfo"}"#, &host)
         .unwrap();
     let js = bridge.deliver(r, SITE).unwrap();
-    assert!(js.starts_with("window.__metallicBridge.resolve(7,"));
+    assert!(call_of(&js).starts_with("window.__metallicBridge.resolve(7,"));
     assert!(js.contains(r#""bridgeVersion":1"#));
     let value = answer(&js);
     assert_eq!(value["ok"]["launcherVersion"], "1.2.3");
@@ -358,6 +367,8 @@ fn bundled_settings_page_can_change_everything_and_see_everything() {
     // null clears the address; a bad address changes nothing.
     let value = set(json!({"devUrl": null}));
     assert_eq!(value["ok"]["devUrl"], Value::Null);
+    // Disk writes are limited to 2 a second; wait for the budget to refill.
+    std::thread::sleep(std::time::Duration::from_millis(600));
     let value = set(json!({"devUrl": "https://metallic.example/with/path", "closeToTray": false}));
     assert_eq!(value, json!({"error": "badRequest"}));
     assert!(host.settings.lock().unwrap().close_to_tray);
@@ -427,7 +438,7 @@ fn host_errors_reach_the_page_as_codes_only() {
     let body = json!({"id": 1, "cmd": "play", "args": {"launchUri": PLAY}}).to_string();
     let js = call(&bridge, &host, SITE, &body).unwrap();
     assert_eq!(
-        js,
+        call_of(&js),
         r#"window.__metallicBridge.resolve(1,{"error":"notInstalled"})"#
     );
     // Every code is a bare camelCase word.
@@ -486,8 +497,8 @@ fn reply_json_is_safe_in_script() {
         assert!(!js.contains(bad), "script contains {bad:?}");
     }
     // The script is one call, and its argument gives back exactly the original text.
-    assert!(js.starts_with("window.__metallicBridge.resolve(5,{"));
-    assert!(js.ends_with("})"));
+    assert!(call_of(&js).starts_with("window.__metallicBridge.resolve(5,{"));
+    assert!(call_of(&js).ends_with("})"));
     assert_eq!(answer(&js)["ok"]["devUrl"], nasty);
 }
 
@@ -500,9 +511,13 @@ fn events_go_only_to_the_site_and_bundled_pages() {
     };
     for page in [SITE, SITE_ROOT, DEV, LOCAL] {
         let js = bridge.event_script(&event, page).unwrap();
-        assert!(js.starts_with("window.__metallicBridge.emit({"), "{page}");
+        assert!(
+            call_of(&js).starts_with("window.__metallicBridge.emit({"),
+            "{page}"
+        );
         let value: Value = serde_json::from_str(
-            js.strip_prefix("window.__metallicBridge.emit(")
+            call_of(&js)
+                .strip_prefix("window.__metallicBridge.emit(")
                 .unwrap()
                 .strip_suffix(')')
                 .unwrap(),
@@ -547,7 +562,8 @@ fn events_have_the_names_and_fields_the_site_reads() {
     let to_json = |event: BridgeEvent| -> Value {
         let js = bridge.event_script(&event, SITE).unwrap();
         serde_json::from_str(
-            js.strip_prefix("window.__metallicBridge.emit(")
+            call_of(&js)
+                .strip_prefix("window.__metallicBridge.emit(")
                 .unwrap()
                 .strip_suffix(')')
                 .unwrap(),
@@ -673,4 +689,140 @@ fn the_page_script_has_the_origins_and_the_fixed_shape() {
     let script = Bridge::new(UrlPolicy::new(&config)).init_script();
     assert!(!script.contains("metallic.example"));
     assert!(script.contains("metallic-app"));
+}
+
+#[test]
+fn site_cannot_set_local_only_settings() {
+    let (bridge, host) = (bridge(), FakeHost::default());
+    // Every setting except closeToTray is for bundled pages only. (The patch is matched field by
+    // field in `allowed`, so a setting added later does not compile until it is classed.)
+    for patch in [
+        json!({"developerMode": false}),
+        json!({"devUrl": "http://127.0.0.1:5173"}),
+        json!({"devUrl": null}),
+        json!({"closeToTray": true, "developerMode": true, "devUrl": null}),
+    ] {
+        for page in [SITE, DEV] {
+            let body = json!({"id": 1, "cmd": "setSettings", "args": {"patch": patch}}).to_string();
+            assert!(is_not_allowed(call(&bridge, &host, page, &body)), "{patch}");
+        }
+    }
+    assert!(host.calls().is_empty());
+    let site_patch = BridgeCommand::SetSettings {
+        patch: SettingsPatch {
+            close_to_tray: Some(false),
+            ..SettingsPatch::default()
+        },
+    };
+    assert!(allowed(PageOrigin::Site, &site_patch));
+    let local_patch = BridgeCommand::SetSettings {
+        patch: SettingsPatch {
+            developer_mode: Some(true),
+            ..SettingsPatch::default()
+        },
+    };
+    assert!(!allowed(PageOrigin::Site, &local_patch));
+    assert!(allowed(PageOrigin::Local, &local_patch));
+}
+
+#[test]
+fn reply_script_checks_origin_first() {
+    let (bridge, host) = (bridge(), FakeHost::default());
+    let reply = bridge
+        .handle(SITE, r#"{"id":3,"cmd":"getInfo"}"#, &host)
+        .unwrap();
+    let js = bridge.deliver(reply, SITE).unwrap();
+    let guard_at = js.find("location.origin").expect("an origin guard");
+    let bridge_at = js.find("__metallicBridge").expect("a bridge call");
+    assert!(js.starts_with(
+        "(function(){if([\"https://metallic.example\"].indexOf(location.origin)===-1)return;"
+    ));
+    assert!(
+        guard_at < bridge_at,
+        "the guard must run before the bridge is touched"
+    );
+    // Events are guarded the same way, for the page they were approved for.
+    let event = BridgeEvent::SiteStatus { up: true };
+    let js = bridge.event_script(&event, SITE).unwrap();
+    assert!(js.find("location.origin").unwrap() < js.find("__metallicBridge").unwrap());
+    assert!(js.contains(r#""https://metallic.example""#));
+    // A bundled page is guarded with the bundled origins, never with the site.
+    let js = bridge.event_script(&event, LOCAL).unwrap();
+    assert!(js.contains("metallic-app.localhost"));
+    assert!(!js.contains("https://metallic.example"));
+    let reply = bridge
+        .handle(DEV, r#"{"id":4,"cmd":"getInfo"}"#, &host)
+        .unwrap();
+    assert!(
+        bridge
+            .deliver(reply, DEV)
+            .unwrap()
+            .contains(r#"["http://127.0.0.1:5173"]"#)
+    );
+}
+
+#[test]
+fn flooding_set_settings_is_rate_limited() {
+    let (bridge, host) = (bridge(), FakeHost::default());
+    let body = r#"{"id":1,"cmd":"setSettings","args":{"patch":{"closeToTray":true}}}"#;
+    let busy = (0..30)
+        .filter(|_| error_of_any(call(&bridge, &host, SITE, body)) == "busy")
+        .count();
+    let writes = host
+        .calls()
+        .iter()
+        .filter(|c| *c == "update_settings")
+        .count();
+    // Two per second, and the whole loop takes a few milliseconds.
+    assert!(
+        (1..=3).contains(&writes),
+        "{writes} writes reached the host"
+    );
+    assert_eq!(busy, 30 - writes);
+}
+
+#[test]
+fn flooding_any_message_gets_busy_without_reaching_the_host() {
+    let (bridge, host) = (bridge(), FakeHost::default());
+    let body = r#"{"id":1,"cmd":"getInfo"}"#;
+    let answers: Vec<_> = (0..200)
+        .map(|_| call(&bridge, &host, SITE, body).expect("every message gets an answer"))
+        .collect();
+    let busy = answers
+        .iter()
+        .filter(|js| answer(js)["error"] == "busy")
+        .count();
+    let served = host.calls().len();
+    // A burst of 40, a little refill while the loop runs.
+    assert!(
+        (40..=45).contains(&served),
+        "{served} calls reached the host"
+    );
+    assert_eq!(busy, 200 - served);
+}
+
+#[test]
+fn hostile_message_bodies_are_dropped_or_refused() {
+    let (bridge, host) = (bridge(), FakeHost::default());
+    let deep = "[".repeat(8000);
+    let deep_object = format!(r#"{{"id":1,"cmd":"getInfo","args":{}}}"#, "[".repeat(8000));
+    for body in [
+        deep.as_str(),
+        r#"{"id":1e999,"cmd":"getInfo"}"#,
+        r#"{"id":1,"cmd":"getInfo","cmd":"play"}"#,
+        r#"{"id":1,"cmd":"\ud800"}"#,
+        deep_object.as_str(),
+    ] {
+        // Never a panic; either no answer or a plain error code.
+        if let Some(js) = call(&bridge, &host, SITE, body) {
+            assert!(answer(&js).get("error").is_some(), "{body:.40}");
+        }
+    }
+    // With a duplicate key the last one wins, and the check sees the same command that runs.
+    assert!(host.calls().is_empty());
+}
+
+fn error_of_any(script: Option<String>) -> String {
+    let value = answer(&script.expect("an answer"));
+    value["error"].as_str().unwrap_or("").to_string()
 }

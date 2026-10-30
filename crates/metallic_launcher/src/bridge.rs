@@ -47,6 +47,11 @@ pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 pub const MAX_IN_FLIGHT: usize = 32;
 /// The shortest time between two Player starts.
 const PLAY_INTERVAL: Duration = Duration::from_secs(2);
+/// How many messages a page may send: a steady rate and a burst (more are answered `busy`).
+const MESSAGES_PER_SECOND: f64 = 20.0;
+const MESSAGE_BURST: f64 = 40.0;
+/// How many disk-writing commands (`setSettings`) a page may send per second.
+const WRITES_PER_SECOND: f64 = 2.0;
 
 /// The text of `assets/bridge.js`, with the list of trusted origins still to be inserted.
 const BRIDGE_JS: &str = include_str!("../assets/bridge.js");
@@ -136,8 +141,18 @@ pub fn allowed(origin: PageOrigin, cmd: &BridgeCommand) -> bool {
             BridgeCommand::GithubSignIn | BridgeCommand::RetrySite => false,
             // Developer mode, the development address and the update channel are for the
             // Launcher's own settings page.
+            // Listed field by field with no `..`: a new setting does not compile until it is
+            // put on one side or the other, so it can never default to "the site may set it".
             BridgeCommand::SetSettings { patch } => {
-                patch.developer_mode.is_none() && patch.dev_url.is_none()
+                let SettingsPatch {
+                    close_to_tray: _,
+                    developer_mode: None,
+                    dev_url: None,
+                } = patch
+                else {
+                    return false;
+                };
+                true
             }
             _ => true,
         },
@@ -281,6 +296,8 @@ pub struct PendingReply {
     id: u32,
     /// Where the asking page came from; the answer goes only to a page with this origin.
     origin_key: String,
+    /// The `location.origin` values the answer may run in (checked in the page as well).
+    guard: Vec<String>,
     outcome: Result<Value, BridgeErrorCode>,
     _slot: Option<InFlight>,
 }
@@ -297,6 +314,48 @@ pub struct Bridge {
     policy: UrlPolicy,
     in_flight: Arc<AtomicUsize>,
     last_play: Mutex<Option<Instant>>,
+    /// Budget for all messages: about 20 a second, bursts of 40.
+    budget: Mutex<Bucket>,
+    /// Budget for commands that write to disk (`setSettings`): 2 a second.
+    write_budget: Mutex<Bucket>,
+}
+
+/// A token bucket: `rate` tokens a second up to `capacity`.
+struct Bucket {
+    tokens: f64,
+    rate: f64,
+    capacity: f64,
+    last: Instant,
+}
+
+impl Bucket {
+    fn new(rate: f64, capacity: f64) -> Self {
+        Bucket {
+            tokens: capacity,
+            rate,
+            capacity,
+            last: Instant::now(),
+        }
+    }
+
+    /// Takes one token if there is one.
+    fn take(&mut self) -> bool {
+        let now = Instant::now();
+        let gained = now.duration_since(self.last).as_secs_f64() * self.rate;
+        self.tokens = (self.tokens + gained).min(self.capacity);
+        self.last = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn take_from(bucket: &Mutex<Bucket>) -> bool {
+    // A poisoned lock counts as "over budget".
+    bucket.lock().is_ok_and(|mut bucket| bucket.take())
 }
 
 /// The name of a command in a log line: letters and digits only, 32 at most, so a hostile
@@ -328,6 +387,17 @@ fn script_json(value: &Value) -> String {
         }
     }
     safe
+}
+
+/// Wraps a call into the page's bridge so the page itself refuses to run it unless its
+/// `location.origin` is one of `origins`. The check comes first: the script has been approved
+/// for the page the view showed a moment ago, but it runs later, and a page that navigated in
+/// between must not see it. `window.__metallicBridge` is defined by `bridge.js` at document
+/// creation as a non-writable, non-configurable property, so on a page that passes the check
+/// it cannot have been replaced by page code.
+fn guarded_script(origins: &[String], call: &str) -> String {
+    let list = script_json(&Value::from(origins.to_vec()));
+    format!("(function(){{if({list}.indexOf(location.origin)===-1)return;{call}}})()")
 }
 
 /// Reads `{"cmd": .., "args": ..}` from a message. Extra top-level fields are refused. A missing
@@ -391,6 +461,8 @@ impl Bridge {
             policy,
             in_flight: Arc::new(AtomicUsize::new(0)),
             last_play: Mutex::new(None),
+            budget: Mutex::new(Bucket::new(MESSAGES_PER_SECOND, MESSAGE_BURST)),
+            write_budget: Mutex::new(Bucket::new(WRITES_PER_SECOND, WRITES_PER_SECOND)),
         }
     }
 
@@ -414,6 +486,27 @@ impl Bridge {
         }
     }
 
+    /// The `location.origin` values a page at `url` may be answered at, or `None` for a page that
+    /// may not use the bridge. Bundled pages are `http(s)://metallic-app.localhost` or
+    /// `metallic-app://local`, depending on the platform.
+    fn guard_origins(&self, url: &str) -> Option<Vec<String>> {
+        match self.policy.origin_of(url) {
+            PageOrigin::Other => None,
+            PageOrigin::Local => Some(
+                [
+                    "http://metallic-app.localhost",
+                    "https://metallic-app.localhost",
+                    "metallic-app://local",
+                ]
+                .map(String::from)
+                .to_vec(),
+            ),
+            PageOrigin::Site => Url::parse(url)
+                .ok()
+                .map(|parsed| vec![parsed.origin().ascii_serialization()]),
+        }
+    }
+
     /// Handles one message from the page at `page_url`. Returns `None` (and logs the origin kind
     /// and, when readable, the command name; never the message) when the page may not use the
     /// bridge, the message is too long, or it has no readable id. Otherwise returns the answer,
@@ -429,7 +522,12 @@ impl Bridge {
             return None;
         }
         let origin = self.policy.origin_of(page_url);
-        let origin_key = self.origin_key(page_url)?;
+        let (Some(origin_key), Some(guard)) =
+            (self.origin_key(page_url), self.guard_origins(page_url))
+        else {
+            log::warn!("dropped a bridge message from a {origin:?} page");
+            return None;
+        };
         // From here on the page is the site or a bundled page; the body is still untrusted.
         let Ok(Value::Object(message)) = serde_json::from_str::<Value>(body) else {
             log::warn!("dropped an unreadable bridge message from a {origin:?} page");
@@ -445,6 +543,17 @@ impl Bridge {
         };
         let name = loggable_name(message.get("cmd"));
 
+        if !take_from(&self.budget) {
+            log::warn!("a {origin:?} page sends bridge messages too fast; answered busy");
+            return Some(PendingReply {
+                id,
+                origin_key,
+                guard,
+                outcome: Err(BridgeErrorCode::Busy),
+                _slot: None,
+            });
+        }
+
         let reserved = self.in_flight.fetch_add(1, Ordering::SeqCst);
         let slot = InFlight(self.in_flight.clone());
         let outcome = if reserved >= MAX_IN_FLIGHT {
@@ -456,6 +565,7 @@ impl Bridge {
         Some(PendingReply {
             id,
             origin_key,
+            guard,
             outcome,
             _slot: Some(slot),
         })
@@ -496,9 +606,14 @@ impl Bridge {
                 done(host.open_studio(place))
             }
             BridgeCommand::GetSettings => Ok(settings_view(origin, &host.settings())),
-            BridgeCommand::SetSettings { patch } => host
-                .update_settings(patch)
-                .map(|settings| settings_view(origin, &settings)),
+            BridgeCommand::SetSettings { patch } => {
+                if !take_from(&self.write_budget) {
+                    log::warn!("settings are changed too often; answered busy");
+                    return Err(BridgeErrorCode::Busy);
+                }
+                host.update_settings(patch)
+                    .map(|settings| settings_view(origin, &settings))
+            }
             BridgeCommand::SignIn => host.sign_in(),
             BridgeCommand::SignOut => done(host.sign_out()),
             BridgeCommand::GithubSignIn => host.github_sign_in(),
@@ -533,10 +648,13 @@ impl Bridge {
             Ok(value) => json!({ "ok": value }),
             Err(code) => json!({ "error": code }),
         };
-        Some(format!(
-            "window.__metallicBridge.resolve({},{})",
-            reply.id,
-            script_json(&answer)
+        Some(guarded_script(
+            &reply.guard,
+            &format!(
+                "window.__metallicBridge.resolve({},{})",
+                reply.id,
+                script_json(&answer)
+            ),
         ))
     }
 
@@ -544,9 +662,7 @@ impl Bridge {
     /// site and bundled pages get events. A sign-in state other than the five known ones is not
     /// sent.
     pub fn event_script(&self, event: &BridgeEvent, current_page_url: &str) -> Option<String> {
-        if self.policy.origin_of(current_page_url) == PageOrigin::Other {
-            return None;
-        }
+        let guard = self.guard_origins(current_page_url)?;
         let event = match event {
             BridgeEvent::SignIn { state, .. } if !SIGN_IN_STATES.contains(&state.as_str()) => {
                 log::warn!("not sending a sign-in event with an unknown state");
@@ -558,9 +674,12 @@ impl Bridge {
             },
             other => other.clone(),
         };
-        Some(format!(
-            "window.__metallicBridge.emit({})",
-            script_json(&json!(event))
+        Some(guarded_script(
+            &guard,
+            &format!(
+                "window.__metallicBridge.emit({})",
+                script_json(&json!(event))
+            ),
         ))
     }
 }
