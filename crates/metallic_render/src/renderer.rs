@@ -4,11 +4,10 @@ use crate::context::{RenderContext, RenderError};
 use crate::meshes::{MeshKind, Vertex};
 use crate::scene::{InstanceRaw, Scene};
 use crate::shadows::{
-    MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
+    Cascade, MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
 };
 use crate::sky::Sky;
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
 use metallic_core::World;
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
@@ -168,6 +167,9 @@ pub struct Renderer {
     opaque: Vec<InstanceBuffer>,
     blended: InstanceBuffer,
     blended_kinds: Vec<MeshKind>,
+    scratch_instances: Vec<InstanceRaw>,
+    scratch_blended: Vec<(f32, MeshKind, InstanceRaw)>,
+    scratch_cascades: Vec<Cascade>,
     globals: wgpu::Buffer,
     global_layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
@@ -288,6 +290,9 @@ impl Renderer {
             opaque,
             blended,
             blended_kinds: Vec::new(),
+            scratch_instances: Vec::new(),
+            scratch_blended: Vec::new(),
+            scratch_cascades: Vec::new(),
             globals,
             global_layout,
             shadow_layout,
@@ -350,15 +355,18 @@ impl Renderer {
         if self.uploaded_version == Some(self.scene.version()) {
             return;
         }
+        let mut data = std::mem::take(&mut self.scratch_instances);
         for kind in MeshKind::ALL {
-            let data: Vec<InstanceRaw> = self
-                .scene
-                .opaque(kind)
-                .filter(|p| !p.is_invisible())
-                .map(|p| p.instance)
-                .collect();
+            data.clear();
+            data.extend(
+                self.scene
+                    .opaque(kind)
+                    .filter(|p| !p.is_invisible())
+                    .map(|p| p.instance),
+            );
             self.opaque[kind.index()].upload(&self.device, &self.queue, &data);
         }
+        self.scratch_instances = data;
         self.uploaded_version = Some(self.scene.version());
     }
 
@@ -406,7 +414,7 @@ impl Renderer {
         });
     }
 
-    fn write_globals(&self, camera: &Camera, size: (u32, u32), cascades: &[Mat4]) -> Globals {
+    fn write_globals(&self, camera: &Camera, size: (u32, u32), cascades: &[Cascade]) -> Globals {
         let aspect = size.0 as f32 / size.1 as f32;
         let vp = camera.view_proj(aspect);
         let count = self.settings.cascades();
@@ -414,21 +422,10 @@ impl Renderer {
         let mut cascade_vp = [[[0.0; 4]; 4]; MAX_CASCADES];
         let mut split_arr = [f32::MAX; 4];
         let mut texel = [1.0; 4];
-        for i in 0..count {
-            cascade_vp[i] = cascades[i].to_cols_array_2d();
+        for (i, c) in cascades.iter().enumerate().take(count) {
+            cascade_vp[i] = c.view_proj.to_cols_array_2d();
             split_arr[i] = splits[i];
-        }
-        for (i, t) in texel.iter_mut().enumerate().take(count) {
-            let near = if i == 0 { NEAR } else { splits[i - 1] };
-            *t = fit_cascade(
-                camera,
-                aspect,
-                near,
-                splits[i],
-                self.sky.to_sun,
-                self.shadow_map.resolution,
-            )
-            .texel_world;
+            texel[i] = c.texel_world;
         }
         let p = |c: [f32; 3], w: f32| [c[0], c[1], c[2], w];
         Globals {
@@ -468,35 +465,53 @@ impl Renderer {
         self.upload_scene();
 
         // Blended parts are re-sorted every frame because the order depends on the camera.
-        let sorted = self.scene.transparent_sorted(camera.position);
-        let blended: Vec<InstanceRaw> = sorted.iter().map(|p| p.instance).collect();
-        self.blended_kinds = sorted.iter().map(|p| p.kind).collect();
-        self.blended.upload(&self.device, &self.queue, &blended);
+        // The scratch vectors keep their capacity from frame to frame.
+        let mut sorted = std::mem::take(&mut self.scratch_blended);
+        sorted.clear();
+        let eye = camera.position;
+        sorted.extend(
+            self.scene
+                .transparent()
+                .map(|p| (p.centre().distance_squared(eye), p.kind, p.instance)),
+        );
+        sorted.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut instances = std::mem::take(&mut self.scratch_instances);
+        instances.clear();
+        instances.extend(sorted.iter().map(|s| s.2));
+        self.blended_kinds.clear();
+        self.blended_kinds.extend(sorted.iter().map(|s| s.1));
+        self.blended.upload(&self.device, &self.queue, &instances);
+        self.scratch_instances = instances;
+        self.scratch_blended = sorted;
 
+        // One fit per cascade per frame; shared by the uniform block and the shadow passes.
         let aspect = size.0 as f32 / size.1 as f32;
         let count = self.settings.cascades();
         let splits = cascade_splits(NEAR, SHADOW_DISTANCE.min(FAR), count);
-        let cascades: Vec<Mat4> = (0..count)
-            .map(|i| {
-                let near = if i == 0 { NEAR } else { splits[i - 1] };
-                fit_cascade(
-                    camera,
-                    aspect,
-                    near,
-                    splits[i],
-                    self.sky.to_sun,
-                    self.shadow_map.resolution,
-                )
-                .view_proj
-            })
-            .collect();
+        let mut cascades = std::mem::take(&mut self.scratch_cascades);
+        cascades.clear();
+        cascades.extend((0..count).map(|i| {
+            let near = if i == 0 { NEAR } else { splits[i - 1] };
+            fit_cascade(
+                camera,
+                aspect,
+                near,
+                splits[i],
+                self.sky.to_sun,
+                self.shadow_map.resolution,
+            )
+        }));
         let globals = self.write_globals(camera, size, &cascades);
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
-        for (slot, vp) in self.cascade_slots.iter().zip(&cascades) {
-            self.queue
-                .write_buffer(&slot.buffer, 0, bytemuck::bytes_of(&vp.to_cols_array_2d()));
+        for (slot, c) in self.cascade_slots.iter().zip(&cascades) {
+            self.queue.write_buffer(
+                &slot.buffer,
+                0,
+                bytemuck::bytes_of(&c.view_proj.to_cols_array_2d()),
+            );
         }
+        self.scratch_cascades = cascades;
 
         let Some(att) = self.attachments.as_ref() else {
             return;
@@ -604,10 +619,39 @@ impl Renderer {
         }
     }
 
+    /// Draws one throw-away frame offscreen at `size` and waits for it, so pipeline
+    /// compilation, render-target creation and instance-buffer growth happen now instead of in
+    /// the first visible frame. Call after [`Renderer::sync`].
+    pub fn prewarm(&mut self, size: (u32, u32)) {
+        if size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("metallic prewarm"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.render(&view, &Camera::default(), size);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
     /// Renders one frame offscreen and returns it as tightly packed RGBA8 bytes
     /// (`size.0 * size.1 * 4`), already encoded for display. Used for screenshots and tests.
     pub fn capture(&mut self, camera: &Camera, size: (u32, u32)) -> Result<Vec<u8>, RenderError> {
         let (w, h) = size;
+        if w == 0 || h == 0 {
+            return Err(RenderError::InvalidSize);
+        }
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("metallic capture"),
             size: wgpu::Extent3d {

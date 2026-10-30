@@ -10,6 +10,8 @@ pub enum RenderError {
     Device(String),
     /// Reading a rendered frame back from the GPU failed.
     Readback(String),
+    /// A capture was requested with a zero width or height.
+    InvalidSize,
     /// The window surface could not be created.
     Surface(String),
 }
@@ -20,6 +22,7 @@ impl fmt::Display for RenderError {
             RenderError::NoAdapter(e) => write!(f, "no graphics adapter: {e}"),
             RenderError::Device(e) => write!(f, "could not create graphics device: {e}"),
             RenderError::Readback(e) => write!(f, "could not read back the frame: {e}"),
+            RenderError::InvalidSize => write!(f, "cannot capture a zero-sized frame"),
             RenderError::Surface(e) => write!(f, "could not create window surface: {e}"),
         }
     }

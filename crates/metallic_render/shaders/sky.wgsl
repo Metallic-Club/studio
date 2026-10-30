@@ -1,4 +1,4 @@
-// Full-screen gradient sky with a crisp sun disc (no glow).
+// Full-screen vertical gradient sky with a soft-edged sun disc (no glow or bloom).
 struct SkyOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) ndc: vec2<f32>,
@@ -19,7 +19,7 @@ fn fs_main(in: SkyOut) -> @location(0) vec4<f32> {
     let far_h = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
     let dir = normalize(far_h.xyz / far_h.w - g.camera_pos.xyz);
     var col = sky_gradient(dir);
-    let disc = smoothstep(0.99985, 0.99992, dot(dir, g.sun_dir.xyz));
-    col = mix(col, g.sun_color.rgb * 0.5, disc);
+    let disc = smoothstep(0.99975, 0.99991, dot(dir, g.sun_dir.xyz));
+    col = mix(col, vec3<f32>(0.95, 0.92, 0.86), disc * 0.9);
     return vec4<f32>(finish(col, in.clip.xy), 1.0);
 }

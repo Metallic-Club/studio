@@ -22,7 +22,7 @@ const PI: f32 = 3.14159265;
 
 fn sky_gradient(d: vec3<f32>) -> vec3<f32> {
     let up = clamp(d.y, -1.0, 1.0);
-    let t = pow(clamp(up, 0.0, 1.0), 0.55);
+    let t = smoothstep(0.0, 0.6, clamp(up, 0.0, 1.0));
     let above = mix(g.sky_horizon.rgb, g.sky_zenith.rgb, t);
     let below = mix(g.sky_horizon.rgb, g.sky_ground.rgb, smoothstep(0.0, 0.35, -up));
     return select(above, below, up < 0.0);

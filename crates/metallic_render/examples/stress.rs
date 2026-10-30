@@ -4,9 +4,10 @@
 //!
 //! Options: `--seconds N` exit after N seconds and print the overall average,
 //! `--vsync` present with vsync (default is uncapped so the number means throughput),
+//! `--no-prewarm` skip the pre-warm frame (to measure first-frame cost),
 //! `--low` use the Low quality preset,
 //! `--screenshot PATH` render one frame offscreen (no window) to a PNG and exit.
-use metallic_core::{Color3, Value, Vec3 as V3, World};
+use metallic_core::{Color3, InstanceId, Value, Vec3 as V3, World};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, Quality, RenderContext, RenderSettings, Renderer};
 use std::sync::Arc;
@@ -18,6 +19,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 const PART_COUNT: usize = 5000;
+/// Parts moved through `World::set` every frame, so the fps includes the sync cost.
+const MOVING_PARTS: usize = 500;
 
 /// Tiny deterministic random generator so every run draws the same scene.
 struct Rng(u64);
@@ -128,6 +131,23 @@ fn build_world() -> World {
     w
 }
 
+/// The first `MOVING_PARTS` parts after the baseplate, with their start positions.
+fn collect_movers(world: &World) -> Vec<(InstanceId, V3)> {
+    let Some(ws) = world.root("Workspace") else {
+        return Vec::new();
+    };
+    world
+        .children(ws)
+        .iter()
+        .skip(1)
+        .take(MOVING_PARTS)
+        .filter_map(|&id| match world.get(id, "Position") {
+            Ok(Value::Vector3(p)) => Some((id, p)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn orbit_camera(t: f32) -> Camera {
     let a = t * 0.15;
     Camera {
@@ -144,6 +164,10 @@ struct Stats {
     last_frame: Instant,
     total_start: Instant,
     total_frames: u64,
+    sync_total: Duration,
+    sync_window: Duration,
+    /// Every frame time in milliseconds, for the summary.
+    all: Vec<f32>,
 }
 
 impl Stats {
@@ -156,32 +180,75 @@ impl Stats {
             last_frame: now,
             total_start: now,
             total_frames: 0,
+            sync_total: Duration::ZERO,
+            sync_window: Duration::ZERO,
+            all: Vec::new(),
         }
+    }
+
+    fn add_sync(&mut self, d: Duration) {
+        self.sync_total += d;
+        self.sync_window += d;
     }
 
     fn frame(&mut self) {
         let now = Instant::now();
-        self.worst = self.worst.max(now - self.last_frame);
+        let dt = now - self.last_frame;
+        self.worst = self.worst.max(dt);
+        self.all.push(dt.as_secs_f32() * 1000.0);
         self.last_frame = now;
         self.frames += 1;
         self.total_frames += 1;
         let elapsed = now - self.window_start;
         if elapsed >= Duration::from_secs(5) {
             println!(
-                "fps avg {:.1}  min {:.1}  ({} frames in {:.1}s)",
+                "fps avg {:.1}  min {:.1}  sync {:.3} ms/frame  ({} frames in {:.1}s)",
                 f64::from(self.frames) / elapsed.as_secs_f64(),
                 1.0 / self.worst.as_secs_f64(),
+                self.sync_window.as_secs_f64() * 1000.0 / f64::from(self.frames),
                 self.frames,
                 elapsed.as_secs_f64()
             );
             self.window_start = now;
             self.frames = 0;
             self.worst = Duration::ZERO;
+            self.sync_window = Duration::ZERO;
         }
     }
 
     fn overall(&self) -> f64 {
         self.total_frames as f64 / self.total_start.elapsed().as_secs_f64()
+    }
+
+    fn summary(&self) {
+        let mut sorted = self.all.clone();
+        sorted.sort_by(f32::total_cmp);
+        let at = |q: f32| {
+            sorted
+                .get(((sorted.len() as f32 - 1.0) * q) as usize)
+                .copied()
+                .unwrap_or(0.0)
+        };
+        let slow: Vec<String> = {
+            let mut idx: Vec<usize> = (0..self.all.len()).collect();
+            idx.sort_by(|&a, &b| self.all[b].total_cmp(&self.all[a]));
+            idx.iter()
+                .take(5)
+                .map(|&i| format!("#{i}={:.1}ms", self.all[i]))
+                .collect()
+        };
+        println!(
+            "overall fps avg {:.1} over {} frames; frame ms p50 {:.2} p99 {:.2} p99.9 {:.2} max {:.2}; >33 ms: {} frames; worst: {}; sync avg {:.3} ms/frame",
+            self.overall(),
+            self.all.len(),
+            at(0.5),
+            at(0.99),
+            at(0.999),
+            at(1.0),
+            self.all.iter().filter(|&&m| m > 33.0).count(),
+            slow.join(" "),
+            self.sync_total.as_secs_f64() * 1000.0 / self.all.len().max(1) as f64,
+        );
     }
 }
 
@@ -197,6 +264,8 @@ struct Gfx {
 struct App {
     gfx: Option<Gfx>,
     world: World,
+    movers: Vec<(InstanceId, V3)>,
+    no_prewarm: bool,
     settings: RenderSettings,
     vsync: bool,
     seconds: Option<f32>,
@@ -216,10 +285,23 @@ impl App {
         if let Some(limit) = self.seconds
             && t >= limit
         {
-            println!("overall fps avg {:.1} over {:.1}s", self.stats.overall(), t);
+            self.stats.summary();
             event_loop.exit();
             return;
         }
+        // Move 500 parts through the world and sync, like a running game would.
+        let sync_start = Instant::now();
+        for (i, (id, base)) in self.movers.iter().enumerate() {
+            let phase = t * 1.5 + i as f32 * 0.37;
+            let pos = V3::new(
+                base.x + f64::from(phase.sin()) * 4.0,
+                base.y + f64::from((phase * 0.7).cos().abs()) * 2.0,
+                base.z + f64::from(phase.cos()) * 4.0,
+            );
+            let _ = self.world.set(*id, "Position", Value::Vector3(pos));
+        }
+        gfx.renderer.sync(&self.world);
+        self.stats.add_sync(sync_start.elapsed());
         match gfx.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -271,6 +353,12 @@ impl ApplicationHandler for App {
         surface.configure(&ctx.device, &config);
         let mut renderer = Renderer::with_settings(&ctx, config.format, self.settings);
         renderer.sync(&self.world);
+        self.movers = collect_movers(&self.world);
+        if !self.no_prewarm {
+            let t = Instant::now();
+            renderer.prewarm((config.width, config.height));
+            println!("prewarm took {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+        }
         println!(
             "{} parts, {:?}, {}x{}, format {:?}, present {:?}",
             renderer.part_count(),
@@ -295,7 +383,7 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                println!("overall fps avg {:.1}", self.stats.overall());
+                self.stats.summary();
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
@@ -372,6 +460,8 @@ fn main() {
     let mut app = App {
         gfx: None,
         world: build_world(),
+        movers: Vec::new(),
+        no_prewarm: flag("--no-prewarm"),
         settings,
         vsync: flag("--vsync"),
         seconds: value("--seconds").and_then(|s| s.parse().ok()),

@@ -25,8 +25,8 @@ pub struct Sky {
 impl Default for Sky {
     fn default() -> Self {
         Sky {
-            zenith: [0.05, 0.058, 0.17],
-            horizon: [0.30, 0.315, 0.41],
+            zenith: [0.032, 0.042, 0.15],
+            horizon: [0.36, 0.375, 0.47],
             ground: [0.085, 0.085, 0.10],
             to_sun: Vec3::new(0.5, 0.55, 0.35).normalize(),
             sun_color: [3.5, 3.3, 3.05],

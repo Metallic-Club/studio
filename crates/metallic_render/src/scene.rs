@@ -3,7 +3,8 @@ use crate::materials::{material_index, material_params};
 use crate::meshes::MeshKind;
 use bytemuck::{Pod, Zeroable};
 use glam::{EulerRot, Mat4, Vec3};
-use metallic_core::{InstanceId, Value, World};
+use metallic_core::{ChangeCursor, Changes, InstanceId, Value, World};
+use std::collections::HashMap;
 
 /// Per-instance data uploaded to the GPU (96 bytes).
 #[repr(C)]
@@ -50,10 +51,17 @@ impl PartDraw {
 }
 
 /// The parts of a world as the renderer sees them.
+///
+/// After the first full read, [`Scene::sync`] only re-reads the instances named by the world's
+/// change journal.
 #[derive(Default)]
 pub struct Scene {
-    parts: Vec<PartDraw>,
+    slots: Vec<Option<PartDraw>>,
+    free: Vec<usize>,
+    index: HashMap<InstanceId, usize>,
+    cursor: Option<ChangeCursor>,
     version: u64,
+    full_rebuilds: u64,
 }
 
 impl Scene {
@@ -62,16 +70,77 @@ impl Scene {
         Scene::default()
     }
 
-    /// Re-reads every part under `Workspace` (or under every root when the world has no
-    /// `Workspace`). Returns true when anything changed; [`Scene::version`] then increases.
+    /// Brings the scene up to date with `world`. The first call (and any call after the
+    /// journal overflowed or a different world was passed) reads every part under `Workspace`
+    /// (under every root when the world has no `Workspace`); later calls re-read only changed
+    /// instances. Returns true when anything changed; [`Scene::version`] then increases.
     pub fn sync(&mut self, world: &World) -> bool {
-        let fresh = collect_parts(world);
-        if fresh == self.parts {
-            return false;
+        let journal = self.cursor.map(|c| world.changes_since(c));
+        match journal {
+            Some((Changes::Ids(ids), cursor)) => {
+                let mut changed = false;
+                for id in ids {
+                    changed |= self.update(world, id);
+                }
+                self.cursor = Some(cursor);
+                if changed {
+                    self.version += 1;
+                }
+                changed
+            }
+            _ => {
+                self.rebuild(world);
+                true
+            }
         }
-        self.parts = fresh;
+    }
+
+    fn rebuild(&mut self, world: &World) {
+        self.slots.clear();
+        self.free.clear();
+        self.index.clear();
+        for part in collect_parts(world) {
+            self.index.insert(part.id, self.slots.len());
+            self.slots.push(Some(part));
+        }
+        self.cursor = Some(world.change_cursor());
         self.version += 1;
-        true
+        self.full_rebuilds += 1;
+    }
+
+    /// Re-reads one instance; true when the scene changed.
+    fn update(&mut self, world: &World, id: InstanceId) -> bool {
+        let want = if world.is_a(id, "BasePart") && in_render_tree(world, id) {
+            read_part(world, id)
+        } else {
+            None
+        };
+        match (self.index.get(&id).copied(), want) {
+            (Some(slot), Some(part)) => {
+                if self.slots[slot].as_ref() == Some(&part) {
+                    false
+                } else {
+                    self.slots[slot] = Some(part);
+                    true
+                }
+            }
+            (Some(slot), None) => {
+                self.slots[slot] = None;
+                self.free.push(slot);
+                self.index.remove(&id);
+                true
+            }
+            (None, Some(part)) => {
+                let slot = self.free.pop().unwrap_or_else(|| {
+                    self.slots.push(None);
+                    self.slots.len() - 1
+                });
+                self.index.insert(id, slot);
+                self.slots[slot] = Some(part);
+                true
+            }
+            (None, None) => false,
+        }
     }
 
     /// Increases whenever [`Scene::sync`] found a change.
@@ -79,35 +148,65 @@ impl Scene {
         self.version
     }
 
+    /// How many times the whole world was read (first sync, journal overflow).
+    pub fn full_rebuilds(&self) -> u64 {
+        self.full_rebuilds
+    }
+
     /// Number of parts, drawn or not.
     pub fn instance_count(&self) -> usize {
-        self.parts.len()
+        self.index.len()
+    }
+
+    fn parts(&self) -> impl Iterator<Item = &PartDraw> {
+        self.slots.iter().flatten()
     }
 
     /// Visible, fully opaque parts of one shape (the shared instanced pass).
     pub fn opaque(&self, kind: MeshKind) -> impl Iterator<Item = &PartDraw> {
-        self.parts
-            .iter()
+        self.parts()
             .filter(move |p| p.kind == kind && !p.is_transparent())
     }
 
     /// Visible, partly transparent parts (the blended pass), unsorted.
     pub fn transparent(&self) -> impl Iterator<Item = &PartDraw> {
-        self.parts
-            .iter()
+        self.parts()
             .filter(|p| p.is_transparent() && !p.is_invisible())
     }
 
-    /// The blended parts ordered far to near as seen from `eye`.
-    pub fn transparent_sorted(&self, eye: Vec3) -> Vec<&PartDraw> {
-        let mut list: Vec<&PartDraw> = self.transparent().collect();
-        list.sort_by(|a, b| {
+    /// Fills `out` with the blended parts ordered far to near as seen from `eye`
+    /// (clears it first, so one buffer can be reused every frame).
+    pub fn transparent_sorted_into<'a>(&'a self, eye: Vec3, out: &mut Vec<&'a PartDraw>) {
+        out.clear();
+        out.extend(self.transparent());
+        out.sort_by(|a, b| {
             let da = a.centre().distance_squared(eye);
             let db = b.centre().distance_squared(eye);
             db.total_cmp(&da)
         });
+    }
+
+    /// The blended parts ordered far to near as seen from `eye`.
+    pub fn transparent_sorted(&self, eye: Vec3) -> Vec<&PartDraw> {
+        let mut list = Vec::new();
+        self.transparent_sorted_into(eye, &mut list);
         list
     }
+}
+
+/// True when the instance is drawn: under `Workspace`, or anywhere if the world has none.
+fn in_render_tree(world: &World, id: InstanceId) -> bool {
+    let Some(ws) = world.root("Workspace") else {
+        return true;
+    };
+    let mut cur = Some(id);
+    while let Some(c) = cur {
+        if c == ws {
+            return true;
+        }
+        cur = world.parent(c);
+    }
+    false
 }
 
 fn collect_parts(world: &World) -> Vec<PartDraw> {
@@ -292,6 +391,78 @@ mod tests {
         let ball = scene.opaque(MeshKind::Sphere).next().unwrap();
         assert_eq!(ball.id, ids[0]);
         assert_eq!(ball.instance.model[0][0], 2.0);
+    }
+
+    #[test]
+    fn later_syncs_are_incremental() {
+        let (mut w, ids) = world_with_parts();
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        assert_eq!(scene.full_rebuilds(), 1);
+        // Move a part, add one, remove one, reparent one out of Workspace.
+        w.set(
+            ids[0],
+            "Position",
+            Value::Vector3(CoreVec3::new(0.0, 9.0, 0.0)),
+        )
+        .unwrap();
+        let ws = w.root("Workspace").unwrap();
+        let extra = w.create("Part", Some(ws)).unwrap();
+        w.destroy(ids[1]);
+        let storage = w.root("ReplicatedStorage").unwrap();
+        w.set_parent(ids[2], Some(storage)).unwrap();
+        assert!(scene.sync(&w));
+        assert_eq!(scene.full_rebuilds(), 1, "no full rebuild");
+        let mut present: Vec<InstanceId> = scene.opaque(MeshKind::Box).map(|p| p.id).collect();
+        present.sort();
+        let mut want = vec![ids[0], extra];
+        want.sort();
+        assert_eq!(present, want);
+        // Back into Workspace: it appears again.
+        w.set_parent(ids[2], Some(ws)).unwrap();
+        assert!(scene.sync(&w));
+        assert_eq!(scene.instance_count(), 3);
+    }
+
+    #[test]
+    fn journal_overflow_falls_back_to_full_rebuild() {
+        let (mut w, ids) = world_with_parts();
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        for i in 0..40_000 {
+            let t = f64::from(i % 7) / 10.0 + 0.01;
+            w.set(ids[0], "Transparency", Value::Number(t)).unwrap();
+        }
+        assert!(scene.sync(&w));
+        assert_eq!(scene.full_rebuilds(), 2);
+        assert_eq!(scene.instance_count(), 3);
+    }
+
+    /// Timing of the incremental path: 5,000 parts, 50 changed. Asserted (< 1 ms) in release only.
+    #[test]
+    fn sync_of_5000_parts_with_50_changed_is_fast() {
+        let mut w = World::new_with_services();
+        let ws = w.root("Workspace").unwrap();
+        let ids: Vec<InstanceId> = (0..5000)
+            .map(|_| w.create("Part", Some(ws)).unwrap())
+            .collect();
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        let mut best = std::time::Duration::MAX;
+        for round in 0..20 {
+            for id in ids.iter().take(50) {
+                let p = CoreVec3::new(f64::from(round) + 1.0, 0.0, 0.0);
+                w.set(*id, "Position", Value::Vector3(p)).unwrap();
+            }
+            let t = std::time::Instant::now();
+            assert!(scene.sync(&w));
+            best = best.min(t.elapsed());
+        }
+        println!("sync 5000 parts / 50 changed: best of 20 = {best:?}");
+        assert_eq!(scene.full_rebuilds(), 1);
+        if !cfg!(debug_assertions) {
+            assert!(best < std::time::Duration::from_millis(1), "took {best:?}");
+        }
     }
 
     #[test]
