@@ -4,8 +4,9 @@
 //! States and transitions (blend times in seconds, crossfaded by `metallic_anim`):
 //! - **Ground**: a 1D blend on `Speed` of idle, `walk_slow`, `walk` and `run` placed at 0, 6, 16
 //!   and 24 studs/s ([`GAITS`]). The clips share one normalised phase (left heel strike at 0,
-//!   right at 0.5) and each is authored for its own speed, so at those speeds the planted foot
-//!   moves backward as fast as the character moves forward: no foot sliding.
+//!   right at 0.5) and each is authored for its own speed. The playback rate is set each frame
+//!   to the speed over the blended authored speed ([`gait_rate`], 0.5 to 2), so the planted
+//!   foot moves backward as fast as the character moves forward: no foot sliding.
 //! - **Jump**: on take-off (the `Jump` trigger, 0.1). The clip starts at its launch frame
 //!   ([`JUMP_LAUNCH`]): the physics jumps the moment the button is pressed, so the anticipation
 //!   crouch before it is skipped.
@@ -50,6 +51,9 @@ const FADE_TO_FALL: f32 = 0.2;
 const FADE_LAND: f32 = 0.1;
 const FADE_LAND_OUT: f32 = 0.2;
 
+/// Limits of the playback rate that keeps the gait in step with the speed.
+const RATE_RANGE: (f32, f32) = (0.5, 2.0);
+
 /// Whether the character stands on something, from the character controller's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Support {
@@ -79,6 +83,39 @@ pub(crate) mod state {
     pub const JUMP: &str = "Jump";
     pub const FALL: &str = "Fall";
     pub const LAND: &str = "Land";
+}
+
+/// Playback rate that keeps the feet planted at `speed`. `ground` lists `(speed, clip length)`
+/// of the ground clips, slowest first, idle first of all. One cycle of a gait covers its speed
+/// times its length; the machine blends clip lengths linearly, so the rate is the distance
+/// covered per second over the stride the blend plays per second. Between idle and the slowest
+/// gait the stride is that gait's own.
+fn gait_rate(ground: &[(f32, f32)], speed: f32) -> f32 {
+    if speed <= STILL || ground.len() < 2 {
+        return 1.0;
+    }
+    let i = ground
+        .iter()
+        .skip(1)
+        .position(|&(v, _)| speed < v)
+        .map_or(ground.len() - 1, |p| p + 1);
+    let (a, b) = (ground[i.saturating_sub(1)], ground[i]);
+    let w = if b.0 > a.0 {
+        ((speed - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let length = a.1 + (b.1 - a.1) * w;
+    let stride = if i == 1 {
+        b.0 * b.1
+    } else {
+        a.0 * a.1 + (b.0 * b.1 - a.0 * a.1) * w
+    };
+    if stride > 1e-4 {
+        (speed * length / stride).clamp(RATE_RANGE.0, RATE_RANGE.1)
+    } else {
+        1.0
+    }
 }
 
 /// The locomotion state machine. `land_length` is the land clip's length in seconds (the moving
@@ -203,6 +240,8 @@ pub(crate) struct Locomotion {
     /// Per player clip: index into `SkinnedModel::clips` and seconds to add to the player's clip
     /// time (the jump clip starts at its launch frame).
     sources: Vec<(usize, f32)>,
+    /// `(speed, clip length)` of idle and the gaits, for [`gait_rate`].
+    ground: Vec<(f32, f32)>,
     scratch: Pose,
     air_time: f32,
     last_support: Support,
@@ -214,6 +253,7 @@ impl Locomotion {
         let mut sources = Vec::new();
         let mut clips = Vec::new();
         let mut land_length = 0.0;
+        let mut ground = Vec::new();
         let named = [
             ("idle", true),
             ("jump", false),
@@ -232,6 +272,12 @@ impl Locomotion {
                 ),
                 _ => (0.0, model.clips[i].duration),
             };
+            if name == "idle" {
+                ground.push((0.0, duration));
+            }
+            if let Some(&(_, v)) = GAITS.iter().find(|(n, _)| *n == name) {
+                ground.push((v, duration));
+            }
             if name == "land" {
                 land_length = duration;
             }
@@ -250,6 +296,7 @@ impl Locomotion {
         Locomotion {
             player,
             sources,
+            ground,
             ..Locomotion::without_player(model)
         }
     }
@@ -258,6 +305,7 @@ impl Locomotion {
         Locomotion {
             player: None,
             sources: Vec::new(),
+            ground: Vec::new(),
             scratch: Pose::rest(&model.skeleton),
             air_time: 0.0,
             last_support: Support::Grounded,
@@ -320,6 +368,12 @@ impl Locomotion {
         let _ = player.set_float("Speed", speed);
         let _ = player.set_float("AirTime", self.air_time);
         let _ = player.set_bool("Grounded", input.support == Support::Grounded);
+        let ground = player.current_state() == state::GROUND;
+        player.set_playback_rate(if ground {
+            gait_rate(&self.ground, speed)
+        } else {
+            1.0
+        });
         player.update(dt);
 
         // Blend the asset clips by the machine's weights (a running weighted average).
@@ -402,6 +456,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_playback_rate_follows_speed_over_authored_speed() {
+        let m = model();
+        let l = Locomotion::new(&m);
+        let g = &l.ground;
+        assert_eq!(gait_rate(g, 0.0), 1.0);
+        for (i, &(v, _)) in g.iter().enumerate().skip(1) {
+            assert!((gait_rate(g, v) - 1.0).abs() < 1e-4, "gait {i} at {v}");
+        }
+        // Between gaits and beyond the run the rate stays inside its limits.
+        for v in [1.0, 3.0, 11.0, 20.0, 30.0, 100.0] {
+            let r = gait_rate(g, v);
+            assert!((RATE_RANGE.0..=RATE_RANGE.1).contains(&r), "{v}: {r}");
+        }
+        assert_eq!(gait_rate(g, 100.0), RATE_RANGE.1);
     }
 
     #[test]
@@ -504,12 +575,12 @@ mod tests {
     /// bounds the median and the 90th percentile rather than the single worst sample (touchdown).
     /// A clip played at the wrong rate (the 24 fps export bug) slips by about 20% of the speed.
     #[test]
-    fn planted_feet_do_not_slide_at_the_authored_speeds() {
+    fn planted_feet_do_not_slide_at_gait_and_in_between_speeds() {
         let m = model();
         let lod = &m.lods[2];
         let feet = m.materials.iter().position(|s| s.name == "M_Feet").unwrap() as u8;
         let studs = Mat4::from_scale(Vec3::splat(1.0 / STUD_METRES));
-        for (_, speed) in GAITS {
+        for speed in [6.0, 11.0, 16.0, 20.0, 24.0] {
             let mut l = Locomotion::new(&m);
             let mut pose = Pose::rest(&m.skeleton);
             run(&mut l, &m, &mut pose, input(speed, Support::Grounded), 0.5);
@@ -548,8 +619,12 @@ mod tests {
                 median < 0.05 * speed,
                 "{speed} studs/s: median slip {median}"
             );
+            // Between gaits two poses are mixed, so the soles that count as planted change from
+            // frame to frame and the tail is wider; the median is what the eye sees.
+            let authored = GAITS.iter().any(|&(_, v)| v == speed);
+            let tail = if authored { 0.1 } else { 0.5 };
             assert!(
-                p90 < 0.1 * speed,
+                p90 < tail * speed,
                 "{speed} studs/s: 90th percentile slip {p90}"
             );
         }
