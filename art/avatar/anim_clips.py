@@ -28,9 +28,11 @@ FINGERS = ("Index", "Middle", "Ring", "Little")
 
 ANKLE_L = SK["ANKLE"].copy()
 HIP_L = SK["HIP"].copy()
-# Ground contact points relative to the ankle (left foot, rest): heel and ball of the foot.
+# Ground contact points relative to the ankle (left foot, rest): heel and ball of the foot, and
+# the toe tip (it turns with the toes bone, about the ball).
 HEEL_REL = Vector((SK["HEEL"].x, SK["HEEL"].y, 0.0)) - ANKLE_L
 BALL_REL = Vector((SK["BALL"].x, SK["BALL"].y, 0.0)) - ANKLE_L
+TOE_REL = Vector((SK["TOE"].x, SK["TOE"].y, 0.0)) - ANKLE_L
 LEG_LEN = (SK["KNEE"] - SK["HIP"]).length + (SK["ANKLE"] - SK["KNEE"]).length
 
 
@@ -178,13 +180,17 @@ def elbow_pole(rig, pose, side, wrist, back=(0.0, 1.0, 0.0)):
 
 
 def contact_points(rig_bones, side):
-    """World heel and ball ground points from a posed armature (used for the slip check)."""
+    """World heel, ball and toe-tip sole points from a posed armature (slip and floor checks)."""
     pb = rig_bones[side + "Foot"]
     s = 1 if side == "left" else -1
-    heel = Vector((ANKLE_L.x * s, ANKLE_L.y, ANKLE_L.z)) + Vector((HEEL_REL.x * s, HEEL_REL.y, HEEL_REL.z))
-    ball = Vector((ANKLE_L.x * s, ANKLE_L.y, ANKLE_L.z)) + Vector((BALL_REL.x * s, BALL_REL.y, BALL_REL.z))
+    ankle = Vector((ANKLE_L.x * s, ANKLE_L.y, ANKLE_L.z))
+    heel = ankle + Vector((HEEL_REL.x * s, HEEL_REL.y, HEEL_REL.z))
+    ball = ankle + Vector((BALL_REL.x * s, BALL_REL.y, BALL_REL.z))
+    toe = ankle + Vector((TOE_REL.x * s, TOE_REL.y, TOE_REL.z))
     m = pb.matrix @ pb.bone.matrix_local.inverted()
-    return m @ heel, m @ ball
+    tb = rig_bones[side + "Toes"]
+    mt = tb.matrix @ tb.bone.matrix_local.inverted()
+    return m @ heel, m @ ball, mt @ toe
 
 
 # ======================================================================== interpolation

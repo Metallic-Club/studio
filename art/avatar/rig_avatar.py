@@ -413,13 +413,44 @@ def write_action(arm, name, frames, loop):
     return act, slot
 
 
+def clear_toes(arm, basis, side, points):
+    """A foot rolling onto its toes bends them up at the joint; it never pushes the toe tip into
+    the floor. If the tip is below z = 0, turn the toes about their own hinge (X) just enough
+    to bring it to the floor, in the baked frame `basis`. Returns the corrected sole points."""
+    heel, ball, tip = points
+    if tip.z >= 0.0:
+        return points
+    tb = arm.pose.bones[side + "Toes"]
+    joint = tb.head.copy()
+    axis = tb.matrix.col[0].to_3d().normalized()
+    rel = tip - joint
+
+    def z(deg):
+        return (joint + Matrix.Rotation(math.radians(deg), 3, axis) @ rel).z
+    sign = 1.0 if z(5) > z(-5) else -1.0
+    lo, hi = 0.0, 90.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if z(sign * mid) < 0:
+            lo = mid
+        else:
+            hi = mid
+    loc, q = basis[side + "Toes"]
+    basis[side + "Toes"] = (loc, q @ Quaternion((1, 0, 0), math.radians(sign * hi)))
+    return heel, ball, joint + Matrix.Rotation(math.radians(sign * hi), 3, axis) @ rel
+
+
 def bake_clip(arm, clip):
     import anim_clips as AC
     frames, contacts = [], []
     for f in range(clip.length + 1):
         apply_pose(arm, clip.sample(f))
-        frames.append(read_basis(arm))
-        contacts.append({s: AC.contact_points(arm.pose.bones, s) for s in ("left", "right")})
+        basis = read_basis(arm)
+        cp = {s: AC.contact_points(arm.pose.bones, s) for s in ("left", "right")}
+        for s in ("left", "right"):
+            cp[s] = clear_toes(arm, basis, s, cp[s])
+        frames.append(basis)
+        contacts.append(cp)
     act, slot = write_action(arm, clip.name, frames, clip.loop)
     if clip.speed:
         act["speed"] = clip.speed
@@ -482,6 +513,25 @@ def ground_slip(clip, contacts):
                 worst = max(worst, Vector((p1.x - p0.x, p1.y - p0.y)).length)
         res.append(worst)
     return res
+
+
+# Clips played in the air, in water or on a ladder: their feet are not on the floor, so the floor
+# check skips them (as it skips one-frame stills: concept poses and rig tests).
+AIRBORNE = {"fall", "swim", "swim_idle", "climb"}
+# Deepest a heel, ball or toe tip may go below the floor (z = 0) in any other clip.
+FLOOR_TOLERANCE = 0.005
+
+
+def floor_penetration(contacts):
+    """Lowest heel, ball or toe-tip point over the clip (metres; negative = below the floor) and
+    the frame and point where it happens."""
+    worst = (float("inf"), None, None)
+    for f, c in enumerate(contacts):
+        for side in ("left", "right"):
+            for name, p in zip(("heel", "ball", "toe"), c[side]):
+                if p.z < worst[0]:
+                    worst = (p.z, f, f"{side} {name}")
+    return worst
 
 
 def export_glb(path, arm, meshes, clips):
@@ -589,6 +639,7 @@ def main():
     if a.only:
         clips = [c for c in clips if c.name in a.only]
     info = {}
+    below = []
     for c in clips:
         act, slot, frames, contacts = bake_clip(arm, c)
         entry = {"frames": c.length + 1, "first": 0, "last": c.length, "seconds": round(c.length / FPS, 4),
@@ -599,9 +650,18 @@ def main():
             entry["max_planted_foot_slip_mm_per_frame"] = [round(x * 1000, 2) for x in slip]
         elif c.length > 0:
             entry["max_ground_slip_mm_per_frame"] = [round(x * 1000, 2) for x in ground_slip(c, contacts)]
+        z, f, where = floor_penetration(contacts)
+        entry["min_sole_z_mm"] = round(z * 1000, 1)
+        if c.name not in AIRBORNE and c.length > 0 and z < -FLOOR_TOLERANCE:
+            below.append(f"{c.name}: {where} {z * 1000:.1f} mm below the floor at frame {f}")
         info[c.name] = entry
         print(f"[clip] {c.name}: 0..{c.length} loop={c.loop} {c.meta} "
               f"slip={entry.get('max_planted_foot_slip_mm_per_frame') or entry.get('max_ground_slip_mm_per_frame')}")
+    if below:
+        # Automatic check: no heel, ball or toe may sink into the floor in a grounded clip.
+        raise SystemExit("[floor] FAIL: " + "; ".join(below))
+    print(f"[floor] ok: no sole point more than {FLOOR_TOLERANCE * 1000:.0f} mm below the floor "
+          f"(airborne clips {sorted(AIRBORNE)} skipped)")
     assign_action(arm, None)
     reset_pose(arm)
     # FK mode by default: the baked clips play as they are; an animator switches a limb to IK.

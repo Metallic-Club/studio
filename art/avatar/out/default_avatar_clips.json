@@ -20,7 +20,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "walk_slow": {
    "frames": 21,
@@ -55,7 +56,8 @@
    "max_planted_foot_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "walk": {
    "frames": 17,
@@ -90,7 +92,8 @@
    "max_planted_foot_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "run": {
    "frames": 17,
@@ -125,7 +128,8 @@
    "max_planted_foot_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "jump": {
    "frames": 17,
@@ -141,7 +145,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.01
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "fall": {
    "frames": 76,
@@ -155,7 +160,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     17.23
-   ]
+   ],
+   "min_sole_z_mm": -65.5
   },
   "land": {
    "frames": 17,
@@ -169,7 +175,8 @@
    "max_ground_slip_mm_per_frame": [
     0.28,
     0.7
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "land_hard": {
    "frames": 29,
@@ -183,7 +190,8 @@
    "max_ground_slip_mm_per_frame": [
     0.17,
     0.47
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "swim": {
    "frames": 41,
@@ -197,7 +205,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": 666.5
   },
   "swim_idle": {
    "frames": 101,
@@ -211,7 +220,8 @@
    "max_ground_slip_mm_per_frame": [
     17.45,
     14.83
-   ]
+   ],
+   "min_sole_z_mm": -79.4
   },
   "sit": {
    "frames": 61,
@@ -225,7 +235,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "dance": {
    "frames": 31,
@@ -241,7 +252,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "idle_b": {
    "frames": 91,
@@ -255,7 +267,8 @@
    "max_ground_slip_mm_per_frame": [
     0.58,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "wave": {
    "frames": 61,
@@ -269,7 +282,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "cheer": {
    "frames": 49,
@@ -283,7 +297,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.01
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "climb": {
    "frames": 25,
@@ -300,7 +315,8 @@
    "max_ground_slip_mm_per_frame": [
     5.79,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -19.3
   },
   "point": {
    "frames": 46,
@@ -314,7 +330,8 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
+   ],
+   "min_sole_z_mm": -0.0
   },
   "pose_hand_on_hip": {
    "frames": 1,
@@ -323,7 +340,8 @@
    "seconds": 0.0,
    "loop": false,
    "export": true,
-   "priority": 0
+   "priority": 0,
+   "min_sole_z_mm": -0.0
   },
   "pose_run": {
    "frames": 1,
@@ -332,7 +350,8 @@
    "seconds": 0.0,
    "loop": false,
    "export": true,
-   "priority": 0
+   "priority": 0,
+   "min_sole_z_mm": -2.1
   },
   "pose_sit_back": {
    "frames": 1,
@@ -341,7 +360,8 @@
    "seconds": 0.0,
    "loop": false,
    "export": true,
-   "priority": 0
+   "priority": 0,
+   "min_sole_z_mm": -28.0
   }
  }
 }
