@@ -4,7 +4,8 @@ Date: 2026-10-30. Status: proposal (planned). Author: Claude (research session).
 Research and catalog: `docs/research/2026-10-30-templates-and-onboarding.md`. Checklist: `docs/templates/quality-bar.md`.
 
 Every template in `docs/templates/<slug>.md` follows these rules. Anything marked "assistant's call" is a proposal the
-owner may override. Nothing here is implemented yet.
+owner may override. Most features below are planned; the project-copy and metadata-storage rules in section 1.2
+are implemented. The Game settings panel and runtime knob/attribute APIs remain separate planned work.
 
 ## 1. What a template is
 
@@ -13,9 +14,10 @@ A template is a project folder under `templates/<slug>/`, the same shape as Park
 ```
 templates/<slug>/
   metallic.toml        name, main_scene, dimension = "3D" | "2D"          (Task 8 + dimension)
+                       + [[setting]] labels, ranges and help                 (section 2)
   template.toml        id, name, description, preview, order              (Task 8)
                        + dimension, genre, players_min, players_max, look,
-                         difficulty, settings, tags                        (new, see 1.1)
+                         difficulty, tags                                  (new, see 1.1)
   main.mscene          the level and all scripts
   tutorial.toml        the in-template tutorial steps (section 5)          (new)
   preview.png          Studio screenshot, 16:9                             (Task 8)
@@ -39,6 +41,13 @@ players_max = 4
 look = "noir"               # default look preset id (section 3)
 difficulty = "starter"      # starter | intermediate | advanced: how much code a creator meets
 tags = ["first-person", "co-op", "npc"]
+```
+
+Settings metadata belongs in the copied project file, `metallic.toml`, after its project fields:
+
+```toml
+name = "Horror"
+main_scene = "main.mscene"
 
 [[setting]]                 # one block per Game settings knob (section 2)
 attribute = "FusesNeeded"
@@ -51,16 +60,37 @@ step = 1
 help = "How many fuses the players must bring to the fuse box."
 ```
 
+### 1.2 Creating a project (implemented)
+
+`create_from_template` copies project content, including `metallic.toml` and its `[[setting]]` metadata, then changes
+only the project name. The runtime accepts the additional project metadata while reading `name` and `main_scene`.
+
+The copy excludes the root `template.toml`, root `preview.png` and `preview.webm`, the template-relative files named
+by `preview` and `preview_video`, and the entire root `tests/` directory. Preview paths may contain `.`/`..` segments
+only while staying within the template; absolute/outside paths do not exclude project content. Nested game assets
+with those same names are retained unless explicitly named as a preview. `tutorial.toml`, scripts and other game
+assets are copied. Symlinks remain skipped. The root `metallic.toml` is always retained, even if a preview field
+incorrectly points at it.
+
+Callers may also provide `TemplateInfo` directly without a catalog file; project metadata is still preserved and the
+provided preview path is excluded when it is inside the template. An existing malformed catalog remains an error.
+
+For templates authored against the earlier proposal, `[[setting]]` in `template.toml` is migrated into the created
+project's `metallic.toml`. The source template is not changed. Identical definitions in both files are not duplicated;
+differing definitions are an error with no partial project left behind. Authors should consolidate new metadata in
+`metallic.toml`. A non-empty destination is still refused without modification.
+
 ## 2. Game settings: remix knobs without code
 
 Each template has one `Configuration` Instance named `GameSettings` in `ReplicatedStorage`. Every knob is an Attribute on
 it (`GameSettings:GetAttribute("FusesNeeded")`). Scripts read knobs only through this object. Studio shows the
-`[[setting]]` blocks of `template.toml` as a **Game settings** panel: sliders, toggles and drop-downs, grouped, with the
+`[[setting]]` blocks of `metallic.toml` in a planned **Game settings** panel: sliders, toggles and drop-downs, grouped, with the
 help text. Changing a knob is an undoable edit like any property change.
 
 Why attributes: Roblox creators already know `GetAttribute`/`SetAttribute`, they appear in the Properties panel, they
 replicate to clients, and a script can listen with `GetAttributeChangedSignal`. The labels, ranges and help text live
-in `template.toml` because Roblox attributes carry no metadata (assistant's call).
+in `metallic.toml` because attributes carry no labels/ranges/help metadata, and project creation excludes the
+template-only catalog file. Storage/copying is implemented; applying these knobs and the panel remain planned.
 
 Rules:
 - Knobs change rules a player feels (speed, timers, damage, counts). Look and art go in look presets, not knobs.

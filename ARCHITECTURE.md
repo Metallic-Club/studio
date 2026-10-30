@@ -42,6 +42,10 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   mode for smoke tests (no window, no GPU).
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Template creation preserves project metadata (`metallic.toml`, including `[[setting]]`) while setting the new name;
+  legacy settings migrate from `template.toml`, with conflicting dual definitions rejected and rolled back. Catalog
+  metadata, preview files and root `tests/` stay in the template; tutorials and nested game assets are copied.
+  The runtime reads `name`/`main_scene` and accepts additional metadata; the Game settings panel remains planned.
   Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
   an injectable `HttpClient`, Velopack for download and apply) and `github_auth.rs` (device sign-in, token in Credential
   Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
