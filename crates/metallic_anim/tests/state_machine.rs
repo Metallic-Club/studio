@@ -244,3 +244,67 @@ fn names_are_checked_up_front() {
     assert!(p.set_bool("Speed", true).is_err());
     assert!(p.fire("Nope").is_err());
 }
+
+#[test]
+fn playback_rate_scales_how_fast_a_state_plays() {
+    let time_after = |rate: f32| {
+        let mut p = player();
+        p.set_playback_rate(rate);
+        p.update(0.5);
+        p.motion_samples()[0].time
+    };
+    // Idle is 2 s long and loops.
+    assert!((time_after(1.0) - 0.5).abs() < 1e-5);
+    assert!((time_after(2.0) - 1.0).abs() < 1e-5);
+    assert!((time_after(0.5) - 0.25).abs() < 1e-5);
+    assert_eq!(time_after(-3.0), 0.0);
+    assert_eq!(time_after(f32::NAN), 0.0);
+}
+
+#[test]
+fn crossfade_eases_with_smoothstep() {
+    let mut p = player();
+    p.set_float("Speed", 5.0).unwrap();
+    p.update(0.0);
+    p.update(0.05); // a quarter of the 0.2 s blend
+    let run = p
+        .motion_samples()
+        .into_iter()
+        .find(|m| m.clip == 1)
+        .unwrap();
+    assert!((run.weight - 0.15625).abs() < 1e-5, "{}", run.weight);
+    p.update(0.05); // halfway: symmetric
+    let run = p
+        .motion_samples()
+        .into_iter()
+        .find(|m| m.clip == 1)
+        .unwrap();
+    assert!((run.weight - 0.5).abs() < 1e-5, "{}", run.weight);
+}
+
+#[test]
+fn a_transition_mid_fade_keeps_the_pose_continuous() {
+    let mut p = player();
+    p.set_float("Speed", 5.0).unwrap();
+    p.update(0.0);
+    p.update(0.1); // halfway through Idle -> Run
+    let by_clip = |p: &StateMachinePlayer| {
+        let mut w = [0.0f32; 4];
+        for s in p.motion_samples() {
+            w[s.clip] += s.weight;
+        }
+        w
+    };
+    let before = by_clip(&p);
+    p.fire("Jump").unwrap();
+    assert_eq!(p.update(0.0).as_deref(), Some("Jump"));
+    let after = by_clip(&p);
+    assert!((after.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    for (b, a) in before.iter().zip(after) {
+        assert!((b - a).abs() < 1e-5, "{before:?} -> {after:?}");
+    }
+    // The jump takes over by the end of its own 0.1 s fade.
+    p.update(0.15);
+    assert!(!p.is_blending());
+    assert_eq!(p.motion_samples().len(), 1);
+}
