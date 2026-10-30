@@ -76,6 +76,9 @@ yaw, while movement input stays in world space and airborne momentum stays stabl
 
 - Core independently reviewed the support/probe geometry. Root reviewed the overall
   support motion before the final clearance narrowing. Dynamic stop caveat retained.
-- Rebased onto latest main `12a6a6b`; final public behavior docs are in the character
-  module and ARCHITECTURE.md. Publish the branch, open/attach PR and inspect CI.
+- Validation used main `12a6a6b`; final rebase onto `fd164c2` picked up only #180
+  input-action design docs. `git diff 4ce5eb8..HEAD -- crates Cargo.toml Cargo.lock`
+  was empty after rebase, so the tested Rust source and dependency graph are identical.
+  Final public behavior docs are in the character module and ARCHITECTURE.md.
+- Publish the branch, open/attach PR and inspect CI.
 - Do not merge this session's PR.
