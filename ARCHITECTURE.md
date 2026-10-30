@@ -194,6 +194,11 @@ apps.
   as an interface only), `Op` + `MeshCommand` + `History`, `triangulate` to a local `MeshData` (switches to
   `metallic_meshgen`'s once merged), `uv` (box/planar, LSCM), `export` (GLB/glTF/OBJ). Demo:
   `cargo run -p metallic_modeling --example modeling_demo`.
+- **metallic_net** (M2a, #297 transport; more modules land with tasks A6-A12): `transport` has the `Connection` and
+  `Listener` traits (non-blocking, polled once per tick), channels `Control`/`World`/`Remote`/`Bulk` plus datagrams,
+  `QuicServer`/`QuicClient` (quinn on a background tokio thread, TLS 1.3 with a pinned self-signed certificate, ALPN
+  `metallic/1`), `MemoryNet` (manual clock, deterministic) and `LinkConditioner` (latency, jitter, loss; on QUIC it
+  wraps the server's UDP socket). The server side enforces spec 7.3's transport limits (`transport::limits`).
 
 ## Input flow
 Games listen to actions, never to raw keys (design: `docs/design/input-actions.md`; phase 1 is implemented: spec

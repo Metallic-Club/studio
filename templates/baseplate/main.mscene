@@ -1,0 +1,66 @@
+(
+    version: 1,
+    roots: [
+        (
+            class: "Workspace",
+            builtin: true,
+            children: [
+                (
+                    class: "Part",
+                    props: [
+                        ("Name", String("Baseplate")),
+                        ("Position", Vector3((x:0.0,y:-8.0,z:0.0))),
+                        ("Size", Vector3((x:512.0,y:16.0,z:512.0))),
+                        ("Color", Color3((r:99.0,g:95.0,b:98.0))),
+                        ("Material", String("Plastic")),
+                        ("Anchored", Bool(true)),
+                    ],
+                ),
+                (
+                    class: "SpawnLocation",
+                    props: [
+                        ("Position", Vector3((x:0.0,y:0.5,z:0.0))),
+                        ("Size", Vector3((x:12.0,y:1.0,z:12.0))),
+                        ("Color", Color3((r:163.0,g:162.0,b:165.0))),
+                        ("Material", String("SmoothPlastic")),
+                        ("Anchored", Bool(true)),
+                    ],
+                ),
+            ],
+        ),
+        (
+            class: "Players",
+            builtin: true,
+        ),
+        (
+            class: "ReplicatedStorage",
+            builtin: true,
+        ),
+        (
+            class: "ServerScriptService",
+            builtin: true,
+        ),
+        (
+            class: "StarterPlayer",
+            builtin: true,
+            children: [
+                (
+                    class: "StarterPlayerScripts",
+                    builtin: true,
+                ),
+            ],
+        ),
+        (
+            class: "StarterGui",
+            builtin: true,
+        ),
+        (
+            class: "Lighting",
+            builtin: true,
+        ),
+        (
+            class: "RunService",
+            builtin: true,
+        ),
+    ],
+)

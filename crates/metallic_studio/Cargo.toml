@@ -29,4 +29,5 @@ metallic_update.workspace = true
 velopack = "1.3.39-g8d2844f"
 
 [dev-dependencies]
+metallic_core.workspace = true
 tempfile = "3"

@@ -53,6 +53,10 @@ Each item marks whose decision it is: the owner's, or my call.
    - Root motion is off: the character controller moves the character.
    - Clips loop cleanly at 30 fps, and walk and run are authored to the controller's speeds (WalkSpeed 16, run
      ×1.5) so the feet don't slide (my call).
+   - v3 (2026-10-30): most clips are retargeted from Quaternius's Universal Animation Library 1 and 2 (CC0) by
+     `art/avatar/retarget_clips.py` (bone names plus rest-pose-corrected rotation, so it survives proportion
+     changes). Gait legs stay procedural for exact plants. `art/avatar/ANIMATION_SOURCES.md` lists the source
+     of each clip, and `art/avatar/CREDITS.md` credits Quaternius.
 6. **Engine:**
    - Issue #76 (GPU skinning and glTF skins) moves forward to land right after milestone 1A: glTF import with the
      `gltf` crate (MIT OR Apache-2.0), linear-blend skinning, and clips sampled on the CPU.
