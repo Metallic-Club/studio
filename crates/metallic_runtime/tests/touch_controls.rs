@@ -167,3 +167,31 @@ fn get_button_returns_the_overlay_button_of_a_bound_action() {
     rig.frames(2);
     assert_eq!(&rig.lines()[2..], ["Dash Begin", "Dash End"]);
 }
+
+/// The review case of #325: a title change while a finger holds the button keeps the press,
+/// and the lift still ends it normally.
+#[test]
+fn set_title_while_held_keeps_the_press() {
+    let mut rig = Rig::new(
+        r#"
+        local CAS = game:GetService("ContextActionService")
+        CAS:BindAction("Dash", function(name, state)
+            print(name, state.Name)
+        end, true, Enum.KeyCode.E)
+        task.wait(0.2)
+        CAS:SetTitle("Dash", "Go")
+        print("retitled")
+        "#,
+        |_| {},
+    );
+    rig.frames(3);
+    let dash = rig.button("Dash");
+    let generation = rig.input.touch_generation();
+    rig.finger(1, TouchPhase::Down, dash);
+    rig.frames(20);
+    assert!(rig.input.touch_generation() > generation, "a new touch set");
+    assert_eq!(rig.button("Go"), dash);
+    rig.finger(1, TouchPhase::Up, dash);
+    rig.frames(2);
+    assert_eq!(rig.lines(), ["Dash Begin", "retitled", "Dash End"]);
+}

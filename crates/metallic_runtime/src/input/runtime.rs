@@ -15,7 +15,7 @@ use super::FrameInput;
 use super::config::{ActionType, BindingDef, CHARACTER_CONTROLS, InputConfig, Role, Trigger};
 use super::control::{
     CONTROL_COUNT, Control, ControlKind, DEVICE_SLOTS, Device, DeviceKind, InputQueue,
-    QUEUE_CAPACITY, RawEvent, RawSource,
+    QUEUE_CAPACITY, RawEvent, RawSource, TOUCH_BUTTON_SLOTS,
 };
 use super::touch::{TOUCH_LOOK_SCALE, TOUCH_STICK_DEADZONE, TouchSet, TouchUse};
 use metallic_core::{ChangeCursor, Changes, InstanceId, World};
@@ -172,6 +172,9 @@ pub struct InputRuntime {
     // Touch.
     touch_set: TouchSet,
     touch_generation: u64,
+    /// Actions whose touch button went away while held: the next full re-evaluation ends them
+    /// as a cancel (no `Triggered`).
+    touch_cancel: Vec<usize>,
     forced_device: Option<DeviceKind>,
 }
 
@@ -242,6 +245,7 @@ impl InputRuntime {
             character: [None; 5],
             touch_set: TouchSet::default(),
             touch_generation: 0,
+            touch_cancel: Vec::new(),
             forced_device: None,
         };
         rt.load(config);
@@ -271,6 +275,12 @@ impl InputRuntime {
                     a.last_tap_release,
                 )
             })
+            .collect();
+        // Touch cancels still waiting for an evaluation follow their actions by path.
+        let pending: Vec<String> = self
+            .touch_cancel
+            .drain(..)
+            .filter_map(|a| self.actions.get(a).map(|a| a.path.clone()))
             .collect();
         self.actions.clear();
         self.bindings.clear();
@@ -408,11 +418,57 @@ impl InputRuntime {
             self.find_action(&format!("{CHARACTER_CONTROLS}/Zoom")),
         ];
         touch_set.resolve(|path| self.find_action(path));
+        for path in &pending {
+            if let Some(a) = self.find_action(path) {
+                self.touch_cancel.push(a.0 as usize);
+            }
+        }
         if touch_set != self.touch_set {
+            self.remap_touch_buttons(&touch_set);
             self.touch_set = touch_set;
             self.touch_generation += 1;
         }
         self.dirty_all = true;
+    }
+
+    /// A new touch set can give an action another button control (`TouchButtonN`): a held
+    /// button moves with its action, by path, so the press survives a relayout and the control
+    /// it leaves does not press whatever action takes that control now. A held button whose
+    /// action lost its touch button is let go as a cancel.
+    fn remap_touch_buttons(&mut self, new: &TouchSet) {
+        let ts = Device::Touch.slot();
+        let mut moved = [0.0f32; TOUCH_BUTTON_SLOTS];
+        for (s, c) in (0..TOUCH_BUTTON_SLOTS).filter_map(|s| Some((s, Control::touch_button(s)?))) {
+            let v = self.slot_value[ts][c.index()];
+            if v <= 0.0 {
+                continue;
+            }
+            let Some(def) = self.touch_set.button_in_slot(s) else {
+                continue;
+            };
+            match new.slot_of(&def.path) {
+                Some(n) => moved[n] = moved[n].max(v),
+                None => {
+                    if let Some(a) = self.find_action(&def.path) {
+                        self.touch_cancel.push(a.0 as usize);
+                    }
+                }
+            }
+        }
+        let kind = DeviceKind::Touch.index();
+        for (s, c) in (0..TOUCH_BUTTON_SLOTS).filter_map(|s| Some((s, Control::touch_button(s)?))) {
+            let ci = c.index();
+            let (was, is) = (self.slot_value[ts][ci], moved[s]);
+            if was >= PAD_ACTIVE && is < PAD_ACTIVE {
+                self.held[kind] = self.held[kind].saturating_sub(1);
+            } else if was < PAD_ACTIVE && is >= PAD_ACTIVE {
+                self.held[kind] += 1;
+            }
+            self.slot_value[ts][ci] = is;
+            self.value[ci] = (0..DEVICE_SLOTS)
+                .map(|d| self.slot_value[d][ci])
+                .fold(0.0, f32::max);
+        }
     }
 
     /// Which actions have automatic touch controls (spec 7): the stick, the look pad and the
@@ -666,9 +722,12 @@ impl InputRuntime {
             self.dirty_all = false;
             for a in 0..self.actions.len() {
                 if self.actions[a].ty == ActionType::Bool {
+                    self.actions[a].cancel_release = self.touch_cancel.contains(&a);
                     self.recompute_bool(a, now);
+                    self.actions[a].cancel_release = false;
                 }
             }
+            self.touch_cancel.clear();
         }
         while let Some(e) = self.queue.pop() {
             self.apply(e);

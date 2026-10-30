@@ -242,6 +242,15 @@ impl TouchSet {
         }
     }
 
+    /// The control slot of the button for action `path` (buttons and the menu button).
+    pub fn slot_of(&self, path: &str) -> Option<usize> {
+        self.buttons
+            .iter()
+            .chain(self.menu.iter())
+            .find(|b| b.path == path)
+            .map(|b| b.slot)
+    }
+
     /// True when nothing would be drawn.
     pub fn is_empty(&self) -> bool {
         self.stick.is_none() && self.buttons.is_empty() && self.menu.is_none()

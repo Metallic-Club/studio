@@ -391,6 +391,14 @@ impl Rig {
         self.rt.evaluate(self.t, DT);
     }
 
+    /// A new config mid-touch, the way a Player frame sees it: load, overlay sync, evaluate.
+    fn relayout(&mut self, config: &InputConfig) {
+        self.t += f64::from(DT);
+        self.rt.load(config);
+        assert!(self.tc.sync(&mut self.rt, self.t), "a new touch set");
+        self.rt.evaluate(self.t, DT);
+    }
+
     fn button(&self, label: &str) -> PlacedButton {
         let set = self.tc.set();
         *self
@@ -595,7 +603,7 @@ fn the_menu_button_acts_on_release() {
 }
 
 #[test]
-fn ten_fingers_at_most_and_a_new_layout_releases_them() {
+fn ten_fingers_at_most_and_a_removed_button_lets_its_finger_go() {
     let mut r = Rig::new(&InputConfig::character_controls());
     let jump = r.button("Jump");
     for id in 0..12 {
@@ -606,15 +614,231 @@ fn ten_fingers_at_most_and_a_new_layout_releases_them() {
     assert_eq!(r.tc.finger_count(), 0);
     r.touch(1, TouchPhase::Down, jump.center);
     assert!(r.rt.frame_input().jump);
-    // Disabling Jump changes the touch set: the overlay releases the finger and places again.
+    // Disabling Jump changes the touch set: its finger holds nothing from then on.
     let mut c = InputConfig::character_controls();
     c.contexts[0].actions[1].enabled = false;
-    r.rt.load(&c);
-    assert!(r.tc.sync(&mut r.rt, r.t));
-    r.rt.evaluate(r.t + 0.02, DT);
+    r.relayout(&c);
     assert!(!r.rt.frame_input().jump);
     assert_eq!(r.tc.set().buttons.len(), 1);
+    assert_eq!(r.tc.capture_of(1), Some(Capture::Ignored));
     assert!(!r.tc.sync(&mut r.rt, r.t), "nothing changed since");
+}
+
+/// Two Release-trigger buttons, `Fire` first and `Alt` second, in context `Game`.
+fn fire_and_alt(fire_order: f32, fire_label: &str) -> InputConfig {
+    let mut fire = button_action("Fire", fire_order).with_trigger(Trigger::Release);
+    fire.touch_label = fire_label.into();
+    let alt = button_action("Alt", 1.0).with_trigger(Trigger::Release);
+    let mut game = ContextDef::new("Game");
+    game.actions = vec![fire, alt];
+    config_of(vec![crate::input::default_character_controls(), game])
+}
+
+#[test]
+fn a_new_title_keeps_held_fingers() {
+    use ActionEventKind::*;
+    let mut r = Rig::new(&fire_and_alt(0.0, ""));
+    let fire = r.button("Fire");
+    r.touch(1, TouchPhase::Down, fire.center);
+    r.touch(2, TouchPhase::Down, [200.0, 300.0]);
+    r.touch(2, TouchPhase::Move, [200.0, 240.0]);
+    assert_eq!(r.events("Game/Fire"), [Pressed, StateChanged]);
+    // SetTitle / a TouchLabel edit: a new touch set and a new layout.
+    r.relayout(&fire_and_alt(0.0, "Shoot"));
+    assert!(r.button("Shoot").center == fire.center);
+    assert!(r.events("Game/Fire").is_empty(), "still held, nothing new");
+    assert_eq!(r.rt.frame_input().movement, [0.0, 1.0], "the stick too");
+    r.touch(2, TouchPhase::Move, [260.0, 300.0]);
+    assert_eq!(
+        r.rt.frame_input().movement,
+        [1.0, 0.0],
+        "and it still moves"
+    );
+    r.touch(1, TouchPhase::Up, fire.center);
+    assert_eq!(
+        r.events("Game/Fire"),
+        [Released, StateChanged, Triggered],
+        "the lift still fires"
+    );
+    r.touch(2, TouchPhase::Up, [260.0, 300.0]);
+    assert_eq!(r.rt.frame_input().movement, [0.0, 0.0]);
+    assert_eq!(r.tc.finger_count(), 0);
+}
+
+#[test]
+fn a_held_button_follows_its_action_to_another_slot() {
+    use ActionEventKind::*;
+    let mut r = Rig::new(&fire_and_alt(0.0, ""));
+    let fire = r.button("Fire");
+    r.touch(1, TouchPhase::Down, fire.center);
+    r.events("Game/Fire");
+    // Fire now sorts after Alt: Alt takes Fire's control (TouchButton3) and Fire moves.
+    r.relayout(&fire_and_alt(5.0, ""));
+    let moved = r.button("Fire");
+    assert_ne!(moved.slot, fire.slot);
+    assert_eq!(
+        r.tc.capture_of(1),
+        Some(Capture::Button {
+            slot: moved.slot,
+            live: true
+        })
+    );
+    assert!(r.tc.is_pressed(moved.slot) && !r.tc.is_pressed(fire.slot));
+    assert!(r.events("Game/Fire").is_empty(), "Fire stays down");
+    let alt = r.rt.find_action("Game/Alt").unwrap();
+    assert!(!r.rt.bool(alt), "the control Fire left does not press Alt");
+    r.touch(1, TouchPhase::Up, fire.center);
+    let events: Vec<ActionEvent> = r.rt.drain_events().collect();
+    let kinds = |id| -> Vec<ActionEventKind> {
+        events
+            .iter()
+            .filter(|e| e.action == id)
+            .map(|e| e.kind)
+            .collect()
+    };
+    let fire_id = r.rt.find_action("Game/Fire").unwrap();
+    assert_eq!(kinds(fire_id), [Released, StateChanged, Triggered]);
+    assert!(kinds(alt).is_empty());
+}
+
+#[test]
+fn a_held_button_that_goes_away_is_cancelled() {
+    use ActionEventKind::*;
+    let mut r = Rig::new(&fire_and_alt(0.0, ""));
+    let fire = r.button("Fire");
+    r.touch(1, TouchPhase::Down, fire.center);
+    r.events("Game/Fire");
+    let mut c = fire_and_alt(0.0, "");
+    c.contexts[1].actions[0].show_on_touch = false;
+    r.relayout(&c);
+    assert_eq!(
+        r.events("Game/Fire"),
+        [Released, StateChanged],
+        "no Triggered"
+    );
+    assert_eq!(r.tc.capture_of(1), Some(Capture::Ignored));
+    r.touch(1, TouchPhase::Up, fire.center);
+    assert!(r.events("Game/Fire").is_empty());
+}
+
+#[test]
+fn a_stick_finger_sliding_over_a_button_keeps_the_stick() {
+    let mut r = Rig::new(&InputConfig::character_controls());
+    let jump = r.button("Jump");
+    r.touch(1, TouchPhase::Down, [200.0, 300.0]);
+    r.touch(1, TouchPhase::Move, jump.center);
+    assert_eq!(r.tc.capture_of(1), Some(Capture::Stick));
+    let f = r.rt.frame_input();
+    assert!(!f.jump, "the button is not pressed");
+    assert!(
+        f.movement[0] > 0.99,
+        "the stick still steers: {:?}",
+        f.movement
+    );
+    r.touch(1, TouchPhase::Up, jump.center);
+    assert!(!r.rt.frame_input().jump);
+}
+
+#[test]
+fn a_cancel_on_the_stick_centres_it() {
+    let mut r = Rig::new(&InputConfig::character_controls());
+    r.touch(1, TouchPhase::Down, [200.0, 300.0]);
+    r.touch(1, TouchPhase::Move, [200.0, 240.0]);
+    assert_eq!(r.rt.frame_input().movement, [0.0, 1.0]);
+    r.touch(1, TouchPhase::Cancel, [200.0, 240.0]);
+    assert_eq!(r.rt.frame_input().movement, [0.0, 0.0]);
+    assert!(r.tc.held_stick().is_none());
+    assert_eq!(r.tc.finger_count(), 0);
+    r.touch(2, TouchPhase::Down, [150.0, 300.0]);
+    assert_eq!(r.tc.capture_of(2), Some(Capture::Stick), "free again");
+}
+
+#[test]
+fn focus_loss_releases_everything_cleanly() {
+    use ActionEventKind::*;
+    let mut r = Rig::new(&fire_and_alt(0.0, ""));
+    let fire = r.button("Fire");
+    r.touch(1, TouchPhase::Down, fire.center);
+    r.touch(2, TouchPhase::Down, [200.0, 300.0]);
+    r.touch(2, TouchPhase::Move, [200.0, 240.0]);
+    r.touch(3, TouchPhase::Down, [500.0, 100.0]);
+    r.events("Game/Fire");
+    r.tc.release_all(&mut r.rt, r.t);
+    r.rt.evaluate(r.t, DT);
+    assert_eq!(
+        r.events("Game/Fire"),
+        [Released, StateChanged],
+        "no Triggered"
+    );
+    let f = r.rt.frame_input();
+    assert_eq!(f.movement, [0.0, 0.0]);
+    assert_eq!(r.tc.finger_count(), 0);
+    assert!(r.tc.held_stick().is_none() && !r.tc.is_pressed(fire.slot));
+    // The lost fingers' later events do nothing.
+    r.touch(1, TouchPhase::Up, fire.center);
+    r.touch(2, TouchPhase::Move, [260.0, 300.0]);
+    assert!(r.events("Game/Fire").is_empty());
+    assert_eq!(r.rt.frame_input().movement, [0.0, 0.0]);
+    // And new touches work.
+    r.touch(4, TouchPhase::Down, fire.center);
+    assert_eq!(r.events("Game/Fire"), [Pressed, StateChanged]);
+}
+
+#[test]
+fn up_or_cancel_without_a_position_still_lifts() {
+    let mut r = Rig::new(&InputConfig::character_controls());
+    let jump = r.button("Jump");
+    r.touch(1, TouchPhase::Down, jump.center);
+    r.touch(1, TouchPhase::Up, [f32::NAN, 0.0]);
+    assert!(!r.rt.frame_input().jump);
+    assert_eq!(r.tc.finger_count(), 0);
+    r.touch(2, TouchPhase::Down, [200.0, 300.0]);
+    r.touch(2, TouchPhase::Move, [200.0, 240.0]);
+    r.touch(2, TouchPhase::Move, [f32::INFINITY, 240.0]);
+    assert_eq!(
+        r.rt.frame_input().movement,
+        [0.0, 1.0],
+        "a bad move is ignored"
+    );
+    r.t += f64::from(DT);
+    r.tc.touch(&mut r.rt, 2, TouchPhase::Cancel, [f32::NAN; 2], f64::NAN);
+    r.rt.evaluate(r.t, DT);
+    assert_eq!(r.rt.frame_input().movement, [0.0, 0.0]);
+    assert_eq!(r.tc.finger_count(), 0);
+}
+
+#[test]
+fn a_reused_finger_id_ends_the_old_touch_first() {
+    let mut r = Rig::new(&InputConfig::character_controls());
+    let (jump, run) = (r.button("Jump"), r.button("Run"));
+    r.touch(1, TouchPhase::Down, jump.center);
+    // Its Up was lost: the same id lands on Run.
+    r.touch(1, TouchPhase::Down, run.center);
+    let f = r.rt.frame_input();
+    assert!(!f.jump && f.run);
+    assert_eq!(r.tc.finger_count(), 1);
+    assert!(!r.tc.is_pressed(jump.slot));
+    r.touch(1, TouchPhase::Up, run.center);
+    assert!(!r.rt.frame_input().run);
+}
+
+#[test]
+fn every_pointer_finger_holds_the_mouse_button() {
+    let mut c = InputConfig::character_controls();
+    c.contexts[0].actions.retain(|a| a.name != "Look");
+    let click = ActionDef::new("Click", ActionType::Bool)
+        .with_binding(BindingDef::key(Control::MouseButton1));
+    let mut g = ContextDef::new("Game");
+    g.actions = vec![click];
+    c.contexts.push(g);
+    let mut r = Rig::new(&c);
+    let click = r.rt.find_action("Game/Click").unwrap();
+    r.touch(1, TouchPhase::Down, [500.0, 100.0]);
+    r.touch(2, TouchPhase::Down, [600.0, 120.0]);
+    r.touch(1, TouchPhase::Up, [500.0, 100.0]);
+    assert!(r.rt.bool(click), "the second finger still holds it");
+    r.touch(2, TouchPhase::Up, [600.0, 120.0]);
+    assert!(!r.rt.bool(click));
 }
 
 #[test]

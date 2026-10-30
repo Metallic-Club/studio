@@ -1,6 +1,6 @@
 //! Finger routing (spec 7.5): each finger is captured by the first thing it lands on, for its
 //! whole life, and turned into raw events on `Device::Touch`.
-use super::layout::{DeviceProfile, PlacedButton, TouchLayout, dist, layout};
+use super::layout::{DeviceProfile, TouchLayout, dist, layout};
 use super::stick::Stick;
 use super::{MENU_SLOT, TouchSet};
 use crate::input::control::{Control, Device, RawEvent, TOUCH_BUTTON_SLOTS};
@@ -56,6 +56,9 @@ struct Finger {
     id: u64,
     capture: Capture,
     last: [f32; 2],
+    /// The button it landed on, where it was then (centre, radius): sliding more than
+    /// [`CANCEL_RADII`] from there ends the press, even when a new layout moved the button.
+    anchor: Option<([f32; 2], f32)>,
 }
 
 /// The touch overlay's input half: layout plus finger state. The Player (and Studio's preview)
@@ -71,6 +74,8 @@ pub struct TouchControls {
     fingers: [Option<Finger>; MAX_FINGERS],
     stick: Option<Stick>,
     held: [u8; TOUCH_BUTTON_SLOTS],
+    /// Pointer fingers down (`MouseButton1` is held while any is).
+    pointers: u8,
     touched: bool,
     px_per_dp: f32,
 }
@@ -86,6 +91,7 @@ impl TouchControls {
             fingers: [None; MAX_FINGERS],
             stick: None,
             held: [0; TOUCH_BUTTON_SLOTS],
+            pointers: 0,
             touched: false,
             px_per_dp: 1.0,
         }
@@ -112,17 +118,68 @@ impl TouchControls {
         }
     }
 
-    /// Follows the runtime's touch actions: when they changed (a scene edit, `BindAction`), every
-    /// finger is released and the controls are placed again. Returns true when they changed.
+    /// Follows the runtime's touch actions: when they changed (a scene edit, `BindAction`,
+    /// `SetTitle`), the controls are placed again and held fingers keep what they hold, matched
+    /// by action path. A finger whose control went away holds nothing from then on (the runtime
+    /// ends its press as a cancel). Returns true when they changed.
     pub fn sync(&mut self, rt: &mut InputRuntime, time: f64) -> bool {
         if self.generation == Some(rt.touch_generation()) {
             return false;
         }
-        self.release_all(rt, time);
         self.generation = Some(rt.touch_generation());
-        self.set = rt.touch_set().clone();
+        let old = std::mem::replace(&mut self.set, rt.touch_set().clone());
         self.layout = layout(&self.profile, &self.set);
+        self.remap(rt, &old, time);
         true
+    }
+
+    fn remap(&mut self, rt: &mut InputRuntime, old: &TouchSet, time: f64) {
+        self.held = [0; TOUCH_BUTTON_SLOTS];
+        for i in 0..MAX_FINGERS {
+            let Some(mut f) = self.fingers[i] else {
+                continue;
+            };
+            let same = |slot: usize| {
+                old.button_in_slot(slot)
+                    .and_then(|d| self.set.slot_of(&d.path))
+            };
+            f.capture = match f.capture {
+                Capture::Button { slot, live } => match same(slot) {
+                    Some(s) if s != MENU_SLOT => {
+                        if live {
+                            self.held[s] = self.held[s].saturating_add(1);
+                        }
+                        Capture::Button { slot: s, live }
+                    }
+                    _ => Capture::Ignored,
+                },
+                Capture::Menu { armed } => match same(MENU_SLOT) {
+                    Some(MENU_SLOT) => Capture::Menu { armed },
+                    _ => Capture::Ignored,
+                },
+                Capture::Stick if self.set.stick.is_none() => {
+                    if self.stick.take().is_some() {
+                        rt.push(RawEvent::vector(
+                            Device::Touch,
+                            Control::TouchStick,
+                            [0.0; 2],
+                            time,
+                        ));
+                    }
+                    Capture::Ignored
+                }
+                Capture::Look if self.set.look.is_none() => Capture::Ignored,
+                c => c,
+            };
+            self.fingers[i] = Some(f);
+        }
+        // The runtime moved held buttons with their actions; saying so again changes nothing
+        // and covers several loads between two syncs.
+        for slot in 0..TOUCH_BUTTON_SLOTS {
+            if self.held[slot] > 0 {
+                push_button(rt, slot, 1.0, time);
+            }
+        }
     }
 
     /// Which actions have touch controls.
@@ -195,7 +252,9 @@ impl TouchControls {
         self.fingers.iter().flatten().count()
     }
 
-    /// One finger event at `at` dp, at input-clock `time`.
+    /// One finger event at `at` dp, at input-clock `time`. A non-finite position is ignored,
+    /// except that `Up` and `Cancel` still lift the finger (where it last was). A `Down` for a
+    /// finger that is still down ends the old touch as a cancel first (its `Up` was lost).
     pub fn touch(
         &mut self,
         rt: &mut InputRuntime,
@@ -204,25 +263,33 @@ impl TouchControls {
         at: [f32; 2],
         time: f64,
     ) {
-        if !(at[0].is_finite() && at[1].is_finite() && time.is_finite()) {
-            return;
-        }
+        // A bad time becomes 0: the runtime never runs its clock backwards.
+        let time = if time.is_finite() { time } else { 0.0 };
+        let finite = at[0].is_finite() && at[1].is_finite();
         let slot = self
             .fingers
             .iter()
             .position(|f| f.is_some_and(|f| f.id == id));
         match (phase, slot) {
-            (TouchPhase::Down, None) => self.down(rt, id, at, time),
-            (TouchPhase::Down | TouchPhase::Move, Some(i)) => self.moved(rt, i, at, time),
+            (TouchPhase::Down, Some(i)) => {
+                self.lift(rt, i, true, time);
+                if finite {
+                    self.down(rt, id, at, time);
+                }
+            }
+            (TouchPhase::Down, None) if finite => self.down(rt, id, at, time),
+            (TouchPhase::Move, Some(i)) if finite => self.moved(rt, i, at, time),
             (TouchPhase::Up | TouchPhase::Cancel, Some(i)) => {
-                self.moved(rt, i, at, time);
+                if finite {
+                    self.moved(rt, i, at, time);
+                }
                 self.lift(rt, i, phase == TouchPhase::Cancel, time);
             }
             _ => {}
         }
     }
 
-    /// Lifts every finger without `Triggered` (focus loss, a new layout).
+    /// Lifts every finger without `Triggered` (focus loss).
     pub fn release_all(&mut self, rt: &mut InputRuntime, time: f64) {
         for i in 0..MAX_FINGERS {
             if self.fingers[i].is_some() {
@@ -231,20 +298,13 @@ impl TouchControls {
         }
     }
 
-    fn button(&self, slot: usize) -> Option<&PlacedButton> {
-        self.layout
-            .buttons
-            .iter()
-            .chain(self.layout.menu.iter())
-            .find(|b| b.slot == slot)
-    }
-
     fn down(&mut self, rt: &mut InputRuntime, id: u64, at: [f32; 2], time: f64) {
         let Some(free) = self.fingers.iter().position(Option::is_none) else {
             return;
         };
         self.touched = true;
         let l = &self.layout;
+        let anchor = l.button_at(at).map(|b| (b.center, b.radius));
         let capture = if let Some(b) = l.button_at(at) {
             if b.slot == MENU_SLOT {
                 Capture::Menu { armed: true }
@@ -288,12 +348,15 @@ impl TouchControls {
             }
             Capture::Pointer => {
                 self.pointer_at(rt, at, time);
-                rt.push(RawEvent::button(
-                    Device::Touch,
-                    Control::MouseButton1,
-                    1.0,
-                    time,
-                ));
+                self.pointers = self.pointers.saturating_add(1);
+                if self.pointers == 1 {
+                    rt.push(RawEvent::button(
+                        Device::Touch,
+                        Control::MouseButton1,
+                        1.0,
+                        time,
+                    ));
+                }
             }
             _ => {}
         }
@@ -301,6 +364,7 @@ impl TouchControls {
             id,
             capture,
             last: at,
+            anchor,
         });
     }
 
@@ -329,18 +393,16 @@ impl TouchControls {
                 }
             }
             Capture::Button { slot, live: true } => {
-                let off = self
-                    .button(slot)
-                    .is_none_or(|b| dist(b.center, at) > CANCEL_RADII * b.radius);
+                let off = f.anchor.is_none_or(|(c, r)| dist(c, at) > CANCEL_RADII * r);
                 if off {
                     f.capture = Capture::Button { slot, live: false };
                     self.unhold(rt, slot, true, time);
                 }
             }
             Capture::Menu { .. } => {
-                let armed = self
-                    .button(MENU_SLOT)
-                    .is_some_and(|b| dist(b.center, at) <= CANCEL_RADII * b.radius);
+                let armed = f
+                    .anchor
+                    .is_some_and(|(c, r)| dist(c, at) <= CANCEL_RADII * r);
                 f.capture = Capture::Menu { armed };
             }
             Capture::Pointer if at != f.last => self.pointer_at(rt, at, time),
@@ -371,12 +433,17 @@ impl TouchControls {
                 push_button(rt, MENU_SLOT, 1.0, time);
                 push_button(rt, MENU_SLOT, 0.0, time);
             }
-            Capture::Pointer => rt.push(RawEvent::button(
-                Device::Touch,
-                Control::MouseButton1,
-                0.0,
-                time,
-            )),
+            Capture::Pointer => {
+                // Every pointer finger holds MouseButton1; it goes up with the last one.
+                self.pointers = self.pointers.saturating_sub(1);
+                if self.pointers == 0 {
+                    rt.push(if cancel {
+                        RawEvent::cancel(Device::Touch, Control::MouseButton1, time)
+                    } else {
+                        RawEvent::button(Device::Touch, Control::MouseButton1, 0.0, time)
+                    });
+                }
+            }
             _ => {}
         }
     }

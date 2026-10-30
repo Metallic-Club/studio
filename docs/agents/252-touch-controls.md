@@ -67,3 +67,14 @@ Finger script lines: `20 touch0 Down pos 170 290`, `28 touch0 Move pos 215 245`,
   held stick with violet knob, Run and Jump with labels, safe-area guide; idle hint ring).
 - Overlay draw time, debug build, RTX 3060 Ti (no Mid-tier machine here), 600 frames with a held stick:
   mean 0.051 ms, p50 0.035 ms, p99 0.23 ms, max 3.6 ms (the first frame lays out the label fonts).
+
+## Review fixes (#325, round 1)
+- A new touch set (SetTitle, SetImage, SetPosition, BindAction, a TouchLabel edit) no longer releases every finger.
+  `InputRuntime::load` moves held `TouchButtonN` values to the action's new control by path, and a held button whose
+  action lost its button ends as a cancel. `TouchControls::sync` re-maps finger captures the same way. Slide-off is
+  measured from where the button was when the finger landed.
+- Up/Cancel with a non-finite position (or time) still lifts; a Down for a held id cancels the old touch first;
+  pointer fingers share `MouseButton1` by count (up with the last one, cancel on Cancel).
+- Tests: title change keeps held fingers (unit and Luau e2e), a held button follows its action to another slot without
+  pressing the action that takes its old control, a removed button cancels, stick finger over a button, Cancel on the
+  stick, focus loss, non-finite Up, reused id, two pointer fingers.
