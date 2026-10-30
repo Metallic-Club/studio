@@ -273,4 +273,38 @@ fn crossfade_eases_with_smoothstep() {
         .find(|m| m.clip == 1)
         .unwrap();
     assert!((run.weight - 0.15625).abs() < 1e-5, "{}", run.weight);
+    p.update(0.05); // halfway: symmetric
+    let run = p
+        .motion_samples()
+        .into_iter()
+        .find(|m| m.clip == 1)
+        .unwrap();
+    assert!((run.weight - 0.5).abs() < 1e-5, "{}", run.weight);
+}
+
+#[test]
+fn a_transition_mid_fade_keeps_the_pose_continuous() {
+    let mut p = player();
+    p.set_float("Speed", 5.0).unwrap();
+    p.update(0.0);
+    p.update(0.1); // halfway through Idle -> Run
+    let by_clip = |p: &StateMachinePlayer| {
+        let mut w = [0.0f32; 4];
+        for s in p.motion_samples() {
+            w[s.clip] += s.weight;
+        }
+        w
+    };
+    let before = by_clip(&p);
+    p.fire("Jump").unwrap();
+    assert_eq!(p.update(0.0).as_deref(), Some("Jump"));
+    let after = by_clip(&p);
+    assert!((after.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    for (b, a) in before.iter().zip(after) {
+        assert!((b - a).abs() < 1e-5, "{before:?} -> {after:?}");
+    }
+    // The jump takes over by the end of its own 0.1 s fade.
+    p.update(0.15);
+    assert!(!p.is_blending());
+    assert_eq!(p.motion_samples().len(), 1);
 }

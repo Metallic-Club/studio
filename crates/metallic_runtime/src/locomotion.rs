@@ -15,7 +15,8 @@
 //! - **Land**: on touchdown (0.1); back to Ground (0.2) when the clip ends, or after
 //!   [`LAND_HOLD_MOVING`] when the character is already moving again.
 //!
-//! A dead character's pose is held.
+//! A dead character's pose is held. Walking off a ledge counts any time in the air (not only
+//! falling) toward [`FALL_DELAY`]; a take-off always enters Jump first.
 //!
 //! Climb and swim clips exist in the asset, but the character controller has no climbing or
 //! swimming state yet (`HumanoidState` is Running, Jumping, Freefall or Dead), so the machine has
@@ -448,6 +449,9 @@ mod tests {
         ] {
             l.update(&m, input(speed, Support::Grounded), DT, &mut pose);
             assert_eq!(l.state(), state::GROUND);
+            let total: f32 = mix(&l).iter().map(|(_, w)| w).sum();
+            assert!((total - 1.0).abs() < 1e-5, "at {speed}: {:?}", mix(&l));
+            assert_eq!(mix(&l).len(), expect.len(), "at {speed}: {:?}", mix(&l));
             for (clip, w) in expect {
                 assert!(
                     (weight_of(&l, clip) - w).abs() < 1e-5,
@@ -473,6 +477,21 @@ mod tests {
             assert!((RATE_RANGE.0..=RATE_RANGE.1).contains(&r), "{v}: {r}");
         }
         assert_eq!(gait_rate(g, 100.0), RATE_RANGE.1);
+    }
+
+    #[test]
+    fn airborne_states_play_at_normal_rate_whatever_the_speed() {
+        let m = model();
+        let mut l = Locomotion::new(&m);
+        let mut pose = Pose::rest(&m.skeleton);
+        run(&mut l, &m, &mut pose, input(40.0, Support::Grounded), 0.3);
+        // Past the take-off fade the jump clip advances 1:1 with time although the ground rate
+        // at 40 studs/s is 1.67.
+        run(&mut l, &m, &mut pose, input(40.0, Support::Rising), 0.2);
+        let t0 = l.motion_samples()[0].time;
+        run(&mut l, &m, &mut pose, input(40.0, Support::Rising), 0.1);
+        let t1 = l.motion_samples()[0].time;
+        assert!(((t1 - t0) - 0.1).abs() < 1e-3, "advanced {}", t1 - t0);
     }
 
     #[test]

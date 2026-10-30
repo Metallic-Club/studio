@@ -429,7 +429,12 @@ impl StateMachinePlayer {
                     *v = false;
                 }
             }
-            let outgoing = self.samples();
+            // A fade still running keeps fading out inside the new one, so the pose does not pop.
+            let outgoing = if self.fading.is_some() {
+                self.motion_samples()
+            } else {
+                self.samples()
+            };
             self.fading = if t.blend_time > 0.0 {
                 Some(Fading {
                     samples: outgoing,
