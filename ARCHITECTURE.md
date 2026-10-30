@@ -112,6 +112,10 @@ apps.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
+  Colour (#221): `colour/` holds `ColourPopover` (ring + square, Hex/RGB/HSV, eyedropper hook, recent, palettes,
+  OKLCh harmonies). It returns `ColourEvent`s (preview, commit with undo name, cancel) and never edits the scene;
+  the Properties panel and preview overlay will consume them (#10, #213). Recent colours live in the user config
+  (`recent-colours.toml`), saved palettes in the project (`palettes/<name>.palette.ron`). Demo: `--scene colour`.
 - **metallic_update** (Launcher L1 Task 1): no UI. `http.rs` (`HttpClient`, `UreqClient`, redacting `Token`; `get_to_writer` streams a download and drops `Authorization` when a redirect leaves the host), `feed.rs`
   (`ReleaseFeed`, `STUDIO_FEED`, `LAUNCHER_FEED`, `UpdateChecker::check/check_quietly/download/apply_and_restart/apply_after_exit`,
   `latest_asset` -> `ReleaseAsset` (name, API address, SHA-256 from GitHub's `digest`, size), GitHub Releases feed, Velopack for download
@@ -193,6 +197,11 @@ apps.
   as an interface only), `Op` + `MeshCommand` + `History`, `triangulate` to a local `MeshData` (switches to
   `metallic_meshgen`'s once merged), `uv` (box/planar, LSCM), `export` (GLB/glTF/OBJ). Demo:
   `cargo run -p metallic_modeling --example modeling_demo`.
+- **metallic_net** (M2a, #297 transport; more modules land with tasks A6-A12): `transport` has the `Connection` and
+  `Listener` traits (non-blocking, polled once per tick), channels `Control`/`World`/`Remote`/`Bulk` plus datagrams,
+  `QuicServer`/`QuicClient` (quinn on a background tokio thread, TLS 1.3 with a pinned self-signed certificate, ALPN
+  `metallic/1`), `MemoryNet` (manual clock, deterministic) and `LinkConditioner` (latency, jitter, loss; on QUIC it
+  wraps the server's UDP socket). The server side enforces spec 7.3's transport limits (`transport::limits`).
 
 ## Input flow
 Games listen to actions, never to raw keys (design: `docs/design/input-actions.md`; phase 1 is implemented: spec
