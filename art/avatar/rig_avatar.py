@@ -423,6 +423,7 @@ def bake_clip(arm, clip):
     act, slot = write_action(arm, clip.name, frames, clip.loop)
     if clip.speed:
         act["speed"] = clip.speed
+    act["source"] = clip.meta.get("source", "procedural")
     return act, slot, frames, contacts
 
 
@@ -462,6 +463,23 @@ def foot_slip(clip, contacts, speed):
                 d0 = p0 + Vector((0, -speed * f / FPS, 0))
                 d1 = p1 + Vector((0, -speed * (f + 1) / FPS, 0))
                 worst = max(worst, Vector((d1.x - d0.x, d1.y - d0.y)).length)
+        res.append(worst)
+    return res
+
+
+def ground_slip(clip, contacts):
+    """For clips played standing still: the most a heel or ball point that touches the ground
+    (within 6 mm) in two consecutive frames moves along the ground, per side, in metres per frame.
+    A planted foot should not move at all."""
+    res = []
+    for side in ("left", "right"):
+        worst = 0.0
+        for f in range(clip.length):
+            for k in range(2):
+                p0, p1 = contacts[f][side][k], contacts[f + 1][side][k]
+                if p0.z > 0.006 or p1.z > 0.006:
+                    continue
+                worst = max(worst, Vector((p1.x - p0.x, p1.y - p0.y)).length)
         res.append(worst)
     return res
 
@@ -579,9 +597,11 @@ def main():
         if c.speed:
             slip = foot_slip(c, contacts, c.speed)
             entry["max_planted_foot_slip_mm_per_frame"] = [round(x * 1000, 2) for x in slip]
+        elif c.length > 0:
+            entry["max_ground_slip_mm_per_frame"] = [round(x * 1000, 2) for x in ground_slip(c, contacts)]
         info[c.name] = entry
         print(f"[clip] {c.name}: 0..{c.length} loop={c.loop} {c.meta} "
-              f"{'slip(mm/frame)=' + str(entry.get('max_planted_foot_slip_mm_per_frame')) if c.speed else ''}")
+              f"slip={entry.get('max_planted_foot_slip_mm_per_frame') or entry.get('max_ground_slip_mm_per_frame')}")
     assign_action(arm, None)
     reset_pose(arm)
     # FK mode by default: the baked clips play as they are; an animator switches a limb to IK.

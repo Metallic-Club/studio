@@ -15,16 +15,12 @@
    "seconds": 3.0,
    "loop": true,
    "export": true,
-   "priority": 1
-  },
-  "idle_b": {
-   "frames": 121,
-   "first": 0,
-   "last": 120,
-   "seconds": 4.0,
-   "loop": true,
-   "export": true,
-   "priority": 2
+   "priority": 1,
+   "source": "Quaternius UAL 1 Idle_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ]
   },
   "walk_slow": {
    "frames": 21,
@@ -48,7 +44,14 @@
    "ground_per_stance_m": 0.6,
    "left_contact_frame": 0,
    "right_contact_frame": 10,
-   "max_leg_reach": 0.9775,
+   "source": "Quaternius UAL 1 Walk_Loop (trunk, arms, head); legs procedural",
+   "source_contacts": [
+    0.0,
+    20.0,
+    40
+   ],
+   "roll_in_cycle": 0.07,
+   "max_leg_reach": 0.98,
    "max_planted_foot_slip_mm_per_frame": [
     0.0,
     0.0
@@ -76,7 +79,14 @@
    "ground_per_stance_m": 0.66,
    "left_contact_frame": 0,
    "right_contact_frame": 8,
-   "max_leg_reach": 0.995,
+   "source": "Quaternius UAL 1 Jog_Fwd_Loop (trunk, arms, head); legs procedural",
+   "source_contacts": [
+    1.0,
+    15.0,
+    28
+   ],
+   "roll_in_cycle": 0.07,
+   "max_leg_reach": 0.98,
    "max_planted_foot_slip_mm_per_frame": [
     0.0,
     0.0
@@ -104,31 +114,48 @@
    "ground_per_stance_m": 0.68,
    "left_contact_frame": 0,
    "right_contact_frame": 8,
-   "max_leg_reach": 0.975,
+   "source": "Quaternius UAL 1 Sprint_Loop (trunk, arms, head); legs procedural",
+   "source_contacts": [
+    0.0,
+    10.0,
+    20
+   ],
+   "roll_in_cycle": 0.07,
+   "max_leg_reach": 0.98,
    "max_planted_foot_slip_mm_per_frame": [
-    0.01,
-    0.01
+    0.0,
+    0.0
    ]
   },
   "jump": {
-   "frames": 19,
+   "frames": 17,
    "first": 0,
-   "last": 18,
-   "seconds": 0.6,
+   "last": 16,
+   "seconds": 0.5333,
    "loop": false,
    "export": true,
    "priority": 1,
    "launch_frame": 6,
-   "note": "frames 0-5 are the anticipation; apply the jump impulse on frame 6"
+   "source": "Quaternius UAL 1 Jump_Start (+ code anticipation 0-4)",
+   "note": "frames 0-5 are the anticipation; apply the jump impulse on frame 6",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.01
+   ]
   },
   "fall": {
-   "frames": 25,
+   "frames": 76,
    "first": 0,
-   "last": 24,
-   "seconds": 0.8,
+   "last": 75,
+   "seconds": 2.5,
    "loop": true,
    "export": true,
-   "priority": 1
+   "priority": 1,
+   "source": "Quaternius UAL 1 Jump_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    17.23
+   ]
   },
   "land": {
    "frames": 17,
@@ -137,7 +164,98 @@
    "seconds": 0.5333,
    "loop": false,
    "export": true,
-   "priority": 1
+   "priority": 1,
+   "source": "Quaternius UAL 1 Jump_Land",
+   "max_ground_slip_mm_per_frame": [
+    0.28,
+    0.7
+   ]
+  },
+  "land_hard": {
+   "frames": 29,
+   "first": 0,
+   "last": 28,
+   "seconds": 0.9333,
+   "loop": false,
+   "export": true,
+   "priority": 1,
+   "source": "Quaternius UAL 1 Jump_Land",
+   "max_ground_slip_mm_per_frame": [
+    0.17,
+    0.47
+   ]
+  },
+  "swim": {
+   "frames": 41,
+   "first": 0,
+   "last": 40,
+   "seconds": 1.3333,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 1 Swim_Fwd_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ]
+  },
+  "swim_idle": {
+   "frames": 101,
+   "first": 0,
+   "last": 100,
+   "seconds": 3.3333,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 1 Swim_Idle_Loop",
+   "max_ground_slip_mm_per_frame": [
+    17.45,
+    14.83
+   ]
+  },
+  "sit": {
+   "frames": 61,
+   "first": 0,
+   "last": 60,
+   "seconds": 2.0,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 1 Sitting_Idle_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ]
+  },
+  "dance": {
+   "frames": 31,
+   "first": 0,
+   "last": 30,
+   "seconds": 1.0,
+   "loop": true,
+   "export": true,
+   "priority": 3,
+   "bpm": 120,
+   "frames_per_beat": 15,
+   "source": "Quaternius UAL 1 Dance_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ]
+  },
+  "idle_b": {
+   "frames": 91,
+   "first": 0,
+   "last": 90,
+   "seconds": 3.0,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 2 Idle_FoldArms_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.58,
+    0.0
+   ]
   },
   "climb": {
    "frames": 25,
@@ -150,37 +268,11 @@
    "climb_speed_m_s": 0.7,
    "climb_speed_studs_s": 2.5,
    "rung_spacing_m": 0.28,
-   "wall_offset_m": 0.17
-  },
-  "swim": {
-   "frames": 37,
-   "first": 0,
-   "last": 36,
-   "seconds": 1.2,
-   "loop": true,
-   "export": true,
-   "priority": 2,
-   "note": "body horizontal at hips height, facing -Y (glTF +Z)"
-  },
-  "swim_idle": {
-   "frames": 49,
-   "first": 0,
-   "last": 48,
-   "seconds": 1.6,
-   "loop": true,
-   "export": true,
-   "priority": 2
-  },
-  "sit": {
-   "frames": 61,
-   "first": 0,
-   "last": 60,
-   "seconds": 2.0,
-   "loop": true,
-   "export": true,
-   "priority": 2,
-   "seat_height_m": 0.4,
-   "note": "feet on the ground plane, thighs level at 0.40 m"
+   "wall_offset_m": 0.17,
+   "max_ground_slip_mm_per_frame": [
+    5.79,
+    0.0
+   ]
   },
   "wave": {
    "frames": 61,
@@ -189,7 +281,12 @@
    "seconds": 2.0,
    "loop": false,
    "export": true,
-   "priority": 3
+   "priority": 3,
+   "source": "procedural upper body over Quaternius UAL 1 Idle_Loop legs",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ]
   },
   "point": {
    "frames": 46,
@@ -198,7 +295,12 @@
    "seconds": 1.5,
    "loop": false,
    "export": true,
-   "priority": 3
+   "priority": 3,
+   "source": "procedural upper body over Quaternius UAL 1 Idle_Loop legs",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ]
   },
   "cheer": {
    "frames": 49,
@@ -207,18 +309,11 @@
    "seconds": 1.6,
    "loop": false,
    "export": true,
-   "priority": 3
-  },
-  "dance": {
-   "frames": 61,
-   "first": 0,
-   "last": 60,
-   "seconds": 2.0,
-   "loop": true,
-   "export": true,
    "priority": 3,
-   "bpm": 120,
-   "frames_per_beat": 15
+   "max_ground_slip_mm_per_frame": [
+    20.22,
+    20.22
+   ]
   },
   "pose_hand_on_hip": {
    "frames": 1,

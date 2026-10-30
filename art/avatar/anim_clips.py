@@ -398,11 +398,15 @@ LOCOMOTION = {
                  sway=0.010, pelvis_yaw=8.0, pelvis_roll=3.0, lean=5.0, chest_yaw=7.0,
                  arm=26.0, arm_base=4.0, elbow=(30.0, 22.0), arm_in=-4.0, hand="loose", lag=0.045),
     "run": dict(studs=24.0, frames=16, stance_m=0.68, mid=-0.08, track=0.100, toe_out=3.0,
-                heel=5.0, toe=44.0, lift=0.22, lift_peak=0.34, drop=-0.045, bob=0.035,
+                heel=5.0, toe=44.0, lift=0.22, lift_peak=0.34, drop=-0.032, bob=0.026,
                 sway=0.006, pelvis_yaw=13.0, pelvis_roll=2.0, lean=23.0, chest_yaw=17.0,
                 arm=58.0, arm_base=12.0, elbow=(88.0, 20.0), arm_in=-8.0, hand="fist", lag=0.04,
                 shoulder=11.0),
 }
+
+
+# Heel strike to foot flat, as a fraction of the gait cycle: the same in every gait (#280).
+ROLL_IN = 0.07
 
 
 class Locomotion(Clip):
@@ -427,10 +431,17 @@ class Locomotion(Clip):
         self.rig = rig
         self.max_reach = 0.0
 
+    def upper_body(self, f, rot):
+        """Hook for the trunk, arms and head (RetargetLoco takes them from a source clip)."""
+        return rot
+
     def stance_state(self, u):
         p = self.p
         A = p["mid"] + p["stance_m"] / 2 - p["stance_m"] * u      # flat-foot ankle, forward coordinate
-        u1, u2 = 0.20, 0.48
+        # Heel to flat takes the same fraction of the cycle in every gait (ROLL_IN, issue #280): the
+        # runtime blends gaits at one shared phase, and a foot that rolls in at different rates in
+        # the two clips turns about the heel below the ground in the mix and slides.
+        u1, u2 = min(0.45, ROLL_IN / self.beta), 0.48
         if u < u1:
             pitch = p["heel"] * (1 - smooth(u / u1))
         elif u < u2:
@@ -516,8 +527,24 @@ class Locomotion(Clip):
             arm["leftShoulder"] = (1.5 * math.cos(2 * two * (ph - down - lag)), 0.0, -p.get("shoulder", 5.0) * c1)
             arm.update(hand(p["hand"]))
             rot.update(side_rot(arm, side))
+        rot = self.upper_body(f, rot)
         vals.update(flat_rot(rot))
         pose = build_pose(rig, vals)
+        # A planted foot must be reachable: when the hips' rotation (from the source) lifts a hip
+        # joint too far, the hips come down instead of the knee locking and the foot sliding.
+        drop = 0.0
+        for side in ("left", "right"):
+            if self.planted(side, f):
+                ank, *_ = self.foot(self.phase(side, f))
+                ank = Vector((ank.x * (1 if side == "left" else -1), ank.y, ank.z))
+                hip = rig.hip_joint(pose, side)
+                d = ank - hip
+                reach = 0.98 * LEG_LEN
+                if d.length > reach:
+                    drop = max(drop, (hip.z - ank.z) - math.sqrt(max(0.0, reach * reach - d.x * d.x - d.y * d.y)))
+        if drop > 0:
+            vals[("hips", 2)] -= drop
+            pose = build_pose(rig, vals)
         for side in ("left", "right"):
             ank, pitch, toes, _ = self.foot(self.phase(side, f))
             s = 1 if side == "left" else -1
@@ -536,6 +563,71 @@ class Locomotion(Clip):
             self.max_reach = max(self.max_reach, reach)
         self.meta["max_leg_reach"] = round(self.max_reach, 4)
         return pose
+
+
+LEG_BONES = ("UpperLeg", "LowerLeg", "Foot", "Toes")
+
+
+def source_contacts(R, clip):
+    """Left and right heel-strike frames of an in-place source loop: after the ankle's most
+    forward point, the first frame where it is within 1.5 cm of its lowest height."""
+    sc = R.source.clip(R.pack, clip)
+    n = sc.last
+    out = {}
+    for side in ("left", "right"):
+        pts = [sc.frames[i][side + "Foot"][1] for i in range(n)]
+        zmin = min(p.z for p in pts)
+        fwd = min(range(n), key=lambda i: pts[i].y)
+        hit = fwd
+        for k in range(n // 2):
+            i = (fwd + k) % n
+            if pts[i].z <= zmin + 0.015:
+                hit = i
+                break
+        out[side] = float(hit)
+    return out["left"], out["right"], n
+
+
+def phase_map(tl, tr, n, frames):
+    """Target frame -> source frame so the source's left heel strike lands on phase 0 and its
+    right on phase 0.5 (piecewise linear between the two contacts)."""
+    d1 = (tr - tl) % n
+    d2 = n - d1
+
+    def m(f):
+        ph = (f / frames) % 1.0
+        if ph < 0.5:
+            return tl + d1 * ph / 0.5
+        return tl + d1 + d2 * (ph - 0.5) / 0.5
+    return m
+
+
+class RetargetLoco(Locomotion):
+    """A gait whose legs are the procedural, exactly planted cycle of `Locomotion` (so the
+    runtime's speed matching and the shared phase hold) and whose hips rotation, trunk, arms,
+    hands and head come from a retargeted source cycle, phase-locked to the legs."""
+
+    def __init__(self, rig, name, p, R, src, lean=0.0, **polish):
+        super().__init__(rig, name, p)
+        tl, tr, n = source_contacts(R, src)
+        import retarget_clips as RC
+        self.inner = RC.RetargetClip(rig, R, name + "_upper", src, self.N, True,
+                                     timemap=phase_map(tl, tr, n, self.N), feet="fk", **polish)
+        self.lean = lean
+        self.meta["source"] = self.inner.meta["source"] + " (trunk, arms, head); legs procedural"
+        self.meta["source_contacts"] = [tl, tr, n]
+        self.meta["roll_in_cycle"] = ROLL_IN
+
+    def upper_body(self, f, rot):
+        src = self.inner.sample(f)["rot"]
+        out = dict(rot)
+        for b, r in src.items():
+            if b == "root" or b.endswith(LEG_BONES):
+                continue
+            out[b] = r
+        x, y, z = out["hips"]
+        out["hips"] = (x + self.lean, y, z)
+        return out
 
 
 # ======================================================================== shared poses
@@ -810,11 +902,11 @@ def emote_clips(rig):
     # Wave (right hand), 2 s: raise, three waves of the forearm, lower.
     # The upper arm is raised to the side and turned out (Y -80) so the elbow bends upward; the wave
     # is the elbow opening and closing, which swings the forearm side to side, the hand trailing.
-    up = {"leftShoulder": (8, 0, 0), "leftUpperArm": (15, -80, 104), "leftLowerArm": (48, 0, 0), "leftHand": (0, 0, 0)}
+    up = {"leftShoulder": (8, 0, 0), "leftUpperArm": (22, -80, 78), "leftLowerArm": (48, 0, 0), "leftHand": (0, 0, 0)}
     keys = [(0, start), (10, with_arm(start, "right", up, "open", {"head": (0, -6, -4)}))]
     for i, f in enumerate(range(14, 46, 8)):
         w = dict(up)
-        w["leftLowerArm"] = (30 if i % 2 == 0 else 60, 0, 0)
+        w["leftLowerArm"] = (28 if i % 2 == 0 else 58, 0, 0)
         w["leftHand"] = (0, 0, -14 if i % 2 == 0 else 14)
         keys.append((f, with_arm(start, "right", w, "open", {"head": (0, -6, -4), "hips": (0, 2, 0)})))
     keys += [(50, with_arm(start, "right", up, "open")), (60, start)]
@@ -978,8 +1070,145 @@ def test_clips(rig):
     return out
 
 
+def ual_clips(rig):
+    import retarget_clips as RC
+    src = RC.Source()
+    R1 = RC.Retargeter(rig, src, "ual1")
+    R2 = RC.Retargeter(rig, src, "ual2")
+    two = 2 * math.pi
+    head = RC.level_head(0.6)
+    arm_lag = {"*LowerArm": 1.0, "*Hand": 2.0, "*Proximal": 2.0, "*Intermediate": 2.5, "*Distal": 3.0}
+    out = []
+
+    # ---- idle: the source idle, slowed to 3 s, with a breath and a slow weight shift added.
+    def breathe(ctx):
+        b = math.sin(two * ctx.u * 2)                # two breaths per loop
+        ctx.rotate_local("upperChest", 0, -1.6 * b)  # chest rises (extends) on the in-breath
+        for s in ("left", "right"):
+            ctx.rotate_local(s + "Shoulder", 2, 1.2 * b * (1 if s == "left" else -1))
+    toe_out = RC.toe_out(10)
+    idle = RC.RetargetClip(rig, R1, "idle", "Idle_Loop", 90, True, spread=(1.0, 0.3),
+                           layers=[breathe, RC.abduct(5), head, toe_out,
+                                   RC.move_hips(lambda c: (0.008 * math.sin(two * c.u), 0, 0))],
+                           lag={"head": 3, "neck": 2, **arm_lag})
+    out.append(idle)
+
+    # ---- gaits: procedural legs (exact contacts, same roll-in), source upper body.
+    out.append(RetargetLoco(rig, "walk_slow", LOCOMOTION["walk_slow"], R1, "Walk_Loop",
+                            layers=[RC.abduct(6), head], lag=arm_lag, stabilize={"head": 0.5}))
+    out.append(RetargetLoco(rig, "walk", LOCOMOTION["walk"], R1, "Jog_Fwd_Loop",
+                            layers=[RC.abduct(12), head], lag=arm_lag, stabilize={"head": 0.5},
+                            exaggerate={"spine": 0.6, "chest": 0.6, "upperChest": 0.6},
+                            hands={"left": ("loose", 0.6), "right": ("loose", 0.6)}))
+    out.append(RetargetLoco(rig, "run", LOCOMOTION["run"], R1, "Sprint_Loop",
+                            layers=[RC.turn("spine", (1, 0, 0), -8), RC.abduct(12), head], lag=arm_lag,
+                            stabilize={"head": 0.5}, hands={"left": ("fist", 0.8), "right": ("fist", 0.8)}))
+
+    # ---- jump: anticipation (0-4: stand to crouch), push-off (4-6), launch on frame 6, then the
+    # source's take-off and tuck at 1.8x speed. The runtime starts at frame 6 and hands over to
+    # the fall loop at the apex.
+    def jump_time(f):
+        if f <= 4:
+            return 0.0
+        if f <= 6:
+            return f - 4
+        return 2 + (f - 6) * 1.8
+    jr = RC.RetargetClip(rig, R1, "jump_src", "Jump_Start", 16, False, timemap=jump_time, feet="lock", spread=(1.0, 0.3),
+                         layers=[RC.abduct(6), RC.level_head(0.4), toe_out], lag={"head": 1, "*Hand": 1})
+    stand = idle
+
+    def jump(f):
+        if f < 4:
+            return RC.blend_pose(stand.sample(0), jr.sample(4), smooth(f / 4))
+        return jr.sample(f)
+    out.append(RC.FnClip("jump", 16, False, jump, meta={
+        "launch_frame": 6, "source": "Quaternius UAL 1 Jump_Start (+ code anticipation 0-4)",
+        "note": "frames 0-5 are the anticipation; apply the jump impulse on frame 6"}))
+
+    # ---- fall: the source air loop, 2.5 s, legs FK.
+    # Slow paddling of the arms and pedalling of the legs on top, so the fall never freezes.
+    def flail(ctx):
+        a = two * ctx.u * 3                     # 3 strokes per 2.5 s loop
+        for s, sg in (("left", 1), ("right", -1)):
+            ctx.rotate_world(s + "UpperArm", (1, 0, 0), 16 * math.sin(a + (0 if s == "left" else 1.3)))
+            ctx.rotate_world(s + "LowerArm", (1, 0, 0), 12 * math.sin(a - 0.8 + (0 if s == "left" else 1.3)))
+            ctx.rotate_world(s + "UpperLeg", (0, -sg, 0), 7)     # legs apart: no crossing shins
+            ctx.rotate_world(s + "UpperLeg", (1, 0, 0), 10 * sg * math.sin(a * 2 / 3))
+            ctx.rotate_world(s + "LowerLeg", (1, 0, 0), -9 * sg * math.sin(a * 2 / 3 - 0.9))
+    out.append(RC.RetargetClip(rig, R1, "fall", "Jump_Loop", 75, True, feet="fk",
+                               layers=[RC.abduct(28), flail, RC.level_head(0.4)], lag={"head": 3, **arm_lag}))
+
+    # ---- land (soft) and land_hard: the source landing; soft is shallower and quicker.
+    def soften(k):
+        def layer(ctx):
+            rest = ctx.clip.R.tgt_head["hips"]
+            ctx.hips = Vector((ctx.hips.x, ctx.hips.y, rest.z + (ctx.hips.z - rest.z) * k))
+        return layer
+    # Squash fast (touchdown to the deepest point in 3 frames instead of 6), recover slower.
+    soft_time = RC.piecewise([(0, 0), (3, 6), (16, 28)])
+    # The last frames ease into idle's first pose, so the hand-over to idle does not pop.
+    def settle(clip, start):
+        def fn(f):
+            w = smooth((f - start) / (clip.length - start))
+            return RC.blend_pose(clip.sample(f), idle.sample(0), w) if w > 0 else clip.sample(f)
+        return fn
+    land = RC.RetargetClip(rig, R1, "land", "Jump_Land", 16, False, timemap=soft_time, spread=(1.0, 0.3),
+                               layers=[soften(0.6), RC.abduct(6), RC.level_head(0.5), toe_out],
+                               exaggerate={"spine": 0.6, "chest": 0.6, "upperChest": 0.6},
+                               lag={"head": 2, **arm_lag})
+    out.append(RC.FnClip("land", 16, False, settle(land, 8), meta=land.meta))
+    hard_time = RC.piecewise([(0, 0), (3, 5.5), (8, 8), (28, 34)])
+    hard = RC.RetargetClip(rig, R1, "land_hard", "Jump_Land", 28, False, timemap=hard_time, spread=(1.0, 0.3),
+                           layers=[RC.abduct(6), RC.level_head(0.3), toe_out], lag={"head": 2, **arm_lag})
+    out.append(RC.FnClip("land_hard", 28, False, settle(hard, 16), meta=hard.meta))
+
+    # ---- swim and swim idle, legs FK.
+    out.append(RC.RetargetClip(rig, R1, "swim", "Swim_Fwd_Loop", 40, True, feet="fk", priority=2,
+                               lag={"head": 2, **arm_lag}))
+    out.append(RC.RetargetClip(rig, R1, "swim_idle", "Swim_Idle_Loop", 100, True, feet="fk", priority=2,
+                               lag={"head": 3, **arm_lag}))
+
+    # ---- sit, dance, idle_b.
+    out.append(RC.RetargetClip(rig, R1, "sit", "Sitting_Idle_Loop", 60, True, priority=2,
+                               layers=[RC.level_head(0.3)], lag={"head": 3, **arm_lag}))
+    bounce = RC.move_hips(lambda c: (0, 0, -0.03 * (0.5 - 0.5 * math.cos(two * 2 * c.u))))
+    out.append(RC.RetargetClip(rig, R1, "dance", "Dance_Loop", 30, True, priority=3,
+                               layers=[RC.abduct(8), bounce, toe_out],
+                               exaggerate={"*UpperArm": 1.6, "*LowerArm": 1.4, "spine": 1.6, "chest": 1.6,
+                                           "upperChest": 1.4, "hips": 1.5, "head": 1.5},
+                               lag={"head": 2, **arm_lag}, meta={"bpm": 120, "frames_per_beat": 15}))
+    out.append(RC.RetargetClip(rig, R2, "idle_b", "Idle_FoldArms_Loop", 90, True, priority=2,
+                               spread=(1.0, 0.3), layers=[head, toe_out], lag={"head": 3, "neck": 2}))
+    return out
+
+
+STANDING_UPPER = ("spine", "chest", "upperChest", "neck", "head")
+
+
+def on_idle_legs(clip, idle):
+    """A standing emote's upper body over the retargeted idle's hips, legs and feet, so the
+    stance matches the idle it starts from and returns to (procedural emotes stand stiffer)."""
+    import retarget_clips as RC
+
+    def fn(f):
+        base = idle.sample(f % idle.length)
+        top = clip.sample(f)
+        rot = dict(base["rot"])
+        for b, r in top["rot"].items():
+            if b in STANDING_UPPER or "Arm" in b or "Hand" in b or "Shoulder" in b or "Proximal" in b                     or "Intermediate" in b or "Distal" in b or "Metacarpal" in b:
+                rot[b] = r
+        return {**base, "rot": rot}
+    return RC.FnClip(clip.name, clip.length, clip.loop, fn, priority=getattr(clip, "priority", 1),
+                     meta={**getattr(clip, "meta", {}), "source": "procedural upper body over Quaternius UAL 1 Idle_Loop legs"})
+
+
 def all_clips(arm):
     rig = Rig(arm)
-    clips = idle_clips(rig) + [Locomotion(rig, n, p) for n, p in LOCOMOTION.items()] + jump_clips(rig)
-    clips += p2_clips(rig) + emote_clips(rig) + concept_poses(rig) + test_clips(rig)
+    clips = ual_clips(rig)
+    done = {c.name for c in clips}
+    proc = idle_clips(rig) + jump_clips(rig) + p2_clips(rig) + emote_clips(rig)
+    idle = next(c for c in clips if c.name == "idle")
+    clips += [on_idle_legs(c, idle) if c.name in ("wave", "point") else c
+              for c in proc if c.name not in done]
+    clips += concept_poses(rig) + test_clips(rig)
     return clips

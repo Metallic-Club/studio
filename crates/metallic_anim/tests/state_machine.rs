@@ -308,3 +308,55 @@ fn a_transition_mid_fade_keeps_the_pose_continuous() {
     assert!(!p.is_blending());
     assert_eq!(p.motion_samples().len(), 1);
 }
+
+#[test]
+fn the_outgoing_mix_keeps_playing_during_a_crossfade() {
+    let mut p = player();
+    p.update(0.3); // idle at 0.3 s
+    p.set_playback_rate(2.0);
+    p.set_float("Speed", 5.0).unwrap();
+    p.update(0.0); // Idle -> Run, 0.2 s fade
+    let idle_at = |p: &StateMachinePlayer| {
+        p.motion_samples()
+            .iter()
+            .find(|m| m.clip == 0)
+            .unwrap()
+            .time
+    };
+    let t0 = idle_at(&p);
+    p.update(0.05);
+    // The outgoing idle advanced at the rate its state had when the fade began (2x).
+    assert!(
+        (idle_at(&p) - t0 - 0.1).abs() < 1e-5,
+        "{} -> {}",
+        t0,
+        idle_at(&p)
+    );
+}
+
+#[test]
+fn motion_samples_into_reuses_its_buffer() {
+    let mut p = player();
+    let mut out = Vec::new();
+    // Warm up through every kind of mix (a crossfade, a 1-clip state).
+    p.set_float("Speed", 5.0).unwrap();
+    for _ in 0..30 {
+        p.update(1.0 / 60.0);
+        p.motion_samples_into(&mut out);
+    }
+    p.set_float("Speed", 0.0).unwrap();
+    for _ in 0..30 {
+        p.update(1.0 / 60.0);
+        p.motion_samples_into(&mut out);
+    }
+    let (ptr, cap) = (out.as_ptr(), out.capacity());
+    for i in 0..200 {
+        p.set_float("Speed", if (i / 40) % 2 == 0 { 5.0 } else { 0.0 })
+            .unwrap();
+        p.update(1.0 / 60.0);
+        p.motion_samples_into(&mut out);
+        let total: f32 = out.iter().map(|m| m.weight).sum();
+        assert!((total - 1.0).abs() < 1e-5);
+    }
+    assert_eq!((out.as_ptr(), out.capacity()), (ptr, cap));
+}

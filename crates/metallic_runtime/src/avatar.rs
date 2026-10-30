@@ -85,12 +85,17 @@ impl Avatar {
     }
 
     /// Advances by `dt` seconds: the character's root centre is at `root` and faces `target_yaw`
-    /// radians; `input` drives the animation.
-    pub fn update(&mut self, root: Vec3, target_yaw: f32, input: LocomotionInput, dt: f32) {
+    /// radians; `input` drives the animation (its `turn_rate` is set here from the shown turn).
+    pub fn update(&mut self, root: Vec3, target_yaw: f32, mut input: LocomotionInput, dt: f32) {
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        input.turn_rate = 0.0;
         if target_yaw.is_finite() {
             let diff = (target_yaw - self.yaw + PI).rem_euclid(TAU) - PI;
-            self.yaw = (self.yaw + diff * (1.0 - (-dt / TURN_TIME).exp())).rem_euclid(TAU);
+            let step = diff * (1.0 - (-dt / TURN_TIME).exp());
+            self.yaw = (self.yaw + step).rem_euclid(TAU);
+            if dt > 0.0 {
+                input.turn_rate = step / dt;
+            }
         }
         self.locomotion
             .update(&self.model, input, dt, &mut self.pose);
