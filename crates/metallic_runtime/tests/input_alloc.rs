@@ -1,0 +1,148 @@
+//! `InputRuntime::evaluate` (and `push`, `drain_events`) must not allocate once the runtime is
+//! built (input spec section 13). A counting global allocator checks it on the reference load:
+//! 4 contexts, 32 actions, 96 bindings, 40 raw events a frame.
+use metallic_runtime::InputRuntime;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
+#[path = "common/reference_load.rs"]
+mod reference_load;
+
+struct Counting;
+
+thread_local! {
+    static ON: Cell<bool> = const { Cell::new(false) };
+    static COUNT: Cell<u64> = const { Cell::new(0) };
+}
+
+fn note() {
+    let _ = ON.try_with(|on| {
+        if on.get() {
+            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+        }
+    });
+}
+
+// SAFETY: forwards every call to the system allocator; it only counts calls on the thread that
+// switched counting on.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        note();
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        note();
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+#[test]
+fn evaluate_makes_no_heap_allocation() {
+    let mut rt = InputRuntime::new(&reference_load::config());
+    let dt = 1.0 / 60.0;
+    // Warm up so every path has run once.
+    for f in 0..120u64 {
+        let t = 10.0 + f as f64 * dt;
+        reference_load::push_frame(&mut rt, f, t);
+        rt.evaluate(t, dt as f32);
+        rt.drain_events().for_each(drop);
+    }
+    COUNT.with(|c| c.set(0));
+    ON.with(|on| on.set(true));
+    let mut events = 0;
+    for f in 120..720u64 {
+        let t = 10.0 + f as f64 * dt;
+        reference_load::push_frame(&mut rt, f, t);
+        rt.evaluate(t, dt as f32);
+        events += rt.drain_events().count();
+    }
+    let allocations = COUNT.with(Cell::get);
+    // The counter works: a plain allocation is seen.
+    drop(std::hint::black_box(vec![0u8; 64]));
+    assert_eq!(
+        COUNT.with(Cell::get),
+        allocations + 1,
+        "the counting allocator is live"
+    );
+    ON.with(|on| on.set(false));
+    assert!(events > 1000, "the load did something: {events} events");
+    assert_eq!(allocations, 0, "push, evaluate and drain_events allocated");
+}
+
+/// Nobody drains the events (the Player did not until #251 reads them): the buffer stays bounded,
+/// nothing allocates, the oldest events are dropped and counted, and vector state keeps updating.
+#[test]
+fn undrained_events_stay_bounded_and_state_keeps_updating() {
+    let mut rt = InputRuntime::new(&reference_load::config());
+    let stick = rt.find_action("Ctx3/Action2").expect("a stick action");
+    let dt = 1.0 / 60.0;
+    for f in 0..120u64 {
+        let t = 10.0 + f as f64 * dt;
+        reference_load::push_frame(&mut rt, f, t);
+        rt.evaluate(t, dt as f32);
+    }
+    COUNT.with(|c| c.set(0));
+    ON.with(|on| on.set(true));
+    let mut last = [0.0f32; 2];
+    let mut changes = 0;
+    for f in 120..2000u64 {
+        let t = 10.0 + f as f64 * dt;
+        reference_load::push_frame(&mut rt, f, t);
+        rt.evaluate(t, dt as f32);
+        let v = rt.axis2(stick);
+        changes += usize::from(v != last);
+        last = v;
+    }
+    ON.with(|on| on.set(false));
+    assert_eq!(COUNT.with(Cell::get), 0, "undrained evaluate allocated");
+    assert!(changes > 100, "the stick state kept changing: {changes}");
+    assert!(rt.dropped_events() > 0);
+    assert!(rt.drain_events().count() <= 1024, "bounded");
+}
+
+#[test]
+fn input_frame_makes_no_heap_allocation_once_warm() {
+    use metallic_core::{Value, World};
+    use metallic_runtime::input::{Control, Device, RawEvent};
+    use metallic_runtime::{Game, StdoutSink};
+    use std::rc::Rc;
+
+    // A scene action on Space with no script: events and values still go to the script host.
+    let mut w = World::new_with_services();
+    let rs = w.root("ReplicatedStorage").unwrap();
+    let ctx = w.create("InputContext", Some(rs)).unwrap();
+    let action = w.create("InputAction", Some(ctx)).unwrap();
+    let key = w.create("InputBinding", Some(action)).unwrap();
+    w.set(key, "KeyCode", Value::String("Space".into()))
+        .unwrap();
+    let mut game = Game::from_world("alloc".into(), w, Rc::new(StdoutSink));
+    game.start().unwrap();
+    let mut rt = InputRuntime::from_world(&game.world().borrow());
+    let dt = 1.0 / 60.0;
+    let mut frame = |rt: &mut InputRuntime, f: u64| {
+        let t = 10.0 + f as f64 * dt;
+        rt.push(RawEvent::button(
+            Device::KeyboardMouse,
+            Control::Space,
+            if f.is_multiple_of(2) { 1.0 } else { 0.0 },
+            t,
+        ));
+        game.input_frame(rt, t, dt as f32);
+    };
+    for f in 0..200u64 {
+        frame(&mut rt, f);
+    }
+    COUNT.with(|c| c.set(0));
+    ON.with(|on| on.set(true));
+    for f in 200..400u64 {
+        frame(&mut rt, f);
+    }
+    ON.with(|on| on.set(false));
+    assert_eq!(COUNT.with(Cell::get), 0, "input_frame allocated");
+}

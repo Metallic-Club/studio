@@ -1,0 +1,53 @@
+//! The events the rest of the Launcher sends to the window, and the way to send them.
+
+use url::Url;
+
+use crate::bridge::BridgeEvent;
+use crate::deep_link::DeepLink;
+use crate::local_pages::LocalPage;
+use crate::platform_auth::HandoffUrl;
+use crate::site_check::SiteStatus;
+use crate::tray::TrayAction;
+
+/// Something the window should do. Other parts post these through an [`EventSink`] and never
+/// touch the web view themselves.
+#[derive(Debug)]
+pub enum AppEvent {
+    /// A `metallic://` link arrived (from the web view or another process).
+    DeepLink(DeepLink),
+    /// Show the window and bring it to the front.
+    Focus,
+    /// A page posted a message to the Launcher. `page_url` is the page that sent it; the
+    /// receiver must check it before acting.
+    BridgeMessage {
+        /// The address of the page that sent the message.
+        page_url: String,
+        /// The message text.
+        body: String,
+    },
+    /// Tell the current page about something (sent only to the site and bundled pages).
+    Bridge(BridgeEvent),
+    /// Run a script in the current page. The shell wraps it with the in-page origin guard
+    /// ([`Bridge::guard_script`](crate::Bridge::guard_script)) and drops it when the page on
+    /// screen is not the site or a bundled page.
+    RunScript(String),
+    /// A site check finished.
+    SiteStatus(SiteStatus),
+    /// Load this address in the main view (only the site and bundled pages are accepted).
+    Navigate(Url),
+    /// Sign the web view in: load the web-session handoff address (the site only). The address
+    /// holds a one-time secret, so this variant's `Debug` hides it.
+    Handoff(HandoffUrl),
+    /// Show a bundled page.
+    ShowLocal(LocalPage),
+    /// An entry of the tray menu was chosen (or the icon was clicked).
+    Tray(TrayAction),
+    /// Close the Launcher.
+    Quit,
+}
+
+/// Where events are sent. Implemented by the shell on top of the event loop; tests use a list.
+pub trait EventSink: Send + Sync {
+    /// Queues `event` for the window.
+    fn send(&self, event: AppEvent);
+}

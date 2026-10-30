@@ -4,7 +4,7 @@
 //! process. Each frame [`Avatar::update`] places it on the `HumanoidRootPart` (feet
 //! [`ROOT_HEIGHT`] studs below the root centre, so they rest on the floor), turns it smoothly
 //! toward the character's facing and animates it with the built-in
-//! [`crate::locomotion::Locomotion`] controller. The character's invisible body parts still do
+//! [`crate::locomotion::Locomotion`] state machine. The character's invisible body parts still do
 //! the collisions and touches.
 use crate::locomotion::{Locomotion, LocomotionInput};
 use metallic_physics::ROOT_HEIGHT;

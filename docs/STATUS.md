@@ -1,39 +1,75 @@
 # Status
 
-Read this first, then `CLAUDE.md`. Updated: 2026-10-30. Statuses are planned / implemented / tested / accepted / released.
+Snapshot: 2026-10-30 14:39 UTC, main `ebb94f3`. Status words are planned / implemented / tested / accepted / released.
+Read [CLAUDE.md](../CLAUDE.md) for the working agreement. Check live issues and claims before choosing work; this
+file describes the verified repository snapshot and does not reserve tasks or supersede newer issue comments.
 
-## What Metallic is
-Metallic is the owner's game platform. This repo holds the **Metallic Engine** (our own game engine, Rust, Windows 11
-first) and **Metallic Studio** (the editor creators use). Games run in a shared **Metallic player**; scripts are
-sandboxed Luau with Roblox-style names. Website and backend live in `Metallic-Club/plateform`, not here.
+## Product and current milestone
 
-## Current milestone: M1 (engine plays Parkour, Studio edits it, installer and updates)
-| Part | Goal | Issues |
-|---|---|---|
-| M1A | `metallic-player` plays the Parkour game | #1 to #8 |
-| M1B | Studio creates, edits and plays Parkour; zip acceptance | #9 to #12 |
-| M1C | Installer, GitHub Releases updates, developer mode | #13, #14 |
+Metallic Engine is the Rust engine; Metallic Studio is the editor; Metallic player runs games in sandboxed Luau.
+Windows 11 is first. The website/backend lives in [Metallic-Club/plateform](https://github.com/Metallic-Club/plateform).
 
-## In progress
-- #1 Task 1 (workspace, toolchain, licence gate): lead session, branch `studio/m1-engine-20261030`.
+Milestone 1 is still in progress. Tasks #1 through #9 are closed, and their implementations are present on main.
+Tasks #10 through #14 remain open. Issue labels on closed tasks can lag their actual state; filter for open issues.
+This snapshot does not declare the complete editor, installer round trip or milestone acceptance finished.
 
-## Ready now
-None until #1 is merged. Then #2 (core) is the only open path; after #2: #3 render, #4 physics, #6 Luau VM in parallel.
+- #197 Launcher L1 Task 9 (packaging, release process, Linux compile check, acceptance; product name Metallic Play, owner choice 2026-10-30): implemented and tested in code on branch
+  `studio/launcher-l1-20261030`; the install round trip is pending (lead/owner), see `docs/agents/197-launcher-release.md`.
 
-## Task graph
-T1 -> T2 -> {T3, T4, T6}; T4 -> T5; T6 -> T7; {T3, T5, T7} -> T8 -> T9 -> {T10, T13, T14}; T10 -> T11 -> T12.
-Issue number = task number (#1 is Task 1 ... #14 is Task 14).
+| Area on main | Implemented evidence | Remaining work |
+| --- | --- | --- |
+| Engine foundations, Tasks #1-#7 | Seven-crate workspace; typed Instance world and scene format; renderer; Rapier physics and characters; sandboxed Luau, scheduler and Instance/RemoteEvent API | Tracked correctness/performance fixes remain on the issue board; open PRs are not merged implementations |
+| Runtime/player/Parkour, Task #8 | `metallic_runtime::Game`, window/headless player, input/camera/game GUI and Parkour template; player smoke, runtime tests and input-driven full-course route test | Maintain regression coverage and complete owner acceptance against the milestone specification |
+| Studio shell, Task #9 | Window/theme/splash, start screen, project/template handling and recent projects | Viewport/editor manipulation under #10; Play/Stop under #11 |
+| Packaging, Task #12 | Specification and plan exist | `tools/package.py` is absent on this snapshot; package/licence/acceptance work remains open |
+| Installer/updater, Task #13 | GitHub auth/update library, release script/workflow, tests and startup Velopack hook | GitHub App configuration and real installed update round trip; sign-in/check UI wiring and tracked release fixes. See [releasing.md](releasing.md) |
+| Developer mode, Task #14 | Plan exists | `metallic_studio/src/devmode/` is absent; overlay/log viewer/inspector/flags/report bundle remain open |
 
-## Later milestones (epics)
-#15 M2 Multiplayer + Team Create, #16 M3 2D + more templates, #17 M4 Creation workflow, #18 M5 Renderer track,
-#19 M6 Modeller/animation/VFX, #20 M7 Marketplace, community, learning, Litha.
+The [building-tools design](design/building-tools.md), [visual-language documents](design/visual-language/visual-language.md)
+and [Launcher L1 plan](superpowers/plans/2026-10-30-launcher-l1.md) are planning/design artifacts. They do not establish
+that the editor tools or desktop Launcher have shipped. Inspect each implementation PR and its acceptance evidence.
 
-## Where things are
-- Spec: `docs/superpowers/specs/2026-10-30-metallic-studio-design.md`
-- Plan (M1, Tasks 1-14): `docs/superpowers/plans/2026-10-30-engine-m1.md`
-- Templates and onboarding research (proposal): `docs/research/2026-10-30-templates-and-onboarding.md`; template
-  designs and the quality bar: `docs/templates/`
-- Brand files: `branding/` (placeholder icon only)
-- Per-issue progress notes: `docs/agents/<issue#>-<slug>.md`
-- Overview: `README.md`, `ARCHITECTURE.md`
-- Board: `gh issue list -R Metallic-Club/studio -l status:ready` (no GitHub Project board; the token lacks the `project` scope)
+## Find current work
+
+Use the live board rather than the original bootstrap statement that nothing is ready:
+
+```sh
+gh issue list -R Metallic-Club/studio --state open --label status:ready
+gh issue list -R Metallic-Club/studio --state open --label status:in-progress
+gh pr list -R Metallic-Club/studio --state open
+gh issue view <number> -R Metallic-Club/studio --comments
+```
+
+Choose the highest-priority unblocked issue. Verify every dependency is closed and check recent claims before
+claiming it. Open Tasks #10-#14 currently carry blocked labels; their issue text and live coordination determine
+what can start. Do not infer that a dependency is still open just because a closed issue retained an old label.
+
+The [conductor agreement](CONDUCTOR.md) and [baton issue #44](https://github.com/Metallic-Club/studio/issues/44) govern
+coordination. Workers may pick ready issues without waiting for a conductor. Only the lead or owner merges after
+review and green CI; keep individual progress in `docs/agents/<issue>-<slug>.md`.
+
+## Commands present on this snapshot
+
+```sh
+cargo build --workspace -j 4
+cargo test --workspace -j 4
+cargo clippy --workspace --all-targets -j 4 -- -D warnings
+cargo deny check licenses
+cargo run -j 4 -p metallic_player -- templates/parkour --headless --scene tests/smoke.mscene --frames 1200
+cargo run -j 4 -p metallic_studio
+```
+
+The Rust toolchain is pinned in `rust-toolchain.toml`; install `cargo-deny` separately if needed. Daytime builds use
+`-j 4`. Follow current conductor resource limits and keep build caches isolated or guarded when changing worktrees;
+do not attribute another checkout's cached outputs to this one. A command's presence is not a performance or release claim.
+
+## Plans and later milestones
+
+- [Engine/Studio specification](superpowers/specs/2026-10-30-metallic-studio-design.md)
+- [M1 plan, Tasks #1-#14](superpowers/plans/2026-10-30-engine-m1.md)
+- [Architecture and crate interfaces](../ARCHITECTURE.md), [Luau API](luau-api.md), [Task #8 progress](agents/8-runtime-parkour.md)
+- Later epics: #15 multiplayer/Team Create; #16 2D/templates; #17 creation workflow; #18 renderer track;
+  #19 modeller/animation/VFX; #20 marketplace/community/learning/Litha.
+
+The original dependency graph remains in the M1 plan. Preserve its contracts while fixing the current tracked
+issues; a closed implementation task does not by itself prove every later milestone or owner acceptance step.

@@ -24,6 +24,8 @@ const SERVICES: &[&str] = &[
     "StarterGui",
     "Lighting",
     "RunService",
+    "UserInputService",
+    "ContextActionService",
 ];
 
 /// True when `class` is a service, which scripts cannot create.
@@ -40,6 +42,9 @@ impl LuaGame {
     fn service(&self, lua: &Lua, name: &str) -> mlua::Result<Value> {
         if !is_service(name) {
             return Err(lua_error(format!("'{name}' is not a valid Service name")));
+        }
+        if let Some(service) = super::input::service(&self.state, name) {
+            return Ok(service);
         }
         let id = self.state.world()?.root(name);
         self.state.wrap_opt(lua, id)

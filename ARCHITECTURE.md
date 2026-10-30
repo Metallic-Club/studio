@@ -28,7 +28,11 @@ apps.
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
-  only non-default properties, stable order). Also `deep_clone()` used by Play.
+  only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
+  defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
+  default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
+  `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
+  either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
@@ -54,9 +58,17 @@ apps.
   jump, wall slide/jump, drop-through, platform carry) run inside the fixed tick. Backend choice and the proposed 2D
   Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
-  `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
+  `task` library). `ScriptHost::new` runs server and client scripts over a shared `World`; additive `new_server`
+  starts only the server VM and server-eligible Scripts, without creating a local Player/PlayerGui or PlayerAdded.
+  The role is fixed at construction, preserves pre-existing world state and filters client script candidates before
+  running-script bookkeeping. This adds no transport, player admission, server executable or M2 acceptance.
+  The host exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
+  Task queue ownership uses weak thread keys and fresh lease identities; task-created callbacks bind their
+  function/arguments at creation. Coroutine admission adapters consume private scheduler markers while ordinary
+  result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
+  retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
   Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
@@ -68,17 +80,22 @@ apps.
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
   scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
   egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
-  `InputState` turns keys, mouse and gamepad into `FrameInput`s without depending on a window library. Shared by
-  player and Studio.
+  Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
+  player and Studio; no window library in this crate.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
   physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
+  Private `PhysicsSyncCache` tracks part signatures and direct Humanoid-to-Model dependencies, including deleted
+  IDs and inherited character membership. It updates affected entries from the journal, avoids full workspace
+  snapshots for ordinary property/pose ticks, and falls back to cache reconciliation on lost history or a new world.
+  The physics wrapper retains its own synchronization/reset contract; no physics API is added by this cache.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
-  [--fps] [--autopilot] [--capture FRAME:PNG]`; winit window, wgpu surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless
-  mode for smoke tests (no window, no GPU).
+  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F]`; winit window, wgpu surface, egui-wgpu for the GUI pass,
+  gilrs for gamepads, headless mode for smoke tests (no window, no GPU). `devices.rs` holds the winit key and mouse
+  mapping and the gilrs `GamepadSource` (the mapping table of spec 4.2); both produce `RawEvent`s for the runtime.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -88,10 +105,68 @@ apps.
   Decoding/streaming through Symphonia (WAV, OGG Vorbis, FLAC, MP3). Notes: `docs/agents/81-audio.md`.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
-  Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
-  an injectable `HttpClient`, exact-tag `updater/tagged.rs` source for the selected version/channel, Velopack for package
-  transfer, checksum verification and apply) and `github_auth.rs` (device sign-in, token in Credential
-  Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
+  Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
+  checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
+  `.github/workflows/release.yml`, `docs/releasing.md`.
+- **metallic_update** (Launcher L1 Task 1): no UI. `http.rs` (`HttpClient`, `UreqClient`, redacting `Token`; `get_to_writer` streams a download and drops `Authorization` when a redirect leaves the host), `feed.rs`
+  (`ReleaseFeed`, `STUDIO_FEED`, `LAUNCHER_FEED`, `UpdateChecker::check/check_quietly/download/apply_and_restart/apply_after_exit`,
+  `latest_asset` -> `ReleaseAsset` (name, API address, SHA-256 from GitHub's `digest`, size), GitHub Releases feed, Velopack for download
+  and apply), `download.rs` (`download_verified`: `<name>.part`, size cap, SHA-256 check, rename; failure deletes the part file), `github_auth.rs` (device sign-in, `GithubAuth`) and `secret.rs`
+  (`SecretStore`, `MemorySecretStore`, `KeyringSecretStore::new(service, account)`). Shared by Studio and the Launcher.
+- **metallic_launcher** (Launcher L1 Tasks 2-3; library plus the `Metallic` program): `deep_link.rs` (`DeepLink::parse/to_uri` for
+  `metallic://play|studio/open|open|install`, `PlaceId`, `JoinTicket`, `SitePath`), `site.rs` (`SiteOrigin`, `LauncherConfig::from_args`,
+  `is_local_page`), `url_policy.rs` (`UrlPolicy::navigation/new_window/origin_of`), `settings.rs` (`LauncherSettings`, `SettingsStore`).
+  Site address: `config/launcher_site_origin.txt`. Task 3 adds, in the library, `local_pages.rs` (`LocalPage`, `OfflineReason`,
+  `local_url`, `serve`, `LOCAL_CSP`: the bundled pages in `assets/pages/`, exact file names only), `site_check.rs` (`check_site`,
+  `SiteStatus`, `start_page`, `user_agent`) and `app_event.rs` (`AppEvent`, `EventSink`: how other parts talk to the window). The
+  program is `main.rs` (start-up order, what to show on failure), `shell.rs` (tao window + wry web view + event loop, thin glue)
+  and `platform/` (`windows.rs`: system browser, WebView2 message box, failed-load hook, accelerator keys; `other.rs`: stubs).
+  Task 4 adds `bridge.rs` (`Bridge::handle/deliver/event_script`, `BridgeCommand`, `allowed`, `BridgeHost`, `BridgeEvent`,
+  `BridgeErrorCode`) and `assets/bridge.js` (`window.metallic`, main frame only): the checked path from a page to the Launcher. Only the
+  site (and the development origin) and bundled pages may call it; commands are a typed enum with unknown fields refused, 16 KiB
+  message limit, 32 calls in flight, one Player start per 2 s; an answer goes only to a page of the same origin as the asker. The
+  shell implements `BridgeHost` (`ShellHost`); the Metallic sign-in answers `notAvailable` until Task 7. A call counts toward the 32
+  only while the host runs it (long work goes to background threads and reports by events), never while its answer waits.
+  Task 5 adds `single_instance.rs` (hand-over message `HandoffMessage`, `encode`/`decode`, 4096-byte limit checked before the body is
+  read; `Acquired`, `HandoffListener`, `HandoffSender`; the Windows pipe is `\\.\pipe\Metallic.Launcher.<user SID>`, first-instance, no remote
+  clients, current user only, and a sender checks that the pipe's server runs as the same user before it sends), `protocol.rs` (`register`,
+  `unregister`, `is_registered_to`, `UriRegistry`, `MemoryRegistry`; `metallic://` under HKCU only, an installed copy re-registers itself
+  on start, a copy run from `target\` never does), `launch.rs` (`Spawner`, `ProductPaths`, `start_player`, `start_studio`) and `tray.rs`
+  (`TrayAction`, `tray_menu`, `CloseAction`, `on_close_requested`). The tray icon, pipe, registry and process start are in
+  `platform/windows.rs` (`tray-icon` crate, MIT/Apache-2.0; icon only from `branding/`). Every script the shell runs into a page
+  (`AppEvent::RunScript`, `Bridge::guard_script`) carries the same in-page `location.origin` guard as bridge replies.
+  Task 6 adds `install.rs` (`Installer::install_studio/start_install_studio`: looks up `MetallicStudio-<channel>-Setup.exe` on
+  `STUDIO_FEED`, `download_verified` into `%LOCALAPPDATA%\MetallicLauncher\data\Downloads`, runs it with `--silent` through
+  `Spawner::spawn_and_wait` only after the SHA-256 matched, deletes it; one install at a time; `ProductStatus`,
+  `LauncherUpdateState`, `InstallStatus`, `read_installed_version`, `github_sign_in`) and `self_update.rs` (`SelfUpdater`: check on
+  start and every `CHECK_INTERVAL`, background download, `on_quit` applies silently without restart only when `ProcessTracker`
+  counts no running Player, `restart_to_update` answers `Busy` instead, a `required` update makes `allow_play` fail with
+  `UpdateRequired`; `StartedPlayers`, `UpdateSource`). `settings.rs` gains `channel` (local-only: the site may not change it).
+  The tray shows "Restart to update" once an update is downloaded.
+  Task 7 adds `platform_auth.rs` (`PlatformAuth`: OAuth device flow against `<site>/v1/oauth/*` with client `metallic-launcher`, scopes
+  `profile play`. Only the refresh token is stored (UTF-8 bytes, Credential Manager entry `Metallic`/`platform`, 2560-byte check); the
+  access token stays in memory; tokens over 256 bytes are refused; refreshes are serialised, the new refresh token is stored before use.
+  `platform_sign_in` answers `{state:"pending"}` at once and a worker emits `signIn` events `pending` (with `userCode`, `verificationUri`),
+  then `signedIn|denied|expired|failed`; a second call returns the running flow's code; a signed-in Launcher skips the browser. The
+  verification page is opened only if it is https on the site origin. `signOut` forgets the session at once, revokes on a worker.) After
+  sign-in `web_session_code` (`POST /v1/oauth/web-session`, single use, 60 s, 3 tries) becomes `AppEvent::Handoff(HandoffUrl)` =
+  `<site>/auth/launcher-handoff?code=..`, which the site redeems itself; the code is a redacting `Token`/`HandoffUrl`, never logged.
+  `OneAtATime` makes a second `githubSignIn` answer `busy`.
+  **Player contract:** `metallic-player.exe <metallic://play?place=<id>&ticket=<ticket>>`: exactly one argument, the canonical link from
+  `DeepLink::to_uri`, started without a shell; the Player sits beside `Metallic.exe`. Studio is started with no arguments (a place in
+  `metallic://studio/open?place=..` is ignored for now).
+  Task 9 (release and hardening; product name **Metallic Play**, owner choice 2026-10-30, used for the window title, tray, pack title and bundled pages; ids, folders and `Metallic.exe` keep their names): `tools/release.py --app launcher` packs `Metallic.exe` + `metallic-player.exe` as Velopack
+  `MetallicLauncher` (`--framework webview2`, channel `launcher-<channel>`, tag `launcher-v<version>-<channel>`; see
+  `docs/releasing.md`). `play_limit.rs` (`PlayLimiter`, burst 3 then one per 2 s; `LaunchGate`) is one gate for every program start: Play and
+  Studio links (pipe, protocol handler, page clicks, start argument), the bridge `play`/`openStudio` and the tray (the bridge also keeps its own one-per-2-s Play limit). `url_policy::remote_content_allowed`: if
+  the WebView2 `FrameNavigationStarting` handler cannot be registered, iframes would be unpoliced, so the Launcher shows the bundled
+  offline page and loads no remote page (fail closed). Own data folders (`data_dirs.rs`): `%LOCALAPPDATA%\MetallicLauncher\data` (`Downloads`, `WebView2`) and `%APPDATA%\MetallicLauncher` (settings), never under `Metallic\` (another app may own it); each holds a `.metallic-launcher` marker written when the Launcher creates it, and the uninstall hook deletes only marked folders. Keyring service `MetallicLauncher`. The view starts on `about:blank`; the start page loads only after registration. CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
+  Template creation preserves project metadata (`metallic.toml`, including `[[setting]]`) while setting the new name;
+  legacy settings migrate from `template.toml`, with conflicting dual definitions rejected and rolled back. Catalog
+  metadata, preview files and root `tests/` stay in the template; tutorials and nested game assets are copied.
+  The runtime reads `name`/`main_scene` and accepts additional metadata; the Game settings panel remains planned.
+  Exact-tag update source (now in `metallic_update`, `feed/tagged.rs`): Velopack downloads the full package of the release the check
+  selected (`<tag_prefix>X.Y.Z-<channel>`), through asset ids on the GitHub API; the token never goes to a URL taken from release metadata.
 - **metallic_anim** (#40, implemented): animation data and playback, pure Rust (glam, no GPU). Typed keyframe
   `Curve<T>` (f32, Vec2, Vec3, Quat, Color3, bool) with constant, linear, Bezier and Roblox `EasingStyle`/`Direction`
   interpolation; `Clip` of joint and property tracks plus event markers; `Skeleton`/`Pose` for 3D joints and 2D bones
@@ -114,6 +189,37 @@ apps.
   as an interface only), `Op` + `MeshCommand` + `History`, `triangulate` to a local `MeshData` (switches to
   `metallic_meshgen`'s once merged), `uv` (box/planar, LSCM), `export` (GLB/glTF/OBJ). Demo:
   `cargo run -p metallic_modeling --example modeling_demo`.
+
+## Input flow
+Games listen to actions, never to raw keys (design: `docs/design/input-actions.md`; phase 1 is implemented: spec
+sections 3, 4.1, 4.2, 4.4 and 6).
+
+```
+winit keys/mouse, gilrs pads, --input-script  ->  RawEvent  ->  InputQueue (1,024 per frame)
+InputRuntime::evaluate(now, dt):  bindings -> actions (values, Pressed/Released/Triggered/StateChanged events)
+InputRuntime::frame_input():      CharacterControls actions -> FrameInput   (Move, Jump, Run, Look, Zoom)
+Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read FrameInput
+```
+
+- **Data model.** Classes `InputContext` (`Enabled`, `Priority`, `Sink`, `RebindGroup`), `InputAction` (`Type`,
+  `Trigger`, times, `Role`, touch fields) and `InputBinding` (`KeyCode`, composites, modifiers, `Scale`,
+  `ResponseCurve`, `Deadzone` ...) are in the class registry. `InputConfig::from_world` reads them from
+  `ReplicatedStorage`, `StarterPlayer` and `Players`; when the scene has no `CharacterControls` context the built-in one
+  (`default_character_controls`) is used, otherwise the scene wins entirely. `InputRuntime::sync(&World)` reloads
+  when the change journal reports an input instance.
+- **Evaluation.** Per binding: modifiers, dead zone (radial, rescaled), response curve, scale, delta time, clamp. Per
+  action: Bool is the OR of its bindings, vectors take the largest magnitude. Contexts are asked by priority; a `Sink`
+  context takes the controls its bindings use (per control, not per context). Bool actions are evaluated at each raw
+  event's own time, so Hold, Tap, DoubleTap and Repeat use event time (a 30 fps phone still reads a 200 ms tap) and
+  a press that ends inside one frame is not lost. `last_device()` follows the hysteresis rule of spec 4.4.
+- **No allocation per frame.** Bindings are compiled once (`load`) into dense arrays with a list of binding indices per
+  control; `evaluate`, `push` and `drain_events` use preallocated buffers (test `tests/input_alloc.rs`). Bench
+  `input_eval/96_bindings` (`benches/input_eval.rs`).
+- **Headless.** `InputRuntime::push(RawEvent)` is the only entry. `ScriptedSource` replays `--input-script` files
+  (`frame device control state [values]`). The Parkour route test sends its moves as raw events, records them as a
+  script and replays the script.
+- **Not yet** (later phases, spec section 15): Luau API (#251), touch controls (#252), Studio panel (#253), rebinding
+  files, glyphs, toggles (#254).
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
@@ -184,6 +290,9 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
   guarded build/test invocation; [build lanes](docs/build-lanes.md) documents the
   metadata-derived package clean, process lock and recovery command.
 - Every public item has a `///` doc comment; every crate has a `//!` crate doc.
+- `World::set` rejects NaN and infinities in Number, Vector3, Color3, and UDim2 before changing
+  state, signals, or the journal. Instance/property/type errors retain precedence; finite ranges
+  remain governed by the existing class registry.
 - Tests sit next to behaviour (write the failing test first).
 - No `unwrap()` or `expect()` outside tests; return typed errors (`CoreError`, `ScriptError`, `RuntimeError`, `StudioError`).
 - Scripts can never freeze or crash the game: budgets and caps are enforced in `metallic_script`.
