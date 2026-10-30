@@ -4,11 +4,11 @@
 //! ([`metallic_core::World`]), the physics ([`metallic_physics::PhysicsWorld`]) and Humanoid
 //! characters, the Luau scripts ([`metallic_script::ScriptHost`]), the third-person
 //! [`CameraController`] and the in-game GUI ([`gui`]). The local character is drawn as the
-//! skinned default avatar (`art/avatar/out/default_avatar.glb`), animated by a small built-in
-//! locomotion controller (idle, walk, run, jump, fall, land) until the animation system (#40)
-//! replaces it. The player app and Studio's Play mode both
-//! drive a `Game`: [`Game::load`], [`Game::start`], then [`Game::frame`] once per displayed
-//! frame, [`Game::render`] and [`gui::paint`], and finally [`Game::stop`].
+//! skinned default avatar (`art/avatar/out/default_avatar.glb`), animated by a `metallic_anim`
+//! state machine (idle, walk, run, jump, fall, land; see `locomotion`). The player app and
+//! Studio's Play mode both drive a `Game`: [`Game::load`], [`Game::start`], then
+//! [`Game::frame`] once per displayed frame, [`Game::render`] and [`gui::paint`], and finally
+//! [`Game::stop`].
 //!
 //! Input is read as actions ([`input`]): the app feeds raw events (keys, mouse, gamepad, scripted
 //! events) to an [`InputRuntime`], which evaluates the scene's `InputContext`s once per frame and

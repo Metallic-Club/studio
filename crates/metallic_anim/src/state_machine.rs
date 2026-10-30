@@ -192,6 +192,7 @@ pub struct StateMachinePlayer {
     params: Vec<PValue>,
     current: Active,
     fading: Option<Fading>,
+    rate: f32,
 }
 
 impl StateMachinePlayer {
@@ -308,6 +309,7 @@ impl StateMachinePlayer {
                 progress: 0.0,
             },
             fading: None,
+            rate: 1.0,
         })
     }
 
@@ -363,6 +365,13 @@ impl StateMachinePlayer {
         }
     }
 
+    /// Scales how fast states play (default 1): `2.0` plays every clip twice as fast. Gameplay
+    /// code sets it each frame to match motion to the clip, e.g. a walk cycle to the real speed.
+    /// Negative and non-finite values count as 0.
+    pub fn set_playback_rate(&mut self, rate: f32) {
+        self.rate = if rate.is_finite() { rate.max(0.0) } else { 0.0 };
+    }
+
     /// Name of the current state.
     pub fn current_state(&self) -> &str {
         self.state_names
@@ -381,7 +390,11 @@ impl StateMachinePlayer {
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
         let len = self.state_length(self.current.state);
         let speed = self.states.get(self.current.state).map_or(1.0, |s| s.speed);
-        self.current.progress += if len > 0.0 { dt * speed / len } else { 0.0 };
+        self.current.progress += if len > 0.0 {
+            dt * speed * self.rate / len
+        } else {
+            0.0
+        };
         if let Some(f) = &mut self.fading {
             f.elapsed += dt;
             if f.elapsed >= f.duration {
@@ -416,7 +429,12 @@ impl StateMachinePlayer {
                     *v = false;
                 }
             }
-            let outgoing = self.samples();
+            // A fade still running keeps fading out inside the new one, so the pose does not pop.
+            let outgoing = if self.fading.is_some() {
+                self.motion_samples()
+            } else {
+                self.samples()
+            };
             self.fading = if t.blend_time > 0.0 {
                 Some(Fading {
                     samples: outgoing,
@@ -507,15 +525,18 @@ impl StateMachinePlayer {
     }
 
     /// The clips to blend for the current frame, with weights adding up to 1. During a
-    /// crossfade the outgoing mix (frozen at the moment the transition fired) fades out.
+    /// crossfade the outgoing mix fades out. It is frozen at the moment the transition fired, so
+    /// the fade needs no second playhead.
     pub fn motion_samples(&self) -> Vec<MotionSample> {
         let mut current = self.samples();
         if let Some(f) = &self.fading {
-            let w_in = if f.duration > 0.0 {
+            let u = if f.duration > 0.0 {
                 (f.elapsed / f.duration).clamp(0.0, 1.0)
             } else {
                 1.0
             };
+            // Smoothstep, so a fade eases in and out instead of starting and stopping at full rate.
+            let w_in = u * u * (3.0 - 2.0 * u);
             for s in &mut current {
                 s.weight *= w_in;
             }

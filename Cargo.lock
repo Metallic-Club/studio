@@ -2749,6 +2749,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "egui",
+ "metallic_anim",
  "metallic_core",
  "metallic_physics",
  "metallic_render",
