@@ -1046,3 +1046,59 @@ fn streaming_is_off_unless_a_client_implements_it() {
     assert!(matches!(result, Err(UpdateError::Network(_))));
     assert!(folder_is_empty(dir.path()));
 }
+
+#[test]
+fn stalled_download_times_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Sends the headers and a little of the body, then goes quiet with the connection open.
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 2048];
+        let _ = stream.read(&mut buf);
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 5000\r\nConnection: close\r\n\r\n";
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&[1u8; 100]).unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(Duration::from_secs(3));
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let http =
+        UreqClient::new(Duration::from_secs(5)).with_stall_timeout(Duration::from_millis(400));
+    let started = std::time::Instant::now();
+    let result = download_verified(
+        &http,
+        None,
+        &asset_for(&[1u8; 5000], format!("http://127.0.0.1:{port}/asset")),
+        dir.path(),
+        |_| {},
+    );
+    assert!(matches!(result, Err(UpdateError::Network(_))), "{result:?}");
+    assert!(
+        started.elapsed() < Duration::from_millis(2500),
+        "gave up on its own, without waiting for the server"
+    );
+    assert!(folder_is_empty(dir.path()), "no file and no .part is left");
+    server.join().unwrap();
+}
+
+#[test]
+fn hostile_file_names_are_refused_even_with_odd_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in [
+        "setup.exe.",
+        "setup.exe ",
+        "NUL.exe",
+        "a*b.exe",
+        "x.PART",
+        "a|b",
+    ] {
+        let mut asset = asset_for(b"abc", "http://127.0.0.1:1/a".into());
+        asset.name = name.to_string();
+        let result = download_verified(&client(), None, &asset, dir.path(), |_| {});
+        assert!(
+            matches!(result, Err(UpdateError::BadResponse(_))),
+            "{name:?}"
+        );
+    }
+}

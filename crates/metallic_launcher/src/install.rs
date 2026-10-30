@@ -16,6 +16,7 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use metallic_update::github_auth::DeviceFlowUi;
 use metallic_update::{
@@ -23,11 +24,15 @@ use metallic_update::{
     UpdateChecker, UpdateError, download_verified,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::app_event::{AppEvent, EventSink};
 use crate::bridge::BridgeEvent;
 use crate::error::LauncherError;
 use crate::launch::{ProductPaths, Spawner};
+
+/// How long Studio's installer may run before it is killed and the install counts as failed.
+pub const INSTALLER_TIME_LIMIT: Duration = Duration::from_secs(10 * 60);
 
 /// What the Launcher knows about the Player or Metallic Studio on this PC.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -226,7 +231,57 @@ pub struct Installer {
     channel: Channel,
     studio_root: PathBuf,
     downloads: PathBuf,
+    time_limit: Duration,
     state: Mutex<StudioState>,
+}
+
+/// Ends an install however the code leaves: the normal way reports the outcome with
+/// [`complete`](Self::complete); any other way out (an early return, a panic) frees the place
+/// and reports a failure, so the Installer can never stay "running" for good.
+struct RunGuard<'a> {
+    installer: &'a Installer,
+    sink: &'a dyn EventSink,
+    done: bool,
+}
+
+impl RunGuard<'_> {
+    fn complete(&mut self, outcome: Result<(), &LauncherError>) {
+        self.done = true;
+        self.installer.finish(outcome);
+        self.sink
+            .send(AppEvent::Bridge(BridgeEvent::InstallFinished {
+                product: "studio".to_string(),
+                ok: outcome.is_ok(),
+            }));
+    }
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            log::error!("the Studio install ended without a result");
+            self.complete(Err(&LauncherError::Update(
+                "the install failed".to_string(),
+            )));
+        }
+    }
+}
+
+/// Reads `file` from the start and says whether its SHA-256 is `expected`.
+fn file_has_sha256(mut file: &std::fs::File, expected: &[u8; 32]) -> std::io::Result<bool> {
+    use std::io::{Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    Ok(&digest == expected)
 }
 
 impl Installer {
@@ -245,8 +300,15 @@ impl Installer {
             channel,
             studio_root,
             downloads,
+            time_limit: INSTALLER_TIME_LIMIT,
             state: Mutex::new(StudioState::default()),
         }
+    }
+
+    /// Replaces how long the installer may run ([`INSTALLER_TIME_LIMIT`]).
+    pub fn with_time_limit(mut self, time_limit: Duration) -> Self {
+        self.time_limit = time_limit;
+        self
     }
 
     /// Studio's status: installing while an install runs, else the last failure until the next
@@ -332,15 +394,16 @@ impl Installer {
     }
 
     fn run_claimed(&self, sink: &dyn EventSink) -> Result<(), LauncherError> {
+        let mut guard = RunGuard {
+            installer: self,
+            sink,
+            done: false,
+        };
         let result = self.do_install(sink);
         if let Err(error) = &result {
             log::warn!("the Studio install failed: {error}");
         }
-        self.finish(result.as_ref().map(|_| ()));
-        sink.send(AppEvent::Bridge(BridgeEvent::InstallFinished {
-            product: "studio".to_string(),
-            ok: result.is_ok(),
-        }));
+        guard.complete(result.as_ref().map(|_| ()));
         result
     }
 
@@ -369,10 +432,32 @@ impl Installer {
                 }
             })
             .map_err(|e| launcher_error(&e))?;
+        // The download was checked, but the file could still be swapped before it runs. Open it
+        // with writing and deleting denied, check the hash again from that handle, and keep the
+        // handle until the installer has ended.
+        let locked = self.spawner.open_locked(&setup)?;
+        match file_has_sha256(&locked, &asset.sha256) {
+            Ok(true) => {}
+            Ok(false) => {
+                drop(locked);
+                let _ = std::fs::remove_file(&setup);
+                return Err(LauncherError::Update(
+                    "the installer changed after the download".to_string(),
+                ));
+            }
+            Err(error) => {
+                drop(locked);
+                let _ = std::fs::remove_file(&setup);
+                return Err(LauncherError::Io(error.to_string()));
+            }
+        }
         // Only now, with a verified file, does the installer run. It is deleted whatever happens.
-        let outcome = self
-            .spawner
-            .spawn_and_wait(&setup, &[OsString::from("--silent")]);
+        // TODO(Task 9): `--silent` for Velopack's Setup.exe is from memory; check with a real run
+        // (no dialog, exit code 0, Studio not started afterwards, `sq.version` written).
+        let outcome =
+            self.spawner
+                .spawn_and_wait(&setup, &[OsString::from("--silent")], self.time_limit);
+        drop(locked);
         if let Err(error) = std::fs::remove_file(&setup) {
             log::warn!("could not delete the Studio installer: {error}");
         }

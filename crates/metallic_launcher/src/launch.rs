@@ -6,6 +6,8 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 use crate::deep_link::{DeepLink, DeepLinkError};
 use crate::error::LauncherError;
@@ -17,11 +19,52 @@ pub trait Spawner {
     fn spawn(&self, exe: &Path, args: &[OsString]) -> Result<u32, LauncherError>;
 
     /// Starts `exe` like [`spawn`](Self::spawn), waits until it ends and returns its exit code.
-    /// Used for installers. The default says "unsupported", so a spawner that cannot wait never
-    /// pretends an installer finished.
-    fn spawn_and_wait(&self, exe: &Path, args: &[OsString]) -> Result<i32, LauncherError> {
-        let _ = (exe, args);
+    /// Used for installers. A program still running after `time_limit` is killed and the call
+    /// fails. The default says "unsupported", so a spawner that cannot wait never pretends an
+    /// installer finished.
+    fn spawn_and_wait(
+        &self,
+        exe: &Path,
+        args: &[OsString],
+        time_limit: Duration,
+    ) -> Result<i32, LauncherError> {
+        let _ = (exe, args, time_limit);
         Err(LauncherError::Unsupported("waiting for a program"))
+    }
+
+    /// Opens `path` for reading so that nobody else can write to it or delete it while the
+    /// returned handle is open (Windows: share mode read only). The default is a plain open, for
+    /// systems without such a lock.
+    fn open_locked(&self, path: &Path) -> Result<std::fs::File, LauncherError> {
+        std::fs::File::open(path).map_err(|e| LauncherError::Io(e.to_string()))
+    }
+}
+
+/// Runs `command` and waits for it. After `limit` the program is killed and the call fails, so
+/// a program that waits for input cannot hold the Launcher for ever.
+pub fn run_with_limit(command: &mut Command, limit: Duration) -> Result<i32, LauncherError> {
+    let mut child = command
+        .spawn()
+        .map_err(|e| LauncherError::Platform(format!("could not run the program: {e}")))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.code().unwrap_or(-1)),
+            Ok(None) => {}
+            Err(e) => {
+                let _ = child.kill();
+                return Err(LauncherError::Platform(format!("could not wait: {e}")));
+            }
+        }
+        if started.elapsed() >= limit {
+            // Killing a program that has just ended fails harmlessly.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(LauncherError::Update(
+                "the installer took too long".to_string(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 

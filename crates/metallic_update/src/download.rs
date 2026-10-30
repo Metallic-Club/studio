@@ -44,11 +44,15 @@ impl<W: Write> Write for CheckedWriter<W> {
 
 /// A file name with no folder part, so it cannot point outside the download folder.
 fn is_plain_file_name(name: &str) -> bool {
+    const RESERVED: [&str; 8] = ["con", "prn", "aux", "nul", "com1", "com2", "lpt1", "lpt2"];
+    let stem = name.split('.').next().unwrap_or("").to_ascii_lowercase();
     !name.is_empty()
         && name != "."
         && name != ".."
-        && !name.contains(['/', '\\', ':', '\0'])
-        && !name.ends_with(".part")
+        && !name.contains(['/', '\\', ':', '\0', '*', '?', '"', '<', '>', '|'])
+        && !name.ends_with(['.', ' '])
+        && !name.to_ascii_lowercase().ends_with(".part")
+        && !RESERVED.contains(&stem.as_str())
 }
 
 /// Downloads `asset` into `dir` and returns the path of the verified file `<dir>/<name>`.

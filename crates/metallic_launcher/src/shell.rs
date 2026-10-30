@@ -15,8 +15,8 @@ use metallic_launcher::{
     AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction,
     DeepLink, EventSink, GithubAssets, HandoffListener, HandoffMessage, InstallStatus, Installer,
     LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage, NavDecision,
-    OfflineReason, PageOrigin, PlaceId, ProcessTracker, RestartError, SelfUpdater, SettingsPatch,
-    SettingsStore, SiteOrigin, SiteStatus, StartPage, StartedPlayers, TrayAction, UrlPolicy,
+    OfflineReason, PageOrigin, PlaceId, PlayerWatcher, ProcessTracker, RestartError, SelfUpdater,
+    SettingsPatch, SettingsStore, SiteOrigin, SiteStatus, StartPage, TrayAction, UrlPolicy,
     check_site, downloads_dir_for, github_sign_in, is_installed_copy, local_url,
     on_close_requested, player_status, product_paths, serve, start_page, start_player,
     start_studio, studio_root_for, tray_menu, user_agent,
@@ -97,7 +97,7 @@ struct ShellHost {
     sink: Arc<dyn EventSink>,
     installer: Arc<Installer>,
     updater: Arc<SelfUpdater>,
-    players: Arc<StartedPlayers>,
+    players: Arc<PlayerWatcher>,
     /// GitHub sign-in for team builds; `None` until the client id is configured.
     github: Option<Arc<GithubAuth>>,
 }
@@ -114,7 +114,7 @@ impl BridgeHost for ShellHost {
     }
 
     fn play(&self, link: DeepLink) -> Result<(), BridgeErrorCode> {
-        start_the_player(&link, &self.updater, &self.players).map_err(|error| match error {
+        start_the_player(&link, &self.updater).map_err(|error| match error {
             LauncherError::NotInstalled(_) => BridgeErrorCode::NotInstalled,
             LauncherError::UpdateRequired => BridgeErrorCode::UpdateRequired,
             _ => BridgeErrorCode::Failed,
@@ -216,16 +216,11 @@ impl BridgeHost for ShellHost {
 }
 
 /// Starts the Player for a Play link and logs the outcome (never the link: it holds a ticket).
-/// Refused while a required Launcher update waits; the Player is remembered for the update rule.
-fn start_the_player(
-    link: &DeepLink,
-    updater: &SelfUpdater,
-    players: &StartedPlayers,
-) -> Result<(), LauncherError> {
+/// Refused while a required Launcher update waits.
+fn start_the_player(link: &DeepLink, updater: &SelfUpdater) -> Result<(), LauncherError> {
     updater.allow_play()?;
     match start_player(&SystemSpawner, &product_paths(), link) {
         Ok(pid) => {
-            players.record(pid);
             log::info!("started the Player (process {pid})");
             Ok(())
         }
@@ -351,7 +346,6 @@ fn handle_deep_link(
     offline: bool,
     sink: &dyn EventSink,
     updater: &SelfUpdater,
-    players: &StartedPlayers,
 ) {
     // The Install flow: show the window and the downloads page, or the local page when offline.
     let show_downloads = || {
@@ -366,7 +360,7 @@ fn handle_deep_link(
     };
     match &link {
         DeepLink::Play { .. } => {
-            match start_the_player(&link, updater, players) {
+            match start_the_player(&link, updater) {
                 Err(LauncherError::NotInstalled(_)) => show_downloads(),
                 // The site shows the update state; bring the window up so the user sees it.
                 Err(LauncherError::UpdateRequired) => sink.send(AppEvent::Focus),
@@ -591,7 +585,10 @@ pub fn run(
         sink.clone(),
         installed_copy,
     ));
-    let players = Arc::new(StartedPlayers::new(platform::process_alive));
+    let players = Arc::new(PlayerWatcher::new(
+        Arc::new(platform::SystemProcesses),
+        product_paths().player_exe,
+    ));
     let host = ShellHost {
         dev_mode: config.dev_mode,
         settings: Mutex::new(settings),
@@ -828,7 +825,6 @@ pub fn run(
                     shared.offline.load(Ordering::SeqCst),
                     sink.as_ref(),
                     &host.updater,
-                    &host.players,
                 ),
                 AppEvent::BridgeMessage { page_url, body } => {
                     handle_bridge_message(&view, &bridge, &host, &page_url, &body);

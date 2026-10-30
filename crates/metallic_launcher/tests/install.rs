@@ -4,14 +4,16 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use metallic_launcher::{
     AppEvent, AssetSource, BridgeCommand, BridgeEvent, EventSink, Installer, LauncherError,
-    LauncherUpdateState, PageOrigin, ProcessTracker, ProductStatus, RestartError, SelfUpdater,
-    Spawner, StartedPlayers, UpdateSource, allowed, github_sign_in, read_installed_version,
+    LauncherUpdateState, PageOrigin, PlayerWatcher, ProcessLister, ProcessTracker, ProductStatus,
+    RestartError, SelfUpdater, Spawner, UpdateSource, allowed, github_sign_in,
+    read_installed_version, run_with_limit,
 };
 use metallic_update::github_auth::GithubAuth;
 use metallic_update::{
@@ -20,6 +22,7 @@ use metallic_update::{
 };
 use semver::Version;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 /// Collects the events the Launcher would send to the window.
 #[derive(Default)]
@@ -107,8 +110,8 @@ fn asset(name: &str) -> ReleaseAsset {
         version: Version::new(0, 4, 2),
         name: name.to_string(),
         api_url: "https://api.github.com/repos/x/y/releases/assets/1".to_string(),
-        sha256: [0; 32],
-        size: 10,
+        sha256: Sha256::digest(b"installer").into(),
+        size: 9,
     }
 }
 
@@ -153,6 +156,10 @@ struct FakeSpawner {
     runs: Mutex<Vec<(PathBuf, Vec<OsString>, bool)>>,
     exit_code: i32,
     studio_root: PathBuf,
+    /// How many times the installer file was opened with a lock.
+    locked: AtomicUsize,
+    /// Make `spawn_and_wait` fail like a killed, hung installer.
+    hang: bool,
 }
 
 impl Spawner for FakeSpawner {
@@ -160,7 +167,20 @@ impl Spawner for FakeSpawner {
         panic!("an installer is started with spawn_and_wait only");
     }
 
-    fn spawn_and_wait(&self, exe: &Path, args: &[OsString]) -> Result<i32, LauncherError> {
+    fn open_locked(&self, path: &Path) -> Result<std::fs::File, LauncherError> {
+        self.locked.fetch_add(1, Ordering::SeqCst);
+        std::fs::File::open(path).map_err(|e| LauncherError::Io(e.to_string()))
+    }
+
+    fn spawn_and_wait(
+        &self,
+        exe: &Path,
+        args: &[OsString],
+        _time_limit: Duration,
+    ) -> Result<i32, LauncherError> {
+        if self.hang {
+            return Err(LauncherError::Update("the installer took too long".into()));
+        }
         // The verified file exists at this moment.
         self.runs
             .lock()
@@ -188,6 +208,8 @@ fn fixture(exit_code: i32) -> Fixture {
         runs: Mutex::new(Vec::new()),
         exit_code,
         studio_root: root.clone(),
+        locked: AtomicUsize::new(0),
+        hang: false,
     });
     Fixture {
         _dir: dir,
@@ -530,20 +552,71 @@ fn a_copy_that_is_not_installed_never_updates() {
     assert!(updater.allow_play().is_ok());
 }
 
+/// A fixed list of running programs.
+struct FakeLister(Option<Vec<PathBuf>>);
+
+impl ProcessLister for FakeLister {
+    fn running_images(&self) -> Option<Vec<PathBuf>> {
+        self.0.clone()
+    }
+}
+
+fn watcher(list: Option<Vec<&str>>) -> PlayerWatcher {
+    PlayerWatcher::new(
+        Arc::new(FakeLister(
+            list.map(|l| l.into_iter().map(PathBuf::from).collect()),
+        )),
+        PathBuf::from(r"C:\Apps\Metallic\current\metallic-player.exe"),
+    )
+}
+
 #[test]
-fn started_players_are_counted_while_they_live() {
-    // Odd process ids count as alive in this test.
-    let players = StartedPlayers::new(|pid| pid % 2 == 1);
-    assert_eq!(players.running_players(), 0);
-    players.record(11);
-    players.record(12);
-    players.record(13);
-    assert_eq!(players.running_players(), 2);
-    assert_eq!(
-        players.running_players(),
-        2,
-        "ended ones are forgotten once"
+fn apply_waits_for_player_started_elsewhere() {
+    // A Player that this Launcher run did not start (a double-click, an earlier Launcher) is
+    // found by its image path, in any letter case and slash style. The Launcher itself, which
+    // sits in the same folder, is not a Player.
+    let watcher = watcher(Some(vec![
+        r"C:\Windows\explorer.exe",
+        r"C:\Apps\Metallic\current\Metallic.exe",
+        r"c:/apps/metallic/CURRENT/Metallic-Player.EXE",
+        r"D:\other\metallic-player.exe",
+    ]));
+    assert_eq!(watcher.running_players(), 1);
+    let source = FakeUpdates::with(vec![Ok(Some(update("0.5.0", false)))]);
+    let updater = SelfUpdater::new(source.clone(), Arc::new(Events::default()), true);
+    updater.check_now();
+    updater.on_quit(watcher.running_players());
+    assert!(
+        source.applied.lock().unwrap().is_empty(),
+        "the update waits"
     );
+    assert_eq!(
+        updater.restart_to_update(watcher.running_players()),
+        Err(RestartError::Busy)
+    );
+    // When the Player has ended, the update goes ahead.
+    let none = self::watcher(Some(vec![r"C:\Windows\explorer.exe"]));
+    assert_eq!(none.running_players(), 0);
+    updater.on_quit(none.running_players());
+    assert_eq!(*source.applied.lock().unwrap(), [false]);
+}
+
+#[test]
+fn an_unreadable_process_list_counts_as_a_running_player() {
+    assert_eq!(watcher(None).running_players(), 1);
+    let unknown = PlayerWatcher::new(Arc::new(FakeLister(Some(vec![]))), PathBuf::new());
+    assert_eq!(unknown.running_players(), 0);
+}
+
+#[test]
+fn no_new_player_while_the_update_is_applying() {
+    let (_source, _events, updater) = ready_updater(false);
+    assert!(updater.allow_play().is_ok());
+    updater.restart_to_update(0).unwrap();
+    assert!(matches!(
+        updater.allow_play(),
+        Err(LauncherError::UpdateRequired)
+    ));
 }
 
 // ---- settings: the site may not switch the channel ---------------------------------------------
@@ -639,4 +712,174 @@ fn github_sign_in_reports_a_refusal() {
     assert!(!ok);
     assert_eq!(events.last().unwrap(), "github denied ");
     assert!(store.get().unwrap().is_none());
+}
+
+// ---- stuck installs and the locked installer ---------------------------------------------------
+
+fn wait_for_finish(events: &Events) {
+    for _ in 0..200 {
+        if events.all().iter().any(|e| e.starts_with("finished")) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("the install never finished");
+}
+
+#[test]
+fn installer_flag_resets_on_every_exit() {
+    let good_asset = Some(asset("MetallicStudio-dev-Setup.exe"));
+
+    // 1. The lookup fails.
+    let f = fixture(0);
+    let mut source = FakeAssets::new(good_asset.clone());
+    source.download_error = true;
+    let installer = Arc::new(installer(&f, Arc::new(source)));
+    assert!(installer.install_studio(&Events::default()).is_err());
+    assert!(!matches!(
+        installer.studio_status(),
+        ProductStatus::Installing { .. }
+    ));
+
+    // 2. The installer hangs and is killed by the time limit.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("MetallicStudio");
+    let spawner = Arc::new(FakeSpawner {
+        runs: Mutex::new(Vec::new()),
+        exit_code: 0,
+        studio_root: root.clone(),
+        locked: AtomicUsize::new(0),
+        hang: true,
+    });
+    let installer = Installer::new(
+        Arc::new(FakeAssets::new(good_asset.clone())),
+        spawner,
+        Channel::Dev,
+        root,
+        dir.path().join("Downloads"),
+    )
+    .with_time_limit(Duration::from_millis(50));
+    assert!(installer.install_studio(&Events::default()).is_err());
+    assert!(matches!(
+        installer.studio_status(),
+        ProductStatus::Failed { .. }
+    ));
+    assert!(
+        !dir.path()
+            .join("Downloads")
+            .join("MetallicStudio-dev-Setup.exe")
+            .exists(),
+        "the installer file is deleted after a kill too"
+    );
+
+    // 3. The code panics on the install thread: the place is freed and the end is reported.
+    struct Panicking;
+    impl AssetSource for Panicking {
+        fn latest_asset(&self, _: Channel, _: &str) -> Result<Option<ReleaseAsset>, UpdateError> {
+            panic!("a bug in the lookup");
+        }
+        fn download(
+            &self,
+            _: &ReleaseAsset,
+            _: &Path,
+            _: &mut dyn FnMut(u8),
+        ) -> Result<PathBuf, UpdateError> {
+            unreachable!()
+        }
+    }
+    let f = fixture(0);
+    let installer = Arc::new(Installer::new(
+        Arc::new(Panicking),
+        f.spawner.clone(),
+        Channel::Dev,
+        f.root.clone(),
+        f.downloads.clone(),
+    ));
+    let events = Arc::new(Events::default());
+    installer.start_install_studio(events.clone()).unwrap();
+    wait_for_finish(&events);
+    assert_eq!(events.all().last().unwrap(), "finished studio false");
+    assert!(matches!(
+        installer.studio_status(),
+        ProductStatus::Failed { .. }
+    ));
+    // A new install may start.
+    assert!(installer.start_install_studio(events.clone()).is_ok());
+    wait_for_finish(&events);
+}
+
+#[test]
+fn installer_is_rehashed_from_locked_handle() {
+    // The source hands back a file that does not have the published SHA-256 (it was swapped
+    // after the download check). The installer must not run it, and must delete it.
+    struct Swapping(FakeAssets);
+    impl AssetSource for Swapping {
+        fn latest_asset(&self, c: Channel, n: &str) -> Result<Option<ReleaseAsset>, UpdateError> {
+            self.0.latest_asset(c, n)
+        }
+        fn download(
+            &self,
+            a: &ReleaseAsset,
+            d: &Path,
+            p: &mut dyn FnMut(u8),
+        ) -> Result<PathBuf, UpdateError> {
+            let path = self.0.download(a, d, p)?;
+            std::fs::write(&path, b"swapped!!").unwrap();
+            Ok(path)
+        }
+    }
+    let f = fixture(0);
+    let source = Swapping(FakeAssets::new(Some(asset("MetallicStudio-dev-Setup.exe"))));
+    let swapped = installer_with(&f, Arc::new(source));
+    let events = Events::default();
+    assert!(swapped.install_studio(&events).is_err());
+    assert!(
+        f.spawner.runs.lock().unwrap().is_empty(),
+        "the swapped file never ran"
+    );
+    assert_eq!(
+        f.spawner.locked.load(Ordering::SeqCst),
+        1,
+        "it was opened locked"
+    );
+    assert!(!f.downloads.join("MetallicStudio-dev-Setup.exe").exists());
+    assert_eq!(events.all().last().unwrap(), "finished studio false");
+
+    // The honest file is locked once, then runs.
+    let f = fixture(0);
+    let installer = installer(
+        &f,
+        Arc::new(FakeAssets::new(Some(asset("MetallicStudio-dev-Setup.exe")))),
+    );
+    installer.install_studio(&Events::default()).unwrap();
+    assert_eq!(f.spawner.locked.load(Ordering::SeqCst), 1);
+    assert_eq!(f.spawner.runs.lock().unwrap().len(), 1);
+}
+
+fn installer_with(f: &Fixture, source: Arc<dyn AssetSource>) -> Installer {
+    Installer::new(
+        source,
+        f.spawner.clone(),
+        Channel::Dev,
+        f.root.clone(),
+        f.downloads.clone(),
+    )
+}
+
+#[cfg(windows)]
+#[test]
+fn a_program_that_runs_too_long_is_killed() {
+    // `ping` is a harmless built-in that runs about 30 seconds.
+    let started = std::time::Instant::now();
+    let result = run_with_limit(
+        std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null()),
+        Duration::from_millis(500),
+    );
+    assert!(
+        matches!(result, Err(LauncherError::Update(_))),
+        "{result:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
 }

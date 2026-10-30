@@ -10,6 +10,7 @@
 //! The Velopack and GitHub parts sit behind [`UpdateSource`], so the rules here are tested with
 //! a fake and no test touches the network.
 
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 
@@ -20,44 +21,53 @@ use crate::bridge::BridgeEvent;
 use crate::error::LauncherError;
 use crate::install::LauncherUpdateState;
 
-/// Counts the Player processes this Launcher started that are still running.
+/// Counts the Player processes that are running.
 pub trait ProcessTracker: Send + Sync {
     /// How many Players are running now.
     fn running_players(&self) -> usize;
 }
 
-/// The Players this Launcher started. `is_alive` (from `platform`) says whether a process id is
-/// still running; ended ones are forgotten the next time the count is read.
-pub struct StartedPlayers {
-    pids: Mutex<Vec<u32>>,
-    is_alive: fn(u32) -> bool,
+/// Lists the programs running on this PC. The real one (`platform`) takes a Windows process
+/// snapshot; tests use a fixed list.
+pub trait ProcessLister: Send + Sync {
+    /// The full path of every running program's image, or `None` when the list cannot be read.
+    fn running_images(&self) -> Option<Vec<PathBuf>>;
 }
 
-impl StartedPlayers {
-    /// An empty list that asks `is_alive` about each process id.
-    pub fn new(is_alive: fn(u32) -> bool) -> Self {
-        StartedPlayers {
-            pids: Mutex::new(Vec::new()),
-            is_alive,
-        }
-    }
+/// Counts running Players by image path: any process that runs the Player's `.exe`, whoever
+/// started it (this Launcher, an earlier one, a double-click). A Player that cannot be told
+/// apart from the others because the list is unreadable counts as running, so an update waits
+/// rather than replacing files under a Player.
+pub struct PlayerWatcher {
+    lister: Arc<dyn ProcessLister>,
+    player_exe: PathBuf,
+}
 
-    /// Remembers a Player this Launcher just started.
-    pub fn record(&self, pid: u32) {
-        if let Ok(mut pids) = self.pids.lock() {
-            pids.push(pid);
-        }
+impl PlayerWatcher {
+    /// Watches for processes running `player_exe`.
+    pub fn new(lister: Arc<dyn ProcessLister>, player_exe: PathBuf) -> Self {
+        PlayerWatcher { lister, player_exe }
     }
 }
 
-impl ProcessTracker for StartedPlayers {
+/// A path as text that compares equal across case and slash style (Windows paths).
+fn comparable(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\").to_lowercase()
+}
+
+impl ProcessTracker for PlayerWatcher {
     fn running_players(&self) -> usize {
-        // If the list cannot be read, assume a Player runs: the update then waits.
-        let Ok(mut pids) = self.pids.lock() else {
+        if self.player_exe.as_os_str().is_empty() {
+            return 0;
+        }
+        let Some(images) = self.lister.running_images() else {
             return 1;
         };
-        pids.retain(|pid| (self.is_alive)(*pid));
-        pids.len()
+        let wanted = comparable(&self.player_exe);
+        images
+            .iter()
+            .filter(|image| comparable(image) == wanted)
+            .count()
     }
 }
 
@@ -249,8 +259,17 @@ impl SelfUpdater {
 
     /// Whether the Player may be started: not while a required update is waiting.
     pub fn allow_play(&self) -> Result<(), LauncherError> {
+        // Once the update is set to apply, files are about to be replaced: no new Player.
+        let applying = self
+            .inner
+            .lock()
+            .map(|inner| inner.scheduled)
+            .unwrap_or(true);
         match self.state() {
             LauncherUpdateState::ReadyToRestart { required: true, .. } => {
+                Err(LauncherError::UpdateRequired)
+            }
+            LauncherUpdateState::ReadyToRestart { .. } if applying => {
                 Err(LauncherError::UpdateRequired)
             }
             _ => Ok(()),

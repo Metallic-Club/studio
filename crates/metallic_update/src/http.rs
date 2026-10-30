@@ -119,6 +119,10 @@ pub trait HttpClient: Send + Sync {
 
 /// How many redirects a streamed download follows.
 const MAX_DOWNLOAD_REDIRECTS: usize = 5;
+/// A streamed download ends with an error when no bytes arrive for this long.
+pub const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// A streamed download may take at most this long in all (1 GiB at about 0.6 MB/s).
+const DOWNLOAD_BODY_LIMIT: Duration = Duration::from_secs(30 * 60);
 
 /// `scheme://authority` of an address, lower-cased, or `None` for an address without one or
 /// with user information in it.
@@ -158,6 +162,8 @@ pub struct UreqClient {
     /// For streamed downloads: no overall time limit (a big file takes a while), redirects are
     /// handled here so the `Authorization` header can be dropped when the host changes.
     download_agent: ureq::Agent,
+    /// How long a download may go without receiving a byte.
+    stall_timeout: Duration,
 }
 
 impl UreqClient {
@@ -172,6 +178,7 @@ impl UreqClient {
             .timeout_global(None)
             .timeout_connect(Some(timeout))
             .timeout_recv_response(Some(timeout))
+            .timeout_recv_body(Some(DOWNLOAD_BODY_LIMIT))
             .max_redirects(0)
             .http_status_as_error(false)
             .build()
@@ -179,7 +186,15 @@ impl UreqClient {
         Self {
             agent,
             download_agent,
+            stall_timeout: DOWNLOAD_STALL_TIMEOUT,
         }
+    }
+
+    /// Replaces the time a download may go without receiving a byte (default
+    /// [`DOWNLOAD_STALL_TIMEOUT`]).
+    pub fn with_stall_timeout(mut self, stall_timeout: Duration) -> Self {
+        self.stall_timeout = stall_timeout;
+        self
     }
 }
 
@@ -270,7 +285,7 @@ impl HttpClient for UreqClient {
                     request = request.header(*name, *value);
                 }
             }
-            let mut response = request.call().map_err(|e| HttpError::new(e.to_string()))?;
+            let response = request.call().map_err(|e| HttpError::new(e.to_string()))?;
             let status = response.status().as_u16();
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
                 let location = response
@@ -285,20 +300,43 @@ impl HttpClient for UreqClient {
             if !(200..300).contains(&status) {
                 return Err(HttpError::new(format!("HTTP status {status}")));
             }
-            let mut reader = response.body_mut().as_reader();
-            let mut buffer = vec![0u8; 64 * 1024];
+            // A reader thread hands over chunks, so a connection that goes quiet is noticed here
+            // (the read itself cannot be interrupted). When this function returns, the channel
+            // closes and the reader thread ends at its next send or when the socket closes.
+            let mut reader = response.into_body().into_reader();
+            let (chunks, received) = std::sync::mpsc::sync_channel::<Result<Vec<u8>, String>>(4);
+            std::thread::Builder::new()
+                .name("download-reader".to_string())
+                .spawn(move || {
+                    loop {
+                        let mut buffer = vec![0u8; 64 * 1024];
+                        let message = match reader.read(&mut buffer) {
+                            Ok(read) => {
+                                buffer.truncate(read);
+                                Ok(buffer)
+                            }
+                            Err(error) => Err(error.to_string()),
+                        };
+                        let last = !matches!(&message, Ok(chunk) if !chunk.is_empty());
+                        if chunks.send(message).is_err() || last {
+                            return;
+                        }
+                    }
+                })
+                .map_err(|e| HttpError::new(e.to_string()))?;
             let mut total: u64 = 0;
             loop {
-                let read = reader
-                    .read(&mut buffer)
-                    .map_err(|e| HttpError::new(e.to_string()))?;
-                if read == 0 {
-                    return Ok(total);
+                match received.recv_timeout(self.stall_timeout) {
+                    Ok(Ok(chunk)) if chunk.is_empty() => return Ok(total),
+                    Ok(Ok(chunk)) => {
+                        out.write_all(&chunk)
+                            .map_err(|e| HttpError::new(e.to_string()))?;
+                        total += chunk.len() as u64;
+                        progress(total);
+                    }
+                    Ok(Err(message)) => return Err(HttpError::new(message)),
+                    Err(_) => return Err(HttpError::new("the download stalled")),
                 }
-                out.write_all(&buffer[..read])
-                    .map_err(|e| HttpError::new(e.to_string()))?;
-                total += read as u64;
-                progress(total);
             }
         }
         Err(HttpError::new("too many redirects"))

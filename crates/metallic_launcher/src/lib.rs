@@ -43,14 +43,17 @@ pub use install::{
     studio_root_for, studio_setup_name,
 };
 pub use launch::{
-    ProductPaths, Spawner, product_paths, product_paths_for, start_player, start_studio,
+    ProductPaths, Spawner, product_paths, product_paths_for, run_with_limit, start_player,
+    start_studio,
 };
 pub use local_pages::{LOCAL_CSP, LocalPage, LocalResponse, OfflineReason, local_url, serve};
 pub use protocol::{
     MemoryRegistry, PROTOCOL_KEY, UriRegistry, is_installed_copy, is_registered_to, register,
     unregister,
 };
-pub use self_update::{ProcessTracker, RestartError, SelfUpdater, StartedPlayers, UpdateSource};
+pub use self_update::{
+    PlayerWatcher, ProcessLister, ProcessTracker, RestartError, SelfUpdater, UpdateSource,
+};
 pub use settings::{LauncherSettings, SettingsPatch, SettingsStore};
 pub use single_instance::{
     Acquired, HandoffListener, HandoffMessage, HandoffSender, MAX_HANDOFF_BYTES, decode, encode,

@@ -2,6 +2,7 @@
 //! single-instance pipe, the `metallic://` registry keys, starting programs and the tray icon.
 
 use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -26,6 +27,9 @@ use ::windows::Win32::Storage::FileSystem::{
     FlushFileBuffers, OPEN_EXISTING, PIPE_ACCESS_INBOUND, ReadFile, SECURITY_IDENTIFICATION,
     SECURITY_SQOS_PRESENT, WriteFile,
 };
+use ::windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use ::windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use ::windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
@@ -36,10 +40,8 @@ use ::windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW, RegSetValueExW,
 };
 use ::windows::Win32::System::Threading::{
-    CreateEventW, GetExitCodeProcess, INFINITE, ResetEvent, WaitForSingleObject,
-};
-use ::windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, GetCurrentProcess, INFINITE, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW, ResetEvent, WaitForSingleObject,
 };
 use ::windows::Win32::UI::Shell::ShellExecuteW;
 use ::windows::Win32::UI::WindowsAndMessaging::{
@@ -723,33 +725,82 @@ impl Spawner for SystemSpawner {
         Ok(child.id())
     }
 
-    fn spawn_and_wait(&self, exe: &Path, args: &[OsString]) -> Result<i32, LauncherError> {
-        let status = Command::new(exe)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .status()
-            .map_err(|e| platform_error("could not run the program", e))?;
-        Ok(status.code().unwrap_or(-1))
+    fn spawn_and_wait(
+        &self,
+        exe: &Path,
+        args: &[OsString],
+        time_limit: Duration,
+    ) -> Result<i32, LauncherError> {
+        metallic_launcher::run_with_limit(
+            Command::new(exe)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW),
+            time_limit,
+        )
+    }
+
+    fn open_locked(&self, path: &Path) -> Result<std::fs::File, LauncherError> {
+        open_read_locked(path).map_err(|e| platform_error("could not lock the installer", e))
     }
 }
 
-/// True while the process with id `pid` is running.
-pub fn process_alive(pid: u32) -> bool {
-    /// The exit code Windows reports for a process that has not ended.
-    const STILL_ACTIVE: u32 = 259;
-    // SAFETY: OpenProcess takes plain values and returns a handle we own; GetExitCodeProcess
-    // writes one u32 through a valid pointer; the handle is closed before returning.
-    unsafe {
-        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
-            return false;
-        };
-        let mut code = 0u32;
-        let alive = GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE;
-        let _ = CloseHandle(handle);
-        alive
+/// Opens `path` for reading with only read sharing: nobody can write to the file, or delete or
+/// replace it, until the handle is closed. (Starting the file as a program only needs read
+/// sharing, so the lock can stay while it runs.)
+fn open_read_locked(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    /// Windows `FILE_SHARE_READ`.
+    const FILE_SHARE_READ: u32 = 1;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(path)
+}
+
+/// Lists the images of all running processes with the Windows process snapshot.
+pub struct SystemProcesses;
+
+impl metallic_launcher::ProcessLister for SystemProcesses {
+    fn running_images(&self) -> Option<Vec<PathBuf>> {
+        // SAFETY: the snapshot and process handles are owned here and closed before returning;
+        // the entry struct has its size set as the API requires; the name buffer is passed with
+        // its real length.
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            let mut images = Vec::new();
+            let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
+            while more {
+                if let Ok(process) = OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION,
+                    false,
+                    entry.th32ProcessID,
+                ) {
+                    let mut name = vec![0u16; 1024];
+                    let mut length = name.len() as u32;
+                    if QueryFullProcessImageNameW(
+                        process,
+                        PROCESS_NAME_WIN32,
+                        PWSTR(name.as_mut_ptr()),
+                        &mut length,
+                    )
+                    .is_ok()
+                    {
+                        images.push(PathBuf::from(OsString::from_wide(&name[..length as usize])));
+                    }
+                    let _ = CloseHandle(process);
+                }
+                more = Process32NextW(snapshot, &mut entry).is_ok();
+            }
+            let _ = CloseHandle(snapshot);
+            Some(images)
+        }
     }
 }
 
@@ -828,6 +879,36 @@ mod tests {
             r"\\.\pipe\Metallic.Launcher.test.{}.{tag}",
             std::process::id()
         )
+    }
+
+    #[test]
+    fn locked_file_cannot_be_written_or_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("setup.exe");
+        std::fs::write(&path, b"abc").unwrap();
+        let handle = open_read_locked(&path).unwrap();
+        assert!(
+            std::fs::OpenOptions::new().write(true).open(&path).is_err(),
+            "writing is denied"
+        );
+        assert!(std::fs::remove_file(&path).is_err(), "deleting is denied");
+        assert!(std::fs::rename(&path, dir.path().join("x.exe")).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"abc", "reading still works");
+        drop(handle);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn this_program_is_in_the_process_list() {
+        use metallic_launcher::ProcessLister;
+        let me = std::env::current_exe().unwrap();
+        let images = SystemProcesses.running_images().unwrap();
+        let wanted = me.to_string_lossy().to_lowercase();
+        assert!(
+            images
+                .iter()
+                .any(|i| i.to_string_lossy().to_lowercase() == wanted)
+        );
     }
 
     #[test]

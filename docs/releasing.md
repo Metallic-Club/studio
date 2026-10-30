@@ -88,3 +88,9 @@ Nobody has published a real release yet. Still to do with the owner: register th
 add the tag ruleset; publish `0.1.0-dev`; install from the Setup.exe; publish `0.1.1-dev`; see Studio offer and apply
 it; take screenshots. Studio's `main` must also call `velopack::VelopackApp::build().run()` first thing (see the task 13
 report), otherwise the installer hooks do not run.
+
+## Check before the Launcher ships (Task 9)
+The Launcher installs Studio by running `MetallicStudio-<channel>-Setup.exe --silent`. The `--silent` flag is from memory
+of Velopack's Setup command line and has never been run against a real Setup. With a real Setup, check: no dialog, exit
+code 0, Studio is not started afterwards, `current\sq.version` exists. The Launcher kills a Setup that runs longer than
+10 minutes and reports the install as failed.

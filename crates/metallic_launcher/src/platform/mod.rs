@@ -80,8 +80,8 @@ pub use imp::SystemSpawner;
 /// The tray icon; it disappears when dropped.
 pub use imp::Tray;
 
-/// True while the process with this id is running.
-pub use imp::process_alive;
+/// Lists the programs running on this PC (to see whether a Player runs).
+pub use imp::SystemProcesses;
 
 /// Becomes the only Launcher of this user, or connects to the one that runs.
 pub fn acquire_instance() -> Result<Acquired, LauncherError> {

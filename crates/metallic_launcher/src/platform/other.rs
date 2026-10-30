@@ -61,15 +61,20 @@ impl Spawner for SystemSpawner {
             .map_err(|e| LauncherError::Platform(format!("could not start the program: {e}")))
     }
 
-    fn spawn_and_wait(&self, exe: &Path, args: &[OsString]) -> Result<i32, LauncherError> {
-        std::process::Command::new(exe)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|status| status.code().unwrap_or(-1))
-            .map_err(|e| LauncherError::Platform(format!("could not run the program: {e}")))
+    fn spawn_and_wait(
+        &self,
+        exe: &Path,
+        args: &[OsString],
+        time_limit: std::time::Duration,
+    ) -> Result<i32, LauncherError> {
+        metallic_launcher::run_with_limit(
+            std::process::Command::new(exe)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null()),
+            time_limit,
+        )
     }
 }
 
@@ -80,9 +85,13 @@ impl Tray {
     pub fn set_items(&self, _items: &[(TrayAction, &'static str)]) {}
 }
 
-/// No way to look at processes on this platform yet: nothing counts as running.
-pub fn process_alive(_pid: u32) -> bool {
-    false
+/// No way to look at processes on this platform yet.
+pub struct SystemProcesses;
+
+impl metallic_launcher::ProcessLister for SystemProcesses {
+    fn running_images(&self) -> Option<Vec<PathBuf>> {
+        None
+    }
 }
 
 pub fn create_tray(
