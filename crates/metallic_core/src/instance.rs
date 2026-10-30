@@ -439,7 +439,10 @@ impl World {
         }
         if old != value {
             self.record(id);
-            if let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string())) {
+            // The is_empty check skips allocating the lookup key when nothing listens at all.
+            if !self.prop_signals.is_empty()
+                && let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string()))
+            {
                 sig.fire(&value);
             }
         }
