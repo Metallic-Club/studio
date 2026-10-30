@@ -78,7 +78,7 @@ fn user_coroutine_wait_hides_internal_tags_and_is_resumed_by_the_scheduler() {
         r#"
 _G.child = coroutine.create(function()
     local elapsed = task.wait(1)
-    print('user-woke', elapsed)
+    print('user-woke:'..elapsed)
     return 'finished', nil
 end)
 local result = table.pack(coroutine.resume(_G.child))
@@ -89,7 +89,7 @@ assert(result.n == 1 and result[1] == true, 'internal wait values escaped')
     vm.step(0.99);
     assert!(output.0.borrow().is_empty());
     vm.step(1.0);
-    assert_eq!(*output.0.borrow(), ["print:user-woke\t1"]);
+    assert_eq!(*output.0.borrow(), ["print:user-woke:1"]);
     vm.run_script("Done", "assert(coroutine.status(_G.child) == 'dead')")
         .unwrap();
 }
@@ -322,6 +322,32 @@ local values=table.pack(coroutine.resume(thread,'manual',nil,'last'))
 assert(values.n==5 and values[1] and values[2]=='returned' and values[3]==nil and values[4]=='last' and values[5]==nil,'guard bookkeeping escaped')
 "#).unwrap();
     assert!(output.0.borrow().is_empty());
+}
+
+#[test]
+fn one_thousand_ordinary_coroutines_fit_the_unchanged_default_budget() {
+    let (vm, _) = rig();
+    let function: Function = vm.lua().load(r#"
+local create,resume,wrap,yield,pack=coroutine.create,coroutine.resume,coroutine.wrap,coroutine.yield,table.pack
+for i=1,500 do
+    local child=create(function(a) local b=yield(a,nil) return b,nil end)
+    local first=pack(resume(child,i))
+    assert(first.n==3 and first[1] and first[2]==i and first[3]==nil)
+    local last=pack(resume(child,i+1))
+    assert(last.n==3 and last[1] and last[2]==i+1 and last[3]==nil)
+    local wrapped=wrap(function(a) local b=yield(a,nil) return b,nil end)
+    local wrapped_first=pack(wrapped(i))
+    assert(wrapped_first.n==2 and wrapped_first[1]==i and wrapped_first[2]==nil)
+    local wrapped_last=pack(wrapped(i+1))
+    assert(wrapped_last.n==2 and wrapped_last[1]==i+1 and wrapped_last[2]==nil)
+end
+"#).set_name("=CoroutineSmoke").into_function().unwrap();
+    let start = std::time::Instant::now();
+    vm.call_with_budget::<()>(&function, ()).unwrap();
+    eprintln!(
+        "1000 precompiled ordinary coroutine smoke, uncontrolled host load: {:?}",
+        start.elapsed()
+    );
 }
 
 #[test]

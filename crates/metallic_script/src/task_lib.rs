@@ -177,7 +177,10 @@ impl Scheduler {
     }
 
     fn finish_resume(&self, thread: &Thread) -> Result<()> {
-        if thread.status() != mlua::thread::ThreadStatus::Resumable {
+        if matches!(
+            thread.status(),
+            mlua::thread::ThreadStatus::Finished | mlua::thread::ThreadStatus::Error
+        ) {
             self.registry()?.raw_remove(thread.clone())?;
         }
         Ok(())
@@ -697,6 +700,67 @@ mod ownership_tests {
         fn print(&self, _: &str) {}
         fn warn(&self, _: &str) {}
         fn error(&self, _: &str) {}
+    }
+
+    #[derive(Default)]
+    struct Trace(RefCell<Vec<String>>);
+    impl OutputSink for Trace {
+        fn print(&self, line: &str) {
+            self.0.borrow_mut().push(line.into());
+        }
+        fn warn(&self, line: &str) {
+            self.0.borrow_mut().push(format!("warn:{line}"));
+        }
+        fn error(&self, line: &str) {
+            self.0.borrow_mut().push(format!("error:{line}"));
+        }
+    }
+
+    fn assert_cancellation_survives_failed_resume(source: &str) {
+        let trace = Rc::new(Trace::default());
+        let mut vm =
+            crate::vm::ScriptVm::with_output(crate::vm::Context::Server, trace.clone()).unwrap();
+        let owner = u64::MAX - 17;
+        vm.run_script_owned("RetainOwner", source, Vec::new(), owner)
+            .unwrap();
+        assert_eq!(*trace.0.borrow(), ["armed"]);
+        vm.run_script_owned(
+            "Control",
+            "task.delay(1,function() print('control') end)",
+            Vec::new(),
+            owner + 1,
+        )
+        .unwrap();
+        vm.budget().cancel_owner(owner);
+        vm.step(1.0);
+        assert_eq!(*trace.0.borrow(), ["armed", "control"]);
+    }
+
+    #[test]
+    fn failed_resume_of_running_task_retains_ownership_until_cancellation() {
+        assert_cancellation_survives_failed_resume(
+            r#"
+local ok=coroutine.resume(coroutine.running())
+assert(not ok)
+print('armed')
+task.wait(1)
+print('escaped')
+"#,
+        );
+    }
+
+    #[test]
+    fn failed_resume_of_normal_parent_retains_ownership_until_cancellation() {
+        assert_cancellation_survives_failed_resume(
+            r#"
+local parent=coroutine.running()
+local nested=coroutine.create(function() assert(not coroutine.resume(parent)) end)
+assert(coroutine.resume(nested))
+print('armed')
+task.wait(1)
+print('escaped')
+"#,
+        );
     }
 
     #[test]

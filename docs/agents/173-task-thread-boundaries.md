@@ -45,7 +45,7 @@ Baseline on the original `69a10d3` source: six expected behavioral failures, whi
 and existing numeric-string delay coercion passed. Guarded cleanup removed 49.1 MiB of local package outputs;
 both core/script paths were verified. Compile 7.68 s; eight tests 0.05 s.
 
-The prototype is written but has not been type-checked. Weak thread keys hold private Rust userdata state,
+The prototype is written and its first focused prebuild passed. Weak thread keys hold private Rust userdata state,
 with exact u64 owners, cancellation flags and fresh Rc lease identities (no wrapping ticket counter). State
 does not reference its thread or Lua. Normal coroutine values stay entirely in Lua so opaque error userdata
 are not reconstructed while crossing Rust. Private callbacks only admit/finish threads and queue waits.
@@ -54,6 +54,28 @@ wait captures native tonumber. Native pcall/xpcall are unchanged.
 
 The expanded matrix now includes ordinary later yields, guard-tag removal, opaque Rust error userdata identity,
 duplicate and closed queues, stale leases, exact high-u64 cancellation ownership, weak-key GC and retained-handle
-VM release. These new cases and the prototype are not yet run. Next: rebase onto fresh main while preserving
-new runtime features and host budget configuration, coordinate the first focused compile, fix actual failures,
-then complete required guarded gates and independent review. No public task APIs added; do not merge.
+VM release. Rebased cleanly onto main `749316a`, preserving the new wave,
+avatar/runtime features and host-configurable resume_budget field/default/use. Unpublished prototype head
+`e67a11f`; focused lib/task_threads prebuild passed in 14.09 s after 91.8 MiB local-package cleanup, with both
+source paths verified.
+
+First actual run: the private cancellation/GC unit passed; fourteen of fifteen integration cases passed.
+The remaining failure was a fixture-only print separator assumption (space versus tab), not a product red.
+Changed that assertion to a single concatenated output argument. Corrected rerun: all fifteen integration
+cases passed in 0.13 s after a 7.04 s incremental compile, including the exact native coroutine/error/frame
+snapshot and opaque Rust error-userdata identity. No production change was needed for that correction.
+
+Independent source review then found a real prototype ownership bug: cleanup on `status != Resumable` also
+removed Running/Normal thread state after a failed self/parent resume. Separate regressions reproduced both
+cancellation escapes (`armed`, `escaped`, `control`), with the unrelated delayed control working correctly.
+Inspected the pinned mlua ThreadStatus enum and narrowed cleanup to terminal Finished/Error states only.
+After the fix, all three private ownership tests passed (including both cancellation cases), and all fifteen
+non-smoke integration cases passed again in 0.03 s. These two valid product reds are separate from the print
+fixture correction above.
+
+The precompiled 1,000-coroutine smoke then passed under the unchanged default 100 ms budget: 10.3084 ms for
+500 create/resume and 500 wrap coroutines, each yielding and returning nil/multiple values. This is one host
+observation with unmeasured background activity, not a speedup or universal latency claim.
+
+Next: finish independent source review, refresh main before final gates, then complete full guarded
+tests/Clippy/licenses/fmt. No public task APIs added; do not merge.

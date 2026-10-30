@@ -82,6 +82,22 @@ game:GetService("Players").PlayerAdded:Connect(function(player)
 end)
 ```
 
+## Tasks and coroutines
+
+- `task.spawn(functionOrThread, ...)` resumes immediately; `task.delay(seconds, functionOrThread, ...)` queues
+  the original function/thread and complete argument tuple. A thread already queued by the scheduler cannot
+  be scheduled again before its current admission completes.
+- `task.wait(seconds?)` and `task.delay(nil, callback, ...)` default nil duration to zero. Numeric strings are
+  coerced to numbers; negative durations use zero. Invalid duration values raise positioned argument errors.
+- While a task thread is queued, `coroutine.resume(thread, ...)` returns false and an ownership error, and a
+  wrapped coroutine raises that error. Foreign arguments do not replace the original callback or wake values.
+  Cancelled script tasks remain blocked while a user retains their thread handles.
+- A user coroutine that calls `task.wait` is adopted by the scheduler and resumes at its due time with the
+  elapsed duration. Its initial resume/wrap call exposes no internal scheduler values. Ordinary later yields
+  release queued ownership so manual resumes work again, preserving nil/multiple values and native errors.
+- Native `pcall` and `xpcall` are unchanged. Ordinary coroutine creation, yielding, status and close behavior
+  remain available; internally tagged results are consumed by the scheduler/admission helpers.
+
 ## RemoteEvent
 `FireServer(...)` (client only), `FireClient(player, ...)` and `FireAllClients(...)` (server only), `OnServerEvent(player, ...)`
 (server only), `OnClientEvent(...)` (client only). Wrong side: `FireClient can only be called from the server` and so on.
