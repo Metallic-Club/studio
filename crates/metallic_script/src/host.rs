@@ -9,12 +9,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value as CoreValue, World};
 use mlua::Value;
 
 use crate::api::{self, ApiState, EventKind, HostShared, RemoteTarget};
-use crate::vm::{Context, OutputSink, ScriptError, ScriptVm};
+use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
 /// Name of the one local player created by [`ScriptHost::start`].
 pub const LOCAL_PLAYER_NAME: &str = "Player1";
@@ -65,6 +66,8 @@ pub struct ScriptHost {
     running: HashMap<InstanceId, RunningScript>,
     /// Where the world's change journal was when scripts were last looked for.
     cursor: Option<ChangeCursor>,
+    /// Resume budget of both VMs (see [`ScriptVm::set_resume_budget`]).
+    resume_budget: Duration,
 }
 
 impl ScriptHost {
@@ -79,6 +82,16 @@ impl ScriptHost {
             inputs: Vec::new(),
             running: HashMap::new(),
             cursor: None,
+            resume_budget: RESUME_BUDGET,
+        }
+    }
+
+    /// Sets the resume budget of both VMs, now and after the next `start`
+    /// ([`RESUME_BUDGET`] by default).
+    pub fn set_resume_budget(&mut self, budget: Duration) {
+        self.resume_budget = budget;
+        for side in [&self.server, &self.client].into_iter().flatten() {
+            side.vm.set_resume_budget(budget);
         }
     }
 
@@ -218,6 +231,7 @@ impl ScriptHost {
 
     fn make_side(&self, context: Context) -> Result<Side, ScriptError> {
         let vm = ScriptVm::with_output(context, self.output.clone())?;
+        vm.set_resume_budget(self.resume_budget);
         let state = api::install(
             &vm,
             self.world.clone(),
