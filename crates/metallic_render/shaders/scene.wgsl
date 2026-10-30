@@ -63,8 +63,16 @@ fn fbm(p: vec3<f32>) -> f32 {
     return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03) + 0.125 * vnoise(p * 4.1) + 0.0625 * vnoise(p * 8.3);
 }
 
-// Returns an albedo multiplier (rgb) and a roughness offset (w) for the material id.
-fn detail(id: i32, p: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
+// Noise value `v` of `freq` cycles per stud, faded to its mean 0.5 where one pixel covers `px`
+// studs and the pattern would be finer than about two pixels. Unfiltered, such fine detail
+// aliases into moire stripes at a distance (seen on Metal's brushed streaks).
+fn fine(v: f32, freq: f32, px: f32) -> f32 {
+    return mix(v, 0.5, smoothstep(0.25, 0.5, freq * px));
+}
+
+// Returns an albedo multiplier (rgb) and a roughness offset (w) for the material id. `px` is the
+// size of one pixel on the surface, in studs.
+fn detail(id: i32, p: vec3<f32>, n: vec3<f32>, px: f32) -> vec4<f32> {
     let an = abs(n);
     var q: vec2<f32>;
     if (an.x > an.y && an.x > an.z) {
@@ -86,8 +94,8 @@ fn detail(id: i32, p: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
             a = vec3<f32>(0.985 + 0.03 * vnoise(p * 3.0));
         }
         case 2: { // Metal: brushed streaks along local x
-            let s = vnoise(vec3<f32>(q.x * 0.5, q.y * 28.0, 0.5));
-            let t = vnoise(vec3<f32>(q.x * 2.0, q.y * 90.0, 1.5));
+            let s = fine(vnoise(vec3<f32>(q.x * 0.5, q.y * 28.0, 0.5)), 28.0, px);
+            let t = fine(vnoise(vec3<f32>(q.x * 2.0, q.y * 90.0, 1.5)), 90.0, px);
             a = vec3<f32>(0.86 + 0.2 * s + 0.06 * t);
             r = 0.14 * (s - 0.5);
         }
@@ -95,7 +103,7 @@ fn detail(id: i32, p: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
             let warp = fbm(vec3<f32>(q.x * 0.35, q.y * 1.1, 0.7)) * 3.0;
             let ring = fract(q.y * 1.7 + warp);
             let band = smoothstep(0.0, 0.55, ring) * (1.0 - smoothstep(0.55, 1.0, ring));
-            let pores = vnoise(vec3<f32>(q.x * 3.0, q.y * 40.0, 2.0));
+            let pores = fine(vnoise(vec3<f32>(q.x * 3.0, q.y * 40.0, 2.0)), 40.0, px);
             a = vec3<f32>(0.78 + 0.26 * band + 0.06 * pores);
             r = 0.1 * (pores - 0.5);
         }
@@ -110,7 +118,7 @@ fn detail(id: i32, p: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
         }
         case 6: { // Grass: large patches plus fine blades
             let s = fbm(vec3<f32>(q.x, 0.0, q.y) * 0.7);
-            let blades = vnoise(vec3<f32>(q * 16.0, 3.0));
+            let blades = fine(vnoise(vec3<f32>(q * 16.0, 3.0)), 16.0, px);
             let patch_tint = mix(vec3<f32>(0.8, 0.92, 0.74), vec3<f32>(1.12, 1.08, 0.88), s);
             a = patch_tint * (0.88 + 0.24 * blades);
         }
@@ -134,7 +142,7 @@ fn detail(id: i32, p: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
             r = 0.12 * crack;
         }
         case 9: { // Sand: grains and soft ripples
-            let grains = vnoise(p * 16.0);
+            let grains = fine(vnoise(p * 16.0), 16.0, px);
             let ripple = vnoise(vec3<f32>(q.x * 1.3, q.y * 0.45, 4.0));
             a = vec3<f32>(0.88 + 0.12 * grains + 0.1 * ripple);
             r = 0.03 * (grains - 0.5);
@@ -187,7 +195,10 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let v = to_cam / max(dist, 1e-4);
     let l = g.sun_dir.xyz;
 
-    let d = detail(i32(in.material.z + 0.5), in.local_p, in.local_n);
+    // Derivatives must be taken here, in uniform control flow, not inside `detail`'s switch.
+    let fw = fwidth(in.local_p);
+    let px = max(fw.x, max(fw.y, fw.z));
+    let d = detail(i32(in.material.z + 0.5), in.local_p, in.local_n, px);
     let albedo = in.color.rgb * d.rgb;
     let rough = clamp(in.material.x + d.w, 0.04, 1.0);
     let metal = in.material.y;

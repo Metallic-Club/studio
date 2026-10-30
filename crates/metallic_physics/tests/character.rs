@@ -1,11 +1,10 @@
 use metallic_core::{Color3, InstanceId, Value, Vec3, World};
 use metallic_physics::{
-    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MoveInput, PhysicsWorld,
-    RESPAWN_DELAY, spawn_character,
+    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MoveInput, PANTS, PhysicsWorld,
+    RESPAWN_DELAY, SHIRT, SKIN, spawn_character,
 };
 
 const DT: f64 = 1.0 / 60.0;
-const TITANIUM: Color3 = Color3::new(142.0, 145.0, 150.0);
 const VIOLET: Color3 = Color3::new(155.0, 130.0, 212.0);
 
 fn part(world: &mut World, class: &str, pos: Vec3, size: Vec3) -> InstanceId {
@@ -156,7 +155,7 @@ fn idle() -> MoveInput {
 fn walk(x: f64, z: f64) -> MoveInput {
     MoveInput {
         dir: Vec3::new(x, 0.0, z),
-        jump: false,
+        ..MoveInput::default()
     }
 }
 
@@ -185,20 +184,24 @@ fn spawns_at_origin_without_spawn_location() {
     assert_eq!(num(&world, hum, "WalkSpeed"), 16.0);
 
     let limbs = [
-        ("Head", Vec3::new(2.0, 1.0, 1.0)),
-        ("Torso", Vec3::new(2.0, 2.0, 1.0)),
-        ("Left Arm", Vec3::new(1.0, 2.0, 1.0)),
-        ("Right Arm", Vec3::new(1.0, 2.0, 1.0)),
-        ("Left Leg", Vec3::new(1.0, 2.0, 1.0)),
-        ("Right Leg", Vec3::new(1.0, 2.0, 1.0)),
+        ("Head", Vec3::new(2.0, 1.0, 1.0), SKIN),
+        ("Torso", Vec3::new(2.0, 2.0, 1.0), SHIRT),
+        ("Left Arm", Vec3::new(1.0, 2.0, 1.0), SKIN),
+        ("Right Arm", Vec3::new(1.0, 2.0, 1.0), SKIN),
+        ("Left Leg", Vec3::new(1.0, 2.0, 1.0), PANTS),
+        ("Right Leg", Vec3::new(1.0, 2.0, 1.0), PANTS),
     ];
-    for (name, size) in limbs {
+    for (name, size, color) in limbs {
         let p = world
             .find_first_child(ch, name)
             .unwrap_or_else(|| panic!("missing {name}"));
         assert_eq!(v3(&world, p, "Size"), size, "{name}");
         assert_eq!(num(&world, p, "Transparency"), 0.0, "{name}");
-        assert_eq!(world.get(p, "Color").unwrap(), Value::Color3(TITANIUM));
+        assert_eq!(
+            world.get(p, "Color").unwrap(),
+            Value::Color3(color),
+            "{name}"
+        );
     }
     let visible = world
         .children(ch)
@@ -255,6 +258,29 @@ fn walk_speed_16_studs_per_second() {
 }
 
 #[test]
+fn running_is_one_and_a_half_times_walk_speed_without_changing_it() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let start = sim.root_pos();
+    sim.run(
+        1.0,
+        MoveInput {
+            run: true,
+            ..walk(1.0, 0.0)
+        },
+    );
+    let d = sim.root_pos().x - start.x;
+    assert!((d - 24.0).abs() <= 24.0 * 0.05, "ran {d}");
+    let hum = sim
+        .world
+        .find_first_child(sim.character(), "Humanoid")
+        .unwrap();
+    assert_eq!(num(&sim.world, hum, "WalkSpeed"), 16.0);
+}
+
+#[test]
 fn jump_apex_about_6_4_studs() {
     let mut world = World::new_with_services();
     baseplate(&mut world);
@@ -264,6 +290,7 @@ fn jump_apex_about_6_4_studs() {
     sim.frame(MoveInput {
         dir: Vec3::default(),
         jump: true,
+        ..MoveInput::default()
     });
     assert_eq!(sim.ctl.state(sim.character()), Some(HumanoidState::Jumping));
     let mut apex = sim.root_pos().y;
@@ -614,6 +641,7 @@ fn kill_twice_while_dead_fires_died_once() {
         MoveInput {
             dir: Vec3::new(1.0, 0.0, 0.0),
             jump: true,
+            ..MoveInput::default()
         },
     );
     assert_eq!(sim.died_count(), 1);
