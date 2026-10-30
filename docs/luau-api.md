@@ -22,9 +22,44 @@ Host-injected client action events likewise have no receiver and are discarded o
 access keeps its existing client-only restriction.
 The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
 
-This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,
-ModuleScript/require loader or playable multiplayer. The separate scheduler correctness work in #173 and the later
-process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
+`ScriptHost::with_role(world, output, ScriptRole::{Combined, Server, Client})` selects a
+fixed VM role; `role()` reports it. A Client host starts one client VM and creates no
+Player, GUI or Character. Before `set_local_player(player)`, no LocalScript runs.
+Binding accepts only a live Player directly under this World's built-in Players service.
+After binding, the next step runs enabled LocalScripts under the existing
+StarterPlayerScripts path, the local Player's PlayerGui, or its current Character.
+Another Player's private GUI and server Scripts do not run in this Client VM.
+Rebinding cancels old client-owned tasks/connections and reruns eligible scripts in the
+new context. Character-reference or ownership changes recheck eligibility without
+restarting unrelated starter/GUI scripts. This is execution policy over a trusted World,
+not authentication or replication filtering.
+
+The host's trusted player lifecycle APIs do not create or destroy World instances:
+
+- `add_player(player)` registers an existing world-local Player and queues PlayerAdded.
+  Duplicate registration returns false. GetPlayers includes the player when Added fires.
+- `remove_player(player)` returns false after the first removal. In a running session,
+  a pending Added fires before Removing, and the player is still in GetPlayers during
+  Removing. The caller destroys the Player and Character after removal and before the
+  next step; normal journal synchronization then cancels destroyed scripts' owned work.
+  Stale registered handles are forgotten without callbacks; unknown handles are no-ops.
+- `set_local_player(player)` is Client-only and separate from roster registration.
+  Stale/non-Player/misparented bindings or additions error without replacing valid state.
+  A busy World rejects lifecycle mutations without partially changing them.
+- `stop` drops VM/session work, retaining the World and registrations. Restart validates
+  live handles and replays Added once in World child order. Stale bindings clear, and
+  recreated same-name players require explicit registration/binding. A removed local
+  Client remains running but unbound until a later valid binding.
+
+Lifecycle events use the existing signal/resume budgets. A callback may yield or be
+deferred, so removal does not promise that every handler finishes before destruction.
+PlayerScripts class-dependent coverage remains separate while its core registration
+is pending; this layer does not fabricate a replacement class or clone player containers.
+
+These roles are a scripting foundation only. They add no network transport, player admission,
+dedicated-server process, ModuleScript/require loader or playable multiplayer. Existing
+sandbox/scheduler behavior is retained; process/transport/isolation work remains separate.
+M2 epic #15 acceptance is unchanged.
 
 ## Globals
 `game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
@@ -130,7 +165,8 @@ local cf, size = door:GetBoundingBox()
 | `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is its `HumanoidRootPart` (so `hit.Parent` is the character Model) |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
-| `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |
+| `Players.PlayerAdded` | `player` | queued registration on the next step; Combined also registers Player1; pending Added is flushed before active removal |
+| `Players.PlayerRemoving` | `player` | `remove_player`, before caller-owned destruction; no synthetic removal on stop |
 | `RunService.Heartbeat` | `dt` | every `step` |
 
 ```lua

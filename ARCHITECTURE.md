@@ -63,9 +63,14 @@ apps.
   Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost::new` runs server and client scripts over a shared `World`; additive `new_server`
-  starts only the server VM and server-eligible Scripts, without creating a local Player/PlayerGui or PlayerAdded.
+  starts only the server VM and server-eligible Scripts, without creating a local Player/PlayerGui or synthetic PlayerAdded.
   The role is fixed at construction, preserves pre-existing world state and filters client script candidates before
   running-script bookkeeping. This adds no transport, player admission, server executable or M2 acceptance.
+  `with_role` also selects Client-only execution with deferred trusted local-Player binding. Client eligibility
+  follows its own PlayerGui/current Character plus the existing starter-script path; rebinding cancels old owned
+  work. Explicit `add_player`/`remove_player` manage the host roster and Added/Removing events with normal budgets.
+  World-local handles are validated; the caller owns Player/Character destruction after Removing and before the
+  next step. Stop/restart recreates VM/session work and validates retained registrations/binding without name-based revival.
   The host exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
