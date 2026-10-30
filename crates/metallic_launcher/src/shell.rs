@@ -948,3 +948,14 @@ fn apply_decision(decision: NavDecision, sink: &Arc<dyn EventSink>) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::background;
+
+    #[test]
+    fn window_background_is_the_graphite_base_token() {
+        // A change here is a change of the design token `bg-base`: make it on purpose.
+        assert_eq!(background(), (22, 21, 27, 255));
+    }
+}

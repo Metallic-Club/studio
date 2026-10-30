@@ -10,6 +10,10 @@
 //! A value of the form `{primitive.g.850}` refers to another token and becomes `var(--g-850)`.
 //! The top-level `$themes` (theme id to CSS name to value) and `$reduced-motion` (CSS name to value)
 //! hold overrides.
+//!
+//! Differences from the full DTCG format: every token states its own `$type` (no inheriting it from
+//! a group), `$themes` and `$reduced-motion` are custom top-level keys (a DTCG tool would keep tool
+//! data under `$extensions`), and a repeated JSON key keeps the last value.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -220,6 +224,17 @@ fn add(
     if !KINDS.contains(&kind) {
         return invalid(&at, format!("unknown $type {kind}"));
     }
+    if let Some(bad) = path.iter().find(|s| {
+        s.is_empty()
+            || !s
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }) {
+        return invalid(
+            &at,
+            format!("the name part {bad:?} may only use letters, digits, - and _"),
+        );
+    }
     let name = path[1..].join("-");
     if set.by_name.contains_key(&name) {
         return invalid(&at, format!("the CSS name --{name} is already used"));
@@ -347,7 +362,12 @@ fn render(set: &TokenSet, token: &Token) -> Result<String, TokenError> {
                 return invalid(&at, "the value must be four numbers");
             };
             let mut parts = Vec::new();
-            for point in points {
+            for (i, point) in points.iter().enumerate() {
+                // CSS drops the whole declaration when an x control point is outside 0..=1.
+                let x_out = i % 2 == 0 && !point.as_f64().is_some_and(|x| (0.0..=1.0).contains(&x));
+                if x_out {
+                    return invalid(&at, "the x control points must be numbers from 0 to 1");
+                }
                 parts.push(number_text(&at, point)?);
             }
             Ok(format!("cubic-bezier({})", parts.join(", ")))

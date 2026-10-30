@@ -8,13 +8,10 @@ use metallic_tokens::{TOKENS_JSON, color, parse, to_css};
 
 #[test]
 fn committed_css_is_current() {
-    let css = to_css(&parse(TOKENS_JSON).unwrap());
-    // A Windows checkout may turn the line ends into CRLF.
-    let committed = include_str!("../../../design/tokens/metallic-tokens.css").replace(
-        "
-", "
-",
-    );
+    // A Windows checkout may turn the line ends into CRLF: compare without them.
+    let css = to_css(&parse(TOKENS_JSON).unwrap()).replace("\r\n", "\n");
+    let committed =
+        include_str!("../../../design/tokens/metallic-tokens.css").replace("\r\n", "\n");
     assert_eq!(
         css, committed,
         "regenerate with: cargo run -p metallic_tokens --example export_css"
@@ -71,12 +68,20 @@ fn launcher_pages_use_only_defined_tokens() {
                 path.display()
             );
         }
-        // The page style sheet takes values from the tokens only: no redefinition.
+        // The page style sheet takes values from the tokens only: no token declaration and no
+        // literal colour (what is left once the `var(--x)` uses are removed).
+        let bare = text.replace("var(--", "var(");
         assert!(
-            !text.contains("\n  --"),
+            !bare.contains("--"),
             "{}: defines its own token",
             path.display()
         );
+        assert!(!bare.contains("rgb"), "{}: literal colour", path.display());
+        let hex = bare
+            .split('#')
+            .skip(1)
+            .any(|r| r.chars().take_while(char::is_ascii_hexdigit).count() >= 3);
+        assert!(!hex, "{}: literal colour", path.display());
     }
     assert!(used > 20, "no token use found");
 }
