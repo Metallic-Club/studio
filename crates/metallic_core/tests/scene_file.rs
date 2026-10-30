@@ -93,3 +93,30 @@ fn load_errors_are_reported() {
         Err(CoreError::Io(_))
     ));
 }
+
+#[test]
+fn pivots_and_scale_survive_a_save() {
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").unwrap();
+    let m = w.create("Model", Some(ws)).unwrap();
+    let p = w.create("Part", Some(m)).unwrap();
+    let offset =
+        CFrame::from_position(Vec3::new(0.0, -1.0, 0.0)) * CFrame::from_euler_xyz(0.1, 0.2, 0.3);
+    w.set(p, "PivotOffset", Value::CFrame(Box::new(offset)))
+        .unwrap();
+    w.set(m, "PrimaryPart", Value::Ref(Some(p))).unwrap();
+    transform::set_world_pivot(&mut w, m, CFrame::from_position(Vec3::new(4.0, 5.0, 6.0))).unwrap();
+    transform::scale_to(&mut w, m, 2.0).unwrap();
+    let path = tmp("pivots.ron");
+    save_scene(&w, &path).unwrap();
+    let w2 = load_scene(&path).unwrap();
+    let m2 = w2.children(w2.root("Workspace").unwrap())[0];
+    let p2 = w2.children(m2)[0];
+    assert_eq!(transform::get_pivot(&w2, m2), transform::get_pivot(&w, m));
+    assert_eq!(
+        transform::world_pivot(&w2, m2),
+        transform::world_pivot(&w, m)
+    );
+    assert_eq!(transform::model_scale(&w2, m2), 2.0);
+    assert_eq!(w2.get(m2, "PrimaryPart").unwrap(), Value::Ref(Some(p2)));
+}
