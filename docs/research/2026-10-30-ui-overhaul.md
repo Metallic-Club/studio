@@ -28,9 +28,9 @@ offer, and splits the work into agent-sized tasks (section 6).
   `crates/metallic_launcher/assets/pages/pages.css`, `branding/placeholder-icon.png` (the only brand file),
   `templates/parkour/` (the only real template).
 - Brand rules: memory `metallic-platform.md`, repo `CLAUDE.md` section 6.
-- Website: `C:\Users\alexi\Documents\plateform` does not exist. `C:\Users\alexi\Documents\metallic-plateform` holds only
+- Website: the main checkout of `Metallic-Club/plateform` holds only
   `docs/platform-feature-list.md`. **The web front end is Next.js 16 + React 19 with plain CSS modules (no Tailwind)
-  in `metallic-plateform-worktrees/web-ui/web/`, branch `platform/web-ui` of `Metallic-Club/plateform`** (private;
+  in `web/` on branch `platform/web-ui` of `Metallic-Club/plateform`** (private;
   other branches: `platform/design-20261030`, `platform/p1-backend`, `codex/platform-foundation`). Its
   `web/docs/DESIGN.md` already follows #199 and adds Titanium and Light ("Aluminium") themes; 16 pages are
   screenshotted at 1440 and 390 in `web/docs/screenshots/`, plus Launcher before/after shots at 960 x 600.
