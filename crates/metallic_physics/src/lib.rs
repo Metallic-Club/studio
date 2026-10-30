@@ -11,17 +11,30 @@
 //! friction and restitution (see [`material_props`]). An anchored part whose `Position` or
 //! `Orientation` was changed since the last step is moved as a kinematic body for that step, with
 //! velocity derived from the move, so parts standing on it are carried along.
+//!
+//! Characters: [`spawn_character`] builds a Roblox-style avatar Model for a Player and
+//! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
+//! death and respawn, checkpoints). Character parts are anchored, so the physics moves them as
+//! kinematic bodies and they report touches; they never collide with or touch each other.
 #![warn(missing_docs)]
 
+mod avatar;
+mod character;
 mod sync;
 mod touched;
 
+pub use avatar::{TITANIUM, VIOLET};
+pub use character::{
+    CharacterController, CharacterEvent, HumanoidState, MAX_STEP_HEIGHT, MoveInput, RESPAWN_DELAY,
+    ROOT_HEIGHT, spawn_character,
+};
 pub use sync::{MaterialProps, material_props};
 
 use metallic_core::{InstanceId, Value, Vec3, World};
 use rapier3d::prelude::{
-    ActiveCollisionTypes, ActiveEvents, ColliderHandle, PhysicsWorld as RapierWorld, Pose,
-    QueryFilter, Ray, RigidBodyBuilder, RigidBodyHandle, RigidBodyType, Rotation, Vector,
+    ActiveCollisionTypes, ActiveEvents, ColliderHandle, Group, InteractionGroups,
+    InteractionTestMode, PhysicsWorld as RapierWorld, Pose, QueryFilter, QueryPipeline, Ray,
+    RigidBodyBuilder, RigidBodyHandle, RigidBodyType, Rotation, Vector,
 };
 use std::collections::{HashMap, HashSet};
 use sync::{PartState, Signature};
@@ -33,6 +46,9 @@ pub const GRAVITY: f64 = 196.2;
 pub const MAX_STEP: f64 = 0.25;
 /// Length of one fixed simulation substep in seconds.
 pub const SUBSTEP: f64 = 1.0 / 240.0;
+
+/// Collision group of character parts; they interact with everything except each other.
+const CHARACTER_GROUP: Group = Group::GROUP_1;
 
 /// Result of a successful [`PhysicsWorld::raycast`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,11 +91,11 @@ impl Default for PhysicsWorld {
     }
 }
 
-fn to_vector(v: Vec3) -> Vector {
+pub(crate) fn to_vector(v: Vec3) -> Vector {
     Vector::new(v.x as f32, v.y as f32, v.z as f32)
 }
 
-fn from_vector(v: Vector) -> Vec3 {
+pub(crate) fn from_vector(v: Vector) -> Vec3 {
     Vec3::new(f64::from(v.x), f64::from(v.y), f64::from(v.z))
 }
 
@@ -157,7 +173,17 @@ impl PhysicsWorld {
             RigidBodyBuilder::dynamic()
         }
         .pose(pose);
+        let groups = if s.character {
+            InteractionGroups::new(
+                CHARACTER_GROUP,
+                Group::ALL.difference(CHARACTER_GROUP),
+                InteractionTestMode::And,
+            )
+        } else {
+            InteractionGroups::all()
+        };
         let collider = sync::build_collider(&s.shape, s.size)
+            .collision_groups(groups)
             .density(mat.density)
             .friction(mat.friction)
             .restitution(mat.restitution)
@@ -342,6 +368,21 @@ impl PhysicsWorld {
             normal: from_vector(hit.normal),
             distance,
         })
+    }
+
+    /// The collider of a synced part.
+    pub(crate) fn collider_of(&self, id: InstanceId) -> Option<ColliderHandle> {
+        self.entries.get(&id).map(|e| e.collider)
+    }
+
+    /// The part that owns a collider.
+    pub(crate) fn owner_of(&self, handle: ColliderHandle) -> Option<InstanceId> {
+        self.owners.get(&handle).copied()
+    }
+
+    /// Rapier scene queries over the current colliders, restricted by `filter`.
+    pub(crate) fn queries<'a>(&'a self, filter: QueryFilter<'a>) -> QueryPipeline<'a> {
+        self.rapier.query_pipeline_with_filter(filter)
     }
 
     /// Returns the part pairs that started touching since the last call. Each contact is

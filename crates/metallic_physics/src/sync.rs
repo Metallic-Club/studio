@@ -59,6 +59,8 @@ pub(crate) struct PartState {
     pub can_collide: bool,
     pub material: String,
     pub shape: String,
+    /// The part belongs to a character (see [`in_character`]).
+    pub character: bool,
 }
 
 /// The part of [`PartState`] that forces the body/collider to be rebuilt when it changes.
@@ -69,6 +71,7 @@ pub(crate) struct Signature {
     pub can_collide: bool,
     pub material: String,
     pub shape: String,
+    pub character: bool,
 }
 
 impl PartState {
@@ -79,6 +82,7 @@ impl PartState {
             can_collide: self.can_collide,
             material: self.material.clone(),
             shape: self.shape.clone(),
+            character: self.character,
         }
     }
 }
@@ -108,7 +112,21 @@ pub(crate) fn read_part(world: &World, id: InstanceId) -> Option<PartState> {
         can_collide: b("CanCollide")?,
         material: s("Material")?,
         shape: s("Shape")?,
+        character: in_character(world, id),
     })
+}
+
+/// True when an ancestor of `id` is a Model with a `Humanoid` child, i.e. the part is one of a
+/// character's parts. Character parts never collide with or touch each other.
+pub(crate) fn in_character(world: &World, id: InstanceId) -> bool {
+    let mut cur = world.parent(id);
+    while let Some(a) = cur {
+        if world.is_a(a, "Model") && world.children(a).iter().any(|&c| world.is_a(c, "Humanoid")) {
+            return true;
+        }
+        cur = world.parent(a);
+    }
+    false
 }
 
 /// All BasePart instances under Workspace, depth first (parts elsewhere are not simulated).
