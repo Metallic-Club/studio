@@ -236,9 +236,28 @@ impl UserData for LuaInstance {
     }
 }
 
-fn member_name(key: &Value) -> mlua::Result<String> {
+/// Owns the Lua string guard for the entire member lookup. Invalid UTF-8 keeps
+/// the existing replacement-character lookup/error behavior via an owned fallback.
+enum MemberName {
+    Borrowed(mlua::BorrowedStr),
+    Lossy(String),
+}
+
+impl AsRef<str> for MemberName {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Borrowed(value) => value.as_ref(),
+            Self::Lossy(value) => value.as_str(),
+        }
+    }
+}
+
+fn member_name(key: &Value) -> mlua::Result<MemberName> {
     match key {
-        Value::String(s) => Ok(String::from_utf8_lossy(&s.as_bytes()).into_owned()),
+        Value::String(s) => Ok(match s.to_str() {
+            Ok(value) => MemberName::Borrowed(value),
+            Err(_) => MemberName::Lossy(String::from_utf8_lossy(&s.as_bytes()).into_owned()),
+        }),
         other => Err(lua_error(format!(
             "an Instance member name must be a string, got {}",
             other.type_name()
@@ -246,12 +265,16 @@ fn member_name(key: &Value) -> mlua::Result<String> {
     }
 }
 
+#[cfg(test)]
+mod read_probe;
+
 fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
-    let key = member_name(&key)?;
+    let member = member_name(&key)?;
+    let key = member.as_ref();
     this.live()?;
     let state = &this.state;
     let class = this.class()?;
-    match key.as_str() {
+    match key {
         "ClassName" => return Ok(Value::String(lua.create_string(class)?)),
         "Parent" => {
             let parent = state.world()?.parent(this.id);
@@ -266,7 +289,7 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
         }
         _ => {}
     }
-    if let Some(method) = state.methods.get(key.as_str()) {
+    if let Some(method) = state.methods.get(key) {
         let allowed = CLASS_METHODS
             .iter()
             .find(|(name, _)| *name == key)
@@ -275,7 +298,7 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             return Ok(Value::Function(method.clone()));
         }
     }
-    if let Some(kind) = event_kind(class, &key) {
+    if let Some(kind) = event_kind(class, key) {
         use crate::vm::Context;
         match (kind, state.context) {
             (EventKind::OnServerEvent, Context::Client) => {
@@ -291,37 +314,36 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             key: (this.id, kind),
         })?));
     }
-    if find_property(class, &key).is_some() {
-        return state.get_property(lua, this.id, &key);
+    if find_property(class, key).is_some() {
+        return state.get_property(lua, this.id, key);
     }
-    let child = state.world()?.find_first_child(this.id, &key);
+    let child = state.world()?.find_first_child(this.id, key);
     match child {
         Some(child) => Ok(Value::UserData(state.wrap(lua, child)?)),
-        None => Err(not_a_member(&key, class)),
+        None => Err(not_a_member(key, class)),
     }
 }
 
 fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> {
-    let key = member_name(&key)?;
+    let member = member_name(&key)?;
+    let key = member.as_ref();
     this.live()?;
     let class = this.class()?;
-    match key.as_str() {
+    match key {
         "ClassName" => Err(lua_error("ClassName is read-only")),
         "Parent" => set_parent(this, value),
         _ => {
-            let Some(def) = find_property(class, &key) else {
-                return if this.state.methods.contains_key(key.as_str())
-                    || event_kind(class, &key).is_some()
-                {
+            let Some(def) = find_property(class, key) else {
+                return if this.state.methods.contains_key(key) || event_kind(class, key).is_some() {
                     Err(lua_error(format!("{key} is read-only")))
                 } else {
-                    Err(not_a_member(&key, class))
+                    Err(not_a_member(key, class))
                 };
             };
-            let converted = lua_to_value(value, def.ty, &key)?;
+            let converted = lua_to_value(value, def.ty, key)?;
             this.state
                 .world_mut()?
-                .set(this.id, &key, converted)
+                .set(this.id, key, converted)
                 .map_err(core_error)?;
             if key == "Name"
                 && let Value::String(s) = value

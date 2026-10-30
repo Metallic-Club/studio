@@ -22,6 +22,8 @@ All API tables are read-only.
 - Members: `Name`, `Parent`, `ClassName` (read-only), `FindFirstChild(name, recursive?)`, `WaitForChild(name, timeout?)`,
   `GetChildren()`, `GetDescendants()`, `IsA(class)`, `Destroy()`, `Clone()`, and every registry property of the class by name.
 - `instance.ChildName` finds a child. Unknown member: `<Name> is not a valid member of <ClassName>`.
+- Member keys must be strings; numeric keys are rejected. Invalid UTF-8 bytes in a string key keep the existing
+  replacement-character behavior for lookup and errors.
 - Wrong property type: `invalid value for property Position: expected Vector3, got number`. Numbers and vectors must be finite.
 - The same instance is always the same Lua object (`a == b`, usable as a table key).
 - A destroyed instance errors on use: `Brick has been destroyed`. Services cannot be destroyed, cloned or reparented.
@@ -36,6 +38,7 @@ print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,
   unary `-`, `==`.
+  Components retain the engine's f64 precision in userdata.
 - `Color3.fromRGB(r, g, b)`: `R G B` read as 0..1.
 - `UDim2.new(xs, xo, ys, yo)`: `X` and `Y` read as `{Scale, Offset}`.
 
