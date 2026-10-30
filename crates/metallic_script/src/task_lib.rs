@@ -2,6 +2,7 @@
 //! script threads, and the execution budget.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::time::Instant;
@@ -52,6 +53,9 @@ pub(crate) struct Scheduler {
     /// running code (possibly empty).
     pub(crate) timeout_loc: RefCell<Option<String>>,
     pending: RefCell<Vec<Pending>>,
+    /// Thread (by address) -> the chunk name of the function it was created for, i.e. the
+    /// script that owns it. Removed when the thread finishes.
+    owners: RefCell<HashMap<usize, String>>,
     seq: Cell<u64>,
     pub(crate) sink: Rc<dyn OutputSink>,
     /// Lua function `guard(f, ...)`: runs `f` under `xpcall` with the error normaliser.
@@ -65,6 +69,7 @@ impl Scheduler {
             deadline: Cell::new(None),
             timeout_loc: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
+            owners: RefCell::new(HashMap::new()),
             seq: Cell::new(0),
             sink,
             guard: RefCell::new(None),
@@ -74,6 +79,7 @@ impl Scheduler {
     /// Forgets every sleeping thread.
     pub(crate) fn clear(&self) {
         self.pending.borrow_mut().clear();
+        self.owners.borrow_mut().clear();
         *self.guard.borrow_mut() = None;
     }
 
@@ -92,10 +98,39 @@ impl Scheduler {
         args: Vec<Value>,
     ) -> Result<(Thread, Vec<Value>)> {
         let thread = lua.create_thread(self.guard()?)?;
+        if let Some(owner) = f
+            .info()
+            .short_src
+            .filter(|s| !s.is_empty() && !s.starts_with('['))
+        {
+            self.owners
+                .borrow_mut()
+                .insert(thread.to_pointer() as usize, owner);
+        }
         let mut all = Vec::with_capacity(args.len() + 1);
         all.push(Value::Function(f));
         all.extend(args);
         Ok((thread, all))
+    }
+
+    /// The chunk name (script) a thread belongs to.
+    pub(crate) fn owner_of(&self, thread: &Thread) -> Option<String> {
+        self.owners
+            .borrow()
+            .get(&(thread.to_pointer() as usize))
+            .cloned()
+    }
+
+    /// Forgets the sleeping threads of `owner`; they are never resumed again.
+    pub(crate) fn cancel_owner(&self, owner: &str) {
+        let owners = self.owners.borrow();
+        self.pending.borrow_mut().retain(|p| {
+            owners
+                .get(&(p.thread.to_pointer() as usize))
+                .is_none_or(|o| o != owner)
+        });
+        drop(owners);
+        self.owners.borrow_mut().retain(|_, o| o != owner);
     }
 
     fn push(&self, wake: f64, is_wait: bool, thread: Thread, args: Vec<Value>) {
@@ -118,6 +153,11 @@ impl Scheduler {
         thread: &Thread,
         raw: Result<MultiValue>,
     ) -> std::result::Result<(), String> {
+        if thread.status() != mlua::thread::ThreadStatus::Resumable {
+            self.owners
+                .borrow_mut()
+                .remove(&(thread.to_pointer() as usize));
+        }
         let values = raw.map_err(|e| format_error(&e))?;
         if thread.status() == mlua::thread::ThreadStatus::Resumable {
             if is_tag(values.front(), SLEEP) {

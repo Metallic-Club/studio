@@ -160,7 +160,7 @@ fn remote_rejects_function_and_cycle() {
     assert!(lines[5].contains("cannot send thread"), "{lines:?}");
     assert_eq!(
         lines[6], "print:true",
-        "a shared (not cyclic) table is fine"
+        "a shared (not cyclic) small table is fine; big expansions are limited in limits.rs"
     );
 }
 

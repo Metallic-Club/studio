@@ -54,6 +54,40 @@ pub(crate) fn udim2(v: &Value) -> Option<UDim2> {
 impl UserData for LuaVector3 {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_meta_field(MetaMethod::Type, "Vector3");
+        fields.add_meta_field_with(MetaMethod::Add, |lua| {
+            errors::guarded_fn(
+                lua,
+                |_, (a, b): (UserDataRef<LuaVector3>, UserDataRef<LuaVector3>)| {
+                    Ok(LuaVector3(a.0 + b.0))
+                },
+            )
+        });
+        fields.add_meta_field_with(MetaMethod::Sub, |lua| {
+            errors::guarded_fn(
+                lua,
+                |_, (a, b): (UserDataRef<LuaVector3>, UserDataRef<LuaVector3>)| {
+                    Ok(LuaVector3(a.0 - b.0))
+                },
+            )
+        });
+        fields.add_meta_field_with(MetaMethod::Mul, |lua| {
+            errors::guarded_fn(lua, |_, (a, b): (Value, Value)| {
+                match (vector(&a), vector(&b), number(&a), number(&b)) {
+                    (Some(v), _, _, Some(k)) | (_, Some(v), Some(k), _) => Ok(LuaVector3(v * k)),
+                    (Some(a), Some(b), _, _) => {
+                        Ok(LuaVector3(Vec3::new(a.x * b.x, a.y * b.y, a.z * b.z)))
+                    }
+                    _ => Err(lua_error(
+                        "Vector3 can only be multiplied by a number or a Vector3",
+                    )),
+                }
+            })
+        });
+        fields.add_meta_field_with(MetaMethod::Div, |lua| {
+            errors::guarded_fn(lua, |_, (a, k): (UserDataRef<LuaVector3>, f64)| {
+                Ok(LuaVector3(a.0 * (1.0 / k)))
+            })
+        });
         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
         fields.add_field_method_get("Y", |_, this| Ok(this.0.y));
         fields.add_field_method_get("Z", |_, this| Ok(this.0.z));
@@ -62,33 +96,6 @@ impl UserData for LuaVector3 {
     }
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_meta_function(
-            MetaMethod::Add,
-            |_, (a, b): (UserDataRef<LuaVector3>, UserDataRef<LuaVector3>)| {
-                Ok(LuaVector3(a.0 + b.0))
-            },
-        );
-        methods.add_meta_function(
-            MetaMethod::Sub,
-            |_, (a, b): (UserDataRef<LuaVector3>, UserDataRef<LuaVector3>)| {
-                Ok(LuaVector3(a.0 - b.0))
-            },
-        );
-        methods.add_meta_function(MetaMethod::Mul, |_, (a, b): (Value, Value)| {
-            match (vector(&a), vector(&b), number(&a), number(&b)) {
-                (Some(v), _, _, Some(k)) | (_, Some(v), Some(k), _) => Ok(LuaVector3(v * k)),
-                (Some(a), Some(b), _, _) => {
-                    Ok(LuaVector3(Vec3::new(a.x * b.x, a.y * b.y, a.z * b.z)))
-                }
-                _ => Err(lua_error(
-                    "Vector3 can only be multiplied by a number or a Vector3",
-                )),
-            }
-        });
-        methods.add_meta_function(
-            MetaMethod::Div,
-            |_, (a, k): (UserDataRef<LuaVector3>, f64)| Ok(LuaVector3(a.0 * (1.0 / k))),
-        );
         methods.add_meta_method(MetaMethod::Unm, |_, this, ()| Ok(LuaVector3(this.0 * -1.0)));
         methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
             Ok(matches!((vector(&a), vector(&b)), (Some(a), Some(b)) if a == b))

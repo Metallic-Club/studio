@@ -7,7 +7,7 @@
 //! [`ScriptHost::character_added`] and reach the scripts on the next `step`.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value as CoreValue, World};
@@ -23,6 +23,12 @@ pub const LOCAL_PLAYER_NAME: &str = "Player1";
 struct Side {
     vm: ScriptVm,
     state: Rc<ApiState>,
+}
+
+/// A script that was started: where it runs and the chunk name its threads carry.
+struct RunningScript {
+    context: Context,
+    chunk: String,
 }
 
 /// An input from another system, delivered on the next `step`.
@@ -51,8 +57,8 @@ pub struct ScriptHost {
     server: Option<Side>,
     client: Option<Side>,
     inputs: Vec<HostEvent>,
-    /// Scripts that already ran (each runs once per `start`).
-    started: HashSet<InstanceId>,
+    /// Scripts that were started and not stopped since (each runs once per `start`).
+    running: HashMap<InstanceId, RunningScript>,
     /// Where the world's change journal was when scripts were last looked for.
     cursor: Option<ChangeCursor>,
 }
@@ -67,7 +73,7 @@ impl ScriptHost {
             server: None,
             client: None,
             inputs: Vec::new(),
-            started: HashSet::new(),
+            running: HashMap::new(),
             cursor: None,
         }
     }
@@ -97,13 +103,14 @@ impl ScriptHost {
         self.shared.local_player.set(Some(player));
         self.shared.joined.borrow_mut().clear();
         self.shared.remotes.borrow_mut().clear();
+        self.shared.queued.set([(0, 0); 2]);
         self.inputs = vec![HostEvent::PlayerAdded { player }];
-        self.started.clear();
+        self.running.clear();
         self.cursor = None;
 
         self.server = Some(self.make_side(Context::Server)?);
         self.client = Some(self.make_side(Context::Client)?);
-        self.start_new_scripts();
+        self.sync_scripts();
         Ok(())
     }
 
@@ -117,8 +124,12 @@ impl ScriptHost {
         }
         for side in self.sides() {
             side.state.now.set(now);
+            side.state.begin_step();
         }
-        self.start_new_scripts();
+        self.sync_scripts();
+        for side in self.sides() {
+            side.state.run_deferred();
+        }
         // Remotes first: one fired by a handler in this step waits for the next one.
         self.deliver_remotes();
         self.deliver_inputs();
@@ -137,6 +148,8 @@ impl ScriptHost {
         }
         for side in self.sides() {
             side.state.wake_waiters();
+            side.state.prune_hub();
+            side.state.end_step();
         }
         for side in self.sides_mut() {
             side.vm.step(now);
@@ -154,8 +167,9 @@ impl ScriptHost {
         }
         self.inputs.clear();
         self.shared.remotes.borrow_mut().clear();
+        self.shared.queued.set([(0, 0); 2]);
         self.shared.joined.borrow_mut().clear();
-        self.started.clear();
+        self.running.clear();
         self.cursor = None;
     }
 
@@ -246,10 +260,11 @@ impl ScriptHost {
         Ok(player)
     }
 
-    /// Runs the scripts that exist now and have not run yet, in tree order. Looks at the
-    /// whole tree the first time and only at changed instances afterwards.
-    fn start_new_scripts(&mut self) {
-        let found = {
+    /// Starts scripts that exist now and are not running, and stops running scripts that
+    /// were destroyed, disabled or moved out of a place where scripts run. Looks at the whole
+    /// tree the first time and only at changed instances afterwards (the world's journal).
+    fn sync_scripts(&mut self) {
+        let (starts, stops) = {
             let Ok(world) = self.world.try_borrow() else {
                 return;
             };
@@ -261,31 +276,62 @@ impl ScriptHost {
                 None => None,
             };
             self.cursor = Some(world.change_cursor());
-            let candidates = match changed {
-                Some(ids) => ids,
+            let (candidates, stop_candidates): (Vec<InstanceId>, Vec<InstanceId>) = match changed {
+                Some(ids) => {
+                    let running = ids
+                        .iter()
+                        .copied()
+                        .filter(|id| self.running.contains_key(id))
+                        .collect();
+                    (ids, running)
+                }
                 None => {
                     let mut all = Vec::new();
                     for &root in world.roots() {
                         collect_tree(&world, root, &mut all);
                     }
-                    all
+                    (all, self.running.keys().copied().collect())
                 }
             };
-            let mut found = Vec::new();
+            let stops: Vec<InstanceId> = stop_candidates
+                .into_iter()
+                .filter(|&id| script_context(&world, id).is_none())
+                .collect();
+            let mut starts = Vec::new();
             for id in candidates {
-                if self.started.contains(&id) {
+                if self.running.contains_key(&id) {
                     continue;
                 }
                 if let Some(context) = script_context(&world, id) {
-                    found.push((id, context, world.full_name(id), source_of(&world, id)));
+                    starts.push((id, context, world.full_name(id), source_of(&world, id)));
                 }
             }
-            found
+            (starts, stops)
         };
-        for (id, context, chunk_name, source) in found {
-            if !self.started.insert(id) {
+        for id in stops {
+            let Some(script) = self.running.remove(&id) else {
+                continue;
+            };
+            // Scripts sharing a full name share a chunk name; keep theirs running.
+            let shared = self
+                .running
+                .values()
+                .any(|r| r.chunk == script.chunk && r.context == script.context);
+            if !shared && let Some(side) = self.side_for(script.context) {
+                side.state.stop_owner(&script.chunk);
+            }
+        }
+        for (id, context, chunk_name, source) in starts {
+            if self.running.contains_key(&id) {
                 continue;
             }
+            self.running.insert(
+                id,
+                RunningScript {
+                    context,
+                    chunk: chunk_name.clone(),
+                },
+            );
             let Some(side) = self.side_for(context) else {
                 continue;
             };
@@ -356,6 +402,7 @@ impl ScriptHost {
 
     fn deliver_remotes(&mut self) {
         let queued = std::mem::take(&mut *self.shared.remotes.borrow_mut());
+        self.shared.queued.set([(0, 0); 2]);
         for message in queued {
             let side = match message.target {
                 RemoteTarget::Server { .. } => self.server.as_ref(),

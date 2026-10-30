@@ -50,7 +50,7 @@ fn event_kind(class: &str, name: &str) -> Option<EventKind> {
 
 /// A thread parked in `WaitForChild`.
 pub(crate) struct Waiter {
-    thread: Thread,
+    pub(crate) thread: Thread,
     parent: InstanceId,
     name: String,
     started: f64,
@@ -118,8 +118,11 @@ fn not_a_member(member: &str, class: &str) -> mlua::Error {
 impl ApiState {
     /// The Luau object of `id`; asking twice gives the same object.
     pub(crate) fn wrap(self: &Rc<Self>, lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserData> {
-        let key = format!("{:x}", id.to_bits());
-        if let Value::UserData(ud) = self.cache.get::<Value>(key.as_str())? {
+        // Keyed by the slot index (exact in a Lua number); the stored id tells generations apart.
+        let slot = (id.to_bits() & 0xffff_ffff) as f64;
+        if let Value::UserData(ud) = self.cache.get::<Value>(slot)?
+            && ud.borrow::<LuaInstance>().is_ok_and(|i| i.id == id)
+        {
             return Ok(ud);
         }
         let name = match self.world()?.get(id, "Name") {
@@ -131,7 +134,7 @@ impl ApiState {
             state: self.clone(),
             name_hint: RefCell::new(name),
         })?;
-        self.cache.set(key, ud.clone())?;
+        self.cache.set(slot, ud.clone())?;
         Ok(ud)
     }
 

@@ -16,6 +16,19 @@ use super::signals::EventKind;
 use super::{ApiState, lua_error};
 use crate::vm::Context;
 
+/// Most arguments one Fire call may carry.
+const MAX_ARGS: usize = 32;
+/// Most values (tables and leaves) one Fire call may carry.
+const MAX_VALUES: usize = 10_000;
+/// Most string bytes one Fire call may carry.
+const MAX_STRING_BYTES: usize = 1 << 20;
+/// Most messages queued per VM between two deliveries.
+const MAX_QUEUED_MESSAGES: usize = 1_000;
+/// Most payload bytes queued per VM between two deliveries.
+const MAX_QUEUED_BYTES: usize = 16 << 20;
+/// Bytes counted for each value besides its string bytes (queue accounting).
+const VALUE_COST: usize = 16;
+
 /// Deepest table nesting a remote argument may have.
 const MAX_TABLE_DEPTH: usize = 16;
 
@@ -49,9 +62,39 @@ pub(crate) struct QueuedRemote {
     pub(crate) args: Vec<Wire>,
 }
 
+/// What one Fire call has copied so far; shared subtables count once per reference, so a
+/// payload that expands exponentially hits the limit instead of exhausting memory.
+#[derive(Default)]
+struct PayloadBudget {
+    values: usize,
+    string_bytes: usize,
+}
+
+impl PayloadBudget {
+    fn take(&mut self, string_bytes: usize) -> mlua::Result<()> {
+        self.values += 1;
+        self.string_bytes += string_bytes;
+        if self.values > MAX_VALUES || self.string_bytes > MAX_STRING_BYTES {
+            Err(lua_error("remote payload too large"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl ApiState {
     /// Copies a Luau value into a [`Wire`]. `path` holds the tables being copied.
-    fn to_wire(&self, value: &Value, path: &mut Vec<*const c_void>) -> mlua::Result<Wire> {
+    fn to_wire(
+        &self,
+        value: &Value,
+        path: &mut Vec<*const c_void>,
+        budget: &mut PayloadBudget,
+    ) -> mlua::Result<Wire> {
+        let string_len = match value {
+            Value::String(s) => s.as_bytes().len(),
+            _ => 0,
+        };
+        budget.take(string_len)?;
         Ok(match value {
             Value::Nil => Wire::Nil,
             Value::Boolean(b) => Wire::Bool(*b),
@@ -73,7 +116,10 @@ impl ApiState {
                 let mut pairs = Vec::new();
                 for pair in table.pairs::<Value, Value>() {
                     let (k, v) = pair?;
-                    pairs.push((self.to_wire(&k, path)?, self.to_wire(&v, path)?));
+                    pairs.push((
+                        self.to_wire(&k, path, budget)?,
+                        self.to_wire(&v, path, budget)?,
+                    ));
                 }
                 path.pop();
                 Wire::Table(pairs)
@@ -146,11 +192,24 @@ impl ApiState {
         target: RemoteTarget,
         args: MultiValue,
     ) -> mlua::Result<()> {
+        if args.len() > MAX_ARGS {
+            return Err(lua_error("remote payload too large"));
+        }
         let mut path = Vec::new();
+        let mut budget = PayloadBudget::default();
         let args = args
             .iter()
-            .map(|v| self.to_wire(v, &mut path))
+            .map(|v| self.to_wire(v, &mut path, &mut budget))
             .collect::<mlua::Result<Vec<_>>>()?;
+        let cost = budget.string_bytes + budget.values * VALUE_COST;
+        let slot = usize::from(self.context == Context::Client);
+        let mut queued = self.shared.queued.get();
+        if queued[slot].0 >= MAX_QUEUED_MESSAGES || queued[slot].1 + cost > MAX_QUEUED_BYTES {
+            return Err(lua_error("remote queue full"));
+        }
+        queued[slot].0 += 1;
+        queued[slot].1 += cost;
+        self.shared.queued.set(queued);
         self.shared.remotes.borrow_mut().push(QueuedRemote {
             remote,
             target,

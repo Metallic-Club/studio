@@ -23,13 +23,15 @@ use mlua::{Error, Function, Table, WeakLua};
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
 
 pub(crate) use remote::{QueuedRemote, RemoteTarget};
-pub(crate) use signals::{EventKind, Hub};
+pub(crate) use signals::{EventKind, Hub, Pacing};
 
 /// State shared by the server VM and the client VM of one [`ScriptHost`](crate::ScriptHost).
 #[derive(Default)]
 pub(crate) struct HostShared {
     /// Remote events fired since the last `step`, delivered by the next one.
     pub(crate) remotes: RefCell<Vec<QueuedRemote>>,
+    /// Messages and bytes queued since the last delivery, for the server (0) and client (1) VM.
+    pub(crate) queued: Cell<[(usize, usize); 2]>,
     /// Players whose `PlayerAdded` was delivered (what `GetPlayers` returns).
     pub(crate) joined: RefCell<HashSet<InstanceId>>,
     /// The player of the client VM (`Players.LocalPlayer`).
@@ -44,6 +46,7 @@ pub(crate) struct ApiState {
     pub(crate) sink: Rc<dyn OutputSink>,
     pub(crate) shared: Rc<HostShared>,
     pub(crate) hub: Hub,
+    pub(crate) pacing: Pacing,
     pub(crate) lua: WeakLua,
     /// Weak-valued table `instance id -> userdata`, so one instance is one Lua object.
     cache: Table,
@@ -125,6 +128,7 @@ fn build(
         sink,
         shared,
         hub: Hub::default(),
+        pacing: Pacing::default(),
         lua: lua.weak(),
         cache,
         spawn,

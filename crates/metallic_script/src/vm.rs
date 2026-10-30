@@ -145,6 +145,16 @@ impl Budget {
         })
     }
 
+    /// The script (chunk name) a thread belongs to.
+    pub(crate) fn owner_of(&self, thread: &Thread) -> Option<String> {
+        self.sched.owner_of(thread)
+    }
+
+    /// Cancels the sleeping threads of a script.
+    pub(crate) fn cancel_owner(&self, owner: &str) {
+        self.sched.cancel_owner(owner);
+    }
+
     /// Resumes a thread that parked itself with a plain `coroutine.yield` (for example
     /// a future `Event:Wait()`), under the same budget. If it yields again it is
     /// parked or put to sleep as usual.

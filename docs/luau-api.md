@@ -92,3 +92,17 @@ remote.OnServerEvent:Connect(function(player, amount) print(player.Name, amount)
 -- client
 remote:FireServer(5)
 ```
+
+## Limits
+- Remote: at most 32 arguments, 10,000 values (tables and leaves, shared tables counted per reference) and 1 MB of string bytes per
+  call (`remote payload too large`); at most 1,000 messages and 16 MB queued per VM per step (`remote queue full`).
+- Signals: at most 10,000 connections per signal (`too many connections`). All handlers of a step share a 0.25 s budget per VM;
+  the rest run on the next step, in order. A script whose handlers time out 3 times in a row is disconnected (error printed once).
+- A script that is destroyed, disabled (`Enabled = false`) or moved out of a place where scripts run stops: its connections and
+  threads are removed. Scripts with the same full name share one chunk name and are stopped together only when all are gone.
+- Userdata metatables are protected (`getmetatable` returns false, `setmetatable` errors).
+- Errors raised by API calls and operators are plain strings with `<script>:<line>:` so `pcall` shows them cleanly.
+
+## Milestone 1 limits
+The client VM writes to the same World as the server VM (single process). Nothing stops a LocalScript from changing server-owned
+state; M2 replication will separate them. Accepted for M1.
