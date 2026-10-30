@@ -20,7 +20,7 @@ metallic_runtime = { path = "crates/metallic_runtime" }
 metallic_audio = { path = "crates/metallic_audio" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 egui = { version = "0.37.0", default-features = false }
-eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "accesskit", "clipboard", "wayland", "x11"] }
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "accesskit", "wayland", "x11"] }
 egui_kittest = { version = "0.37.0", features = ["wgpu"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 
