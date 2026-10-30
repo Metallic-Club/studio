@@ -4,7 +4,8 @@
 //! Luau's own implementations run uninterruptibly in C, so a pattern such as `.-b` on a
 //! large string could hang the host. These versions follow the same semantics (they are a
 //! port of the reference matcher) but count steps and give up with `pattern too complex`
-//! after [`MAX_STEPS`] steps or once the script's time budget is gone.
+//! after [`MAX_STEPS`] steps in one match attempt, or once the script's time budget is gone.
+//! Deadline polling continues across attempts, including scans with many short failures.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -14,8 +15,10 @@ use mlua::{Error, Function, Lua, LuaString, MultiValue, Result, Table, Value};
 use crate::task_lib::{Scheduler, TIMEOUT_MSG};
 use crate::vm::script_location;
 
-/// Hard cap on matcher steps per call to a pattern function.
+/// Hard cap on matcher steps per starting-position attempt.
 pub(crate) const MAX_STEPS: u64 = 10_000_000;
+/// Charged-work interval for deadline checks, independent of attempt boundaries.
+const DEADLINE_POLL_STEPS: u64 = 4096;
 /// Cap on the nesting depth of the matcher (as in the reference implementation).
 const MAX_DEPTH: u32 = 200;
 /// Cap on captures per pattern.
@@ -54,7 +57,10 @@ struct State<'a> {
     pat: &'a [u8],
     level: usize,
     caps: [(usize, isize); MAX_CAPTURES],
+    /// Complexity charged to the current starting-position attempt.
     steps: u64,
+    /// Charged work since the last deadline poll, retained across attempts.
+    poll_steps: u64,
     deadline: Option<Instant>,
     depth: u32,
 }
@@ -87,22 +93,31 @@ impl<'a> State<'a> {
             level: 0,
             caps: [(0, 0); MAX_CAPTURES],
             steps: 0,
+            poll_steps: 0,
             deadline,
             depth: 0,
         }
     }
 
+    /// Starts an independent attempt without resetting aggregate deadline polling.
+    fn begin_attempt(&mut self) {
+        self.level = 0;
+        self.steps = 0;
+    }
+
     fn tick(&mut self, n: u64) -> R<()> {
-        let before = self.steps;
-        self.steps += n;
+        self.steps = self.steps.saturating_add(n);
         if self.steps > MAX_STEPS {
             return Err(Stop::TooComplex);
         }
-        if (before >> 12) != (self.steps >> 12)
-            && let Some(d) = self.deadline
-            && Instant::now() >= d
-        {
-            return Err(Stop::Timeout);
+        self.poll_steps = self.poll_steps.saturating_add(n);
+        if self.poll_steps >= DEADLINE_POLL_STEPS {
+            self.poll_steps %= DEADLINE_POLL_STEPS;
+            if let Some(d) = self.deadline
+                && Instant::now() >= d
+            {
+                return Err(Stop::Timeout);
+            }
         }
         Ok(())
     }
@@ -414,6 +429,84 @@ fn has_specials(pat: &[u8]) -> bool {
     pat.iter().any(|c| b"^$*+?.([%-".contains(c))
 }
 
+/// Recognizes one literal byte conservatively; malformed magic stays on the matcher.
+fn literal_byte(pat: &[u8]) -> Option<u8> {
+    match pat {
+        [byte] if !b"^$*+?.()[]%-".contains(byte) => Some(*byte),
+        _ => None,
+    }
+}
+
+/// Uses the same sticky timeout reporting as the general matcher.
+fn check_deadline(lua: &Lua, sched: &Scheduler) -> Result<()> {
+    if let Some(deadline) = sched.deadline.get()
+        && Instant::now() >= deadline
+    {
+        return Err(stop_error(lua, sched, Stop::Timeout));
+    }
+    Ok(())
+}
+
+fn match_literal(
+    lua: &Lua,
+    sched: &Scheduler,
+    src: &[u8],
+    byte: u8,
+    init: usize,
+) -> Result<MultiValue> {
+    for chunk in src[init..].chunks(DEADLINE_POLL_STEPS as usize) {
+        check_deadline(lua, sched)?;
+        if chunk.contains(&byte) {
+            let result = lua.create_string([byte])?;
+            check_deadline(lua, sched)?;
+            return Ok(MultiValue::from_vec(vec![Value::String(result)]));
+        }
+    }
+    check_deadline(lua, sched)?;
+    Ok(MultiValue::from_vec(vec![Value::Nil]))
+}
+
+fn gsub_literal(
+    lua: &Lua,
+    sched: &Scheduler,
+    src: &[u8],
+    byte: u8,
+    replacement: u8,
+    max_s: usize,
+) -> Result<MultiValue> {
+    check_deadline(lua, sched)?;
+    if src.len() > MAX_RESULT {
+        return Err(Error::runtime(
+            "string.gsub: result too large (limit 64 MB)",
+        ));
+    }
+    let mut out = Vec::with_capacity(src.len());
+    let mut count = 0;
+    for chunk in src.chunks(DEADLINE_POLL_STEPS as usize) {
+        check_deadline(lua, sched)?;
+        let start = out.len();
+        out.extend_from_slice(chunk);
+        if count >= max_s {
+            continue;
+        }
+        for current in &mut out[start..] {
+            if *current == byte {
+                *current = replacement;
+                count += 1;
+                if count >= max_s {
+                    break;
+                }
+            }
+        }
+    }
+    let result = lua.create_string(&out)?;
+    check_deadline(lua, sched)?;
+    Ok(MultiValue::from_vec(vec![
+        Value::String(result),
+        num(count),
+    ]))
+}
+
 fn find_plain(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if needle.is_empty() {
         return Some(from);
@@ -446,12 +539,15 @@ fn find_aux(
             None => vec![Value::Nil],
         }));
     }
+    if !find && let Some(byte) = literal_byte(&pat) {
+        return match_literal(lua, sched, &src, byte, init);
+    }
     let anchor = pat.first() == Some(&b'^');
     let pstart = usize::from(anchor);
     let mut st = State::new(&src, &pat, sched.deadline.get());
     let mut s1 = init;
     loop {
-        st.level = 0;
+        st.begin_attempt();
         if let Some(e) = st
             .do_match(s1, pstart)
             .map_err(|e| stop_error(lua, sched, e))?
@@ -479,7 +575,7 @@ fn gmatch(sched: &Rc<Scheduler>, lua: &Lua, (s, pat): (LuaString, LuaString)) ->
         let mut st = State::new(&src, &pat, sched.deadline.get());
         let mut s1 = pos.get();
         while s1 <= src.len() {
-            st.level = 0;
+            st.begin_attempt();
             if let Some(e) = st.do_match(s1, 0).map_err(|e| stop_error(lua, &sched, e))? {
                 pos.set(if e == s1 { e + 1 } else { e });
                 return Ok(MultiValue::from_vec(st.captures(lua, s1, e, true)?));
@@ -538,13 +634,20 @@ fn gsub(
         v => Some(value_bytes(lua, v)?),
     };
     let max_s = max_n.map_or(src.len() + 1, |n| if n < 0.0 { 0 } else { n as usize });
+    if let Some(byte) = literal_byte(&pat)
+        && let Some(replacement) = &repl_str
+        && let [replacement] = replacement.as_slice()
+        && *replacement != b'%'
+    {
+        return gsub_literal(lua, sched, &src, byte, *replacement, max_s);
+    }
     let anchor = pat.first() == Some(&b'^');
     let pstart = usize::from(anchor);
     let mut st = State::new(&src, &pat, sched.deadline.get());
     let mut out: Vec<u8> = Vec::new();
     let (mut pos, mut n) = (0usize, 0usize);
     while n < max_s {
-        st.level = 0;
+        st.begin_attempt();
         let e = st
             .do_match(pos, pstart)
             .map_err(|er| stop_error(lua, sched, er))?;
@@ -648,4 +751,68 @@ fn stop_error(lua: &Lua, sched: &Scheduler, stop: Stop) -> Error {
         *sched.timeout_loc.borrow_mut() = Some(script_location(lua, 1));
     }
     stop.into()
+}
+
+#[cfg(test)]
+mod attempt_budget_tests {
+    use super::*;
+    use std::time::Duration;
+
+    struct Quiet;
+    impl crate::vm::OutputSink for Quiet {
+        fn print(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    #[test]
+    fn expired_literal_paths_report_timeout_and_mark_it_sticky() {
+        let lua = Lua::new();
+        let sched = Scheduler::new(Rc::new(Quiet));
+        sched.deadline.set(Some(Instant::now()));
+        for result in [
+            match_literal(&lua, &sched, b"", b'a', 0),
+            match_literal(&lua, &sched, b"a", b'a', 0),
+            gsub_literal(&lua, &sched, b"", b'a', b'b', 1),
+            gsub_literal(&lua, &sched, b"a", b'a', b'b', 0),
+            gsub_literal(&lua, &sched, b"a", b'a', b'b', 1),
+        ] {
+            let error = result.unwrap_err();
+            assert!(crate::vm::format_error(&error).contains(TIMEOUT_MSG));
+        }
+        assert!(sched.timeout_loc.borrow().is_some());
+    }
+
+    #[test]
+    fn independent_attempts_receive_their_own_complexity_allowance() {
+        let mut state = State::new(b"", b"", None);
+        assert!(state.tick(MAX_STEPS).is_ok());
+        assert!(matches!(state.tick(1), Err(Stop::TooComplex)));
+        state.begin_attempt();
+        assert!(state.tick(MAX_STEPS).is_ok());
+        assert!(matches!(state.tick(1), Err(Stop::TooComplex)));
+    }
+
+    #[test]
+    fn many_short_failed_attempts_still_reach_the_deadline_poll() {
+        let expired = Instant::now() - Duration::from_secs(1);
+        let mut state = State::new(b"a", b"x", Some(expired));
+        for attempt in 1..=DEADLINE_POLL_STEPS {
+            state.begin_attempt();
+            match state.do_match(0, 0) {
+                Ok(None) => assert!(attempt < DEADLINE_POLL_STEPS),
+                Err(Stop::Timeout) => assert_eq!(attempt, DEADLINE_POLL_STEPS),
+                _ => panic!("unexpected result for a one-step failed attempt"),
+            }
+        }
+    }
+
+    #[test]
+    fn attempt_reset_preserves_partial_poll_work() {
+        let expired = Instant::now() - Duration::from_secs(1);
+        let mut state = State::new(b"", b"", Some(expired));
+        assert!(state.tick(DEADLINE_POLL_STEPS - 1).is_ok());
+        state.begin_attempt();
+        assert!(matches!(state.tick(1), Err(Stop::Timeout)));
+    }
 }

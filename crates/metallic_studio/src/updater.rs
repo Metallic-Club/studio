@@ -19,6 +19,8 @@ use std::time::Duration;
 use semver::Version;
 use serde::Deserialize;
 
+mod tagged;
+
 /// How often Studio should check for updates after the check on start.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -426,11 +428,25 @@ impl UpdateChecker {
         Some(UpdateInfo { version, required })
     }
 
-    fn velopack_manager(&self) -> Result<velopack::UpdateManager, UpdateError> {
+    fn update_source(
+        &self,
+        update: &UpdateInfo,
+    ) -> Result<tagged::TaggedGithubSource, UpdateError> {
         let token = self.tokens.token().ok_or(UpdateError::Unauthorized)?;
-        let repo_url = format!("https://github.com/{RELEASE_REPO}");
-        let source =
-            velopack::sources::GithubSource::new(&repo_url, Some(token.expose().to_string()), true);
+        Ok(tagged::TaggedGithubSource::new(
+            self.channel,
+            update.version.clone(),
+            token,
+            self.api_base.clone(),
+            self.http.clone(),
+        ))
+    }
+
+    fn velopack_manager(
+        &self,
+        update: &UpdateInfo,
+    ) -> Result<velopack::UpdateManager, UpdateError> {
+        let source = self.update_source(update)?;
         let options = velopack::UpdateOptions {
             ExplicitChannel: Some(self.channel.as_str().to_string()),
             ..Default::default()
@@ -439,7 +455,7 @@ impl UpdateChecker {
             .map_err(|e| UpdateError::NotInstalled(e.to_string()))
     }
 
-    /// Downloads the update described by `update` (delta packages when possible) and reports
+    /// Downloads the selected version's full package and reports
     /// progress as percent, 0 to 100. Only works in an installed copy of Studio. Does not
     /// restart; call [`apply_and_restart`](Self::apply_and_restart) afterwards.
     pub fn download(
@@ -447,7 +463,7 @@ impl UpdateChecker {
         update: &UpdateInfo,
         mut progress: impl FnMut(u8),
     ) -> Result<(), UpdateError> {
-        let manager = self.velopack_manager()?;
+        let manager = self.velopack_manager(update)?;
         let found = manager
             .check_for_updates()
             .map_err(|e| UpdateError::Install(e.to_string()))?;

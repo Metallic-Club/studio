@@ -36,6 +36,15 @@ runs). Prefer the workflow.
 - Tag `vX.Y.Z-stable`, command `--channel stable`. It is published as a normal release; dev releases are marked
   pre-release.
 - Stable and dev are separate feeds. A Studio only sees releases of its own channel (dev ignores `-stable` tags).
+- Once a version is selected, Studio fetches that exact `vX.Y.Z-<channel>` release by tag, then its
+  `releases.<channel>.json` and package assets by numeric GitHub asset ID. Newer releases of the other channel cannot
+  push the selected package out of a fixed-size release listing. The feed must contain a full package for the selected
+  version; advertised packages must be attached to that release. Historical feed entries and deltas are excluded:
+  one exact tag cannot establish the complete delta chain from an arbitrary installed version. Velopack verifies the
+  downloaded full package's checksum. Delta optimization needs a separate complete-chain design and regression tests.
+  Metadata uses the updater's bounded HTTP client; each package transfer has a ten-minute overall timeout. This is
+  synchronous worker logic; UI cancellation/threading is tracked separately in #206. Installed-copy restart and real
+  release round-trip acceptance remain pending below.
 - Only the owner decides when a stable release is cut. Dev builds come first; stable is a dev build that was tested.
 - A release can be marked required (Studio then insists on restarting): add `--required` to the script, or put the line
   `required: true` in the release notes. Use it only for breaking changes (file format, protocol).

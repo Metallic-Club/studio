@@ -414,7 +414,9 @@ impl World {
     ///
     /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`],
     /// [`CoreError::TypeMismatch`] (wrong value type), [`CoreError::InvalidValue`] (e.g. unknown
-    /// material). Fires the property's `property_changed` signal when the value changes.
+    /// material or a non-finite Number/Vector3/Color3/UDim2 component). Rejected writes change
+    /// neither properties, the change journal, nor signals. Numeric ranges remain defined by
+    /// existing registry constraints. Fires `property_changed` when an accepted value changes.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
         let class = self.node(id).ok_or(CoreError::InvalidInstance)?.class;
         let def = find_property(class, prop).ok_or_else(|| CoreError::UnknownProperty {
@@ -426,6 +428,12 @@ impl World {
                 property: prop.to_string(),
                 expected: def.ty.name().to_string(),
                 found: value.value_type().name().to_string(),
+            });
+        }
+        if !value.has_finite_components() {
+            return Err(CoreError::InvalidValue {
+                property: prop.to_string(),
+                reason: "all numeric components must be finite".into(),
             });
         }
         if let (Some(allowed), Value::String(s)) = (def.allowed, &value)
