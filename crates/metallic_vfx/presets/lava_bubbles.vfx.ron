@@ -1,0 +1,165 @@
+(
+  format: 1,
+  name: "Lava bubbles",
+  description: "Bubbles swelling and popping on a lava pool, with splatter.",
+  tags: [
+    "lava",
+    "environment",
+    "loop",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Heat glow",
+      capacity: 8,
+      spawn: [
+        Rate(
+          per_second: 2.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 0.05, 0.0),
+        ),
+        Lifetime(
+          seconds: (2.0, 2.0),
+        ),
+        Size(
+          size: (6.0, 6.0),
+        ),
+        Color(
+          choices: [
+            "#FF5A1F",
+          ],
+        ),
+      ],
+      update: [
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.5, 0.75),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        facing: Ground,
+        texture: SoftDot,
+        light_emission: 1.0,
+      ),
+    ),
+    (
+      name: "Bubbles",
+      capacity: 32,
+      spawn: [
+        Rate(
+          per_second: 3.5,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 2.0,
+          ),
+        ),
+        Lifetime(
+          seconds: (1.2, 1.8),
+        ),
+        Velocity(
+          speed: (0.15, 0.3),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.35, 0.7),
+        ),
+        Color(
+          choices: [
+            "#FF7A1A",
+            "#FFB03A",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.2),
+              (0.82, 1.0),
+              (0.9, 1.25),
+              (1.0, 0.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Bubble,
+        light_emission: 0.5,
+        brightness: 1.5,
+        sort: OldestOnTop,
+      ),
+    ),
+    (
+      name: "Splatter",
+      capacity: 64,
+      spawn: [
+        Rate(
+          per_second: 7.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 1.8,
+          ),
+        ),
+        Lifetime(
+          seconds: (0.5, 0.9),
+        ),
+        Velocity(
+          speed: (2.0, 4.0),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (50.0, 50.0),
+        ),
+        Size(
+          size: (0.08, 0.15),
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.0, -14.0, 0.0),
+        ),
+        CollisionPlane(
+          point: (0.0, 0.0, 0.0),
+          normal: (0.0, 1.0, 0.0),
+          bounce: 0.0,
+          friction: 0.0,
+          on_hit: Kill,
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#FFC24A"),
+              (1.0, "#B3260E"),
+            ],
+            space: Oklab,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Dot,
+        light_emission: 0.5,
+        brightness: 1.4,
+      ),
+    ),
+  ],
+)
