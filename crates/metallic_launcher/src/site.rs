@@ -101,12 +101,12 @@ pub fn is_local_page(url: &Url) -> bool {
     if !url.username().is_empty() || url.password().is_some() {
         return false;
     }
-    match (url.scheme(), url.host_str(), url.port_or_known_default()) {
-        (LOCAL_SCHEME, Some("local"), None) => true,
-        ("http", Some("metallic-app.localhost"), Some(80)) => true,
-        ("https", Some("metallic-app.localhost"), Some(443)) => true,
-        _ => false,
-    }
+    matches!(
+        (url.scheme(), url.host_str(), url.port_or_known_default()),
+        (LOCAL_SCHEME, Some("local"), None)
+            | ("http", Some("metallic-app.localhost"), Some(80))
+            | ("https", Some("metallic-app.localhost"), Some(443))
+    )
 }
 
 /// Parsed startup configuration; arguments exclude the executable name.

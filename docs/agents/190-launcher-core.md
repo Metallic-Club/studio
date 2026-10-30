@@ -35,10 +35,17 @@ Claimed after verifying no blockers/fresh competing claim and merged plan PR 188
   [tempfile atomic persist](https://docs.rs/tempfile/3.27.0/tempfile/struct.TempPath.html#method.persist),
   [Rust filesystem rename](https://doc.rust-lang.org/std/fs/fn.rename.html). Installed tempfile Windows source confirms
   MoveFileExW replacement and retaining TempPath on failure; the closed TempPath is kept between bounded retries.
-- Final workspace, strict Clippy, license and formatting gates: pending. Guarded lane116 ownership transition cleaned
-  local packages only and compile output confirms this worktree. Coordinated timed test windows with other agents.
+- Guarded `cargo test --workspace -j 4 -- --test-threads=1`: 251 tests passed.
+- Guarded `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed after replacing one boolean match with
+  the equivalent `matches!` spelling. Focused launcher suite rerun after that syntax cleanup: all 39 tests passed.
+- `cargo deny check licenses`, `cargo fmt --all --check`, `git diff --check`: passed; existing unused MPL-2.0 license
+  allowance warning only. No dependency version changes.
+- Independent read-only review of URL/deep-link/argument/settings source and tests found no actionable issue.
+- Guarded lane116 ownership transition cleaned local packages only; compilation confirms this worktree. Coordinated
+  timed test windows with other agents. Final local logs: `metallic-190-workspace-final.log`, `metallic-190-clippy-final.log`.
 
 ## Next / open questions
 
-Independent source review, final gates, push/PR/status review. No merges. Later tasks build the shell and consume
-these APIs. No production origin or credentials are supplied by this change.
+Implementation, local gates and independent source review are complete. Push/open the PR and mark issue 190 for
+review; CI remains pending. No merges. Later tasks build the shell and consume these APIs. No production origin or
+credentials are supplied by this change.
