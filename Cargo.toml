@@ -14,3 +14,10 @@ metallic_render = { path = "crates/metallic_render" }
 metallic_physics = { path = "crates/metallic_physics" }
 metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
+
+# The vendored Luau VM is C++ built by the `cc` crate, which follows the package's opt-level.
+# Unoptimised, it is too slow for the 0.1 s script budget.
+[profile.dev.package.luau0-src]
+opt-level = 2
+[profile.dev.package.mlua-sys]
+opt-level = 2
