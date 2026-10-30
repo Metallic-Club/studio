@@ -103,3 +103,29 @@ all-target Clippy passed in 28.66 s; licenses (`licenses ok`), format and diff c
 The pre-PR fetch found main `48b20dd` (#278 input actions), with broad core/runtime/player changes and no
 direct script-source changes. The unpublished branch must be rebased onto that advance and validated again;
 the 659-test result remains exact-base evidence rather than a claim about that newer integration.
+
+## Final pinned input-actions integration
+
+Rebased cleanly onto `48b20dd`, source head `45b7b6d`. The task implementation and regression test files are
+identical to the independently reviewed `fc33f97` source; no pending PR production code was imported.
+The guarded reset removed 2.7 GiB of local package outputs, retained third-party dependencies and rebuilt
+this worktree's local crates. Workspace prebuild passed in 2m34s. The actual serial workspace suite passed
+718 tests, zero failures, three existing manual probes ignored, including both Parkour routes, input actions,
+all Luau suites and all 19 new tests. Logs: `metallic173-48-{prebuild,workspace}.log` in the local temporary
+directory. This base is pinned for final checks and publication; CI will validate the PR merge result.
+
+Strict workspace all-target Clippy passed in 35.81 s. License (`licenses ok`), format and diff checks also
+passed on this base. The final Clippy log is `metallic173-48-clippy.log` in the local temporary directory.
+All required local checks are green. Publish this branch for review, verify CI against the final pushed
+commit and do not merge. No new public task APIs or relaxed budgets.
+
+Final commands use the owned target lane via `tools/cargo_lane.py`, with `--reset` before prebuilding:
+
+```text
+test --workspace --no-run -j 4
+test --workspace -j 4 -- --test-threads=1
+clippy --workspace --all-targets -j 4 -- -D warnings
+cargo deny check licenses
+cargo fmt --all -- --check
+git diff --check
+```
