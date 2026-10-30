@@ -403,7 +403,7 @@ fn pos_relat(pos: f64, len: usize) -> usize {
     let pos = pos.trunc();
     if pos > 0.0 {
         pos as usize
-    } else if pos == 0.0 || pos < -(len as f64) {
+    } else if pos.is_nan() || pos == 0.0 || pos < -(len as f64) {
         1
     } else {
         (len as f64 + pos + 1.0) as usize

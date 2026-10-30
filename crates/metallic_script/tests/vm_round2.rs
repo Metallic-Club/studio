@@ -78,6 +78,17 @@ fn trim_pattern_on_100kb_works() {
     );
 }
 
+#[test]
+fn nan_init_is_treated_as_start() {
+    let (mut vm, _) = vm();
+    vm.run_script(
+        "T",
+        "assert(string.find('abc', 'b', 0/0) == 2)
+         assert(string.match('abc', '.', 0/0) == 'a')",
+    )
+    .unwrap();
+}
+
 const FMT: &str = "local function fmt(...) local o = {} for i = 1, select('#', ...) do o[#o + 1] = tostring((select(i, ...))) end return table.concat(o, '|') end
 local function it(f, s, p) local r = {} for a, b in f(s, p) do r[#r + 1] = tostring(a) .. ',' .. tostring(b) end return table.concat(r, ';') end
 ";
