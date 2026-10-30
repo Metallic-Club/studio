@@ -25,7 +25,9 @@ apps.
 ## Crates
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref); a class registry (`classes.rs`) with typed
-  properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
+  properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
+  cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
+  `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). Also `deep_clone()` used by Play.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
