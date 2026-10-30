@@ -22,23 +22,38 @@
 //!   Press, Release, Hold, Tap, DoubleTap and Repeat measured in event time; context priority
 //!   and sink; the last-used device with its hysteresis rule.
 //! - [`ScriptedSource`]: `--input-script` files and tests.
+//! - [`overrides`]: the player's changes (rebound controls, hold or toggle, stick and mouse
+//!   sensitivity, inversion and dead zone, the hold assists) as a JSON file of differences per
+//!   game ([`OverrideStore`]); [`InputRuntime::set_overrides`] applies them.
+//! - [`rebind`]: the Controls page's rules: rows by `RebindGroup`, what a slot takes while
+//!   listening, conflicts with Swap / Replace / Cancel, `Required` and `Menu`.
+//! - [`glyph`]: how a binding looks (keycaps, mouse, a generic gamepad in Letters or Positions
+//!   style); [`InputRuntime::glyphs`] caches them per action and device.
 
 mod config;
 mod control;
+pub mod glyph;
+pub mod overrides;
+pub mod rebind;
 mod runtime;
 mod script;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_controls;
 
 pub use config::{
-    ActionDef, ActionType, BindingDef, CHARACTER_CONTROLS, ContextDef, InputConfig,
-    MOUSE_ORBIT_SPEED, PAD_ZOOM_SPEED, Role, STICK_ORBIT_SPEED, Trigger, ZOOM_PER_NOTCH,
-    default_character_controls,
+    ActionDef, ActionType, BindingDef, CHARACTER_CONTROLS, ContextDef, DEFAULT_GROUP, InputConfig,
+    MENU_ACTION, MOUSE_ORBIT_SPEED, PAD_ZOOM_SPEED, Role, STICK_ORBIT_SPEED, SYSTEM_CONTEXT,
+    SYSTEM_GROUP, SYSTEM_PRIORITY, Trigger, ZOOM_PER_NOTCH, default_character_controls,
+    system_context,
 };
 pub use control::{
     CONTROL_COUNT, Control, ControlKind, Device, DeviceKind, InputQueue, MAX_GAMEPADS,
     QUEUE_CAPACITY, RawEvent, RawSource,
 };
+pub use glyph::{GamepadStyle, Glyph};
+pub use overrides::{OverrideStore, PlayerOverrides, Slot};
 pub use runtime::{ActionEvent, ActionEventKind, ActionId, ActionValue, InputRuntime};
 pub use script::ScriptedSource;
 

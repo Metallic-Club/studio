@@ -170,6 +170,37 @@ impl Default for Motion {
     }
 }
 
+/// Everything needed to rewind a character: its movement state plus the root position. Saved
+/// with [`CharacterController::save_state`], applied with [`CharacterController::restore_state`];
+/// client prediction replays inputs from a saved state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterState {
+    /// `HumanoidRootPart` position.
+    pub position: Vec3,
+    /// Vertical velocity of the character's own motion (jumping, falling).
+    pub vertical: f64,
+    /// Horizontal velocity inherited from the part the character left, kept while airborne.
+    pub inherited: Vec3,
+    /// What the character is doing.
+    pub state: HumanoidState,
+    /// The part stood on after the last step.
+    pub ground: Option<InstanceId>,
+    /// Facing in degrees around +Y (0 looks along -Z).
+    pub yaw: f64,
+    /// Seconds since death.
+    pub dead_time: f64,
+    /// Total velocity of the last step.
+    pub velocity: Vec3,
+    /// Velocity of the last step minus what the carrying part added.
+    pub relative: Vec3,
+}
+
+/// Poses every avatar part found in `model` so the root is at `root` and the figure faces
+/// `yaw` degrees around +Y (0 looks along -Z). Clients use it to place remote characters' limbs.
+pub fn place_character(world: &mut World, model: InstanceId, root: Vec3, yaw: f64) {
+    avatar::place(world, model, root, yaw);
+}
+
 /// Builds a character for `player` and makes it the player's `Character`.
 ///
 /// The Model is named after the player and holds the avatar parts (a 2x2x1 `HumanoidRootPart`,
@@ -313,6 +344,50 @@ impl CharacterController {
     /// uses this to pick idle, walk or run.
     pub fn relative_velocity(&self, character: InstanceId) -> Option<Vec3> {
         self.motions.get(&character).map(|m| m.relative)
+    }
+
+    /// The character's movement state and root position, to rewind to later. A character that
+    /// was never stepped saves the state its first step would start from. `None` if it has no
+    /// `HumanoidRootPart` with a position.
+    pub fn save_state(&self, world: &World, character: InstanceId) -> Option<CharacterState> {
+        let root = world.find_first_child(character, ROOT_PART)?;
+        let position = vec_prop(world, root, "Position")?;
+        let m = self.motions.get(&character).copied().unwrap_or_default();
+        Some(CharacterState {
+            position,
+            vertical: m.vertical,
+            inherited: m.inherited,
+            state: m.state,
+            ground: m.ground,
+            yaw: m.yaw,
+            dead_time: m.dead_time,
+            velocity: m.velocity,
+            relative: m.relative,
+        })
+    }
+
+    /// Sets the character's movement state and places the whole avatar at `state.position` and
+    /// `state.yaw`. The set of parts it touches is left alone, so no touch is reported twice.
+    pub fn restore_state(
+        &mut self,
+        world: &mut World,
+        character: InstanceId,
+        state: &CharacterState,
+    ) {
+        self.motions.insert(
+            character,
+            Motion {
+                state: state.state,
+                vertical: state.vertical,
+                inherited: state.inherited,
+                ground: state.ground,
+                yaw: state.yaw,
+                dead_time: state.dead_time,
+                velocity: state.velocity,
+                relative: state.relative,
+            },
+        );
+        avatar::place(world, character, state.position, state.yaw);
     }
 
     /// Takes the events of all steps since the last call, oldest first.
