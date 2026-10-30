@@ -10,7 +10,8 @@ pub enum RenderError {
     Device(String),
     /// Reading a rendered frame back from the GPU failed.
     Readback(String),
-    /// A capture was requested with a zero width or height.
+    /// A capture was requested with a zero width or height, or with a width or height above
+    /// the device's `max_texture_dimension_2d` (or a readback above `max_buffer_size`).
     InvalidSize,
     /// The window surface could not be created.
     Surface(String),
@@ -22,7 +23,12 @@ impl fmt::Display for RenderError {
             RenderError::NoAdapter(e) => write!(f, "no graphics adapter: {e}"),
             RenderError::Device(e) => write!(f, "could not create graphics device: {e}"),
             RenderError::Readback(e) => write!(f, "could not read back the frame: {e}"),
-            RenderError::InvalidSize => write!(f, "cannot capture a zero-sized frame"),
+            RenderError::InvalidSize => {
+                write!(
+                    f,
+                    "cannot capture a frame of zero size or above the device limits"
+                )
+            }
             RenderError::Surface(e) => write!(f, "could not create window surface: {e}"),
         }
     }
@@ -46,6 +52,9 @@ pub struct RenderContext {
 impl RenderContext {
     /// Creates a device that can present to `window` and returns it with the window's surface.
     ///
+    /// The device gets the adapter's maximum texture size (not wgpu's 8192 px default) and
+    /// logs uncaptured wgpu errors with `log::error!` instead of panicking.
+    ///
     /// `window` is anything wgpu accepts as a surface target, for example an
     /// `Arc<winit::window::Window>`.
     pub fn new_for_window(
@@ -59,14 +68,16 @@ impl RenderContext {
         Ok((ctx, surface))
     }
 
-    /// Creates a device with no window, for tests and screenshots.
+    /// Creates a device with no window, for tests and screenshots. Same limits and error
+    /// handling as [`RenderContext::new_for_window`].
     pub fn new_headless() -> Result<RenderContext, RenderError> {
         let instance = wgpu::Instance::default();
         pollster::block_on(Self::from_instance(&instance, None))
     }
 
     /// Wraps the device and queue of a host that already owns them (the eframe/egui
-    /// Studio editor passes the ones from its `wgpu_render_state`).
+    /// Studio editor passes the ones from its `wgpu_render_state`). The host's limits and
+    /// uncaptured-error handler are left as they are.
     pub fn from_eframe(device: wgpu::Device, queue: wgpu::Queue) -> RenderContext {
         RenderContext {
             device,
@@ -89,13 +100,21 @@ impl RenderContext {
             })
             .await
             .map_err(|e| RenderError::NoAdapter(e.to_string()))?;
+        // The default limits cap textures at 8192 px; take the adapter's real maximum so wide
+        // windows and large captures work. Other limits stay at the portable defaults.
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("metallic device"),
+                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
                 ..Default::default()
             })
             .await
             .map_err(|e| RenderError::Device(e.to_string()))?;
+        // wgpu's default handler panics on any validation error; log it instead so one bad
+        // frame does not kill the process.
+        device.on_uncaptured_error(std::sync::Arc::new(|e: wgpu::Error| {
+            log::error!("wgpu error: {e}");
+        }));
         let adapter_name = adapter.get_info().name;
         Ok(RenderContext {
             device,
