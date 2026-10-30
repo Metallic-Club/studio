@@ -34,7 +34,14 @@ preserving Lua byte positions and sandbox timeout reporting without a needle-siz
   without a Luau bytecode interrupt between them. It verifies the original script/line timeout and another script's
   successful recovery.
 - Focused script suite: 72 ordinary tests passed, one worker ignored by the parent harness but exercised twice in
-  isolated children. Final workspace/Clippy/license/format gates pending.
+  isolated children.
+- Final guarded `cargo test --workspace -j 4 -- --test-threads=1`: 218 ordinary tests passed; the subprocess worker
+  remains ignored by the outer harness and is exercised twice by its normal parent tests.
+- Guarded `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed.
+- `cargo deny check licenses`: passed, including direct memchr; existing unused MPL-2.0 allowance warning only.
+- `cargo fmt --all --check` and `git diff --check`: passed.
+- Independent read-only review of source, deadline/error routing and child-process tests found no actionable issue.
+- Local temporary logs: `metallic-165-workspace-final.log` and `metallic-165-clippy-final.log`.
 
 ## Build provenance
 
@@ -44,4 +51,5 @@ compile output confirms `165-linear-plain-find` source paths. Third-party artifa
 
 ## Next / open questions
 
-Run final gates, review/rebase, push and open a PR. Do not merge. No UI or public API signature changes.
+Local gates and source review are complete. Push/open the PR, mark issue 165 for review, then await CI. Do not merge.
+No UI or public API signature changes. Native scans are linear but are not preempted mid-scan.
