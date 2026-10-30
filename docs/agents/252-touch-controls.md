@@ -60,3 +60,10 @@ cargo run -p metallic_player -- templates/parkour --emulate phone
 cargo run -p metallic_player -- templates/parkour --emulate phone --input-script <file> --frames 70 --capture 66:<png>
 ```
 Finger script lines: `20 touch0 Down pos 170 290`, `28 touch0 Move pos 215 245`, `60 touch1 Down pos 736 310`.
+
+## Verified
+- fmt; clippy `--workspace --all-targets -D warnings`; `cargo test --workspace` (no failures); `cargo deny check licenses` (ok).
+- Windowed `--emulate phone` and `--emulate small-phone-portrait` on Parkour, screenshots in `252-shots/` (looked at:
+  held stick with violet knob, Run and Jump with labels, safe-area guide; idle hint ring).
+- Overlay draw time, debug build, RTX 3060 Ti (no Mid-tier machine here), 600 frames with a held stick:
+  mean 0.051 ms, p50 0.035 ms, p99 0.23 ms, max 3.6 ms (the first frame lays out the label fonts).
