@@ -201,7 +201,10 @@ impl PreviewMotion {
                     let u = (phase - 0.3) / 0.7;
                     -1.0 + 2.0 * (u * u * (3.0 - 2.0 * u))
                 };
-                Transform::from_position_yaw(Vec3::new(0.0, 0.0, 0.0), s * 80f32.to_radians() + PI * 0.5)
+                Transform::from_position_yaw(
+                    Vec3::new(0.0, 0.0, 0.0),
+                    s * 80f32.to_radians() + PI * 0.5,
+                )
             }
             PreviewMotion::Line => {
                 let x = 4.0 * (t * 0.8).sin();

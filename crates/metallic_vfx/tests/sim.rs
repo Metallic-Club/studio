@@ -3,8 +3,8 @@
 use metallic_vfx::draw::{beam_point, build_draw_list, flipbook_frames};
 use metallic_vfx::roblox::{FlipbookLayout, ParticleEmitter};
 use metallic_vfx::{
-    Beam, Camera, Curve, Direction, Effect, Emitter, Flipbook, FlipbookMode, HitAction,
-    InitModule, Range, Shape, Simulation, SpawnModule, Transform, UpdateModule, Vec3, VfxError,
+    Beam, Camera, Curve, Direction, Effect, Emitter, Flipbook, FlipbookMode, HitAction, InitModule,
+    Range, Shape, Simulation, SpawnModule, Transform, UpdateModule, Vec3, VfxError,
 };
 
 const DT: f32 = 1.0 / 60.0;
@@ -85,7 +85,10 @@ fn different_seeds_differ() {
     run(&mut a, 0.5);
     run(&mut b, 0.5);
     assert_eq!(a.particle_count(), b.particle_count());
-    assert_ne!(a.emitters()[0].pool.position_age, b.emitters()[0].pool.position_age);
+    assert_ne!(
+        a.emitters()[0].pool.position_age,
+        b.emitters()[0].pool.position_age
+    );
 }
 
 #[test]
@@ -186,13 +189,19 @@ fn looping_effects_repeat_bursts_each_cycle() {
 
 #[test]
 fn particles_die_at_their_lifetime() {
-    let mut s = sim(single(emitter(vec![SpawnModule::Burst {
-        time: 0.0,
-        count: 50,
-        cycles: 1,
-        interval: 0.0,
-        disabled: false,
-    }], 0.5)), 1);
+    let mut s = sim(
+        single(emitter(
+            vec![SpawnModule::Burst {
+                time: 0.0,
+                count: 50,
+                cycles: 1,
+                interval: 0.0,
+                disabled: false,
+            }],
+            0.5,
+        )),
+        1,
+    );
     s.step(DT);
     assert_eq!(s.particle_count(), 50);
     for p in &s.emitters()[0].pool.velocity_life {
@@ -211,7 +220,13 @@ fn zero_lifetime_spawns_nothing_and_lifetime_is_capped() {
     assert_eq!(s.particle_count(), 0);
     let mut long = sim(single(emitter(vec![rate(10.0)], 60.0)), 1);
     run(&mut long, 0.5);
-    assert!(long.emitters()[0].pool.velocity_life.iter().all(|v| v[3] == 20.0));
+    assert!(
+        long.emitters()[0]
+            .pool
+            .velocity_life
+            .iter()
+            .all(|v| v[3] == 20.0)
+    );
 }
 
 #[test]
@@ -398,7 +413,11 @@ fn distance_spawning_counts_studs() {
     em.capacity = 1000;
     let mut s = sim(single(em), 1);
     for i in 1..=60 {
-        s.set_transform(Transform::from_position(Vec3::new(i as f32 * 0.1, 0.0, 0.0)));
+        s.set_transform(Transform::from_position(Vec3::new(
+            i as f32 * 0.1,
+            0.0,
+            0.0,
+        )));
         s.step(DT);
     }
     assert_eq!(s.particle_count(), 12);
@@ -418,7 +437,10 @@ fn bad_dt_is_ignored() {
 #[test]
 fn invalid_effects_are_rejected() {
     let mut e = single(emitter(vec![rate(f32::NAN)], 1.0));
-    assert!(matches!(Simulation::new(e.clone(), 1), Err(VfxError::Invalid { .. })));
+    assert!(matches!(
+        Simulation::new(e.clone(), 1),
+        Err(VfxError::Invalid { .. })
+    ));
     e.emitters[0].spawn = vec![rate(1.0)];
     e.emitters[0].capacity = 0;
     assert!(matches!(e.validate(), Err(VfxError::Invalid { .. })));
@@ -468,13 +490,28 @@ fn flipbook_modes() {
         blend: false,
     };
     // OneShot spans the lifetime regardless of fps.
-    assert_eq!(flipbook_frames(&fb(FlipbookMode::OneShot), 0.0, 2.0, 0.5, 1).0, 0);
-    assert_eq!(flipbook_frames(&fb(FlipbookMode::OneShot), 1.99, 2.0, 0.5, 1).0, 3);
+    assert_eq!(
+        flipbook_frames(&fb(FlipbookMode::OneShot), 0.0, 2.0, 0.5, 1).0,
+        0
+    );
+    assert_eq!(
+        flipbook_frames(&fb(FlipbookMode::OneShot), 1.99, 2.0, 0.5, 1).0,
+        3
+    );
     // Loop at 4 fps: frame 1 at 0.25 s, wraps after 1 s.
-    assert_eq!(flipbook_frames(&fb(FlipbookMode::Loop), 0.3, 9.0, 0.5, 1).0, 1);
-    assert_eq!(flipbook_frames(&fb(FlipbookMode::Loop), 1.05, 9.0, 0.5, 1).0, 0);
+    assert_eq!(
+        flipbook_frames(&fb(FlipbookMode::Loop), 0.3, 9.0, 0.5, 1).0,
+        1
+    );
+    assert_eq!(
+        flipbook_frames(&fb(FlipbookMode::Loop), 1.05, 9.0, 0.5, 1).0,
+        0
+    );
     // PingPong goes 0 1 2 3 2 1 0.
-    assert_eq!(flipbook_frames(&fb(FlipbookMode::PingPong), 1.3, 9.0, 0.5, 1).0, 1);
+    assert_eq!(
+        flipbook_frames(&fb(FlipbookMode::PingPong), 1.3, 9.0, 0.5, 1).0,
+        1
+    );
     let (a, _, _) = flipbook_frames(&fb(FlipbookMode::Random), 0.6, 9.0, 0.5, 7);
     assert!(a < 4);
 }
@@ -530,5 +567,10 @@ fn trails_follow_motion_and_expire() {
     }
     let n = s.trails()[0].points.len();
     assert!(n > 5, "trail has {n} points");
-    assert!(s.trails()[0].points.iter().all(|p| p.age <= e.trails[0].lifetime + DT));
+    assert!(
+        s.trails()[0]
+            .points
+            .iter()
+            .all(|p| p.age <= e.trails[0].lifetime + DT)
+    );
 }

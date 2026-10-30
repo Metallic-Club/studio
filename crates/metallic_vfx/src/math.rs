@@ -126,7 +126,11 @@ impl Vec3 {
     /// Two unit vectors perpendicular to `self` (assumed unit length) and to each other.
     #[must_use]
     pub fn basis(self) -> (Self, Self) {
-        let up = if self.y.abs() > 0.99 { Self::X } else { Self::Y };
+        let up = if self.y.abs() > 0.99 {
+            Self::X
+        } else {
+            Self::Y
+        };
         let t = up.cross(self).normalize_or(Self::X);
         let b = self.cross(t);
         (t, b)
@@ -276,7 +280,12 @@ mod tests {
 
     #[test]
     fn basis_is_orthonormal() {
-        for d in [Vec3::X, Vec3::Y, -Vec3::Y, Vec3::new(1.0, 2.0, 3.0).normalize_or(Vec3::Y)] {
+        for d in [
+            Vec3::X,
+            Vec3::Y,
+            -Vec3::Y,
+            Vec3::new(1.0, 2.0, 3.0).normalize_or(Vec3::Y),
+        ] {
             let (t, b) = d.basis();
             assert!(t.dot(d).abs() < 1e-5);
             assert!(b.dot(d).abs() < 1e-5);

@@ -52,7 +52,10 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         }
         Icon::Pause => {
             for dx in [-0.3, 0.3] {
-                let r = Rect::from_center_size(c + Vec2::new(s * dx, 0.0), Vec2::new(s * 0.28, s * 1.2));
+                let r = Rect::from_center_size(
+                    c + Vec2::new(s * dx, 0.0),
+                    Vec2::new(s * 0.28, s * 1.2),
+                );
                 painter.rect_filled(r, 1.0, color);
             }
         }
@@ -93,8 +96,14 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             );
         }
         Icon::Plus => {
-            painter.line_segment([c - Vec2::new(s * 0.6, 0.0), c + Vec2::new(s * 0.6, 0.0)], stroke);
-            painter.line_segment([c - Vec2::new(0.0, s * 0.6), c + Vec2::new(0.0, s * 0.6)], stroke);
+            painter.line_segment(
+                [c - Vec2::new(s * 0.6, 0.0), c + Vec2::new(s * 0.6, 0.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [c - Vec2::new(0.0, s * 0.6), c + Vec2::new(0.0, s * 0.6)],
+                stroke,
+            );
         }
         Icon::More => {
             for dx in [-0.5, 0.0, 0.5] {
@@ -187,7 +196,11 @@ pub fn segmented(ui: &mut Ui, items: &[&str], selected: usize) -> Option<usize> 
             Color32::TRANSPARENT
         };
         ui.painter().rect_filled(r, theme::R_SM, fill);
-        let text_color = if i == selected { color::TEXT } else { color::TEXT_2 };
+        let text_color = if i == selected {
+            color::TEXT
+        } else {
+            color::TEXT_2
+        };
         ui.painter().text(
             r.center(),
             egui::Align2::CENTER_CENTER,
@@ -259,7 +272,12 @@ pub fn num(ui: &mut Ui, v: &mut f32, speed: f64, range: std::ops::RangeInclusive
 }
 
 /// `min – max` fields for a [`Range`].
-pub fn range(ui: &mut Ui, r: &mut Range, speed: f64, limits: std::ops::RangeInclusive<f32>) -> bool {
+pub fn range(
+    ui: &mut Ui,
+    r: &mut Range,
+    speed: f64,
+    limits: std::ops::RangeInclusive<f32>,
+) -> bool {
     let a = num(ui, &mut r.min, speed, limits.clone()).changed();
     ui.label(egui::RichText::new("to").color(color::TEXT_3));
     let b = num(ui, &mut r.max, speed, limits).changed();
@@ -274,7 +292,11 @@ pub fn vec3(ui: &mut Ui, v: &mut Vec3, speed: f64) -> bool {
         ("Y", color::AXIS_Y, &mut v.y),
         ("Z", color::AXIS_Z, &mut v.z),
     ] {
-        ui.label(egui::RichText::new(letter).color(c).font(theme::semibold(11.0)));
+        ui.label(
+            egui::RichText::new(letter)
+                .color(c)
+                .font(theme::semibold(11.0)),
+        );
         changed |= ui
             .add(
                 egui::DragValue::new(value)

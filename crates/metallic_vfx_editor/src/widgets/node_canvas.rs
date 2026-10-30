@@ -142,7 +142,11 @@ pub fn node_canvas(
     groups: &[Group],
 ) -> CanvasOutput {
     let mut out = CanvasOutput::default();
-    let bg = ui.interact(rect, ui.scope_id().with("canvas-bg"), Sense::click_and_drag());
+    let bg = ui.interact(
+        rect,
+        ui.scope_id().with("canvas-bg"),
+        Sense::click_and_drag(),
+    );
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, color::BG_BASE);
 
@@ -167,7 +171,11 @@ pub fn node_canvas(
     // Dot grid.
     let step = 24.0 * z;
     if step > 6.0 {
-        let start = rect.min + Vec2::new(view.offset.x.rem_euclid(step), view.offset.y.rem_euclid(step));
+        let start = rect.min
+            + Vec2::new(
+                view.offset.x.rem_euclid(step),
+                view.offset.y.rem_euclid(step),
+            );
         let mut y = start.y;
         while y < rect.max.y {
             let mut x = start.x;
@@ -189,7 +197,9 @@ pub fn node_canvas(
             }
         }
         if let Some(b) = bounds {
-            let b = b.expand2(Vec2::new(16.0, 16.0)).translate(Vec2::new(0.0, -14.0));
+            let b = b
+                .expand2(Vec2::new(16.0, 16.0))
+                .translate(Vec2::new(0.0, -14.0));
             let b = Rect::from_min_max(b.min, b.max + Vec2::new(0.0, 14.0));
             let sr = Rect::from_min_max(to_screen(b.min), to_screen(b.max));
             painter.rect(
@@ -218,7 +228,11 @@ pub fn node_canvas(
         let pb = to_screen(b.anchor(w.to.1));
         let path = route(pa, w.from.1, pb, w.to.1, 8.0 * z);
         let selected = a.selected || b.selected;
-        let c = if selected { color::ACCENT } else { color::ICON.gamma_multiply(0.7) };
+        let c = if selected {
+            color::ACCENT
+        } else {
+            color::ICON.gamma_multiply(0.7)
+        };
         painter.add(egui::Shape::line(path, Stroke::new(1.5 * z.max(0.7), c)));
         painter.circle_filled(pa, 3.0 * z, c);
         painter.circle_filled(pb, 3.0 * z, c);
@@ -226,12 +240,19 @@ pub fn node_canvas(
 
     // Nodes.
     for (index, n) in nodes.iter_mut().enumerate() {
-        let r = Rect::from_min_max(to_screen(n.pos), to_screen(n.pos + Vec2::new(n.width, n.height())));
+        let r = Rect::from_min_max(
+            to_screen(n.pos),
+            to_screen(n.pos + Vec2::new(n.width, n.height())),
+        );
         if !r.intersects(rect) {
             continue;
         }
         let header = Rect::from_min_size(r.min, Vec2::new(r.width(), HEADER * z));
-        let hresp = ui.interact(header, ui.scope_id().with(("node", n.id, index)), Sense::click_and_drag());
+        let hresp = ui.interact(
+            header,
+            ui.scope_id().with(("node", n.id, index)),
+            Sense::click_and_drag(),
+        );
         if hresp.dragged() {
             n.pos += hresp.drag_delta() / z;
             out.moved = true;
@@ -245,12 +266,19 @@ pub fn node_canvas(
             color::BG_RAISED,
             Stroke::new(
                 if n.selected { 1.5 } else { 1.0 },
-                if n.selected { color::ACCENT } else { color::LINE_STRONG },
+                if n.selected {
+                    color::ACCENT
+                } else {
+                    color::LINE_STRONG
+                },
             ),
             StrokeKind::Inside,
         );
         painter.line_segment(
-            [Pos2::new(r.min.x + 1.0, header.max.y), Pos2::new(r.max.x - 1.0, header.max.y)],
+            [
+                Pos2::new(r.min.x + 1.0, header.max.y),
+                Pos2::new(r.max.x - 1.0, header.max.y),
+            ],
             Stroke::new(1.0, color::LINE_STRONG),
         );
         painter.text(
@@ -269,10 +297,17 @@ pub fn node_canvas(
         );
         for (ri, row) in n.rows.iter().enumerate() {
             let rr = Rect::from_min_size(
-                Pos2::new(r.min.x + 4.0 * z, header.max.y + (4.0 + ri as f32 * ROW) * z),
+                Pos2::new(
+                    r.min.x + 4.0 * z,
+                    header.max.y + (4.0 + ri as f32 * ROW) * z,
+                ),
                 Vec2::new(r.width() - 8.0 * z, (ROW - 2.0) * z),
             );
-            let resp = ui.interact(rr, ui.scope_id().with(("row", n.id, row.id, index)), Sense::click());
+            let resp = ui.interact(
+                rr,
+                ui.scope_id().with(("row", n.id, row.id, index)),
+                Sense::click(),
+            );
             let dot = Pos2::new(rr.min.x + 10.0 * z, rr.center().y);
             let on_dot = resp
                 .interact_pointer_pos()
@@ -297,7 +332,11 @@ pub fn node_canvas(
             } else {
                 painter.circle_stroke(dot, 3.5 * z, Stroke::new(1.0, color::TEXT_3));
             }
-            let text_color = if row.enabled { color::TEXT } else { color::TEXT_3 };
+            let text_color = if row.enabled {
+                color::TEXT
+            } else {
+                color::TEXT_3
+            };
             painter.text(
                 Pos2::new(rr.min.x + 22.0 * z, rr.center().y),
                 egui::Align2::LEFT_CENTER,
@@ -381,7 +420,13 @@ mod tests {
 
     #[test]
     fn straight_routes_have_no_corners() {
-        let p = route(Pos2::new(0.0, 0.0), Side::Bottom, Pos2::new(0.0, 50.0), Side::Top, 8.0);
+        let p = route(
+            Pos2::new(0.0, 0.0),
+            Side::Bottom,
+            Pos2::new(0.0, 50.0),
+            Side::Top,
+            8.0,
+        );
         assert!(p.iter().all(|q| q.x == 0.0));
     }
 }

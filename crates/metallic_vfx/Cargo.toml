@@ -13,7 +13,7 @@ thiserror = "2.0.21"
 
 [dev-dependencies]
 naga = { version = "30.0.1", features = ["wgsl-in"] }
-criterion = { version = "0.8.2", default-features = false }
+criterion.workspace = true
 
 [[bench]]
 name = "update"

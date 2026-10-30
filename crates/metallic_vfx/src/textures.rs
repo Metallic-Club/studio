@@ -38,11 +38,15 @@ pub fn generate(texture: &Texture) -> Image {
         Texture::Spark => field(64, |x, y| {
             let core = (-(x / 0.16).powi(2)).exp() * (-(y / 0.75).powi(2)).exp();
             let hot = (-(x * x + y * y) / 0.04).exp();
-            (1.0, (core + hot).min(1.0) * (1.0 - smoothstep(0.9, 1.0, y.abs())))
+            (
+                1.0,
+                (core + hot).min(1.0) * (1.0 - smoothstep(0.9, 1.0, y.abs())),
+            )
         }),
         Texture::Twinkle => field(64, |x, y| {
             let r2 = x * x + y * y;
-            let arm = |a: f32, b: f32| (-(a / 0.07).powi(2)).exp() * (1.0 - b.abs()).max(0.0).powf(1.5);
+            let arm =
+                |a: f32, b: f32| (-(a / 0.07).powi(2)).exp() * (1.0 - b.abs()).max(0.0).powf(1.5);
             let a = arm(x, y).max(arm(y, x)) + (-r2 / 0.05).exp() * 0.8;
             (1.0, a.min(1.0))
         }),
@@ -66,7 +70,11 @@ pub fn generate(texture: &Texture) -> Image {
                 .max(blob(0.3, 0.22, 0.38));
             let inside = smoothstep(-0.015, 0.015, d);
             // Two-tone cel shading lit from the top-left, plus a dark ink rim.
-            let lit = if (x * 0.6 - y * 0.8) < -0.05 - d * 0.6 { 1.0 } else { 0.72 };
+            let lit = if (x * 0.6 - y * 0.8) < -0.05 - d * 0.6 {
+                1.0
+            } else {
+                0.72
+            };
             let ink = 1.0 - smoothstep(0.035, 0.07, d);
             (lit * (1.0 - ink * 0.55), inside)
         }),
@@ -90,7 +98,10 @@ pub fn generate(texture: &Texture) -> Image {
             (0.7 + 0.3 * core, body * smoothstep(1.0, 0.75, h + n * 0.1))
         }),
         Texture::Streak => field(32, |x, y| {
-            (1.0, (-(x / 0.12).powi(2)).exp() * (1.0 - y.abs()).max(0.0).sqrt())
+            (
+                1.0,
+                (-(x / 0.12).powi(2)).exp() * (1.0 - y.abs()).max(0.0).sqrt(),
+            )
         }),
         Texture::Leaf => field(64, |x, y| {
             let half = 0.48 * (1.0 - y * y).max(0.0) * (1.0 - 0.25 * y);
@@ -296,7 +307,11 @@ mod tests {
     fn every_builtin_texture_generates_a_visible_image() {
         for t in &Texture::BUILTIN {
             let img = generate(t);
-            assert_eq!(img.rgba.len(), (img.width * img.height * 4) as usize, "{t:?}");
+            assert_eq!(
+                img.rgba.len(),
+                (img.width * img.height * 4) as usize,
+                "{t:?}"
+            );
             let opaque = img.rgba.chunks(4).filter(|p| p[3] > 128).count();
             assert!(opaque > 4, "{t:?} is almost empty");
             assert_eq!(img.nearest, t.is_pixel_art(), "{t:?}");

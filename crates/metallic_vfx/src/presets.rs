@@ -10,8 +10,8 @@ use crate::color::Rgb;
 use crate::curve::{Curve, Gradient, Range};
 use crate::effect::{
     ArtStyle, Beam, Direction, Effect, Emitter, Facing, Flipbook, FlipbookMode, HitAction, InOut,
-    InitModule, PreviewMotion, Render, RenderKind, Shape, SimSpace, SortMode, SpawnModule,
-    Texture, TextureMode, Trail, UpdateModule,
+    InitModule, PreviewMotion, Render, RenderKind, Shape, SimSpace, SortMode, SpawnModule, Texture,
+    TextureMode, Trail, UpdateModule,
 };
 use crate::math::Vec3;
 
@@ -311,7 +311,13 @@ fn fire() -> Effect {
         vec![
             em("Smoke", 128, Texture::Smoke)
                 .rate(5.0)
-                .shape_at(Shape::Sphere { radius: 0.4, partial: 1.0 }, v(0.0, 1.8, 0.0))
+                .shape_at(
+                    Shape::Sphere {
+                        radius: 0.4,
+                        partial: 1.0,
+                    },
+                    v(0.0, 1.8, 0.0),
+                )
                 .life(2.2, 3.2)
                 .vel(Vec3::Y, 1.0, 1.6, 20.0)
                 .size(1.0, 1.5)
@@ -323,7 +329,10 @@ fn fire() -> Effect {
                 .done(),
             em("Flames", 128, Texture::FlameSheet)
                 .rate(42.0)
-                .shape(Shape::Cone { radius: 0.55, angle: 12.0 })
+                .shape(Shape::Cone {
+                    radius: 0.55,
+                    angle: 12.0,
+                })
                 .life(0.55, 0.95)
                 .vel_out(1.8, 3.2, 0.0)
                 .size(1.3, 1.9)
@@ -343,7 +352,13 @@ fn fire() -> Effect {
                 .done(),
             em("Embers", 64, Texture::SoftDot)
                 .rate(9.0)
-                .shape_at(Shape::Sphere { radius: 0.45, partial: 1.0 }, v(0.0, 0.3, 0.0))
+                .shape_at(
+                    Shape::Sphere {
+                        radius: 0.45,
+                        partial: 1.0,
+                    },
+                    v(0.0, 0.3, 0.0),
+                )
                 .life(1.0, 2.0)
                 .vel(Vec3::Y, 2.0, 4.0, 40.0)
                 .size(0.08, 0.15)
@@ -365,7 +380,10 @@ fn smoke() -> Effect {
         vec![
             em("Plume", 256, Texture::Smoke)
                 .rate(9.0)
-                .shape(Shape::Disc { radius: 0.7, inner: 0.0 })
+                .shape(Shape::Disc {
+                    radius: 0.7,
+                    inner: 0.0,
+                })
                 .life(3.5, 5.0)
                 .vel(Vec3::Y, 1.2, 1.9, 14.0)
                 .size(1.4, 2.2)
@@ -438,7 +456,11 @@ fn magic() -> Effect {
             em("Motes", 256, Texture::Twinkle)
                 .rate(46.0)
                 .shape_full(
-                    Shape::Cylinder { radius: 1.3, height: 0.2, top: 1.0 },
+                    Shape::Cylinder {
+                        radius: 1.3,
+                        height: 0.2,
+                        top: 1.0,
+                    },
                     true,
                     Vec3::ZERO,
                     v(0.0, 0.2, 0.0),
@@ -486,7 +508,13 @@ fn explosion() -> Effect {
                     .done(),
                 em("Smoke", 64, Texture::Smoke)
                     .burst(0.12, 22)
-                    .shape_at(Shape::Sphere { radius: 1.0, partial: 1.0 }, v(0.0, 1.3, 0.0))
+                    .shape_at(
+                        Shape::Sphere {
+                            radius: 1.0,
+                            partial: 1.0,
+                        },
+                        v(0.0, 1.3, 0.0),
+                    )
                     .life(2.0, 3.0)
                     .vel_out(1.0, 3.0, 0.0)
                     .size(2.0, 3.0)
@@ -500,7 +528,13 @@ fn explosion() -> Effect {
                     .done(),
                 em("Fireball", 64, Texture::SmokeSheet)
                     .burst(0.0, 28)
-                    .shape_at(Shape::Sphere { radius: 0.6, partial: 1.0 }, v(0.0, 1.2, 0.0))
+                    .shape_at(
+                        Shape::Sphere {
+                            radius: 0.6,
+                            partial: 1.0,
+                        },
+                        v(0.0, 1.2, 0.0),
+                    )
                     .life(0.8, 1.3)
                     .vel_out(3.0, 7.0, 0.0)
                     .size(1.6, 2.6)
@@ -521,7 +555,13 @@ fn explosion() -> Effect {
                     .done(),
                 em("Debris", 96, Texture::Spark)
                     .burst(0.0, 40)
-                    .shape_at(Shape::Sphere { radius: 0.4, partial: 1.0 }, v(0.0, 1.2, 0.0))
+                    .shape_at(
+                        Shape::Sphere {
+                            radius: 0.4,
+                            partial: 1.0,
+                        },
+                        v(0.0, 1.2, 0.0),
+                    )
                     .life(0.6, 1.2)
                     .vel_out(10.0, 18.0, 0.0)
                     .size(0.12, 0.2)
@@ -559,7 +599,10 @@ fn dust_puff() -> Effect {
             vec![
                 em("Puff", 32, Texture::Smoke)
                     .burst(0.0, 14)
-                    .shape(Shape::Cone { radius: 0.3, angle: 78.0 })
+                    .shape(Shape::Cone {
+                        radius: 0.3,
+                        angle: 78.0,
+                    })
                     .life(0.8, 1.3)
                     .vel_out(2.0, 4.2, 0.0)
                     .size(0.5, 0.9)
@@ -586,7 +629,10 @@ fn footstep() -> Effect {
                 em("Dust", 32, Texture::Smoke)
                     .burst(0.0, 7)
                     .distance(0.6)
-                    .shape(Shape::Cone { radius: 0.15, angle: 82.0 })
+                    .shape(Shape::Cone {
+                        radius: 0.15,
+                        angle: 82.0,
+                    })
                     .life(0.5, 0.8)
                     .vel_out(1.2, 2.4, 0.0)
                     .size(0.28, 0.45)
@@ -633,7 +679,10 @@ fn splash() -> Effect {
                     .done(),
                 em("Mist", 16, Texture::SoftDot)
                     .burst(0.02, 10)
-                    .shape(Shape::Disc { radius: 0.4, inner: 0.0 })
+                    .shape(Shape::Disc {
+                        radius: 0.4,
+                        inner: 0.0,
+                    })
                     .life(0.6, 1.0)
                     .vel(Vec3::Y, 1.0, 2.5, 60.0)
                     .size(0.6, 1.0)
@@ -644,7 +693,10 @@ fn splash() -> Effect {
                     .done(),
                 em("Droplets", 96, Texture::Droplet)
                     .burst(0.0, 50)
-                    .shape(Shape::Cone { radius: 0.35, angle: 28.0 })
+                    .shape(Shape::Cone {
+                        radius: 0.35,
+                        angle: 28.0,
+                    })
                     .life(0.7, 1.1)
                     .vel_out(5.0, 8.5, 0.0)
                     .size(0.12, 0.2)
@@ -669,7 +721,12 @@ fn rain() -> Effect {
         vec![
             em("Drops", 1024, Texture::Streak)
                 .rate(320.0)
-                .shape_at(Shape::Box { size: v(14.0, 0.1, 8.0) }, v(0.0, 9.0, 0.0))
+                .shape_at(
+                    Shape::Box {
+                        size: v(14.0, 0.1, 8.0),
+                    },
+                    v(0.0, 9.0, 0.0),
+                )
                 .life(0.7, 0.7)
                 .vel(v(0.12, -1.0, 0.0), 17.0, 21.0, 2.0)
                 .size(0.05, 0.07)
@@ -680,7 +737,12 @@ fn rain() -> Effect {
                 .done(),
             em("Splashes", 256, Texture::Ring)
                 .rate(70.0)
-                .shape_at(Shape::Box { size: v(14.0, 0.0, 8.0) }, v(0.0, 0.03, 0.0))
+                .shape_at(
+                    Shape::Box {
+                        size: v(14.0, 0.0, 8.0),
+                    },
+                    v(0.0, 0.03, 0.0),
+                )
                 .life(0.28, 0.28)
                 .size(0.55, 0.55)
                 .size_ol(&[(0.0, 0.15), (1.0, 1.0)])
@@ -700,7 +762,12 @@ fn snow() -> Effect {
         vec![
             em("Flakes", 1024, Texture::SoftDot)
                 .rate(70.0)
-                .shape_at(Shape::Box { size: v(14.0, 0.1, 8.0) }, v(0.0, 8.0, 0.0))
+                .shape_at(
+                    Shape::Box {
+                        size: v(14.0, 0.1, 8.0),
+                    },
+                    v(0.0, 8.0, 0.0),
+                )
                 .life(8.0, 10.0)
                 .vel(-Vec3::Y, 0.8, 1.4, 10.0)
                 .size(0.07, 0.17)
@@ -720,7 +787,12 @@ fn leaves() -> Effect {
         vec![
             em("Leaves", 128, Texture::Leaf)
                 .rate(6.0)
-                .shape_at(Shape::Box { size: v(10.0, 0.1, 6.0) }, v(-1.5, 7.0, 0.0))
+                .shape_at(
+                    Shape::Box {
+                        size: v(10.0, 0.1, 6.0),
+                    },
+                    v(-1.5, 7.0, 0.0),
+                )
                 .life(7.0, 9.0)
                 .vel(-Vec3::Y, 0.4, 0.8, 30.0)
                 .size(0.35, 0.5)
@@ -730,7 +802,13 @@ fn leaves() -> Effect {
                 .drag(0.6)
                 .curl(2.5, 2.5, v(0.4, 0.0, 0.0))
                 .ground(0.0, 1.0, HitAction::Stick)
-                .squash(&[(0.0, 0.0), (0.25, 0.9), (0.5, 0.0), (0.75, -0.9), (1.0, 0.0)])
+                .squash(&[
+                    (0.0, 0.0),
+                    (0.25, 0.9),
+                    (0.5, 0.0),
+                    (0.75, -0.9),
+                    (1.0, 0.0),
+                ])
                 .fade(&[(0.0, 1.0), (0.05, 0.0), (0.92, 0.0), (1.0, 1.0)])
                 .done(),
         ],
@@ -746,7 +824,10 @@ fn confetti() -> Effect {
             vec![
                 em("Confetti", 256, Texture::Confetti)
                     .burst(0.0, 140)
-                    .shape(Shape::Cone { radius: 0.2, angle: 26.0 })
+                    .shape(Shape::Cone {
+                        radius: 0.2,
+                        angle: 26.0,
+                    })
                     .life(3.0, 4.0)
                     .vel_out(10.0, 15.0, 0.0)
                     .size(0.18, 0.26)
@@ -758,7 +839,14 @@ fn confetti() -> Effect {
                     .accel(0.0, -9.0, 0.0)
                     .drag(1.6)
                     .curl(3.0, 2.0, Vec3::ZERO)
-                    .squash(&[(0.0, 0.0), (0.2, 1.0), (0.4, -0.6), (0.6, 0.9), (0.8, -0.8), (1.0, 0.0)])
+                    .squash(&[
+                        (0.0, 0.0),
+                        (0.2, 1.0),
+                        (0.4, -0.6),
+                        (0.6, 0.9),
+                        (0.8, -0.8),
+                        (1.0, 0.0),
+                    ])
                     .fade(&[(0.0, 0.0), (0.85, 0.0), (1.0, 1.0)])
                     .done(),
             ],
@@ -887,7 +975,10 @@ fn heal() -> Effect {
                 .done(),
             em("Glow", 64, Texture::SoftDot)
                 .rate(12.0)
-                .shape(Shape::Disc { radius: 1.2, inner: 0.7 })
+                .shape(Shape::Disc {
+                    radius: 1.2,
+                    inner: 0.7,
+                })
                 .life(1.2, 1.8)
                 .vel(Vec3::Y, 0.8, 1.6, 0.0)
                 .size(0.6, 0.9)
@@ -897,7 +988,10 @@ fn heal() -> Effect {
                 .done(),
             em("Plus", 64, Texture::Twinkle)
                 .rate(16.0)
-                .shape(Shape::Disc { radius: 1.2, inner: 0.6 })
+                .shape(Shape::Disc {
+                    radius: 1.2,
+                    inner: 0.6,
+                })
                 .life(1.2, 1.8)
                 .vel(Vec3::Y, 1.5, 2.5, 0.0)
                 .size(0.18, 0.32)
@@ -919,7 +1013,10 @@ fn portal() -> Effect {
             em("Inner swirl", 128, Texture::Smoke)
                 .rate(36.0)
                 .shape_full(
-                    Shape::Disc { radius: 1.6, inner: 0.0 },
+                    Shape::Disc {
+                        radius: 1.6,
+                        inner: 0.0,
+                    },
                     false,
                     v(90.0, 0.0, 0.0),
                     v(0.0, 2.2, 0.0),
@@ -935,7 +1032,10 @@ fn portal() -> Effect {
             em("Rim", 512, Texture::SoftDot)
                 .rate(140.0)
                 .shape_full(
-                    Shape::Disc { radius: 2.0, inner: 0.9 },
+                    Shape::Disc {
+                        radius: 2.0,
+                        inner: 0.9,
+                    },
                     false,
                     v(90.0, 0.0, 0.0),
                     v(0.0, 2.2, 0.0),
@@ -962,7 +1062,10 @@ fn shockwave() -> Effect {
                 em("Dust wall", 64, Texture::Smoke)
                     .burst(0.0, 40)
                     .shape_full(
-                        Shape::Cone { radius: 0.6, angle: 86.0 },
+                        Shape::Cone {
+                            radius: 0.6,
+                            angle: 86.0,
+                        },
                         true,
                         Vec3::ZERO,
                         v(0.0, 0.2, 0.0),
@@ -1025,7 +1128,13 @@ fn toon_smear() -> Effect {
                     .done(),
                 em("Sparkles", 16, Texture::Twinkle)
                     .burst(0.04, 7)
-                    .shape_at(Shape::Sphere { radius: 1.2, partial: 0.5 }, v(0.4, 1.6, 0.0))
+                    .shape_at(
+                        Shape::Sphere {
+                            radius: 1.2,
+                            partial: 0.5,
+                        },
+                        v(0.4, 1.6, 0.0),
+                    )
                     .life(0.3, 0.5)
                     .vel_out(3.0, 5.0, 0.0)
                     .size(0.35, 0.55)
@@ -1097,7 +1206,10 @@ fn lava_bubbles() -> Effect {
                 .done(),
             em("Bubbles", 32, Texture::Bubble)
                 .rate(3.5)
-                .shape(Shape::Disc { radius: 2.0, inner: 0.0 })
+                .shape(Shape::Disc {
+                    radius: 2.0,
+                    inner: 0.0,
+                })
                 .life(1.2, 1.8)
                 .vel(Vec3::Y, 0.15, 0.3, 0.0)
                 .size(0.35, 0.7)
@@ -1108,7 +1220,10 @@ fn lava_bubbles() -> Effect {
                 .done(),
             em("Splatter", 64, Texture::Dot)
                 .rate(7.0)
-                .shape(Shape::Disc { radius: 1.8, inner: 0.0 })
+                .shape(Shape::Disc {
+                    radius: 1.8,
+                    inner: 0.0,
+                })
                 .life(0.5, 0.9)
                 .vel(Vec3::Y, 2.0, 4.0, 50.0)
                 .size(0.08, 0.15)
@@ -1233,7 +1348,10 @@ fn magic_ribbon() -> Effect {
                 .done(),
             em("Sparkle tail", 128, Texture::Twinkle)
                 .rate(40.0)
-                .shape(Shape::Sphere { radius: 0.25, partial: 1.0 })
+                .shape(Shape::Sphere {
+                    radius: 0.25,
+                    partial: 1.0,
+                })
                 .life(0.5, 0.9)
                 .vel(Vec3::Y, 0.2, 0.8, 360.0)
                 .size(0.1, 0.2)
@@ -1257,7 +1375,13 @@ fn crystal_shatter() -> Effect {
             vec![
                 em("Shards", 64, Texture::Shard)
                     .burst(0.0, 30)
-                    .shape_at(Shape::Sphere { radius: 0.4, partial: 1.0 }, v(0.0, 1.4, 0.0))
+                    .shape_at(
+                        Shape::Sphere {
+                            radius: 0.4,
+                            partial: 1.0,
+                        },
+                        v(0.0, 1.4, 0.0),
+                    )
                     .life(1.2, 1.8)
                     .vel_out(4.0, 8.0, 0.0)
                     .size(0.25, 0.5)
@@ -1270,7 +1394,13 @@ fn crystal_shatter() -> Effect {
                     .done(),
                 em("Puff", 16, Texture::Hexagon)
                     .burst(0.0, 8)
-                    .shape_at(Shape::Sphere { radius: 0.5, partial: 1.0 }, v(0.0, 1.4, 0.0))
+                    .shape_at(
+                        Shape::Sphere {
+                            radius: 0.5,
+                            partial: 1.0,
+                        },
+                        v(0.0, 1.4, 0.0),
+                    )
                     .life(0.5, 0.8)
                     .vel_out(1.0, 2.0, 0.0)
                     .size(0.6, 0.9)
@@ -1333,7 +1463,13 @@ fn waterfall_mist() -> Effect {
         vec![
             em("Jet", 512, Texture::Droplet)
                 .rate(160.0)
-                .shape_at(Shape::Disc { radius: 0.15, inner: 0.0 }, v(0.0, 0.3, 0.0))
+                .shape_at(
+                    Shape::Disc {
+                        radius: 0.15,
+                        inner: 0.0,
+                    },
+                    v(0.0, 0.3, 0.0),
+                )
                 .life(1.4, 1.8)
                 .vel(Vec3::Y, 8.0, 9.5, 12.0)
                 .size(0.1, 0.18)
@@ -1346,7 +1482,13 @@ fn waterfall_mist() -> Effect {
                 .done(),
             em("Spray", 256, Texture::SoftDot)
                 .rate(30.0)
-                .shape_at(Shape::Disc { radius: 1.6, inner: 0.6 }, v(0.0, 0.1, 0.0))
+                .shape_at(
+                    Shape::Disc {
+                        radius: 1.6,
+                        inner: 0.6,
+                    },
+                    v(0.0, 0.1, 0.0),
+                )
                 .life(0.8, 1.2)
                 .vel(Vec3::Y, 0.5, 1.5, 60.0)
                 .size(0.5, 0.9)

@@ -8,9 +8,9 @@ publish.workspace = true
 
 [dependencies]
 metallic_vfx = { path = "../metallic_vfx" }
-egui = { version = "0.37.0", default-features = false }
+egui.workspace = true
 
 [dev-dependencies]
-eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "accesskit", "clipboard", "wayland", "x11"] }
-egui_kittest = { version = "0.37.0", features = ["wgpu"] }
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+eframe.workspace = true
+egui_kittest.workspace = true
+image.workspace = true

@@ -173,7 +173,10 @@ mod tests {
         if let Err(e) = layouter.update(module.to_ctx()) {
             panic!("{e:?}");
         }
-        assert_eq!(layouter[ty].size as usize, std::mem::size_of::<GpuSimParams>());
+        assert_eq!(
+            layouter[ty].size as usize,
+            std::mem::size_of::<GpuSimParams>()
+        );
     }
 
     #[test]

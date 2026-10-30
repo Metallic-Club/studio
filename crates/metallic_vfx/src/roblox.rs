@@ -243,9 +243,7 @@ impl ParticleEmitter {
         };
         let rate = self.rate.clamp(0.0, ROBLOX_MAX_RATE);
         let max_life = self.lifetime.min.max(self.lifetime.max).clamp(0.0, 20.0);
-        let capacity = ((rate * max_life * 1.25).ceil() as u32 + 64)
-            .max(512)
-            .min(MAX_CAPACITY);
+        let capacity = ((rate * max_life * 1.25).ceil() as u32 + 64).clamp(512, MAX_CAPACITY);
         let flipbook = match self.flipbook_layout {
             FlipbookLayout::None => None,
             layout => {

@@ -17,8 +17,11 @@ impl Effect {
     pub fn to_ron(&self) -> Result<String, VfxError> {
         let config = ron::ser::PrettyConfig::new()
             .indentor("  ".to_string())
-            .new_line("
-".to_string())
+            .new_line(
+                "
+"
+                .to_string(),
+            )
             .struct_names(false)
             .separate_tuple_members(false)
             .compact_arrays(false);
@@ -69,7 +72,7 @@ impl Effect {
                 return bad(format!("{at}.attachment"), "must be finite");
             }
             if !(t.width_scale.is_finite() && t.transparency.is_finite()) {
-                return bad(format!("{at}"), "curves must be finite");
+                return bad(at.to_string(), "curves must be finite");
             }
         }
         for (i, b) in self.beams.iter().enumerate() {
@@ -221,7 +224,11 @@ fn validate_emitter(e: &Emitter, at: &str) -> Result<(), VfxError> {
         return bad("render", "numbers must be finite");
     }
     if let Some(fb) = &r.flipbook
-        && (fb.columns == 0 || fb.rows == 0 || fb.columns > 64 || fb.rows > 64 || !fb.fps.is_finite())
+        && (fb.columns == 0
+            || fb.rows == 0
+            || fb.columns > 64
+            || fb.rows > 64
+            || !fb.fps.is_finite())
     {
         return bad("render.flipbook", "grid must be 1..=64 and fps finite");
     }

@@ -140,7 +140,11 @@ impl Curve {
     #[must_use]
     pub fn constant(v: f32) -> Self {
         Self {
-            keys: vec![Key { t: 0.0, v, env: 0.0 }],
+            keys: vec![Key {
+                t: 0.0,
+                v,
+                env: 0.0,
+            }],
             interp: Interp::Linear,
         }
     }
@@ -241,7 +245,11 @@ impl Curve {
         let k = &self.keys;
         let slope = |a: usize, b: usize| {
             let dt = k[b].t - k[a].t;
-            if dt > 0.0 { (k[b].v - k[a].v) / dt } else { 0.0 }
+            if dt > 0.0 {
+                (k[b].v - k[a].v) / dt
+            } else {
+                0.0
+            }
         };
         if i == 0 {
             return slope(0, 1);

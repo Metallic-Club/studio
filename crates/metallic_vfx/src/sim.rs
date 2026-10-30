@@ -231,8 +231,16 @@ impl Simulation {
     /// [`VfxError::Invalid`] if the effect fails [`Effect::validate`].
     pub fn new(effect: Effect, seed: u32) -> Result<Self, VfxError> {
         effect.validate()?;
-        let emitters = effect.emitters.iter().map(|_| EmitterState::default()).collect();
-        let trails = effect.trails.iter().map(|_| TrailState::default()).collect();
+        let emitters = effect
+            .emitters
+            .iter()
+            .map(|_| EmitterState::default())
+            .collect();
+        let trails = effect
+            .trails
+            .iter()
+            .map(|_| TrailState::default())
+            .collect();
         Ok(Self {
             effect,
             seed,
@@ -258,8 +266,10 @@ impl Simulation {
     /// [`VfxError::Invalid`] if the new effect fails validation; the old one keeps running.
     pub fn set_effect(&mut self, effect: Effect) -> Result<(), VfxError> {
         effect.validate()?;
-        self.emitters.resize_with(effect.emitters.len(), EmitterState::default);
-        self.trails.resize_with(effect.trails.len(), TrailState::default);
+        self.emitters
+            .resize_with(effect.emitters.len(), EmitterState::default);
+        self.trails
+            .resize_with(effect.trails.len(), TrailState::default);
         for (state, em) in self.emitters.iter_mut().zip(&effect.emitters) {
             if state.pool.len() > em.capacity as usize {
                 state.pool.truncate(em.capacity as usize);
@@ -426,7 +436,11 @@ impl Simulation {
     /// Advances the simulation by `dt` seconds. Non-finite or negative `dt` is treated as 0; values above
     /// [`MAX_STEP`] are clamped.
     pub fn step(&mut self, dt: f32) {
-        let dt = if dt.is_finite() { dt.clamp(0.0, MAX_STEP) } else { 0.0 };
+        let dt = if dt.is_finite() {
+            dt.clamp(0.0, MAX_STEP)
+        } else {
+            0.0
+        };
         let from = self.prev_transform;
         let to = self.transform;
         if dt > 0.0 {
@@ -725,10 +739,7 @@ fn spawn_particles(
     local: bool,
 ) {
     // (time fraction inside this step at which each particle is born)
-    let mut births: Vec<f32> = Vec::new();
-    for _ in 0..state.pending_emit {
-        births.push(1.0);
-    }
+    let mut births: Vec<f32> = vec![1.0; state.pending_emit as usize];
     state.pending_emit = 0;
 
     let t0 = state.time - f64::from(em.delay);
@@ -917,11 +928,7 @@ fn sample_shape(shape: &Shape, surface: bool, rng: &mut Rng) -> (Vec3, Vec3) {
         } => {
             let hy = rng.next_f32();
             let r_here = radius * (1.0 + (top - 1.0) * hy);
-            let u = if surface {
-                1.0
-            } else {
-                rng.next_f32().sqrt()
-            };
+            let u = if surface { 1.0 } else { rng.next_f32().sqrt() };
             let phi = rng.next_f32() * std::f32::consts::TAU;
             let radial = Vec3::new(phi.cos(), 0.0, phi.sin());
             (
@@ -1046,7 +1053,7 @@ fn init_particle(
         }
     }
     let life = lifetime.at(rng.next_f32()).min(MAX_LIFETIME);
-    if !(life > 0.0) {
+    if life.is_nan() || life <= 0.0 {
         return;
     }
     let noise = rng.range(-1.0, 1.0);
@@ -1061,7 +1068,8 @@ fn init_particle(
     pool.position_age.push([p.x, p.y, p.z, age]);
     pool.velocity_life.push([v.x, v.y, v.z, life]);
     pool.base.push([color.r, color.g, color.b, size]);
-    pool.motion.push([rotation + spin * age, spin, noise, random]);
+    pool.motion
+        .push([rotation + spin * age, spin, noise, random]);
     pool.visual.push([size, size, 0.0, 0.0]);
     pool.tint.push([color.r, color.g, color.b, 1.0]);
     pool.ids.push(id);
@@ -1128,7 +1136,7 @@ fn evaluate_visuals(em: &Emitter, state: &mut EmitterState) {
             .map_or(0.0, |c| c.sample_with(t, noise).clamp(0.0, 1.0));
         let mut rgb = Rgb::new(base[0], base[1], base[2]);
         if let Some(g) = ol.color {
-            rgb = rgb.mul(g.sample(t));
+            rgb = rgb.modulate(g.sample(t));
         }
         let alpha = ol
             .transparency

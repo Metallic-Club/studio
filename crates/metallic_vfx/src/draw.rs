@@ -12,8 +12,8 @@
 use crate::color::Rgb;
 use crate::curve::Curve;
 use crate::effect::{
-    Beam, Emitter, Facing, Flipbook, FlipbookMode, Render, RenderKind, SimSpace, SortMode,
-    Texture, TextureMode, Trail,
+    Beam, Emitter, Facing, Flipbook, FlipbookMode, Render, RenderKind, SimSpace, SortMode, Texture,
+    TextureMode, Trail,
 };
 use crate::math::{Transform, Vec3};
 use crate::rng::{Rng, pcg};
@@ -163,7 +163,13 @@ pub fn step_alpha(a: f32, steps: u32) -> f32 {
 
 /// Flipbook frames for a particle: `(frame a, frame b, blend 0..1 from a to b)`.
 #[must_use]
-pub fn flipbook_frames(fb: &Flipbook, age: f32, life: f32, random: f32, id: u32) -> (u32, u32, f32) {
+pub fn flipbook_frames(
+    fb: &Flipbook,
+    age: f32,
+    life: f32,
+    random: f32,
+    id: u32,
+) -> (u32, u32, f32) {
     let n = fb.frames();
     if n <= 1 {
         return (0, 0, 0.0);
@@ -280,7 +286,15 @@ pub fn build_draw_list(sim: &Simulation, camera: &Camera) -> DrawList {
     }
     for (i, beam) in effect.beams.iter().enumerate() {
         if beam.enabled {
-            beam_quads(beam, i as u32, sim.seed(), sim.time(), &xf, camera, &mut out);
+            beam_quads(
+                beam,
+                i as u32,
+                sim.seed(),
+                sim.time(),
+                &xf,
+                camera,
+                &mut out,
+            );
         }
     }
     out.quads.sort_by(|a, b| b.depth.total_cmp(&a.depth));
@@ -359,14 +373,23 @@ fn sprite_quads(
             (a * c + b * s, b * c - a * s)
         };
         let (axis_x, axis_y, half_w, half_h, center) = match (&r.kind, r.facing) {
-            (RenderKind::Stretched {
-                speed_scale,
-                min_length,
-            }, _) => {
+            (
+                RenderKind::Stretched {
+                    speed_scale,
+                    min_length,
+                },
+                _,
+            ) => {
                 let up = (vdir - to_eye * vdir.dot(to_eye)).normalize_or(cam_up);
                 let right = up.cross(to_eye).normalize_or(cam_right);
                 let len = (h + speed * speed_scale).max(h * min_length);
-                (right, up, w * 0.5, len * 0.5, center - up * ((len - h) * 0.5))
+                (
+                    right,
+                    up,
+                    w * 0.5,
+                    len * 0.5,
+                    center - up * ((len - h) * 0.5),
+                )
             }
             (_, Facing::Camera) => {
                 let (a, b) = spin(cam_right, cam_up);
@@ -613,7 +636,12 @@ fn beam_quads(
         let t = k as f32 / n as f32;
         let width = beam.width0 + (beam.width1 - beam.width0) * t;
         let alpha = 1.0 - beam.transparency.sample(t).clamp(0.0, 1.0);
-        let c = premultiply(beam.color.sample(t), alpha, beam.light_emission, beam.brightness);
+        let c = premultiply(
+            beam.color.sample(t),
+            alpha,
+            beam.light_emission,
+            beam.brightness,
+        );
         let u = match beam.texture_mode {
             TextureMode::Stretch => t * beam.texture_length,
             TextureMode::Wrap | TextureMode::Static => run / beam.texture_length.max(1e-3),
@@ -638,5 +666,7 @@ fn beam_quads(
 /// Evaluates a [`Curve`] at `n + 1` evenly spaced points (for widgets and tests).
 #[must_use]
 pub fn tabulate(curve: &Curve, n: usize) -> Vec<f32> {
-    (0..=n).map(|i| curve.sample(i as f32 / n.max(1) as f32)).collect()
+    (0..=n)
+        .map(|i| curve.sample(i as f32 / n.max(1) as f32))
+        .collect()
 }

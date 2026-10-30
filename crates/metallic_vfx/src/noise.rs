@@ -125,7 +125,11 @@ pub fn fbm3_grad(p: Vec3, seed: u32, octaves: u32) -> (f32, Vec3) {
 pub fn curl3(p: Vec3, seed: u32, octaves: u32) -> Vec3 {
     let (_, a) = fbm3_grad(p, seed, octaves);
     let (_, b) = fbm3_grad(p + Vec3::new(31.4, 47.2, 12.9), seed ^ 0x5bd1_e995, octaves);
-    let (_, c) = fbm3_grad(p + Vec3::new(-19.1, 33.7, 71.3), seed ^ 0x27d4_eb2d, octaves);
+    let (_, c) = fbm3_grad(
+        p + Vec3::new(-19.1, 33.7, 71.3),
+        seed ^ 0x27d4_eb2d,
+        octaves,
+    );
     // Potential psi = (a, b, c); curl = (dc/dy - db/dz, da/dz - dc/dx, db/dx - da/dy).
     Vec3::new(c.y - b.z, a.z - c.x, b.x - a.y)
 }
@@ -148,11 +152,14 @@ mod tests {
     fn analytic_gradient_matches_finite_difference() {
         let h = 1e-3;
         for i in 0..50 {
-            let p = Vec3::new(0.3 + i as f32 * 0.21, 1.7 - i as f32 * 0.13, 0.45 * i as f32);
+            let p = Vec3::new(
+                0.3 + i as f32 * 0.21,
+                1.7 - i as f32 * 0.13,
+                0.45 * i as f32,
+            );
             let (_, g) = noise3_grad(p, 4);
-            let fd = |d: Vec3| {
-                (noise3_grad(p + d * h, 4).0 - noise3_grad(p - d * h, 4).0) / (2.0 * h)
-            };
+            let fd =
+                |d: Vec3| (noise3_grad(p + d * h, 4).0 - noise3_grad(p - d * h, 4).0) / (2.0 * h);
             let n = Vec3::new(fd(Vec3::X), fd(Vec3::Y), fd(Vec3::Z));
             assert!((g - n).length() < 2e-2, "analytic {g:?} vs numeric {n:?}");
         }
@@ -162,7 +169,11 @@ mod tests {
     fn curl_is_divergence_free() {
         let h = 1e-2;
         for i in 0..20 {
-            let p = Vec3::new(0.37 * i as f32, 0.5 + 0.11 * i as f32, 1.3 - 0.07 * i as f32);
+            let p = Vec3::new(
+                0.37 * i as f32,
+                0.5 + 0.11 * i as f32,
+                1.3 - 0.07 * i as f32,
+            );
             let div = (curl3(p + Vec3::X * h, 2, 1).x - curl3(p - Vec3::X * h, 2, 1).x
                 + curl3(p + Vec3::Y * h, 2, 1).y
                 - curl3(p - Vec3::Y * h, 2, 1).y

@@ -36,7 +36,11 @@ impl Rgb {
     /// Builds a colour from 8-bit components.
     #[must_use]
     pub fn from_u8(r: u8, g: u8, b: u8) -> Self {
-        Self::new(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0)
+        Self::new(
+            f32::from(r) / 255.0,
+            f32::from(g) / 255.0,
+            f32::from(b) / 255.0,
+        )
     }
 
     /// 8-bit components, rounded and clamped.
@@ -91,7 +95,7 @@ impl Rgb {
 
     /// Component-wise product.
     #[must_use]
-    pub fn mul(self, o: Self) -> Self {
+    pub fn modulate(self, o: Self) -> Self {
         Self::new(self.r * o.r, self.g * o.g, self.b * o.b)
     }
 
@@ -140,7 +144,11 @@ fn linear_to_srgb(c: f32) -> f32 {
 
 /// sRGB to Oklab (Björn Ottosson's published matrices).
 fn to_oklab(c: Rgb) -> [f32; 3] {
-    let (r, g, b) = (srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
+    let (r, g, b) = (
+        srgb_to_linear(c.r),
+        srgb_to_linear(c.g),
+        srgb_to_linear(c.b),
+    );
     let l = 0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b;
     let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
     let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;

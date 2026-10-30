@@ -217,7 +217,6 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 /// A frame for docked panels (no radius, no shadow).
-#[must_use]
 pub fn panel_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(color::BG_PANEL)

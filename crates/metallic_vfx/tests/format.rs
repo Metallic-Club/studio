@@ -48,9 +48,11 @@ fn at_least_twenty_presets_with_unique_names() {
 #[test]
 fn every_preset_round_trips_through_ron() {
     for e in presets::all() {
-        e.validate().unwrap_or_else(|err| panic!("{}: {err}", e.name));
+        e.validate()
+            .unwrap_or_else(|err| panic!("{}: {err}", e.name));
         let text = e.to_ron().unwrap_or_else(|err| panic!("{err}"));
-        let back = Effect::from_ron(&text).unwrap_or_else(|err| panic!("{}: {err}\n{text}", e.name));
+        let back =
+            Effect::from_ron(&text).unwrap_or_else(|err| panic!("{}: {err}\n{text}", e.name));
         assert_eq!(back, e, "{} changed in a round trip", e.name);
         assert_eq!(back.to_ron().ok(), Some(text), "{} output unstable", e.name);
     }
@@ -87,7 +89,10 @@ fn format_is_readable_and_minimal() {
     assert!(text.contains("name: \"Fire\""));
     assert!(text.contains("\"#FFB238\""), "colours are hex");
     assert!(!text.contains("disabled"), "default flags are left out");
-    assert!(text.lines().all(|l| l.len() < 120), "lines stay short for diffs");
+    assert!(
+        text.lines().all(|l| l.len() < 120),
+        "lines stay short for diffs"
+    );
 }
 
 #[test]
@@ -112,11 +117,20 @@ fn files_written_by_hand_load_with_defaults() {
 
 #[test]
 fn parse_errors_and_newer_versions_are_reported() {
-    assert!(matches!(Effect::from_ron("(name: 3)"), Err(VfxError::Parse(_))));
+    assert!(matches!(
+        Effect::from_ron("(name: 3)"),
+        Err(VfxError::Parse(_))
+    ));
     let text = "(format: 99, name: \"Future\")";
-    assert_eq!(Effect::from_ron(text), Err(VfxError::UnsupportedVersion(99)));
+    assert_eq!(
+        Effect::from_ron(text),
+        Err(VfxError::UnsupportedVersion(99))
+    );
     let bad = r##"(name: "X", emitters: [(name: "E", capacity: 0)])"##;
-    assert!(matches!(Effect::from_ron(bad), Err(VfxError::Invalid { .. })));
+    assert!(matches!(
+        Effect::from_ron(bad),
+        Err(VfxError::Invalid { .. })
+    ));
 }
 
 /// The `.vfx.ron` files under `presets/` are generated from code. Run with `METALLIC_VFX_BLESS=1` to
@@ -132,8 +146,9 @@ fn preset_files_match_code() {
             std::fs::write(&path, &text).unwrap_or_else(|err| panic!("{err}"));
             continue;
         }
-        let on_disk = std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("missing {}; run with METALLIC_VFX_BLESS=1", path.display()));
+        let on_disk = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!("missing {}; run with METALLIC_VFX_BLESS=1", path.display())
+        });
         assert_eq!(
             on_disk.replace("\r\n", "\n"),
             text,

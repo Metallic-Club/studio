@@ -13,7 +13,7 @@ use crate::widgets::{self, Icon};
 use egui::{CornerRadius, Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use metallic_vfx::draw::build_draw_list;
 use metallic_vfx::{
-    ArtStyle, Beam, Effect, Emitter, SpawnModule, Simulation, Trail, VfxError, presets,
+    ArtStyle, Beam, Effect, Emitter, Simulation, SpawnModule, Trail, VfxError, presets,
 };
 use std::collections::HashMap;
 
@@ -43,6 +43,9 @@ pub enum View {
 
 /// Preview step used when scrubbing (seconds).
 pub const SCRUB_STEP: f32 = 1.0 / 60.0;
+/// One module row in a stage: label, detail text, enabled.
+type StageRow = (String, String, bool);
+
 const UNDO_LIMIT: usize = 200;
 
 /// The VFX editor. Embed it with [`VfxEditor::ui`]; it needs only an `egui::Ui`.
@@ -357,7 +360,10 @@ impl VfxEditor {
             (
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z),
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
-                    || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z),
+                    || i.consume_key(
+                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                        egui::Key::Z,
+                    ),
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
                 false,
             )
@@ -373,7 +379,11 @@ impl VfxEditor {
             self.save();
         }
 
-        let bar = |fill| Frame::new().fill(fill).inner_margin(Margin::symmetric(10, 0));
+        let bar = |fill| {
+            Frame::new()
+                .fill(fill)
+                .inner_margin(Margin::symmetric(10, 0))
+        };
         egui::Panel::top("vfx-title")
             .exact_size(40.0)
             .frame(bar(color::BG_DEEP))
@@ -404,7 +414,11 @@ impl VfxEditor {
 
     fn title_bar(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
-            ui.label(RichText::new("VFX Editor").font(theme::semibold(14.0)).color(color::TEXT));
+            ui.label(
+                RichText::new("VFX Editor")
+                    .font(theme::semibold(14.0))
+                    .color(color::TEXT),
+            );
             ui.add_space(12.0);
             ui.menu_button("File", |ui| {
                 if ui.button("Save as .vfx.ron    Ctrl+S").clicked() {
@@ -421,11 +435,17 @@ impl VfxEditor {
                 ui.label(RichText::new("Drop a .vfx.ron file to open it").color(color::TEXT_3));
             });
             ui.menu_button("Edit", |ui| {
-                if ui.add_enabled(!self.undo.is_empty(), egui::Button::new("Undo    Ctrl+Z")).clicked() {
+                if ui
+                    .add_enabled(!self.undo.is_empty(), egui::Button::new("Undo    Ctrl+Z"))
+                    .clicked()
+                {
                     self.undo();
                     ui.close();
                 }
-                if ui.add_enabled(!self.redo.is_empty(), egui::Button::new("Redo    Ctrl+Y")).clicked() {
+                if ui
+                    .add_enabled(!self.redo.is_empty(), egui::Button::new("Redo    Ctrl+Y"))
+                    .clicked()
+                {
                     self.redo();
                     ui.close();
                 }
@@ -464,13 +484,24 @@ impl VfxEditor {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new(text).font(theme::semibold(14.0)).color(color::TEXT));
+            ui.label(
+                RichText::new(text)
+                    .font(theme::semibold(14.0))
+                    .color(color::TEXT),
+            );
         });
         ui.add_space(4.0);
     }
 
-    fn list_row(ui: &mut Ui, selected: bool, label: &str, detail: &str, dim: bool) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
+    fn list_row(
+        ui: &mut Ui,
+        selected: bool,
+        label: &str,
+        detail: &str,
+        dim: bool,
+    ) -> egui::Response {
+        let (rect, resp) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
         let r = rect.shrink2(Vec2::new(6.0, 0.0));
         let fill = if selected {
             color::SELECT
@@ -502,8 +533,14 @@ impl VfxEditor {
         Self::section_title(ui, "Effect");
         let mut changed = false;
         let mut new_selection = None;
-        if Self::list_row(ui, self.selection == Selection::Effect, &self.effect.name, self.effect.style.label(), false)
-            .clicked()
+        if Self::list_row(
+            ui,
+            self.selection == Selection::Effect,
+            &self.effect.name,
+            self.effect.style.label(),
+            false,
+        )
+        .clicked()
         {
             new_selection = Some(Selection::Effect);
         }
@@ -522,15 +559,27 @@ impl VfxEditor {
             }
         }
         for (i, t) in self.effect.trails.iter().enumerate() {
-            if Self::list_row(ui, self.selection == Selection::Trail(i), &format!("   {}", t.name), "Trail", !t.enabled)
-                .clicked()
+            if Self::list_row(
+                ui,
+                self.selection == Selection::Trail(i),
+                &format!("   {}", t.name),
+                "Trail",
+                !t.enabled,
+            )
+            .clicked()
             {
                 new_selection = Some(Selection::Trail(i));
             }
         }
         for (i, b) in self.effect.beams.iter().enumerate() {
-            if Self::list_row(ui, self.selection == Selection::Beam(i), &format!("   {}", b.name), "Beam", !b.enabled)
-                .clicked()
+            if Self::list_row(
+                ui,
+                self.selection == Selection::Beam(i),
+                &format!("   {}", b.name),
+                "Beam",
+                !b.enabled,
+            )
+            .clicked()
             {
                 new_selection = Some(Selection::Beam(i));
             }
@@ -564,7 +613,10 @@ impl VfxEditor {
                 }
             });
             let removable = !matches!(self.selection, Selection::Effect);
-            if ui.add_enabled(removable, egui::Button::new("Duplicate")).clicked() {
+            if ui
+                .add_enabled(removable, egui::Button::new("Duplicate"))
+                .clicked()
+            {
                 match self.selection {
                     Selection::Emitter(i) => {
                         let mut e = self.effect.emitters[i].clone();
@@ -584,7 +636,10 @@ impl VfxEditor {
                 }
                 changed = true;
             }
-            if ui.add_enabled(removable, egui::Button::new("Remove")).clicked() {
+            if ui
+                .add_enabled(removable, egui::Button::new("Remove"))
+                .clicked()
+            {
                 match self.selection {
                     Selection::Emitter(i) => {
                         self.effect.emitters.remove(i);
@@ -613,7 +668,10 @@ impl VfxEditor {
         ui.add_space(6.0);
         let sep = ui.available_rect_before_wrap();
         ui.painter().line_segment(
-            [Pos2::new(sep.min.x, sep.min.y), Pos2::new(sep.max.x, sep.min.y)],
+            [
+                Pos2::new(sep.min.x, sep.min.y),
+                Pos2::new(sep.max.x, sep.min.y),
+            ],
             Stroke::new(1.0, color::LINE),
         );
         Self::section_title(ui, "Library");
@@ -628,25 +686,27 @@ impl VfxEditor {
         ui.add_space(4.0);
         let filter = self.filter.to_lowercase();
         let mut open = None;
-        egui::ScrollArea::vertical().id_salt("library").show(ui, |ui| {
-            for (i, e) in self.library.iter().enumerate() {
-                let hay = format!("{} {}", e.name, e.tags.join(" ")).to_lowercase();
-                if !filter.is_empty() && !hay.contains(&filter) {
-                    continue;
+        egui::ScrollArea::vertical()
+            .id_salt("library")
+            .show(ui, |ui| {
+                for (i, e) in self.library.iter().enumerate() {
+                    let hay = format!("{} {}", e.name, e.tags.join(" ")).to_lowercase();
+                    if !filter.is_empty() && !hay.contains(&filter) {
+                        continue;
+                    }
+                    let detail = if e.style == ArtStyle::Realistic {
+                        e.tags.first().cloned().unwrap_or_default()
+                    } else {
+                        e.style.label().to_string()
+                    };
+                    if Self::list_row(ui, self.preset == Some(i), &e.name, &detail, false)
+                        .on_hover_text(&e.description)
+                        .clicked()
+                    {
+                        open = Some(i);
+                    }
                 }
-                let detail = if e.style == ArtStyle::Realistic {
-                    e.tags.first().cloned().unwrap_or_default()
-                } else {
-                    e.style.label().to_string()
-                };
-                if Self::list_row(ui, self.preset == Some(i), &e.name, &detail, false)
-                    .on_hover_text(&e.description)
-                    .clicked()
-                {
-                    open = Some(i);
-                }
-            }
-        });
+            });
         if let Some(i) = open
             && let Some(e) = self.library.get(i).cloned()
         {
@@ -671,7 +731,11 @@ impl VfxEditor {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new(title).font(theme::semibold(14.0)).color(color::TEXT));
+            ui.label(
+                RichText::new(title)
+                    .font(theme::semibold(14.0))
+                    .color(color::TEXT),
+            );
         });
         ui.add_space(6.0);
         let mut changed = false;
@@ -679,39 +743,54 @@ impl VfxEditor {
             .id_salt("inspector")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                Frame::new().inner_margin(Margin { left: 10, right: 12, top: 0, bottom: 12 }).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    match self.selection {
-                        Selection::Effect => {
-                            changed |= inspector::effect_settings(ui, &mut self.effect);
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} emitters · {} trails · {} beams",
-                                    self.effect.emitters.len(),
-                                    self.effect.trails.len(),
-                                    self.effect.beams.len()
-                                ))
-                                .color(color::TEXT_3),
-                            );
-                        }
-                        Selection::Emitter(i) => {
-                            if let Some(em) = self.effect.emitters.get_mut(i) {
-                                changed |= inspector::emitter_stack(ui, em, i, self.focus, &mut self.preview);
+                Frame::new()
+                    .inner_margin(Margin {
+                        left: 10,
+                        right: 12,
+                        top: 0,
+                        bottom: 12,
+                    })
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match self.selection {
+                            Selection::Effect => {
+                                changed |= inspector::effect_settings(ui, &mut self.effect);
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} emitters · {} trails · {} beams",
+                                        self.effect.emitters.len(),
+                                        self.effect.trails.len(),
+                                        self.effect.beams.len()
+                                    ))
+                                    .color(color::TEXT_3),
+                                );
+                            }
+                            Selection::Emitter(i) => {
+                                if let Some(em) = self.effect.emitters.get_mut(i) {
+                                    changed |= inspector::emitter_stack(
+                                        ui,
+                                        em,
+                                        i,
+                                        self.focus,
+                                        &mut self.preview,
+                                    );
+                                }
+                            }
+                            Selection::Trail(i) => {
+                                if let Some(t) = self.effect.trails.get_mut(i) {
+                                    changed |=
+                                        inspector::trail_inspector(ui, t, i, &mut self.preview);
+                                }
+                            }
+                            Selection::Beam(i) => {
+                                if let Some(b) = self.effect.beams.get_mut(i) {
+                                    changed |=
+                                        inspector::beam_inspector(ui, b, i, &mut self.preview);
+                                }
                             }
                         }
-                        Selection::Trail(i) => {
-                            if let Some(t) = self.effect.trails.get_mut(i) {
-                                changed |= inspector::trail_inspector(ui, t, i, &mut self.preview);
-                            }
-                        }
-                        Selection::Beam(i) => {
-                            if let Some(b) = self.effect.beams.get_mut(i) {
-                                changed |= inspector::beam_inspector(ui, b, i, &mut self.preview);
-                            }
-                        }
-                    }
-                });
+                    });
             });
         if changed {
             self.edited();
@@ -793,13 +872,18 @@ impl VfxEditor {
             [full.left_top(), full.right_top()],
             Stroke::new(1.0, color::LINE),
         );
-        let mut header_ui = ui.new_child(egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(10.0, 5.0))));
+        let mut header_ui =
+            ui.new_child(egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(10.0, 5.0))));
         header_ui.horizontal_centered(|ui| {
             if widgets::icon_button(ui, Icon::Restart, false, "Restart").clicked() {
                 self.sim.restart();
                 self.sim.teleport(self.effect.preview.transform_at(0.0));
             }
-            let icon = if self.playing { Icon::Pause } else { Icon::Play };
+            let icon = if self.playing {
+                Icon::Pause
+            } else {
+                Icon::Play
+            };
             if widgets::icon_button(ui, icon, false, "Play / pause").clicked() {
                 self.playing = !self.playing;
             }
@@ -811,7 +895,11 @@ impl VfxEditor {
             }
             ui.add_space(6.0);
             let len = self.timeline_length();
-            let shown = if self.effect.duration > 0.0 { self.sim.time() % len } else { self.sim.time() };
+            let shown = if self.effect.duration > 0.0 {
+                self.sim.time() % len
+            } else {
+                self.sim.time()
+            };
             ui.label(
                 RichText::new(format!("{shown:.2} / {len:.2} s"))
                     .font(egui::FontId::monospace(12.0))
@@ -832,7 +920,11 @@ impl VfxEditor {
                 .on_hover_text("New random seed (the simulation is deterministic per seed)")
                 .clicked()
             {
-                self.seed = self.seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453) % 10_000;
+                self.seed = self
+                    .seed
+                    .wrapping_mul(747_796_405)
+                    .wrapping_add(2_891_336_453)
+                    % 10_000;
                 self.sim.reseed(self.seed);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -848,9 +940,16 @@ impl VfxEditor {
             });
         });
         let body = Rect::from_min_max(Pos2::new(full.min.x, header.max.y), full.max);
-        ui.painter().line_segment([body.left_top(), body.right_top()], Stroke::new(1.0, color::LINE));
+        ui.painter().line_segment(
+            [body.left_top(), body.right_top()],
+            Stroke::new(1.0, color::LINE),
+        );
         let len = self.timeline_length();
-        let shown = if self.effect.duration > 0.0 { self.sim.time() % len } else { self.sim.time().min(len) };
+        let shown = if self.effect.duration > 0.0 {
+            self.sim.time() % len
+        } else {
+            self.sim.time().min(len)
+        };
         let tracks = self.tracks();
         if let Some(t) = timeline::timeline(ui, body, shown, len, &tracks) {
             self.playing = false;
@@ -866,7 +965,8 @@ impl VfxEditor {
             [header.left_bottom(), header.right_bottom()],
             Stroke::new(1.0, color::LINE),
         );
-        let mut hui = ui.new_child(egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(10.0, 5.0))));
+        let mut hui =
+            ui.new_child(egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(10.0, 5.0))));
         hui.horizontal_centered(|ui| {
             let views = ["Preview", "Graph", "Source"];
             let current = match self.view {
@@ -888,16 +988,24 @@ impl VfxEditor {
                 .collect();
             let current = match self.style_view {
                 None => 0,
-                Some(s) => ArtStyle::ALL.iter().position(|x| *x == s).map_or(0, |p| p + 1),
+                Some(s) => ArtStyle::ALL
+                    .iter()
+                    .position(|x| *x == s)
+                    .map_or(0, |p| p + 1),
             };
             if let Some(i) = widgets::segmented(ui, &styles, current) {
-                let style = if i == 0 { None } else { ArtStyle::ALL.get(i - 1).copied() };
+                let style = if i == 0 {
+                    None
+                } else {
+                    ArtStyle::ALL.get(i - 1).copied()
+                };
                 let t = self.sim.time();
                 self.set_style_view(style);
                 self.seek(t.min(3.0));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(ui, Icon::Grid, self.preview.grid, "Ground grid").clicked() {
+                if widgets::icon_button(ui, Icon::Grid, self.preview.grid, "Ground grid").clicked()
+                {
                     self.preview.grid = !self.preview.grid;
                 }
                 egui::ComboBox::from_id_salt("motion")
@@ -905,7 +1013,10 @@ impl VfxEditor {
                     .selected_text(self.effect.preview.label())
                     .show_ui(ui, |ui| {
                         for m in metallic_vfx::effect::PreviewMotion::ALL {
-                            if ui.selectable_value(&mut self.effect.preview, m, m.label()).changed() {
+                            if ui
+                                .selectable_value(&mut self.effect.preview, m, m.label())
+                                .changed()
+                            {
                                 self.dirty = true;
                             }
                         }
@@ -979,7 +1090,7 @@ impl VfxEditor {
         for (ei, em) in self.effect.emitters.iter().enumerate() {
             let selected_emitter = self.selection == Selection::Emitter(ei);
             let first = nodes.len();
-            let stages: [(Stage, Vec<(String, String, bool)>); 4] = [
+            let stages: [(Stage, Vec<StageRow>); 4] = [
                 (
                     Stage::Spawn,
                     em.spawn
@@ -1031,7 +1142,11 @@ impl VfxEditor {
                     pos,
                     width: 250.0,
                     title: stage.label().to_string(),
-                    subtitle: if si == 0 { em.name.clone() } else { String::new() },
+                    subtitle: if si == 0 {
+                        em.name.clone()
+                    } else {
+                        String::new()
+                    },
                     rows,
                     selected: selected_emitter && self.focus.is_some_and(|f| f.0 == stage),
                 };
@@ -1116,8 +1231,11 @@ impl VfxEditor {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(12.0)));
         child.horizontal(|ui| {
             ui.label(
-                RichText::new(format!("{}  ·  human-readable, one property per line", presets::file_name(&self.effect.name)))
-                    .color(color::TEXT_2),
+                RichText::new(format!(
+                    "{}  ·  human-readable, one property per line",
+                    presets::file_name(&self.effect.name)
+                ))
+                .color(color::TEXT_2),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Apply").clicked() {
@@ -1145,14 +1263,16 @@ impl VfxEditor {
             child.label(RichText::new(err).color(color::ERROR));
         }
         child.add_space(6.0);
-        egui::ScrollArea::vertical().id_salt("source").show(&mut child, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut self.source)
-                    .font(egui::TextStyle::Monospace)
-                    .code_editor()
-                    .desired_width(f32::INFINITY),
-            );
-        });
+        egui::ScrollArea::vertical()
+            .id_salt("source")
+            .show(&mut child, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.source)
+                        .font(egui::TextStyle::Monospace)
+                        .code_editor()
+                        .desired_width(f32::INFINITY),
+                );
+            });
     }
 }
 

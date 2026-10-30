@@ -16,16 +16,26 @@ struct DragState {
 }
 
 /// Shows the curve editor; returns true when the curve changed.
-pub fn curve_edit(ui: &mut Ui, curve: &mut Curve, id_salt: impl std::hash::Hash + std::fmt::Debug, height: f32) -> bool {
+pub fn curve_edit(
+    ui: &mut Ui,
+    curve: &mut Curve,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    height: f32,
+) -> bool {
     let id = Id::unique(("curve", id_salt));
     let width = ui.available_width().max(120.0);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
     let painter = ui.painter_at(rect.expand(4.0));
     painter.rect_filled(rect, theme::R_SM, color::BG_DEEP);
 
     let mut state: DragState = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let fitted = fit_range(curve);
-    let (lo, hi) = if state.key.is_some() { state.range } else { fitted };
+    let (lo, hi) = if state.key.is_some() {
+        state.range
+    } else {
+        fitted
+    };
     let inner = rect.shrink2(Vec2::new(8.0, 8.0));
     let to_screen = |t: f32, v: f32| {
         Pos2::new(
@@ -43,14 +53,20 @@ pub fn curve_edit(ui: &mut Ui, curve: &mut Curve, id_salt: impl std::hash::Hash 
     for i in 1..4 {
         let x = inner.min.x + inner.width() * i as f32 / 4.0;
         painter.line_segment(
-            [Pos2::new(x, rect.min.y + 2.0), Pos2::new(x, rect.max.y - 2.0)],
+            [
+                Pos2::new(x, rect.min.y + 2.0),
+                Pos2::new(x, rect.max.y - 2.0),
+            ],
             Stroke::new(1.0, color::LINE),
         );
     }
     if lo < 0.0 && hi > 0.0 {
         let y = to_screen(0.0, 0.0).y;
         painter.line_segment(
-            [Pos2::new(rect.min.x + 2.0, y), Pos2::new(rect.max.x - 2.0, y)],
+            [
+                Pos2::new(rect.min.x + 2.0, y),
+                Pos2::new(rect.max.x - 2.0, y),
+            ],
             Stroke::new(1.0, color::LINE_STRONG),
         );
     }
@@ -104,7 +120,11 @@ pub fn curve_edit(ui: &mut Ui, curve: &mut Curve, id_salt: impl std::hash::Hash 
         let (t, v) = from_screen(p);
         let keys = &mut curve.keys;
         let t_min = if k == 0 { 0.0 } else { keys[k - 1].t };
-        let t_max = if k + 1 == keys.len() { 1.0 } else { keys[k + 1].t };
+        let t_max = if k + 1 == keys.len() {
+            1.0
+        } else {
+            keys[k + 1].t
+        };
         keys[k].t = t.clamp(t_min, t_max);
         keys[k].v = v;
         changed = true;
@@ -146,7 +166,12 @@ pub fn curve_edit(ui: &mut Ui, curve: &mut Curve, id_salt: impl std::hash::Hash 
         ));
     }
     if response.hovered() {
-        painter.rect_stroke(rect, theme::R_SM, Stroke::new(1.0, color::LINE_STRONG), StrokeKind::Inside);
+        painter.rect_stroke(
+            rect,
+            theme::R_SM,
+            Stroke::new(1.0, color::LINE_STRONG),
+            StrokeKind::Inside,
+        );
     }
     ui.data_mut(|d| d.insert_temp(id, state));
     response.on_hover_text("Drag keys · double-click to add · right-click to remove");
@@ -154,7 +179,11 @@ pub fn curve_edit(ui: &mut Ui, curve: &mut Curve, id_salt: impl std::hash::Hash 
 }
 
 /// Interpolation picker shown next to curves and gradients.
-pub fn interp_combo(ui: &mut Ui, interp: &mut Interp, id_salt: impl std::hash::Hash + std::fmt::Debug) -> bool {
+pub fn interp_combo(
+    ui: &mut Ui,
+    interp: &mut Interp,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+) -> bool {
     let before = *interp;
     egui::ComboBox::from_id_salt(("interp", id_salt))
         .width(84.0)

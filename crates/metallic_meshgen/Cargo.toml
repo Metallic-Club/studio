@@ -17,7 +17,7 @@ thiserror = "2.0.21"
 bytemuck = { version = "1.25.2", features = ["derive"], optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+criterion.workspace = true
 png = "0.18.1"
 # Reference implementation, used only by a test that checks our tangents match MikkTSpace.
 mikktspace = { version = "0.3.0", default-features = false, features = ["glam"] }

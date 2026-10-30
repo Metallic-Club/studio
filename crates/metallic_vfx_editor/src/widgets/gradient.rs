@@ -10,12 +10,17 @@ use egui::{Color32, Id, Mesh, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use metallic_vfx::{BlendSpace, ColorKey, Gradient, Interp, Rgb};
 
 /// Shows the gradient editor; returns true when the gradient changed.
-pub fn gradient_edit(ui: &mut Ui, g: &mut Gradient, id_salt: impl std::hash::Hash + std::fmt::Debug) -> bool {
+pub fn gradient_edit(
+    ui: &mut Ui,
+    g: &mut Gradient,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+) -> bool {
     let id = Id::unique(("gradient", id_salt));
     let mut selected: usize = ui.data(|d| d.get_temp(id)).unwrap_or(0);
     let width = ui.available_width().max(120.0);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 34.0), Sense::click_and_drag());
-    let bar = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, rect.min.y + 20.0)).shrink2(Vec2::new(6.0, 0.0));
+    let bar = Rect::from_min_max(rect.min, Pos2::new(rect.max.x, rect.min.y + 20.0))
+        .shrink2(Vec2::new(6.0, 0.0));
     let painter = ui.painter_at(rect.expand(2.0));
     let mut changed = false;
 
@@ -35,7 +40,12 @@ pub fn gradient_edit(ui: &mut Ui, g: &mut Gradient, id_salt: impl std::hash::Has
         }
     }
     painter.add(egui::Shape::mesh(mesh));
-    painter.rect_stroke(bar, theme::R_SM, Stroke::new(1.0, color::LINE_STRONG), StrokeKind::Outside);
+    painter.rect_stroke(
+        bar,
+        theme::R_SM,
+        Stroke::new(1.0, color::LINE_STRONG),
+        StrokeKind::Outside,
+    );
 
     let handle_y = bar.max.y + 6.0;
     let key_pos = |k: &ColorKey| Pos2::new(bar.min.x + k.t * bar.width(), handle_y);
@@ -101,24 +111,41 @@ pub fn gradient_edit(ui: &mut Ui, g: &mut Gradient, id_salt: impl std::hash::Has
         ));
     }
     ui.data_mut(|d| d.insert_temp(id, selected));
-    response.on_hover_text("Click a key to edit · drag to move · double-click to add · right-click to remove");
+    response.on_hover_text(
+        "Click a key to edit · drag to move · double-click to add · right-click to remove",
+    );
 
     ui.horizontal(|ui| {
         if let Some(k) = g.keys.get_mut(selected) {
             changed |= crate::widgets::color_button(ui, &mut k.c);
-            ui.label(egui::RichText::new(format!("{} at {:.0}%", k.c.to_hex_string(), k.t * 100.0)).color(color::TEXT_3));
+            ui.label(
+                egui::RichText::new(format!("{} at {:.0}%", k.c.to_hex_string(), k.t * 100.0))
+                    .color(color::TEXT_3),
+            );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut banded = g.interp == Interp::Step;
-            if ui.selectable_label(banded, "Bands").on_hover_text("Hard colour bands (toon, pixel)").clicked() {
+            if ui
+                .selectable_label(banded, "Bands")
+                .on_hover_text("Hard colour bands (toon, pixel)")
+                .clicked()
+            {
                 banded = !banded;
                 g.interp = if banded { Interp::Step } else { Interp::Linear };
                 changed = true;
             }
             let mut ok = g.space == BlendSpace::Oklab;
-            if ui.selectable_label(ok, "Oklab").on_hover_text("Blend in Oklab: even, never muddy").clicked() {
+            if ui
+                .selectable_label(ok, "Oklab")
+                .on_hover_text("Blend in Oklab: even, never muddy")
+                .clicked()
+            {
                 ok = !ok;
-                g.space = if ok { BlendSpace::Oklab } else { BlendSpace::Srgb };
+                g.space = if ok {
+                    BlendSpace::Oklab
+                } else {
+                    BlendSpace::Srgb
+                };
                 changed = true;
             }
         });

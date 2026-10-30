@@ -30,7 +30,10 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
     painter.rect_filled(rect, 0.0, color::BG_PANEL);
     let length = length.max(0.1);
     let area = Rect::from_min_max(Pos2::new(rect.min.x + LABEL_COLUMN, rect.min.y), rect.max);
-    let lane = Rect::from_min_max(area.min + Vec2::new(10.0, 0.0), area.max - Vec2::new(16.0, 0.0));
+    let lane = Rect::from_min_max(
+        area.min + Vec2::new(10.0, 0.0),
+        area.max - Vec2::new(16.0, 0.0),
+    );
     let x_of = |t: f32| lane.min.x + (t / length).clamp(0.0, 1.0) * lane.width();
     let ruler_h = 22.0;
 
@@ -73,7 +76,11 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
             break;
         }
         let row = Rect::from_min_size(Pos2::new(rect.min.x, y), Vec2::new(rect.width(), row_h));
-        let label_color = if tr.enabled { color::TEXT } else { color::TEXT_3 };
+        let label_color = if tr.enabled {
+            color::TEXT
+        } else {
+            color::TEXT_3
+        };
         painter.text(
             Pos2::new(rect.min.x + 12.0, row.center().y),
             egui::Align2::LEFT_CENTER,
@@ -98,7 +105,11 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
                     c + Vec2::new(0.0, s),
                     c + Vec2::new(-s, 0.0),
                 ],
-                if tr.enabled { color::ICON } else { color::TEXT_3 },
+                if tr.enabled {
+                    color::ICON
+                } else {
+                    color::TEXT_3
+                },
                 Stroke::NONE,
             ));
         }
@@ -107,7 +118,10 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
     // Playhead.
     let x = x_of(time.min(length));
     painter.line_segment(
-        [Pos2::new(x, rect.min.y + ruler_h - 2.0), Pos2::new(x, rect.max.y)],
+        [
+            Pos2::new(x, rect.min.y + ruler_h - 2.0),
+            Pos2::new(x, rect.max.y),
+        ],
         Stroke::new(1.5, color::ACCENT),
     );
     let chip = Rect::from_center_size(Pos2::new(x, rect.min.y + 11.0), Vec2::new(40.0, 18.0));
@@ -120,7 +134,11 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
         color::ON_ACCENT,
     );
 
-    let resp = ui.interact(area, ui.scope_id().with("timeline-scrub"), Sense::click_and_drag());
+    let resp = ui.interact(
+        area,
+        ui.scope_id().with("timeline-scrub"),
+        Sense::click_and_drag(),
+    );
     if (resp.clicked() || resp.dragged())
         && let Some(p) = resp.interact_pointer_pos()
     {

@@ -5,8 +5,8 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use metallic_vfx::{
-    Curve, Direction, Effect, Emitter, Gradient, InitModule, Range, Shape, Simulation,
-    SpawnModule, UpdateModule, Vec3,
+    Curve, Direction, Effect, Emitter, Gradient, InitModule, Range, Shape, Simulation, SpawnModule,
+    UpdateModule, Vec3,
 };
 use std::hint::black_box;
 

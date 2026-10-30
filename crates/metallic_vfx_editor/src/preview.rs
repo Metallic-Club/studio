@@ -148,13 +148,17 @@ impl Preview {
                 current = Some(tex);
             }
             let base = mesh.vertices.len() as u32;
-            for i in 0..4 {
-                let c = q.colors[i];
+            for ((&c, &uv), &pos) in q.colors.iter().zip(&q.uvs).zip(&pts) {
                 let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
                 mesh.vertices.push(egui::epaint::Vertex {
-                    pos: pts[i],
-                    uv: Pos2::new(q.uvs[i][0], q.uvs[i][1]),
-                    color: Color32::from_rgba_premultiplied(to8(c[0]), to8(c[1]), to8(c[2]), to8(c[3])),
+                    pos,
+                    uv: Pos2::new(uv[0], uv[1]),
+                    color: Color32::from_rgba_premultiplied(
+                        to8(c[0]),
+                        to8(c[1]),
+                        to8(c[2]),
+                        to8(c[3]),
+                    ),
                 });
             }
             mesh.indices
@@ -190,8 +194,14 @@ fn draw_ground(painter: &egui::Painter, rect: Rect, camera: &Camera, style: ArtS
         let f = i as f32;
         let major = i % 4 == 0;
         for (a, b) in [
-            (Vec3::new(f, 0.0, -extent as f32), Vec3::new(f, 0.0, extent as f32)),
-            (Vec3::new(-extent as f32, 0.0, f), Vec3::new(extent as f32, 0.0, f)),
+            (
+                Vec3::new(f, 0.0, -extent as f32),
+                Vec3::new(f, 0.0, extent as f32),
+            ),
+            (
+                Vec3::new(-extent as f32, 0.0, f),
+                Vec3::new(extent as f32, 0.0, f),
+            ),
         ] {
             // Split lines so each piece can fade with distance from the centre.
             let pieces = 12;
@@ -207,7 +217,11 @@ fn draw_ground(painter: &egui::Painter, rect: Rect, camera: &Camera, style: ArtS
                 else {
                     continue;
                 };
-                let base = if major { color::LINE_STRONG } else { color::LINE };
+                let base = if major {
+                    color::LINE_STRONG
+                } else {
+                    color::LINE
+                };
                 let c = lerp_color(color::BG_BASE, base, fade);
                 painter.line_segment(
                     [Pos2::new(s0[0], s0[1]) + off, Pos2::new(s1[0], s1[1]) + off],

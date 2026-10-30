@@ -16,6 +16,10 @@ metallic_physics = { path = "crates/metallic_physics" }
 metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+egui = { version = "0.37.0", default-features = false }
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "accesskit", "clipboard", "wayland", "x11"] }
+egui_kittest = { version = "0.37.0", features = ["wgpu"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 # Debug builds keep file:line backtraces for our crates and drop debug info for dependencies.
 # Full debug info made each lane's target dir 2-4 GB, and the build PC is short on disk.

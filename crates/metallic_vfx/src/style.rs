@@ -12,9 +12,9 @@
 //! | Low-poly | shards and faceted hexagons | 4-step gradients, cut-out alpha, fades become erosion, tumbling | every frame |
 //! | 2D | unchanged | unchanged | locked to the XY plane, ground-facing quads face the camera |
 
+use crate::curve::Range;
 use crate::curve::{ColorKey, Curve, Gradient, Interp, Key};
 use crate::effect::{ArtStyle, Effect, Facing, InitModule, Texture, UpdateModule};
-use crate::curve::Range;
 
 impl Effect {
     /// A copy of this effect converted to `target`. Converting to the effect's own style returns an
@@ -63,7 +63,11 @@ impl Effect {
                     em.fixed_fps = 0.0;
                     fades_to_erosion(&mut em.update);
                     band_gradients(&mut em.update, 4);
-                    if !em.init.iter().any(|m| matches!(m, InitModule::Rotation { .. })) {
+                    if !em
+                        .init
+                        .iter()
+                        .any(|m| matches!(m, InitModule::Rotation { .. }))
+                    {
                         em.init.push(InitModule::Rotation {
                             angle: Range::new(0.0, 360.0),
                             spin: Range::new(-120.0, 120.0),
