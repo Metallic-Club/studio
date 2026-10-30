@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 rapier3d = "0.36.1"
 metallic_core = { path = "crates/metallic_core" }
+metallic_asset = { path = "crates/metallic_asset" }
 metallic_render = { path = "crates/metallic_render" }
 metallic_physics = { path = "crates/metallic_physics" }
 metallic_script = { path = "crates/metallic_script" }

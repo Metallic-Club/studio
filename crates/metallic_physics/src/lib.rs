@@ -13,7 +13,8 @@
 //! linear and angular velocity derived from the move, so parts standing on it are carried along
 //! and parts in its way are pushed, by rotating movers too.
 //!
-//! Characters: [`spawn_character`] builds a Roblox-style avatar Model for a Player and
+//! Characters: [`spawn_character`] builds a Roblox-style character Model (invisible body parts
+//! that the runtime draws the skinned avatar over) for a Player and
 //! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
 //! death and respawn, checkpoints, touches). Character parts are anchored, so the physics moves
 //! them as kinematic bodies (they push loose parts) but never reports their touches:
@@ -26,7 +27,7 @@ mod character;
 mod sync;
 mod touched;
 
-pub use avatar::{PANTS, SHIRT, SKIN, VIOLET};
+pub use avatar::VIOLET;
 pub use character::{
     CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT, MoveInput,
     RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, spawn_character,

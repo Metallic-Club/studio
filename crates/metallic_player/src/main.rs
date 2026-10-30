@@ -2,12 +2,14 @@
 //!
 //! ```text
 //! metallic-player <project dir> [--scene <file relative to project>] [--headless --frames N]
-//!                 [--quality low|high] [--fps] [--frames N] [--capture FRAME:PNG]...
+//!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
+//!                 [--capture FRAME:PNG]...
 //! ```
 //! Windowed by default (WASD/arrows move, Space jumps, Shift runs, right-drag orbits, wheel
 //! zooms, Esc quits; gamepad left stick, A, right stick). `--headless` runs N frames of 1/60 s
 //! without a window or GPU (smoke tests). `--fps` plays 60 s in a fixed 1920x1080 window without
-//! vsync and prints frame-rate statistics. `--frames N` also ends a windowed run after N frames,
+//! vsync and prints frame-rate statistics; with `--autopilot` the character runs in a circle and
+//! jumps meanwhile, so the measurement includes the animated avatar. `--frames N` also ends a windowed run after N frames,
 //! and `--capture FRAME:PNG` saves that frame (3D view and GUI) as a PNG.
 //! Exit code: 0 on a clean exit, 1 when the project cannot be loaded or started, 2 for bad
 //! arguments.
