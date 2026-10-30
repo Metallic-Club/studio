@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, FontId, TextureHandle, Vec2};
 
+use crate::colour::demo::ColourDemo;
 use crate::editor_ui::{EditorExit, EditorUi};
 use crate::png_image::{RgbaImage, decode_png};
 use crate::recent::RecentProjects;
@@ -35,6 +36,8 @@ pub enum Scene {
     Error,
     /// The editor with the bundled Parkour template open (nothing is saved).
     Editor,
+    /// The colour popover demo (stand-in until the editor's Properties panel uses it).
+    Colour,
 }
 
 /// Command-line options (all for design review; creators start Studio without any).
@@ -49,7 +52,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// Parses `--screenshot <path>`, `--scene splash|start|error`, `--location <dir>`.
+    /// Parses `--screenshot <path>`, `--scene splash|start|error|editor|colour`, `--location <dir>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut opts = Self::default();
@@ -65,6 +68,7 @@ impl Options {
                         "start" => Scene::Start,
                         "error" => Scene::Error,
                         "editor" => Scene::Editor,
+                        "colour" | "color" => Scene::Colour,
                         other => return Err(format!("unknown scene {other}")),
                     }
                 }
@@ -79,6 +83,7 @@ enum Phase {
     Splash { since: Instant },
     Start,
     Opened(Box<EditorUi>),
+    Colour(Box<ColourDemo>),
 }
 
 /// The eframe application.
@@ -119,6 +124,13 @@ impl StudioApp {
             start.set_location(location);
         }
         let phase = match (options.screenshot.is_some(), options.scene) {
+            (shot, Scene::Colour) => {
+                let mut demo = ColourDemo::new(!shot);
+                if shot {
+                    demo.open_at(egui::pos2(420.0, 120.0));
+                }
+                Phase::Colour(Box::new(demo))
+            }
             (_, Scene::Splash) => Phase::Splash {
                 since: Instant::now() + Duration::from_secs(3600),
             },
@@ -192,6 +204,12 @@ impl eframe::App for StudioApp {
                     }
                 }
             }
+            Phase::Colour(demo) => {
+                if demo.show(ui) {
+                    self.phase = Phase::Start;
+                    ctx.request_repaint();
+                }
+            }
             Phase::Opened(editor) => {
                 // Closing the window with unsaved changes asks first (#319 review).
                 if ctx.input(|i| i.viewport().close_requested())
@@ -228,6 +246,12 @@ fn recent_projects(screenshot: bool) -> RecentProjects {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_scene_is_parsed() {
+        let opts = Options::parse(["--scene".to_owned(), "colour".to_owned()]).unwrap();
+        assert_eq!(opts.scene, Scene::Colour);
+    }
 
     #[test]
     fn screenshot_mode_never_uses_the_real_config_dir() {

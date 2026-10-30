@@ -18,6 +18,9 @@
 //! and the undo, selection and gizmo APIs the building tools use ([`commands`], [`selection`],
 //! [`gizmo`]). Panels take colours, font sizes and metrics only from [`tokens::ui_tokens`].
 //!
+//! [`colour`] holds the building colour popover, its colour maths and palette files; it also runs
+//! as a demo screen (`--scene colour`).
+//!
 //! Library code returns [`StudioError`]; only `main.rs` decides what to show on failure.
 
 #![warn(missing_docs)]
@@ -25,6 +28,7 @@
 pub mod actions;
 pub mod app;
 pub mod camera;
+pub mod colour;
 pub mod commands;
 pub mod editor;
 pub mod editor_ui;
