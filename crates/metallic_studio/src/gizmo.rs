@@ -400,17 +400,42 @@ impl GizmoDrag {
         &self.current
     }
 
-    /// Writes the current transforms into the world (live preview).
+    /// Writes the current transforms into the world (live preview). Only the properties the
+    /// handle changes are written: a move never rewrites `Orientation` or `Size`.
     pub fn apply(&self, world: &mut World) {
+        let (rotates, resizes) = self.changes();
         for (cur, p) in self.current.iter().zip(&self.parts) {
-            write(world, p.id, cur, None);
+            let _ = world.set(p.id, "Position", Value::Vector3(from_d(cur.position)));
+            if rotates {
+                let o = quat_to_orientation(cur.rotation);
+                let _ = world.set(p.id, "Orientation", Value::Vector3(o));
+            }
+            if resizes {
+                let _ = world.set(p.id, "Size", Value::Vector3(from_d(cur.size)));
+            }
         }
     }
 
     /// Puts every part back where it started (Esc).
     pub fn cancel(&self, world: &mut World) {
+        let (rotates, resizes) = self.changes();
         for p in &self.parts {
-            write(world, p.id, &p.start, Some(p.start_orientation));
+            let _ = world.set(p.id, "Position", Value::Vector3(from_d(p.start.position)));
+            if rotates {
+                let _ = world.set(p.id, "Orientation", Value::Vector3(p.start_orientation));
+            }
+            if resizes {
+                let _ = world.set(p.id, "Size", Value::Vector3(from_d(p.start.size)));
+            }
+        }
+    }
+
+    /// (writes Orientation, writes Size) for this handle.
+    fn changes(&self) -> (bool, bool) {
+        match self.handle {
+            Handle::Axis(_) | Handle::Plane(_) => (false, false),
+            Handle::Ring(_) => (true, false),
+            Handle::Face(..) => (false, true),
         }
     }
 
@@ -488,18 +513,6 @@ fn resize_face(p: &DragPart, axis: DVec3, sign: f64, d: f64) -> PartTransform {
     t.size[local] = new;
     t.position = p.start.position + axis * (sign * (new - start) * 0.5);
     t
-}
-
-fn write(
-    world: &mut World,
-    id: InstanceId,
-    t: &PartTransform,
-    orientation: Option<metallic_core::Vec3>,
-) {
-    let _ = world.set(id, "Position", Value::Vector3(from_d(t.position)));
-    let o = orientation.unwrap_or_else(|| quat_to_orientation(t.rotation));
-    let _ = world.set(id, "Orientation", Value::Vector3(o));
-    let _ = world.set(id, "Size", Value::Vector3(from_d(t.size)));
 }
 
 /// Axis colour.
@@ -715,6 +728,27 @@ mod tests {
             },
         );
         assert!((d.current[0].position.x - 1.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn move_keeps_an_unrounded_orientation_untouched() {
+        let (mut w, p) = world_with_part(Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0));
+        // A value quat_to_orientation would not give back bit for bit.
+        let odd = Vec3::new(12.345678912, 33.3333333333, -7.1);
+        w.set(p, "Orientation", Value::Vector3(odd)).unwrap();
+        let f = frame(DVec3::ZERO, Tool::Move);
+        let mut d = GizmoDrag::begin(&w, f, Handle::Axis(0), &ray_down(0.0, 0.0), &[p]).unwrap();
+        d.update(
+            &ray_down(2.0, 0.0),
+            &Snapping::default(),
+            DragModifiers::default(),
+        );
+        d.apply(&mut w);
+        let Some(Command::Batch { commands, .. }) = d.finish(&w) else {
+            panic!()
+        };
+        assert_eq!(commands.len(), 1, "only Position changes: {commands:?}");
+        assert_eq!(w.get(p, "Orientation").unwrap(), Value::Vector3(odd));
     }
 
     #[test]

@@ -213,8 +213,12 @@ impl EditorState {
         result
     }
 
-    /// Pushes an already-applied command (end of a live-preview gesture).
+    /// Pushes an already-applied command (end of a live-preview gesture). Ignored while playing.
     pub fn record(&mut self, cmd: Command) {
+        if self.play.is_playing() {
+            // Edits are refused while playing; a gesture cannot have started then.
+            return;
+        }
         self.history.record(cmd, &mut self.world);
         self.after_history_change();
     }

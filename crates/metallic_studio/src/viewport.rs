@@ -119,7 +119,12 @@ pub struct Viewport {
     rendered: Option<(metallic_core::ChangeCursor, EditorCamera, (u32, u32))>,
     gpu_missing_logged: bool,
     last_rect: Rect,
+    /// Ray pick under the pointer, reused while pointer, world and camera are unchanged, so an
+    /// idle pointer does not scan every part each frame.
+    hover_pick: Option<(HoverKey, Option<Hit>)>,
 }
+
+type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
 
 impl Default for Viewport {
     fn default() -> Self {
@@ -144,6 +149,7 @@ impl Viewport {
             rendered: None,
             gpu_missing_logged: false,
             last_rect: Rect::NOTHING,
+            hover_pick: None,
         }
     }
 
@@ -260,22 +266,30 @@ impl Viewport {
                 (Some(f), Some(p)) => f.hit(&view, local(p)),
                 _ => None,
             };
-            self.hovered_part = match pointer {
-                Some(p) if self.hovered_handle.is_none() => {
+        }
+        // One pick per pointer position, world change or camera move (not one per frame).
+        let pick = pointer.map(|p| {
+            let key = (p, state.world.change_cursor(), self.camera, rect);
+            match &self.hover_pick {
+                Some((k, hit)) if *k == key => *hit,
+                _ => {
                     let (x, y) = local(p);
-                    self.picks.first(&view.ray(x, y), &[]).map(|h| h.id)
+                    let hit = self.picks.first(&view.ray(x, y), &[]);
+                    self.hover_pick = Some((key, hit));
+                    hit
                 }
+            }
+        });
+        if self.drag.is_none() {
+            self.hovered_part = match pick {
+                Some(hit) if self.hovered_handle.is_none() => hit.map(|h| h.id),
                 _ => None,
             };
         }
-        if let Some(p) = pointer {
+        if let (Some(p), Some(hit)) = (pointer, pick) {
             let (x, y) = local(p);
             let ray = view.ray(x, y);
-            let ahead = ray.at(20.0);
-            let at = self
-                .picks
-                .first(&ray, &[])
-                .map_or(ahead, |h| ray.at(h.distance) + DVec3::Y * 0.5);
+            let at = hit.map_or(ray.at(20.0), |h| ray.at(h.distance) + DVec3::Y * 0.5);
             state.insert_point = from_d(at);
         }
 

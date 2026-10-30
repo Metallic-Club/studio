@@ -322,6 +322,9 @@ impl Properties {
     }
 
     fn commit(&mut self, state: &mut EditorState, ids: &[InstanceId], edit: Edit, live: bool) {
+        if state.play.is_playing() {
+            return;
+        }
         let (prop, values): (String, Vec<(InstanceId, Value)>) = match edit {
             Edit::Set(prop, v) => {
                 let vals = ids.iter().map(|&id| (id, v.clone())).collect();

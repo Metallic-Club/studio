@@ -254,3 +254,27 @@ fn batch_failure_leaves_world_unchanged() {
     assert_eq!(world.get(p, "Transparency").unwrap(), Value::Number(0.0));
     assert!(h.is_empty());
 }
+
+#[test]
+fn undoing_everything_after_the_cap_is_still_dirty() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    // Opened file: clean. Past the 200-step cap the first steps are gone, so undoing every
+    // kept step does not bring back the opened file.
+    for i in 0..(HISTORY_LIMIT + 5) {
+        s.set_property(
+            &[a],
+            "Transparency",
+            Value::Number(((i % 9) as f64 + 1.0) / 10.0),
+        );
+    }
+    while s.history.undo(&mut s.world).is_some() {}
+    assert!(s.is_dirty(), "the world is not the opened file");
+    // Saving at the bottom, then redo and undo back, is clean again.
+    s.save().unwrap();
+    assert!(!s.is_dirty());
+    s.redo();
+    s.undo();
+    assert!(!s.is_dirty());
+}

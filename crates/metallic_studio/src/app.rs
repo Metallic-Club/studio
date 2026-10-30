@@ -88,6 +88,8 @@ pub struct StudioApp {
     icon: Option<TextureHandle>,
     screenshot: Option<ScreenshotJob>,
     pending_error_scene: bool,
+    /// The user agreed to quit from the unsaved-changes prompt; the next close is let through.
+    quit_confirmed: bool,
 }
 
 /// Decodes the embedded brand icon.
@@ -133,6 +135,7 @@ impl StudioApp {
             icon,
             screenshot: options.screenshot.map(ScreenshotJob::new),
             pending_error_scene: options.scene == Scene::Error,
+            quit_confirmed: false,
         }
     }
 
@@ -190,8 +193,20 @@ impl eframe::App for StudioApp {
                 }
             }
             Phase::Opened(editor) => {
-                if editor.ui(ui, frame.wgpu_render_state()) == EditorExit::Close {
-                    self.phase = Phase::Start;
+                // Closing the window with unsaved changes asks first (#319 review).
+                if ctx.input(|i| i.viewport().close_requested())
+                    && !self.quit_confirmed
+                    && !editor.request_quit()
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+                match editor.ui(ui, frame.wgpu_render_state()) {
+                    EditorExit::Stay => {}
+                    EditorExit::Close => self.phase = Phase::Start,
+                    EditorExit::Quit => {
+                        self.quit_confirmed = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 }
             }
         }

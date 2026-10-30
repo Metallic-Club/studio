@@ -4,11 +4,21 @@
 //! halves, so a creator can type `+2` into Position.Y to lift a part by two studs. Properties
 //! and (later) typed gizmo values (#214) use [`eval_relative`].
 
-/// Evaluates `text` as an expression. `None` when it is not a valid finite expression.
+/// Longest text accepted (a pasted novel is not a number).
+pub const MAX_LEN: usize = 256;
+/// Deepest nesting of brackets and signs accepted, so `((((...` cannot overflow the stack.
+pub const MAX_DEPTH: usize = 64;
+
+/// Evaluates `text` as an expression. `None` when it is not a valid finite expression, longer
+/// than [`MAX_LEN`] bytes, or nested deeper than [`MAX_DEPTH`].
 pub fn eval(text: &str) -> Option<f64> {
+    if text.len() > MAX_LEN {
+        return None;
+    }
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
+        depth: 0,
     };
     let v = p.expr()?;
     p.ws();
@@ -37,6 +47,7 @@ pub fn eval_relative(text: &str, current: f64) -> Option<f64> {
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -92,6 +103,16 @@ impl Parser<'_> {
     }
 
     fn unary(&mut self) -> Option<f64> {
+        if self.depth >= MAX_DEPTH {
+            return None;
+        }
+        self.depth += 1;
+        let v = self.unary_inner();
+        self.depth -= 1;
+        v
+    }
+
+    fn unary_inner(&mut self) -> Option<f64> {
         match self.peek()? {
             b'-' => {
                 self.i += 1;
@@ -141,6 +162,18 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_nesting_and_long_input_are_rejected_not_a_crash() {
+        let deep = "(".repeat(100_000) + "1" + &")".repeat(100_000);
+        assert_eq!(eval(&deep), None);
+        assert_eq!(eval(&"-".repeat(100_000)), None);
+        let ok = "(".repeat(40) + "2" + &")".repeat(40);
+        assert_eq!(eval(&ok), Some(2.0));
+        let long = "1+".repeat(200) + "1";
+        assert_eq!(eval(&long), None);
+        assert_eq!(eval_relative(&deep, 1.0), None);
+    }
 
     #[test]
     fn arithmetic_with_precedence() {

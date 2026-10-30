@@ -509,6 +509,9 @@ pub struct History {
     next_serial: u64,
     /// Serial of the newest applied step when the scene was last saved (0: nothing applied).
     saved: u64,
+    /// Serial of the newest step dropped by [`HISTORY_LIMIT`] (0: none). With every kept step
+    /// undone, the world is in the state after that step, not the opened file's.
+    floor: u64,
     /// Bumps on every apply, record, undo and redo.
     revision: u64,
 }
@@ -547,6 +550,7 @@ impl History {
         });
         if self.undo.len() > HISTORY_LIMIT {
             let old = self.undo.remove(0);
+            self.floor = old.serial;
             old.command.discard(world, &mut self.parked, true);
         }
         self.revision += 1;
@@ -621,11 +625,11 @@ impl History {
 
     /// Remembers the current step as saved.
     pub fn mark_saved(&mut self) {
-        self.saved = self.undo.last().map_or(0, |e| e.serial);
+        self.saved = self.undo.last().map_or(self.floor, |e| e.serial);
     }
 
     /// True when the world differs from the last save (or was never saved after an edit).
     pub fn is_dirty(&self) -> bool {
-        self.undo.last().map_or(0, |e| e.serial) != self.saved
+        self.undo.last().map_or(self.floor, |e| e.serial) != self.saved
     }
 }

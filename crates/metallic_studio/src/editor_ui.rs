@@ -26,6 +26,17 @@ pub enum EditorExit {
     Stay,
     /// Close the game and go back to the start screen.
     Close,
+    /// Quit Studio (the window's close button or Alt+F4, after the unsaved-changes prompt).
+    Quit,
+}
+
+/// What the unsaved-changes prompt is guarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Leave {
+    /// File > Close game.
+    Close,
+    /// Closing the window.
+    Quit,
 }
 
 /// The editor window for one open game.
@@ -44,7 +55,10 @@ pub struct EditorUi {
     properties: Properties,
     scripts: ScriptTabs,
     pressed: Vec<&'static str>,
-    confirm_close: bool,
+    /// Open while the unsaved-changes prompt shows.
+    confirm: Option<Leave>,
+    /// Why the last Save from the prompt failed (shown in the prompt).
+    save_error: Option<String>,
 }
 
 impl EditorUi {
@@ -60,7 +74,8 @@ impl EditorUi {
             properties: Properties::new(),
             scripts: ScriptTabs::new(),
             pressed: Vec::new(),
-            confirm_close: false,
+            confirm: None,
+            save_error: None,
         };
         ui.viewport.frame_all(&ui.state);
         ui
@@ -86,6 +101,41 @@ impl EditorUi {
         let back = -editor.viewport.camera.forward();
         editor.viewport.camera.dolly(back, 6.0);
         Some(editor)
+    }
+
+    /// The window is asked to close (close button, Alt+F4). Returns true when it may close now;
+    /// with unsaved changes it opens the Save / Don't save / Cancel prompt instead and returns
+    /// false, and a later frame returns [`EditorExit::Quit`] if the user agrees.
+    pub fn request_quit(&mut self) -> bool {
+        if !self.state.is_dirty() {
+            return true;
+        }
+        self.confirm = Some(Leave::Quit);
+        false
+    }
+
+    /// True while the unsaved-changes prompt is open.
+    pub fn is_confirming(&self) -> bool {
+        self.confirm.is_some()
+    }
+
+    /// Why the last Save from the prompt failed, if it did.
+    pub fn save_error(&self) -> Option<&str> {
+        self.save_error.as_deref()
+    }
+
+    /// Saves now (script buffers first). On failure the error goes to Output and is returned.
+    pub fn save(&mut self) -> Result<(), String> {
+        self.scripts.flush(&mut self.state);
+        self.state.save().map_err(|e| {
+            let text = e.to_string();
+            self.state.output.push(
+                crate::output::Tag::Studio,
+                crate::output::Level::Error,
+                text.clone(),
+            );
+            text
+        })
     }
 
     /// Runs action `id`, flushing script buffers first for Save.
@@ -164,7 +214,8 @@ impl EditorUi {
                     }
                     if ui.button("Close game").clicked() {
                         if self.state.is_dirty() {
-                            self.confirm_close = true;
+                            self.confirm = Some(Leave::Close);
+                            self.save_error = None;
                         } else {
                             exit = EditorExit::Close;
                         }
@@ -360,25 +411,43 @@ impl EditorUi {
         self.keys(&ctx, viewport_hovered, right_down);
         self.requests();
 
-        if self.confirm_close {
-            egui::Window::new("Close without saving?")
+        if let Some(leave) = self.confirm {
+            let done = match leave {
+                Leave::Close => EditorExit::Close,
+                Leave::Quit => EditorExit::Quit,
+            };
+            egui::Window::new("Save changes?")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .show(&ctx, |ui| {
-                    ui.label("This game has unsaved changes.");
+                    ui.label(format!("{} has unsaved changes.", self.state.name));
+                    if let Some(err) = &self.save_error {
+                        ui.label(
+                            RichText::new(format!("Could not save: {err}"))
+                                .color(ui_tokens().error),
+                        );
+                    }
                     ui.horizontal(|ui| {
-                        if ui.button("Save and close").clicked() {
-                            self.run_action("file.save");
-                            self.confirm_close = false;
-                            exit = EditorExit::Close;
+                        if ui.button("Save").clicked() {
+                            match self.save() {
+                                Ok(()) => {
+                                    self.confirm = None;
+                                    self.save_error = None;
+                                    exit = done;
+                                }
+                                // Stay open and show why; the game is not closed unsaved.
+                                Err(e) => self.save_error = Some(e),
+                            }
                         }
-                        if ui.button("Close without saving").clicked() {
-                            self.confirm_close = false;
-                            exit = EditorExit::Close;
+                        if ui.button("Don't save").clicked() {
+                            self.confirm = None;
+                            self.save_error = None;
+                            exit = done;
                         }
                         if ui.button("Cancel").clicked() {
-                            self.confirm_close = false;
+                            self.confirm = None;
+                            self.save_error = None;
                         }
                     });
                 });

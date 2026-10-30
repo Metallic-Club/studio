@@ -2,10 +2,11 @@
 //! the viewport falls back to a flat background but picking and gizmos work the same).
 use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use metallic_core::{InstanceId, Value, Vec3, World};
 use metallic_render::glam::DVec3;
 use metallic_studio::editor::{EditorState, Tool};
-use metallic_studio::editor_ui::EditorUi;
+use metallic_studio::editor_ui::{EditorExit, EditorUi};
 use metallic_studio::output::OutputPanel;
 
 fn editor() -> (EditorUi, InstanceId, InstanceId) {
@@ -201,4 +202,91 @@ fn alt_click_cycles_to_the_part_behind() {
     h.run_steps(1);
     assert_eq!(h.state().state.selection.ids(), &[back]);
     assert_ne!(back, front);
+}
+
+struct Shell {
+    editor: EditorUi,
+    exit: EditorExit,
+}
+
+fn dirty_shell(scene: std::path::PathBuf) -> (Harness<'static, Shell>, InstanceId) {
+    let (mut ui, _model, part) = editor();
+    ui.state.scene_path = scene;
+    ui.state.can_save = true;
+    ui.state
+        .set_property(&[part], "Transparency", Value::Number(0.5));
+    assert!(ui.state.is_dirty());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .build_ui_state(
+            |ui, shell: &mut Shell| {
+                let exit = shell.editor.ui(ui, None);
+                if exit != EditorExit::Stay {
+                    shell.exit = exit;
+                }
+            },
+            Shell {
+                editor: ui,
+                exit: EditorExit::Stay,
+            },
+        );
+    h.run_steps(2);
+    (h, part)
+}
+
+#[test]
+fn closing_the_window_with_unsaved_changes_asks_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, _) = dirty_shell(dir.path().join("main.mscene"));
+    assert!(
+        !h.state_mut().editor.request_quit(),
+        "dirty: the close is held"
+    );
+    h.run_steps(2);
+    assert!(h.state().editor.is_confirming());
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(!h.state().editor.is_confirming());
+    assert_eq!(h.state().exit, EditorExit::Stay);
+    // Ask again and choose Don't save: the shell is told to quit.
+    assert!(!h.state_mut().editor.request_quit());
+    h.run_steps(2);
+    h.get_by_label("Don't save").click();
+    h.run_steps(2);
+    assert_eq!(h.state().exit, EditorExit::Quit);
+}
+
+#[test]
+fn save_from_the_prompt_closes_only_when_the_save_worked() {
+    let dir = tempfile::tempdir().unwrap();
+    // The folder does not exist, so Save fails.
+    let (mut h, _) = dirty_shell(dir.path().join("missing").join("main.mscene"));
+    assert!(!h.state_mut().editor.request_quit());
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().exit,
+        EditorExit::Stay,
+        "a failed save keeps the game open"
+    );
+    assert!(h.state().editor.is_confirming());
+    assert!(h.state().editor.save_error().is_some());
+    assert!(h.state().editor.state.is_dirty());
+    // Fix the path and save again: now it quits.
+    h.state_mut().editor.state.scene_path = dir.path().join("main.mscene");
+    // Move away and wait past the double-click window, as a person would.
+    h.hover_at(egui::pos2(5.0, 400.0));
+    h.step();
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().exit,
+        EditorExit::Quit,
+        "{:?}",
+        h.state().editor.save_error()
+    );
+    assert!(dir.path().join("main.mscene").exists());
 }

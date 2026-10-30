@@ -23,6 +23,7 @@ use crate::{CoreError, InstanceId, World};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::Path;
 
 const VERSION: u32 = 1;
@@ -127,6 +128,10 @@ fn write_node(
 
 /// Writes the world to `path` in tree order, non-default properties only.
 ///
+/// The write is atomic: the text goes to a temporary file in the same folder, which is flushed and
+/// synced to disk and then renamed over `path`. If anything fails, `path` keeps its old contents
+/// and the temporary file is removed.
+///
 /// Errors: [`CoreError::Io`] if the file cannot be written, [`CoreError::Scene`] if a value cannot be encoded.
 pub fn save_scene(world: &World, path: &Path) -> Result<(), CoreError> {
     let mut order = Vec::new();
@@ -138,7 +143,47 @@ pub fn save_scene(world: &World, path: &Path) -> Result<(), CoreError> {
         write_node(world, r, 2, &index_of, &mut out)?;
     }
     out.push_str("    ],\n)\n");
-    std::fs::write(path, out).map_err(|e| CoreError::Io(format!("{}: {e}", path.display())))
+    write_atomic(path, |f| f.write_all(out.as_bytes()))
+        .map_err(|e| CoreError::Io(format!("{}: {e}", path.display())))
+}
+
+/// Writes `path` through a temporary file in the same folder: `fill` writes the contents, then
+/// the file is flushed, synced and renamed over `path`. On any error the temporary file is
+/// removed and `path` is left as it was.
+fn write_atomic(
+    path: &Path,
+    fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let tmp = dir.join(format!(
+        ".{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        fill(&mut file)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        // Make the rename itself durable where the platform allows syncing a folder.
+        #[cfg(unix)]
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 struct Loader {
@@ -226,4 +271,54 @@ pub fn load_scene(path: &Path) -> Result<World, CoreError> {
         loader.world.set(id, &prop, Value::Ref(target))?;
     }
     Ok(loader.world)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir()
+            .join("metallic_core_atomic")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn failed_write_keeps_the_original_file() {
+        let d = dir("fail");
+        let path = d.join("main.mscene");
+        std::fs::write(&path, "original").unwrap();
+        let err = write_atomic(&path, |f| {
+            f.write_all(b"half a sce")?;
+            Err(std::io::Error::other("disk full"))
+        });
+        assert!(err.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        // No temporary file is left behind.
+        let left: Vec<_> = std::fs::read_dir(&d).unwrap().collect();
+        assert_eq!(left.len(), 1);
+    }
+
+    #[test]
+    fn save_replaces_the_file_and_leaves_no_temp() {
+        let d = dir("ok");
+        let path = d.join("main.mscene");
+        std::fs::write(&path, "old").unwrap();
+        save_scene(&World::new_with_services(), &path).unwrap();
+        assert!(load_scene(&path).is_ok());
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn save_into_a_missing_folder_fails_cleanly() {
+        let d = dir("missing");
+        let path = d.join("nope").join("main.mscene");
+        assert!(matches!(
+            save_scene(&World::new_with_services(), &path),
+            Err(CoreError::Io(_))
+        ));
+    }
 }
