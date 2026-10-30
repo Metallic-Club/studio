@@ -1,6 +1,7 @@
 //! Conversion between the Instance tree (BasePart properties) and Rapier bodies/colliders.
 use metallic_core::{InstanceId, Value, Vec3, World};
 use rapier3d::prelude::*;
+use std::collections::{HashMap, HashSet};
 
 /// Physical properties of a material.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -69,7 +70,7 @@ pub(crate) struct Signature {
     pub can_collide: bool,
     pub material: String,
     pub shape: String,
-    /// The part belongs to a character (see [`collect_parts`]).
+    /// The part belongs to a character (see [`is_character_model`]).
     pub character: bool,
 }
 
@@ -115,7 +116,7 @@ pub(crate) fn read_part(world: &World, id: InstanceId) -> Option<PartState> {
 }
 
 /// True for a Model with a `Humanoid` child: a character.
-fn is_character_model(world: &World, id: InstanceId) -> bool {
+pub(crate) fn is_character_model(world: &World, id: InstanceId) -> bool {
     world.is_a(id, "Model")
         && world
             .children(id)
@@ -123,12 +124,18 @@ fn is_character_model(world: &World, id: InstanceId) -> bool {
             .any(|&c| world.is_a(c, "Humanoid"))
 }
 
-/// All BasePart instances under Workspace, depth first (parts elsewhere are not simulated),
-/// each with a flag telling whether it is inside a character Model (a Model with a `Humanoid`
-/// child). Every instance is visited once and every Model's children scanned once, so this is
-/// linear in the tree size. Character parts never collide with or touch each other.
-pub(crate) fn collect_parts(world: &World) -> Vec<(InstanceId, bool)> {
-    let mut out = Vec::new();
+/// Scene membership collected during a full synchronization.
+#[derive(Default)]
+pub(crate) struct SceneMembership {
+    pub parts: Vec<(InstanceId, bool)>,
+    pub character_models: HashSet<InstanceId>,
+    pub humanoid_parents: HashMap<InstanceId, InstanceId>,
+}
+
+/// All physics parts and character membership under Workspace. Every instance is visited
+/// once and every Model's children scanned once, so a full reconciliation is linear.
+pub(crate) fn collect_scene(world: &World) -> SceneMembership {
+    let mut out = SceneMembership::default();
     let mut stack: Vec<(InstanceId, bool)> = world
         .root("Workspace")
         .into_iter()
@@ -136,12 +143,36 @@ pub(crate) fn collect_parts(world: &World) -> Vec<(InstanceId, bool)> {
         .collect();
     while let Some((id, in_char)) = stack.pop() {
         if world.is_a(id, "BasePart") {
-            out.push((id, in_char));
+            out.parts.push((id, in_char));
         }
-        let child_flag = in_char || is_character_model(world, id);
+        if world.is_a(id, "Humanoid")
+            && let Some(parent) = world.parent(id)
+        {
+            out.humanoid_parents.insert(id, parent);
+        }
+        let character_model = is_character_model(world, id);
+        if character_model {
+            out.character_models.insert(id);
+        }
+        let child_flag = in_char || character_model;
         stack.extend(world.children(id).iter().rev().map(|&c| (c, child_flag)));
     }
     out
+}
+
+/// Whether an instance is currently beneath the supplied Workspace root.
+pub(crate) fn in_workspace(world: &World, id: InstanceId, workspace: Option<InstanceId>) -> bool {
+    let Some(workspace) = workspace else {
+        return false;
+    };
+    let mut current = Some(id);
+    while let Some(ancestor) = current {
+        if ancestor == workspace {
+            return true;
+        }
+        current = world.parent(ancestor);
+    }
+    false
 }
 
 /// Rotation matrix (row-major) for Roblox Euler angles in degrees: R = Ry * Rx * Rz.

@@ -68,3 +68,14 @@ fn journal_overflow_and_foreign_cursor_are_reported() {
     let other = World::new_with_services();
     assert_eq!(w.changes_since(other.change_cursor()).0, Changes::Overflow);
 }
+
+#[test]
+fn cursor_identity_survives_mutation_but_not_world_cloning() {
+    let mut world = World::new_with_services();
+    let before = world.change_cursor();
+    world.create("Folder", None).unwrap();
+    assert!(before.same_world(world.change_cursor()));
+    assert!(world.change_cursor().same_world(before));
+    assert!(!before.same_world(world.deep_clone().change_cursor()));
+    assert!(!before.same_world(World::new_empty().change_cursor()));
+}

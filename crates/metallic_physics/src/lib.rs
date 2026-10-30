@@ -13,6 +13,12 @@
 //! linear and angular velocity derived from the move, so parts standing on it are carried along
 //! and parts in its way are pushed, by rotating movers too.
 //!
+//! Synchronization has its own non-consuming world-change cursor. Unchanged calls read no
+//! parts; sparse changes re-read only affected parts and character-model subtrees. Full scans
+//! happen on first use, journal overflow, or a different world. A world switch also resets
+//! simulation state; overflow in the same world preserves unchanged bodies and momentum.
+//! [`PhysicsWorld::last_sync_stats`] reports operation counts without measuring frame time.
+//!
 //! Characters: [`spawn_character`] builds a Roblox-style avatar Model for a Player and
 //! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
 //! death and respawn, checkpoints, touches). Character parts are anchored, so the physics moves
@@ -26,6 +32,9 @@ mod character;
 mod sync;
 mod touched;
 
+#[cfg(test)]
+mod journal_tests;
+
 pub use avatar::{TITANIUM, VIOLET};
 pub use character::{
     CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT, MoveInput,
@@ -33,7 +42,7 @@ pub use character::{
 };
 pub use sync::{MaterialProps, material_props};
 
-use metallic_core::{InstanceId, Value, Vec3, World};
+use metallic_core::{ChangeCursor, Changes, InstanceId, Value, Vec3, World};
 use rapier3d::prelude::{
     ActiveCollisionTypes, ActiveEvents, ColliderHandle, Group, InteractionGroups,
     InteractionTestMode, PhysicsWorld as RapierWorld, Pose, QueryFilter, QueryPipeline, Ray,
@@ -66,6 +75,19 @@ pub struct RayHit {
     pub distance: f64,
 }
 
+/// Work performed by the last [`PhysicsWorld::sync_from`] call.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PhysicsSyncStats {
+    /// A full Workspace traversal was required rather than an incremental journal read.
+    pub full_scan: bool,
+    /// Distinct eligible BaseParts whose physics properties were read.
+    pub examined_parts: usize,
+    /// Parts whose bodies were created or replaced because their signature changed.
+    pub rebuilt_parts: usize,
+    /// Parts removed because they were destroyed or left Workspace; replacements are excluded.
+    pub removed_parts: usize,
+}
+
 /// Rapier handles and bookkeeping for one part.
 struct Entry {
     body: RigidBodyHandle,
@@ -89,6 +111,10 @@ pub struct PhysicsWorld {
     touches: TouchTracker,
     /// Synced parts that belong to a character; [`Self::drain_touched`] never reports them.
     characters: HashSet<InstanceId>,
+    cursor: Option<ChangeCursor>,
+    character_models: HashSet<InstanceId>,
+    humanoid_parents: HashMap<InstanceId, InstanceId>,
+    last_sync_stats: PhysicsSyncStats,
     accumulator: f64,
 }
 
@@ -154,6 +180,10 @@ impl PhysicsWorld {
             collector: EventCollector::default(),
             touches: TouchTracker::default(),
             characters: HashSet::new(),
+            cursor: None,
+            character_models: HashSet::new(),
+            humanoid_parents: HashMap::new(),
+            last_sync_stats: PhysicsSyncStats::default(),
             accumulator: 0.0,
         }
     }
@@ -161,38 +191,169 @@ impl PhysicsWorld {
     /// Makes the simulation match the BaseParts currently in `world`.
     ///
     /// New parts get a body, parts whose Size/Shape/Material/Anchored/CanCollide changed are
-    /// rebuilt, and parts that were destroyed or are no longer BaseParts are removed. Call it
-    /// after adding or removing parts or changing those properties; moving parts needs no sync.
+    /// rebuilt, and parts that were destroyed or left Workspace are removed. Character collision
+    /// membership is refreshed when Models or their Humanoid children change. Call it after
+    /// adding, removing, reparenting, or reconfiguring parts; moving parts needs no sync.
+    ///
+    /// The first call and journal overflow reconcile the whole Workspace. Later calls examine
+    /// only changed instances and affected character subtrees; an unchanged cursor is a no-op.
+    /// Passing another world (including a deep clone) resets bodies, contacts, and accumulated
+    /// simulation time. Same-world overflow keeps bodies whose signatures still match.
     pub fn sync_from(&mut self, world: &World) {
-        let parts = sync::collect_parts(world);
-        let alive: HashSet<InstanceId> = parts.iter().map(|&(id, _)| id).collect();
+        let now = world.change_cursor();
+        self.last_sync_stats = PhysicsSyncStats::default();
+        if self.cursor == Some(now) {
+            return;
+        }
+        let changes = match self.cursor {
+            Some(cursor) if cursor.same_world(now) => world.changes_since(cursor).0,
+            Some(_) => {
+                *self = Self::new();
+                Changes::Overflow
+            }
+            None => Changes::Overflow,
+        };
+        let bodies_changed = match changes {
+            Changes::Ids(ids) => self.sync_changed(world, ids),
+            Changes::Overflow => self.sync_full(world),
+        };
+        self.cursor = Some(now);
+        if bodies_changed {
+            // Refresh the broad phase only when bodies/colliders changed, so newly inserted
+            // parts are queryable before the first simulation step.
+            self.rapier.detect_collisions(&(), &self.collector);
+            self.collect_touches();
+        }
+    }
+
+    /// Operation counts from the last synchronization; unchanged calls return all-zero stats.
+    ///
+    /// These describe wrapper synchronization work, not Rapier simulation cost or elapsed time.
+    pub fn last_sync_stats(&self) -> PhysicsSyncStats {
+        self.last_sync_stats
+    }
+
+    fn sync_full(&mut self, world: &World) -> bool {
+        self.last_sync_stats.full_scan = true;
+        let scene = sync::collect_scene(world);
+        self.character_models = scene.character_models;
+        self.humanoid_parents = scene.humanoid_parents;
+        let alive: HashSet<InstanceId> = scene.parts.iter().map(|&(id, _)| id).collect();
         let gone: Vec<InstanceId> = self
             .entries
             .keys()
             .filter(|id| !alive.contains(id))
             .copied()
             .collect();
+        let mut changed = !gone.is_empty();
         for id in gone {
             self.remove_entry(id);
+            self.last_sync_stats.removed_parts += 1;
         }
-        for (id, character) in parts {
-            let Some(state) = sync::read_part(world, id) else {
-                continue;
-            };
-            let stale = self
-                .entries
-                .get(&id)
-                .is_some_and(|e| e.signature != state.signature(character));
-            if stale {
+        for (id, character) in scene.parts {
+            changed |= self.sync_part(world, id, Some(character));
+        }
+        changed
+    }
+
+    fn sync_changed(&mut self, world: &World, ids: Vec<InstanceId>) -> bool {
+        let workspace = world.root("Workspace");
+        let mut models = HashSet::new();
+        for &id in &ids {
+            if let Some(old_parent) = self.humanoid_parents.remove(&id) {
+                models.insert(old_parent);
+            }
+            if world.is_a(id, "Humanoid")
+                && let Some(parent) = world.parent(id)
+            {
+                models.insert(parent);
+                if sync::in_workspace(world, id, workspace) {
+                    self.humanoid_parents.insert(id, parent);
+                }
+            }
+            if world.is_a(id, "Model") || self.character_models.contains(&id) {
+                models.insert(id);
+            }
+        }
+        let mut changed_models = Vec::new();
+        for model in models {
+            let was_character = self.character_models.contains(&model);
+            let is_character = sync::in_workspace(world, model, workspace)
+                && sync::is_character_model(world, model);
+            if is_character {
+                self.character_models.insert(model);
+            } else {
+                self.character_models.remove(&model);
+            }
+            if was_character != is_character {
+                changed_models.push(model);
+            }
+        }
+        let mut candidates: HashSet<InstanceId> = ids.into_iter().collect();
+        for model in changed_models {
+            let mut stack = world.children(model).to_vec();
+            while let Some(id) = stack.pop() {
+                if world.is_a(id, "BasePart") {
+                    candidates.insert(id);
+                }
+                stack.extend_from_slice(world.children(id));
+            }
+        }
+        let mut changed = false;
+        for id in candidates {
+            let character = self.part_membership(world, id, workspace);
+            changed |= self.sync_part(world, id, character);
+        }
+        changed
+    }
+
+    fn part_membership(
+        &self,
+        world: &World,
+        id: InstanceId,
+        workspace: Option<InstanceId>,
+    ) -> Option<bool> {
+        if !world.is_a(id, "BasePart") {
+            return None;
+        }
+        let workspace = workspace?;
+        let mut current = world.parent(id);
+        let mut character = false;
+        while let Some(ancestor) = current {
+            if ancestor == workspace {
+                return Some(character);
+            }
+            character |= self.character_models.contains(&ancestor);
+            current = world.parent(ancestor);
+        }
+        None
+    }
+
+    fn sync_part(&mut self, world: &World, id: InstanceId, character: Option<bool>) -> bool {
+        let Some(character) = character else {
+            if self.entries.contains_key(&id) {
                 self.remove_entry(id);
+                self.last_sync_stats.removed_parts += 1;
+                return true;
             }
-            if !self.entries.contains_key(&id) {
-                self.add_entry(id, &state, character);
-            }
+            return false;
+        };
+        self.last_sync_stats.examined_parts += 1;
+        let Some(state) = sync::read_part(world, id) else {
+            return false;
+        };
+        let signature = state.signature(character);
+        if self
+            .entries
+            .get(&id)
+            .is_some_and(|entry| entry.signature == signature)
+        {
+            return false;
         }
-        // Refresh the broad phase so raycasts work before the first step.
-        self.rapier.detect_collisions(&(), &self.collector);
-        self.collect_touches();
+        self.remove_entry(id);
+        self.add_entry(id, &state, character);
+        self.last_sync_stats.rebuilt_parts += 1;
+        true
     }
 
     fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) {
