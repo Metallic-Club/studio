@@ -9,7 +9,8 @@
 //!
 //! Movement (units are studs and seconds):
 //! - horizontal speed is `Humanoid.WalkSpeed` (input direction longer than 1 is shortened to 1),
-//!   with instant acceleration and full air control, as in Roblox;
+//!   with instant acceleration and full air control, as in Roblox; [`MoveInput::run`] multiplies
+//!   it by [`RUN_MULTIPLIER`] (a Metallic addition) without changing `WalkSpeed`;
 //! - a jump sets the upward velocity to `Humanoid.JumpPower` (50 -> apex 50^2 / (2 * 196.2) =
 //!   6.37 studs); holding jump jumps again on landing;
 //! - gravity is [`crate::GRAVITY`] (196.2), integrated exactly for constant acceleration;
@@ -69,6 +70,8 @@ const SNAP_DISTANCE: f64 = 1.5;
 const TOUCH_MARGIN: f64 = 0.1;
 /// Most the character is pushed out of overlapping parts in one step, in studs.
 pub const MAX_PUSH: f64 = 0.5;
+/// Running ([`MoveInput::run`]) moves this many times faster than `Humanoid.WalkSpeed`.
+pub const RUN_MULTIPLIER: f64 = 1.5;
 
 /// Movement wish for one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -78,6 +81,8 @@ pub struct MoveInput {
     pub dir: Vec3,
     /// Jump (when standing on something). Holding it jumps again on landing.
     pub jump: bool,
+    /// Run at [`RUN_MULTIPLIER`] times `Humanoid.WalkSpeed` (scripts still read `WalkSpeed`).
+    pub run: bool,
 }
 
 /// What a character is doing.
@@ -369,7 +374,7 @@ impl CharacterController {
         let input = if alive { input } else { MoveInput::default() };
         let hum = |p: &str, default: f64| num_prop(world, humanoid, p).unwrap_or(default);
         let tuning = Tuning {
-            walk_speed: hum("WalkSpeed", 16.0),
+            walk_speed: hum("WalkSpeed", 16.0) * if input.run { RUN_MULTIPLIER } else { 1.0 },
             jump_power: hum("JumpPower", 50.0),
             max_slope: hum("MaxSlopeAngle", 89.0).clamp(0.0, 89.9),
         };

@@ -10,6 +10,8 @@ Code: `crates/metallic_script/src/api/`. Tests: `crates/metallic_script/tests/{a
 `ScriptHost::start` runs, in tree order: every enabled `Script` under Workspace or ServerScriptService (server VM) and every
 enabled `LocalScript` under StarterPlayerScripts or a `PlayerGui` (client VM). Scripts added later to those places (for example
 StarterGui contents cloned into the `PlayerGui`) start on the next `step`. `script` is the script's own Instance.
+The runtime (`Game::start`) copies the children of `StarterGui` into `Player1.PlayerGui` once when the game starts (M1 has
+no `ResetOnSpawn`: the GUI survives respawns).
 
 ## Globals
 `game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Color3`, `UDim2`.
@@ -48,7 +50,7 @@ part.Size = Vector3.new(4, 1, 2) * 2
 
 | Signal | Arguments | Fired when |
 |---|---|---|
-| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)` |
+| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is its `HumanoidRootPart` (so `hit.Parent` is the character Model) |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after `start`, for `Player1` |
