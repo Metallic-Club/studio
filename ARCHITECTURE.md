@@ -35,6 +35,9 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **metallic_player** (Task 8): `metallic-player <project dir>`; window, input, headless mode for smoke tests.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
+  an injectable `HttpClient`, Velopack for download and apply) and `github_auth.rs` (device sign-in, token in Credential
+  Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
 
 ## Frame loop
 `Game::frame(input, dt)`: input -> scripts (`ScriptHost::step`: Heartbeat, Touched, queued remotes, resumed threads)

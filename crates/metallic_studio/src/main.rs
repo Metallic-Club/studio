@@ -6,6 +6,9 @@ use eframe::egui;
 use metallic_studio::app::{Options, StudioApp, WINDOW_TITLE, icon_image};
 
 fn main() -> eframe::Result {
+    // Must run first: when the installer or an update starts Studio with a hook argument,
+    // Velopack handles it here and exits.
+    velopack::VelopackApp::build().run();
     env_logger::init();
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(o) => o,
