@@ -4,6 +4,9 @@ Status: implemented and tested locally; ready for review, not accepted or releas
 Branch: `studio/114-borrowed-properties`.
 Base: `2780922` (`origin/main` at start).
 Rebased onto `532c4f7` before the final checks and PR.
+Current-main integration: normal-merged `ebb94f3` at `e24b2e7` without rewriting the published branch. Fresh
+semantic/allocation/workspace gates passed, as recorded below. Original Criterion timings remain pinned to
+their original base and are not silently relabeled as fresh performance measurements.
 
 ## Goal and scope
 
@@ -75,4 +78,13 @@ engine frame-rate target, and existing physics/render readers need separate migr
   `%LOCALAPPDATA%\Metallic\cargo-target-114`. An earlier shared-target run picked up another
   worktree's incompatible core artifacts and was discarded; the isolated run resolved that environment failure.
 - New dependencies: none. Public API and architecture documentation updated. No UI changes.
-- Push this branch and attach the scoped PR; review remote CI independently. Do not merge it here.
+
+Current-main integration gates (2026-10-30): reviewed #209 Cargo guard scoped-cleaned local packages on ownership
+transition and verified this worktree's source compilation. Five semantic tests and the allocation test passed
+again. The complete allocation table and fixture totals above repeated exactly: borrowed reads allocate zero;
+owned frame reads allocate 10,000 times / 60,000 requested bytes; the cache retains 12,589 requested bytes and the
+fixture retains 5,075,848. No new Criterion timing run was performed.
+
+`cargo test --workspace -j 4 -- --test-threads=1` passed 218 tests, including the current Parkour route/player smoke.
+Strict all-targets Clippy, licenses, formatting and diff checks passed on this merged source. Inspect updated
+PR #185 CI after the normal integration push. Do not merge it here.
