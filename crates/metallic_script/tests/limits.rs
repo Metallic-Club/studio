@@ -3,10 +3,11 @@
 
 mod common;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use common::Rig;
 use metallic_core::Value;
+use metallic_script::{Context, ScriptVm};
 
 /// Depth of the nested-table bomb; the unit test run for the red/green record may lower it.
 const BOMB_LEVELS: usize = 15;
@@ -448,4 +449,65 @@ fn full_deferral_queue_stops_building_arguments() {
     // Without the early stop every step built 10,000 argument lists (80,000 here).
     let built = rig.host.dispatch_args_built();
     assert!(built < 20_000, "built {built} argument lists");
+}
+
+/// `table.move` loops in C, where the time budget cannot interrupt it (#164): huge
+/// counts must fail at once instead of blocking the host for over a minute.
+#[test]
+fn table_move_huge_count_is_rejected_quickly() {
+    let mut vm = ScriptVm::new(Context::Server).unwrap();
+    for src in [
+        "table.move({}, 1, 2^31 - 3, 2, {})",
+        "table.move({}, 1, 2^31 - 3, 2)",
+        "table.move({}, -2^30, 2^30 - 2, 1, {})",
+        "table.move({}, '1', '2147483645', 2, {})",
+        "table.move({}, 0.5, 2^31 - 3.5, 2, {})",
+        "table.move({}, 1, 1e300, 2, {})",
+        "table.move({}, 0/0, 100, 1, {})",
+        "table.move({}, 1, 2^24 + 1, 2, {})",
+    ] {
+        let began = Instant::now();
+        let err = vm.run_script("T", src).unwrap_err();
+        let took = began.elapsed();
+        assert!(took < Duration::from_millis(500), "{src}: took {took:?}");
+        assert!(err.message.starts_with("T:1:"), "{src}: {}", err.message);
+    }
+    // At the limit a sparse move is allowed and still quick.
+    let began = Instant::now();
+    vm.run_script(
+        "T",
+        "local t = table.move({7}, 1, 2^24, 2, {}) assert(t[2] == 7)",
+    )
+    .unwrap();
+    let took = began.elapsed();
+    assert!(took < Duration::from_millis(500), "took {took:?}");
+}
+
+#[test]
+fn table_move_keeps_normal_semantics() {
+    let mut vm = ScriptVm::new(Context::Server).unwrap();
+    vm.run_script(
+        "T",
+        r#"
+        local function s(t) return table.concat(t, ",") end
+        local a = {1, 2, 3, 4, 5}
+        assert(table.move(a, 1, 3, 2) == a and s(a) == "1,1,2,3,5", s(a))
+        local b = {1, 2, 3, 4, 5}
+        table.move(b, 2, 5, 1)
+        assert(s(b) == "2,3,4,5,5", s(b))
+        local dst = {9}
+        assert(table.move({1, 2, 3}, 1, 3, 2, dst) == dst and s(dst) == "9,1,2,3", s(dst))
+        local c = {1, 2, 3}
+        assert(table.move(c, "2", "3", 1, nil) == c and s(c) == "2,3,3", s(c))
+        local e = {1, 2}
+        assert(table.move(e, 2, 1, 5) == e and s(e) == "1,2")
+        local ok, err = pcall(table.move, nil, 1, 2, 3)
+        assert(not ok and err:find("table expected"), err)
+        ok = pcall(table.move, {}, "x", 2, 3)
+        assert(not ok)
+        ok = pcall(table.move, {}, 1, 2, 3, table)
+        assert(not ok)
+        "#,
+    )
+    .unwrap();
 }
