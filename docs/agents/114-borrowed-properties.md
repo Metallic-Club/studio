@@ -1,8 +1,9 @@
 # #114 Borrowed property reads
 
-Status: implemented; targeted semantic and allocation tests passed, full workspace checks in progress.
+Status: implemented and tested locally; ready for review, not accepted or released.
 Branch: `studio/114-borrowed-properties`.
 Base: `2780922` (`origin/main` at start).
+Rebased onto `532c4f7` before the final checks and PR.
 
 ## Goal and scope
 
@@ -66,6 +67,12 @@ engine frame-rate target, and existing physics/render readers need separate migr
 
 - Five semantic borrowed-property tests: passed.
 - Deterministic allocation test: passed, including owned baseline allocations and zero borrowed allocations.
-- Full workspace tests, strict Clippy and license gate: in progress; update before opening the PR.
+- `cargo test --workspace -j 4`: passed all 196 tests after the rebase.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed after the rebase.
+- `cargo deny check licenses`: passed after the rebase (one existing unused MPL-2.0 allowance warning).
+- `cargo fmt --check` and `git diff --check`: passed.
+- Final workspace gates used the isolated task target directory
+  `C:\Users\alexi\AppData\Local\Metallic\cargo-target-114`. An earlier shared-target run picked up another
+  worktree's incompatible core artifacts and was discarded; the isolated run resolved that environment failure.
 - New dependencies: none. Public API and architecture documentation updated. No UI changes.
-- Before PR: finish required gates, fetch/rebase latest `origin/main`, push this branch and attach the PR. Do not merge.
+- Push this branch and attach the scoped PR; review remote CI independently. Do not merge it here.
