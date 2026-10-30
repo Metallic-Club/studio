@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 metallic_update.workspace = true
+metallic_tokens.workspace = true
 url = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

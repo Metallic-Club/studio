@@ -16,6 +16,7 @@ metallic_physics = { path = "crates/metallic_physics" }
 metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
 metallic_update = { path = "crates/metallic_update" }
+metallic_tokens = { path = "crates/metallic_tokens" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
 # Debug builds keep file:line backtraces for our crates and drop debug info for dependencies.

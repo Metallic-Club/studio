@@ -1,0 +1,478 @@
+//! Shared Metallic design tokens.
+//!
+//! One source, `design/tokens/metallic.tokens.json` (W3C Design Tokens format), is read here and
+//! exported as CSS custom properties for the Launcher pages, the website and, later, Studio. Native
+//! code reads colours with [`color`].
+//!
+//! A token is an object with `$value` and `$type`. The first path segment is a category
+//! (`primitive`, `role`, `space`, ...) and is not part of the CSS name: `role.bg-base` becomes
+//! `--bg-base`, `primitive.g.850` becomes `--g-850`, `type.t-body.size` becomes `--t-body-size`.
+//! A value of the form `{primitive.g.850}` refers to another token and becomes `var(--g-850)`.
+//! The top-level `$themes` (theme id to CSS name to value) and `$reduced-motion` (CSS name to value)
+//! hold overrides.
+
+use std::collections::HashMap;
+use std::fmt;
+
+use serde_json::{Map, Value};
+
+/// The token source, built into the crate.
+pub const TOKENS_JSON: &str = include_str!("../../../design/tokens/metallic.tokens.json");
+
+/// Why a token file was rejected.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TokenError {
+    /// The text is not JSON.
+    Json(String),
+    /// A token or a section is wrong: where, and what.
+    Invalid {
+        /// The dotted path of the token or section.
+        at: String,
+        /// What is wrong.
+        reason: String,
+    },
+}
+
+impl fmt::Display for TokenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenError::Json(e) => write!(f, "tokens are not valid JSON: {e}"),
+            TokenError::Invalid { at, reason } => write!(f, "token {at}: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for TokenError {}
+
+fn invalid<T>(at: &str, reason: impl Into<String>) -> Result<T, TokenError> {
+    Err(TokenError::Invalid {
+        at: at.to_string(),
+        reason: reason.into(),
+    })
+}
+
+/// One token.
+#[derive(Debug, Clone)]
+pub struct Token {
+    path: Vec<String>,
+    name: String,
+    kind: String,
+    value: Value,
+}
+
+impl Token {
+    /// The path in the file, for example `["role", "bg-base"]`.
+    pub fn path(&self) -> &[String] {
+        &self.path
+    }
+
+    /// The CSS custom property name without the leading dashes, for example `bg-base`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The DTCG `$type`.
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// The dotted path of the token this one points at, when its value is `{a.b.c}`.
+    pub fn reference(&self) -> Option<&str> {
+        self.value.as_str()?.strip_prefix('{')?.strip_suffix('}')
+    }
+}
+
+/// A named set of overrides, switched on with `data-theme="<id>"`.
+#[derive(Debug, Clone)]
+struct Overrides {
+    id: String,
+    values: Vec<(String, String)>,
+}
+
+/// A parsed token file.
+#[derive(Debug, Clone)]
+pub struct TokenSet {
+    tokens: Vec<Token>,
+    themes: Vec<Overrides>,
+    reduced_motion: Vec<(String, String)>,
+    by_path: HashMap<String, usize>,
+    by_name: HashMap<String, usize>,
+}
+
+impl TokenSet {
+    /// Every token, in file order.
+    pub fn tokens(&self) -> &[Token] {
+        &self.tokens
+    }
+}
+
+const KINDS: &[&str] = &[
+    "color",
+    "dimension",
+    "duration",
+    "fontFamily",
+    "cubicBezier",
+    "number",
+    "shadow",
+];
+
+/// Reads a token file.
+pub fn parse(json: &str) -> Result<TokenSet, TokenError> {
+    let root: Value = serde_json::from_str(json).map_err(|e| TokenError::Json(e.to_string()))?;
+    let Value::Object(root) = root else {
+        return invalid("(root)", "must be an object");
+    };
+    let mut set = TokenSet {
+        tokens: Vec::new(),
+        themes: Vec::new(),
+        reduced_motion: Vec::new(),
+        by_path: HashMap::new(),
+        by_name: HashMap::new(),
+    };
+    for (key, value) in &root {
+        if key.starts_with('$') {
+            continue;
+        }
+        walk(&mut set, &mut vec![key.clone()], value)?;
+    }
+    for token in &set.tokens {
+        check_value(&set, token)?;
+    }
+    if let Some(themes) = root.get("$themes") {
+        let Some(themes) = themes.as_object() else {
+            return invalid("$themes", "must be an object");
+        };
+        for (id, values) in themes {
+            if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return invalid(
+                    "$themes",
+                    format!("theme id {id} must be letters, digits and dashes"),
+                );
+            }
+            let values = overrides(&set, &format!("$themes.{id}"), values)?;
+            set.themes.push(Overrides {
+                id: id.clone(),
+                values,
+            });
+        }
+    }
+    if let Some(values) = root.get("$reduced-motion") {
+        set.reduced_motion = overrides(&set, "$reduced-motion", values)?;
+    }
+    Ok(set)
+}
+
+fn overrides(
+    set: &TokenSet,
+    at: &str,
+    values: &Value,
+) -> Result<Vec<(String, String)>, TokenError> {
+    let Some(map) = values.as_object() else {
+        return invalid(at, "must be an object");
+    };
+    let mut out = Vec::new();
+    for (name, value) in map {
+        if !set.by_name.contains_key(name) {
+            return invalid(at, format!("overrides unknown token {name}"));
+        }
+        match value.as_str() {
+            Some(text) if !text.is_empty() && !text.contains([';', '{', '}']) => {
+                out.push((name.clone(), text.to_string()));
+            }
+            _ => return invalid(at, format!("the value of {name} must be a plain string")),
+        }
+    }
+    Ok(out)
+}
+
+fn walk(set: &mut TokenSet, path: &mut Vec<String>, node: &Value) -> Result<(), TokenError> {
+    let at = path.join(".");
+    let Value::Object(map) = node else {
+        return invalid(&at, "must be a group or a token");
+    };
+    if let Some(value) = map.get("$value") {
+        return add(set, path, map, value.clone());
+    }
+    for (key, child) in map {
+        if key.starts_with('$') {
+            continue;
+        }
+        path.push(key.clone());
+        walk(set, path, child)?;
+        path.pop();
+    }
+    Ok(())
+}
+
+fn add(
+    set: &mut TokenSet,
+    path: &[String],
+    map: &Map<String, Value>,
+    value: Value,
+) -> Result<(), TokenError> {
+    let at = path.join(".");
+    if path.len() < 2 {
+        return invalid(&at, "a token needs a category group above it");
+    }
+    let Some(kind) = map.get("$type").and_then(Value::as_str) else {
+        return invalid(&at, "missing $type");
+    };
+    if !KINDS.contains(&kind) {
+        return invalid(&at, format!("unknown $type {kind}"));
+    }
+    let name = path[1..].join("-");
+    if set.by_name.contains_key(&name) {
+        return invalid(&at, format!("the CSS name --{name} is already used"));
+    }
+    let index = set.tokens.len();
+    set.by_path.insert(at, index);
+    set.by_name.insert(name.clone(), index);
+    set.tokens.push(Token {
+        path: path.to_vec(),
+        name,
+        kind: kind.to_string(),
+        value,
+    });
+    Ok(())
+}
+
+fn check_value(set: &TokenSet, token: &Token) -> Result<(), TokenError> {
+    let at = token.path.join(".");
+    if token.reference().is_some() {
+        // Follow the chain; a missing target, another type or a loop is an error.
+        let mut current = token;
+        for _ in 0..=set.tokens.len() {
+            let Some(target) = current.reference() else {
+                return Ok(());
+            };
+            let Some(&index) = set.by_path.get(target) else {
+                return invalid(&at, format!("points at missing token {target}"));
+            };
+            if set.tokens[index].kind != token.kind {
+                return invalid(&at, format!("points at {target}, which has another type"));
+            }
+            current = &set.tokens[index];
+        }
+        return invalid(&at, "references loop");
+    }
+    render(set, token).map(|_| ())
+}
+
+const GENERIC_FAMILIES: &[&str] = &[
+    "serif",
+    "sans-serif",
+    "monospace",
+    "cursive",
+    "fantasy",
+    "system-ui",
+    "ui-serif",
+    "ui-sans-serif",
+    "ui-monospace",
+    "ui-rounded",
+];
+
+fn plain<'a>(at: &str, value: &'a Value) -> Result<&'a str, TokenError> {
+    match value.as_str() {
+        Some(text) if !text.is_empty() && !text.contains([';', '{', '}']) => Ok(text),
+        _ => invalid(at, "the value must be a plain string"),
+    }
+}
+
+fn number_text(at: &str, value: &Value) -> Result<String, TokenError> {
+    match value {
+        Value::Number(n) => Ok(n.to_string()),
+        _ => invalid(at, "the value must be a number"),
+    }
+}
+
+/// The CSS text of a token's value (a reference becomes `var(--name)`).
+fn render(set: &TokenSet, token: &Token) -> Result<String, TokenError> {
+    let at = token.path.join(".");
+    let value = &token.value;
+    if let Some(target) = token.reference() {
+        return match set.by_path.get(target) {
+            Some(&index) => Ok(format!("var(--{})", set.tokens[index].name)),
+            None => invalid(&at, format!("points at missing token {target}")),
+        };
+    }
+    match token.kind.as_str() {
+        "color" => {
+            let text = plain(&at, value)?;
+            if parse_color(text).is_none() {
+                return invalid(
+                    &at,
+                    format!("{text} is not a colour (#rrggbb, #rrggbbaa or rgba())"),
+                );
+            }
+            Ok(text.to_string())
+        }
+        "dimension" | "duration" => {
+            let text = plain(&at, value)?;
+            let units: &[&str] = if token.kind == "duration" {
+                &["ms", "s"]
+            } else {
+                &["px", "rem", "em"]
+            };
+            let number = units.iter().find_map(|u| text.strip_suffix(*u));
+            if number.is_none_or(|n| n.parse::<f64>().is_err()) {
+                return invalid(&at, format!("{text} is not a {}", token.kind));
+            }
+            Ok(text.to_string())
+        }
+        "number" => number_text(&at, value),
+        "fontFamily" => {
+            let names: Vec<&str> = match value {
+                Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+                Value::String(one) => vec![one.as_str()],
+                _ => Vec::new(),
+            };
+            let bad = |n: &&str| n.is_empty() || n.contains(['\'', '"', ';', '{', '}', ',']);
+            if names.is_empty() || names.iter().any(bad) {
+                return invalid(&at, "the value must be a list of font family names");
+            }
+            let quoted: Vec<String> = names
+                .iter()
+                .map(|n| {
+                    if GENERIC_FAMILIES.contains(n) {
+                        (*n).to_string()
+                    } else {
+                        format!("'{n}'")
+                    }
+                })
+                .collect();
+            Ok(quoted.join(", "))
+        }
+        "cubicBezier" => {
+            let Some(points) = value.as_array().filter(|a| a.len() == 4) else {
+                return invalid(&at, "the value must be four numbers");
+            };
+            let mut parts = Vec::new();
+            for point in points {
+                parts.push(number_text(&at, point)?);
+            }
+            Ok(format!("cubic-bezier({})", parts.join(", ")))
+        }
+        "shadow" => {
+            let Some(map) = value.as_object() else {
+                return invalid(&at, "the value must be an object");
+            };
+            let mut parts = Vec::new();
+            for key in ["offsetX", "offsetY", "blur", "spread", "color"] {
+                match map.get(key) {
+                    Some(v) => parts.push(plain(&at, v)?.to_string()),
+                    None => return invalid(&at, format!("missing {key}")),
+                }
+            }
+            Ok(parts.join(" "))
+        }
+        _ => invalid(&at, "unsupported type"),
+    }
+}
+
+/// The CSS text: `:root` with every token in file order, one `[data-theme="<id>"]` block per theme,
+/// and a `prefers-reduced-motion` block when the file has one. The same input gives the same text.
+pub fn to_css(set: &TokenSet) -> String {
+    let mut css = String::from(
+        "/* Metallic design tokens. Generated from design/tokens/metallic.tokens.json: do not edit.\n   Regenerate with: cargo run -p metallic_tokens --example export_css */\n:root {\n",
+    );
+    let mut group: Option<&str> = None;
+    for token in &set.tokens {
+        let top = token.path[0].as_str();
+        if group.is_some_and(|g| g != top) {
+            css.push('\n');
+        }
+        group = Some(top);
+        // `parse` already checked every value.
+        let text = render(set, token).unwrap_or_default();
+        css.push_str(&format!("  --{}: {text};\n", token.name));
+    }
+    css.push_str("}\n");
+    for theme in &set.themes {
+        css.push_str(&format!("\n[data-theme=\"{}\"] {{\n", theme.id));
+        for (name, value) in &theme.values {
+            css.push_str(&format!("  --{name}: {value};\n"));
+        }
+        css.push_str("}\n");
+    }
+    if !set.reduced_motion.is_empty() {
+        css.push_str("\n@media (prefers-reduced-motion: reduce) {\n  :root {\n");
+        for (name, value) in &set.reduced_motion {
+            css.push_str(&format!("    --{name}: {value};\n"));
+        }
+        css.push_str("  }\n}\n");
+    }
+    css
+}
+
+/// The colour of a token by CSS name (`bg-base`, `g-850`) as red, green, blue, alpha, following
+/// references. `None` when there is no such token or it is not a colour.
+pub fn color(set: &TokenSet, name: &str) -> Option<[u8; 4]> {
+    let mut token = set.tokens.get(*set.by_name.get(name)?)?;
+    while let Some(target) = token.reference() {
+        token = set.tokens.get(*set.by_path.get(target)?)?;
+    }
+    if token.kind != "color" {
+        return None;
+    }
+    parse_color(token.value.as_str()?)
+}
+
+fn parse_color(text: &str) -> Option<[u8; 4]> {
+    if let Some(hex) = text.strip_prefix('#') {
+        if !hex.is_ascii() || !(hex.len() == 6 || hex.len() == 8) {
+            return None;
+        }
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+        let alpha = if hex.len() == 8 { byte(6)? } else { 255 };
+        return Some([byte(0)?, byte(2)?, byte(4)?, alpha]);
+    }
+    let inner = text.strip_prefix("rgba(")?.strip_suffix(')')?;
+    let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let alpha: f64 = parts[3].parse().ok()?;
+    if !(0.0..=1.0).contains(&alpha) {
+        return None;
+    }
+    Some([
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+        (alpha * 255.0).round() as u8,
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SMALL: &str = r##"{
+      "primitive": {"g": {"900": {"$type": "color", "$value": "#111015"}}},
+      "role": {"bg-deep": {"$type": "color", "$value": "{primitive.g.900}"}},
+      "motion": {"t-fast": {"$type": "duration", "$value": "90ms"}},
+      "$themes": {"light": {"bg-deep": "#ffffff"}},
+      "$reduced-motion": {"t-fast": "0ms"}
+    }"##;
+
+    #[test]
+    fn css_has_roots_themes_and_reduced_motion() {
+        let css = to_css(&parse(SMALL).unwrap());
+        assert!(css.contains("  --g-900: #111015;\n"));
+        assert!(css.contains("  --bg-deep: var(--g-900);\n"));
+        assert!(css.contains("[data-theme=\"light\"] {\n  --bg-deep: #ffffff;\n}"));
+        assert!(css.contains("prefers-reduced-motion: reduce) {\n  :root {\n    --t-fast: 0ms;"));
+        assert_eq!(css, to_css(&parse(SMALL).unwrap()));
+    }
+
+    #[test]
+    fn bad_files_are_refused() {
+        let alias = |v: &str| format!(r#"{{"role":{{"a":{{"$type":"color","$value":"{v}"}}}}}}"#);
+        assert!(parse("[]").is_err());
+        assert!(parse(&alias("{role.nope}")).is_err());
+        assert!(parse(&alias("{role.a}")).is_err());
+        assert!(parse(&alias("red")).is_err());
+        assert!(parse(r##"{"role":{"a":{"$value":"#000000"}}}"##).is_err());
+        assert!(parse(r##"{"role":{"a":{"$type":"color","$value":"#000000"}},"$themes":{"x":{"zzz":"1"}}}"##).is_err());
+    }
+}

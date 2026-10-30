@@ -41,9 +41,16 @@ use wry::{
 
 use crate::platform::{self, SystemSpawner};
 
-/// The graphite page background (`--bg-base` in the visual language), so no white shows before
-/// the first page paints.
-const BACKGROUND: (u8, u8, u8, u8) = (22, 21, 27, 255);
+/// The page background, the `bg-base` role of the shared design tokens (the bundled pages paint
+/// their body with it), so no white shows before the first page paints.
+fn background() -> (u8, u8, u8, u8) {
+    let set = metallic_tokens::parse(metallic_tokens::TOKENS_JSON).ok();
+    match set.and_then(|set| metallic_tokens::color(&set, "bg-base")) {
+        Some([r, g, b, a]) => (r, g, b, a),
+        // The tokens are built in and a test reads this role; the fallback is the same graphite.
+        None => (22, 21, 27, 255),
+    }
+}
 
 /// How long the site check may take (the health check and the offline re-checks).
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -661,7 +668,7 @@ pub fn run(
 
     let mut context = WebContext::new(platform::webview_data_dir());
     let mut builder = WebViewBuilder::new_with_web_context(&mut context)
-        .with_background_color(BACKGROUND)
+        .with_background_color(background())
         .with_user_agent(user_agent(webview_version, env!("CARGO_PKG_VERSION")))
         .with_devtools(config.dev_mode)
         // `window.metallic`, for the main frame. (On Windows the script also reaches frames, so

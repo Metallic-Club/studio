@@ -105,6 +105,11 @@ pub const BUNDLED: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/pages/settings.html"),
     ),
     (
+        "/tokens.css",
+        CSS,
+        include_bytes!("../../../design/tokens/metallic-tokens.css"),
+    ),
+    (
         "/pages.css",
         CSS,
         include_bytes!("../assets/pages/pages.css"),

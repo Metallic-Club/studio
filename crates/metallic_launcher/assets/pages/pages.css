@@ -1,30 +1,8 @@
-/* Metallic Launcher bundled pages: Graphite theme.
-   Token values are copied from docs/design/visual-language/assets/tokens.css (Metallic visual language).
-   System fonts only; no gradients, no glow. One violet accent on the main action, one 45 degree
+/* Metallic Launcher bundled pages. All colours, type families, radii and motion come from the shared
+   design tokens (/tokens.css, generated from design/tokens/metallic.tokens.json); this file uses roles
+   only and defines no token. No gradients, no glow. One violet accent on the main action, one 45 degree
    chamfer on the primary button, and a 1 px top highlight on raised surfaces. */
-:root {
-  color-scheme: dark;
-  --g-900: #111015; --g-850: #16151b; --g-800: #1c1b22; --g-750: #24222b;
-  --g-700: #2c2a34; --g-650: #35323e;
-  --v-300: #b4a6ec; --v-400: #9d8be0; --v-500: #8673cf;
-  --bg-deep: var(--g-900); --bg-base: var(--g-850); --bg-panel: var(--g-800);
-  --bg-raised: var(--g-750); --bg-hover: var(--g-700); --bg-active: var(--g-650);
-  --line: #2b2933; --line-control: #6e6a79;
-  --text-1: #e6e4ea; --text-2: #aeaab6; --text-3: #8e8a97;
-  --accent: var(--v-400); --accent-hover: var(--v-300); --accent-press: var(--v-500);
-  --accent-text: var(--v-300); --on-accent: var(--g-900); --focus: var(--v-300);
-  --highlight: rgba(255, 255, 255, 0.06);
-  --warning: #e0ad55; --success: #62bf91;
-  --font: system-ui, "Segoe UI", sans-serif;
-  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --r-sm: 4px; --r-md: 6px;
-  --cut-sm: 6px;
-  --t-fast: 90ms;
-  --ease-out: cubic-bezier(0.215, 0.61, 0.355, 1);
-}
-@media (prefers-reduced-motion: reduce) {
-  :root { --t-fast: 0ms; }
-}
+:root { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -98,7 +76,7 @@ code { font: 400 12px/18px var(--mono); color: var(--text-1); }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* The chamfer clips anything outside the button, so its ring sits inside. */
-.btn-primary:focus-visible { outline: 2px solid var(--g-900); outline-offset: -6px; }
+.btn-primary:focus-visible { outline: 2px solid var(--on-accent); outline-offset: -6px; }
 
 .status:empty { display: none; }
 .status { margin: 12px 0 0; font-size: 12px; line-height: 16px; color: var(--text-3); }
