@@ -243,17 +243,10 @@ fn caught_timeout_stays_fatal_and_next_resume_recovers() {
 }
 
 #[test]
-fn original_large_pattern_error_has_only_the_positioned_message() {
+fn uncaught_malformed_pattern_has_only_the_positioned_message() {
     let mut vm = ScriptVm::new(Context::Server).unwrap();
-    let error = vm
-        .run_script("Case", "string.match(string.rep('a',12e6),'x')")
-        .unwrap_err();
-    assert!(
-        error.message == "Case:1: pattern too complex"
-            || error.message == "Case:1: Script timeout: exhausted allowed execution time",
-        "{}",
-        error.message
-    );
+    let error = vm.run_script("Case", "string.match('x','%')").unwrap_err();
+    assert_eq!(error.message, "Case:1: malformed pattern (ends with '%')");
 }
 
 #[test]

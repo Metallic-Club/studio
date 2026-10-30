@@ -32,9 +32,12 @@ pattern messages were already clean on current main, reflecting an earlier parti
 
 Focused final prototype: 3 unit tests and 16 integration tests pass, including native pcall frame snapshots,
 callable tables, missing arguments, nil/multiple results, xpcall handler behavior, user error identity,
-multiline text, inner-function lines, delayed output, yields, sticky timeout recovery, original large-pattern
-repro, returned-iterator errors, GC and VM release. The 12 MB pattern repro permits either exact complexity
-failure or exact timeout failure because wall-clock load can decide which existing limit fires first.
+multiline text, inner-function lines, delayed output, yields, sticky timeout recovery, deterministic malformed
+pattern errors, returned-iterator errors, GC and VM release. An earlier focused regression exercised the
+historical 12 MB pattern repro, permitting exact complexity or exact timeout failure because wall-clock load
+can decide which limit fires first. That failure is not a lasting formatting invariant: issue #171 must allow
+the linear operation to succeed. Before integration, replaced that test with `string.match('x','%')`, whose
+deterministic malformed-pattern error verifies exact uncaught output without freezing #171's bug.
 
 The 1,000 successful-pcall smoke passed the unchanged 100 ms budget: 691.2 microseconds in the earlier baseline,
 1.2416 milliseconds after the narrow prototype. These single runs had uncontrolled host load and are not a
@@ -62,4 +65,9 @@ worktree. All Cargo builds use `-j 4`.
 Independent source review found no blocking findings. Local gates ran after rebasing onto main `12a6a6b`
 (avatar assets only since the original base). Before publication, rebased again onto `fd164c2`; that advance
 changes only the input-actions design, HTML mockup and progress note, with no Rust/config changes. All required
-local gates are complete. Next: publish the PR, inspect CI and address review feedback; do not merge.
+local gates are complete. Published as [PR #255](https://github.com/Metallic-Club/studio/pull/255).
+
+Integration follow-up: the test-only malformed-pattern correction described above passed all 16 focused
+error-formatting integration tests in 0.13 s after another guarded lane-ownership cleanup (10.34 s compile,
+both source paths verified). No production code changed. The preceding full 231-test gate remains recorded
+above; CI is rerun on this normal appended commit. Next: inspect final CI and review feedback; do not merge.
