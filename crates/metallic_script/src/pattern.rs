@@ -25,6 +25,10 @@ const MAX_DEPTH: u32 = 200;
 const MAX_CAPTURES: usize = 32;
 /// Cap on the size of a `gsub` result.
 const MAX_RESULT: usize = 64 * 1024 * 1024;
+/// Pattern bytes of a `[...]` class read per extra matcher step (#166). Shorter reads cost
+/// nothing extra, so ordinary patterns count exactly as before; a long class is charged in
+/// proportion to its length, so the step cap and the deadline check bound it.
+const CLASS_BYTES_PER_STEP: u64 = 16;
 
 const CAP_UNFINISHED: isize = -1;
 const CAP_POSITION: isize = -2;
@@ -122,7 +126,16 @@ impl<'a> State<'a> {
         Ok(())
     }
 
-    fn class_end(&self, mut p: usize) -> R<usize> {
+    /// Charges for reading `bytes` bytes of a `[...]` class.
+    fn charge_class(&mut self, bytes: usize) -> R<()> {
+        match bytes as u64 / CLASS_BYTES_PER_STEP {
+            0 => Ok(()),
+            extra => self.tick(extra),
+        }
+    }
+
+    fn class_end(&mut self, mut p: usize) -> R<usize> {
+        let start = p;
         let pat = self.pat;
         let c = pat[p];
         p += 1;
@@ -149,48 +162,26 @@ impl<'a> State<'a> {
                     break;
                 }
             }
+            self.charge_class(p - start)?;
             return Ok(p + 1);
         }
         Ok(p)
     }
 
-    /// `p` points at `[`, `ec` at the closing `]`.
-    fn match_bracket_class(&self, c: u8, mut p: usize, ec: usize) -> bool {
-        let pat = self.pat;
-        let mut sig = true;
-        if pat.get(p + 1) == Some(&b'^') {
-            sig = false;
-            p += 1;
-        }
-        loop {
-            p += 1;
-            if p >= ec {
-                break;
-            }
-            if pat[p] == b'%' {
-                p += 1;
-                if match_class(c, pat[p]) {
-                    return sig;
-                }
-            } else if pat.get(p + 1) == Some(&b'-') && p + 2 < ec {
-                p += 2;
-                if pat[p - 2] <= c && c <= pat[p] {
-                    return sig;
-                }
-            } else if pat[p] == c {
-                return sig;
-            }
-        }
-        !sig
+    /// `p` points at `[`, `ec` at the closing `]`. Charges for the class bytes read.
+    fn match_bracket_class(&mut self, c: u8, p: usize, ec: usize) -> R<bool> {
+        let (res, end) = bracket_class(self.pat, c, p, ec);
+        self.charge_class(end - p)?;
+        Ok(res)
     }
 
-    fn single_match(&self, c: u8, p: usize, ep: usize) -> bool {
-        match self.pat[p] {
+    fn single_match(&mut self, c: u8, p: usize, ep: usize) -> R<bool> {
+        Ok(match self.pat[p] {
             b'.' => true,
             b'%' => match_class(c, self.pat[p + 1]),
-            b'[' => self.match_bracket_class(c, p, ep - 1),
+            b'[' => return self.match_bracket_class(c, p, ep - 1),
             pc => pc == c,
-        }
+        })
     }
 
     fn match_balance(&mut self, s: usize, p: usize) -> R<Option<usize>> {
@@ -221,10 +212,10 @@ impl<'a> State<'a> {
 
     fn max_expand(&mut self, s: usize, p: usize, ep: usize) -> R<Option<usize>> {
         let mut i = 0;
-        while s + i < self.src.len() && self.single_match(self.src[s + i], p, ep) {
+        while s + i < self.src.len() && self.single_match(self.src[s + i], p, ep)? {
+            self.tick(1)?;
             i += 1;
         }
-        self.tick(i as u64)?;
         loop {
             if let Some(r) = self.do_match(s + i, ep + 1)? {
                 return Ok(Some(r));
@@ -241,7 +232,7 @@ impl<'a> State<'a> {
             if let Some(r) = self.do_match(s, ep + 1)? {
                 return Ok(Some(r));
             }
-            if s < self.src.len() && self.single_match(self.src[s], p, ep) {
+            if s < self.src.len() && self.single_match(self.src[s], p, ep)? {
                 s += 1;
             } else {
                 return Ok(None);
@@ -336,8 +327,8 @@ impl<'a> State<'a> {
                     let ep = self.class_end(p)?;
                     let prev = if s == 0 { 0 } else { self.src[s - 1] };
                     let cur = self.src.get(s).copied().unwrap_or(0);
-                    if !self.match_bracket_class(prev, p, ep - 1)
-                        && self.match_bracket_class(cur, p, ep - 1)
+                    if !self.match_bracket_class(prev, p, ep - 1)?
+                        && self.match_bracket_class(cur, p, ep - 1)?
                     {
                         p = ep;
                         continue;
@@ -357,7 +348,7 @@ impl<'a> State<'a> {
                 _ => {}
             }
             let ep = self.class_end(p)?;
-            let m = s < self.src.len() && self.single_match(self.src[s], p, ep);
+            let m = s < self.src.len() && self.single_match(self.src[s], p, ep)?;
             match self.pat.get(ep) {
                 Some(b'?') => {
                     if m && let Some(r) = self.do_match(s + 1, ep + 1)? {
@@ -411,6 +402,36 @@ impl<'a> State<'a> {
         };
         (0..n).map(|i| self.one_capture(lua, i, s, e)).collect()
     }
+}
+
+/// Tests `c` against the `[...]` class at `p` (closing `]` at `ec`). Returns the result and
+/// where reading stopped, so the caller can charge for the bytes read.
+fn bracket_class(pat: &[u8], c: u8, mut p: usize, ec: usize) -> (bool, usize) {
+    let mut sig = true;
+    if pat.get(p + 1) == Some(&b'^') {
+        sig = false;
+        p += 1;
+    }
+    loop {
+        p += 1;
+        if p >= ec {
+            break;
+        }
+        if pat[p] == b'%' {
+            p += 1;
+            if match_class(c, pat[p]) {
+                return (sig, p);
+            }
+        } else if pat.get(p + 1) == Some(&b'-') && p + 2 < ec {
+            p += 2;
+            if pat[p - 2] <= c && c <= pat[p] {
+                return (sig, p);
+            }
+        } else if pat[p] == c {
+            return (sig, p);
+        }
+    }
+    (!sig, p)
 }
 
 /// Lua-style relative start position (as in Luau): 1-based, negative counts from the end.
