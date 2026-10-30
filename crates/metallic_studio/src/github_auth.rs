@@ -271,10 +271,17 @@ fn unix_now() -> u64 {
 }
 
 impl Session {
-    /// Reads a stored value; a bare token string (not JSON) counts as a session without expiry.
-    fn parse(raw: &str) -> Session {
-        serde_json::from_str(raw).unwrap_or_else(|_| Session {
-            access_token: raw.to_string(),
+    /// Reads a stored value. JSON is a session; a bare string counts (as a session without
+    /// expiry) only if it has GitHub's token shape. Anything else is "no session".
+    fn parse(raw: &str) -> Option<Session> {
+        if let Ok(session) = serde_json::from_str::<Session>(raw) {
+            return Some(session);
+        }
+        let bare = raw.trim();
+        let prefixed = ["ghu_", "gho_", "ghp_"].iter().any(|p| bare.starts_with(p));
+        let safe = bare.len() > 4 && bare.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        (prefixed && safe).then(|| Session {
+            access_token: bare.to_string(),
             refresh_token: None,
             expires_at: None,
             refresh_expires_at: None,
@@ -302,6 +309,9 @@ pub struct GithubAuth {
     http: Arc<dyn HttpClient>,
     store: Arc<dyn SecretStore>,
     sleeping: bool,
+    /// Held for the whole of `valid_token`: refresh tokens rotate, so two refreshes at once
+    /// would make the second fail and wipe the session the first saved.
+    refresh_lock: Mutex<()>,
 }
 
 impl GithubAuth {
@@ -312,6 +322,7 @@ impl GithubAuth {
             http,
             store,
             sleeping: true,
+            refresh_lock: Mutex::new(()),
         }
     }
 
@@ -326,7 +337,8 @@ impl GithubAuth {
         Ok(self
             .store
             .get()?
-            .map(|raw| Token::new(Session::parse(&raw).access_token)))
+            .and_then(|raw| Session::parse(&raw))
+            .map(|session| Token::new(session.access_token)))
     }
 
     /// Forgets the stored session.
@@ -342,10 +354,14 @@ impl GithubAuth {
     /// The stored access token, refreshed first when it is about to expire. `Ok(None)` means
     /// "sign in (again)": nothing is stored, or it expired and cannot be refreshed.
     pub fn valid_token(&self) -> Result<Option<Token>, AuthError> {
-        let Some(raw) = self.store.get()? else {
+        let _guard = self
+            .refresh_lock
+            .lock()
+            .map_err(|_| AuthError::Store("refresh lock was poisoned".to_string()))?;
+        // Read the store only after taking the lock: another caller may have just refreshed.
+        let Some(session) = self.store.get()?.and_then(|raw| Session::parse(&raw)) else {
             return Ok(None);
         };
-        let session = Session::parse(&raw);
         let now = unix_now();
         if !session.needs_refresh(now) {
             return Ok(Some(Token::new(session.access_token)));

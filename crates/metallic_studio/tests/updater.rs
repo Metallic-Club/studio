@@ -535,3 +535,109 @@ fn expired_without_refresh_token_asks_to_sign_in_again() {
     let auth = GithubAuth::new("abc".into(), MockHttp::with(vec![]), store);
     assert!(auth.valid_token().unwrap().is_none());
 }
+
+/// Counts refresh calls and answers slowly, so two racing callers overlap.
+struct SlowRefreshHttp {
+    calls: Mutex<u32>,
+}
+
+impl HttpClient for SlowRefreshHttp {
+    fn get(&self, _: &str, _: &[(&str, &str)]) -> Result<HttpResponse, HttpError> {
+        Err(HttpError::new("unexpected GET"))
+    }
+
+    fn post_form(
+        &self,
+        _: &str,
+        _: &[(&str, &str)],
+        form: &[(&str, &str)],
+    ) -> Result<HttpResponse, HttpError> {
+        let mut calls = self.calls.lock().unwrap();
+        *calls += 1;
+        std::thread::sleep(Duration::from_millis(200));
+        // A rotating refresh token works once; the second use is refused.
+        let used_old = form.contains(&("refresh_token", "r1"));
+        let body = if *calls == 1 && used_old {
+            r#"{"access_token":"new","refresh_token":"r2","expires_in":28800,"refresh_token_expires_in":15897600}"#
+        } else {
+            r#"{"error":"bad_refresh_token"}"#
+        };
+        ok(body)
+    }
+}
+
+#[test]
+fn concurrent_valid_token_refreshes_once() {
+    let store = Arc::new(MemorySecretStore::default());
+    store
+        .set(r#"{"access_token":"old","refresh_token":"r1","expires_at":1}"#)
+        .unwrap();
+    let http = Arc::new(SlowRefreshHttp {
+        calls: Mutex::new(0),
+    });
+    let auth =
+        Arc::new(GithubAuth::new("abc".into(), http.clone(), store.clone()).without_sleeping());
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let auth = auth.clone();
+            std::thread::spawn(move || auth.valid_token().unwrap().unwrap().expose().to_string())
+        })
+        .collect();
+    for handle in handles {
+        assert_eq!(handle.join().unwrap(), "new");
+    }
+    assert_eq!(*http.calls.lock().unwrap(), 1);
+    assert!(
+        store.get().unwrap().unwrap().contains("r2"),
+        "session must survive"
+    );
+}
+
+#[test]
+fn only_token_shaped_text_counts_as_a_bare_token() {
+    let store = Arc::new(MemorySecretStore::default());
+    let auth = GithubAuth::new("abc".into(), MockHttp::with(vec![]), store.clone());
+    for junk in [
+        "hello world",
+        "not json {",
+        "",
+        "ghu_has space",
+        "xyz_abc123",
+    ] {
+        store.set(junk).unwrap();
+        assert!(auth.valid_token().unwrap().is_none(), "{junk:?}");
+        assert!(auth.stored_token().unwrap().is_none(), "{junk:?}");
+    }
+    store.set("ghu_AbC123xyz").unwrap();
+    assert_eq!(
+        auth.valid_token().unwrap().unwrap().expose(),
+        "ghu_AbC123xyz"
+    );
+}
+
+#[test]
+fn refresh_tokens_never_logged() {
+    let logs = capture();
+    let store = Arc::new(MemorySecretStore::default());
+    store
+        .set(&format!(
+            r#"{{"access_token":"{SECRET}","refresh_token":"{REFRESH_SECRET}","expires_at":1}}"#
+        ))
+        .unwrap();
+    let http = MockHttp::with(vec![ok(&format!(
+        r#"{{"access_token":"{SECRET}2","refresh_token":"{REFRESH_SECRET}2","expires_in":28800}}"#
+    ))]);
+    let auth = GithubAuth::new("abc".into(), http, store).without_sleeping();
+    assert!(auth.valid_token().unwrap().is_some());
+    let lines = logs.0.lock().unwrap().clone();
+    assert!(
+        lines.iter().any(|l| l.contains("refreshed")),
+        "refresh should log"
+    );
+    for line in &lines {
+        assert!(
+            !line.contains(SECRET) && !line.contains(REFRESH_SECRET),
+            "{line}"
+        );
+    }
+}
