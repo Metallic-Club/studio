@@ -57,6 +57,13 @@ class StagedBinaryTests(unittest.TestCase):
     def test_studio_exe_is_its_bin(self):
         self.assertIn(release.STUDIO_BUILT_EXE.removesuffix(".exe"), self.bin_names(release.CARGO_BIN))
 
+    def test_studio_ships_its_templates(self):
+        # A fresh install otherwise shows "No templates found" on the start screen.
+        self.assertIn("templates", release.STUDIO_FOLDERS)
+        self.assertTrue(any((release.ROOT / "templates").glob("*/template.toml")))
+        for folder in release.STUDIO_FOLDERS:
+            self.assertTrue((release.ROOT / folder).is_dir(), folder)
+
     def test_launcher_files_are_bins(self):
         bins = set().union(*(self.bin_names(p) for p in release.LAUNCHER_CARGO_PACKAGES))
         for built, _ in release.LAUNCHER_FILES:

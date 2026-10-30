@@ -1,4 +1,4 @@
-//! The Roblox-named Luau API: `game`, `workspace`, `Instance`, the datatypes, services,
+//! The Roblox-named Luau API: `game`, `workspace`, `Instance`, the datatypes (with `CFrame`), services,
 //! signals and `RemoteEvent`.
 //!
 //! Every VM gets one [`ApiState`] that the userdata and functions of this module share. It
@@ -6,6 +6,7 @@
 //! keeps a `World` borrow while Lua code runs: handlers may change the world, so the host
 //! collects what to call, releases the borrow and only then calls into Lua.
 
+mod cframe;
 mod datatypes;
 mod errors;
 mod input;
@@ -173,6 +174,7 @@ fn build(
         mlua::Value::Table(instance::constructor(lua, &state)?),
     )
     .map_err(to_err)?;
+    set("CFrame", mlua::Value::Table(cframe::constructor(lua)?)).map_err(to_err)?;
     for (name, table) in datatypes::constructors(lua)? {
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }
