@@ -1,6 +1,6 @@
 # #114 Borrowed property reads
 
-Status: implemented and tested locally; ready for review, not accepted or released.
+Status: implemented and tested on main `9d0dc8e`; refreshed PR ready for review, not accepted or released.
 Branch: `studio/114-borrowed-properties`.
 Base: `2780922` (`origin/main` at start).
 Rebased onto `532c4f7` before the final checks and PR.
@@ -88,3 +88,29 @@ fixture retains 5,075,848. No new Criterion timing run was performed.
 `cargo test --workspace -j 4 -- --test-threads=1` passed 218 tests, including the current Parkour route/player smoke.
 Strict all-targets Clippy, licenses, formatting and diff checks passed on this merged source. Inspect updated
 PR #185 CI after the normal integration push. Do not merge it here.
+
+## Latest-source refresh completed
+
+Normal-merged `749316a` and then `9d0dc8e`, preserving published branch history. The latter includes avatar animation
+and locomotion production changes. The diff against `9d0dc8e` contains only this issue's source, tests and documentation.
+Earlier totals above remain evidence for their named bases.
+
+- Reviewed Cargo lane guard cleaned only local workspace packages for this source/profile and verified worktree paths.
+- Expanded workspace prebuild passed in 4m22s, then the actual serial workspace suite passed **646 tests, 0 failed,
+  3 existing manual probes ignored**. This includes all five semantic regressions and the allocation regression.
+- Strict workspace/all-targets Clippy passed in 2m06s; license, formatting and whitespace checks passed.
+- A fresh optimized allocation run also passed:
+  `cargo test --release -p metallic_core --test borrowed_allocations -j 4 -- --nocapture`.
+  The counts repeat exactly: cache 134 allocations / 21,169 requested bytes allocated / 8,580 freed;
+  retained cache 12,589 bytes; fixture retained 5,075,848 bytes, or 1,015.170 requested B/Part.
+  Borrowed frame reads and 20,000 stored/default string reads allocate zero. Owned frame reads allocate
+  10,000 times / 60,000 requested bytes. Release compilation took 15.59s; that duration is not a getter benchmark.
+- Independent source review found no actionable issue in inherited defaults, owned API compatibility, reference
+  filtering, allocation counting or current-registry assumptions.
+- Original Criterion timing intervals above were not rerun or relabelled as current performance data. The
+  256 B/Part aspiration remains unmet; this change establishes allocation behavior rather than a storage redesign.
+
+Local raw logs: `<TEMP>/metallic-185-current-prebuild.log`, `metallic-185-current-tests.log`,
+`metallic-185-current-clippy.log`, `metallic-185-current-licenses.log`, and
+`metallic-185-current-release-allocations.log`. Inspect new PR CI after the normal push; no current CI result
+is claimed before it runs. Only the lead/owner may merge.
