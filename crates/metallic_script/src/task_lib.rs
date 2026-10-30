@@ -228,6 +228,9 @@ impl Scheduler {
             self.budgeted(|| thread.resume::<MultiValue>(MultiValue::from_vec(args)))
         });
         if let Some(msg) = timeout {
+            self.owners
+                .borrow_mut()
+                .remove(&(thread.to_pointer() as usize));
             return Err(msg);
         }
         self.after_resume(thread, raw)

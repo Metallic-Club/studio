@@ -152,6 +152,8 @@ pub(crate) struct Pacing {
     deferred: RefCell<VecDeque<Deferred>>,
     streaks: RefCell<HashMap<u64, u32>>,
     warned_full: Cell<bool>,
+    /// How many times a handler's arguments were built (a test hook for the dispatch cost).
+    args_built: Cell<u64>,
 }
 
 impl ApiState {
@@ -166,6 +168,11 @@ impl ApiState {
     /// Ends the step budget (calls outside `step`, like script start-up, are not limited by it).
     pub(crate) fn end_step(&self) {
         self.pacing.deadline.set(None);
+    }
+
+    /// How many times handler arguments were built since the VM started.
+    pub(crate) fn args_built(&self) -> u64 {
+        self.pacing.args_built.get()
     }
 
     fn over_budget(&self) -> bool {
@@ -205,6 +212,17 @@ impl ApiState {
             if !alive.get() {
                 continue;
             }
+            // Decide first, so a full queue costs no argument copying: once it is full the
+            // rest of the handlers are dropped without building anything.
+            let defer = self.over_budget();
+            if defer && self.pacing.deferred.borrow().len() >= MAX_DEFERRED {
+                if !self.pacing.warned_full.replace(true) {
+                    self.sink
+                        .warn("too many script handlers are waiting; some calls were dropped");
+                }
+                break;
+            }
+            self.pacing.args_built.set(self.pacing.args_built.get() + 1);
             let values = match args(&lua) {
                 Ok(values) => values,
                 Err(e) => {
@@ -212,22 +230,16 @@ impl ApiState {
                     continue;
                 }
             };
-            if self.over_budget() {
-                let mut queue = self.pacing.deferred.borrow_mut();
-                if queue.len() < MAX_DEFERRED {
-                    queue.push_back(Deferred {
-                        func,
-                        alive,
-                        owner,
-                        args: values,
-                    });
-                } else if !self.pacing.warned_full.replace(true) {
-                    self.sink
-                        .warn("too many script handlers are waiting; some calls were dropped");
-                }
-                continue;
+            if defer {
+                self.pacing.deferred.borrow_mut().push_back(Deferred {
+                    func,
+                    alive,
+                    owner,
+                    args: values,
+                });
+            } else {
+                self.run_handler(func, owner, values);
             }
-            self.run_handler(func, owner, values);
         }
     }
 

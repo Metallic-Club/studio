@@ -427,3 +427,25 @@ fn cloned_scripts_with_same_name_stop_independently() {
         );
     }
 }
+
+#[test]
+fn full_deferral_queue_stops_building_arguments() {
+    let mut rig = Rig::new();
+    rig.server_script(
+        "Many",
+        r#"
+        local beat = game:GetService("RunService").Heartbeat
+        for i = 1, 10000 do
+            beat:Connect(function()
+                local x = 0
+                for j = 1, 300000 do x = x + j end
+            end)
+        end
+        "#,
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 8);
+    // Without the early stop every step built 10,000 argument lists (80,000 here).
+    let built = rig.host.dispatch_args_built();
+    assert!(built < 20_000, "built {built} argument lists");
+}

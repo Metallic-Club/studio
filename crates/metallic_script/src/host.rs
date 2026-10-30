@@ -198,6 +198,13 @@ impl ScriptHost {
             .push(HostEvent::CharacterAdded { player, model });
     }
 
+    /// How many times signal handler arguments were built so far (both VMs). A test hook
+    /// that shows the dispatch cost stays bounded when handlers cannot keep up.
+    #[doc(hidden)]
+    pub fn dispatch_args_built(&self) -> u64 {
+        self.sides().iter().map(|s| s.state.args_built()).sum()
+    }
+
     fn sides(&self) -> Vec<&Side> {
         self.server.iter().chain(self.client.iter()).collect()
     }
