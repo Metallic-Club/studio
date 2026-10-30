@@ -34,7 +34,8 @@ fn level(n: usize) -> (World, Vec<InstanceId>) {
             .expect("set Size");
         w.set(p, "Color", Value::Color3(Color3::new(120.0, 90.0, 200.0)))
             .expect("set Color");
-        w.set(p, "Anchored", Value::Bool(true)).expect("set Anchored");
+        w.set(p, "Anchored", Value::Bool(true))
+            .expect("set Anchored");
         parts.push(p);
     }
     (w, parts)
@@ -57,7 +58,11 @@ fn property_access(c: &mut Criterion) {
     g.bench_function("set_position", |b| {
         b.iter(|| {
             x += 1.0;
-            w.set(black_box(p), "Position", Value::Vector3(Vec3::new(x, 1.0, 0.0)))
+            w.set(
+                black_box(p),
+                "Position",
+                Value::Vector3(Vec3::new(x, 1.0, 0.0)),
+            )
         })
     });
     g.bench_function("is_a_basepart", |b| {
@@ -114,7 +119,9 @@ fn tree_ops(c: &mut Criterion) {
         )
     });
     let (big, _) = level(5_000);
-    g.bench_function("deep_clone_5000", |b| b.iter(|| black_box(big.deep_clone())));
+    g.bench_function("deep_clone_5000", |b| {
+        b.iter(|| black_box(big.deep_clone()))
+    });
     g.finish();
 }
 

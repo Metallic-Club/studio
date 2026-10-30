@@ -261,7 +261,12 @@ mod tests {
             let mut unique = names.clone();
             unique.sort_unstable();
             unique.dedup();
-            assert_eq!(names.len(), unique.len(), "class {} repeats a property", c.name);
+            assert_eq!(
+                names.len(),
+                unique.len(),
+                "class {} repeats a property",
+                c.name
+            );
         }
     }
 }
