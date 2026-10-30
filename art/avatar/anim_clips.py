@@ -305,7 +305,7 @@ class Keyed(Clip):
         for ch, v in spec.get("ikw", {}).items():
             out[("ikw", ch)] = v
         for ch, v in spec.get("pole", {}).items():
-            for i in range(3):
+            for i in range(len(v)):
                 out[("pole", ch, i)] = v[i]
         return out
 
@@ -345,7 +345,7 @@ def build_pose(rig, vals):
             ankle = Vector((x * s, y, z))
             pose["ikw"].setdefault(f"leg.{side}", 1.0)
             pose["ik"][f"leg.{side}"] = (ankle, foot_rot(rig, side, pitch, yaw, roll),
-                                         knee_pole(rig, pose, side, ankle, yaw))
+                                         knee_pole(rig, pose, side, ankle, vals.get(("pole", "knee", 0), yaw)))
         if ("hand", side, 0) in vals:
             v = [vals[("hand", side, i)] for i in range(9)]
             wrist = Vector((v[0] * s, v[1], v[2]))
@@ -387,14 +387,21 @@ LOCOMOTION = {
     # at most about 0.8 m of ground before the leg runs out of reach, so the stance must be short and
     # both gaits need a flight phase. Roblox does the same: its Animate script plays the run clip
     # at WalkSpeed 16.
+    # A true walk for partial stick / touch input (the engine blends it with "walk" by speed). With
+    # this leg a walk (no flight, Froude number under 0.5) tops out near 6 studs/s.
+    "walk_slow": dict(studs=6.0, frames=20, stance_m=0.60, mid=-0.03, track=0.10, toe_out=6.0,
+                      heel=20.0, toe=30.0, lift=0.06, lift_peak=0.35, drop=-0.020, bob=0.018, down=0.04,
+                      sway=0.022, pelvis_yaw=6.0, pelvis_roll=4.0, lean=2.0, chest_yaw=5.0,
+                      arm=18.0, arm_base=2.0, elbow=(14.0, 8.0), arm_in=-4.0, hand="relaxed", lag=0.05),
     "walk": dict(studs=16.0, frames=16, stance_m=0.66, mid=-0.04, track=0.122, toe_out=5.0,
                  heel=14.0, toe=34.0, lift=0.11, lift_peak=0.40, drop=-0.025, bob=0.018,
                  sway=0.010, pelvis_yaw=8.0, pelvis_roll=3.0, lean=5.0, chest_yaw=7.0,
                  arm=26.0, arm_base=4.0, elbow=(30.0, 22.0), arm_in=-4.0, hand="loose", lag=0.045),
     "run": dict(studs=24.0, frames=16, stance_m=0.68, mid=-0.08, track=0.100, toe_out=3.0,
-                heel=5.0, toe=44.0, lift=0.22, lift_peak=0.34, drop=-0.040, bob=0.025,
-                sway=0.006, pelvis_yaw=11.0, pelvis_roll=2.0, lean=17.0, chest_yaw=10.0,
-                arm=48.0, arm_base=10.0, elbow=(88.0, 18.0), arm_in=-12.0, hand="fist", lag=0.04),
+                heel=5.0, toe=44.0, lift=0.22, lift_peak=0.34, drop=-0.045, bob=0.035,
+                sway=0.006, pelvis_yaw=13.0, pelvis_roll=2.0, lean=23.0, chest_yaw=17.0,
+                arm=58.0, arm_base=12.0, elbow=(88.0, 20.0), arm_in=-8.0, hand="fist", lag=0.04,
+                shoulder=11.0),
 }
 
 
@@ -413,7 +420,8 @@ class Locomotion(Clip):
                 "cycle_s": round(self.T, 4), "stride_m": round(self.v * self.T, 4),
                 "stride_studs": round(self.v * self.T / STUD, 3), "step_m": round(self.v * self.T / 2, 4),
                 "cadence_steps_min": round(120 / self.T, 1), "stance_frames": round(self.beta * self.N, 2),
-                "flight_frames_per_step": round((0.5 - self.beta) * self.N, 2),
+                "flight_frames_per_step": round(max(0.0, 0.5 - self.beta) * self.N, 2),
+                "double_support_frames_per_step": round(max(0.0, self.beta - 0.5) * self.N, 2),
                 "ground_per_stance_m": p["stance_m"], "left_contact_frame": 0, "right_contact_frame": self.N // 2}
         super().__init__(name, self.N, True, 1, True, speed=self.v, meta=meta)
         self.rig = rig
@@ -476,7 +484,7 @@ class Locomotion(Clip):
         ph = f / self.N
         two = 2 * math.pi
         # Hips: lowest just after contact ("down"), highest in the flight ("up").
-        down = 0.45 * self.beta
+        down = p.get("down", 0.45 * self.beta)
         dz = p["drop"] - p["bob"] * math.cos(2 * two * (ph - down))
         dx = p["sway"] * math.cos(two * (ph - self.beta / 2))
         vals = {("hips", 0): dx, ("hips", 1): 0.0, ("hips", 2): dz}
@@ -505,7 +513,7 @@ class Locomotion(Clip):
             e0, e1 = p["elbow"]
             arm["leftLowerArm"] = (e0 + e1 * c2, 0.0, 0.0)
             arm["leftHand"] = (8.0 - 8.0 * c3, -10.0, 0.0)
-            arm["leftShoulder"] = (1.5 * math.cos(2 * two * (ph - down - lag)), 0.0, -5.0 * c1)
+            arm["leftShoulder"] = (1.5 * math.cos(2 * two * (ph - down - lag)), 0.0, -p.get("shoulder", 5.0) * c1)
             arm.update(hand(p["hand"]))
             rot.update(side_rot(arm, side))
         vals.update(flat_rot(rot))
@@ -815,8 +823,14 @@ def emote_clips(rig):
     # Point (right hand) forward, 1.5 s.
     pt = {"leftShoulder": (2, 0, -6), "leftUpperArm": (78, -10, 14), "leftLowerArm": (6, 0, 0), "leftHand": (0, 0, 0)}
     look = {"head": (4, -10, 0), "neck": (2, -6, 0), "upperChest": (0, -6, 0), "chest": (2, -4, 0)}
-    keys = [(0, start), (9, with_arm(start, "right", pt, "point", look)),
-            (32, with_arm(start, "right", pt, "point", look)), (45, start)]
+    # The arm shoots out a little past the target (frame 7), settles (12) and drifts while held; the
+    # chest leans into it.
+    over = dict(pt, leftUpperArm=(86, -10, 16), leftLowerArm=(0, 0, 0))
+    held = dict(pt, leftUpperArm=(75, -10, 13), leftLowerArm=(8, 0, 0))
+    lean = dict(look, spine=(3, 0, 0), chest=(4, -4, 0))
+    keys = [(0, start), (7, with_arm(start, "right", over, "point", lean)),
+            (12, with_arm(start, "right", pt, "point", lean)),
+            (32, with_arm(start, "right", held, "point", look)), (45, start)]
     out.append(Keyed(rig, "point", 45, False, keys, base=IDLE_BASE, lag=lag, priority=3))
 
     # Cheer, 1.6 s: a small dip, both fists thrown up with a hop onto the toes, two pumps, down.
@@ -824,22 +838,23 @@ def emote_clips(rig):
         k = {"rot": dict(start["rot"]), "hips": (0.0, 0.0, hz),
              "feet": {"left": (0.160, ANKLE_L.y + 0.012 + (0.05 if toes else 0), ANKLE_L.z + (0.07 if toes else 0),
                                -30 if toes else 0, 12)}}
-        arm = {"leftShoulder": (10 if arm_x > 90 else 0, 0, 0), "leftUpperArm": (arm_x, 0, arm_z),
+        arm = {"leftShoulder": (10 if max(arm_x, arm_z) > 90 else 0, 0, 0), "leftUpperArm": (arm_x, 0, arm_z),
                "leftLowerArm": (elbow, 0, 0), "leftHand": (0, 0, 0)}
         k["rot"].update(arm)
         k["rot"].update(mirror_rot(arm))
         k["rot"].update(hands(shape))
-        k["rot"].update({"hips": (lean, 0, 0), "spine": (lean * 0.5, 0, 0), "head": (-lean - 6 if arm_x > 90 else 0, 0, 0)})
+        k["rot"].update({"hips": (lean, 0, 0), "spine": (lean * 0.5, 0, 0), "head": (-lean - 6 if max(arm_x, arm_z) > 90 else 0, 0, 0)})
         return k
 
-    keys = [(0, start), (6, cheer(-10, -4, 40, -0.07, False, "fist", 10)), (12, cheer(150, 30, 30, 0.04, True)),
-            (18, cheer(132, 34, 60, 0.0, True)), (24, cheer(152, 30, 26, 0.04, True)), (30, cheer(134, 34, 58, 0.0, True)),
-            (38, cheer(40, 10, 30, -0.03, False, "relaxed")), (48, start)]
+    # Fists go up in a V (raised to the sides, so they come down the same way, never forward).
+    keys = [(0, start), (6, cheer(-10, -4, 40, -0.07, False, "fist", 10)), (12, cheer(4, 140, 20, 0.04, True)),
+            (18, cheer(6, 122, 64, 0.0, True)), (24, cheer(4, 142, 18, 0.04, True)), (30, cheer(6, 122, 62, 0.0, True)),
+            (38, cheer(2, 44, 30, -0.03, False, "relaxed")), (48, start)]
     out.append(Keyed(rig, "cheer", 48, False, keys, lag=lag, priority=3))
 
     # Dance, 2 s loop at 120 bpm (15 frames a beat): a two-step with a bounce on every beat, arms
     # pumping, head bobbing.
-    def dance(beat, dz=0.0):
+    def dance(beat, dz=0.0, up=False):
         side = 1 if beat in (0, 1) else -1          # weight goes left on beats 1-2, right on 3-4
         out_step = beat in (0, 2)
         ff = stand_feet(10, 0.15)["left"]
@@ -850,17 +865,21 @@ def emote_clips(rig):
             feet = {"left": tap if out_step else ff, "right": ff}
         r = {"hips": (4, 10 * side, 4 * side), "spine": (2, -4 * side, -2 * side), "chest": (2, -6 * side, -2 * side),
              "neck": (-2, 0, 3 * side), "head": (4, 4 * side, 4 * side)}
-        armf = {"leftUpperArm": (55, 0, 6), "leftLowerArm": (100, 0, 0), "leftHand": (0, 0, 0)}
-        armb = {"leftUpperArm": (-10, 0, 10), "leftLowerArm": (80, 0, 0), "leftHand": (0, 0, 0)}
+        # Arms pump on every beat: the front fist punches up on the off-beat, the back elbow drives back.
+        armf = {"leftUpperArm": (78, 0, 14) if up else (50, 0, 8), "leftLowerArm": (62 if up else 100, 0, 0),
+                "leftHand": (0, 0, 0)}
+        armb = {"leftUpperArm": (-24 if up else -10, 0, 14), "leftLowerArm": (90 if up else 80, 0, 0),
+                "leftHand": (0, 0, 0)}
         r.update(armf if side == 1 else armb)
         r.update(mirror_rot(armb if side == 1 else armf))
         r.update(hands("fist"))
-        return {"rot": r, "hips": (0.03 * side, 0, -0.06 + dz), "feet": feet}
+        r["head"] = (r["head"][0] + (-4 if up else 6), r["head"][1], r["head"][2])
+        return {"rot": r, "hips": (0.045 * side, 0, -0.06 + dz), "feet": feet}
 
     keys = []
     for b in range(4):
         keys.append((b * 15, dance(b)))
-        keys.append((b * 15 + 7, dance(b, 0.045)))
+        keys.append((b * 15 + 7, dance(b, 0.045, up=True)))
     out.append(Keyed(rig, "dance", 60, True, keys, lag=lag, priority=3, feet_mirror=False,
                      meta={"bpm": 120, "frames_per_beat": 15}))
     return out
@@ -877,40 +896,43 @@ def concept_poses(rig):
     # elbow out, left arm hanging, head tilted.
     rot = {"hips": (0, 6, 5), "spine": (0, -2, -3), "chest": (-2, -4, -3), "upperChest": (-2, 0, 0),
            "neck": (0, 0, 2), "head": (2, 8, 6)}
-    rot.update(side_rot({"leftUpperArm": (6, 0, -4), "leftLowerArm": (18, 0, 0), "leftHand": (8, -16, 0)}, "left"))
+    rot.update(side_rot({"leftUpperArm": (6, 0, 14), "leftLowerArm": (16, 0, 0), "leftHand": (8, -16, 6)}, "left"))
     rot.update(hand("loose", "left"))
     rot.update(hand("fist", "right"))
     rot.update({"rightShoulder": (4, 0, 0)})
-    still("pose_hand_on_hip", {"rot": rot, "hips": (0.03, 0, -0.06),
-                               "feet": {"left": (0.34, ANKLE_L.y - 0.01, ANKLE_L.z, 0, 22),
-                                        "right": (0.33, ANKLE_L.y + 0.02, ANKLE_L.z, 0, 26)},
+    # A wide, confident A-stance: the feet about 0.75 m apart, legs straight, hips lowered to reach.
+    still("pose_hand_on_hip", {"rot": rot, "hips": (0.03, 0, -0.085),
+                               "feet": {"left": (0.38, ANKLE_L.y - 0.01, ANKLE_L.z, 0, 18),
+                                        "right": (0.37, ANKLE_L.y + 0.02, ANKLE_L.z, 0, 22)},
                                "hands": {"right": (0.150, 0.03, 0.80, 0.25, -0.45, -0.85, -0.85, 0.2, 0.0)},
                                "pole": {"elbow": (1.0, 0.25, 0.0)}})
 
-    # Run: the sheet's running figure in its "passing" pose: the left leg under the body carries the
-    # weight, the right leg is folded up behind (heel toward the seat), right fist forward at chin
-    # height, left arm back (arms swing against the legs).
-    rot = {"hips": (16, -10, 2), "spine": (6, 4, 0), "chest": (6, 6, 0), "upperChest": (2, 4, 0),
-           "neck": (-10, 2, 0), "head": (-12, 4, 0)}
-    rot.update(side_rot({"leftUpperArm": (-58, 0, -6), "leftLowerArm": (30, 0, 0), "leftHand": (6, 0, 0),
-                         "leftShoulder": (0, 0, 8)}, "left"))
-    rot.update(side_rot({"leftUpperArm": (62, 0, -14), "leftLowerArm": (100, 0, 0), "leftHand": (-6, 0, 0),
-                         "leftShoulder": (2, 0, -8)}, "right"))
+    # Run: the sheet's dynamic run. Strong forward lean, the right knee driven up and forward (thigh
+    # near horizontal, shin hanging), the left leg pushing off behind on the ball of the foot; arms
+    # swing big against the legs (left fist forward at chin height, right arm back), fists out from
+    # the body, shoulders counter-rotated against the hips.
+    rot = {"hips": (24, 12, 2), "spine": (8, -6, 0), "chest": (6, -8, 0), "upperChest": (2, -6, 0),
+           "neck": (-14, 2, 0), "head": (-14, 4, 0)}
+    rot.update(side_rot({"leftUpperArm": (78, 0, -2), "leftLowerArm": (95, 0, 0), "leftHand": (-6, 0, 0),
+                         "leftShoulder": (2, 0, -12)}, "left"))
+    rot.update(side_rot({"leftUpperArm": (-72, 0, 14), "leftLowerArm": (40, 0, 0), "leftHand": (6, 0, 0),
+                         "leftShoulder": (0, 0, 12)}, "right"))
     rot.update(hands("fist"))
+    rot["leftToes"] = (36, 0, 0)
     still("pose_run", {"rot": rot, "hips": (0, 0, -0.04),
-                       "feet": {"left": (0.10, ANKLE_L.y - 0.06, ANKLE_L.z + 0.02, 6, 4),
-                                "right": (0.10, 0.36, 0.40, -70, 2)}})
+                       "feet": {"left": (0.10, ANKLE_L.y + 0.30, 0.15, -46, 2),
+                                "right": (0.11, -0.28, 0.34, -36, 4)}})
 
-    # Sitting back on the hands: on the ground, leaning back on straight arms, left knee up, right
-    # leg stretched out, head turned to the viewer.
+    # Sitting back on the hands: on the ground, leaning back on straight arms, the right leg stretched
+    # long, the left knee bent up with its foot crossing in toward the right leg, head to the viewer.
     rot = {"hips": (-36, 8, 0), "spine": (4, 2, 0), "chest": (4, 2, 0), "upperChest": (2, 0, 0),
            "neck": (6, 8, 2), "head": (8, 12, 10)}
     rot.update(hands("flat"))
     hl = (0.23, 0.42, 0.04, 0.05, -0.85, -0.5, 0.0, 0.0, -1.0)
     hr = (0.25, 0.40, 0.04, 0.05, -0.85, -0.5, 0.0, 0.0, -1.0)
     still("pose_sit_back", {"rot": rot, "hips": (0, 0.10, -0.62),
-                            "feet": {"left": (0.17, -0.28, ANKLE_L.z, 0, 14),
-                                     "right": (0.17, -0.60, 0.10, 18, 20, 10)},
+                            "feet": {"left": (-0.02, -0.34, ANKLE_L.z, 0, -10),
+                                     "right": (0.17, -0.70, 0.10, 18, 20, 10)},
                             "hands": {"left": hl, "right": hr}, "pole": {"elbow": (0.6, 1.0, 0.0)}})
     return out
 
@@ -928,8 +950,8 @@ def test_clips(rig):
     still("test_hand_open", {"rot": hands("open")})
     F = stand_feet(10, 0.17)["left"]
     # Deep knee bend: stand on the right leg, left thigh up, knee folded.
-    rot = merge(arms_down(), hands("relaxed"), {"leftUpperLeg": (100, 0, 4), "leftLowerLeg": (-140, 0, 0),
-                                                "leftFoot": (-20, 0, 0)})
+    rot = merge(arms_down(), hands("relaxed"), {"leftUpperLeg": (95, 0, 4), "leftLowerLeg": (-130, 0, 0),
+                                                "leftFoot": (-15, 0, 0), "leftUpperArm": (4, 0, 24)})
     still("test_knee_bend", {"rot": rot, "hips": (0, 0, -0.01), "feet": {"right": F}})
     rot = merge(arms_down(), hands("open"), {"leftShoulder": (24, 0, 0), "leftUpperArm": (0, 0, 150),
                                               "leftLowerArm": (10, 0, 0)})
@@ -941,12 +963,15 @@ def test_clips(rig):
                                               "leftHand": (50, 85, 0), "rightUpperArm": (60, 0, 0),
                                               "rightLowerArm": (40, 0, 0), "rightHand": (-55, 0, 0)})
     still("test_wrist_twist", {"rot": rot, "feet": {"left": F, "right": F}})
-    rot = merge(hands("relaxed"), {"hips": (28, 0, 0), "spine": (10, 0, 0), "chest": (6, 0, 0), "neck": (-20, 0, 0),
-                                   "head": (-18, 0, 0)},
-                {"leftUpperArm": (70, 0, -6), "leftLowerArm": (40, 0, 0), "rightUpperArm": (70, 0, 6),
-                 "rightLowerArm": (40, 0, 0)})
-    cf = (0.19, ANKLE_L.y + 0.0, ANKLE_L.z, 0, 16)
-    still("test_crouch", {"rot": rot, "hips": (0, 0.10, -0.40), "feet": {"left": cf, "right": cf}})
+    # Crouch: feet wide and turned out, knees open over the toes so the torso sits between the thighs
+    # (a clean silhouette instead of thighs pressed into the belly), forearms resting on the knees.
+    rot = merge(hands("relaxed"), {"hips": (16, 0, 0), "spine": (8, 0, 0), "chest": (4, 0, 0), "neck": (-12, 0, 0),
+                                   "head": (-10, 0, 0)},
+                {"leftUpperArm": (52, 0, 4), "leftLowerArm": (52, 0, 0), "rightUpperArm": (52, 0, -4),
+                 "rightLowerArm": (52, 0, 0)})
+    cf = (0.24, ANKLE_L.y + 0.02, ANKLE_L.z, 0, 30)
+    still("test_crouch", {"rot": rot, "hips": (0, 0.08, -0.40), "feet": {"left": cf, "right": cf},
+                          "pole": {"knee": (38,)}})
     rot = merge(hands("open"), {"leftUpperArm": (0, 0, 60), "rightUpperArm": (0, 0, -60)})
     still("test_splits", {"rot": rot, "hips": (0, 0.0, -0.34),
                           "feet": {"left": (0.09, -0.52, 0.11, 30, 0), "right": (0.09, 0.50, 0.07, -50, 0)}})

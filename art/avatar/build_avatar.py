@@ -40,7 +40,7 @@ GREY = (0.42, 0.42, 0.42, 1.0)  # linear; about sRGB #ABABAB
 SLOTS = ["Head", "Torso", "Arms", "Legs", "Hands", "Feet"]
 
 LOD = 0          # 0 = full, 1 = about half the triangles, 2 = about 15%
-HEAD_SEG = 2     # corner segments of the head rings (Phase A used 3; 2 reads harder in clay)
+HEAD_SEG = 3     # corner segments of the head rings; 3 matches the concept's soft corners (head_segments_v2.png)
 
 
 def sg(n):
