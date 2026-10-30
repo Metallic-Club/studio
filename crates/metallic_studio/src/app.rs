@@ -1,10 +1,11 @@
-//! The Studio application: splash, start screen, and the placeholder for the opened game.
+//! The Studio application: splash, start screen, and the editor for the opened game.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Align2, FontId, RichText, TextureHandle, Vec2};
+use eframe::egui::{self, Align2, FontId, TextureHandle, Vec2};
 
+use crate::editor_ui::{EditorExit, EditorUi};
 use crate::png_image::{RgbaImage, decode_png};
 use crate::recent::RecentProjects;
 use crate::screenshot::ScreenshotJob;
@@ -32,6 +33,8 @@ pub enum Scene {
     Start,
     /// The start screen after pressing Create on a non-empty folder.
     Error,
+    /// The editor with the bundled Parkour template open (nothing is saved).
+    Editor,
 }
 
 /// Command-line options (all for design review; creators start Studio without any).
@@ -61,6 +64,7 @@ impl Options {
                         "splash" => Scene::Splash,
                         "start" => Scene::Start,
                         "error" => Scene::Error,
+                        "editor" => Scene::Editor,
                         other => return Err(format!("unknown scene {other}")),
                     }
                 }
@@ -74,7 +78,7 @@ impl Options {
 enum Phase {
     Splash { since: Instant },
     Start,
-    Opened { name: String, path: PathBuf },
+    Opened(Box<EditorUi>),
 }
 
 /// The eframe application.
@@ -116,6 +120,8 @@ impl StudioApp {
             (_, Scene::Splash) => Phase::Splash {
                 since: Instant::now() + Duration::from_secs(3600),
             },
+            (true, Scene::Editor) => EditorUi::demo(&templates_dir().join("parkour"))
+                .map_or(Phase::Start, |e| Phase::Opened(Box::new(e))),
             (true, _) => Phase::Start,
             (false, _) => Phase::Splash {
                 since: Instant::now(),
@@ -156,10 +162,11 @@ impl StudioApp {
 }
 
 impl eframe::App for StudioApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        match &self.phase {
+        match &mut self.phase {
             Phase::Splash { since } => {
+                let since = *since;
                 self.splash(ui);
                 if since.elapsed() >= SPLASH_TIME {
                     self.phase = Phase::Start;
@@ -173,20 +180,17 @@ impl eframe::App for StudioApp {
                         .set_error(&StudioError::FolderNotEmpty(PathBuf::new()).to_string());
                 }
                 if let Some(StartAction::OpenProject { name, path }) = self.start.show(ui) {
-                    self.phase = Phase::Opened { name, path };
+                    match EditorUi::open(&path) {
+                        Ok(editor) => self.phase = Phase::Opened(Box::new(editor)),
+                        Err(e) => {
+                            log::warn!("could not open {name}: {e}");
+                            self.start.set_error(&e.to_string());
+                        }
+                    }
                 }
             }
-            Phase::Opened { name, path } => {
-                let (name, path) = (name.clone(), path.clone());
-                let mut back = false;
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.label(RichText::new(name).size(28.0).strong());
-                    ui.label(RichText::new(path.to_string_lossy()).color(theme::TEXT_DIM));
-                    ui.add_space(12.0);
-                    ui.label("The editor opens here in the next step of the roadmap.");
-                    back = ui.button("Back to start").clicked();
-                });
-                if back {
+            Phase::Opened(editor) => {
+                if editor.ui(ui, frame.wgpu_render_state()) == EditorExit::Close {
                     self.phase = Phase::Start;
                 }
             }

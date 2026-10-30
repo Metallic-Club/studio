@@ -104,6 +104,17 @@ apps.
   Decoding/streaming through Symphonia (WAV, OGG Vorbis, FLAC, MP3). Notes: `docs/agents/81-audio.md`.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Editing (Task 10): `editor.rs` (`EditorState`: world, `Selection`, `History`, tool/snap settings, Output sink,
+  `PlayController`; no UI), `editor_ui.rs` (window layout), `commands.rs` (`Command`, `History::apply/record/undo/redo`;
+  deletes park instances so undo restores the same ids), `selection.rs`, `viewport.rs` (renders through
+  `metallic_render` into an egui texture on eframe's wgpu device, only when world/camera/size change; picking via
+  `picking.rs`, camera in `camera.rs`), `gizmo.rs` (own move/rotate/scale handles; pure maths plus egui painting),
+  `explorer.rs`, `properties.rs` (live preview while the pointer is held, one undo step on release),
+  `script_editor.rs`, `transform.rs`, `expr.rs`. Seams: `actions.rs` (toolbar/menu/key actions as data, with
+  accessories), `keymap.rs` (bindings as data), `output.rs` (`OutputSink::push(tag, level, text)` over a bounded
+  channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
+  start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
+  and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
@@ -282,7 +293,9 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
 - **A Studio edit action:** a `Command` in `metallic_studio/src/commands.rs` applied through `History`, never by
-  mutating the world directly.
+  mutating the world directly (a live-preview gesture writes the world while dragging and calls
+  `EditorState::record` once on release). A toolbar or menu command: register an `Action` in
+  `metallic_studio/src/actions.rs` and, for a default key, a row in `keymap.rs` `METALLIC_PRESET`.
 
 ## Quality bar
 - Local Cargo cache ownership across worktrees: use `tools/cargo_lane.py` for a
