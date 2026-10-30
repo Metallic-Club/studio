@@ -4,12 +4,16 @@
 //! metallic-player <project dir> [--scene <file relative to project>] [--headless --frames N]
 //!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
 //!                 [--capture FRAME:PNG]... [--input-script <file>]
+//!                 [--no-overrides] [--menu main|keyboard|gamepad|assist]
 //!                 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]
 //! ```
 //! Windowed by default. Input is read as actions (`metallic_runtime::input`); the default
 //! `CharacterControls`: WASD/arrows or the d-pad move, Space or A jumps, Shift or L3 runs,
 //! right-drag or the right stick turns the camera, the wheel or R1/L1 zoom; the left stick
-//! moves; Esc quits. `--headless` runs N frames of 1/60 s without a window or GPU (smoke tests).
+//! moves; Esc (or Start) opens the Player menu: Resume, Controls (rebinding, hold or toggle,
+//! stick and mouse settings; saved per game in the Player's data folder) and Leave game.
+//! `--no-overrides` ignores the saved controls; `--menu main|keyboard|gamepad|assist` starts with
+//! the menu or a Controls tab open (for screenshots). `--headless` runs N frames of 1/60 s without a window or GPU (smoke tests).
 //! `--input-script <file>` plays input events (`frame device control state [values]`, for
 //! example `30 keyboard Space down`) in either mode, with 1/60 s of input time per frame. `--fps` plays 60 s in a fixed 1920x1080 window without
 //! vsync and prints frame-rate statistics; with `--autopilot` the character runs in a circle and
@@ -27,7 +31,10 @@
 
 mod args;
 mod capture;
+mod controls_store;
+mod data_dir;
 mod devices;
+mod menu;
 mod overlay;
 mod touch_overlay;
 mod window;
@@ -65,11 +72,22 @@ fn main() -> ExitCode {
         }
         None => None,
     };
+    let controls = if args.no_overrides {
+        controls_store::Controls::disabled()
+    } else {
+        controls_store::Controls::open(game.name())
+    };
     if args.headless {
-        run_headless(&mut game, args.frames.unwrap_or(600), script, args.emulate);
+        run_headless(
+            &mut game,
+            args.frames.unwrap_or(600),
+            script,
+            &controls,
+            args.emulate,
+        );
         ExitCode::SUCCESS
     } else {
-        window::run(game, &args, script)
+        window::run(game, &args, script, controls)
     }
 }
 
@@ -86,10 +104,14 @@ fn run_headless(
     game: &mut Game,
     frames: u64,
     mut script: Option<ScriptedSource>,
+    controls: &controls_store::Controls,
     emulate: Option<DeviceProfile>,
 ) {
     let mut input = InputRuntime::from_world(&game.world().borrow());
-    let mut touch = emulate.map(TouchControls::new);
+    controls.apply(&mut input);
+    // The player's touch settings (stick mode) apply to the emulated device.
+    let stick_mode = input.overrides().touch.stick_mode;
+    let mut touch = emulate.map(|p| TouchControls::new(p.with_stick_mode(stick_mode)));
     if touch.is_some() {
         input.set_forced_device(Some(DeviceKind::Touch));
         game.set_input_devices(true, false, false);

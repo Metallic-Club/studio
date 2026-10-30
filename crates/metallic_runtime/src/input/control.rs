@@ -183,6 +183,14 @@ impl Control {
         ) || self.touch_button_slot().is_some()
     }
 
+    /// True for the touch controls: the stick, the look pad and every on-screen button.
+    pub fn is_touch(self) -> bool {
+        matches!(
+            self,
+            Control::TouchStick | Control::TouchLook | Control::TouchButton
+        ) || self.touch_button_slot().is_some()
+    }
+
     /// True for the controls of a gamepad.
     pub fn is_gamepad(self) -> bool {
         self.index() >= Control::ButtonA.index() && self.index() <= Control::Thumbstick2.index()

@@ -896,3 +896,74 @@ fn paint_draws_without_panicking() {
     out.textures_delta.clear();
     assert!(out.shapes.len() > 10, "{} shapes", out.shapes.len());
 }
+
+// ----------------------------------------------------------------------------- with #254
+
+#[test]
+fn touch_controls_have_touch_glyphs_and_the_touch_device() {
+    use crate::input::glyph::{GamepadStyle, GlyphArt, control_glyph, image_id, slot_glyph};
+    use crate::input::overrides::control_device;
+    for slot in 0..TOUCH_BUTTON_SLOTS {
+        let c = Control::touch_button(slot).unwrap();
+        assert!(c.is_touch());
+        assert_eq!(control_device(c), DeviceKind::Touch, "{c:?}");
+        let g = control_glyph(c, GamepadStyle::Letters);
+        assert!(matches!(g.art, GlyphArt::Touch), "{c:?}");
+        assert!(!g.text.is_empty());
+        assert!(
+            image_id(c, GamepadStyle::Letters).contains("/touch/"),
+            "{c:?}"
+        );
+    }
+    let empty = slot_glyph(
+        &crate::input::Slot::Single(None),
+        DeviceKind::Touch,
+        GamepadStyle::Letters,
+    );
+    assert_eq!(empty.count, 0, "an empty slot is unbound, not a panic");
+}
+
+#[test]
+fn the_menu_button_opens_the_player_menu() {
+    use crate::input::MENU_ACTION;
+    let mut r = Rig::new(&InputConfig::player_defaults());
+    assert_eq!(
+        r.tc.set().menu.as_ref().map(|m| m.path.as_str()),
+        Some(MENU_ACTION),
+        "the built-in Menu action has the menu button"
+    );
+    let m = r.tc.layout().menu.unwrap();
+    let menu = r.rt.find_action(MENU_ACTION).unwrap();
+    let before = r.rt.presses(menu);
+    r.touch(1, TouchPhase::Down, m.center);
+    r.touch(1, TouchPhase::Up, m.center);
+    assert_eq!(r.rt.presses(menu), before + 1, "one press: the menu opens");
+}
+
+#[test]
+fn touch_settings_are_saved_with_the_overrides() {
+    use crate::input::PlayerOverrides;
+    use crate::input::overrides::{TOUCH_OPACITY_RANGE, TouchSettings};
+    let o = PlayerOverrides::from_json(
+        r#"{"version":1,"touch":{"stick":"Fixed","opacity":0.1,"later":true}}"#,
+    )
+    .unwrap();
+    assert_eq!(o.touch.stick_mode, StickMode::Fixed);
+    assert_eq!(o.touch.opacity, TOUCH_OPACITY_RANGE.0, "clamped");
+    let text = o.to_json("2026-10-30T00:00:00Z");
+    assert!(
+        text.contains("\"stick\": \"Fixed\"") && text.contains("\"later\""),
+        "{text}"
+    );
+    let mut p = PlayerOverrides::default();
+    assert!(p.is_empty());
+    p.set_touch(TouchSettings {
+        stick_mode: StickMode::Floating,
+        opacity: 0.6,
+    });
+    assert!(!p.is_empty());
+    let back = PlayerOverrides::from_json(&p.to_json("x")).unwrap();
+    assert!((back.touch.opacity - 0.6).abs() < 1e-6);
+    p.reset_known();
+    assert!(p.is_empty());
+}

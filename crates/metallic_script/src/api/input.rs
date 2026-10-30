@@ -388,7 +388,7 @@ impl UserData for LuaEnumItem {
 }
 
 /// `(enum, item, value)` of an `EnumItem` value.
-fn enum_item(v: &Value) -> Option<(&'static str, &'static str, i64)> {
+pub(crate) fn enum_item(v: &Value) -> Option<(&'static str, &'static str, i64)> {
     match v {
         Value::UserData(ud) => ud
             .borrow::<LuaEnumItem>()
@@ -399,6 +399,30 @@ fn enum_item(v: &Value) -> Option<(&'static str, &'static str, i64)> {
 }
 
 /// The `Enum` table and Rust-side access to its items.
+/// `Enum.RotationOrder` item names (used by `CFrame.fromEulerAngles`).
+static ROTATION_ORDERS: [&str; 6] = {
+    let all = metallic_core::RotationOrder::ALL;
+    let mut names = [""; 6];
+    let mut i = 0;
+    while i < 6 {
+        names[i] = all[i].name();
+        i += 1;
+    }
+    names
+};
+
+/// `Enum.NormalId` item names (used by `BasePart:Resize`).
+static NORMAL_IDS: [&str; 6] = {
+    let all = metallic_core::transform::NormalId::ALL;
+    let mut names = [""; 6];
+    let mut i = 0;
+    while i < 6 {
+        names[i] = all[i].name();
+        i += 1;
+    }
+    names
+};
+
 pub(crate) struct Enums {
     pub(crate) table: Table,
     items: HashMap<(&'static str, &'static str), AnyUserData>,
@@ -423,6 +447,8 @@ impl Enums {
             ("ContextActionResult", named(CONTEXT_ACTION_RESULTS)),
             ("PreferredInput", named(PREFERRED_INPUTS)),
             ("ContextActionPriority", CONTEXT_ACTION_PRIORITIES.to_vec()),
+            ("RotationOrder", named(&ROTATION_ORDERS)),
+            ("NormalId", named(&NORMAL_IDS)),
         ];
         let table = lua.create_table()?;
         let mut items = HashMap::new();

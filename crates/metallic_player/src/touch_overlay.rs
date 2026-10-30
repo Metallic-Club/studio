@@ -259,6 +259,8 @@ pub struct TouchOverlay {
     mouse: MouseFingers,
     cursor: [f32; 2],
     alpha: f32,
+    /// The player's opacity setting.
+    opacity: f32,
     reduce_motion: bool,
     project: PathBuf,
     images: HashMap<String, Option<egui::TextureHandle>>,
@@ -279,6 +281,7 @@ impl TouchOverlay {
             mouse: MouseFingers::default(),
             cursor: [0.0; 2],
             alpha: if emulated.is_some() { 1.0 } else { 0.0 },
+            opacity: 1.0,
             reduce_motion,
             project: project.to_path_buf(),
             images: HashMap::new(),
@@ -306,6 +309,9 @@ impl TouchOverlay {
         dt: f32,
     ) {
         self.view = viewport(self.emulated.as_ref(), window, scale);
+        // The player's settings from the Controls page (spec 7.4).
+        let settings = rt.overrides().touch;
+        self.opacity = settings.opacity;
         let profile = self.emulated.unwrap_or_else(|| {
             let p = *self.controls.profile();
             DeviceProfile {
@@ -315,7 +321,8 @@ impl TouchOverlay {
                 ..p
             }
         });
-        self.controls.set_profile(profile);
+        self.controls
+            .set_profile(profile.with_stick_mode(settings.stick_mode));
         self.controls.set_px_per_dp(self.view.px_per_dp);
         self.controls.sync(rt, time);
         let shown = self.emulated.is_some() || rt.last_device() == DeviceKind::Touch;
@@ -418,7 +425,7 @@ impl TouchOverlay {
             origin: [self.view.origin[0] / scale, self.view.origin[1] / scale],
             points_per_dp: self.view.px_per_dp / scale,
             alpha: self.alpha,
-            opacity: 1.0,
+            opacity: self.opacity,
             show_safe_area: self.emulated.is_some(),
         };
         let images = &self.images;
@@ -559,6 +566,32 @@ mod tests {
             "lifted where pinned"
         );
         assert_eq!(m.pinned(), None);
+    }
+
+    #[test]
+    fn the_players_touch_settings_drive_the_overlay() {
+        use metallic_runtime::input::touch::StickMode;
+        use metallic_runtime::input::{InputConfig, PlayerOverrides, TouchSettings};
+        let mut rt = InputRuntime::new(&InputConfig::player_defaults());
+        let mut o = PlayerOverrides::default();
+        o.set_touch(TouchSettings {
+            stick_mode: StickMode::Fixed,
+            opacity: 0.5,
+        });
+        rt.set_overrides(o);
+        let mut game = Game::from_world(
+            "t".into(),
+            metallic_core::World::new_with_services(),
+            std::rc::Rc::new(metallic_runtime::StdoutSink),
+        );
+        let mut overlay = TouchOverlay::new(
+            std::path::Path::new("."),
+            Some(DeviceProfile::phone()),
+            false,
+        );
+        overlay.update(&mut rt, &mut game, (1600, 739), 1.0, 1.0, 0.016);
+        assert_eq!(overlay.controls.profile().stick_mode, StickMode::Fixed);
+        assert_eq!(overlay.opacity, 0.5);
     }
 
     #[test]

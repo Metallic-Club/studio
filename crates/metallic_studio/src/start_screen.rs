@@ -13,7 +13,9 @@ use eframe::egui::{
 
 use crate::png_image::decode_png;
 use crate::recent::RecentProjects;
-use crate::templates::{PROJECT_FILE, TemplateInfo, create_from_template, validate_project_name};
+use crate::templates::{
+    PROJECT_FILE, TemplateInfo, create_from_template, validate_project_name, with_builtin,
+};
 use crate::{StudioError, theme};
 
 /// What the creator asked the app to do.
@@ -38,6 +40,8 @@ pub struct StartScreen {
     error: Option<String>,
     recent: RecentProjects,
     previews: HashMap<PathBuf, Option<TextureHandle>>,
+    /// Set by "+ New game": the name field takes keyboard focus on the next draw.
+    focus_name: bool,
 }
 
 /// Default parent folder for new games: `<Documents>/Metallic Games`.
@@ -53,7 +57,9 @@ fn default_location() -> String {
 
 impl StartScreen {
     /// Creates the screen for `templates` (already sorted) and the remembered `recent` games.
+    /// The compiled-in Baseplate is added when `templates` has none, so a game can always be made.
     pub fn new(templates: Vec<TemplateInfo>, recent: RecentProjects) -> Self {
+        let templates = with_builtin(templates);
         let name = templates
             .first()
             .map(|t| default_name(&t.name))
@@ -67,6 +73,7 @@ impl StartScreen {
             error: None,
             recent,
             previews: HashMap::new(),
+            focus_name: false,
         }
     }
 
@@ -139,6 +146,13 @@ impl StartScreen {
         }
     }
 
+    /// "+ New game": selects the first template (Baseplate) and focuses the game name field, so
+    /// Enter creates the game.
+    fn new_game(&mut self) {
+        self.select(0);
+        self.focus_name = true;
+    }
+
     fn select(&mut self, index: usize) {
         if index != self.selected {
             self.selected = index;
@@ -206,6 +220,25 @@ impl StartScreen {
 
     fn sidebar(&mut self, ui: &mut egui::Ui) -> Option<StartAction> {
         let mut action = None;
+        // The grow atoms on both sides centre the label in the full-width button.
+        let new_game = egui::Button::new((
+            egui::Atom::grow(),
+            RichText::new("+ New game")
+                .strong()
+                .size(16.0)
+                .color(theme::DEEP),
+            egui::Atom::grow(),
+        ))
+        .fill(theme::ACCENT)
+        .corner_radius(CornerRadius::same(8))
+        .min_size(Vec2::new(ui.available_width(), 44.0));
+        if ui
+            .add_enabled(!self.templates.is_empty(), new_game)
+            .clicked()
+        {
+            self.new_game();
+        }
+        ui.add_space(20.0);
         ui.label(RichText::new("Recent games").strong().size(15.0));
         ui.add_space(4.0);
         if self.recent.items().is_empty() {
@@ -375,8 +408,12 @@ impl StartScreen {
             .min_col_width(label_w)
             .show(ui, |ui| {
                 ui.label(RichText::new("Game name").color(theme::TEXT_DIM));
-                name_resp =
-                    Some(ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(input_w)));
+                let resp =
+                    ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(input_w));
+                if std::mem::take(&mut self.focus_name) {
+                    resp.request_focus();
+                }
+                name_resp = Some(resp);
                 ui.end_row();
                 ui.label(RichText::new("Folder").color(theme::TEXT_DIM));
                 ui.horizontal(|ui| {
@@ -575,6 +612,7 @@ mod tests {
             preview_path: dir.join("p.png"),
             dir: dir.to_path_buf(),
             order: 1,
+            embedded: None,
         }
     }
 
@@ -585,6 +623,7 @@ mod tests {
         std::fs::create_dir_all(out.path().join("My Parkour")).expect("mkdir");
         std::fs::write(out.path().join("My Parkour").join("x.txt"), "x").expect("write");
         let mut screen = StartScreen::new(vec![template(tpl.path())], RecentProjects::load(None));
+        screen.select(1);
         screen.set_location(out.path());
         assert!(screen.create().is_none());
         assert_eq!(
@@ -598,6 +637,7 @@ mod tests {
         let tpl = tempfile::tempdir().expect("tmp");
         let out = tempfile::tempdir().expect("tmp");
         let mut screen = StartScreen::new(vec![template(tpl.path())], RecentProjects::load(None));
+        screen.select(1);
         screen.set_location(out.path());
         let action = screen.create().expect("created");
         assert_eq!(
@@ -608,6 +648,51 @@ mod tests {
             }
         );
         assert_eq!(screen.recent.items().len(), 1);
+    }
+
+    #[test]
+    fn without_templates_the_screen_offers_baseplate_and_creates_it() {
+        let out = tempfile::tempdir().expect("tmp");
+        let mut screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
+        let ids: Vec<&str> = screen.templates.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["baseplate"]);
+        screen.set_location(out.path());
+        let action = screen.create().expect("created");
+        let target = out.path().join("My Baseplate");
+        assert_eq!(
+            action,
+            StartAction::OpenProject {
+                name: "My Baseplate".into(),
+                path: target.clone()
+            }
+        );
+        assert!(target.join("metallic.toml").is_file());
+        assert!(target.join("main.mscene").is_file());
+    }
+
+    #[test]
+    fn with_the_disk_templates_baseplate_comes_before_parkour() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates");
+        let screen = StartScreen::new(
+            crate::templates::list_templates(&dir),
+            RecentProjects::load(None),
+        );
+        let ids: Vec<&str> = screen.templates.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(&ids[..2], ["baseplate", "parkour"]);
+        assert_eq!(screen.name, "My Baseplate");
+    }
+
+    #[test]
+    fn new_game_selects_baseplate_and_focuses_the_name_field() {
+        let tpl = tempfile::tempdir().expect("tmp");
+        let mut screen = StartScreen::new(vec![template(tpl.path())], RecentProjects::load(None));
+        screen.select(1);
+        assert_eq!(screen.name, "My Parkour");
+        screen.new_game();
+        assert_eq!(screen.selected, 0);
+        assert_eq!(screen.templates[0].id, "baseplate");
+        assert_eq!(screen.name, "My Baseplate");
+        assert!(screen.focus_name);
     }
 
     #[test]
@@ -649,6 +734,7 @@ mod location_tests {
             preview_path: tpl.path().join("p.png"),
             dir: tpl.path().to_path_buf(),
             order: 1,
+            embedded: None,
         };
         let mut screen = StartScreen::new(vec![info], RecentProjects::load(None));
         screen.set_location(Path::new(""));

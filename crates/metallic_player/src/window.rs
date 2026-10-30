@@ -1,12 +1,17 @@
 //! The windowed player: winit window, wgpu surface, input, frame loop and statistics.
 use crate::args::Args;
 use crate::capture::CaptureTarget;
+use crate::controls_store::Controls;
 use crate::devices::{GamepadSource, key_control, mouse_control};
+use crate::menu::{ControlsHint, Menu, MenuOutcome, UiLayer};
 use crate::overlay::Overlay;
 use crate::touch_overlay::{TouchOverlay, emulation_window};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
-use metallic_runtime::input::{Control, Device, DeviceKind, FingerEvent, RawEvent, ScriptedSource};
+use metallic_runtime::HumanoidState;
+use metallic_runtime::input::{
+    ActionId, Control, Device, DeviceKind, FingerEvent, MENU_ACTION, RawEvent, ScriptedSource,
+};
 use metallic_runtime::{FrameInput, Game, InputRuntime, TICK};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -16,7 +21,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// How long `--fps` measures.
@@ -29,7 +34,12 @@ const AUTOPILOT_TURN: f32 = 4.8;
 const AUTOPILOT_JUMP_EVERY: f64 = 1.5;
 
 /// Plays `game` in a window until it is closed (or `--frames` / `--fps` ends it).
-pub fn run(mut game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitCode {
+pub fn run(
+    mut game: Game,
+    args: &Args,
+    script: Option<ScriptedSource>,
+    controls: Controls,
+) -> ExitCode {
     let event_loop = match EventLoop::new() {
         Ok(l) => l,
         Err(e) => {
@@ -42,6 +52,21 @@ pub fn run(mut game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitC
     let mut input = InputRuntime::from_world(&game.world().borrow());
     for warning in input.warnings() {
         eprintln!("warning: input: {warning}");
+    }
+    controls.apply(&mut input);
+    let menu_action = input.find_action(MENU_ACTION);
+    let menu_presses = menu_action.map_or(0, |id| input.presses(id));
+    let mut menu = Menu::new(game.name());
+    if let Some(page) = args.menu.as_deref() {
+        menu.open(&input, 0.0);
+        if page != "main" {
+            menu.open_controls();
+            menu.show_tab(match page {
+                "gamepad" => crate::menu::Tab::Gamepad,
+                "assist" => crate::menu::Tab::Assist,
+                _ => crate::menu::Tab::Keyboard,
+            });
+        }
     }
     if args.emulate.is_some() {
         // Device emulation: the game sees a touch device only (spec 10.2).
@@ -66,6 +91,13 @@ pub fn run(mut game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitC
         frame_times: Vec::new(),
         started: None,
         failed: false,
+        quit: false,
+        menu,
+        hint: ControlsHint::new(),
+        controls,
+        menu_action,
+        menu_presses,
+        dead: false,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
@@ -75,6 +107,7 @@ pub fn run(mut game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitC
     if let Some(report) = app.touch.timing_report() {
         println!("{report}");
     }
+    app.controls.save(app.input.overrides());
     if app.failed {
         ExitCode::from(1)
     } else {
@@ -89,6 +122,8 @@ struct Gfx {
     ctx: RenderContext,
     renderer: Renderer,
     overlay: Overlay,
+    /// The Player menu and the controls hint.
+    ui: UiLayer,
     minimised: bool,
 }
 
@@ -115,6 +150,19 @@ struct App {
     frame_times: Vec<f64>,
     started: Option<Instant>,
     failed: bool,
+    /// "Leave game" was chosen.
+    quit: bool,
+    /// The Player menu (Menu action: Esc or Start by default).
+    menu: Menu,
+    /// The Jump / Run / Menu hint at the start and after a glyph change.
+    hint: ControlsHint,
+    /// Where the player's input overrides are stored.
+    controls: Controls,
+    menu_action: Option<ActionId>,
+    /// `presses` of the Menu action when last looked at.
+    menu_presses: u32,
+    /// The character was dead last frame (toggles clear on death).
+    dead: bool,
 }
 
 impl App {
@@ -156,6 +204,7 @@ impl App {
         }
         renderer.prewarm((config.width, config.height));
         let overlay = Overlay::new(&ctx.device, config.format);
+        let ui = UiLayer::new(&ctx.device, config.format);
         println!(
             "metallic-player: {} on {}, {}x{}, {:?} quality",
             self.game.name(),
@@ -171,6 +220,7 @@ impl App {
             ctx,
             renderer,
             overlay,
+            ui,
             minimised: false,
         })
     }
@@ -185,9 +235,15 @@ impl App {
         }
     }
 
-    /// Collects the gamepad and script events of this frame.
+    /// Collects the gamepad and script events of this frame. Gamepad events go to the menu
+    /// while it is open.
     fn poll_devices(&mut self, clock: f64) {
-        self.input.poll_source(&mut self.gamepads);
+        self.events.clear();
+        self.gamepads.poll_into(&mut self.events);
+        for i in 0..self.events.len() {
+            let e = self.events[i];
+            self.route(e, false);
+        }
         if let Some(script) = self.script.as_mut() {
             self.events.clear();
             script.poll_frame(self.frame, clock, &mut self.events);
@@ -198,6 +254,77 @@ impl App {
             for f in self.fingers.drain(..) {
                 self.touch.finger(&mut self.input, f, clock);
             }
+        }
+    }
+
+    /// Sends a raw event to the menu while it is open, else to the game's input.
+    fn route(&mut self, e: RawEvent, repeat: bool) {
+        if !self.menu.is_open() {
+            self.input.push(e);
+            return;
+        }
+        let out = self.menu.raw(e, repeat);
+        self.menu_outcome(out);
+    }
+
+    /// A finger while the menu is open: it points and clicks like the mouse.
+    fn menu_touch(&mut self, phase: winit::event::TouchPhase, px: [f32; 2], time: f64) {
+        use winit::event::TouchPhase as P;
+        let pos = RawEvent::vector(Device::KeyboardMouse, Control::MousePosition, px, time);
+        self.route(pos, false);
+        let value = match phase {
+            P::Started => 1.0,
+            P::Ended | P::Cancelled => 0.0,
+            P::Moved => return,
+        };
+        let click = RawEvent::button(Device::KeyboardMouse, Control::MouseButton1, value, time);
+        self.route(click, false);
+    }
+
+    fn menu_outcome(&mut self, out: MenuOutcome) {
+        match out {
+            MenuOutcome::None => {}
+            MenuOutcome::Changed => {
+                if let Some(o) = self.menu.overrides() {
+                    self.input.set_overrides(o.clone());
+                    self.update_glyph_style();
+                    self.menu.sync(&self.input);
+                    self.menu_action = self.input.find_action(MENU_ACTION);
+                }
+            }
+            MenuOutcome::Save | MenuOutcome::Closed { save: true } => {
+                self.controls.save(self.input.overrides());
+            }
+            MenuOutcome::Closed { save: false } => {}
+            MenuOutcome::Quit => self.quit = true,
+        }
+        if matches!(out, MenuOutcome::Closed { .. }) {
+            // The key that closed the menu must not reach the game as a press.
+            self.menu_presses = self.menu_action.map_or(0, |id| self.input.presses(id));
+        }
+    }
+
+    /// The face-button style: the player's choice, or by the vendor of the pad in use.
+    fn update_glyph_style(&mut self) {
+        let vendor = self.gamepads.last_vendor();
+        self.menu.set_pad_vendor(vendor);
+        let style = crate::menu::resolve_style(self.input.overrides().gamepad_glyphs, vendor);
+        self.input.set_gamepad_style(style);
+    }
+
+    /// Opens the menu when the Menu action was pressed this frame.
+    fn check_menu(&mut self, clock: f64) {
+        let Some(id) = self.menu_action else { return };
+        let presses = self.input.presses(id);
+        if presses == self.menu_presses {
+            return;
+        }
+        self.menu_presses = presses;
+        if !self.menu.is_open() {
+            self.touch.release_all(&mut self.input, clock);
+            self.input.release_all(clock);
+            self.set_captured(false);
+            self.menu.open(&self.input, clock);
         }
     }
 
@@ -241,13 +368,27 @@ impl App {
             dt as f32,
         );
         self.poll_devices(clock);
+        self.update_glyph_style();
+        let out = self.menu.tick(clock);
+        self.menu_outcome(out);
+        if self.quit {
+            event_loop.exit();
+            return;
+        }
         let mut frame_input = self.game.input_frame(&mut self.input, clock, dt as f32);
-        let want_capture = self.input.wants_mouse_delta();
+        self.check_menu(clock);
+        let want_capture = self.input.wants_mouse_delta() && !self.menu.is_open();
         self.set_captured(want_capture);
         if self.args.autopilot {
             autopilot(&mut frame_input, self.game.time(), dt);
         }
-        self.game.frame(&frame_input, dt);
+        let output = self.game.frame(&frame_input, dt);
+        let dead = output.state == Some(HumanoidState::Dead);
+        if dead && !self.dead {
+            // A toggled Run or Aim does not survive death (spec 11.1).
+            self.input.clear_toggles(clock);
+        }
+        self.dead = dead;
         self.frame += 1;
 
         let Some(gfx) = self.gfx.as_mut() else {
@@ -258,6 +399,7 @@ impl App {
         }
         let size = (gfx.config.width, gfx.config.height);
         let scale = gfx.window.scale_factor() as f32;
+        self.menu.set_scale(scale);
         if let Some(path) = capture_path(&self.args, self.frame) {
             let target = CaptureTarget::new(&gfx.ctx.device, gfx.config.format, size);
             let camera = match self.args.capture_view {
@@ -278,6 +420,18 @@ impl App {
                 scale,
                 &self.game,
                 Some(&mut self.touch),
+            );
+            let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
+            gfx.ui.draw(
+                &gfx.ctx.device,
+                &gfx.ctx.queue,
+                &target.view,
+                size,
+                scale,
+                clock,
+                |ctx| {
+                    paint_ui(ctx, menu, hint, input, clock);
+                },
             );
             match target.save_png(&gfx.ctx.device, &gfx.ctx.queue, &path) {
                 Ok(()) => println!(
@@ -304,6 +458,18 @@ impl App {
                     &self.game,
                     Some(&mut self.touch),
                 );
+                let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
+                gfx.ui.draw(
+                    &gfx.ctx.device,
+                    &gfx.ctx.queue,
+                    &view,
+                    size,
+                    scale,
+                    clock,
+                    |ctx| {
+                        paint_ui(ctx, menu, hint, input, clock);
+                    },
+                );
                 gfx.window.pre_present_notify();
                 gfx.ctx.queue.present(frame);
             }
@@ -324,6 +490,21 @@ impl App {
         if self.args.frames.is_some_and(|n| self.frame >= n) {
             event_loop.exit();
         }
+    }
+}
+
+/// Paints the controls hint (while playing) and the menu (while open).
+fn paint_ui(
+    ctx: &egui::Context,
+    menu: &mut Menu,
+    hint: &mut ControlsHint,
+    input: &InputRuntime,
+    clock: f64,
+) {
+    if menu.is_open() {
+        menu.paint(ctx, input);
+    } else {
+        hint.paint(ctx, input, clock);
     }
 }
 
@@ -402,55 +583,48 @@ impl ApplicationHandler for App {
                 self.set_captured(false);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
+                // Every key, Escape included, is a control: Escape is the default binding of
+                // the `Menu` action, which opens the Player menu.
+                if let PhysicalKey::Code(code) = event.physical_key
+                    && let Some(control) = key_control(code)
+                {
                     let down = event.state == ElementState::Pressed;
-                    // Escape quits for now; it becomes the `Menu` action with the Player menu.
-                    if code == KeyCode::Escape && down {
-                        event_loop.exit();
-                    } else if let Some(control) = key_control(code) {
-                        let time = self.input_clock();
-                        let value = f32::from(u8::from(down));
-                        self.input.push(RawEvent::button(
-                            Device::KeyboardMouse,
-                            control,
-                            value,
-                            time,
-                        ));
-                    }
+                    let time = self.input_clock();
+                    let value = f32::from(u8::from(down));
+                    let e = RawEvent::button(Device::KeyboardMouse, control, value, time);
+                    self.route(e, event.repeat);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let time = self.input_clock();
                 let down = state == ElementState::Pressed;
-                // In device emulation the mouse is a finger.
-                if !self.touch.mouse_button(&mut self.input, button, down, time)
-                    && let Some(control) = mouse_control(button)
-                {
+                // In device emulation the mouse is a finger (but a mouse in the menu).
+                let finger = !self.menu.is_open()
+                    && self.touch.mouse_button(&mut self.input, button, down, time);
+                if !finger && let Some(control) = mouse_control(button) {
                     let value = f32::from(u8::from(state == ElementState::Pressed));
-                    self.input.push(RawEvent::button(
-                        Device::KeyboardMouse,
-                        control,
-                        value,
-                        time,
-                    ));
+                    let e = RawEvent::button(Device::KeyboardMouse, control, value, time);
+                    self.route(e, false);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let time = self.input_clock();
                 let pos = [position.x as f32, position.y as f32];
-                if !self.touch.cursor_moved(&mut self.input, pos, time) {
-                    self.input.push(RawEvent::vector(
-                        Device::KeyboardMouse,
-                        Control::MousePosition,
-                        pos,
-                        time,
-                    ));
+                if !self.menu.is_open() && self.touch.cursor_moved(&mut self.input, pos, time) {
+                    return;
                 }
+                let e = RawEvent::vector(Device::KeyboardMouse, Control::MousePosition, pos, time);
+                self.route(e, false);
             }
             WindowEvent::Touch(t) => {
                 let time = self.input_clock();
                 let px = [t.location.x as f32, t.location.y as f32];
-                self.touch.touch(&mut self.input, t.id, t.phase, px, time);
+                if self.menu.is_open() {
+                    // The menu is used like a mouse: a finger points and taps.
+                    self.menu_touch(t.phase, px, time);
+                } else {
+                    self.touch.touch(&mut self.input, t.id, t.phase, px, time);
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let notches = match delta {
@@ -458,8 +632,7 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => (p.y / 60.0) as f32,
                 };
                 let time = self.input_clock();
-                self.input
-                    .push(RawEvent::wheel(Device::KeyboardMouse, notches, time));
+                self.route(RawEvent::wheel(Device::KeyboardMouse, notches, time), false);
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             _ => {}
@@ -469,6 +642,7 @@ impl ApplicationHandler for App {
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event
             && self.captured
+            && !self.menu.is_open()
         {
             let pos = [delta.0 as f32, delta.1 as f32];
             let time = self.input_clock();

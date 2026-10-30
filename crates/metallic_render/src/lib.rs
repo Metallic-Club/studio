@@ -26,4 +26,4 @@ pub use context::{RenderContext, RenderError};
 pub use glam;
 pub use metallic_asset;
 pub use renderer::{Quality, RenderSettings, Renderer};
-pub use skinned::SkinnedInstance;
+pub use skinned::{SkinStyle, SkinnedInstance};
