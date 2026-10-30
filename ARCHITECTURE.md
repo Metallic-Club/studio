@@ -36,7 +36,8 @@ apps.
   `change_cursor` feeds independent readers: `changes_since` deduplicates coarse instance invalidations;
   `changes_since_detailed` returns ordered `Change { id, kind }` notices for creation, destruction, direct
   reparent operations and properties. Property tokens are canonical static registry names, with no journal-owned
-  strings or values. Both readers share the same bounded retention/overflow boundary, including coarse-only
+  strings or values. Private property metadata keeps a thin static `PropDef` pointer and forms the public name
+  token on read. Both readers share the same bounded retention/overflow boundary, including coarse-only
   descendant invalidations after reparent. Clones record creations in deterministic parent-before-child order.
   The detailed feed retains current-state invalidations, not historic values or a durable editing operation log.
   This A1 foundation leaves the existing half-drop history algorithm unchanged; full-capacity ring PR #186

@@ -66,12 +66,32 @@ pub enum DetailedChanges {
     Overflow,
 }
 
+/// The history retains one thin registry pointer; the public fat string token is formed on read.
+#[derive(Clone, Copy)]
+enum JournalKind {
+    Created,
+    Destroyed,
+    Reparented,
+    Property(&'static classes::PropDef),
+}
+
+impl JournalKind {
+    fn public_kind(self) -> ChangeKind {
+        match self {
+            Self::Created => ChangeKind::Created,
+            Self::Destroyed => ChangeKind::Destroyed,
+            Self::Reparented => ChangeKind::Reparented,
+            Self::Property(property) => ChangeKind::Property(property.name),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct JournalEntry {
     revision: u64,
     id: InstanceId,
     /// A moved ancestor invalidates descendants for coarse readers without changing their Parent.
-    kind: Option<ChangeKind>,
+    kind: Option<JournalKind>,
 }
 
 /// Stable handle to an instance. Generational: a destroyed instance's id never becomes valid again.
@@ -148,7 +168,7 @@ impl World {
         }
     }
 
-    fn record(&mut self, id: InstanceId, kind: Option<ChangeKind>) {
+    fn record(&mut self, id: InstanceId, kind: Option<JournalKind>) {
         self.revision += 1;
         self.journal.push(JournalEntry {
             revision: self.revision,
@@ -165,7 +185,7 @@ impl World {
     fn record_subtree(&mut self, id: InstanceId) {
         let mut stack = vec![id];
         while let Some(cur) = stack.pop() {
-            self.record(cur, (cur == id).then_some(ChangeKind::Reparented));
+            self.record(cur, (cur == id).then_some(JournalKind::Reparented));
             stack.extend_from_slice(self.children(cur));
         }
     }
@@ -217,7 +237,12 @@ impl World {
         };
         let changes = self.journal[start..]
             .iter()
-            .filter_map(|entry| entry.kind.map(|kind| Change { id: entry.id, kind }))
+            .filter_map(|entry| {
+                entry.kind.map(|kind| Change {
+                    id: entry.id,
+                    kind: kind.public_kind(),
+                })
+            })
             .collect();
         (DetailedChanges::Changes(changes), now)
     }
@@ -361,7 +386,7 @@ impl World {
             }
             None => self.roots.push(id),
         }
-        self.record(id, Some(ChangeKind::Created));
+        self.record(id, Some(JournalKind::Created));
         Ok(id)
     }
 
@@ -392,7 +417,7 @@ impl World {
                 .is_some_and(|s| s.generation == k.generation && s.node.is_some())
         });
         for g in gone {
-            self.record(g, Some(ChangeKind::Destroyed));
+            self.record(g, Some(JournalKind::Destroyed));
         }
     }
 
@@ -564,7 +589,7 @@ impl World {
             }
         }
         if old != value {
-            self.record(id, Some(ChangeKind::Property(def.name)));
+            self.record(id, Some(JournalKind::Property(def)));
             // The is_empty check skips allocating the lookup key when nothing listens at all.
             if !self.prop_signals.is_empty()
                 && let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string()))
@@ -627,7 +652,7 @@ impl World {
         };
         let copy = self.alloc(class, parent, props, false);
         map.insert(id, copy);
-        self.record(copy, Some(ChangeKind::Created));
+        self.record(copy, Some(JournalKind::Created));
         for k in kids {
             let kc = self.clone_rec(k, Some(copy), map);
             self.link_child(copy, kc);
@@ -650,3 +675,6 @@ impl World {
         }
     }
 }
+
+#[cfg(test)]
+mod layout_probe;

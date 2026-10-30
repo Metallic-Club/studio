@@ -62,3 +62,30 @@ The candidate benchmark will use the unchanged workload in a second owned output
 guarded checks. No compiler artifacts/cache objects are copied or linked between output lanes. Isolated paired
 timing is still held while other team compilation is active. The C2 worker will add its `pub mod edit;` directly
 after the instance module doc and a separate `pub use instance::edit;` export; A1 leaves those locations untouched.
+
+## Initial paired timing and compact metadata checkpoint
+
+The fixed eight-run ABBAABBA world comparison completed successfully for all 19 matching workloads. It compared
+exact base `fbaa17d` and initial source `1176dda`; no timing sample/run was removed. Settings: 20 samples,
+0.3-second warmup, 1-second measurement, 10,000 resamples, no plots. The observed median paired ratios did NOT
+meet the 5% target: set_position +18.70%, create_1000_parts +27.75%, deep_clone_5000 +31.28%, borrowed 5,000-Part
+reads +14.21%, get_name +7.88%, get_ref_name +12.35%, save_5000 +14.94%. Ranges were wide (set_position
+0.813-1.479; destroy 0.375-2.506). Short activity snapshots recorded 74.11% and 63.44% host CPU across 12 logical
+processors despite the managed team hold. This does not establish causality or justify dismissing regressions
+as noise; no clean-host or universal target pass is claimed. The full table/limits are in
+`docs/research/2026-10-30-a1-detailed-journal.md`; raw per-run estimates/CIs, binary hashes and activity data are
+retained outside the checkout under `integration-evidence/298-detailed-journal`.
+
+Following root's review, a manual probe measured the actual entry/public type layouts before changing storage.
+The private metadata now retains `&'static PropDef` and forms `Property(def.name)` on read; public API unchanged.
+Entry size falls from 40 to 32 bytes, optional metadata 24 to 16 bytes; public kind/change stay 24/32 bytes.
+Warm capacity/retention remain 32,768/15,425, so requested history-buffer bytes fall from 1,310,720 to 1,048,576
+(20%). The 5,000-Part requested-heap fixture now reports 1,120.027 bytes/Part; warmed 1,000 writes still request
+1,000 allocations / 12,000 bytes. This establishes bounded storage/allocation improvement, not a timing cause.
+
+All 56 default core tests pass after that change. One new ignored manual layout probe was explicitly executed
+before and after storage changes; it prints observations without imposing a compiler-specific size threshold.
+Initial baseline/candidate artifacts are retained unchanged. Next: a separately named compact candidate, a narrow
+mutation workload with unchanged controls, and mandatory workspace/Clippy/license/fmt gates. The 5% acceptance
+target is still unproven and must not be silently waived. Root granted the diagnostic/candidate build slot;
+coordinate actual timing windows with the Simulation worker.
