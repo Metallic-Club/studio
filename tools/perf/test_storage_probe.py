@@ -7,7 +7,7 @@ import storage_probe as probe
 
 
 def memory_rows():
-    return [{"kind": "layout", **{key: 40 for key in ["value_bytes", "id_value_entry_bytes", "named_header_bytes", "id_map_header_bytes", "sorted_header_bytes", "world_stack_bytes", "prototype_schema_requested_bytes"]}}] + [
+    return [{"kind": "layout", **{key: 40 for key in ["value_bytes", "id_value_entry_bytes", "named_header_bytes", "id_map_header_bytes", "sorted_header_bytes", "world_stack_bytes", "journal_entry_bytes", "prototype_schema_requested_bytes"]}}] + [
         {"kind": "memory", "scope": scope, "parts": parts, "overrides": density,
          "live_requested_bytes": 100, "requested_bytes": 120, "freed_bytes": 20,
          "allocation_calls": 2, "outer_stack_bytes": 24}

@@ -93,3 +93,27 @@ pub fn measure<T>(operation: impl FnOnce() -> T) -> (T, Counts) {
     drop(guard);
     (result, COUNTS.get())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hint::black_box;
+
+    #[test]
+    fn retained_and_released_layouts_are_distinguished() {
+        let (retained, counts) = measure(|| black_box(vec![7_u8; 73]));
+        assert_eq!(counts.allocated - counts.freed, retained.capacity());
+        let (_, released) = measure(|| drop(black_box(vec![9_u8; 41])));
+        assert!(released.allocated > 0);
+        assert_eq!(released.allocated, released.freed);
+    }
+
+    #[test]
+    fn unwinding_ends_the_recording_interval() {
+        let failed = std::panic::catch_unwind(|| measure(|| panic!("measurement interrupted")));
+        assert!(failed.is_err());
+        assert!(!ENABLED.get());
+        let (value, counts) = measure(|| black_box(vec![3_u8; 19]));
+        assert_eq!(counts.allocated - counts.freed, value.capacity());
+    }
+}

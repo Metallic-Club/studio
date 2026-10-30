@@ -113,13 +113,14 @@ fn memory(defaults: &[Value], schema_heap: usize) -> ProbeResult<()> {
     // Warm global registry/runtime initialization outside measured intervals.
     black_box(level(1, 7)?);
     println!(
-        "{{\"kind\":\"layout\",\"value_bytes\":{},\"id_value_entry_bytes\":{},\"named_header_bytes\":{},\"id_map_header_bytes\":{},\"sorted_header_bytes\":{},\"world_stack_bytes\":{},\"prototype_schema_requested_bytes\":{}}}",
+        "{{\"kind\":\"layout\",\"value_bytes\":{},\"id_value_entry_bytes\":{},\"named_header_bytes\":{},\"id_map_header_bytes\":{},\"sorted_header_bytes\":{},\"world_stack_bytes\":{},\"journal_entry_bytes\":{},\"prototype_schema_requested_bytes\":{}}}",
         size_of::<Value>(),
         size_of::<(u16, Value)>(),
         size_of::<NamedMap>(),
         size_of::<KeyMap>(),
         size_of::<SortedValues>(),
         size_of::<World>(),
+        size_of::<(u64, InstanceId)>(),
         schema_heap
     );
     for count in [300, 5_000] {

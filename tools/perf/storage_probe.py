@@ -39,7 +39,7 @@ def parse_memory(text: str) -> tuple[dict, list[dict]]:
                 raise ValueError(f"invalid memory count: {field}")
         if row["requested_bytes"] - row["freed_bytes"] != row["live_requested_bytes"]:
             raise ValueError("retained bytes do not match allocated-minus-freed")
-    for field in ["value_bytes", "id_value_entry_bytes", "named_header_bytes", "id_map_header_bytes", "sorted_header_bytes", "world_stack_bytes", "prototype_schema_requested_bytes"]:
+    for field in ["value_bytes", "id_value_entry_bytes", "named_header_bytes", "id_map_header_bytes", "sorted_header_bytes", "world_stack_bytes", "journal_entry_bytes", "prototype_schema_requested_bytes"]:
         if type(layouts[0].get(field)) is not int or layouts[0][field] <= 0:
             raise ValueError(f"invalid layout count: {field}")
     return layouts[0], rows
@@ -73,6 +73,7 @@ def table(layout: dict, memory: list[dict], cpu: list[dict]) -> str:
     for row in memory:
         lines.append(f"| {row['parts']} | {row['overrides']} | {row['scope']} | {row['live_requested_bytes']} | {row['live_requested_bytes']/row['parts']:.3f} |")
     lines += ["", f"On this build, Value is {layout['value_bytes']} B and an ID/Value pair is {layout['id_value_entry_bytes']} B. Seven independent owned Value payloads alone require {7 * layout['value_bytes']} B before keys/containers/world storage. Prototype shared defaults retain {layout['prototype_schema_requested_bytes']} requested B, excluded from each component row.", "",
+              f"A mutation journal entry is {layout['journal_entry_bytes']} B. A fully retained 16,384-entry history therefore needs at least {layout['journal_entry_bytes'] * 16384} payload B before allocator/capacity overhead. This is a calculated fixed-cost lower bound, not an allocation measurement of the ring implementation.", "",
               "## Component CPU samples", "", "Six rotated-order samples per case. These are component operations with pre-resolved IDs, not World API or frame timings. Concurrent-build noise prevents treating them as a controlled performance baseline.", "",
               "| Parts | Overrides | Scope | Read ns/op median [min,max] | Write ns/op median [min,max] |", "|---:|---:|---|---|---|"]
     for parts in PARTS:
