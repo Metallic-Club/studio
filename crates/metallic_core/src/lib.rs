@@ -15,12 +15,14 @@
 //! retain no historic values and do not replace a durable editing operation log.
 #![warn(missing_docs)]
 
+mod cframe;
 pub mod classes;
 mod instance;
 mod scene_file;
 mod signal;
 mod value;
 
+pub use cframe::{CFrame, RotationOrder};
 pub use instance::{Change, ChangeCursor, ChangeKind, Changes, DetailedChanges, InstanceId, World};
 pub use scene_file::{load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
