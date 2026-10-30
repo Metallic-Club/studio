@@ -326,6 +326,14 @@ fn rebinding_and_removing_client_cancel_old_tasks_connections_and_allow_unbound_
         rig.host.is_running(),
         "Client VM stays running without a local binding"
     );
+    let after_removal = rig.lines();
+    rig.host.dispatch_input_now(now);
+    rig.host.end_frame();
+    assert_eq!(
+        rig.lines(),
+        after_removal,
+        "removed local work must stop before the caller destroys its still-live Player"
+    );
     rig.world.borrow_mut().destroy(second);
     let before = rig.lines();
     now = rig.run(now, 20);
@@ -503,5 +511,190 @@ fn removal_preserves_a_held_input_budget_instead_of_resetting_it() {
             .all(|line| line == "print:removed-handler"),
         "{:?}",
         rig.lines()
+    );
+}
+
+#[test]
+fn input_dispatch_does_not_resume_deferred_work_after_gui_ownership_changes() {
+    let mut rig = rig(ScriptRole::Client);
+    let local = player(&rig, "Local");
+    let other = player(&rig, "Other");
+    let leaving = player(&rig, "Leaving");
+    let owned_gui = gui(&rig, local);
+    rig.local_script("Global", "print('global-start') game:GetService('RunService').Heartbeat:Connect(function() print('global-beat') end)");
+    for index in 0..8 {
+        rig.add_script(
+            "LocalScript",
+            &format!("Owner{index}"),
+            owned_gui,
+            &format!("print('connected') {SLOW_REMOVING_HANDLER}"),
+        );
+    }
+    for p in [local, other, leaving] {
+        rig.host.add_player(p).unwrap();
+    }
+    rig.host.set_local_player(local).unwrap();
+    rig.host.start().unwrap();
+    let now = rig.run(0.0, 1);
+    assert_eq!(count(&rig, "print:connected"), 8);
+    rig.host.remove_player(leaving).unwrap();
+    let before = count(&rig, "print:removed-handler");
+    assert!(before < 8, "fixture must retain deferred work");
+    rig.world.borrow_mut().destroy(leaving);
+    rig.world
+        .borrow_mut()
+        .set_parent(owned_gui, Some(other))
+        .unwrap();
+    let fresh_gui = gui(&rig, local);
+    rig.add_script("LocalScript", "Late", fresh_gui, "print('late-start')");
+    rig.host.dispatch_input_now(now);
+    rig.host.end_frame();
+    assert_eq!(
+        count(&rig, "print:removed-handler"),
+        before,
+        "explicit input dispatch resumed a script now owned by another player"
+    );
+    assert_eq!(
+        count(&rig, "print:late-start"),
+        0,
+        "pruning must not start new scripts"
+    );
+    rig.run(now, 2);
+    assert_eq!(count(&rig, "print:removed-handler"), before);
+    assert_eq!(
+        count(&rig, "print:global-start"),
+        1,
+        "unrelated starter work must not restart"
+    );
+    assert_eq!(
+        count(&rig, "print:global-beat"),
+        3,
+        "unrelated valid handlers must continue"
+    );
+    assert_eq!(
+        count(&rig, "print:late-start"),
+        1,
+        "pruning must not consume pending start changes"
+    );
+}
+
+#[test]
+fn lifecycle_dispatch_does_not_call_handlers_after_gui_ownership_changes() {
+    let mut rig = rig(ScriptRole::Client);
+    let local = player(&rig, "Local");
+    let other = player(&rig, "Other");
+    let first = player(&rig, "FirstLeaving");
+    let second = player(&rig, "SecondLeaving");
+    let owned_gui = gui(&rig, local);
+    rig.add_script(
+        "LocalScript",
+        "Observe",
+        owned_gui,
+        "print('connected') game.Players.PlayerRemoving:Connect(function() print('removed') end)",
+    );
+    for p in [local, other, first, second] {
+        rig.host.add_player(p).unwrap();
+    }
+    rig.host.set_local_player(local).unwrap();
+    rig.host.start().unwrap();
+    let now = rig.run(0.0, 1);
+    rig.host.remove_player(first).unwrap();
+    rig.world.borrow_mut().destroy(first);
+    assert_eq!(rig.lines(), ["print:connected", "print:removed"]);
+    rig.world
+        .borrow_mut()
+        .set_parent(owned_gui, Some(other))
+        .unwrap();
+    rig.host.remove_player(second).unwrap();
+    rig.world.borrow_mut().destroy(second);
+    assert_eq!(
+        rig.lines(),
+        ["print:connected", "print:removed"],
+        "lifecycle dispatch called a script now owned by another player"
+    );
+    rig.run(now, 2);
+    assert_eq!(rig.lines(), ["print:connected", "print:removed"]);
+}
+
+#[test]
+fn client_input_dispatch_postpones_lua_when_world_scope_is_borrowed() {
+    let mut rig = rig(ScriptRole::Client);
+    let local = player(&rig, "Local");
+    let leaving = player(&rig, "Leaving");
+    let owned_gui = gui(&rig, local);
+    for index in 0..8 {
+        rig.add_script(
+            "LocalScript",
+            &format!("Owner{index}"),
+            owned_gui,
+            SLOW_REMOVING_HANDLER,
+        );
+    }
+    rig.host.add_player(local).unwrap();
+    rig.host.add_player(leaving).unwrap();
+    rig.host.set_local_player(local).unwrap();
+    rig.host.start().unwrap();
+    let now = rig.run(0.0, 1);
+    rig.host.remove_player(leaving).unwrap();
+    rig.world.borrow_mut().destroy(leaving);
+    let before = count(&rig, "print:removed-handler");
+    assert!(before < 8, "fixture must retain deferred work");
+    {
+        let shared = rig.world.clone();
+        let _borrow = shared.borrow_mut();
+        rig.host.dispatch_input_now(now);
+    }
+    rig.host.end_frame();
+    assert_eq!(
+        count(&rig, "print:removed-handler"),
+        before,
+        "Client dispatch executed Lua without validating its borrowed World scope"
+    );
+    rig.run(now, 20);
+    assert_eq!(
+        count(&rig, "print:removed-handler"),
+        8,
+        "postponed valid work must remain queued"
+    );
+}
+
+#[test]
+fn client_step_postpones_tasks_until_reparented_owner_scope_can_be_validated() {
+    let mut rig = rig(ScriptRole::Client);
+    let local = player(&rig, "Local");
+    let other = player(&rig, "Other");
+    let owned_gui = gui(&rig, local);
+    rig.add_script(
+        "LocalScript",
+        "Owned",
+        owned_gui,
+        "print('connected') task.delay(0.05,function() print('owned-task') end)",
+    );
+    rig.local_script(
+        "Global",
+        "task.delay(0.05,function() print('global-task') end)",
+    );
+    rig.host.set_local_player(local).unwrap();
+    rig.host.start().unwrap();
+    rig.run(0.0, 1);
+    assert_eq!(rig.lines(), ["print:connected"]);
+    {
+        let shared = rig.world.clone();
+        let mut world = shared.borrow_mut();
+        world.set_parent(owned_gui, Some(other)).unwrap();
+        // Advance virtual time past both queued tasks while the changed ownership
+        // remains unreadable to the host. No wall-clock sleep is involved.
+        rig.host.step(0.1, 0.1);
+    }
+    assert_eq!(
+        rig.lines(),
+        ["print:connected"],
+        "Client step resumed Lua before validating its borrowed World scope"
+    );
+    rig.run(0.1, 3);
+    assert_eq!(
+        rig.lines(),
+        ["print:connected", "print:global-task"],
+        "transferred work must cancel while unrelated valid work remains queued"
     );
 }

@@ -164,7 +164,8 @@ impl ScriptHost {
     /// Removes a registered player from this host without destroying World instances.
     /// Returns false for an unknown/already removed handle. A pending PlayerAdded is
     /// delivered before PlayerRemoving in an active session; the player remains in
-    /// GetPlayers during Removing. A stale registered handle is forgotten without callbacks.
+    /// GetPlayers during immediate Removing dispatch. Deferred handlers observe later roster
+    /// state. A stale registered handle is forgotten without callbacks.
     ///
     /// The caller destroys the Player/Character after this call and before the next step.
     /// Signal callbacks use the existing budgets; yielded/deferred handlers are not promised
@@ -185,6 +186,7 @@ impl ScriptHost {
                 .then(|| world.root("Players"))
                 .flatten()
         };
+        self.prune_client_scripts()?;
         self.inputs.retain(|event| {
             !matches!(event,
             HostEvent::PlayerAdded { player: p } | HostEvent::CharacterAdded { player: p, .. }
@@ -353,8 +355,13 @@ impl ScriptHost {
     /// appeared since the last step, delivers the queued remotes and inputs, fires
     /// `RunService.Heartbeat(dt)`, then resumes `WaitForChild` and `task.wait` threads.
     /// Does nothing before `start`.
+    /// Client hosts postpone the whole step if the World cannot be read for ownership
+    /// validation, preserving queued work and any held frame deadline for a later retry.
     pub fn step(&mut self, now: f64, dt: f64) {
         if !self.is_running() {
+            return;
+        }
+        if self.role == ScriptRole::Client && self.world.try_borrow().is_err() {
             return;
         }
         for side in self.sides() {
@@ -549,6 +556,45 @@ impl ScriptHost {
                 client.state.stop_owner(owner_id(id));
             }
         }
+    }
+
+    /// Stops invalid Client owners before public immediate dispatch paths. It neither
+    /// starts scripts nor advances the journal cursor: the next normal step must still
+    /// observe every new script/change. Owner cancellation does not call Lua handlers.
+    fn prune_client_scripts(&mut self) -> Result<(), ScriptError> {
+        if self.role != ScriptRole::Client || self.client.is_none() {
+            return Ok(());
+        }
+        self.refresh_client_scope();
+        let stops: Vec<_> = {
+            let world = self
+                .world
+                .try_borrow()
+                .map_err(|_| host_error("the world is busy"))?;
+            let changed = self
+                .cursor
+                .and_then(|cursor| match world.changes_since(cursor).0 {
+                    Changes::Ids(ids) => Some(ids),
+                    Changes::Overflow => None,
+                });
+            let candidates = changed.unwrap_or_else(|| self.running.keys().copied().collect());
+            candidates
+                .into_iter()
+                .filter(|id| {
+                    self.running
+                        .get(id)
+                        .is_some_and(|script| script.context == Context::Client)
+                        && self.runnable_context(&world, *id) != Some(Context::Client)
+                })
+                .collect()
+        };
+        for id in stops {
+            self.running.remove(&id);
+            if let Some(client) = &self.client {
+                client.state.stop_owner(owner_id(id));
+            }
+        }
+        Ok(())
     }
 
     fn refresh_client_scope(&mut self) {
@@ -788,7 +834,15 @@ impl ScriptHost {
     /// `ContextActionService` handlers are known before the character reads its input. The
     /// `step` of the same frame then delivers no more action events and continues the time
     /// budget started here; call [`ScriptHost::end_frame`] when the frame is done.
+    /// Client hosts first prune owners that lost eligibility, without starting new scripts
+    /// or consuming journal changes. A borrowed World postpones Client execution until its
+    /// scope can be validated; existing queued work is retained.
     pub fn dispatch_input_now(&mut self, now: f64) {
+        if self.prune_client_scripts().is_err() {
+            // Without a readable World the Client scope cannot be validated. Leave
+            // queued work for a later dispatch/step instead of running stale owners.
+            return;
+        }
         let Some(client) = &self.client else { return };
         client.state.now.set(now);
         client.state.restart_step();

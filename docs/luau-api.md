@@ -33,6 +33,12 @@ Rebinding cancels old client-owned tasks/connections and reruns eligible scripts
 new context. Character-reference or ownership changes recheck eligibility without
 restarting unrelated starter/GUI scripts. This is execution policy over a trusted World,
 not authentication or replication filtering.
+Client input/lifecycle dispatch also prunes invalid owners before executing handlers.
+This prune does not start new scripts or consume the journal changes needed by step;
+input execution waits when a World borrow prevents validating the current scope.
+Client step likewise postpones all Lua work until the World is readable; queued
+valid work and held frame deadlines remain intact. Server/Combined stepping keeps
+its existing behavior.
 
 The host's trusted player lifecycle APIs do not create or destroy World instances:
 
@@ -40,7 +46,7 @@ The host's trusted player lifecycle APIs do not create or destroy World instance
   Duplicate registration returns false. GetPlayers includes the player when Added fires.
 - `remove_player(player)` returns false after the first removal. In a running session,
   a pending Added fires before Removing, and the player is still in GetPlayers during
-  Removing. The caller destroys the Player and Character after removal and before the
+  immediate Removing dispatch. The caller destroys the Player and Character after removal and before the
   next step; normal journal synchronization then cancels destroyed scripts' owned work.
   Stale registered handles are forgotten without callbacks; unknown handles are no-ops.
 - `set_local_player(player)` is Client-only and separate from roster registration.
@@ -53,6 +59,7 @@ The host's trusted player lifecycle APIs do not create or destroy World instance
 
 Lifecycle events use the existing signal/resume budgets. A callback may yield or be
 deferred, so removal does not promise that every handler finishes before destruction.
+GetPlayers reads the current roster; a deferred callback may see the player already removed.
 PlayerScripts class-dependent coverage remains separate while its core registration
 is pending; this layer does not fabricate a replacement class or clone player containers.
 

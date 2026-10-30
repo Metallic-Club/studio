@@ -1,7 +1,8 @@
 # Issue 311: explicit ScriptHost roles and player lifecycle
 
-Status: implementation and fourteen public behavioral cases pass focused checks;
-refreshing unpublished branch onto new main before broader gates.
+Status: all eighteen role/lifecycle cases and 61 focused cases pass on cb26593;
+independent final review is clean. Broad gates are pending; Cargo is held until
+a fresh explicit build grant.
 
 Branch `studio/311-script-player-lifecycle`, initial main
 `e20f0828454d21ae2325b671add29f9bf5c3a7c3`. This user-prioritized remaining A3
@@ -59,6 +60,72 @@ cleanup and restart; unchanged legacy Combined tests. Use actual host/World APIs
   `metallic-311-focused-first.log`, `metallic-311-pacing-red.log` and
   `metallic-311-focused-paced.log`. No broad workspace result is claimed yet.
 
+## Refreshed base and review
+
+Refreshed the unpublished branch once onto
+`cb265939f8f1c9a20f9fbfdecd0786e08888df37`, after inspecting both the CFrame
+core/script merge and subsequent Studio colour-popover/dependency merge. Rebase
+had no conflicts; CFrame members and PlayerRemoving event plumbing both remain.
+Checkpoint: `67fcdfd`.
+
+The refreshed prebuild passed in 39.05s. Actual serial focused selection passed
+57 cases, zero failed, two existing manual probes ignored: fourteen library,
+eighteen API, five new-main CFrame, fourteen role/lifecycle and six server-host cases.
+The role/lifecycle group completed in 1.39s. Logs:
+`metallic-311-refreshed-prebuild.log`, `metallic-311-refreshed-focused.log`.
+
+C2 independently re-reviewed the scoped pacing fix and reported no further concrete
+roster/scope/cancellation finding. Removing's immediate dispatch precedes caller
+destruction; deferred handlers read later roster/world state, as documented.
+The subsequent ownership corrections are recorded and tested separately below.
+
+## Further ownership-entrypoint audit and reproduction
+
+`dispatch_input_now` runs deferred/action work outside the normal step eligibility
+refresh. `remove_player` fires lifecycle handlers through the same client Hub.
+A GUI changed to another player's ownership between steps may therefore retain
+old executable handlers at these two public entrypoints. Prepared public tests:
+deferred input-dispatch work after GUI transfer; lifecycle dispatch with a valid
+positive control before transfer; and fail-closed input dispatch while the World
+is borrowed, with valid postponed work eventually completing.
+
+The granted two-entrypoint red run failed both cases on the unfixed implementation
+in 0.34s (13.51s incremental build). Input dispatch resumed an eighth transferred
+deferred handler (expected seven already-completed handlers); lifecycle dispatch
+called the transferred observer a second time. Both positive controls passed.
+Log: `<TEMP>/metallic-311-ownership-red.log`. At that stage the borrowed-World
+control and local-removal input assertion were prepared; they are now included
+in the complete green selection below.
+
+The reviewed Client-only prune fix prunes changed
+running IDs before either dispatch without consuming the normal journal cursor
+or starting new scripts. Added controls require unrelated starter work to continue
+and newly created scripts to start only on the following step, without lost changes.
+Owner cancellation only removes work/hidden actions; it does not call Lua handlers.
+Ordinary/held dispatch deadlines remain in place before immediate Lua execution.
+
+An independent audit also found normal Client step could continue to scheduler work
+after sync_scripts could not borrow the World. A public control transfers a GUI
+through a held RefMut and advances public step's virtual clock past task.delay's
+deadline. It requires no old owned task to run and an unrelated starter task to
+remain queued until scope validation succeeds. Fresh Heartbeat is not used as the
+repro because resolving RunService also fails under that borrow. The control failed
+on the unchanged step path in 0.01s (7.67s incremental build): both owned-task and
+global-task ran while scope was unreadable. Log: `metallic-311-step-borrow-red.log`.
+
+The Client-only readable-World preflight now returns before any clock/budget/queue
+mutation. The granted complete serial focused selection passed 61 cases, zero
+failed, with two existing library probes ignored. All eighteen role/lifecycle cases
+passed in 1.61s; all five CFrame cases remain green. This includes both ownership
+reds, normal-step/input borrowed-World controls, local removal before destruction,
+held deadlines, unrelated starter continuity and no lost late-script starts.
+Log: `metallic-311-ownership-green.log`.
+
+C2's final read-only review found no further concrete scope/roster finding. Reviewed
+host blob `0ad98326f6fe1a1cfe4ee2a7d0e634dc62b3ac6f` and test blob
+`ef96a20fb4f8e29b1a3da19132d3fb2f5a1a3c92`. No scheduler/budget constants,
+Server/Combined dispatch behavior or core registry/class interfaces were changed.
+
 ## Ownership and next
 
 Only script host/API/event plumbing, focused tests and public docs. Physics state
@@ -68,8 +135,9 @@ build jobs. The root worker coordinator released slot one after A1's actual suit
 the first focused prebuild covers the script library, host_roles, server_host and
 api targets. Root's pure movement-math prebuild has slot two; no other Lua suite
 or measurement overlaps the reserved actual focused window.
-Main advanced with CFrame APIs; inspect and refresh once before broad validation,
-preserving both API/event plumbing changes. PlayerScripts coverage still depends
+Do not run further Cargo commands until a fresh explicit build grant; the prior
+focused grant ended at its reported completion. Request the next workspace prebuild,
+then a separately coordinated actual suite and remaining gates. PlayerScripts coverage still depends
 on actual core registration, not a fabricated class or a copied unmerged branch.
 Run meaningful focused tests and all required workspace/Clippy/license/format gates,
 then open/attach one PR, inspect CI, and do not merge it.
