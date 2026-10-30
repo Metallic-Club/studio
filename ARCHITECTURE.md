@@ -28,6 +28,11 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
+  Each VM has a passive condition-variable deadline worker (128 KiB requested stack); it signals an atomic flag
+  without touching Lua. Interrupts also retain a sparse clock fallback. Nested budgets keep the outer deadline,
+  return boundaries reject expired work, and a scope guard disarms/restores the deadline on unwind. VM drop and
+  shutdown cancel pending tasks and join the worker outside its mutex. Native callbacks cannot be preempted;
+  they must be bounded by the host, and expiration is checked when they return.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
