@@ -11,6 +11,7 @@
 //! friction and restitution (see [`material_props`]). An anchored part whose `Position` or
 //! `Orientation` was changed since the last step is moved as a kinematic body for that step, with
 //! velocity derived from the move, so parts standing on it are carried along.
+//! A move faster than [`TELEPORT_SPEED`] is a teleport instead: plain reposition, zero velocity.
 #![warn(missing_docs)]
 
 mod sync;
@@ -33,6 +34,13 @@ pub const GRAVITY: f64 = 196.2;
 pub const MAX_STEP: f64 = 0.25;
 /// Length of one fixed simulation substep in seconds.
 pub const SUBSTEP: f64 = 1.0 / 240.0;
+/// Speed in studs/s above which a move of an anchored part counts as a teleport.
+///
+/// [`PhysicsWorld::step`] derives an anchored part's velocity as distance / simulated time.
+/// Above this limit (e.g. a script resetting a platform 50 studs in one frame) the part is
+/// repositioned with zero derived velocity instead of being swept as a kinematic body, so parts
+/// touching it are not launched.
+pub const TELEPORT_SPEED: f64 = 500.0;
 
 /// Result of a successful [`PhysicsWorld::raycast`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,7 +49,8 @@ pub struct RayHit {
     pub instance: InstanceId,
     /// World position of the hit.
     pub position: Vec3,
-    /// Surface normal at the hit (unit length, pointing away from the surface).
+    /// Surface normal at the hit (unit length, pointing away from the surface). A ray that
+    /// starts inside a part hits it at distance 0; the normal is then the reversed ray direction.
     pub normal: Vec3,
     /// Distance from the ray origin to the hit, in studs.
     pub distance: f64,
@@ -203,8 +212,9 @@ impl PhysicsWorld {
     /// back into `world`.
     ///
     /// Before simulating, a changed `Position`/`Orientation` is applied: an anchored part is moved
-    /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`]); an
-    /// unanchored part is teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`]
+    /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`]), or
+    /// just repositioned with zero velocity when that exceeds [`TELEPORT_SPEED`]; an unanchored
+    /// part is teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`]
     /// (0.25 s) so a long frame cannot spiral.
     ///
     /// Callers must call [`Self::sync_from`] after adding, removing or reconfiguring parts
@@ -236,8 +246,11 @@ impl PhysicsWorld {
             };
             if e.signature.anchored {
                 e.derived_velocity = Vec3::default();
-                if moved {
-                    let v = (state.position - e.last_position) * (1.0 / sim_time);
+                let v = (state.position - e.last_position) * (1.0 / sim_time);
+                if moved && v.magnitude() > TELEPORT_SPEED {
+                    // Teleport: plain reposition, no derived velocity (#34).
+                    body.set_position(to_pose(state.position, state.orientation), true);
+                } else if moved {
                     e.derived_velocity = v;
                     body.set_body_type(RigidBodyType::KinematicVelocityBased, true);
                     body.set_linvel(to_vector(v), true);
@@ -336,10 +349,18 @@ impl PhysicsWorld {
             .cast_ray_and_get_normal(&ray, max as f32, true, filter)?;
         let instance = *self.owners.get(&handle)?;
         let distance = f64::from(hit.time_of_impact);
+        // A ray starting inside a collider hits at distance 0 with a zero normal (#34).
+        let n = from_vector(hit.normal);
+        let len = n.magnitude();
+        let normal = if len > 1e-6 && len.is_finite() {
+            n * (1.0 / len)
+        } else {
+            unit * -1.0
+        };
         Some(RayHit {
             instance,
             position: origin + unit * distance,
-            normal: from_vector(hit.normal),
+            normal,
             distance,
         })
     }

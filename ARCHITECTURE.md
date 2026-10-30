@@ -23,7 +23,7 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   only non-default properties, stable order). Also `deep_clone()` used by Play.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `raycast`, `drain_touched`. Anchored parts that are moved become kinematic
-  movers. `CharacterController`, `spawn_character` and the Humanoid rules (death, respawn, checkpoints) live here.
+  movers (moves faster than `TELEPORT_SPEED` are plain teleports). `CharacterController`, `spawn_character` and the Humanoid rules (death, respawn, checkpoints) live here.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
