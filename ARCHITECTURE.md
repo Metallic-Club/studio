@@ -54,7 +54,8 @@ apps.
   Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
-  (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
+  (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
+  for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
   Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
