@@ -46,6 +46,28 @@ jobs:
       - name: Licences
         run: cargo deny check licenses
 
+  simulation-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust from rust-toolchain.toml
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check CPU dependency policy
+        run: |
+          python -I tools/test_simulation_graph.py
+          python -I tools/check_simulation_graph.py
+      - name: Test graphics-free simulation and finite runner
+        run: cargo test -p metallic_runtime --no-default-features --lib --bin metallic-sim --test simulation --test sim_runner -j 4 -- --test-threads=1
+      - name: Check all graphics-free targets
+        run: cargo clippy -p metallic_runtime --no-default-features --all-targets -j 4 -- -D warnings
+
   # Proves the Windows/other `cfg` split compiles on Linux. It does not prove the Linux Launcher works.
   launcher-linux-check:
     runs-on: ubuntu-latest

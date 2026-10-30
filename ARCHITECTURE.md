@@ -79,6 +79,15 @@ apps.
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
   scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
   egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
+  `Simulation` owns the shared CPU kernel (World, physics, characters, server/Combined ScriptHost, membership cache
+  and fixed-step clock). Public constructors use server-only scripts without creating a synthetic player; Game
+  delegates through a private Combined constructor. Trusted `PlayerInput` keys are world-local Player InstanceIds,
+  not backend/wire identities; inputs are world-space, missing samples are idle and repeated samples use the last
+  value. Character references resolve each server tick so respawn keeps the same Player input key. Each Player is
+  visited once per tick. Game retains its existing camera mapping, avatar, GUI and client input behavior.
+  Default feature `presentation` preserves existing APIs. Without default features, Simulation and `metallic-sim`
+  have no renderer/wgpu/window/GUI/gamepad dependency. `metallic-sim` runs a trusted project for finite explicit ticks,
+  then stops; it does not listen, admit players, register joinability, deploy a server or establish M2 acceptance.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
