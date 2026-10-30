@@ -1,6 +1,6 @@
 //! The instance tree: [`World`] and [`InstanceId`].
 use crate::CoreError;
-use crate::classes::{self, class_def, default_value, find_property};
+use crate::classes::{self, class_def, default_value, default_value_ref, find_property};
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Most journal entries kept before the oldest half is dropped.
 const JOURNAL_LIMIT: usize = 16384;
 static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
+static NULL_REFERENCE: Value = Value::Ref(None);
 
 /// A position in a world's change journal; see [`World::changes_since`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -373,7 +374,7 @@ impl World {
         self.children(id)
             .iter()
             .copied()
-            .find(|&c| matches!(self.get(c, "Name"), Ok(Value::String(ref s)) if s == name))
+            .find(|&c| matches!(self.get_ref(c, "Name"), Ok(Value::String(s)) if s == name))
     }
 
     /// Dotted path of names from the root, e.g. `Workspace.Lava.Script`; empty for unknown ids.
@@ -381,8 +382,8 @@ impl World {
         let mut names = Vec::new();
         let mut cur = Some(id);
         while let Some(c) = cur {
-            match self.get(c, "Name") {
-                Ok(Value::String(s)) => names.push(s),
+            match self.get_ref(c, "Name") {
+                Ok(Value::String(s)) => names.push(s.as_str()),
                 _ => break,
             }
             cur = self.parent(c);
@@ -391,10 +392,11 @@ impl World {
         names.join(".")
     }
 
-    /// Reads a property (the class default if never set).
+    /// Reads an owned property value (the class default if never set).
     ///
     /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`].
-    /// A `Ref` to a destroyed instance reads as `Ref(None)`.
+    /// A `Ref` to a destroyed instance reads as `Ref(None)`. This clones string values;
+    /// use [`World::get_ref`] when an owned copy is not needed.
     pub fn get(&self, id: InstanceId, prop: &str) -> Result<Value, CoreError> {
         let node = self.node(id).ok_or(CoreError::InvalidInstance)?;
         let value = match node.props.get(prop) {
@@ -406,6 +408,31 @@ impl World {
         };
         Ok(match value {
             Value::Ref(Some(r)) if !self.is_alive(r) => Value::Ref(None),
+            v => v,
+        })
+    }
+
+    /// Borrows a property value without cloning it, including inherited class defaults.
+    ///
+    /// Explicit values are borrowed from this world. Defaults come from the shared immutable
+    /// registry, which initializes on the first default lookup; successful reads after that
+    /// initialization do not allocate. The borrow prevents mutating the world while it is in use.
+    /// A reference to a destroyed target reads as a shared `Ref(None)` value, as with [`World::get`].
+    ///
+    /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`].
+    pub fn get_ref(&self, id: InstanceId, prop: &str) -> Result<&Value, CoreError> {
+        let node = self.node(id).ok_or(CoreError::InvalidInstance)?;
+        let value = match node.props.get(prop) {
+            Some(v) => v,
+            None => {
+                default_value_ref(node.class, prop).ok_or_else(|| CoreError::UnknownProperty {
+                    class: node.class.to_string(),
+                    property: prop.to_string(),
+                })?
+            }
+        };
+        Ok(match value {
+            Value::Ref(Some(r)) if !self.is_alive(*r) => &NULL_REFERENCE,
             v => v,
         })
     }
