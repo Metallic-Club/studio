@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use metallic_launcher::{
     AppEvent, AssetSource, BridgeCommand, BridgeEvent, EventSink, Installer, LauncherError,
-    LauncherUpdateState, PageOrigin, PlayerWatcher, ProcessLister, ProcessTracker, ProductStatus,
-    RestartError, SelfUpdater, Spawner, UpdateSource, allowed, github_sign_in,
+    LauncherUpdateState, OneAtATime, PageOrigin, PlayerWatcher, ProcessLister, ProcessTracker,
+    ProductStatus, RestartError, SelfUpdater, Spawner, UpdateSource, allowed, github_sign_in,
     read_installed_version, run_with_limit,
 };
 use metallic_update::github_auth::GithubAuth;
@@ -679,6 +679,7 @@ fn run_sign_in(answers: &[&str]) -> (Vec<String>, Vec<String>, bool, Arc<MemoryS
         auth,
         events.clone(),
         Arc::new(move |address: &str| opened_by_ui.lock().unwrap().push(address.to_string())),
+        &OneAtATime::new(),
         move |ok| done_tx.send(ok).unwrap(),
     )
     .unwrap();
@@ -712,6 +713,51 @@ fn github_sign_in_reports_a_refusal() {
     assert!(!ok);
     assert_eq!(events.last().unwrap(), "github denied ");
     assert!(store.get().unwrap().is_none());
+}
+
+#[test]
+fn github_sign_in_is_one_at_a_time() {
+    // The first sign-in waits for its (never-ready) answers; the second must be refused.
+    struct Slow;
+    impl HttpClient for Slow {
+        fn get(&self, _: &str, _: &[(&str, &str)]) -> Result<HttpResponse, HttpError> {
+            Err(HttpError::new("no"))
+        }
+        fn post_form(
+            &self,
+            _: &str,
+            _: &[(&str, &str)],
+            _: &[(&str, &str)],
+        ) -> Result<HttpResponse, HttpError> {
+            std::thread::sleep(Duration::from_millis(400));
+            Err(HttpError::new("slow"))
+        }
+    }
+    let store = Arc::new(MemorySecretStore::default());
+    let auth = Arc::new(GithubAuth::new("client".into(), Arc::new(Slow), store).without_sleeping());
+    let guard = OneAtATime::new();
+    let events = Arc::new(Events::default());
+    let open: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    let (tx, rx) = channel::<bool>();
+    github_sign_in(
+        auth.clone(),
+        events.clone(),
+        open.clone(),
+        &guard,
+        move |ok| tx.send(ok).unwrap(),
+    )
+    .unwrap();
+    let second = github_sign_in(auth.clone(), events.clone(), open.clone(), &guard, |_| {});
+    assert!(matches!(second, Err(LauncherError::Busy(_))));
+    rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    // Once the first has ended, a new one may start.
+    for _ in 0..100 {
+        if guard.try_begin().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("the guard was never released");
 }
 
 // ---- stuck installs and the locked installer ---------------------------------------------------

@@ -11,15 +11,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use metallic_launcher::deep_link::SitePath;
+use metallic_launcher::platform_auth::{KEYRING_ACCOUNT, KEYRING_SERVICE};
 use metallic_launcher::{
     AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction,
     DeepLink, EventSink, GithubAssets, HandoffListener, HandoffMessage, InstallStatus, Installer,
     LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage, NavDecision,
-    OfflineReason, PageOrigin, PlaceId, PlayerWatcher, ProcessTracker, RestartError, SelfUpdater,
-    SettingsPatch, SettingsStore, SiteOrigin, SiteStatus, StartPage, TrayAction, UrlPolicy,
-    check_site, downloads_dir_for, github_sign_in, is_installed_copy, local_url,
-    on_close_requested, player_status, product_paths, serve, start_page, start_player,
-    start_studio, studio_root_for, tray_menu, user_agent,
+    OfflineReason, OneAtATime, PageOrigin, PlaceId, PlatformAuth, PlayerWatcher, ProcessTracker,
+    RestartError, SelfUpdater, SettingsPatch, SettingsStore, SiteOrigin, SiteStatus, StartPage,
+    TrayAction, UrlPolicy, check_site, downloads_dir_for, github_sign_in, is_installed_copy,
+    local_url, on_close_requested, platform_sign_in, player_status, product_paths, serve,
+    start_page, start_player, start_studio, studio_root_for, tray_menu, user_agent,
 };
 use metallic_update::github_auth::{StoredTokenProvider, embedded_client_id};
 use metallic_update::{
@@ -45,6 +46,8 @@ const BACKGROUND: (u8, u8, u8, u8) = (22, 21, 27, 255);
 
 /// How long the site check may take (the health check and the offline re-checks).
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a request of the Metallic sign-in may take.
+const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(8);
 /// The first wait between re-checks while offline, and the longest.
 const RECHECK_FIRST: Duration = Duration::from_secs(10);
 const RECHECK_LONGEST: Duration = Duration::from_secs(60);
@@ -87,7 +90,7 @@ impl TokenProvider for NoToken {
 
 /// What the bridge can do in this build. Playing and opening Studio start the installed
 /// programs; installing Studio and updating the Launcher are in `install` and `self_update`;
-/// the Metallic sign-in arrives in a later step and answers `notAvailable` until then.
+/// the Metallic sign-in is in `platform_auth` (`notAvailable` while the site address is not set).
 struct ShellHost {
     dev_mode: bool,
     settings: Mutex<LauncherSettings>,
@@ -100,6 +103,20 @@ struct ShellHost {
     players: Arc<PlayerWatcher>,
     /// GitHub sign-in for team builds; `None` until the client id is configured.
     github: Option<Arc<GithubAuth>>,
+    /// Metallic sign-in; `None` while the site address is not configured.
+    platform: Option<Arc<PlatformAuth>>,
+    /// One Metallic sign-in at a time.
+    platform_flight: OneAtATime,
+    /// One GitHub sign-in at a time.
+    github_flight: OneAtATime,
+}
+
+/// What a sign-in start becomes on the bridge: `busy` while one runs, else `failed`.
+fn sign_in_code(error: LauncherError) -> BridgeErrorCode {
+    match error {
+        LauncherError::Busy(_) => BridgeErrorCode::Busy,
+        _ => BridgeErrorCode::Failed,
+    }
 }
 
 impl BridgeHost for ShellHost {
@@ -168,11 +185,35 @@ impl BridgeHost for ShellHost {
     }
 
     fn sign_in(&self) -> Result<Value, BridgeErrorCode> {
-        Err(BridgeErrorCode::NotAvailable)
+        let Some(auth) = self.platform.clone() else {
+            return Err(BridgeErrorCode::NotAvailable);
+        };
+        let started = platform_sign_in(
+            auth,
+            self.sink.clone(),
+            Arc::new(|address| {
+                if let Err(error) = platform::open_in_browser(address) {
+                    log::warn!("could not open the sign-in page: {error}");
+                }
+            }),
+            &self.platform_flight,
+        )
+        .map_err(sign_in_code)?;
+        Ok(json!({
+            "userCode": started.user_code,
+            "verificationUri": started.verification_uri,
+        }))
     }
 
     fn sign_out(&self) -> Result<(), BridgeErrorCode> {
-        Err(BridgeErrorCode::NotAvailable)
+        let Some(auth) = &self.platform else {
+            return Err(BridgeErrorCode::NotAvailable);
+        };
+        self.platform_flight.cancel_running();
+        auth.sign_out().map_err(|error| {
+            log::warn!("could not sign out: {error}");
+            BridgeErrorCode::Failed
+        })
     }
 
     fn github_sign_in(&self) -> Result<Value, BridgeErrorCode> {
@@ -188,13 +229,14 @@ impl BridgeHost for ShellHost {
                     log::warn!("could not open the GitHub page: {error}");
                 }
             }),
+            &self.github_flight,
             move |signed_in| {
                 if signed_in {
                     updater.check_soon();
                 }
             },
         )
-        .map_err(|_| BridgeErrorCode::Failed)?;
+        .map_err(sign_in_code)?;
         Ok(json!({ "started": true }))
     }
 
@@ -558,6 +600,15 @@ pub fn run(
             None
         }
     };
+    // The Metallic sign-in talks to the platform on the site's own origin. Its requests are
+    // short (the user is waiting for the code); the session lives in the Credential Manager.
+    let platform_auth = check_origin.clone().map(|origin| {
+        Arc::new(PlatformAuth::new(
+            origin,
+            Arc::new(UreqClient::new(SIGN_IN_TIMEOUT)),
+            Arc::new(KeyringSecretStore::new(KEYRING_SERVICE, KEYRING_ACCOUNT)),
+        ))
+    });
     let tokens: Arc<dyn TokenProvider> = match &github {
         Some(auth) => Arc::new(StoredTokenProvider(auth.clone())),
         None => Arc::new(NoToken),
@@ -600,6 +651,9 @@ pub fn run(
         updater: updater.clone(),
         players: players.clone(),
         github,
+        platform: platform_auth,
+        platform_flight: OneAtATime::new(),
+        github_flight: OneAtATime::new(),
     };
 
     let mut context = WebContext::new(platform::webview_data_dir());
@@ -790,6 +844,15 @@ pub fn run(
                     }
                     PageOrigin::Other => log::warn!("refused to load an address outside the site"),
                 },
+                AppEvent::Handoff(handoff) => {
+                    // Only ever the site; the address holds a one-time code and is not logged.
+                    let url = handoff.expose();
+                    if policy.origin_of(url.as_str()) == PageOrigin::Site {
+                        load(&view, &shared, url.as_str(), false);
+                    } else {
+                        log::warn!("refused a sign-in handoff outside the site");
+                    }
+                }
                 AppEvent::ShowLocal(page) => {
                     let offline = matches!(page, LocalPage::Offline(_));
                     load(&view, &shared, &local_address(&page), offline);

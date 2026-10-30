@@ -80,6 +80,12 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   counts no running Player, `restart_to_update` answers `Busy` instead, a `required` update makes `allow_play` fail with
   `UpdateRequired`; `StartedPlayers`, `UpdateSource`). `settings.rs` gains `channel` (local-only: the site may not change it).
   The tray shows "Restart to update" once an update is downloaded.
+  Task 7 adds `platform_auth.rs` (`PlatformAuth`: OAuth device flow against `<site>/v1/oauth/*` with client `metallic-launcher`, scopes
+  `profile play`; session as one JSON value in the Credential Manager entry `Metallic`/`platform`; `platform_sign_in` answers `{userCode,
+  verificationUri}` and emits `signIn` events `pending|signedIn|denied|expired|failed`; the verification page is opened only if it is https
+  on the site origin). After sign-in `web_session_code` (`POST /v1/oauth/web-session`, single use, 60 s) becomes
+  `AppEvent::Handoff(HandoffUrl)` = `<site>/auth/launcher-handoff?code=..`, which the site redeems itself; the code is a redacting
+  `Token`/`HandoffUrl` and never logged. `OneAtATime` makes a second `signIn` or `githubSignIn` answer `busy`.
   **Player contract:** `metallic-player.exe <metallic://play?place=<id>&ticket=<ticket>>`: exactly one argument, the canonical link from
   `DeepLink::to_uri`, started without a shell; the Player sits beside `Metallic.exe`. Studio is started with no arguments (a place in
   `metallic://studio/open?place=..` is ignored for now).

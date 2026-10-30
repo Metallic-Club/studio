@@ -7,8 +7,8 @@
 //! accepts ([`app_event`]), the checked bridge from pages to the Launcher
 //! ([`bridge`]), the hand-over between Launchers ([`single_instance`]), the `metallic://`
 //! registration ([`protocol`]), starting the Player and Studio ([`launch`]) and the tray
-//! rules ([`tray`]), installing Studio ([`install`]) and the Launcher's own update
-//! ([`self_update`]). The window itself is in the `Metallic` program (`main.rs`, `shell.rs`).
+//! rules ([`tray`]), installing Studio ([`install`]), the Launcher's own update
+//! ([`self_update`]) and the Metallic sign-in with the web-session handoff ([`platform_auth`]). The window itself is in the `Metallic` program (`main.rs`, `shell.rs`).
 //!
 //! Library code returns [`LauncherError`]; only `main.rs` decides what to show on failure.
 
@@ -21,6 +21,7 @@ pub mod error;
 pub mod install;
 pub mod launch;
 pub mod local_pages;
+pub mod platform_auth;
 pub mod protocol;
 pub mod self_update;
 pub mod settings;
@@ -47,6 +48,9 @@ pub use launch::{
     start_studio,
 };
 pub use local_pages::{LOCAL_CSP, LocalPage, LocalResponse, OfflineReason, local_url, serve};
+pub use platform_auth::{
+    HandoffUrl, OneAtATime, PlatformAuth, SignInStarted, SignInTicket, platform_sign_in,
+};
 pub use protocol::{
     MemoryRegistry, PROTOCOL_KEY, UriRegistry, is_installed_copy, is_registered_to, register,
     unregister,

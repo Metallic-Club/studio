@@ -5,6 +5,7 @@ use url::Url;
 use crate::bridge::BridgeEvent;
 use crate::deep_link::DeepLink;
 use crate::local_pages::LocalPage;
+use crate::platform_auth::HandoffUrl;
 use crate::site_check::SiteStatus;
 use crate::tray::TrayAction;
 
@@ -34,6 +35,9 @@ pub enum AppEvent {
     SiteStatus(SiteStatus),
     /// Load this address in the main view (only the site and bundled pages are accepted).
     Navigate(Url),
+    /// Sign the web view in: load the web-session handoff address (the site only). The address
+    /// holds a one-time secret, so this variant's `Debug` hides it.
+    Handoff(HandoffUrl),
     /// Show a bundled page.
     ShowLocal(LocalPage),
     /// An entry of the tray menu was chosen (or the icon was clicked).

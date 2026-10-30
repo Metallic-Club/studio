@@ -30,6 +30,7 @@ use crate::app_event::{AppEvent, EventSink};
 use crate::bridge::BridgeEvent;
 use crate::error::LauncherError;
 use crate::launch::{ProductPaths, Spawner};
+use crate::platform_auth::OneAtATime;
 
 /// How long Studio's installer may run before it is killed and the install counts as failed.
 pub const INSTALLER_TIME_LIMIT: Duration = Duration::from_secs(10 * 60);
@@ -496,16 +497,20 @@ impl DeviceFlowUi for EventUi<'_> {
 /// Starts the GitHub sign-in for team builds on a new thread. The code the user types arrives as
 /// a `githubSignIn` event with state `pending`, `open` is called with the page to show (the
 /// shell opens it in the system browser), and the end is a state of `signedIn`, `denied`,
-/// `expired` or `failed`. `done` is called with `true` when the user signed in.
+/// `expired` or `failed`. `done` is called with `true` when the user signed in. Only one
+/// GitHub sign-in runs at a time: while `guard` has one, this is [`LauncherError::Busy`].
 pub fn github_sign_in(
     auth: Arc<GithubAuth>,
     sink: Arc<dyn EventSink>,
     open: Arc<dyn Fn(&str) + Send + Sync>,
+    guard: &OneAtATime,
     done: impl FnOnce(bool) + Send + 'static,
 ) -> Result<(), LauncherError> {
+    let ticket = guard.try_begin().ok_or(LauncherError::Busy("sign-in"))?;
     std::thread::Builder::new()
         .name("github-sign-in".to_string())
         .spawn(move || {
+            let _ticket = ticket;
             let mut ui = EventUi {
                 sink: sink.as_ref(),
                 open: open.as_ref(),

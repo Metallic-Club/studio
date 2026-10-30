@@ -54,6 +54,12 @@ pub enum AuthError {
     Provider(String),
     /// The credential store failed.
     Store(String),
+    /// Nobody is signed in (or the session ended), so the step cannot run.
+    NotSignedIn,
+    /// The server named an address that is not on the expected site; it is not opened.
+    UnsafeAddress,
+    /// The sign-in was cancelled on this PC before the user finished.
+    Cancelled,
 }
 
 impl fmt::Display for AuthError {
@@ -69,6 +75,11 @@ impl fmt::Display for AuthError {
             AuthError::Expired => f.write_str("the sign-in code expired; start again"),
             AuthError::Provider(code) => write!(f, "GitHub sign-in failed: {code}"),
             AuthError::Store(m) => write!(f, "credential store error: {m}"),
+            AuthError::NotSignedIn => f.write_str("not signed in"),
+            AuthError::UnsafeAddress => {
+                f.write_str("the sign-in page is not on the expected site; it was not opened")
+            }
+            AuthError::Cancelled => f.write_str("the sign-in was cancelled"),
         }
     }
 }

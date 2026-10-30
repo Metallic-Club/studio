@@ -32,6 +32,10 @@
 //! (`notInstalled`, `installed` + `version`, `installing` + `percent`, `failed` + `reason`; for
 //! the launcher `notInstalledCopy`, `upToDate`, `checking`, `downloading` + `percent`,
 //! `readyToRestart` + `version` + `required`, `needsGithubSignIn`, `failed` + `reason`).
+//! `signIn` answers `{userCode, verificationUri}` and opens the verification page in the system
+//! browser; `signIn` events (`pending`, `signedIn`, `denied`, `expired`, `failed`) tell how it goes, and
+//! on success the Launcher signs the web view in itself (see `platform_auth`). A second `signIn` (or
+//! `githubSignIn`) while one is running answers `busy`.
 //! `githubSignIn` starts the GitHub sign-in and answers at once; the code to type arrives in
 //! `githubSignIn` events, which only bundled pages receive.
 
