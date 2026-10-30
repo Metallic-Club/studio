@@ -3497,6 +3497,7 @@ dependencies = [
  "metallic_update",
  "png",
  "rfd",
+ "ron",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
