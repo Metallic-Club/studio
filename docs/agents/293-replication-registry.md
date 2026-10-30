@@ -1,7 +1,7 @@
 # Issue 293: core replication schema and play-client visibility
 
-Status: implemented and tested; full workspace, strict Clippy, license and source-review gates passed; publication pending.
-Branch: studio/293-replication-registry; initial base fbaa17d, rebased onto main 7c238f8 before expanded gates.
+Status: implemented and tested; full workspace, strict Clippy, license and source-review gates passed; ready for review.
+Branch: studio/293-replication-registry; initial base fbaa17d, rebased onto main 7c238f8 before expanded gates, then ebf359a (release Python files only).
 
 ## Scope
 
@@ -40,6 +40,8 @@ these filters must be used by the future replicator before any data is sent.
   Final log: <TEMP>/metallic-293-clippy-final.log. The subsequent full test suite uses this final ordering.
 - cargo deny check licenses: licenses ok; cargo fmt --all -- --check and git diff --check passed.
 - Full workspace no-run prebuild also passed in 8m57s; provenance-guarded lane122 was used for all Rust gates.
+- The final release-only rebase retained the exact tested crates tree ef2c2a5d672e43baf5952d254734209ea033fe7d.
+  The updated Python release helper suite passed all 13 tests; format/whitespace checks passed again.
 - The single new direct dependency is sha2 0.10.9, already in the workspace lockfile, MIT/Apache-2.0.
 
 Root owns classes.rs/replication.rs and only the ServerStorage SERVICES/doc lines in instance.rs. The journal and
@@ -48,6 +50,5 @@ No running backend/server changes, credentials, public exposure, capacity guaran
 
 ## Next
 
-Publish one PR and move this issue to review. The last main delta is release Python tooling only; if rebasing,
-verify that the tested crates tree is unchanged and run the updated release helper tests. Owner/lead merges only.
+Publish one PR and move this issue to review; monitor CI and address review findings. Owner/lead merges only.
 After all four foundation branches are ready, validate a private composition before planning a live-play claim.
