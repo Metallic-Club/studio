@@ -1,4 +1,5 @@
 //! Property value types.
+use crate::cframe::CFrame;
 use crate::instance::InstanceId;
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Mul, Sub};
@@ -115,6 +116,8 @@ pub enum Value {
     UDim2(UDim2),
     /// A reference to another instance (or none).
     Ref(Option<InstanceId>),
+    /// A position and rotation. Boxed so the enum stays as small as before (CFrame is 96 bytes).
+    CFrame(Box<CFrame>),
 }
 
 /// The type of a property, used to type-check [`Value`]s.
@@ -136,6 +139,8 @@ pub enum ValueType {
     UDim2,
     /// [`Value::Ref`]
     Ref,
+    /// [`Value::CFrame`]
+    CFrame,
 }
 
 impl ValueType {
@@ -150,6 +155,7 @@ impl ValueType {
             ValueType::Color3 => "Color3",
             ValueType::UDim2 => "UDim2",
             ValueType::Ref => "Ref",
+            ValueType::CFrame => "CFrame",
         }
     }
 }
@@ -171,6 +177,7 @@ impl Value {
                     && value.y_scale.is_finite()
                     && value.y_offset.is_finite()
             }
+            Value::CFrame(cf) => cf.is_finite(),
             Value::Nil | Value::Bool(_) | Value::String(_) | Value::Ref(_) => true,
         }
     }
@@ -186,6 +193,19 @@ impl Value {
             Value::Color3(_) => ValueType::Color3,
             Value::UDim2(_) => ValueType::UDim2,
             Value::Ref(_) => ValueType::Ref,
+            Value::CFrame(_) => ValueType::CFrame,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn cframe_does_not_grow_value() {
+        // Property reads and writes copy Values; the boxed CFrame keeps them at 40 bytes.
+        assert_eq!(std::mem::size_of::<Value>(), 40);
     }
 }

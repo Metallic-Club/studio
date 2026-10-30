@@ -188,9 +188,13 @@ fn hue_degrees(hsv: Hsv) -> i32 {
 enum DragKind {
     Ring,
     Square,
-    /// Alt-drag on the ring: shift each target's hue, starting from this hue.
+    /// Alt-drag on the ring: shift each target's hue by how far the pointer has turned since
+    /// the press. `base_hue` is the shown hue at the press, `press_hue` the pointer's angle then,
+    /// `delta` the shift so far (degrees, -180 to 180).
     RingShift {
-        start_hue: f32,
+        base_hue: f32,
+        press_hue: f32,
+        delta: f32,
     },
     Scrub {
         field: Field,
@@ -401,8 +405,15 @@ impl ColourPopover {
 
     fn finish_gesture(&mut self, library: &mut ColourLibrary) {
         match self.drag.take() {
-            Some(DragKind::RingShift { start_hue }) => {
-                let degrees = signed_degrees(self.hsv.h - start_hue);
+            Some(DragKind::RingShift { delta, .. }) => {
+                let degrees = delta;
+                if degrees.round() == 0.0 {
+                    // No net turn: no undo step. Clear any preview a back-and-forth left behind.
+                    if delta != 0.0 {
+                        self.events.push(ColourEvent::PreviewHueShift(0.0));
+                    }
+                    return;
+                }
                 let noun = if self.targets == 1 { "part" } else { "parts" };
                 self.events.push(ColourEvent::CommitHueShift {
                     degrees,
@@ -617,7 +628,9 @@ impl ColourPopover {
                     resp.request_focus();
                     self.drag = Some(if ui.input(|i| i.modifiers.alt) {
                         DragKind::RingShift {
-                            start_hue: self.hsv.h,
+                            base_hue: self.hsv.h,
+                            press_hue: ring_hue(origin - centre),
+                            delta: 0.0,
                         }
                     } else {
                         DragKind::Ring
@@ -625,18 +638,26 @@ impl ColourPopover {
                 }
             }
             if matches!(self.drag, Some(DragKind::Ring | DragKind::RingShift { .. })) {
-                let v = p - centre;
-                let hue = v.y.atan2(v.x).to_degrees() + 90.0;
-                let new = Hsv::new(hue, self.hsv.s, self.hsv.v);
-                if let Some(DragKind::RingShift { start_hue }) = self.drag {
-                    self.hsv = new;
-                    self.touched = true;
-                    self.events
-                        .push(ColourEvent::PreviewHueShift(signed_degrees(
-                            new.h - start_hue,
-                        )));
+                let hue = ring_hue(p - centre);
+                if let Some(DragKind::RingShift {
+                    base_hue,
+                    press_hue,
+                    delta,
+                }) = self.drag
+                {
+                    let new_delta = signed_degrees(hue - press_hue);
+                    if new_delta != delta {
+                        self.drag = Some(DragKind::RingShift {
+                            base_hue,
+                            press_hue,
+                            delta: new_delta,
+                        });
+                        self.hsv = Hsv::new(base_hue + new_delta, self.hsv.s, self.hsv.v);
+                        self.touched = true;
+                        self.events.push(ColourEvent::PreviewHueShift(new_delta));
+                    }
                 } else {
-                    self.set_hsv(new);
+                    self.set_hsv(Hsv::new(hue, self.hsv.s, self.hsv.v));
                 }
             }
         }
@@ -1206,7 +1227,7 @@ impl ColourPopover {
         let plus_w = SWATCH + SWATCH_GAP;
         let area_w = (ui.available_width() - plus_w).max(SWATCH);
         let mut focused = None;
-        let mut first_left = None;
+        let mut slots = Vec::with_capacity(colours.len());
         egui::ScrollArea::horizontal()
             .id_salt(self.id.with("palette_scroll"))
             .max_width(area_w)
@@ -1221,7 +1242,7 @@ impl ColourPopover {
                     };
                     for (i, c) in colours.iter().enumerate() {
                         let resp = self.swatch(ui, Row::Palette, i, *c, drag);
-                        first_left.get_or_insert(resp.rect.left());
+                        slots.push(resp.rect);
                         if resp.clicked() {
                             *action = Some(PaletteAction::Apply(*c));
                         }
@@ -1267,11 +1288,13 @@ impl ColourPopover {
             && !ui.input(|i| i.pointer.any_down())
         {
             self.palette_drag = None;
-            if let (Some(x0), Some(p)) = (first_left, ui.input(|i| i.pointer.interact_pos())) {
-                let to = ((p.x - x0) / (SWATCH + SWATCH_GAP)).floor().max(0.0) as usize;
-                if to != from {
-                    *action = Some(PaletteAction::Move(from, to));
-                }
+            let to = ui
+                .input(|i| i.pointer.interact_pos())
+                .and_then(|p| nearest_slot(&slots, p));
+            if let Some(to) = to
+                && to != from
+            {
+                *action = Some(PaletteAction::Move(from, to));
             }
         }
         self.roving_keys(ui, Row::Palette, focused, colours.len());
@@ -1566,6 +1589,25 @@ fn select_all(ui: &Ui, id: Id, text: &str) {
 
 fn to_color32(c: Rgb8) -> Color32 {
     Color32::from_rgb(c.r, c.g, c.b)
+}
+
+/// The hue under a ring offset from the centre: 0 at the top, increasing clockwise.
+fn ring_hue(v: Vec2) -> f32 {
+    v.y.atan2(v.x).to_degrees() + 90.0
+}
+
+/// The slot whose centre is nearest to `p`, by distance in both x and y, so dropping works in
+/// a single row, a wrapped row or a grid. `None` when there are no slots.
+pub fn nearest_slot(slots: &[Rect], p: Pos2) -> Option<usize> {
+    slots
+        .iter()
+        .enumerate()
+        .min_by(|a, b| {
+            a.1.center()
+                .distance_sq(p)
+                .total_cmp(&b.1.center().distance_sq(p))
+        })
+        .map(|(i, _)| i)
 }
 
 /// -180 to 180 degrees.

@@ -5,8 +5,8 @@
 //! [`github_auth`] (GitHub device sign-in and token storage). The 3D viewport, Explorer and the
 //! rest of the editor arrive in later tasks and plug into [`app::StudioApp`]. [`colour`] holds the
 //! building colour popover, its colour maths and palette files; until the editor exists it runs
-//! as a demo screen (`--scene colour`). [`tools`] holds the building tools' engine-side cores
-//! (for now [`tools::arrange`]: align, distribute, mirror, arrays).
+//! as a demo screen (`--scene colour`). [`tools`] holds the pure cores of the building tools
+//! (shared geometry, scatter, selection, measure, arrange) that the viewport will drive.
 //!
 //! Library code returns [`StudioError`]; only `main.rs` decides what to show on failure.
 
