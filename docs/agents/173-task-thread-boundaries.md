@@ -77,5 +77,16 @@ The precompiled 1,000-coroutine smoke then passed under the unchanged default 10
 500 create/resume and 500 wrap coroutines, each yielding and returning nil/multiple values. This is one host
 observation with unmeasured background activity, not a speedup or universal latency claim.
 
-Next: finish independent source review, refresh main before final gates, then complete full guarded
-tests/Clippy/licenses/fmt. No public task APIs added; do not merge.
+## Pinned-base full validation
+
+On main base `749316a`, source head `fc33f97`: guarded forced-clean workspace prebuild passed in 5m21s,
+removing 152.0 MiB of local package outputs and preserving third-party cache. All local crate paths in the
+compile log identify this worktree. Strict workspace all-target Clippy passed in 2m23s; licenses (`licenses ok`),
+format and diff checks passed. The actual serial workspace suite passed 653 tests, zero failures, three
+existing manual probes ignored, including all new coroutine/cancellation/lifetime cases and the default-budget
+smoke. Independent second read-only review found no additional actionable findings.
+
+Main then advanced to `9d0dc8e` with production avatar animation changes (#279). The 653-test result above is
+preserved as pinned-base evidence, not a claim that this newer main has been validated here. Next: inspect and
+rebase that advance, coordinate the updated full gates with root/backend, and publish only after checks pass.
+No public task APIs added; do not merge.
