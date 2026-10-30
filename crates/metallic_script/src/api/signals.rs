@@ -162,6 +162,8 @@ pub(crate) struct Pacing {
     deferred: RefCell<VecDeque<Deferred>>,
     streaks: RefCell<HashMap<u64, u32>>,
     warned_full: Cell<bool>,
+    /// Set by `hold_step_deadline`: the next `begin_step` keeps the running deadline.
+    keep_deadline: Cell<bool>,
     /// How many times a handler's arguments were built (a test hook for the dispatch cost).
     args_built: Cell<u64>,
 }
@@ -169,10 +171,25 @@ pub(crate) struct Pacing {
 impl ApiState {
     /// Starts the time budget of one `step`.
     pub(crate) fn begin_step(&self) {
+        if self.pacing.keep_deadline.replace(false) {
+            return;
+        }
         self.pacing.deadline.set(Some(
             Instant::now() + Duration::from_secs_f64(STEP_BUDGET_SEC),
         ));
         self.pacing.warned_full.set(false);
+    }
+
+    /// Starts a time budget at once, dropping any held one (see `hold_step_deadline`).
+    pub(crate) fn restart_step(&self) {
+        self.pacing.keep_deadline.set(false);
+        self.begin_step();
+    }
+
+    /// Lets the next `begin_step` continue this budget, so work done before the `step` of the
+    /// same frame and the step itself share one budget.
+    pub(crate) fn hold_step_deadline(&self) {
+        self.pacing.keep_deadline.set(true);
     }
 
     /// Ends the step budget (calls outside `step`, like script start-up, are not limited by it).

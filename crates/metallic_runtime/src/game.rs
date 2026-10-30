@@ -2,7 +2,9 @@
 use crate::RuntimeError;
 use crate::avatar::{Avatar, default_model};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
-use crate::input::FrameInput;
+use crate::input::{
+    ActionEvent, ActionEventKind, ActionId, ActionValue, DeviceKind, FrameInput, InputRuntime,
+};
 use crate::locomotion::{LocomotionInput, Support};
 use crate::project::ProjectConfig;
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value, Vec3, World, load_scene};
@@ -12,7 +14,10 @@ use metallic_physics::{
 };
 use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
-use metallic_script::{LOCAL_PLAYER_NAME, OutputSink, ScriptHost};
+use metallic_script::{
+    InputActionEvent, InputDevice, InputEventKind, InputValue, LOCAL_PLAYER_NAME, OutputSink,
+    ScriptHost,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -129,6 +134,8 @@ pub struct Game {
     /// The local character's skinned avatar and the character Model it belongs to.
     avatar: Option<(InstanceId, Avatar)>,
     running: bool,
+    /// `InputRuntime::device_changes` when the scripts were last told the last-used device.
+    input_device_changes: Option<u64>,
 }
 
 impl Game {
@@ -182,6 +189,7 @@ impl Game {
             synced_parts: HashMap::new(),
             avatar: None,
             running: false,
+            input_device_changes: None,
         }
     }
 
@@ -273,6 +281,90 @@ impl Game {
         self.running = false;
     }
 
+    /// Evaluates the player's input for one frame and connects it to the scripts; call it before
+    /// [`Game::frame`] and pass the result to it. `now` is the input clock (seconds), `dt` the
+    /// frame time.
+    ///
+    /// In order: the runtime follows scene changes (a `BindAction` creates actions) and the
+    /// answers of handlers from the last frame are applied; the raw events are evaluated; the
+    /// events and values of every `InputAction` instance go to the scripts; the client scripts
+    /// handle at most [`metallic_script::MAX_ACTION_EVENTS_PER_STEP`] events now, under the
+    /// frame's 0.25 s handler budget; `Sink` answers of `ContextActionService` handlers are
+    /// applied at once (spec 3.7), so a sunk key never reaches the contexts below it, the
+    /// default character controls included. A `Pass` answer, or a handler that has not answered
+    /// (over budget, or yielded), lets the key through. Allocates nothing once the buffers have
+    /// grown (the script values handlers receive aside).
+    pub fn input_frame(&mut self, rt: &mut InputRuntime, now: f64, dt: f32) -> FrameInput {
+        if let Ok(world) = self.world.try_borrow() {
+            rt.sync(&world);
+        }
+        self.apply_script_sinks(rt, now);
+        rt.evaluate(now, dt);
+        self.feed_input(rt);
+        if self.running {
+            self.scripts.dispatch_input_now(self.time);
+        }
+        self.apply_script_sinks(rt, now);
+        // Release edges of actions that a sink just blocked.
+        self.feed_input(rt);
+        rt.frame_input()
+    }
+
+    fn apply_script_sinks(&mut self, rt: &mut InputRuntime, now: f64) {
+        self.scripts.drain_bound_results(|r| {
+            if let Some(action) = rt_action(rt, r.action) {
+                rt.set_script_sink(action, r.sink, now);
+            }
+        });
+    }
+
+    /// Sends the runtime's events and the values of its scene actions to the scripts.
+    fn feed_input(&mut self, rt: &mut InputRuntime) {
+        while let Some(ActionEvent {
+            action,
+            kind,
+            value,
+            time,
+        }) = rt.pop_event()
+        {
+            let Some(instance) = rt.instance(action) else {
+                continue;
+            };
+            let kind = match kind {
+                ActionEventKind::Pressed => InputEventKind::Pressed,
+                ActionEventKind::Released => InputEventKind::Released,
+                ActionEventKind::Triggered => InputEventKind::Triggered,
+                ActionEventKind::StateChanged => InputEventKind::StateChanged,
+            };
+            self.scripts.input_action_event(InputActionEvent {
+                action: instance,
+                kind,
+                value: input_value(value),
+                time,
+            });
+        }
+        for i in 0..rt.action_count() {
+            let id = ActionId(i as u16);
+            if let Some(instance) = rt.instance(id) {
+                self.scripts.set_action_state(
+                    instance,
+                    input_value(rt.state(id)),
+                    rt.hold_progress(id),
+                );
+            }
+        }
+        if self.input_device_changes != Some(rt.device_changes()) {
+            self.input_device_changes = Some(rt.device_changes());
+            let (device, last) = match rt.last_device() {
+                DeviceKind::KeyboardMouse => (InputDevice::KeyboardMouse, "Keyboard"),
+                DeviceKind::Gamepad => (InputDevice::Gamepad, "Gamepad1"),
+                DeviceKind::Touch => (InputDevice::Touch, "Touch"),
+            };
+            self.scripts.set_preferred_input(device);
+            self.scripts.set_last_input_type(last);
+        }
+    }
+
     /// Advances the game by a frame of `dt` seconds and returns the camera to draw it with.
     ///
     /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`TICK`]
@@ -308,6 +400,7 @@ impl Game {
                 ticks += 1;
             }
         }
+        self.scripts.end_frame();
         let state = self.character.and_then(|c| self.characters.state(c));
         self.update_avatar(state, dt as f32);
         if state != Some(HumanoidState::Dead)
@@ -543,6 +636,20 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
         {
             world.destroy(copy);
         }
+    }
+}
+
+/// The runtime action of an `InputAction` instance.
+fn rt_action(rt: &InputRuntime, instance: InstanceId) -> Option<ActionId> {
+    rt.action_for_instance(instance)
+}
+
+fn input_value(v: ActionValue) -> InputValue {
+    match v {
+        ActionValue::Bool(b) => InputValue::Bool(b),
+        ActionValue::Axis1(x) => InputValue::Axis1(x),
+        ActionValue::Axis2(x) => InputValue::Axis2(x),
+        ActionValue::Axis3(x) => InputValue::Axis3(x),
     }
 }
 

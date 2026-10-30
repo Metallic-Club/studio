@@ -71,6 +71,8 @@ pub struct ScriptHost {
     cursor: Option<ChangeCursor>,
     /// Resume budget of both VMs (see [`ScriptVm::set_resume_budget`]).
     resume_budget: Duration,
+    /// `dispatch_input_now` already delivered this frame's action events.
+    input_dispatched: bool,
 }
 
 impl ScriptHost {
@@ -86,6 +88,7 @@ impl ScriptHost {
             running: HashMap::new(),
             cursor: None,
             resume_budget: RESUME_BUDGET,
+            input_dispatched: false,
         }
     }
 
@@ -207,11 +210,12 @@ impl ScriptHost {
     /// Sets what `InputAction:GetState()` and `GetHoldProgress()` return from now on (the
     /// values as of the start of the frame). `hold_progress` is 0 to 1.
     pub fn set_action_state(&mut self, action: InstanceId, value: InputValue, hold_progress: f32) {
-        self.shared
-            .input
-            .states
-            .borrow_mut()
-            .insert(action, (value, hold_progress));
+        let mut states = self.shared.input.states.borrow_mut();
+        // The host reports every action every frame, so dropping the map loses nothing.
+        if states.len() >= 4096 && !states.contains_key(&action) {
+            states.clear();
+        }
+        states.insert(action, (value, hold_progress));
     }
 
     /// Sets `UserInputService.TouchEnabled`, `KeyboardEnabled` and `GamepadEnabled`.
@@ -234,6 +238,14 @@ impl ScriptHost {
     /// Takes what the `ContextActionService` handlers answered since the last call.
     pub fn take_bound_results(&mut self) -> Vec<BoundResult> {
         std::mem::take(&mut *self.shared.input.results.borrow_mut())
+    }
+
+    /// Like [`ScriptHost::take_bound_results`], but hands each result to `f` and keeps the
+    /// buffer, so a frame loop allocates nothing.
+    pub fn drain_bound_results(&mut self, mut f: impl FnMut(BoundResult)) {
+        for r in self.shared.input.results.borrow_mut().drain(..) {
+            f(r);
+        }
     }
 
     /// How many queued action events were dropped because the queue was full.
@@ -473,9 +485,31 @@ impl ScriptHost {
                 side.state.deliver_input_type_changes(&changes);
             }
         }
-        if let Some(client) = &self.client {
+        if !self.input_dispatched
+            && let Some(client) = &self.client
+        {
             client.state.deliver_action_events();
         }
+    }
+
+    /// Delivers the queued action events to the client scripts now (at most
+    /// [`MAX_ACTION_EVENTS_PER_STEP`](crate::MAX_ACTION_EVENTS_PER_STEP)), so the answers of
+    /// `ContextActionService` handlers are known before the character reads its input. The
+    /// `step` of the same frame then delivers no more action events and continues the time
+    /// budget started here; call [`ScriptHost::end_frame`] when the frame is done.
+    pub fn dispatch_input_now(&mut self, now: f64) {
+        let Some(client) = &self.client else { return };
+        client.state.now.set(now);
+        client.state.restart_step();
+        client.state.run_deferred();
+        client.state.deliver_action_events();
+        client.state.hold_step_deadline();
+        self.input_dispatched = true;
+    }
+
+    /// Ends a frame that used [`ScriptHost::dispatch_input_now`].
+    pub fn end_frame(&mut self) {
+        self.input_dispatched = false;
     }
 
     fn deliver_remotes(&mut self) {

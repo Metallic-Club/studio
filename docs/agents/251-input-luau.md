@@ -21,11 +21,25 @@ Goal: spec `docs/design/input-actions.md` section 5 in the script crate (issue #
 ## Verified
 `cargo fmt`, clippy with `-D warnings` and tests for `metallic_script` and `metallic_runtime`.
 
+## Wiring (added after review)
+- `Game::input_frame(&mut InputRuntime, now, dt) -> FrameInput` replaces the Player's sync/frame/drain: it feeds events and
+  action values of scene `InputAction`s to `ScriptHost`, runs the client handlers at once
+  (`ScriptHost::dispatch_input_now`, max 16 events, the step then continues the same 0.25 s budget), applies the
+  Sink/Pass answers, and returns the `FrameInput`.
+- `InputRuntime::set_script_sink`: a Sink answer blocks the controls of the bound action for lower contexts while the
+  action is down, and lower actions are re-evaluated the same frame (so the default jump is released before the character
+  reads it). Pass, no answer yet (over budget, yielded) or an action already up: no sink.
+- Tests: `crates/metallic_runtime/tests/input_scripts.rs` (Pass jumps, Sink does not, scene action reaches its script) and a
+  zero-allocation check of `input_frame` in `tests/input_alloc.rs` (idle handlers; Luau values for a connected handler
+  allocate, as before).
+
+## Verified
+fmt, clippy `-D warnings` and tests for `metallic_script`, `metallic_runtime`, `metallic_player`.
+
 ## Deferred / deviations
-- `Game` does not yet feed `InputRuntime` events and states into `ScriptHost`, and the runtime does not yet use the
-  `Sink`/`Pass` answers (`take_bound_results`) for arbitration. The script side and host API are ready for that wiring.
+- A tap shorter than one frame cannot be sunk (the lower action already saw it).
 - `BindAction` with `UserInputType.Gamepad1` to `4` binds all gamepad buttons (not sticks); `Keyboard` binds every key.
   `InputBinding` has no device slot, so `Gamepad1` to `4` are the same.
-- A bound handler that errors or yields before returning records no result.
+- A bound handler that errors or yields before returning records no result (the key passes).
 - `GetButton` returns nil (no touch overlay).
 - The `inputObject.KeyCode` of a bound handler is `Unknown`; `Position` carries the action value.

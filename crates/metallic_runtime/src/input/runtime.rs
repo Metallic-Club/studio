@@ -90,6 +90,8 @@ struct CompiledAction {
     active: bool,
     bindings: Range<usize>,
     instance: Option<InstanceId>,
+    /// A script handler answered `Sink` for this action's press.
+    script_sink: bool,
     hold: f64,
     tap: f64,
     double_tap: f64,
@@ -123,6 +125,10 @@ pub struct InputRuntime {
     by_control: Vec<Vec<usize>>,
     /// Per control: the best rank of a sinking context that uses it (`u16::MAX`: none).
     sink_rank: [u16; CONTROL_COUNT],
+    /// Like `sink_rank`, for actions whose script handler answered `Sink` (spec 3.7).
+    script_sink_rank: [u16; CONTROL_COUNT],
+    /// True while some action has `script_sink` set.
+    any_script_sink: bool,
     /// Per device slot and control: the last value; the vector for two-axis controls.
     slot_value: [[f32; CONTROL_COUNT]; DEVICE_SLOTS],
     slot_pos: [[[f32; 2]; CONTROL_COUNT]; DEVICE_SLOTS],
@@ -194,6 +200,8 @@ impl InputRuntime {
             bindings: Vec::new(),
             by_control: vec![Vec::new(); CONTROL_COUNT],
             sink_rank: [u16::MAX; CONTROL_COUNT],
+            script_sink_rank: [u16::MAX; CONTROL_COUNT],
+            any_script_sink: false,
             slot_value: [[0.0; CONTROL_COUNT]; DEVICE_SLOTS],
             slot_pos: [[[0.0; 2]; CONTROL_COUNT]; DEVICE_SLOTS],
             value: [0.0; CONTROL_COUNT],
@@ -262,6 +270,8 @@ impl InputRuntime {
             list.clear();
         }
         self.sink_rank = [u16::MAX; CONTROL_COUNT];
+        self.script_sink_rank = [u16::MAX; CONTROL_COUNT];
+        self.any_script_sink = false;
         self.warnings = config.warnings.clone();
 
         // Context order: priority, then the context enabled most recently.
@@ -340,6 +350,7 @@ impl InputRuntime {
                     active,
                     bindings: start..self.bindings.len(),
                     instance: a.instance,
+                    script_sink: false,
                     hold: ms(a.hold_time),
                     tap: ms(a.tap_time),
                     double_tap: ms(a.double_tap_window),
@@ -420,6 +431,88 @@ impl InputRuntime {
             .iter()
             .position(|a| a.instance == Some(id))
             .map(|i| ActionId(i as u16))
+    }
+
+    /// The `InputAction` instance an action was made from (none for the built-in context).
+    pub fn instance(&self, action: ActionId) -> Option<InstanceId> {
+        self.actions.get(action.0 as usize).and_then(|a| a.instance)
+    }
+
+    /// Records the answer of a script handler (`ContextActionService`, spec 3.7) for `action`:
+    /// with `sink` the controls of its bindings read 0 for lower contexts for as long as the
+    /// action stays down; `Pass` (false) lets them through. Takes effect at once for the
+    /// current frame: lower actions are evaluated again (so a jump already seen is released
+    /// before the character reads it). A sink on an action that is already up has no effect.
+    pub fn set_script_sink(&mut self, action: ActionId, sink: bool, now: f64) {
+        let Some(a) = self.actions.get_mut(action.0 as usize) else {
+            return;
+        };
+        if a.script_sink == sink {
+            return;
+        }
+        a.script_sink = sink;
+        self.any_script_sink = self.actions.iter().any(|a| a.script_sink);
+        if self.rebuild_script_sinks() {
+            self.reevaluate(now);
+        }
+    }
+
+    /// Recomputes `script_sink_rank`; actions that went up lose their sink. True when it changed.
+    fn rebuild_script_sinks(&mut self) -> bool {
+        let mut next = [u16::MAX; CONTROL_COUNT];
+        let mut any = false;
+        for a in 0..self.actions.len() {
+            if !self.actions[a].script_sink {
+                continue;
+            }
+            let act = &self.actions[a];
+            let held = act.active
+                && if act.ty == ActionType::Bool {
+                    act.down
+                } else {
+                    act.value != [0.0; 3]
+                };
+            if !held {
+                self.actions[a].script_sink = false;
+                continue;
+            }
+            any = true;
+            for bi in self.actions[a].bindings.clone() {
+                let b = &self.bindings[bi];
+                for c in b.def.controls() {
+                    let r = &mut next[c.index()];
+                    *r = (*r).min(b.rank);
+                }
+            }
+        }
+        self.any_script_sink = any;
+        let changed = next != self.script_sink_rank;
+        self.script_sink_rank = next;
+        changed
+    }
+
+    /// Evaluates the actions again without new input, after sinks changed. Mouse movement and
+    /// wheel notches of this frame are already used up, so actions that read them stay as they are.
+    fn reevaluate(&mut self, now: f64) {
+        for a in 0..self.actions.len() {
+            if !self.actions[a].active {
+                continue;
+            }
+            if self.actions[a].ty == ActionType::Bool {
+                self.recompute_bool(a, now);
+                continue;
+            }
+            let per_frame = self.actions[a].bindings.clone().any(|bi| {
+                self.bindings[bi]
+                    .def
+                    .controls()
+                    .any(|c| matches!(c.kind(), ControlKind::Delta | ControlKind::Wheel))
+            });
+            if !per_frame {
+                self.recompute_vector(a);
+                self.announce_vector(a, now);
+            }
+        }
     }
 
     /// The path `Context/Action` of an action.
@@ -548,6 +641,10 @@ impl InputRuntime {
         }
         self.delta_touched.clear();
         self.clock = now.max(self.clock);
+        // A sunk action that went up no longer blocks the controls below it.
+        if self.any_script_sink && self.rebuild_script_sinks() {
+            self.reevaluate(now);
+        }
     }
 
     /// Evaluates and returns the character's input (spec 6.2).
@@ -574,6 +671,11 @@ impl InputRuntime {
     /// Takes the events of the frames evaluated since the last call.
     pub fn drain_events(&mut self) -> std::collections::vec_deque::Drain<'_, ActionEvent> {
         self.events.drain(..)
+    }
+
+    /// Takes the oldest undrained event.
+    pub fn pop_event(&mut self) -> Option<ActionEvent> {
+        self.events.pop_front()
     }
 
     /// Events dropped because nobody drained them: the buffer keeps the newest
@@ -693,6 +795,7 @@ impl InputRuntime {
 
     fn blocked(&self, c: Control, rank: u16) -> bool {
         self.sink_rank[c.index()] < rank
+            || self.script_sink_rank[c.index()] < rank
             || if c.is_pointer() {
                 self.gui_pointer
             } else {
