@@ -79,6 +79,26 @@ handles both. Expiring tokens are the safer choice.
 
 Until step 9 is done, sign-in reports: "put the GitHub App's client ID into config/github_app_client_id.txt".
 
+## Concurrent GitHub refreshes
+
+Separate Studio instances can submit the same rotating refresh token. After a provider
+refresh error, Studio re-reads the credential store and returns an observed newer,
+unexpired access token when its refresh token changed. An expired or malformed newer
+value is preserved but is not returned as a usable token. Network retry behavior is
+unchanged.
+
+Automatic cleanup uses `SecretStore::delete_if_unchanged` only when the backend can
+atomically remove the expected value. The memory backend provides that operation.
+Native keyring get/delete do not provide compare-and-delete, so the default declines
+automatic deletion: an invalid entry can remain until sign-in replaces it or explicit
+sign-out removes it. A separate read followed by an unconditional delete could erase
+another process's newly saved session. Refresh exchanges and successful writes are
+not serialized across processes, and a failing caller does not wait for an in-flight
+writer that has not saved yet.
+
+See [GitHub's refresh-token rotation rules](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens)
+and the [native CredDelete signature](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-creddeletew).
+
 ## Install on a teammate's PC
 Download `MetallicStudio-dev-Setup.exe` from the release page (needs repo access), run it. It installs per user (no
 admin prompt) with a Start-menu entry and uninstaller. Updates arrive inside Studio as "Restart to update".
