@@ -48,6 +48,16 @@ pub(crate) enum EventKind {
     OnServerEvent,
     /// `RemoteEvent.OnClientEvent(...)`
     OnClientEvent,
+    /// `InputAction.Pressed()`
+    Pressed,
+    /// `InputAction.Released()`
+    Released,
+    /// `InputAction.Triggered(value)`
+    Triggered,
+    /// `InputAction.StateChanged(value)`
+    StateChanged,
+    /// `UserInputService.LastInputTypeChanged(type)`
+    LastInputTypeChanged,
 }
 
 /// One signal: an event of one instance.
@@ -205,42 +215,60 @@ impl ApiState {
         if handlers.is_empty() {
             return;
         }
-        let Some(lua) = self.lua.try_upgrade() else {
+        if self.lua.try_upgrade().is_none() {
             return;
-        };
+        }
         for (func, alive, owner) in handlers {
             if !alive.get() {
                 continue;
             }
-            // Decide first, so a full queue costs no argument copying: once it is full the
-            // rest of the handlers are dropped without building anything.
-            let defer = self.over_budget();
-            if defer && self.pacing.deferred.borrow().len() >= MAX_DEFERRED {
-                if !self.pacing.warned_full.replace(true) {
-                    self.sink
-                        .warn("too many script handlers are waiting; some calls were dropped");
-                }
+            if !self.dispatch(func, alive, owner, args) {
                 break;
             }
-            self.pacing.args_built.set(self.pacing.args_built.get() + 1);
-            let values = match args(&lua) {
-                Ok(values) => values,
-                Err(e) => {
-                    self.sink.error(&format_error(&e));
-                    continue;
-                }
-            };
-            if defer {
-                self.pacing.deferred.borrow_mut().push_back(Deferred {
-                    func,
-                    alive,
-                    owner,
-                    args: values,
-                });
-            } else {
-                self.run_handler(func, owner, values);
-            }
         }
+    }
+
+    /// Runs one handler call now, or queues it when this step is out of time. `args` builds
+    /// its arguments. Returns false when the queue is full and the rest should be dropped.
+    pub(crate) fn dispatch(
+        &self,
+        func: Function,
+        alive: Rc<Cell<bool>>,
+        owner: u64,
+        args: &dyn Fn(&Lua) -> mlua::Result<Vec<Value>>,
+    ) -> bool {
+        let Some(lua) = self.lua.try_upgrade() else {
+            return false;
+        };
+        // Decide first, so a full queue costs no argument copying: once it is full the
+        // rest of the handlers are dropped without building anything.
+        let defer = self.over_budget();
+        if defer && self.pacing.deferred.borrow().len() >= MAX_DEFERRED {
+            if !self.pacing.warned_full.replace(true) {
+                self.sink
+                    .warn("too many script handlers are waiting; some calls were dropped");
+            }
+            return false;
+        }
+        self.pacing.args_built.set(self.pacing.args_built.get() + 1);
+        let values = match args(&lua) {
+            Ok(values) => values,
+            Err(e) => {
+                self.sink.error(&format_error(&e));
+                return true;
+            }
+        };
+        if defer {
+            self.pacing.deferred.borrow_mut().push_back(Deferred {
+                func,
+                alive,
+                owner,
+                args: values,
+            });
+        } else {
+            self.run_handler(func, owner, values);
+        }
+        true
     }
 
     /// Runs one handler in its own thread; tracks consecutive timeouts of its script.
@@ -291,6 +319,7 @@ impl ApiState {
             .borrow_mut()
             .retain(|w| self.budget.owner_of(&w.thread) != Some(owner));
         self.pacing.streaks.borrow_mut().remove(&owner);
+        self.drop_bound_actions(owner);
         self.budget.cancel_owner(owner);
     }
 

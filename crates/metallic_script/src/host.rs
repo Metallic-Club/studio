@@ -14,7 +14,10 @@ use std::time::Duration;
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value as CoreValue, World};
 use mlua::Value;
 
-use crate::api::{self, ApiState, EventKind, HostShared, RemoteTarget};
+use crate::api::{
+    self, ApiState, BoundResult, EventKind, HostShared, InputActionEvent, InputDevice, InputValue,
+    RemoteTarget,
+};
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
 /// Name of the one local player created by [`ScriptHost::start`].
@@ -121,6 +124,7 @@ impl ScriptHost {
         self.shared.joined.borrow_mut().clear();
         self.shared.remotes.borrow_mut().clear();
         self.shared.queued.set([(0, 0); 2]);
+        self.shared.input.clear();
         self.inputs = vec![HostEvent::PlayerAdded { player }];
         self.running.clear();
         self.cursor = None;
@@ -150,6 +154,7 @@ impl ScriptHost {
         // Remotes first: one fired by a handler in this step waits for the next one.
         self.deliver_remotes();
         self.deliver_inputs();
+        self.deliver_input_actions();
 
         let run_service = self
             .world
@@ -186,8 +191,54 @@ impl ScriptHost {
         self.shared.remotes.borrow_mut().clear();
         self.shared.queued.set([(0, 0); 2]);
         self.shared.joined.borrow_mut().clear();
+        self.shared.input.clear();
         self.running.clear();
         self.cursor = None;
+    }
+
+    /// Queues an event of an `InputAction` instance for the client scripts: the next `step`
+    /// delivers `Pressed`, `Released`, `Triggered` or `StateChanged` and the handlers of
+    /// `ContextActionService`, oldest event time first, at most
+    /// [`MAX_ACTION_EVENTS_PER_STEP`](crate::MAX_ACTION_EVENTS_PER_STEP) per step.
+    pub fn input_action_event(&mut self, event: InputActionEvent) {
+        self.shared.input.push_event(event);
+    }
+
+    /// Sets what `InputAction:GetState()` and `GetHoldProgress()` return from now on (the
+    /// values as of the start of the frame). `hold_progress` is 0 to 1.
+    pub fn set_action_state(&mut self, action: InstanceId, value: InputValue, hold_progress: f32) {
+        self.shared
+            .input
+            .states
+            .borrow_mut()
+            .insert(action, (value, hold_progress));
+    }
+
+    /// Sets `UserInputService.TouchEnabled`, `KeyboardEnabled` and `GamepadEnabled`.
+    pub fn set_input_devices(&mut self, touch: bool, keyboard: bool, gamepad: bool) {
+        self.shared.input.set_devices(touch, keyboard, gamepad);
+    }
+
+    /// Sets `UserInputService.PreferredInput`.
+    pub fn set_preferred_input(&mut self, device: InputDevice) {
+        self.shared.input.set_preferred(device);
+    }
+
+    /// Sets what `UserInputService:GetLastInputType()` returns, by the name of an
+    /// `Enum.UserInputType` item. When it changes, `LastInputTypeChanged` fires on the next
+    /// `step`. Returns false for an unknown name.
+    pub fn set_last_input_type(&mut self, name: &str) -> bool {
+        self.shared.input.set_last_input_type(name)
+    }
+
+    /// Takes what the `ContextActionService` handlers answered since the last call.
+    pub fn take_bound_results(&mut self) -> Vec<BoundResult> {
+        std::mem::take(&mut *self.shared.input.results.borrow_mut())
+    }
+
+    /// How many queued action events were dropped because the queue was full.
+    pub fn dropped_action_events(&self) -> u64 {
+        self.shared.input.dropped.get()
     }
 
     /// Queues `part.Touched(hit)` for the next `step`.
@@ -412,6 +463,18 @@ impl ScriptHost {
                 Some(id) => Ok(vec![Value::UserData(state.wrap(lua, id)?)]),
                 None => Ok(Vec::new()),
             });
+        }
+    }
+
+    fn deliver_input_actions(&mut self) {
+        let changes = std::mem::take(&mut *self.shared.input.type_changes.borrow_mut());
+        if !changes.is_empty() {
+            for side in self.sides() {
+                side.state.deliver_input_type_changes(&changes);
+            }
+        }
+        if let Some(client) = &self.client {
+            client.state.deliver_action_events();
         }
     }
 

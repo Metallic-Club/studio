@@ -1,4 +1,4 @@
-//! `Vector3`, `Color3` and `UDim2` as Luau userdata, and the conversion between Luau
+//! `Vector3`, `Vector2`, `Color3` and `UDim2` as Luau userdata, and the conversion between Luau
 //! values and the world's property [`Value`](metallic_core::Value)s.
 
 use std::rc::Rc;
@@ -13,6 +13,16 @@ use super::{ApiState, lua_error};
 /// Luau `Vector3` (f64 components).
 #[derive(Clone, Copy)]
 pub(crate) struct LuaVector3(pub(crate) Vec3);
+
+/// Luau `Vector2` (f64 components). Not a property type; scripts, remotes and input use it.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct LuaVector2(pub(crate) [f64; 2]);
+
+impl LuaVector2 {
+    fn magnitude(self) -> f64 {
+        self.0[0].hypot(self.0[1])
+    }
+}
 
 /// Luau `Color3`.
 #[derive(Clone, Copy)]
@@ -33,6 +43,13 @@ fn number(v: &Value) -> Option<f64> {
 pub(crate) fn vector(v: &Value) -> Option<Vec3> {
     match v {
         Value::UserData(ud) => ud.borrow::<LuaVector3>().ok().map(|v| v.0),
+        _ => None,
+    }
+}
+
+pub(crate) fn vector2(v: &Value) -> Option<[f64; 2]> {
+    match v {
+        Value::UserData(ud) => ud.borrow::<LuaVector2>().ok().map(|v| v.0),
         _ => None,
     }
 }
@@ -106,6 +123,75 @@ impl UserData for LuaVector3 {
     }
 }
 
+impl UserData for LuaVector2 {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_meta_field(MetaMethod::Type, "Vector2");
+        fields.add_meta_field_with(MetaMethod::Add, |lua| {
+            errors::guarded_fn(
+                lua,
+                |_, (a, b): (UserDataRef<LuaVector2>, UserDataRef<LuaVector2>)| {
+                    Ok(LuaVector2([a.0[0] + b.0[0], a.0[1] + b.0[1]]))
+                },
+            )
+        });
+        fields.add_meta_field_with(MetaMethod::Sub, |lua| {
+            errors::guarded_fn(
+                lua,
+                |_, (a, b): (UserDataRef<LuaVector2>, UserDataRef<LuaVector2>)| {
+                    Ok(LuaVector2([a.0[0] - b.0[0], a.0[1] - b.0[1]]))
+                },
+            )
+        });
+        fields.add_meta_field_with(MetaMethod::Mul, |lua| {
+            errors::guarded_fn(lua, |_, (a, b): (Value, Value)| {
+                match (vector2(&a), vector2(&b), number(&a), number(&b)) {
+                    (Some(v), _, _, Some(k)) | (_, Some(v), Some(k), _) => {
+                        Ok(LuaVector2([v[0] * k, v[1] * k]))
+                    }
+                    (Some(a), Some(b), _, _) => Ok(LuaVector2([a[0] * b[0], a[1] * b[1]])),
+                    _ => Err(lua_error(
+                        "Vector2 can only be multiplied by a number or a Vector2",
+                    )),
+                }
+            })
+        });
+        fields.add_meta_field_with(MetaMethod::Div, |lua| {
+            errors::guarded_fn(lua, |_, (a, b): (Value, Value)| {
+                match (vector2(&a), vector2(&b), number(&b)) {
+                    (Some(v), _, Some(k)) => Ok(LuaVector2([v[0] / k, v[1] / k])),
+                    (Some(a), Some(b), _) => Ok(LuaVector2([a[0] / b[0], a[1] / b[1]])),
+                    _ => Err(lua_error(
+                        "Vector2 can only be divided by a number or a Vector2",
+                    )),
+                }
+            })
+        });
+        fields.add_field_method_get("X", |_, this| Ok(this.0[0]));
+        fields.add_field_method_get("Y", |_, this| Ok(this.0[1]));
+        fields.add_field_method_get("Magnitude", |_, this| Ok(this.magnitude()));
+        fields.add_field_method_get("Unit", |_, this| {
+            let m = this.magnitude();
+            Ok(LuaVector2(if m == 0.0 {
+                this.0
+            } else {
+                [this.0[0] / m, this.0[1] / m]
+            }))
+        });
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method(MetaMethod::Unm, |_, this, ()| {
+            Ok(LuaVector2([-this.0[0], -this.0[1]]))
+        });
+        methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
+            Ok(matches!((vector2(&a), vector2(&b)), (Some(a), Some(b)) if a == b))
+        });
+        methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
+            Ok(format!("{}, {}", this.0[0], this.0[1]))
+        });
+    }
+}
+
 impl UserData for LuaColor3 {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_meta_field(MetaMethod::Type, "Color3");
@@ -175,6 +261,13 @@ pub(crate) fn constructors(lua: &Lua) -> mlua::Result<Vec<(&'static str, Table)>
             },
         )?,
     )?;
+    let vector2 = lua.create_table()?;
+    vector2.set(
+        "new",
+        errors::guarded_fn(lua, |_, (x, y): (Option<f64>, Option<f64>)| {
+            Ok(LuaVector2([x.unwrap_or(0.0), y.unwrap_or(0.0)]))
+        })?,
+    )?;
     let color3 = lua.create_table()?;
     color3.set(
         "fromRGB",
@@ -201,11 +294,12 @@ pub(crate) fn constructors(lua: &Lua) -> mlua::Result<Vec<(&'static str, Table)>
             },
         )?,
     )?;
-    for t in [&vector3, &color3, &udim2] {
+    for t in [&vector3, &vector2, &color3, &udim2] {
         t.set_readonly(true);
     }
     Ok(vec![
         ("Vector3", vector3),
+        ("Vector2", vector2),
         ("Color3", color3),
         ("UDim2", udim2),
     ])
