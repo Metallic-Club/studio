@@ -74,6 +74,10 @@ watchdog. No FPS, quiet-machine speedup, or universal net win is asserted.
 - `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed after rebasing.
 - `cargo deny check licenses`: passed (one existing unused MPL-2.0 allowance warning).
 - `cargo fmt --check` and `git diff --check`: passed.
+- Repeated final workspace tests and strict Clippy after `cargo clean -p` for all seven Metallic workspace
+  packages in the verified owned target directory, retaining third-party dependencies. All 224 tests passed
+  again; logs show core/script and the other Metallic crates rebuilding from this worktree. Sequential target
+  reuse alone is not treated as cache provenance evidence.
 - No dependencies or root Cargo configuration changed. No UI changes.
 - The isolated worker target is `%LOCALAPPDATA%\Metallic\cargo-target-114`, reused sequentially after #114's
   local checks completed; no other worker uses it. Do not share compiled outputs with concurrent worktrees.
