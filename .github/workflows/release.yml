@@ -1,0 +1,46 @@
+name: Release
+# Runs only when a tag like v0.1.1-dev or v0.2.0-stable is pushed. Builds the installer and
+# publishes it as a GitHub Release with the workflow's own GITHUB_TOKEN (no other secrets).
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Work out version and channel from the tag
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-(dev|stable)$ ]]; then
+            echo "Tag '$tag' must look like v0.1.1-dev or v0.2.0-stable" >&2
+            exit 1
+          fi
+          echo "RELEASE_VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+          echo "RELEASE_CHANNEL=${BASH_REMATCH[2]}" >> "$GITHUB_ENV"
+      - name: Install Rust from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Velopack CLI (version pinned in tools/release.py)
+        shell: bash
+        run: |
+          pinned="$(python tools/release.py --print-vpk-version)"
+          dotnet tool install --global vpk --version "$pinned"
+      - name: Install Pillow (icon conversion)
+        run: python -m pip install Pillow
+      - name: Build, pack and publish
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/release.py --channel "$RELEASE_CHANNEL" --version "$RELEASE_VERSION"

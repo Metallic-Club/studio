@@ -7,3 +7,10 @@ publish.workspace = true
 
 [dependencies]
 metallic_runtime.workspace = true
+log = "0.4"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3"
+velopack = "1.3.39-g8d2844f"
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
