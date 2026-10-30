@@ -1,0 +1,423 @@
+//! The instance tree: [`World`] and [`InstanceId`].
+use crate::CoreError;
+use crate::classes::{self, class_def, default_value, find_property};
+use crate::signal::Signal;
+use crate::value::Value;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+
+/// Stable handle to an instance. Generational: a destroyed instance's id never becomes valid again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct InstanceId {
+    index: u32,
+    generation: u32,
+}
+
+#[derive(Clone)]
+struct Node {
+    class: &'static str,
+    parent: Option<InstanceId>,
+    children: Vec<InstanceId>,
+    /// Only values that were set; everything else uses the class default.
+    props: BTreeMap<String, Value>,
+    builtin: bool,
+}
+
+#[derive(Clone)]
+struct Slot {
+    generation: u32,
+    node: Option<Node>,
+}
+
+/// Services created by [`World::new_with_services`], in order.
+const SERVICES: &[&str] = &[
+    "Workspace",
+    "Players",
+    "ReplicatedStorage",
+    "ServerScriptService",
+    "StarterPlayer",
+    "StarterGui",
+    "Lighting",
+    "RunService",
+];
+
+/// A whole game tree: owns all instances, their properties and events.
+pub struct World {
+    slots: Vec<Slot>,
+    free: Vec<u32>,
+    roots: Vec<InstanceId>,
+    /// Fires `(parent, child)` whenever an instance gets a parent (create or reparent).
+    pub child_added: Signal<(InstanceId, InstanceId)>,
+    prop_signals: HashMap<(InstanceId, String), Signal<Value>>,
+}
+
+impl World {
+    /// An empty world with no instances at all.
+    pub fn new_empty() -> World {
+        World {
+            slots: Vec::new(),
+            free: Vec::new(),
+            roots: Vec::new(),
+            child_added: Signal::default(),
+            prop_signals: HashMap::new(),
+        }
+    }
+
+    /// A world with the standard services (`Workspace`, `Players`, `ReplicatedStorage`,
+    /// `ServerScriptService`, `StarterPlayer` with `StarterPlayerScripts`, `StarterGui`,
+    /// `Lighting`, `RunService`) as parentless built-in roots.
+    pub fn new_with_services() -> World {
+        let mut w = World::new_empty();
+        for s in SERVICES {
+            let id = w.alloc(s, None, BTreeMap::new(), true);
+            w.roots.push(id);
+            if *s == "StarterPlayer" {
+                let c = w.alloc("StarterPlayerScripts", Some(id), BTreeMap::new(), true);
+                w.link_child(id, c);
+            }
+        }
+        w
+    }
+
+    fn alloc(
+        &mut self,
+        class: &'static str,
+        parent: Option<InstanceId>,
+        props: BTreeMap<String, Value>,
+        builtin: bool,
+    ) -> InstanceId {
+        let node = Node {
+            class,
+            parent,
+            children: Vec::new(),
+            props,
+            builtin,
+        };
+        if let Some(index) = self.free.pop() {
+            let slot = &mut self.slots[index as usize];
+            slot.node = Some(node);
+            InstanceId {
+                index,
+                generation: slot.generation,
+            }
+        } else {
+            self.slots.push(Slot {
+                generation: 0,
+                node: Some(node),
+            });
+            InstanceId {
+                index: (self.slots.len() - 1) as u32,
+                generation: 0,
+            }
+        }
+    }
+
+    fn link_child(&mut self, parent: InstanceId, child: InstanceId) {
+        if let Some(n) = self.node_mut(parent) {
+            n.children.push(child);
+        }
+    }
+
+    fn node(&self, id: InstanceId) -> Option<&Node> {
+        let slot = self.slots.get(id.index as usize)?;
+        if slot.generation == id.generation {
+            slot.node.as_ref()
+        } else {
+            None
+        }
+    }
+
+    fn node_mut(&mut self, id: InstanceId) -> Option<&mut Node> {
+        let slot = self.slots.get_mut(id.index as usize)?;
+        if slot.generation == id.generation {
+            slot.node.as_mut()
+        } else {
+            None
+        }
+    }
+
+    /// True while the instance exists.
+    pub fn is_alive(&self, id: InstanceId) -> bool {
+        self.node(id).is_some()
+    }
+
+    /// Parentless instances in order (the services come first in a fresh world).
+    pub fn roots(&self) -> &[InstanceId] {
+        &self.roots
+    }
+
+    /// The parentless built-in service with this class name, e.g. `root("Workspace")`.
+    pub fn root(&self, class: &str) -> Option<InstanceId> {
+        self.roots
+            .iter()
+            .copied()
+            .find(|&r| self.node(r).is_some_and(|n| n.builtin && n.class == class))
+    }
+
+    /// The class name of an instance, or `None` if it does not exist.
+    pub fn class_name(&self, id: InstanceId) -> Option<&'static str> {
+        self.node(id).map(|n| n.class)
+    }
+
+    /// True for instances created by [`World::new_with_services`]; scene files do not recreate them.
+    pub fn is_builtin(&self, id: InstanceId) -> bool {
+        self.node(id).is_some_and(|n| n.builtin)
+    }
+
+    /// The parent of an instance, `None` for roots and for unknown ids.
+    pub fn parent(&self, id: InstanceId) -> Option<InstanceId> {
+        self.node(id).and_then(|n| n.parent)
+    }
+
+    /// Creates an instance of `class` (appended as the last child of `parent`, if any).
+    ///
+    /// Errors: [`CoreError::UnknownClass`], or [`CoreError::InvalidInstance`] if `parent` does not exist.
+    /// Fires `child_added` when a parent is given.
+    pub fn create(
+        &mut self,
+        class: &str,
+        parent: Option<InstanceId>,
+    ) -> Result<InstanceId, CoreError> {
+        let def = class_def(class).ok_or_else(|| CoreError::UnknownClass(class.to_string()))?;
+        if let Some(p) = parent
+            && !self.is_alive(p)
+        {
+            return Err(CoreError::InvalidInstance);
+        }
+        let id = self.alloc(def.name, parent, BTreeMap::new(), false);
+        match parent {
+            Some(p) => {
+                self.link_child(p, id);
+                self.child_added.fire(&(p, id));
+            }
+            None => self.roots.push(id),
+        }
+        Ok(id)
+    }
+
+    /// Destroys an instance and all its descendants; their ids become invalid. Unknown ids are ignored.
+    pub fn destroy(&mut self, id: InstanceId) {
+        if !self.is_alive(id) {
+            return;
+        }
+        self.detach(id);
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            let Some(slot) = self.slots.get_mut(cur.index as usize) else {
+                continue;
+            };
+            if let Some(node) = slot.node.take() {
+                stack.extend(node.children);
+                slot.generation += 1;
+                self.free.push(cur.index);
+            }
+        }
+        self.prop_signals
+            .retain(|(k, _), _| self.slots[k.index as usize].generation == k.generation);
+    }
+
+    fn detach(&mut self, id: InstanceId) {
+        let parent = self.node(id).and_then(|n| n.parent);
+        match parent {
+            Some(p) => {
+                if let Some(n) = self.node_mut(p) {
+                    n.children.retain(|&c| c != id);
+                }
+            }
+            None => self.roots.retain(|&c| c != id),
+        }
+    }
+
+    /// Moves an instance under a new parent (or makes it a root with `None`), as the last child.
+    ///
+    /// Errors: [`CoreError::InvalidInstance`] if either id is destroyed, [`CoreError::Cycle`] if
+    /// `parent` is the instance itself or one of its descendants. Fires `child_added`.
+    pub fn set_parent(
+        &mut self,
+        id: InstanceId,
+        parent: Option<InstanceId>,
+    ) -> Result<(), CoreError> {
+        if !self.is_alive(id) {
+            return Err(CoreError::InvalidInstance);
+        }
+        if let Some(p) = parent {
+            if !self.is_alive(p) {
+                return Err(CoreError::InvalidInstance);
+            }
+            let mut cur = Some(p);
+            while let Some(c) = cur {
+                if c == id {
+                    return Err(CoreError::Cycle);
+                }
+                cur = self.parent(c);
+            }
+        }
+        self.detach(id);
+        if let Some(n) = self.node_mut(id) {
+            n.parent = parent;
+        }
+        match parent {
+            Some(p) => {
+                self.link_child(p, id);
+                self.child_added.fire(&(p, id));
+            }
+            None => self.roots.push(id),
+        }
+        Ok(())
+    }
+
+    /// Children in order; empty for unknown ids.
+    pub fn children(&self, id: InstanceId) -> &[InstanceId] {
+        self.node(id).map_or(&[], |n| n.children.as_slice())
+    }
+
+    /// The first child whose `Name` equals `name`.
+    pub fn find_first_child(&self, id: InstanceId, name: &str) -> Option<InstanceId> {
+        self.children(id)
+            .iter()
+            .copied()
+            .find(|&c| matches!(self.get(c, "Name"), Ok(Value::String(ref s)) if s == name))
+    }
+
+    /// Dotted path of names from the root, e.g. `Workspace.Lava.Script`; empty for unknown ids.
+    pub fn full_name(&self, id: InstanceId) -> String {
+        let mut names = Vec::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            match self.get(c, "Name") {
+                Ok(Value::String(s)) => names.push(s),
+                _ => break,
+            }
+            cur = self.parent(c);
+        }
+        names.reverse();
+        names.join(".")
+    }
+
+    /// Reads a property (the class default if never set).
+    ///
+    /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`].
+    /// A `Ref` to a destroyed instance reads as `Ref(None)`.
+    pub fn get(&self, id: InstanceId, prop: &str) -> Result<Value, CoreError> {
+        let node = self.node(id).ok_or(CoreError::InvalidInstance)?;
+        let value = match node.props.get(prop) {
+            Some(v) => v.clone(),
+            None => default_value(node.class, prop).ok_or_else(|| CoreError::UnknownProperty {
+                class: node.class.to_string(),
+                property: prop.to_string(),
+            })?,
+        };
+        Ok(match value {
+            Value::Ref(Some(r)) if !self.is_alive(r) => Value::Ref(None),
+            v => v,
+        })
+    }
+
+    /// Writes a property after checking it against the class registry.
+    ///
+    /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`],
+    /// [`CoreError::TypeMismatch`] (wrong value type), [`CoreError::InvalidValue`] (e.g. unknown
+    /// material). Fires the property's `property_changed` signal when the value changes.
+    pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
+        let class = self.node(id).ok_or(CoreError::InvalidInstance)?.class;
+        let def = find_property(class, prop).ok_or_else(|| CoreError::UnknownProperty {
+            class: class.to_string(),
+            property: prop.to_string(),
+        })?;
+        if value.value_type() != def.ty {
+            return Err(CoreError::TypeMismatch {
+                property: prop.to_string(),
+                expected: def.ty.name().to_string(),
+                found: value.value_type().name().to_string(),
+            });
+        }
+        if let (Some(allowed), Value::String(s)) = (def.allowed, &value)
+            && !allowed.contains(&s.as_str())
+        {
+            return Err(CoreError::InvalidValue {
+                property: prop.to_string(),
+                reason: format!("`{s}` is not one of {allowed:?}"),
+            });
+        }
+        let old = self.get(id, prop)?;
+        let is_default = default_value(class, prop).as_ref() == Some(&value);
+        if let Some(n) = self.node_mut(id) {
+            if is_default {
+                n.props.remove(prop);
+            } else {
+                n.props.insert(prop.to_string(), value.clone());
+            }
+        }
+        if old != value
+            && let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string()))
+        {
+            sig.fire(&value);
+        }
+        Ok(())
+    }
+
+    /// The signal fired with the new value when `prop` of `id` changes (created on first use).
+    pub fn property_changed(&mut self, id: InstanceId, prop: &str) -> &mut Signal<Value> {
+        self.prop_signals.entry((id, prop.to_string())).or_default()
+    }
+
+    /// True when the instance's class is `class` or inherits from it.
+    pub fn is_a(&self, id: InstanceId, class: &str) -> bool {
+        self.node(id)
+            .is_some_and(|n| classes::is_subclass(n.class, class))
+    }
+
+    /// Copies an instance and its descendants into a new parentless subtree and returns its root.
+    /// Refs that point inside the copied subtree point to the copies. The copy is never built-in.
+    ///
+    /// # Panics
+    /// If `id` does not exist (there is no sensible id to return).
+    pub fn clone_subtree(&mut self, id: InstanceId) -> InstanceId {
+        assert!(self.is_alive(id), "clone_subtree: instance does not exist");
+        let mut map = HashMap::new();
+        let root = self.clone_rec(id, None, &mut map);
+        self.roots.push(root);
+        for &copy in map.values() {
+            if let Some(n) = self.node_mut(copy) {
+                for v in n.props.values_mut() {
+                    if let Value::Ref(Some(r)) = v
+                        && let Some(&mapped) = map.get(r)
+                    {
+                        *r = mapped;
+                    }
+                }
+            }
+        }
+        root
+    }
+
+    fn clone_rec(
+        &mut self,
+        id: InstanceId,
+        parent: Option<InstanceId>,
+        map: &mut HashMap<InstanceId, InstanceId>,
+    ) -> InstanceId {
+        let (class, props, kids) = match self.node(id) {
+            Some(n) => (n.class, n.props.clone(), n.children.clone()),
+            None => return id,
+        };
+        let copy = self.alloc(class, parent, props, false);
+        map.insert(id, copy);
+        for k in kids {
+            let kc = self.clone_rec(k, Some(copy), map);
+            self.link_child(copy, kc);
+        }
+        copy
+    }
+
+    /// An independent copy of the whole world with the same ids. Signal connections are not copied.
+    pub fn deep_clone(&self) -> World {
+        World {
+            slots: self.slots.clone(),
+            free: self.free.clone(),
+            roots: self.roots.clone(),
+            child_added: Signal::default(),
+            prop_signals: HashMap::new(),
+        }
+    }
+}
