@@ -51,5 +51,6 @@ compile output confirms `165-linear-plain-find` source paths. Third-party artifa
 
 ## Next / open questions
 
-Local gates and source review are complete. Push/open the PR, mark issue 165 for review, then await CI. Do not merge.
+Local gates and source review are complete. [PR 235](https://github.com/Metallic-Club/studio/pull/235) is open and
+issue 165 is marked for review. CI is pending. Do not merge.
 No UI or public API signature changes. Native scans are linear but are not preempted mid-scan.
