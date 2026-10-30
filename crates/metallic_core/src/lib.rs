@@ -5,7 +5,8 @@
 //! registry, one optional parent and an ordered list of children. Instances are addressed
 //! by [`InstanceId`], a generational handle that stays invalid after the instance is
 //! destroyed. Scenes are saved to and loaded from a diff-friendly text file
-//! ([`save_scene`], [`load_scene`]).
+//! ([`save_scene`], [`load_scene`]). Saves replace the destination only after a temporary file
+//! has been written and synced; nesting is limited to [`MAX_SCENE_DEPTH`] instance levels.
 #![warn(missing_docs)]
 
 pub mod classes;
@@ -15,7 +16,7 @@ mod signal;
 mod value;
 
 pub use instance::{InstanceId, World};
-pub use scene_file::{load_scene, save_scene};
+pub use scene_file::{MAX_SCENE_DEPTH, load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
 pub use value::{Color3, UDim2, Value, ValueType, Vec3};
 

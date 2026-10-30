@@ -20,7 +20,11 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
-  only non-default properties, stable order). Also `deep_clone()` used by Play.
+  only non-default properties, stable order). Scene saves preflight the tree, resolve reference indices through
+  a hash map, and sync a temporary sibling file before replacing the destination. Both directions enforce
+  `MAX_SCENE_DEPTH` (32 instance levels); loading rejects unknown fields, duplicate property names, unmatched
+  built-in markers and dangling references. Built-ins must remain at their standard locations when saving.
+  Also `deep_clone()` used by Play.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `raycast`, `drain_touched`. Anchored parts that are moved become kinematic
   movers. `CharacterController`, `spawn_character` and the Humanoid rules (death, respawn, checkpoints) live here.
