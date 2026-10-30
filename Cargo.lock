@@ -1848,17 +1848,27 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "env_logger",
- "keyring",
  "log",
  "metallic_runtime",
+ "metallic_update",
  "png",
  "rfd",
- "semver",
  "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "toml",
+ "velopack",
+]
+
+[[package]]
+name = "metallic_update"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "log",
+ "semver",
+ "serde",
+ "serde_json",
  "ureq",
  "velopack",
 ]

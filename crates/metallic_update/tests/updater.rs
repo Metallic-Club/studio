@@ -1,4 +1,4 @@
-//! Tests for the update checker and GitHub sign-in. All HTTP is mocked or goes to 127.0.0.1;
+//! Tests for the shared update checker and GitHub sign-in. All HTTP is mocked or goes to 127.0.0.1;
 //! nothing touches the internet or the real Windows Credential Manager.
 
 use std::collections::VecDeque;
@@ -7,11 +7,10 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use metallic_studio::github_auth::{
-    DeviceFlowUi, GithubAuth, MemorySecretStore, SecretStore, parse_client_id,
-};
-use metallic_studio::updater::{
-    Channel, HttpClient, HttpError, HttpResponse, Token, UpdateChecker, UpdateError, UreqClient,
+use metallic_update::github_auth::{DeviceFlowUi, GithubAuth, parse_client_id};
+use metallic_update::{
+    Channel, HttpClient, HttpError, HttpResponse, LAUNCHER_FEED, MemorySecretStore, STUDIO_FEED,
+    SecretStore, Token, UpdateChecker, UpdateError, UreqClient,
 };
 use semver::Version;
 
@@ -94,9 +93,13 @@ const SECRET: &str = "ghu_secret_token_value";
 const REFRESH_SECRET: &str = "ghr_secret_refresh_value";
 
 fn checker(channel: Channel, current: &str, http: Arc<MockHttp>) -> UpdateChecker {
-    UpdateChecker::new(channel, Arc::new(Token::new(SECRET.to_string())))
-        .with_http(http)
-        .with_current_version(Version::parse(current).unwrap())
+    UpdateChecker::new(
+        STUDIO_FEED,
+        channel,
+        Arc::new(Token::new(SECRET.to_string())),
+    )
+    .with_http(http)
+    .with_current_version(Version::parse(current).unwrap())
 }
 
 #[test]
@@ -232,7 +235,7 @@ fn network_error_is_not_fatal() {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap().port()
     };
-    let c = UpdateChecker::new(Channel::Dev, Arc::new(Token::new("t".into())))
+    let c = UpdateChecker::new(STUDIO_FEED, Channel::Dev, Arc::new(Token::new("t".into())))
         .with_api_base(format!("http://127.0.0.1:{port}"))
         .unwrap()
         .with_http(Arc::new(UreqClient::new(Duration::from_secs(2))));
@@ -257,11 +260,15 @@ fn ureq_client_talks_to_a_local_server() {
         );
         stream.write_all(reply.as_bytes()).unwrap();
     });
-    let c = UpdateChecker::new(Channel::Dev, Arc::new(Token::new("tok123".into())))
-        .with_api_base(format!("http://127.0.0.1:{port}"))
-        .unwrap()
-        .with_http(Arc::new(UreqClient::new(Duration::from_secs(5))))
-        .with_current_version(Version::new(0, 1, 0));
+    let c = UpdateChecker::new(
+        STUDIO_FEED,
+        Channel::Dev,
+        Arc::new(Token::new("tok123".into())),
+    )
+    .with_api_base(format!("http://127.0.0.1:{port}"))
+    .unwrap()
+    .with_http(Arc::new(UreqClient::new(Duration::from_secs(5))))
+    .with_current_version(Version::new(0, 1, 0));
     assert_eq!(c.check().unwrap().unwrap().version, Version::new(9, 0, 0));
     server.join().unwrap();
     let request = seen.lock().unwrap().clone();
@@ -407,7 +414,7 @@ fn http_response_debug_hides_body() {
 
 #[test]
 fn api_base_must_be_https_or_local() {
-    let new = || UpdateChecker::new(Channel::Dev, Arc::new(Token::new("t".into())));
+    let new = || UpdateChecker::new(STUDIO_FEED, Channel::Dev, Arc::new(Token::new("t".into())));
     assert!(new().with_api_base("https://api.github.com".into()).is_ok());
     assert!(new().with_api_base("http://127.0.0.1:8080".into()).is_ok());
     assert!(new().with_api_base("http://localhost:8080/".into()).is_ok());
@@ -640,4 +647,46 @@ fn refresh_tokens_never_logged() {
             "{line}"
         );
     }
+}
+
+fn mixed_feed() -> String {
+    feed(&[
+        release("v0.2.0-dev", ""),
+        release("launcher-v0.1.5-dev", ""),
+        release("v0.1.0-dev", ""),
+    ])
+}
+
+#[test]
+fn launcher_feed_ignores_studio_tags() {
+    let http = MockHttp::with(vec![ok(&mixed_feed())]);
+    let checker = UpdateChecker::new(
+        LAUNCHER_FEED,
+        Channel::Dev,
+        Arc::new(Token::new("t".into())),
+    )
+    .with_http(http)
+    .with_current_version(Version::new(0, 1, 0));
+    assert_eq!(
+        checker.check().unwrap().unwrap().version,
+        Version::new(0, 1, 5)
+    );
+}
+
+#[test]
+fn studio_feed_ignores_launcher_tags() {
+    let http = MockHttp::with(vec![ok(&mixed_feed())]);
+    let checker = UpdateChecker::new(STUDIO_FEED, Channel::Dev, Arc::new(Token::new("t".into())))
+        .with_http(http)
+        .with_current_version(Version::new(0, 1, 0));
+    assert_eq!(
+        checker.check().unwrap().unwrap().version,
+        Version::new(0, 2, 0)
+    );
+}
+
+#[test]
+fn velopack_channel_name_has_feed_prefix() {
+    assert_eq!(LAUNCHER_FEED.velopack_channel(Channel::Dev), "launcher-dev");
+    assert_eq!(STUDIO_FEED.velopack_channel(Channel::Stable), "stable");
 }
