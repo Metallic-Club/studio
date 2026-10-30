@@ -1,6 +1,6 @@
 # Finite property values: issue 98
 
-Status: implemented; focused core tests passed; full workspace gates pending.
+Status: implemented and tested; ready for review.
 
 ## Goal
 
@@ -29,7 +29,13 @@ Do not introduce numeric range clamps or reject finite extremes.
   precedence/finite-extreme/nonnumeric compatibility regressions passed, reproducing the reported bug.
 - After implementation, `cargo test -p metallic_core -j 4`: all 31 core tests passed, including the eight new
   regressions and all journal, scene-file, and tree tests.
-- Full workspace gates to finish before opening the PR.
+- Rebased on main at `88f5512` before final validation.
+- `cargo test --workspace -j 4 -- --test-threads=1`: all 220 tests passed, zero failures or skips. This includes the full
+  input-only Parkour route, player smoke, runtime determinism, all character/physics/Luau tests, GPU headless and
+  Studio suites. Runtime safety budgets were unchanged.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed, no warnings.
+- `cargo deny check licenses`: passed (`licenses ok`); existing unused MPL-2.0 allowance warning only.
+- `cargo fmt --all -- --check` and `git diff --check`: passed. No visual change or windowed manual test.
 
 ## Remaining scope
 
