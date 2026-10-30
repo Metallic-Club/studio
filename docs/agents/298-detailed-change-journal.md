@@ -135,3 +135,60 @@ or excluded. The timing window and lane114 were released immediately after verif
 All required local gates are green. Commit this final documentation record, publish for review and verify the
 existing CI against the final pushed head; no further Rust build is needed for the documentation-only record.
 The 5% wall-time target remains unresolved even if instruction CI passes. No own merge or acceptance claim.
+
+
+## Published branch CFrame integration
+
+PR #318 was published at `57af160657edbe27ee4f8206ffa11d33d7ac3a8e`. Main then advanced to
+`abef7fc130a2c5916b30b0371897a84291abf07d` (PR #304, computed CFrame and BasePart.CFrame support).
+The published branch received a normal merge, `1c48712c022c54f271ba8dd4f3709aed1e0227a1`; only
+`ARCHITECTURE.md` and the core crate exports required additive conflict resolution. Both CFrame and the detailed
+journal exports/documentation are retained. There is no journal implementation change, no new stored Value
+variant, and no absorption of PR #186 or the unpublished A2/C2 branches.
+
+The 1,006-test result above remains pinned to the earlier source/base. Fresh merged-source gates follow in the
+owned guarded lane after package-only cleanup. Original benchmark binaries and every timing observation remain
+unchanged; the wall-time target remains unresolved. No own merge or force push.
+
+
+The forced-clean merged-source workspace prebuild passed in 4m39s at `1c48712`, removing 3.4 GiB of local
+workspace outputs while retaining third-party caches. Strict workspace/all-target Clippy passed in 1m43s with
+`--locked -j 4 -- -D warnings`; licenses, formatting and diff checks passed. Logs are
+`workspace-prebuild-cframe-merge.log`, `clippy-cframe-merge.log` and `licenses-cframe-merge.log` in the same
+retained integration evidence directory. All default workspace test binaries are prebuilt; actual tests await
+the next managed quiet window. No previous result is relabelled as validation of this merge.
+
+
+The first merged-source actual workspace run exited 101 before reaching the script crate suites: 598 passed,
+one failed and four ignored across 56 summaries. `metallic_player/tests/smoke.rs::parkour_smoke_scene_passes_headless`
+ran 1,200 frames without its success marker; stderr reported
+`error: __mlua_index:19: Script timeout: exhausted allowed execution time`. The complete failure is retained in
+`workspace-tests-cframe-merge.log`; no test was removed or budget weakened. The managed timing window was
+released immediately after verified exit. A short observation taken after the exit recorded 76.16% host CPU and
+active compiler/linker processes; it does not measure the failed interval or establish causality. The pending
+#311 remove-player guard does not change the existing startup path and is not imported or claimed as a fix.
+Merged-source full validation is not green at this checkpoint; an isolated observation and complete gate remain.
+
+
+The package-selected isolated Cargo command unexpectedly began a separate feature-unification dependency build.
+It was cancelled by terminating only the verified Cargo process and descendants of its lane114 guard, before
+any actual test ran; the guard returned -1. No cleanup or metallic_player compile occurred. The already-built
+workspace test and spawned player executables retained last-write times 23:04:15Z/23:04:22Z, before that command
+started at 23:18:55Z. Their hashes/timestamps are recorded in `smoke-isolated-provenance.json`. Running that exact
+smoke binary from `crates/metallic_player` passed the single smoke test in 6.03s, with no source or budget change.
+This is an isolated observation, not a replacement for the failed full gate or evidence of its cause. The full
+workspace command will be repeated in the next managed quiet window; no mixed artifact result is relabelled.
+
+
+The complete guarded workspace repeat on unchanged `1c48712` exited zero: **1,016 passed, zero failed, seven
+manual/UI probes ignored across 104 summaries**. The command selected the full workspace graph, rebuilt only
+metallic_player in 17.90s before any tests, and used `--locked -j 4 -- --test-threads=1`. Both Parkour routes and
+all default Luau suites passed. `workspace-tests-cframe-merge-repeat.log` and `merged-gate-results.json` retain
+the complete run and both full-run totals. No source, budget or test selection was changed between the failed
+full gate, the isolated observation and this complete repeat. The initial timeout remains an actual failed
+observation with an undetermined cause; the passing repeat does not erase it. The actual window and lane114
+were released immediately after verified exit and parsed totals.
+
+Merged-source required gates are now complete. Publish the normal main merge plus this documentation-only
+record by append-only push, then inspect existing PR #318 CI on the resulting head. The 5% local wall-time target
+remains unresolved regardless of the separate instruction-count CI outcome. No own merge or new workflow.
