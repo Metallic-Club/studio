@@ -3657,35 +3657,6 @@ map = "model"
 path = "character-soldier.glb"
 
 [[asset]]
-id = "mdl-character-lowpoly-wizard"
-kind = "model"
-name = "Wizard"
-source = "polypizza"
-source_id = "tabnmuxQBl"
-page_url = "https://poly.pizza/m/tabnmuxQBl"
-download_url = "https://static.poly.pizza/3df4bc4f-54a7-43e4-a35d-35d05610d0eb.glb"
-licence = "CC0-1.0"
-licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
-licence_evidence = "https://poly.pizza/m/tabnmuxQBl: model data \"Licence\":\"CC0 1.0\""
-licence_checked = "2026-10-30"
-author = "Quaternius"
-attribution = "Wizard by Quaternius on Poly Pizza (CC0 1.0)"
-format = "glb"
-resolution = "n/a"
-size = 297096
-category = "character"
-look = "lowpoly"
-polycount = 6227
-animated = false
-tags = ["character", "fantasy", "lowpoly", "magic", "people-characters", "stylized", "wizard"]
-[[asset.files]]
-url = "https://static.poly.pizza/3df4bc4f-54a7-43e4-a35d-35d05610d0eb.glb"
-sha256 = "29ea5f59c41a8c3a9d96b4503e0af0bc3c37179788e030b5b1811ae9fe4a0a79"
-size = 297096
-map = "model"
-path = "wizard.glb"
-
-[[asset]]
 id = "mdl-character-lowpoly-cube-guy"
 kind = "model"
 name = "Cube Guy Character"
@@ -4612,35 +4583,6 @@ sha256 = "0b8a27b3eae479ec62e42b2c41a573937e275168b2a91998c4f0c5f6b9ebaaf1"
 size = 23696
 map = "model"
 path = "door.glb"
-
-[[asset]]
-id = "mdl-building-lowpoly-brick-wall"
-kind = "model"
-name = "Brick Wall"
-source = "polypizza"
-source_id = "7uEf9KAU9q"
-page_url = "https://poly.pizza/m/7uEf9KAU9q"
-download_url = "https://static.poly.pizza/e0072371-89a5-43ef-bbc5-fb6728913ea7.glb"
-licence = "CC0-1.0"
-licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
-licence_evidence = "https://poly.pizza/m/7uEf9KAU9q: model data \"Licence\":\"CC0 1.0\""
-licence_checked = "2026-10-30"
-author = "Quaternius"
-attribution = "Brick Wall by Quaternius on Poly Pizza (CC0 1.0)"
-format = "glb"
-resolution = "n/a"
-size = 7564
-category = "building"
-look = "lowpoly"
-polycount = 108
-animated = false
-tags = ["brick", "building", "buildings-architecture", "lowpoly", "structure", "stylized", "wall"]
-[[asset.files]]
-url = "https://static.poly.pizza/e0072371-89a5-43ef-bbc5-fb6728913ea7.glb"
-sha256 = "25be4854a298ade370f78d84b2cf731c2c4b73b1cf2cf925dce42a74d6ccce84"
-size = 7564
-map = "model"
-path = "brick-wall.glb"
 
 [[asset]]
 id = "mdl-horror-old-gas-mask"

@@ -7,13 +7,13 @@ Lots of free, high-quality, permissively licensed textures, HDRIs and models so 
 per-asset licence proof and SHA-256, a fetch/convert tool, and nothing large in git.
 
 ## Done
-- `assets/manifest/` (186 entries, all CC0 1.0, every file hashed):
+- `assets/manifest/` (184 entries, all CC0 1.0, every file hashed):
   - 51 texture sets + 4 pixel texture packs. Every Part material (Plastic, SmoothPlastic, Metal, Wood, Concrete,
     Glass, Grass, Brick, Ice, Sand) has 1 `primary` + 2 or 3 `alternate`; 3 `extra`; 8 `stylized`/toon (hand painted,
     OpenGameArt) and 8 `pixel` (N64-style 32 px) sets mapped to materials.
   - 20 HDRIs from Poly Haven (4 day, 4 sunset, 3 overcast/fog, 3 night, 6 interior), each 4k + 1k `.hdr`.
-  - 111 models: 55 Poly Haven (realistic glTF, 1k textures) + 56 Poly Pizza (Quaternius low poly GLB; 16 animated).
-    Categories: prop 23, nature 19, building 15, horror 15, weapon 14 (FPS guns), platformer 10, animal 8, character 7.
+  - 109 models: 55 Poly Haven (realistic glTF, 1k textures) + 54 Poly Pizza (Quaternius low poly GLB; 16 animated).
+    Categories: prop 23, nature 19, building 14, horror 15, weapon 14 (FPS guns), platformer 10, animal 8, character 6.
   - `sources.toml`: licence proof, evidence, bundling/CDN terms, download hosts, crawl delays per source.
 - `tools/assets/fetch.py`: download (resume with Range, per-host delay), SHA-256 verify, safe unzip (allow-listed
   types, no traversal/symlinks, bomb limits), texture conversion to 512/1K/2K `albedo`/`normal` (GL)/`orm`/`height`
@@ -25,7 +25,7 @@ per-asset licence proof and SHA-256, a fetch/convert tool, and nothing large in 
   stamps, pixel native size, CLI, committed `LICENSES/ASSETS.md` freshness, real-manifest coverage rules).
 - `tools/assets/previews.py` + `blender_render.py`: contact sheets rendered from the CC0 files themselves
   (`docs/agents/36-asset-library/{textures,hdris,models}.jpg`). Weak picks replaced after looking: pixel Brick (blue
-  bricks), Grass (yellow) and Ice (pink crystal) swapped for red bricks, green grass and tintable snow.
+  bricks), Grass (yellow) and Ice (pink crystal) swapped for red bricks, green grass and tintable snow; dropped two weak models (Wizard scene, flat Brick Wall).
 - `assets/README.md`: how it works, fields, licence policy, exclusions, how to add an asset.
 
 ## Commands
@@ -51,7 +51,7 @@ python -m venv <venv> && <venv>/Scripts/pip install -r tools/assets/requirements
    source with locally computed hashes? (CC0, very good for stylized/platformer.)
 2. Default texture resolution to ship in the installer: 1K (about 30 MB for one set per material as PNG; less once
    compressed) with 2K downloaded on demand? Assistant's call so far: convert all three, ship decision open.
-3. Poly Pizza has no terms page; per-model CC0 is clear, but should we ask them before mirroring ~56 models?
+3. Poly Pizza has no terms page; per-model CC0 is clear, but should we ask them before mirroring ~54 models?
 4. The `OpenGameArt` author field is the submitter; for the N64 packs and hand-painted sets the page text says the
    submitter made them. Fine for CC0, but confirm we want "submitter" as credit.
 

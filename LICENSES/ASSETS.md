@@ -118,7 +118,6 @@ attribution; we credit the authors anyway. Licence proof for each source is link
 | [Street Rat](https://polyhaven.com/a/street_rat) (`mdl-animal-street-rat`) | Sean Buckley | Poly Haven | CC0-1.0 |
 | [Large Castle Door](https://polyhaven.com/a/large_castle_door) (`mdl-building-large-castle-door`) | Tina | Poly Haven | CC0-1.0 |
 | [Large Iron Gate](https://polyhaven.com/a/large_iron_gate) (`mdl-building-large-iron-gate`) | Josh Dean | Poly Haven | CC0-1.0 |
-| [Brick Wall](https://poly.pizza/m/7uEf9KAU9q) (`mdl-building-lowpoly-brick-wall`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Castle](https://poly.pizza/m/y15yE6kWLY) (`mdl-building-lowpoly-castle`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Door](https://poly.pizza/m/LbrIuy3mMR) (`mdl-building-lowpoly-door`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Fence](https://poly.pizza/m/JfSPlkPhRD) (`mdl-building-lowpoly-fence`) | Quaternius | Poly Pizza | CC0-1.0 |
@@ -135,7 +134,6 @@ attribution; we credit the authors anyway. Licence proof for each source is link
 | [Man](https://poly.pizza/m/fjHyMd5Wxw) (`mdl-character-lowpoly-man`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Animated Platformer Character](https://poly.pizza/m/kKtL4zvS3n) (`mdl-character-lowpoly-platformer-character`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Character Soldier](https://poly.pizza/m/PpLF4rt4ah) (`mdl-character-lowpoly-soldier`) | Quaternius | Poly Pizza | CC0-1.0 |
-| [Wizard](https://poly.pizza/m/tabnmuxQBl) (`mdl-character-lowpoly-wizard`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Animated Woman](https://poly.pizza/m/nIItLV9nxS) (`mdl-character-lowpoly-woman`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Zombie](https://poly.pizza/m/VlXjG0N8Eg) (`mdl-character-lowpoly-zombie`) | Quaternius | Poly Pizza | CC0-1.0 |
 | [Chandelier 01](https://polyhaven.com/a/Chandelier_01) (`mdl-horror-chandelier-01`) | Kirill Sannikov | Poly Haven | CC0-1.0 |
