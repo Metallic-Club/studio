@@ -17,6 +17,13 @@ metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
+# Debug builds keep file:line backtraces for our crates and drop debug info for dependencies.
+# Full debug info made each lane's target dir 2-4 GB, and the build PC is short on disk.
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+debug = false
+
 # The vendored Luau VM is C++ built by the `cc` crate, which follows the package's opt-level.
 # Unoptimised, it is too slow for the 0.1 s script budget.
 [profile.dev.package.luau0-src]
