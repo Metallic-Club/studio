@@ -619,8 +619,13 @@ mod tests {
                 median < 0.05 * speed,
                 "{speed} studs/s: median slip {median}"
             );
-            // Between gaits two poses are mixed, so the soles that count as planted change from
-            // frame to frame and the tail is wider; the median is what the eye sees.
+            // Between gaits the tail is wider (11 studs/s: 4.6, 20: 2.3 studs/s measured). The
+            // clips already share one phase and agree on the contacts (left heel strike at 0, right
+            // at 0.5, checked from the glb), so a phase offset cannot help. The cause is that the
+            // gaits roll the foot in at different rates (heel to flat takes 0.11 of the cycle in
+            // walk_slow, 0.06 in walk): in the mix the sole is rotating about the heel while
+            // already below the contact height, and its far vertices move fast. The median is
+            // what the eye sees and stays under 5%.
             let authored = GAITS.iter().any(|&(_, v)| v == speed);
             let tail = if authored { 0.1 } else { 0.5 };
             assert!(
