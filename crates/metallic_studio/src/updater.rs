@@ -288,7 +288,10 @@ fn body_marks_required(body: &str) -> bool {
 fn version_from_tag(tag: &str, channel: Channel) -> Option<Version> {
     let rest = tag.strip_prefix('v')?;
     let version = rest.strip_suffix(&format!("-{}", channel.as_str()))?;
-    Version::parse(version).ok()
+    let version = Version::parse(version).ok()?;
+    // Match the release script's vX.Y.Z-channel grammar. Parseable semver
+    // prereleases must not impersonate an installed-version history boundary.
+    (version.pre.is_empty() && version.build.is_empty()).then_some(version)
 }
 
 /// Checks GitHub Releases for a newer Studio and runs the Velopack download and apply steps.
@@ -357,7 +360,8 @@ impl UpdateChecker {
         self
     }
 
-    /// Asks GitHub for the newest release of the channel. `Ok(None)` means "up to date".
+    /// Asks GitHub for the newest release of the channel and requirements on skipped releases.
+    /// `Ok(None)` means "up to date". An incomplete bounded history is an error.
     pub fn check(&self) -> Result<Option<UpdateInfo>, UpdateError> {
         let token = self.tokens.token().ok_or(UpdateError::Unauthorized)?;
         let authorization = format!("Bearer {}", token.expose());
@@ -367,8 +371,8 @@ impl UpdateChecker {
             ("User-Agent", USER_AGENT),
             ("Authorization", authorization.as_str()),
         ];
-        // Newest releases come first. Read pages until one holds a release of our channel
-        // (the newest of the channel is then on it), the list ends, or five pages are read.
+        // Our release process publishes increasing versions. Keep all pages through
+        // the installed-version boundary so skipped required releases remain visible.
         let mut releases: Vec<GithubRelease> = Vec::new();
         for page in 1..=MAX_RELEASE_PAGES {
             let url = format!(
@@ -385,13 +389,23 @@ impl UpdateChecker {
                 401 | 403 | 404 => return Err(UpdateError::Unauthorized),
                 other => return Err(UpdateError::BadResponse(format!("HTTP status {other}"))),
             }
-            releases = serde_json::from_str(&response.body)
+            let page_releases: Vec<GithubRelease> = serde_json::from_str(&response.body)
                 .map_err(|e| UpdateError::BadResponse(e.to_string()))?;
-            let has_match = releases
+            let reached_installed = page_releases
                 .iter()
-                .any(|r| version_from_tag(&r.tag_name, self.channel).is_some());
-            if has_match || releases.len() < RELEASES_PER_PAGE as usize {
+                .filter(|release| !release.draft)
+                .filter_map(|release| version_from_tag(&release.tag_name, self.channel))
+                .any(|version| version <= self.current);
+            let reached_end = page_releases.len() < RELEASES_PER_PAGE as usize;
+            releases.extend(page_releases);
+            if reached_installed || reached_end {
                 break;
+            }
+            if page == MAX_RELEASE_PAGES {
+                return Err(UpdateError::BadResponse(
+                    "release history exceeds the update-check limit; required status is incomplete"
+                        .into(),
+                ));
             }
         }
         Ok(self.pick_update(&releases))
