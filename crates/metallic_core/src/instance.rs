@@ -480,7 +480,25 @@ impl World {
             return Err(CoreError::InvalidInstance);
         }
         let mut map = HashMap::new();
-        let root = self.clone_rec(id, None, &mut map);
+        // Explicit stack instead of recursion so deep trees cannot overflow the call stack.
+        // Pre-order with children pushed in reverse: same allocation and child order as a
+        // recursive walk.
+        let mut stack = vec![(id, None)];
+        while let Some((orig, parent)) = stack.pop() {
+            let (class, props, kids) = match self.node(orig) {
+                Some(n) => (n.class, n.props.clone(), n.children.clone()),
+                None => continue,
+            };
+            let copy = self.alloc(class, parent, props, false);
+            map.insert(orig, copy);
+            if let Some(p) = parent {
+                self.link_child(p, copy);
+            }
+            stack.extend(kids.into_iter().rev().map(|k| (k, Some(copy))));
+        }
+        let Some(&root) = map.get(&id) else {
+            return Err(CoreError::InvalidInstance);
+        };
         self.roots.push(root);
         let copies: Vec<InstanceId> = map.values().copied().collect();
         for copy in copies {
@@ -498,25 +516,6 @@ impl World {
             }
         }
         Ok(root)
-    }
-
-    fn clone_rec(
-        &mut self,
-        id: InstanceId,
-        parent: Option<InstanceId>,
-        map: &mut HashMap<InstanceId, InstanceId>,
-    ) -> InstanceId {
-        let (class, props, kids) = match self.node(id) {
-            Some(n) => (n.class, n.props.clone(), n.children.clone()),
-            None => return id,
-        };
-        let copy = self.alloc(class, parent, props, false);
-        map.insert(id, copy);
-        for k in kids {
-            let kc = self.clone_rec(k, Some(copy), map);
-            self.link_child(copy, kc);
-        }
-        copy
     }
 
     /// An independent copy of the whole world with the same ids. Signal connections are not copied.
