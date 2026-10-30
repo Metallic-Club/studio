@@ -8,9 +8,9 @@
 //! the collisions and touches.
 use crate::locomotion::{Locomotion, LocomotionInput};
 use metallic_physics::ROOT_HEIGHT;
-use metallic_render::SkinnedInstance;
 use metallic_render::glam::{Mat4, Vec3};
 use metallic_render::metallic_asset::{Pose, SkinnedModel};
+use metallic_render::{SkinStyle, SkinnedInstance};
 use std::f32::consts::{PI, TAU};
 use std::sync::{Arc, OnceLock};
 
@@ -118,6 +118,7 @@ impl Avatar {
             center: self.feet + Vec3::new(0.0, height * 0.5, 0.0),
             height,
             detail_scale: 1.0 / STUD_METRES,
+            style: SkinStyle::Toon,
         }
     }
 }

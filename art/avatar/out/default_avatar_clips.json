@@ -3,9 +3,9 @@
  "fps": 30,
  "stud_m": 0.28,
  "meshes": {
-  "DefaultAvatar_LOD0": 5908,
-  "DefaultAvatar_LOD1": 2812,
-  "DefaultAvatar_LOD2": 888
+  "DefaultAvatar_LOD0": 4360,
+  "DefaultAvatar_LOD1": 2756,
+  "DefaultAvatar_LOD2": 896
  },
  "clips": {
   "idle": {
@@ -48,10 +48,10 @@
    "ground_per_stance_m": 0.6,
    "left_contact_frame": 0,
    "right_contact_frame": 10,
-   "max_leg_reach": 0.9797,
+   "max_leg_reach": 0.9767,
    "max_planted_foot_slip_mm_per_frame": [
-    0.01,
-    0.01
+    0.0,
+    0.0
    ]
   },
   "walk": {
@@ -76,10 +76,10 @@
    "ground_per_stance_m": 0.66,
    "left_contact_frame": 0,
    "right_contact_frame": 8,
-   "max_leg_reach": 0.9992,
+   "max_leg_reach": 0.9962,
    "max_planted_foot_slip_mm_per_frame": [
-    0.01,
-    0.01
+    0.0,
+    0.0
    ]
   },
   "run": {

@@ -12,6 +12,7 @@ struct Globals {
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
     params: vec4<f32>,       // x: cascades, y: 1 if the target encodes sRGB itself, z: exposure, w: shadow map size
+    viewport: vec4<f32>,     // x, y: target size in pixels; z, w: their reciprocals
 }
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -47,6 +48,16 @@ fn hash12(p: vec2<f32>) -> f32 {
 }
 
 // Tone maps linear light, encodes it for the target and adds a little dither against banding.
+// The scene colour that `finish` maps to the display-linear colour `y` (0..1): the inverse of its
+// tone curve and exposure. Toon shading picks display colours directly and goes through this.
+fn unfinish(y: vec3<f32>) -> vec3<f32> {
+    let t = clamp(y, vec3<f32>(0.0), vec3<f32>(0.98));
+    let a = 2.51 - 2.43 * t;
+    let b = 0.03 - 0.59 * t;
+    let c = -0.14 * t;
+    return (-b + sqrt(b * b - 4.0 * a * c)) / (2.0 * a) / max(g.params.z, 1e-4);
+}
+
 fn finish(c: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
     let x = max(c, vec3<f32>(0.0)) * g.params.z;
     let mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));

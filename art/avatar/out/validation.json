@@ -3,8 +3,8 @@
  "bones": 53,
  "meshes": {
   "DefaultAvatar_LOD0": {
-   "triangles": 5908,
-   "vertices": 4960,
+   "triangles": 4360,
+   "vertices": 4422,
    "max_influences": 3,
    "unweighted": 0,
    "materials": [
@@ -17,8 +17,8 @@
    ]
   },
   "DefaultAvatar_LOD1": {
-   "triangles": 2812,
-   "vertices": 2897,
+   "triangles": 2756,
+   "vertices": 3096,
    "max_influences": 3,
    "unweighted": 0,
    "materials": [
@@ -31,8 +31,8 @@
    ]
   },
   "DefaultAvatar_LOD2": {
-   "triangles": 888,
-   "vertices": 1102,
+   "triangles": 896,
+   "vertices": 1222,
    "max_influences": 3,
    "unweighted": 0,
    "materials": [
@@ -125,5 +125,5 @@
  },
  "missing": [],
  "wrong_length": [],
- "bytes": 1416968
+ "bytes": 1394140
 }

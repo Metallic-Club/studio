@@ -1,12 +1,12 @@
-//! Renders the default avatar in the engine for a model review: real lighting and shadows, no
-//! outline, nothing but a ground plate. No window; needs a GPU adapter (or a software one).
+//! Renders the default avatar in the engine for a model review: real lighting and shadows in the
+//! avatar's toon style (or the standard style with `--standard`), nothing but a ground plate. No window; needs a GPU adapter (or a software one).
 //!
 //! ```text
-//! cargo run --release -p metallic_render --example avatar_review -- <avatar.glb> <output folder>
+//! cargo run --release -p metallic_render --example avatar_review -- <avatar.glb> <output folder> [--standard]
 //! ```
 //! Writes, all 480 x 800:
 //! - `engine_<view>_lod<n>.png` for the views front, front34, side, back and back34 (the concept
-//!   sheet's five body views) at LOD0, LOD1 and LOD2, in the first frame of `idle`;
+//!   sheet's five body views) at LOD0, LOD1 and LOD2, in the rest pose with curled fingers;
 //! - `engine_<pose>.png` for the concept's three poses (`pose_hand_on_hip`, `pose_run`,
 //!   `pose_sit_back`), LOD0, seen from about the drawing's angle.
 //!
@@ -17,7 +17,9 @@
 use metallic_core::{Color3, Value, Vec3 as V3, World};
 use metallic_render::glam::{Mat4, Quat, Vec3};
 use metallic_render::metallic_asset::{Pose, SkinnedModel};
-use metallic_render::{Camera, Quality, RenderContext, RenderSettings, Renderer, SkinnedInstance};
+use metallic_render::{
+    Camera, Quality, RenderContext, RenderSettings, Renderer, SkinStyle, SkinnedInstance,
+};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -42,13 +44,19 @@ const VIEWS: [(&str, f32); 5] = [
 ];
 /// Concept poses: clip, turntable angle, height of the framed middle and framed height (studs).
 const POSES: [(&str, f32, f32, f32); 3] = [
-    ("pose_hand_on_hip", -18.0, HEIGHT * 0.5, HEIGHT * 1.24),
-    ("pose_run", 55.0, HEIGHT * 0.5, HEIGHT * 1.24),
-    ("pose_sit_back", 35.0, HEIGHT * 0.3, HEIGHT * 0.8),
+    ("pose_hand_on_hip", -18.0, HEIGHT * 0.5, HEIGHT * 1.36),
+    ("pose_run", 55.0, HEIGHT * 0.5, HEIGHT * 1.36),
+    ("pose_sit_back", 35.0, HEIGHT * 0.36, HEIGHT * 1.05),
 ];
 
 fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
+    let standard = std::env::args().any(|a| a == "--standard");
+    let style = if standard {
+        SkinStyle::Standard
+    } else {
+        SkinStyle::Toon
+    };
+    let mut args = std::env::args().skip(1).filter(|a| !a.starts_with("--"));
     let glb = PathBuf::from(args.next().ok_or("usage: avatar_review <glb> <folder>")?);
     let out = PathBuf::from(args.next().ok_or("usage: avatar_review <glb> <folder>")?);
     std::fs::create_dir_all(&out)?;
@@ -68,12 +76,11 @@ fn main() -> Result<()> {
 
     let camera = framing(HEIGHT * 0.5, HEIGHT * 1.24);
 
-    let idle = model.clip("idle").ok_or("no idle clip")?;
+    let fists = model.clip("pose_run").ok_or("no pose_run clip")?;
     for (name, angle) in VIEWS {
-        let mut pose = Pose::rest(&model.skeleton);
-        idle.sample(0.0, &mut pose);
+        let pose = rest_with_fists(&model, fists);
         for (lod, lod_height) in [(0, HEIGHT), (1, 1.0), (2, 0.4)] {
-            draw(&mut r, &model, &pose, angle, lod_height);
+            draw(style, &mut r, &model, &pose, angle, lod_height);
             let px = r.capture(&camera, SIZE)?;
             assert_eq!(r.skinned_lods(), [lod], "LOD forcing");
             write_png(&out.join(format!("engine_{name}_lod{lod}.png")), SIZE, &px)?;
@@ -86,7 +93,7 @@ fn main() -> Result<()> {
         };
         let mut pose = Pose::rest(&model.skeleton);
         c.sample(0.0, &mut pose);
-        draw(&mut r, &model, &pose, angle, HEIGHT);
+        draw(style, &mut r, &model, &pose, angle, HEIGHT);
         let px = r.capture(&framing(mid, framed), SIZE)?;
         write_png(&out.join(format!("engine_{clip}.png")), SIZE, &px)?;
     }
@@ -94,12 +101,30 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// The rest pose (the model's own stance) with the fingers and thumbs closed into fists as in
+/// `fists` (a clip whose first frame has closed hands), the way the concept sheet draws the
+/// turnaround.
+fn rest_with_fists(model: &SkinnedModel, fists: &metallic_render::metallic_asset::Clip) -> Pose {
+    let mut curled = Pose::rest(&model.skeleton);
+    fists.sample(0.0, &mut curled);
+    let mut pose = Pose::rest(&model.skeleton);
+    for (j, name) in model.skeleton.names.iter().enumerate() {
+        if ["Thumb", "Index", "Middle", "Ring", "Little"]
+            .iter()
+            .any(|f| name.contains(f))
+        {
+            pose.locals[j] = curled.locals[j];
+        }
+    }
+    pose
+}
+
 /// A camera slightly above the middle that fits `framed` studs into the frame height.
 fn framing(mid_y: f32, framed: f32) -> Camera {
     let distance = (framed * 0.5) / (FOV_DEG.to_radians() * 0.5).tan();
     let mid = Vec3::new(0.0, mid_y, 0.0);
     Camera {
-        position: mid + Vec3::new(0.0, distance * 0.10, distance),
+        position: mid + Vec3::new(0.0, distance * 0.04, distance),
         look_at: mid,
         fov_deg: FOV_DEG,
     }
@@ -123,7 +148,14 @@ fn ground() -> World {
     w
 }
 
-fn draw(r: &mut Renderer, model: &Arc<SkinnedModel>, pose: &Pose, angle_deg: f32, lod_height: f32) {
+fn draw(
+    style: SkinStyle,
+    r: &mut Renderer,
+    model: &Arc<SkinnedModel>,
+    pose: &Pose,
+    angle_deg: f32,
+    lod_height: f32,
+) {
     let m =
         Mat4::from_rotation_translation(Quat::from_rotation_y(angle_deg.to_radians()), Vec3::ZERO)
             * Mat4::from_scale(Vec3::splat(STUDS_PER_M));
@@ -136,6 +168,7 @@ fn draw(r: &mut Renderer, model: &Arc<SkinnedModel>, pose: &Pose, angle_deg: f32
         center: Vec3::new(0.0, HEIGHT * 0.5, 0.0),
         height: lod_height,
         detail_scale: STUDS_PER_M,
+        style,
     }]);
 }
 

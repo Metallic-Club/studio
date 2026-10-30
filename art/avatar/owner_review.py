@@ -14,8 +14,8 @@ Writes art/avatar/renders/v3/owner-review/:
 With `--v2 DIR` (a rawB folder rendered by the v2 scripts) it also writes renders/v3/
 before_after_toon.png and before_after_clay.png: concept / v2 / v3, five views.
 """
-import sys
 import os
+import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -23,7 +23,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONCEPT = os.path.join(HERE, "concept", "default-avatar-concept.png")
 RAW = os.path.join(HERE, "out", "rawB")
 ENGINE = os.path.join(HERE, "out", "engine")
-OUT = os.path.join(HERE, "renders", "v3", "owner-review")
+VERSION = sys.argv[sys.argv.index("--version") + 1] if "--version" in sys.argv else "v4"
+OUT = os.path.join(HERE, "renders", VERSION, "owner-review")
 
 BG = (231, 227, 220)
 INK = (110, 80, 70)
@@ -68,8 +69,8 @@ def toon(name, raw=None, kind="toon"):
     return base.convert("RGB")
 
 
-def engine(name):
-    path = os.path.join(ENGINE, f"engine_{name}.png")
+def engine(name, folder=None):
+    path = os.path.join(folder or ENGINE, f"engine_{name}.png")
     if not os.path.exists(path):
         return None
     im = Image.open(path).convert("RGB")
@@ -110,16 +111,25 @@ def sheet(columns, title, path, cell_h=560, label_h=34, row_labels=("concept", "
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    sheet([(lab, concept_crop(box), toon(f"body_{n}")) for n, lab, box in BODY],
-          "Default avatar v3, toon look (Blender, the concept's style)", os.path.join(OUT, "turnaround_toon.png"))
+    toon_sheets = "--toon" in sys.argv   # Blender toon renders (out/rawB) of the same version
+    if toon_sheets:
+        sheet([(lab, concept_crop(box), toon(f"body_{n}")) for n, lab, box in BODY],
+              f"Default avatar {VERSION}, toon look (Blender)", os.path.join(OUT, "turnaround_toon.png"))
     sheet([(lab, concept_crop(box), engine(f"{n}_lod0")) for n, lab, box in BODY],
-          "Default avatar v3 in the engine (real lighting, no outline, LOD0, idle frame 0)",
+          f"Default avatar {VERSION} in the engine (toon style, LOD0, rest pose with fists)",
           os.path.join(OUT, "turnaround_engine.png"))
-    sheet([(lab, concept_crop(box), toon(n)) for n, lab, box in POSES],
-          "Concept poses, toon look", os.path.join(OUT, "poses_toon.png"), cell_h=420)
+    if toon_sheets:
+        sheet([(lab, concept_crop(box), toon(n)) for n, lab, box in POSES],
+              "Concept poses, toon look", os.path.join(OUT, "poses_toon.png"), cell_h=420)
     sheet([(lab, concept_crop(box), engine(n)) for n, lab, box in POSES],
           "Concept poses in the engine", os.path.join(OUT, "poses_engine.png"), cell_h=420)
     # LODs: three rows of the five engine views.
+    if "--prev" in sys.argv:
+        prev_dir, prev = sys.argv[sys.argv.index("--prev") + 1], sys.argv[sys.argv.index("--prev") + 2]
+        sheet([(lab, concept_crop(box), engine(f"{n}_lod0", prev_dir), engine(f"{n}_lod0"))
+               for n, lab, box in BODY],
+              f"{prev} (as reviewed) vs {VERSION} in the engine", os.path.join(OUT, f"{prev}_vs_{VERSION}.png"),
+              cell_h=460, row_labels=("concept", prev, VERSION))
     if "--v2" in sys.argv:
         v2 = sys.argv[sys.argv.index("--v2") + 1]
         for kind in ("toon", "clay"):
