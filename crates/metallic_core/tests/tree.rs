@@ -156,6 +156,76 @@ fn clone_subtree_copies_and_remaps_refs() {
 }
 
 #[test]
+fn clone_subtree_keeps_child_order_and_external_refs() {
+    let mut w = world();
+    let outside = w.create("SpawnLocation", Some(ws(&w))).unwrap();
+    let m = w.create("Model", Some(ws(&w))).unwrap();
+    let inner = w.create("Player", Some(m)).unwrap();
+    let outer = w.create("Player", Some(m)).unwrap();
+    let sp = w.create("SpawnLocation", Some(m)).unwrap();
+    for (id, name) in [(inner, "A"), (outer, "B"), (sp, "C")] {
+        w.set(id, "Name", Value::String(name.into())).unwrap();
+    }
+    w.set(inner, "RespawnLocation", Value::Ref(Some(sp)))
+        .unwrap();
+    w.set(outer, "RespawnLocation", Value::Ref(Some(outside)))
+        .unwrap();
+    let c = w.clone_subtree(m).unwrap();
+    assert!(w.roots().contains(&c));
+    assert!(!w.is_builtin(c));
+    let kids = w.children(c).to_vec();
+    let names: Vec<Value> = kids.iter().map(|&k| w.get(k, "Name").unwrap()).collect();
+    assert_eq!(
+        names,
+        ["A", "B", "C"].map(|s| Value::String(s.into())).to_vec()
+    );
+    assert_eq!(
+        w.get(kids[0], "RespawnLocation").unwrap(),
+        Value::Ref(Some(kids[2]))
+    );
+    assert_eq!(
+        w.get(kids[1], "RespawnLocation").unwrap(),
+        Value::Ref(Some(outside))
+    );
+    // The original is untouched.
+    assert_eq!(w.children(m), &[inner, outer, sp]);
+    assert_eq!(
+        w.get(inner, "RespawnLocation").unwrap(),
+        Value::Ref(Some(sp))
+    );
+}
+
+#[test]
+fn clone_subtree_handles_deep_chain() {
+    const DEPTH: usize = 100_000;
+    let mut w = world();
+    let top = w.create("Folder", Some(ws(&w))).unwrap();
+    let mut originals = std::collections::HashSet::from([top]);
+    let mut cur = top;
+    for _ in 0..DEPTH {
+        cur = w.create("Folder", Some(cur)).unwrap();
+        originals.insert(cur);
+    }
+    let c = w.clone_subtree(top).unwrap();
+    assert_eq!(w.parent(c), None);
+    let mut depth = 0;
+    let mut node = c;
+    loop {
+        assert!(!originals.contains(&node));
+        match w.children(node) {
+            [] => break,
+            [only] => node = *only,
+            more => panic!("expected one child, found {}", more.len()),
+        }
+        depth += 1;
+    }
+    assert_eq!(depth, DEPTH);
+    // Destroying the original leaves the copy alive.
+    w.destroy(top);
+    assert!(w.is_alive(c) && w.is_alive(node));
+}
+
+#[test]
 fn signals_fire() {
     use std::sync::{Arc, Mutex};
     let mut w = world();
