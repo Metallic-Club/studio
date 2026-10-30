@@ -734,3 +734,145 @@ fn respawn_on_non_colliding_checkpoint_stands_on_top() {
     let p = v3(&world, root, "Position");
     assert!((p - Vec3::new(-10.0, 6.0, 0.0)).magnitude() < 1e-9, "{p:?}");
 }
+
+/// A level with steps, a slope-free wall and a pit edge, so replays touch every code path.
+fn replay_level() -> Sim {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    for i in 0..4 {
+        let h = 1.0 + f64::from(i);
+        part(
+            &mut world,
+            "Part",
+            Vec3::new(10.0 + f64::from(i) * 6.0, h / 2.0, 0.0),
+            Vec3::new(6.0, h, 20.0),
+        );
+    }
+    part(
+        &mut world,
+        "Part",
+        Vec3::new(-15.0, 5.0, 0.0),
+        Vec3::new(2.0, 10.0, 40.0),
+    );
+    Sim::start(world)
+}
+
+/// Seeded inputs (a linear congruential generator) with jumps and runs, held for a few frames.
+fn seeded_inputs(count: usize) -> Vec<MoveInput> {
+    let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut next = move || {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) as f64 / f64::from(1u32 << 31)
+    };
+    let mut out = Vec::with_capacity(count);
+    let mut cur = MoveInput::default();
+    while out.len() < count {
+        if out.len() % 12 == 0 {
+            let a = next() * std::f64::consts::TAU;
+            cur = MoveInput {
+                dir: Vec3::new(a.cos(), 0.0, a.sin()) * (0.4 + next()),
+                jump: next() < 0.3,
+                run: next() < 0.4,
+            };
+        }
+        out.push(cur);
+    }
+    out
+}
+
+fn replay(sim: &mut Sim, inputs: &[MoveInput]) -> Vec<(Vec3, HumanoidState)> {
+    inputs
+        .iter()
+        .map(|&i| {
+            sim.frame(i);
+            let ch = sim.character();
+            (sim.root_pos(), sim.ctl.state(ch).unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn replay_600_inputs_from_saved_state_matches() {
+    let mut sim = replay_level();
+    let inputs = seeded_inputs(600);
+    let ch = sim.character();
+    let saved = sim.ctl.save_state(&sim.world, ch).expect("saved");
+    let first = replay(&mut sim, &inputs);
+    sim.ctl.restore_state(&mut sim.world, ch, &saved);
+    let second = replay(&mut sim, &inputs);
+    let moved = first
+        .iter()
+        .any(|(p, _)| (*p - saved.position).magnitude() > 5.0);
+    assert!(moved, "the inputs must actually move the character");
+    for (i, (a, b)) in first.iter().zip(&second).enumerate() {
+        assert!(
+            (a.0 - b.0).magnitude() < 1e-4,
+            "tick {i}: {:?} vs {:?}",
+            a.0,
+            b.0
+        );
+        assert_eq!(a.1, b.1, "tick {i}");
+    }
+}
+
+#[test]
+fn save_then_restore_returns_the_same_state() {
+    let mut sim = replay_level();
+    let ch = sim.character();
+    sim.run(
+        1.0,
+        MoveInput {
+            dir: Vec3::new(1.0, 0.0, 0.0),
+            jump: true,
+            run: false,
+        },
+    );
+    let saved = sim.ctl.save_state(&sim.world, ch).unwrap();
+    sim.run(
+        1.0,
+        MoveInput {
+            dir: Vec3::new(0.0, 0.0, 1.0),
+            jump: false,
+            run: true,
+        },
+    );
+    sim.ctl.restore_state(&mut sim.world, ch, &saved);
+    assert_eq!(sim.ctl.save_state(&sim.world, ch), Some(saved));
+}
+
+#[test]
+fn restore_moves_root_and_limbs() {
+    let mut sim = replay_level();
+    let ch = sim.character();
+    let mut state = sim.ctl.save_state(&sim.world, ch).unwrap();
+    state.position = Vec3::new(40.0, 3.0, -20.0);
+    state.yaw = 90.0;
+    sim.ctl.restore_state(&mut sim.world, ch, &state);
+    assert!((sim.root_pos() - state.position).magnitude() < 1e-9);
+    let head = sim.world.find_first_child(ch, "Head").unwrap();
+    // Yaw 90 turns the head's (0, 1.5, 0) offset into itself; the arm offset (1.5, 0, 0) moves.
+    assert!(
+        (v3(&sim.world, head, "Position") - (state.position + Vec3::new(0.0, 1.5, 0.0)))
+            .magnitude()
+            < 1e-9
+    );
+    let arm = sim.world.find_first_child(ch, "Right Arm").unwrap();
+    assert!(
+        (v3(&sim.world, arm, "Position") - (state.position + Vec3::new(0.0, 0.0, -1.5)))
+            .magnitude()
+            < 1e-9
+    );
+    assert!((v3(&sim.world, arm, "Orientation").y - 90.0).abs() < 1e-9);
+}
+
+#[test]
+fn place_character_poses_the_limbs() {
+    let mut sim = replay_level();
+    let ch = sim.character();
+    metallic_physics::place_character(&mut sim.world, ch, Vec3::new(1.0, 2.0, 3.0), 0.0);
+    assert!((sim.root_pos() - Vec3::new(1.0, 2.0, 3.0)).magnitude() < 1e-9);
+    let leg = sim.world.find_first_child(ch, "Left Leg").unwrap();
+    assert!((v3(&sim.world, leg, "Position") - Vec3::new(0.5, 0.0, 3.0)).magnitude() < 1e-9);
+}
