@@ -49,7 +49,16 @@ worktree. All Cargo builds use `-j 4`.
 - Focused formatter/compatibility units: 3 passed.
 - Focused error-formatting integration binary: 16 passed, serial, 0.24 seconds.
 - `cargo fmt --all` and `git diff --check`: passed.
-- Full workspace tests, strict workspace Clippy and license gate: pending.
+- `cargo test --workspace -j 4 -- --test-threads=1` through the lane guard: 231 passed, zero ignored.
+  The final forced-clean workspace prebuild took 58.35 seconds and compiled all seven local packages from this
+  worktree; 118.9 MiB of local package artifacts were removed while dependency cache was preserved.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings` through the lane guard: passed, 8.30 seconds.
+  The first attempt reported `arc_with_non_send_sync` on mlua's required `Arc<Error>` cause fields. Narrow,
+  reasoned `#[expect]` annotations in the formatter and its construction test resolved that API-shape lint;
+  no runtime code or budget was changed after the full test pass.
+- `cargo deny check licenses`: passed (`licenses ok`; existing unused MPL-2.0 allowance warning).
+- Final `cargo fmt --all -- --check` and `git diff --check`: passed.
 
-Next: independent source review, guarded workspace prebuild, quiet serial workspace tests, strict Clippy and
-licenses; update this record with actual results, then open a PR without merging.
+Independent source review found no blocking findings. Rebased onto current main `12a6a6b` (avatar assets only
+since the original base). All required local gates are complete. Next: publish the PR, inspect CI and address
+review feedback; do not merge.

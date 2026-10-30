@@ -79,6 +79,10 @@ pub(crate) fn lossy(bytes: &[u8]) -> String {
 
 /// Copies an error for display, removing only structured callback traceback metadata.
 /// The original error and user-provided message text remain unchanged.
+#[expect(
+    clippy::arc_with_non_send_sync,
+    reason = "mlua error variants require Arc causes even in its single-threaded configuration"
+)]
 fn without_callback_tracebacks(error: &Error) -> Error {
     match error {
         Error::CallbackError { cause, .. } => without_callback_tracebacks(cause),
@@ -136,6 +140,10 @@ mod error_format_tests {
     }
 
     #[test]
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "construct mlua's Arc-based cause variants in this single-threaded test"
+    )]
     fn callback_metadata_is_removed_without_losing_nested_diagnostics() {
         let error = Error::CallbackError {
             traceback: "stack traceback:\nINTERNAL OUTER FRAME".into(),
