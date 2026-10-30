@@ -34,7 +34,13 @@ pub struct Cascade {
 }
 
 /// Fits an orthographic light volume around the part of the camera frustum between
-/// `slice_near` and `slice_far`, snapped to whole texels so edges do not shimmer.
+/// `slice_near` and `slice_far`.
+///
+/// The volume is a square around the slice's bounding sphere. The sphere is measured in view
+/// space, so its radius (and with it the texel size) depends only on the lens and the slice, not
+/// on where the camera stands or looks. The light's rotation is fixed by `to_sun` alone, and the
+/// sphere centre is snapped to whole texels in that rotated space, so moving the camera moves
+/// the shadow-map grid over the world by whole texels only and shadow edges do not shimmer.
 pub fn fit_cascade(
     camera: &Camera,
     aspect: f32,
@@ -49,53 +55,53 @@ pub fn fit_cascade(
         slice_near,
         slice_far,
     );
-    let inv = (proj * camera.view()).inverse();
-    let mut centre = Vec3::ZERO;
+    // Slice corners in view space: the same numbers for every camera pose.
+    let inv_proj = proj.inverse();
+    let mut centre_view = Vec3::ZERO;
     let mut corners = [Vec3::ZERO; 8];
     let mut i = 0;
     for z in [0.0_f32, 1.0] {
         for y in [-1.0_f32, 1.0] {
             for x in [-1.0_f32, 1.0] {
-                let p = inv * Vec4::new(x, y, z, 1.0);
+                let p = inv_proj * Vec4::new(x, y, z, 1.0);
                 corners[i] = p.truncate() / p.w;
-                centre += corners[i];
+                centre_view += corners[i];
                 i += 1;
             }
         }
     }
-    centre /= 8.0;
+    centre_view /= 8.0;
     let radius = corners
         .iter()
-        .map(|c| c.distance(centre))
+        .map(|c| c.distance(centre_view))
         .fold(0.0_f32, f32::max)
         .max(1.0);
     let radius = (radius * 16.0).ceil() / 16.0;
-    let texel = 2.0 * radius / resolution as f32;
+    // Half-width of the square: the radius plus exactly one texel, so the sphere still fits after
+    // the centre moves by up to half a texel when it is snapped.
+    let res = resolution.max(4) as f32;
+    let half = radius * res / (res - 2.0);
+    let texel = 2.0 * half / res;
+    let centre = camera.view().inverse().transform_point3(centre_view);
 
     let up = if to_sun.y.abs() > 0.99 {
         Vec3::Z
     } else {
         Vec3::Y
     };
-    let light_view = Mat4::look_at_rh(centre + to_sun * (radius + CASTER_MARGIN), centre, up);
-    // Snap the centre (in light space) to the texel grid.
-    let c_ls = light_view.transform_point3(centre);
-    let snapped = Vec3::new(
+    // Rotation only: looks from the origin along -to_sun, so +Z in light space points at the sun.
+    let light_rot = Mat4::look_at_rh(Vec3::ZERO, -to_sun, up);
+    let c_ls = light_rot.transform_point3(centre);
+    let eye_ls = Vec3::new(
         (c_ls.x / texel).round() * texel,
         (c_ls.y / texel).round() * texel,
-        c_ls.z,
+        c_ls.z + half + CASTER_MARGIN,
     );
-    let shift = Mat4::from_translation(Vec3::new(snapped.x - c_ls.x, snapped.y - c_ls.y, 0.0));
-    let light_proj = Mat4::orthographic_rh(
-        -radius,
-        radius,
-        -radius,
-        radius,
-        0.0,
-        2.0 * radius + CASTER_MARGIN * 2.0,
-    );
+    let light_view = Mat4::from_translation(-eye_ls) * light_rot;
+    let light_proj =
+        Mat4::orthographic_rh(-half, half, -half, half, 0.0, 2.0 * (half + CASTER_MARGIN));
     Cascade {
-        view_proj: light_proj * shift * light_view,
+        view_proj: light_proj * light_view,
         texel_world: texel,
     }
 }
@@ -183,23 +189,90 @@ mod tests {
 
     #[test]
     fn cascade_covers_its_frustum_slice() {
-        let cam = Camera::default();
         let to_sun = Vec3::new(0.4, 0.8, 0.3).normalize();
-        let (near, far) = (10.0, 60.0);
-        let c = fit_cascade(&cam, 16.0 / 9.0, near, far, to_sun, 2048);
-        let proj = Mat4::perspective_rh(cam.fov_deg.to_radians(), 16.0 / 9.0, near, far);
-        let inv = (proj * cam.view()).inverse();
-        for z in [0.0_f32, 1.0] {
-            for y in [-1.0_f32, 1.0] {
-                for x in [-1.0_f32, 1.0] {
-                    let p = inv * Vec4::new(x, y, z, 1.0);
-                    let world = p.truncate() / p.w;
-                    let clip = c.view_proj * world.extend(1.0);
-                    assert!(clip.x.abs() <= 1.001 && clip.y.abs() <= 1.001, "{clip:?}");
-                    assert!((0.0..=1.0).contains(&clip.z), "depth {}", clip.z);
+        let cameras = [
+            Camera::default(),
+            Camera {
+                position: Vec3::new(123.4, 7.7, -56.1),
+                look_at: Vec3::new(80.0, 2.0, -10.0),
+                fov_deg: 70.0,
+            },
+            Camera {
+                position: Vec3::new(-3.3, 50.0, 9.9),
+                look_at: Vec3::new(10.0, 0.0, -30.0),
+                fov_deg: 90.0,
+            },
+        ];
+        let splits = cascade_splits(0.3, SHADOW_DISTANCE, MAX_CASCADES);
+        for cam in &cameras {
+            for (i, &far) in splits.iter().enumerate() {
+                let near = if i == 0 { 0.3 } else { splits[i - 1] };
+                let c = fit_cascade(cam, 16.0 / 9.0, near, far, to_sun, 2048);
+                let proj = Mat4::perspective_rh(cam.fov_deg.to_radians(), 16.0 / 9.0, near, far);
+                let inv = (proj * cam.view()).inverse();
+                for z in [0.0_f32, 1.0] {
+                    for y in [-1.0_f32, 1.0] {
+                        for x in [-1.0_f32, 1.0] {
+                            let p = inv * Vec4::new(x, y, z, 1.0);
+                            let world = p.truncate() / p.w;
+                            let clip = c.view_proj * world.extend(1.0);
+                            assert!(clip.x.abs() <= 1.0 && clip.y.abs() <= 1.0, "{clip:?}");
+                            assert!((0.0..=1.0).contains(&clip.z), "depth {}", clip.z);
+                        }
+                    }
                 }
+                assert!(c.texel_world > 0.0);
             }
         }
-        assert!(c.texel_world > 0.0);
+    }
+
+    /// Shadow-map texel coordinates of `world` in cascade `c` (the shader's clip-to-uv mapping).
+    fn texel_coords(c: &Cascade, world: Vec3, resolution: u32) -> (f32, f32) {
+        let clip = c.view_proj * world.extend(1.0);
+        let res = resolution as f32;
+        ((clip.x * 0.5 + 0.5) * res, (0.5 - clip.y * 0.5) * res)
+    }
+
+    /// Signed distance of `a - b` from the nearest whole number.
+    fn frac_diff(a: f32, b: f32) -> f32 {
+        let d = a - b;
+        d - d.round()
+    }
+
+    #[test]
+    fn shadow_snap_moves_world_point_by_whole_texels() {
+        const RES: u32 = 2048;
+        let to_sun = Vec3::new(0.4, 0.8, 0.3).normalize();
+        let splits = cascade_splits(0.3, SHADOW_DISTANCE, MAX_CASCADES);
+        let step = Vec3::new(0.137, 0.0, 0.0);
+        let world = Vec3::ZERO;
+        let base = Camera::default();
+        let mut worst = 0.0_f32;
+        for (i, &far) in splits.iter().enumerate() {
+            let near = if i == 0 { 0.3 } else { splits[i - 1] };
+            let first = fit_cascade(&base, 16.0 / 9.0, near, far, to_sun, RES);
+            let (u0, v0) = texel_coords(&first, world, RES);
+            for k in 1..=6 {
+                let offset = step * k as f32;
+                let cam = Camera {
+                    position: base.position + offset,
+                    look_at: base.look_at + offset,
+                    ..base
+                };
+                let c = fit_cascade(&cam, 16.0 / 9.0, near, far, to_sun, RES);
+                assert_eq!(
+                    c.texel_world, first.texel_world,
+                    "cascade {i}: texel size changed"
+                );
+                let (u, v) = texel_coords(&c, world, RES);
+                let (du, dv) = (frac_diff(u, u0), frac_diff(v, v0));
+                eprintln!("cascade {i} step {k}: off-grid ({du:.4}, {dv:.4}) texels");
+                worst = worst.max(du.abs()).max(dv.abs());
+            }
+        }
+        assert!(
+            worst < 1e-3,
+            "a fixed world point slid up to {worst} texels off the shadow grid"
+        );
     }
 }
