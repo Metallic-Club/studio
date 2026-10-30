@@ -45,6 +45,14 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
   an injectable `HttpClient`, Velopack for download and apply) and `github_auth.rs` (device sign-in, token in Credential
   Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
+- **metallic_launcher** (Launcher L1 Task 2): window-free library for validated/canonical `DeepLink`s, redacted
+  `JoinTicket`s, exact `SiteOrigin` comparisons, `LauncherConfig` and pure `UrlPolicy` navigation decisions. A protocol
+  argument suppresses flags and developer settings at every argument position. External HTTPS goes to the browser;
+  only exact configured site/developer and bundled-page origins grant capabilities. `about:blank` grants none.
+  `SettingsStore` loads bounded TOML with defaults on failure and validates whole patches before mutation. Saves sync
+  a unique sibling temporary file, close its handle, then atomically replace with bounded sharing-failure retries;
+  persistent failure preserves the old file. The production-origin placeholder remains unconfigured. The shell,
+  bridge, process launching and installation are later tasks; no window dependency is introduced here.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

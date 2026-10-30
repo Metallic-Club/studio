@@ -1783,6 +1783,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "metallic_launcher"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml",
+ "url",
+]
+
+[[package]]
 name = "metallic_physics"
 version = "0.1.0"
 dependencies = [
