@@ -347,18 +347,22 @@ impl<'p, C: Clock, const N: usize> Frame<'p, C, N> {
     /// This also marks the frame boundary in an enabled external backend. Frame elapsed time
     /// includes work outside scopes; its budget is independent of trace capacity or attribution.
     pub fn finish(self) -> FrameReport<N> {
+        let report = self.finish_interval();
+        finish_backend_frame();
+        report
+    }
+
+    /// Finish only this CPU interval, without marking a full external profiler frame.
+    ///
+    /// Use for a simulation phase that excludes rendering/GUI. The application can separately
+    /// call [`finish_backend_frame`] at its actual displayed-frame boundary.
+    pub fn finish_interval(self) -> FrameReport<N> {
         let now = self.profiler.clock.now();
         let mut state = self.state.into_inner();
         state.observe(now);
         let elapsed = now.saturating_sub(self.start);
         if state.root_time > elapsed {
             state.clock_errors = state.clock_errors.saturating_add(1);
-        }
-        #[cfg(not(feature = "tracy"))]
-        profiling::finish_frame!();
-        #[cfg(feature = "tracy")]
-        if let Some(client) = profiling::tracy_client::Client::running() {
-            client.frame_mark();
         }
         FrameReport {
             elapsed,
@@ -374,6 +378,19 @@ impl<'p, C: Clock, const N: usize> Frame<'p, C, N> {
             nesting_errors: state.nesting_errors,
             unclosed: state.depth,
         }
+    }
+}
+
+/// Mark the host application's actual external profiler frame boundary.
+///
+/// This does not manufacture CPU samples. It is a no-op without a backend, and safely skips an
+/// uninitialized Tracy client. Hosts should mark once after their complete frame, including GUI.
+pub fn finish_backend_frame() {
+    #[cfg(not(feature = "tracy"))]
+    profiling::finish_frame!();
+    #[cfg(feature = "tracy")]
+    if let Some(client) = profiling::tracy_client::Client::running() {
+        client.frame_mark();
     }
 }
 

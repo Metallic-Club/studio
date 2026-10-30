@@ -166,6 +166,29 @@ fn budget_equality_is_allowed_and_time_outside_scopes_counts_in_frame() {
 }
 
 #[test]
+fn overall_assessment_cannot_pass_when_a_required_stage_is_missing() {
+    let clock = ManualClock::default();
+    let mut profiler = FrameProfiler::<_, 4>::new(&clock);
+    let frame = profiler.begin_frame();
+    {
+        let _scope = frame.scope(Subsystem::Input, "input");
+        clock.advance(2);
+    }
+    let report = frame.finish();
+    let table = BudgetTable::new(ms(10))
+        .with_subsystem(Subsystem::Input, ms(10))
+        .with_subsystem(Subsystem::RenderCpu, ms(10));
+    let checks = report.check_budgets(&table);
+    assert_eq!(checks.frame.state, BudgetState::Within);
+    assert_eq!(checks.overall_state(), BudgetState::NotMeasured);
+    let over = BudgetTable::new(ms(1)).with_subsystem(Subsystem::RenderCpu, ms(10));
+    assert_eq!(
+        report.check_budgets(&over).overall_state(),
+        BudgetState::Exceeded
+    );
+}
+
+#[test]
 fn a_backwards_clock_never_produces_a_passing_budget() {
     let clock = ManualClock(Cell::new(ms(20)));
     let mut profiler = FrameProfiler::<_, 4>::new(&clock);

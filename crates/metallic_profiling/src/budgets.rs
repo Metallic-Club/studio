@@ -155,10 +155,10 @@ impl BudgetTable {
     }
 }
 
-/// Independent frame and CPU-stage checks; no overall pass hides missing stage measurements.
+/// Independent interval/stage checks, plus an overall assessment that cannot hide missing stages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BudgetReport {
-    /// Whole-frame assessment, including unscoped work.
+    /// Recorded CPU-interval assessment, including unscoped work; not necessarily a displayed frame.
     pub frame: BudgetCheck,
     subsystems: [BudgetCheck; Subsystem::COUNT],
 }
@@ -179,5 +179,30 @@ impl BudgetReport {
     /// Assessment for one CPU stage, retaining unavailable or incomplete data explicitly.
     pub const fn subsystem(&self, subsystem: Subsystem) -> &BudgetCheck {
         &self.subsystems[subsystem as usize]
+    }
+
+    /// Combine configured checks without treating absent stages as zero.
+    ///
+    /// A known violation reports `Exceeded` even when other stages are missing. Otherwise any
+    /// incomplete measurement wins over `NotMeasured`, and every configured check must be
+    /// complete and within its limit before `Within` is possible. Unbudgeted stages are ignored.
+    pub fn overall_state(&self) -> BudgetState {
+        let mut incomplete = false;
+        let mut missing = false;
+        for check in std::iter::once(&self.frame).chain(self.subsystems.iter()) {
+            match check.state {
+                BudgetState::Exceeded => return BudgetState::Exceeded,
+                BudgetState::Incomplete => incomplete = true,
+                BudgetState::NotMeasured => missing = true,
+                BudgetState::Within | BudgetState::NotBudgeted => {}
+            }
+        }
+        if incomplete {
+            BudgetState::Incomplete
+        } else if missing {
+            BudgetState::NotMeasured
+        } else {
+            BudgetState::Within
+        }
     }
 }

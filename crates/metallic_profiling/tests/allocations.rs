@@ -61,6 +61,7 @@ fn default_recording_and_budget_assessment_allocate_nothing() {
     }
     let report = frame.finish();
     let checks = report.check_budgets(&budgets);
+    std::hint::black_box(checks.overall_state());
     std::hint::black_box(checks);
     std::hint::black_box(report.samples().count());
     let allocations = ALLOCATIONS.with(|counter| counter.replace(None));

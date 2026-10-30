@@ -8,6 +8,9 @@ pub use metallic_physics::RUN_MULTIPLIER;
 use metallic_physics::{
     CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, spawn_character,
 };
+use metallic_profiling::{
+    BudgetReport, BudgetTable, Frame, FrameProfiler, FrameReport, Subsystem, SystemClock,
+};
 use metallic_render::{Camera, Renderer};
 use metallic_script::{LOCAL_PLAYER_NAME, OutputSink, ScriptHost};
 use std::cell::RefCell;
@@ -22,6 +25,9 @@ pub const TICK: f64 = 1.0 / TICK_RATE;
 /// Longest frame time [`Game::frame`] simulates; a longer stall (a dragged window, a breakpoint)
 /// is dropped instead of being caught up in a burst.
 pub const MAX_FRAME_DT: f64 = 0.25;
+/// Maximum retained CPU scope samples in one opt-in simulation profile; no history is retained.
+pub const SIMULATION_PROFILE_CAPACITY: usize = 128;
+type SimulationFrame<'p> = Frame<'p, SystemClock, SIMULATION_PROFILE_CAPACITY>;
 /// Name of the character part passed as `hit` when a character touches a part.
 const ROOT_PART: &str = "HumanoidRootPart";
 
@@ -124,6 +130,8 @@ pub struct Game {
     /// Shapes of the parts the physics was last synced with.
     synced_parts: HashMap<InstanceId, PartShape>,
     running: bool,
+    cpu_profiling_enabled: bool,
+    last_simulation_profile: Option<FrameReport<SIMULATION_PROFILE_CAPACITY>>,
 }
 
 impl Game {
@@ -176,6 +184,8 @@ impl Game {
             physics_cursor: None,
             synced_parts: HashMap::new(),
             running: false,
+            cpu_profiling_enabled: false,
+            last_simulation_profile: None,
         }
     }
 
@@ -214,6 +224,41 @@ impl Game {
         self.running
     }
 
+    /// Whether CPU simulation profiling is enabled. New games default to disabled.
+    pub fn cpu_profiling_enabled(&self) -> bool {
+        self.cpu_profiling_enabled
+    }
+
+    /// Opt into bounded CPU simulation profiles, without changing simulation inputs or ticks.
+    ///
+    /// Changing this flag clears the previous report. Disabled recording performs no clock reads
+    /// or collector initialization. This flag does not enable an external profiling backend.
+    pub fn set_cpu_profiling_enabled(&mut self, enabled: bool) {
+        if self.cpu_profiling_enabled != enabled {
+            self.cpu_profiling_enabled = enabled;
+            self.last_simulation_profile = None;
+        }
+    }
+
+    /// Latest completed running [`Game::frame`] CPU interval, if profiling is enabled.
+    ///
+    /// This interval excludes separate rendering, GUI and app input/window processing. Their
+    /// timings remain unavailable; this is not an entire displayed-frame or GPU profile. Reports
+    /// are cleared on start, stop, flag changes and before each new frame. Reloading creates a
+    /// fresh disabled game. A zero-tick frame can measure camera work without script/physics data.
+    pub fn latest_simulation_profile(&self) -> Option<&FrameReport<SIMULATION_PROFILE_CAPACITY>> {
+        self.last_simulation_profile.as_ref()
+    }
+
+    /// Assess the latest simulation interval with a caller-selected CPU policy.
+    ///
+    /// Use [`BudgetReport::overall_state`] to retain missing required stages. In particular a
+    /// simulation-only interval cannot pass a policy requiring render/GUI timings it did not record.
+    pub fn latest_simulation_budget(&self, table: &BudgetTable) -> Option<BudgetReport> {
+        self.latest_simulation_profile()
+            .map(|report| report.check_budgets(table))
+    }
+
     /// Starts the game: runs the scripts (which creates the local player `Player1`), copies the
     /// contents of `StarterGui` into the player's `PlayerGui` (once; M1 has no ResetOnSpawn),
     /// spawns the character on the first `SpawnLocation` and fires `CharacterAdded`.
@@ -224,6 +269,7 @@ impl Game {
         if self.running {
             return Ok(());
         }
+        self.last_simulation_profile = None;
         self.scripts
             .start()
             .map_err(|e| RuntimeError::Start(e.message))?;
@@ -263,6 +309,7 @@ impl Game {
 
     /// Stops the scripts. The world keeps its last state; the game can be dropped afterwards.
     pub fn stop(&mut self) {
+        self.last_simulation_profile = None;
         self.scripts.stop();
         self.running = false;
     }
@@ -280,20 +327,32 @@ impl Game {
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
     /// Then the camera follows the character. Draw with [`Game::render`] and
-    /// [`crate::gui::paint`].
+    /// [`crate::gui::paint`]. Opt-in CPU profiles measure only this simulation/camera interval;
+    /// rendering, GUI and the host's full-frame boundary are deliberately separate.
     pub fn frame(&mut self, input: &FrameInput, dt: f64) -> FrameOutput {
-        let dt = if dt.is_finite() {
-            dt.clamp(0.0, MAX_FRAME_DT)
-        } else {
-            0.0
+        self.last_simulation_profile = None;
+        let mut profiler = (self.cpu_profiling_enabled && self.running)
+            .then(FrameProfiler::<SystemClock, SIMULATION_PROFILE_CAPACITY>::default);
+        let profile = profiler.as_mut().map(FrameProfiler::begin_frame);
+        let dt = {
+            let _scope = profile
+                .as_ref()
+                .map(|frame| frame.scope(Subsystem::Input, "runtime.input"));
+            metallic_profiling::backend_scope!("runtime.input");
+            let dt = if dt.is_finite() {
+                dt.clamp(0.0, MAX_FRAME_DT)
+            } else {
+                0.0
+            };
+            self.camera.apply_input(input);
+            dt
         };
-        self.camera.apply_input(input);
         let mut ticks = 0;
         if self.running {
             // Capped so time kept by skipped ticks (see below) never piles up into a burst.
             self.accumulator = (self.accumulator + dt).min(MAX_FRAME_DT + TICK);
             while self.accumulator + 1e-9 >= TICK {
-                if !self.tick(input) {
+                if !self.tick(input, profile.as_ref()) {
                     // Someone holds a World borrow across frames (a bug in the caller): keep the
                     // time and try again next frame instead of dropping the tick.
                     break;
@@ -302,21 +361,29 @@ impl Game {
                 ticks += 1;
             }
         }
-        let state = self.character.and_then(|c| self.characters.state(c));
-        if state != Some(HumanoidState::Dead)
-            && let Some(root) = self.root_position()
-        {
-            self.focus = root + Vec3::new(0.0, FOCUS_HEIGHT, 0.0);
-        }
-        let ignore = self.character_parts();
-        self.last_camera = self
-            .camera
-            .camera(self.focus, &self.physics, &ignore, dt as f32);
-        FrameOutput {
-            camera: self.last_camera,
-            ticks,
-            state,
-        }
+        let output = {
+            let _scope = profile
+                .as_ref()
+                .map(|frame| frame.scope(Subsystem::Input, "runtime.camera"));
+            metallic_profiling::backend_scope!("runtime.camera");
+            let state = self.character.and_then(|c| self.characters.state(c));
+            if state != Some(HumanoidState::Dead)
+                && let Some(root) = self.root_position()
+            {
+                self.focus = root + Vec3::new(0.0, FOCUS_HEIGHT, 0.0);
+            }
+            let ignore = self.character_parts();
+            self.last_camera = self
+                .camera
+                .camera(self.focus, &self.physics, &ignore, dt as f32);
+            FrameOutput {
+                camera: self.last_camera,
+                ticks,
+                state,
+            }
+        };
+        self.last_simulation_profile = profile.map(Frame::finish_interval);
+        output
     }
 
     /// Brings `renderer` up to date with the world and draws the frame into `target` (`size` in
@@ -333,6 +400,7 @@ impl Game {
         size: (u32, u32),
         camera: &Camera,
     ) {
+        metallic_profiling::backend_scope!("runtime.render");
         if let Ok(world) = self.world.try_borrow() {
             renderer.sync(&world);
         }
@@ -341,19 +409,26 @@ impl Game {
 
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
     pub fn paint_gui(&self, painter: &egui::Painter) {
+        metallic_profiling::backend_scope!("runtime.gui");
         if let Ok(world) = self.world.try_borrow() {
             crate::gui::paint(&world, painter);
         }
     }
 
     /// One fixed simulation tick. Returns false, having done nothing, when the world is borrowed.
-    fn tick(&mut self, input: &FrameInput) -> bool {
-        let move_input = MoveInput {
-            dir: self.camera.move_direction(input.movement),
-            jump: input.jump,
-            run: input.run,
+    fn tick(&mut self, input: &FrameInput, profile: Option<&SimulationFrame<'_>>) -> bool {
+        let move_input = {
+            let _scope = profile.map(|frame| frame.scope(Subsystem::Input, "runtime.move_input"));
+            metallic_profiling::backend_scope!("runtime.move_input");
+            MoveInput {
+                dir: self.camera.move_direction(input.movement),
+                jump: input.jump,
+                run: input.run,
+            }
         };
         {
+            let _scope = profile.map(|frame| frame.scope(Subsystem::Physics, "runtime.physics"));
+            metallic_profiling::backend_scope!("runtime.physics");
             let Ok(mut world) = self.world.try_borrow_mut() else {
                 return false;
             };
@@ -363,15 +438,24 @@ impl Game {
             }
             self.physics.step(&mut world, TICK);
         }
-        self.feed_events();
-        self.time += TICK;
-        self.scripts.step(self.time, TICK);
-        self.sync_physics_if_changed();
+        {
+            let _scope = profile.map(|frame| frame.scope(Subsystem::Scripts, "runtime.scripts"));
+            metallic_profiling::backend_scope!("runtime.scripts");
+            self.feed_events(profile);
+            self.time += TICK;
+            self.scripts.step(self.time, TICK);
+        }
+        {
+            let _scope =
+                profile.map(|frame| frame.scope(Subsystem::Physics, "runtime.physics_sync"));
+            metallic_profiling::backend_scope!("runtime.physics_sync");
+            self.sync_physics_if_changed();
+        }
         true
     }
 
     /// Hands this tick's character and physics events to the script host.
-    fn feed_events(&mut self) {
+    fn feed_events(&mut self, profile: Option<&SimulationFrame<'_>>) {
         for event in self.characters.drain_events() {
             match event {
                 CharacterEvent::Touched { character, part } => {
@@ -391,7 +475,12 @@ impl Game {
                     if Some(player) == self.player {
                         self.character = Some(character);
                     }
-                    self.sync_physics_now();
+                    {
+                        let _scope = profile
+                            .map(|frame| frame.scope(Subsystem::Physics, "runtime.respawn_sync"));
+                        metallic_profiling::backend_scope!("runtime.respawn_sync");
+                        self.sync_physics_now();
+                    }
                     self.scripts.character_added(player, character);
                 }
                 CharacterEvent::CheckpointReached { .. } => {}

@@ -28,8 +28,8 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   has no external profiler, GPU timing, UI or network server. Frame-independent `backend_scope!` instruments
   ScriptVm run/step and Scene/Renderer sync/render/prewarm. Tracy uses manual lifetime and localhost-only access;
   hosts must call `start_tracy()` before any engine/third-party Tracy instrumentation. Dropping its handle does not
-  shut down the process-lifetime client. Physics instrumentation and Game/dev-mode budget consumption remain #121
-  follow-ups, blocked by the leaf landing and #8/#14/#23. Integration guide: `docs/profiling.md`.
+  shut down the process-lifetime client. Physics-library instrumentation and full application/dev-mode budget
+  consumption remain #121 follow-ups. Integration guide: `docs/profiling.md`.
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
@@ -52,6 +52,10 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   player and Studio.
   Re-exports the CPU recorder as `metallic_runtime::profiling`; runtime features `profiling-puffin` and
   `profiling-tracy` forward optional external backends.
+  `Game::set_cpu_profiling_enabled` (default off) enables bounded 128-sample simulation reports through
+  `latest_simulation_profile` and caller-selected `latest_simulation_budget`. Input/camera, physics/characters/resync
+  and events/scripts are scoped without changing `FrameOutput`. Start, stop, toggles and reload clear availability.
+  These intervals exclude separate rendering/GUI/app input; required missing stages prevent an overall policy pass.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
   [--fps] [--capture FRAME:PNG]`; winit window, wgpu surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless
   mode for smoke tests (no window, no GPU).

@@ -22,9 +22,13 @@ fn main() {
     let budgets = report.check_budgets(&BudgetTable::proposed_dev_60());
     println!("Synthetic CPU scope example; no game runtime or GPU measurement.");
     println!(
-        "frame: {:?}; proposed policy: {:?}",
+        "CPU interval: {:?}; proposed interval limit: {:?}",
         report.frame_time(),
         budgets.frame.state
+    );
+    println!(
+        "overall proposed-policy assessment: {:?}",
+        budgets.overall_state()
     );
     for subsystem in Subsystem::ALL {
         let check = budgets.subsystem(subsystem);

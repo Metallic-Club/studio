@@ -1,9 +1,9 @@
 # CPU scopes and frame budgets
 
 `metallic_profiling` implements bounded CPU recording without depending on the world, renderer, scripts or runtime.
-It is re-exported at `metallic_runtime::profiling` for the future game loop. Optional external backend scopes already
-instrument implemented script and renderer entrypoints. The current runtime remains a scaffold; CPU budget reports
-are not automatically populated by those entrypoints or by unimplemented game stages.
+It is re-exported at `metallic_runtime::profiling`. Optional external backend scopes instrument implemented script,
+renderer and runtime entrypoints. `Game` also supports opt-in simulation CPU reports, described below. Separate
+render/GUI/window processing remains outside those CPU intervals; it is not automatically measured as zero.
 
 ## Record a frame
 
@@ -25,6 +25,10 @@ optional backend guard until that block ends. `frame.scope(stage, static_name)` 
 for explicit lifetimes. Close guards in reverse opening order. Normal Rust borrowing prevents finishing a frame
 while a guard remains live. A deliberately forgotten guard is reported as unclosed; it does not turn into a passing
 budget check. Dropping an unfinished frame discards it.
+
+`finish()` also marks an external profiler frame boundary. For a partial CPU interval use `finish_interval()`;
+the host can call `finish_backend_frame()` after its complete displayed frame, including rendering and GUI. The
+runtime simulation collector uses the interval variant, so enabling CPU reports does not relocate backend boundaries.
 
 Each collector measures one thread. Create separate collectors for worker threads; this API does not merge their
 times or add them to the main-thread budget. The frame duration is elapsed CPU wall time between begin and finish,
@@ -64,7 +68,9 @@ backed by `Instant`. Resolution can yield zero for genuinely short scopes withou
 
 `BudgetTable::new(frame_limit).with_subsystem(stage, limit)` configures explicit inclusive upper limits on exclusive
 CPU time. Equality passes; strictly larger complete durations exceed the limit. Unbudgeted, unmeasured and incomplete
-states remain distinct. There is deliberately no aggregate pass flag hiding missing stage measurements.
+states remain distinct. `BudgetReport::overall_state()` requires every configured stage to be complete and within
+its limit before returning `Within`. Required missing stages return `NotMeasured`; unreliable data returns
+`Incomplete`. A known violation can still return `Exceeded` even if another stage is missing.
 
 The four `proposed_*` tables reproduce the CPU-only proposal in
 [`2026-10-30-performance-and-scale.md`, section 3.2](research/2026-10-30-performance-and-scale.md): Dev/60, Mid/60,
@@ -80,7 +86,35 @@ cargo run -p metallic_profiling --example frame_report
 
 Its CPU loop demonstrates report availability and formatting. It is not a Parkour frame benchmark and establishes
 no FPS, hardware-tier or profiler-overhead result. The headless Parkour benchmark and Studio developer-mode timeline
-remain dependent on the runtime/editor work; #23 is not completed by this foundation.
+remain separate work; #23 is not completed by this foundation.
+
+## Runtime simulation intervals
+
+New games default to CPU profiling off. Enable it explicitly on a running game:
+
+```rust
+game.set_cpu_profiling_enabled(true);
+game.frame(&input, dt);
+if let Some(report) = game.latest_simulation_profile() {
+    let checks = report.check_budgets(&BudgetTable::proposed_dev_60());
+    // Inspect checks.overall_state(), not only checks.frame.state.
+}
+```
+
+`latest_simulation_budget(&table)` assesses the retained report directly. Recording retains at most 128 samples
+and has no history. It measures input normalization/camera work, characters/physics/resync and events/scripts inside
+`Game::frame`. A nested respawn physics sync is charged to physics rather than double-counted as script work.
+`FrameOutput`, simulation ticks, dt normalization and camera behavior are unchanged.
+
+These are **simulation/camera CPU intervals**, not full displayed frames. They exclude separate `Game::render`,
+GUI, window/input gathering and GPU execution. Those stage timings stay unavailable, and a whole-frame policy
+requiring them cannot pass overall. A fresh zero-tick frame measures camera work without inventing script/physics
+measurements. Disabled recording initializes no collector and reads no profiling clock; existing game allocations
+and script execution-budget clocks are independent of this recorder's allocation guarantee.
+
+The latest report is cleared before every frame, at start/stop, and when the enable flag changes. Stopped frames
+produce no simulation report. A reloaded game begins disabled with no prior report. Tests exercise these rules with
+the actual Parkour project and compare enabled/disabled frame outputs without asserting machine timing targets.
 
 ## Optional backends
 
@@ -127,6 +161,10 @@ These are currently instrumented:
 | `Renderer::sync` | `render.sync` |
 | `Renderer::render` | `render.cpu` |
 | `Renderer::prewarm` | `render.prewarm` |
+| Runtime input/camera and move-input processing | `runtime.input`, `runtime.camera`, `runtime.move_input` |
+| Runtime character/physics work and resync | `runtime.physics`, `runtime.physics_sync`, `runtime.respawn_sync` |
+| Runtime event/script dispatch | `runtime.scripts` |
+| Separate runtime render/GUI entrypoints | `runtime.render`, `runtime.gui` |
 
 Prewarm can include CPU waiting on device work; that span is not a GPU query. Scope payloads contain no dynamic
 script names, source text or user-supplied data. Existing script/render behavior tests cover default-build execution;
@@ -135,9 +173,10 @@ individual backend builds are also compiled, and inactive Tracy behavior is test
 This foundation references #121 and leaves it open for:
 
 - Physics entrypoint scopes after the shared leaf crate lands, coordinated with the physics work.
-- Actual `Game::frame` scopes, frame boundaries and a headless Parkour frame benchmark after #8 supplies the runtime.
+- Whole displayed-frame aggregation/boundaries and a headless Parkour percentile benchmark using the new reports.
 - Host backend initialization and developer-mode budget display after #14.
 - Timeline/per-script integration and diagnostics in #23, with its #8/#10 dependencies.
 
-No full-app Tracy host, developer-mode UI, complete per-subsystem budget integration or game benchmark is delivered
-by this substrate. The first complete run must be verified through those application integration tasks.
+No full-app Tracy host, developer-mode UI, complete displayed-frame budget integration or game performance benchmark
+is delivered here. Actual simulation-interval integration is implemented and covered by Parkour tests; the remaining
+application integrations need their own end-to-end verification.

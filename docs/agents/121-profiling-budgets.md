@@ -1,60 +1,47 @@
-# Issue 121: profiling scopes and frame budgets
+﻿# Issue 121: CPU scopes and simulation budget reports
 
-Status: substrate implemented and tested; application integration remains planned.
-Branch: `studio/121-profiling-budgets`.
-Base: `2780922` (2026-10-30). No owner decision is required for this scoped foundation.
+Status: implemented and tested for CPU recording, backend entrypoints and simulation intervals. Full displayed-frame/dev-mode integration remains planned; PR references #121 rather than closing it.
+Branch: `studio/121-profiling-budgets`. Date: 2026-10-30.
+Validated runtime base: `937dcd8` (includes #8 Parkour/runtime and #163 Studio shell).
 
-## Goal and refined acceptance
+## Goal
 
-Implement bounded CPU scopes and explicit frame/stage budget reports as an independent leaf crate. Optional
-profiling/puffin/Tracy exports are compile-time choices. No UI, GPU measurements, automatic game-stage budget integration
-or claimed hardware performance. Preserve core and physics APIs owned by other work.
+Provide bounded CPU timing and honest budget assessments, with opt-in real Game integration and optional external profilers. Preserve FrameOutput and gameplay. Missing render/GUI measurements must not certify a whole-frame policy. No UI or GPU timing changes.
 
-Acceptance: deterministic manual-clock tests for exclusive nested attribution, repeated scopes, measured-zero versus
-unavailable values, equality/overrun checks, trace/nesting bounds, bad clocks, bad/forgotten guard lifetimes and
-session reset. Default recording/reporting must make zero heap allocations in a counting-allocator test. Document
-proposed budget values separately from achieved results. Run all repository checks before PR.
+## Implemented
 
-## Done
-
-- Read AGENTS/CLAUDE, status, architecture, #121, #23 and the performance-and-scale research.
-- Verified #121 was ready with no fresh claim or blocking dependency; posted refined scope, then claimed it.
-- Added `metallic_profiling`, its test-clock API, bounded frame recorder, availability-aware budget checks, optional
-  mutually exclusive external backends and a synthetic CPU-only report example.
-- Added runtime re-export and feature forwarding. Runtime itself is still a scaffold; no synthetic game API added.
-- Instrumented implemented ScriptVm run/step and Scene/Renderer sync/render/prewarm with static, opt-in backend
-  scopes. This changes no method signatures. No dynamic script names/source are sent to profilers.
-- Configured optional Tracy manual lifetime and localhost-only access. The lexical bridge keeps an optional span
-  guard and safely skips uninitialized leaf scopes/frame marks; host startup is explicit and handle drop does not
-  shut down the upstream client.
-- Added integration documentation and architecture notes. No files in core, physics or platform were changed.
+- Independent `metallic_profiling` leaf: monotonic/test clocks, static lexical scopes, fixed trace/nesting capacity, owned interval reports, exclusive CPU accounting and explicit unavailable/incomplete values.
+- Trace overflow drops samples without truncating stage totals. Bad clocks, bad nesting, excessive depth and forgotten guards remain visible; incomplete or absent required data cannot produce an overall budget pass.
+- Proposed configurable CPU policy tables from performance research, labeled as proposals rather than measured/accepted targets.
+- Default collector recording, overflow, iteration and budget assessment allocate zero heap objects in a counting-allocator test. External backends and existing game allocations are outside that guarantee.
+- Optional mutually exclusive puffin/Tracy bridges. Puffin has a real in-memory nested-export test. Tracy uses manual lifetime and localhost-only access; inactive tests verify no client starts. Host initialization is explicit and handle drop does not shut down the upstream client.
+- Static backend scopes in ScriptVm run/step, Scene/Renderer sync/render/prewarm, and runtime simulation/render/GUI entrypoints. No dynamic script names or source payloads.
+- Game CPU recording defaults off. `set_cpu_profiling_enabled`, `latest_simulation_profile` and `latest_simulation_budget` provide bounded 128-sample simulation/camera reports with lifecycle clearing. FrameOutput is unchanged.
+- Simulation intervals exclude separate rendering/GUI/app window processing and do not mark a full external frame boundary. `finish_backend_frame` remains an explicit host responsibility.
+- Architecture/crate docs, integration guide and a synthetic CPU report example. No core, physics or platform files changed.
 
 ## Validation
 
-- Before implementation: `cargo test -p metallic_profiling --test frame_reports -j 4` failed with missing API imports
-  and macro, as expected for the tests-first step.
-- Isolated targeted gate: `cargo test -p metallic_profiling -j 4` passed 10 integration tests and one doctest.
-- `cargo clippy -p metallic_profiling --all-targets -j 4 -- -D warnings`: pass.
-- The counting allocator observed zero allocations during recording, trace overflow, iteration and budget checks.
-- `cargo test -p metallic_profiling --features tracy -j 4`: 10 integration tests and one doctest pass, including
-  `Client::is_running() == false` before/after inactive scopes and frame marks. No Tracy client was started.
-- `cargo test -p metallic_profiling --features puffin -j 4`: 10 integration tests and one doctest pass, including
-  a real in-memory export asserting two nested scopes at depth two (no UI or network transport).
-- Workspace test/clippy/license gates passed on the initial base, including after script/render instrumentation.
-- Both engine-wide individual backend feature checks, all-features license metadata check, warning-free rustdoc,
-  synthetic example and formatting check passed. Final rebased workspace results will be recorded before PR.
-- Final commands use task-scoped `CARGO_TARGET_DIR` pointing to the local Metallic Cargo cache's isolated `lane121`
-  subdirectory and `-j 4`, avoiding same-package artifacts built from other active branches.
+- Tests first: collector tests failed on missing APIs before implementation; real-Game tests failed on missing additive methods before integration.
+- `cargo test --workspace -j 4 -- --test-threads=1`: pass, including existing complete input-only Parkour route/player smoke tests and four new actual-Parkour profiling tests.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: pass.
+- `cargo deny check licenses`: pass; one existing unused MPL allowance warning.
+- Default profiling package: 11 integration tests and one doctest pass, including allocation accounting and missing-required-stage policy behavior.
+- `cargo test -p metallic_profiling --features puffin -j 4`: 11 integration tests and one doctest pass; actual nested scopes retain depth two without UI/network transport.
+- `cargo test -p metallic_profiling --features tracy -j 4`: 11 integration tests and one doctest pass; Client::is_running remains false before/after leaf scopes and frame marks.
+- `cargo clippy --workspace --all-targets --features metallic_runtime/profiling-puffin -j 4 -- -D warnings`: pass.
+- Same engine-wide clippy command with `metallic_runtime/profiling-tracy`: pass (compile/lint only; engine app initialization remains integration work).
+- `cargo deny --all-features check licenses`: pass. This checks dependency metadata; mutually exclusive backends are not compiled together.
+- `RUSTDOCFLAGS=-D warnings cargo doc -p metallic_profiling -p metallic_runtime --no-deps -j 4`: pass.
+- Synthetic `frame_report` example: pass; displays missing stages and overall NotMeasured, not a game benchmark result.
+- Targeted formatting and `git diff --check`: pass.
+- Final gates use an isolated task-scoped local Cargo target (`lane121`) with four build jobs. This lane has only built this worktree; source ownership must be cleaned/guarded before any future worktree switch (infra #209).
 
-## Next
+## Remaining issue acceptance
 
-Finish workspace checks after entrypoint instrumentation, backend compile/license checks and the synthetic example,
-then open one PR with `Refs #121`. The issue remains open for physics instrumentation after the leaf lands, real
-Game/frame benchmark integration after #8, host initialization/dev-mode budgets after #14 and timeline/per-script
-diagnostics in #23. A source/proposal foundation is not full application integration.
+- Physics-library backend entrypoints after the shared leaf lands, coordinated with physics work.
+- Whole displayed-frame aggregation and explicit application backend startup/frame boundaries.
+- Developer-mode budget consumer after #14; timeline/per-script diagnostics under #23 and its editor dependencies.
+- A headless Parkour percentile benchmark using real reports; no benchmark target was measured or asserted here.
 
-## Limits
-
-The collector is single-threaded and stores no history. Stage attribution errors are explicit; no GPU values or
-unimplemented-stage zeros are invented. Backends can allocate. No recorder-overhead benchmark, game benchmark,
-Puffin UI or Tracy network capture has been run.
+The collector is single-threaded and retains no history. No recorder-overhead benchmark, GPU measurement, Puffin UI or Tracy network capture was run. Actual simulation integration is tested; full application integration is not claimed.
