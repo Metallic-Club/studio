@@ -11,8 +11,84 @@ use crate::cframe::{CFrame, cross, dot};
 use crate::value::{Value, Vec3};
 use crate::{CoreError, InstanceId, World};
 
-/// Smallest size of a part on each axis after `resize` (Roblox's minimum part size).
+/// Smallest size of a part on each axis (Roblox's minimum part size).
 pub const MIN_PART_SIZE: f64 = 0.001;
+
+/// Largest size of a part on each axis (Roblox's maximum part size).
+pub const MAX_PART_SIZE: f64 = 2048.0;
+
+/// A part size with each axis clamped to `MIN_PART_SIZE..=MAX_PART_SIZE`, as Roblox clamps
+/// `BasePart.Size` on assignment.
+pub fn clamp_part_size(size: Vec3) -> Vec3 {
+    let c = |v: f64| v.clamp(MIN_PART_SIZE, MAX_PART_SIZE);
+    Vec3::new(c(size.x), c(size.y), c(size.z))
+}
+
+fn size_in_limits(size: Vec3) -> bool {
+    [size.x, size.y, size.z]
+        .iter()
+        .all(|v| (MIN_PART_SIZE..=MAX_PART_SIZE).contains(v))
+}
+
+/// `cf` with its rotation made orthonormal (Gram-Schmidt on the right and up axes), as Roblox
+/// does with the CFrames it stores. Errors when the rotation is degenerate or not finite.
+pub fn orthonormal(cf: CFrame, property: &str) -> Result<CFrame, CoreError> {
+    if !cf.is_finite() {
+        return Err(wrong(property, "all numeric components must be finite"));
+    }
+    let right = cf.right_vector();
+    let up = cf.up_vector();
+    let rm = right.magnitude();
+    let degenerate = || wrong(property, "the rotation is degenerate");
+    if rm < 1e-9 {
+        return Err(degenerate());
+    }
+    let rest = up - right * (dot(up, right) / (rm * rm));
+    if rest.magnitude() < 1e-9 * up.magnitude().max(1.0) {
+        return Err(degenerate());
+    }
+    let out = cf.orthonormalize();
+    if out.is_finite() {
+        Ok(out)
+    } else {
+        Err(degenerate())
+    }
+}
+
+/// Property writes planned by an operation. They are all checked before any is applied, so a
+/// failing operation changes nothing.
+#[derive(Default)]
+struct Plan(Vec<(InstanceId, &'static str, Value)>);
+
+impl Plan {
+    fn push(&mut self, id: InstanceId, prop: &'static str, value: Value) {
+        self.0.push((id, prop, value));
+    }
+
+    /// The writes that put a part at `cf` (orthonormal).
+    fn part_cframe(&mut self, id: InstanceId, cf: CFrame) {
+        self.push(id, "Position", Value::Vector3(cf.position));
+        self.push(id, "Orientation", Value::Vector3(cf.orientation_degrees()));
+    }
+
+    fn cframe(&mut self, id: InstanceId, prop: &'static str, cf: CFrame) {
+        self.push(id, prop, Value::CFrame(Box::new(cf)));
+    }
+
+    /// Errors (naming `what`) unless every planned value is finite; then applies them all.
+    fn apply(self, world: &mut World, what: &str) -> Result<(), CoreError> {
+        if let Some((_, prop, _)) = self.0.iter().find(|(_, _, v)| !v.has_finite_components()) {
+            return Err(wrong(
+                prop,
+                &format!("{what} would make it too large to represent; nothing was changed"),
+            ));
+        }
+        for (id, prop, value) in self.0 {
+            world.set(id, prop, value)?;
+        }
+        Ok(())
+    }
+}
 
 /// Overlap below this depth (studs) counts as touching, not colliding, in [`resize`].
 const TOUCH_TOLERANCE: f64 = 1e-4;
@@ -140,13 +216,13 @@ pub fn part_cframe(world: &World, id: InstanceId) -> Result<CFrame, CoreError> {
     ))
 }
 
-/// Writes `BasePart.CFrame` as `Position` and `Orientation`; nothing changes if it is not finite.
+/// Writes `BasePart.CFrame` as `Position` and `Orientation`. The rotation is made orthonormal
+/// first; nothing changes if it is degenerate or not finite.
 pub fn set_part_cframe(world: &mut World, id: InstanceId, cf: CFrame) -> Result<(), CoreError> {
-    if !cf.is_finite() {
-        return Err(wrong("CFrame", "all numeric components must be finite"));
-    }
-    world.set(id, "Position", Value::Vector3(cf.position))?;
-    world.set(id, "Orientation", Value::Vector3(cf.orientation_degrees()))
+    let cf = orthonormal(cf, "CFrame")?;
+    let mut plan = Plan::default();
+    plan.part_cframe(id, cf);
+    plan.apply(world, "CFrame")
 }
 
 /// The model's `PrimaryPart` when it is a live BasePart inside the model.
@@ -174,11 +250,9 @@ pub fn world_pivot(world: &World, model: InstanceId) -> Result<CFrame, CoreError
     }
 }
 
-/// Sets `Model.WorldPivot`; from now on it no longer follows the bounding box.
+/// Sets `Model.WorldPivot` (made orthonormal); from now on it no longer follows the bounding box.
 pub fn set_world_pivot(world: &mut World, model: InstanceId, cf: CFrame) -> Result<(), CoreError> {
-    if !cf.is_finite() {
-        return Err(wrong("WorldPivot", "all numeric components must be finite"));
-    }
+    let cf = orthonormal(cf, "WorldPivot")?;
     set_cframe_prop(world, model, "WorldPivot", cf)?;
     world.set(model, "WorldPivotSet", Value::Bool(true))
 }
@@ -208,35 +282,42 @@ pub fn get_pivot(world: &World, id: InstanceId) -> Result<CFrame, CoreError> {
 }
 
 /// `PVInstance:PivotTo(target)`: moves a part, or every part of a model, so the pivot lands on
-/// `target`. A Model's WorldPivot becomes `target` (or moves with its PrimaryPart), and the
-/// WorldPivots of nested Models move with their parts.
+/// `target` (made orthonormal). A Model's WorldPivot becomes `target` (or moves with its
+/// PrimaryPart), and the WorldPivots of nested Models move with their parts. Every new value is
+/// computed and checked first: if any would not be finite, it errors and nothing changes.
 pub fn pivot_to(world: &mut World, id: InstanceId, target: CFrame) -> Result<(), CoreError> {
-    if !target.is_finite() {
-        return Err(wrong("CFrame", "all numeric components must be finite"));
-    }
+    let target = orthonormal(target, "CFrame")?;
+    let mut plan = Plan::default();
     if world.is_a(id, "BasePart") {
         let offset = cframe_prop(world, id, "PivotOffset")?;
-        return set_part_cframe(world, id, target * offset.inverse());
+        plan.part_cframe(id, target * offset.inverse());
+        return plan.apply(world, "PivotTo");
     }
     let current = get_pivot(world, id)?;
     let delta = target * current.inverse();
     let has_primary = primary_part(world, id).is_some();
     for d in descendants(world, id) {
         if world.is_a(d, "BasePart") {
-            let cf = part_cframe(world, d)?;
-            set_part_cframe(world, d, delta * cf)?;
+            plan.part_cframe(d, delta * part_cframe(world, d)?);
         } else if world.is_a(d, "Model") && world_pivot_set(world, d) {
-            let cf = cframe_prop(world, d, "WorldPivot")?;
-            set_cframe_prop(world, d, "WorldPivot", delta * cf)?;
+            plan.cframe(
+                d,
+                "WorldPivot",
+                delta * cframe_prop(world, d, "WorldPivot")?,
+            );
         }
     }
     if !has_primary {
-        set_world_pivot(world, id, target)?;
+        plan.cframe(id, "WorldPivot", target);
+        plan.push(id, "WorldPivotSet", Value::Bool(true));
     } else if world_pivot_set(world, id) {
-        let cf = cframe_prop(world, id, "WorldPivot")?;
-        set_cframe_prop(world, id, "WorldPivot", delta * cf)?;
+        plan.cframe(
+            id,
+            "WorldPivot",
+            delta * cframe_prop(world, id, "WorldPivot")?,
+        );
     }
-    Ok(())
+    plan.apply(world, "PivotTo")
 }
 
 /// Centre and size of the box around every part of `model`, measured along the axes of `frame`
@@ -291,38 +372,60 @@ pub fn model_scale(world: &World, model: InstanceId) -> f64 {
 /// values at scale 1, about the model's pivot (which stays put). Part `PivotOffset`s and nested
 /// Models' WorldPivots scale with them; nested Models' scales multiply. `scale` is absolute:
 /// `ScaleTo(2)` then `ScaleTo(1)` restores the original.
+///
+/// Every new value is computed and checked first. If a part would end up outside
+/// `MIN_PART_SIZE..=MAX_PART_SIZE` on any axis, or any value would not be finite, it errors and
+/// nothing changes (`GetScale` included).
 pub fn scale_to(world: &mut World, model: InstanceId, scale: f64) -> Result<(), CoreError> {
     if !(scale.is_finite() && scale > 0.0) {
         return Err(wrong("Scale", "must be a positive finite number"));
     }
     let factor = scale / model_scale(world, model);
+    if !(factor.is_finite() && factor > 0.0) {
+        return Err(wrong("Scale", "the change of scale is too large"));
+    }
     let center = get_pivot(world, model)?.position;
     let about = |p: Vec3| center + (p - center) * factor;
+    let mut plan = Plan::default();
     for d in descendants(world, model) {
         if world.is_a(d, "BasePart") {
-            let position = vec_prop(world, d, "Position")?;
-            let size = vec_prop(world, d, "Size")?;
+            let size = vec_prop(world, d, "Size")? * factor;
+            if !size_in_limits(size) {
+                return Err(wrong(
+                    "Size",
+                    &format!(
+                        "ScaleTo({scale}) would make a part {} by {} by {} studs; each axis must \
+                         be {MIN_PART_SIZE} to {MAX_PART_SIZE}. Nothing was changed",
+                        size.x, size.y, size.z
+                    ),
+                ));
+            }
             let mut offset = cframe_prop(world, d, "PivotOffset")?;
             offset.position = offset.position * factor;
-            world.set(d, "Position", Value::Vector3(about(position)))?;
-            world.set(d, "Size", Value::Vector3(size * factor))?;
-            set_cframe_prop(world, d, "PivotOffset", offset)?;
+            let position = about(vec_prop(world, d, "Position")?);
+            plan.push(d, "Position", Value::Vector3(position));
+            plan.push(d, "Size", Value::Vector3(size));
+            plan.cframe(d, "PivotOffset", offset);
         } else if world.is_a(d, "Model") {
             if world_pivot_set(world, d) {
                 let mut cf = cframe_prop(world, d, "WorldPivot")?;
                 cf.position = about(cf.position);
-                set_cframe_prop(world, d, "WorldPivot", cf)?;
+                plan.cframe(d, "WorldPivot", cf);
             }
             let inner = model_scale(world, d) * factor;
-            world.set(d, "ScaleFactor", Value::Number(inner))?;
+            if !(inner.is_finite() && inner > 0.0) {
+                return Err(wrong("Scale", "a nested model's scale would overflow"));
+            }
+            plan.push(d, "ScaleFactor", Value::Number(inner));
         }
     }
     if world_pivot_set(world, model) {
         let mut cf = cframe_prop(world, model, "WorldPivot")?;
         cf.position = about(cf.position);
-        set_cframe_prop(world, model, "WorldPivot", cf)?;
+        plan.cframe(model, "WorldPivot", cf);
     }
-    world.set(model, "ScaleFactor", Value::Number(scale))
+    plan.push(model, "ScaleFactor", Value::Number(scale));
+    plan.apply(world, "ScaleTo")
 }
 
 /// An oriented box: centre frame and half size.
@@ -375,7 +478,7 @@ fn part_box(world: &World, id: InstanceId) -> Result<Obb, CoreError> {
 }
 
 /// `BasePart:Resize(face, delta)`: moves one face by `delta` studs along its normal while the
-/// opposite face stays put (sizes stop at [`MIN_PART_SIZE`]). Ball parts grow on every axis;
+/// opposite face stays put (sizes stay within [`MIN_PART_SIZE`] and [`MAX_PART_SIZE`]). Ball parts grow on every axis;
 /// a Cylinder's Y and Z (its round section) grow together.
 ///
 /// Returns `false` and changes nothing when the part can collide and the grown part would newly
@@ -392,7 +495,7 @@ pub fn resize(
     let cf = part_cframe(world, part)?;
     let size = vec_prop(world, part, "Size")?;
     let (i, sign) = face.axis();
-    let target = (axis(size, i) + delta).max(MIN_PART_SIZE);
+    let target = (axis(size, i) + delta).clamp(MIN_PART_SIZE, MAX_PART_SIZE);
     let shape = match world.get_ref(part, "Shape")? {
         Value::String(s) => s.as_str(),
         _ => "Block",
@@ -428,8 +531,10 @@ pub fn resize(
             }
         }
     }
-    world.set(part, "Size", Value::Vector3(new_size))?;
-    world.set(part, "Position", Value::Vector3(new_cf.position))?;
+    let mut plan = Plan::default();
+    plan.push(part, "Size", Value::Vector3(new_size));
+    plan.push(part, "Position", Value::Vector3(new_cf.position));
+    plan.apply(world, "Resize")?;
     Ok(true)
 }
 

@@ -21,6 +21,10 @@ Roblox names and behaviour for the transform API the building tools and BuildKit
   `ScaleTo(0.5)` separately.
 - `PVInstance` is not added to the class chain: it would add a step to `find_property` for every inherited lookup.
 
+- Review follow-ups: `ScaleTo`/`PivotTo`/`Resize` plan every write and check it before applying (atomic). Part sizes
+  are capped at 2048 per axis (Luau `Size` writes clamp, `Resize` clamps, `ScaleTo` errors). Stored CFrames are
+  orthonormalised (`transform::orthonormal`) and degenerate ones are rejected.
+
 ## Next
 - Studio gizmos (#200 follow-ups) call `metallic_core::transform` directly.
 - CFrame in remote payloads.

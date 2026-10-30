@@ -369,9 +369,18 @@ pub(crate) fn lua_to_value(value: &Value, ty: ValueType, prop: &str) -> mlua::Re
         CoreValue::CFrame(cf) => cf.is_finite(),
         _ => true,
     };
-    if finite {
-        Ok(converted)
-    } else {
-        Err(lua_error(format!("property {prop} must be finite")))
+    if !finite {
+        return Err(lua_error(format!("property {prop} must be finite")));
     }
+    // Stored CFrames keep an orthonormal rotation (Roblox does the same), so a pivot set from
+    // a scaled or skewed matrix still round-trips through PivotTo and GetPivot.
+    if let CoreValue::CFrame(cf) = &converted {
+        let cf = metallic_core::transform::orthonormal(**cf, prop).map_err(|_| {
+            lua_error(format!(
+                "invalid value for property {prop}: the rotation is degenerate"
+            ))
+        })?;
+        return Ok(CoreValue::CFrame(Box::new(cf)));
+    }
+    Ok(converted)
 }

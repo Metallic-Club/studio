@@ -371,3 +371,103 @@ fn members_and_errors() {
     );
     assert_eq!(lines.len(), 10, "{lines:?}");
 }
+
+#[test]
+fn scale_to_and_pivot_to_change_nothing_when_they_fail() {
+    let lines = run(r#"
+        local m = Instance.new("Model", workspace)
+        local a = part("A", m, V(0, 0, 0), V(4, 1, 2))
+        local inner = Instance.new("Model", m)
+        local b = part("B", inner, V(10, 0, 0), V(2, 2, 2))
+        m.WorldPivot = CFrame.new()
+        m:ScaleTo(2)
+        -- 1000 would make A 4000 studs long: past the 2048 limit.
+        print(pcall(function() m:ScaleTo(1000) end))
+        near(m:GetScale(), 2, "scale kept")
+        near(inner:GetScale(), 2, "nested scale kept")
+        near(a.Size, V(8, 2, 4), "a size kept")
+        near(b.Size, V(4, 4, 4), "b size kept")
+        near(b.Position, V(20, 0, 0), "b position kept")
+
+        -- Sizes in range, but a position would overflow to infinity.
+        local far = Instance.new("Model", workspace)
+        local near0 = part("Near", far, V(0, 0, 0), V(0.001, 0.001, 0.001))
+        local edge = part("Edge", far, V(1e303, 0, 0), V(0.001, 0.001, 0.001))
+        far.WorldPivot = CFrame.new()
+        print(pcall(function() far:ScaleTo(1e6) end))
+        near(far:GetScale(), 1, "far scale kept")
+        near(near0.Size, V(0.001, 0.001, 0.001), "near size kept")
+        if edge.Position.X ~= 1e303 then error("edge moved") end
+
+        -- PivotTo: Edge (at 1e308) would land at 2e308, past the largest number; Near is moved
+        -- first in tree order and must not move.
+        edge.Position = V(1e308, 0, 0)
+        print(pcall(function() far:PivotTo(CFrame.new(1e308, 0, 0)) end))
+        near(near0.Position, V(0, 0, 0), "near position kept")
+        same(far.WorldPivot, CFrame.new(), "WorldPivot kept")
+    "#);
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(
+        lines[0].starts_with("print:false") && lines[0].contains("2048"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1].starts_with("print:false") && lines[1].contains("nothing was changed"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[2].starts_with("print:false") && lines[2].contains("nothing was changed"),
+        "{lines:?}"
+    );
+    assert_eq!(lines[3], "print:ok");
+}
+
+#[test]
+fn part_size_is_capped_at_2048_studs() {
+    assert_ok(
+        run(r#"
+        local p = part("P", workspace, V(0, 0, 0), V(4, 1, 2))
+        p.CanCollide = false
+        p.Size = V(5000, 1, 0)
+        near(p.Size, V(2048, 1, 0.001), "assignment clamps")
+        p.Size = V(4, 1, 2)
+        -- Resize stops at 2048 and keeps the left face (x = -2) where it was.
+        print(p:Resize(Enum.NormalId.Right, 5000))
+        near(p.Size, V(2048, 1, 2), "resize clamps")
+        near(p.Position, V(-2 + 1024, 0, 0), "left face kept")
+    "#)
+        .into_iter()
+        .filter(|l| l != "print:true")
+        .collect(),
+    );
+}
+
+#[test]
+fn pivot_offset_is_made_orthonormal() {
+    let lines = run(r#"
+        local p = part("P", workspace, V(0, 0, 0))
+        -- A scaled rotation (2 on the diagonal) is stored as the plain rotation.
+        p.PivotOffset = CFrame.new(1, 2, 3, 2, 0, 0, 0, 2, 0, 0, 0, 2)
+        same(p.PivotOffset, CFrame.new(1, 2, 3), "scaled matrix")
+        -- A skewed one: right (1, 0, 0), up (1, 1, 0); Gram-Schmidt keeps right, fixes up.
+        p.PivotOffset = CFrame.new(0, -1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1)
+        same(p.PivotOffset, CFrame.new(0, -1, 0), "skewed matrix")
+        local target = CFrame.new(5, 6, 7) * CFrame.Angles(0.3, 0.6, 0.9)
+        p:PivotTo(target)
+        same(p:GetPivot(), target, "round trip")
+        -- A skewed target lands as its orthonormal version.
+        local skewed = CFrame.new(1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1)
+        p:PivotTo(skewed)
+        same(p:GetPivot(), skewed:Orthonormalize(), "skewed target")
+        print(pcall(function() p.PivotOffset = CFrame.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) end))
+        print(pcall(function() p:PivotTo(CFrame.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) end))
+    "#);
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    for line in &lines[..2] {
+        assert!(
+            line.starts_with("print:false") && line.contains("degenerate"),
+            "{lines:?}"
+        );
+    }
+    assert_eq!(lines[2], "print:ok");
+}

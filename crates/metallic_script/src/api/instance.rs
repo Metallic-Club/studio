@@ -399,7 +399,14 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
                     Err(not_a_member(key, class))
                 };
             };
-            let converted = lua_to_value(value, def.ty, key)?;
+            let mut converted = lua_to_value(value, def.ty, key)?;
+            // Like Roblox, a part's Size is clamped to 0.001..=2048 studs per axis.
+            if key == "Size"
+                && let CoreValue::Vector3(size) = converted
+                && is_subclass(class, "BasePart")
+            {
+                converted = CoreValue::Vector3(transform::clamp_part_size(size));
+            }
             this.state
                 .world_mut()?
                 .set(this.id, key, converted)

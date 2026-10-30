@@ -95,7 +95,8 @@ Code: `metallic_core::transform`, shared with Studio's building tools. Spec: `do
   bounding box with world axes, and follows the parts; after that it stays where it was put. It is ignored while a
   valid `PrimaryPart` is set. `Model.PrimaryPart` (BasePart or nil) is ignored when it is not a BasePart inside the model.
 - `BasePart:Resize(face, delta)`: `face` is `Enum.NormalId` (`Right Top Back Left Bottom Front`, values 0 to 5; the number
-  or the name also work). The face moves `delta` studs along its normal and the opposite face stays; sizes stop at 0.001.
+  or the name also work). The face moves `delta` studs along its normal and the opposite face stays; sizes stay within
+  0.001 to 2048 studs.
   A Ball grows on all axes, a Cylinder's Y and Z together. Returns false and changes nothing when the part has
   `CanCollide` and the grown part would newly overlap (by more than 0.0001 studs) another `CanCollide` part in
   Workspace; true otherwise.
@@ -103,6 +104,12 @@ Code: `metallic_core::transform`, shared with Studio's building tools. Spec: `do
   as in Roblox: `ScaleTo(2)` then `ScaleTo(0.5)` gives half the original size, and `ScaleTo(1)` (or
   `ScaleTo(GetScale() * 0.5)` after `ScaleTo(2)`) restores it. Part positions and sizes scale about the pivot, which stays
   put; orientations stay; `PivotOffset` positions and nested WorldPivots scale too; nested Models' `GetScale` multiplies.
+- **Limits.** A part's `Size` is 0.001 to 2048 studs per axis. Assigning `Size` clamps each axis, as Roblox does, and
+  so does `Resize`. `ScaleTo` and `PivotTo` compute and check every new value first. If a part would leave the size
+  limits, or a position would overflow, they error and change nothing (`GetScale` included).
+- **CFrame properties.** `PivotOffset`, `WorldPivot`, `BasePart.CFrame` and `PivotTo`'s target are made orthonormal on
+  write. A scaled or skewed matrix keeps its right axis and corrects the others (`CFrame:Orthonormalize`), so
+  `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate rotation (for example all zeros) errors.
 - `Model:GetBoundingBox()` returns `(CFrame, Vector3)`: the box around every BasePart descendant, oriented like the
   PrimaryPart (or the pivot when there is none). An empty model returns its pivot and size 0.
   `Model:GetExtentsSize()` returns that size.
