@@ -33,13 +33,16 @@ local workspace artifacts as validation of another source checkout.
   passed after review fixes; same-owner invocation skipped cleanup as expected.
 - `cargo deny check licenses`: passed (existing unused MPL-2.0 allowance warning).
 - `cargo fmt --check`, `git diff --check`, existing release Python tests: passed.
+- Rebased onto `ebb94f3`; upstream changes were building-tools documentation only.
+  Engine sources, Cargo manifests/lock, helper/tests and CI workflow were identical
+  to the validated tip after rebase. Peer re-review independently passed fresh/reused
+  real Cargo lanes, Clippy output rejection and the Windows Unicode-path case.
 - Before switching from #121, verified the resolved lane and cleaned only local
   workspace packages through Cargo. Third-party artifacts were retained.
 
 ## Next
 
-- Rebase on current main (currently docs-only changes from the validated Rust source),
-  open and attach PR. Do not merge. Windows/Linux helper CI remains pending until the PR runs.
+- Open and attach PR. Do not merge. Windows/Linux helper CI remains pending until the PR runs.
 
 ## Open questions
 
