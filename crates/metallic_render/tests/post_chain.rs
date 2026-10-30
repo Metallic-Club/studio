@@ -1,10 +1,9 @@
 //! The HDR target, the finish pass and the post chain on a real (or software) adapter.
 //! Skipped when the machine has none.
-use metallic_core::World;
 use metallic_render::glam::Vec3;
 use metallic_render::{
-    Camera, FullscreenPass, PostContext, PostPass, PostSlot, Quality, RenderContext,
-    RenderSettings, Renderer, ToneCurve,
+    Camera, FinishSettings, FullscreenPass, LightingInputs, PostContext, PostPass, PostSlot,
+    Quality, RenderContext, RenderSettings, Renderer, ToneCurve,
 };
 
 const SIZE: (u32, u32) = (64, 48);
@@ -17,11 +16,18 @@ fn flat_sky(quality: Quality, value: f32) -> Option<Renderer> {
         wgpu::TextureFormat::Rgba8UnormSrgb,
         RenderSettings { quality },
     );
+    // These tests check the finish pass and the chain alone: no lighting curve, grade, fog or
+    // bloom.
+    r.set_lighting(&LightingInputs {
+        atmosphere: None,
+        ..LightingInputs::default()
+    });
+    r.finish = FinishSettings::default();
+    r.post_mut().remove("bloom");
     r.sky.zenith = [value; 3];
     r.sky.horizon = [value; 3];
     r.sky.ground = [value; 3];
     r.sky.to_sun = Vec3::new(0.0, -1.0, 0.0);
-    r.sync(&World::new_with_services());
     Some(r)
 }
 

@@ -13,6 +13,20 @@ struct Globals {
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
     params: vec4<f32>,       // x: cascades, y, z: unused (exposure moved to the finish pass), w: shadow map size
+    // Lighting block (`LightingUniform` in src/lighting.rs; used by lighting.wgsl).
+    light_ambient: vec4<f32>,  // rgb: Ambient, w: EnvironmentDiffuseScale
+    light_outdoor: vec4<f32>,  // rgb: OutdoorAmbient, w: EnvironmentSpecularScale
+    light_bounce: vec4<f32>,   // rgb: ground bounce tint, w: shadow filter radius (texels)
+    light_flags: vec4<f32>,    // x: shadows on, y: diffuse wrap, z: star density, w: star brightness
+    fog_params: vec4<f32>,     // x: density, y: height falloff, z: fog height, w: max opacity
+    fog_toward: vec4<f32>,     // rgb: fog toward the sun, w: anisotropy g
+    fog_away: vec4<f32>,       // rgb: fog away from the sun, w: glare strength
+    fog_extinction: vec4<f32>, // rgb: extinction per channel, w: height fog on
+    legacy_fog: vec4<f32>,     // rgb: FogColor, w: distance fog on
+    legacy_range: vec4<f32>,   // x: FogStart, y: FogEnd
+    sun_disc: vec4<f32>,       // xyz: toward the sun, w: cos(disc radius)
+    moon_disc: vec4<f32>,      // xyz: toward the moon, w: cos(disc radius)
+    celestial: vec4<f32>,      // x: sun disc scale, y: moon radiance, z: bodies shown, w: night
 }
 
 @group(0) @binding(0) var<uniform> g: Globals;

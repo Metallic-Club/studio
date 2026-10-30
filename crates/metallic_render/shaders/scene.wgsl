@@ -154,8 +154,11 @@ fn detail(id: i32, p: vec3<f32>, n: vec3<f32>, px: f32) -> vec4<f32> {
 
 // ---- shadows -----------------------------------------------------------
 
-fn shadow_factor(wp: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32 {
+fn shadow_factor(wp: vec3<f32>, n: vec3<f32>, view_depth: f32, frag: vec2<f32>) -> f32 {
     let count = i32(g.params.x);
+    if (g.light_flags.x < 0.5) {
+        return 1.0;
+    }
     var ci = -1;
     for (var i = 0; i < count; i = i + 1) {
         if (view_depth < g.cascade_splits[i]) {
@@ -171,15 +174,7 @@ fn shadow_factor(wp: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32 {
     let clip = g.cascade_vp[ci] * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
     let ref_depth = clip.z - 0.0004;
-    let ts = 1.0 / g.params.w;
-    var sum = 0.0;
-    for (var dy = -1; dy <= 1; dy = dy + 1) {
-        for (var dx = -1; dx <= 1; dx = dx + 1) {
-            let o = vec2<f32>(f32(dx), f32(dy)) * ts;
-            sum = sum + textureSampleCompareLevel(shadow_tex, shadow_samp, uv + o, ci, ref_depth);
-        }
-    }
-    let lit = sum / 9.0;
+    let lit = shadow_filter(uv, ci, ref_depth, frag);
     let last = g.cascade_splits[count - 1];
     let fade = smoothstep(0.85, 1.0, view_depth / last);
     return mix(lit, 1.0, fade);
@@ -221,18 +216,12 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let spec = big_d * big_g * fres / max(4.0 * ndl * ndv, 1e-3);
 
     let view_depth = 1.0 / in.clip.w;
-    let sh = shadow_factor(in.world_pos, n, view_depth);
-    let direct = (diffuse_col / PI + spec) * g.sun_color.rgb * ndl * sh;
+    let sh = shadow_factor(in.world_pos, n, view_depth, in.clip.xy);
+    let direct = (diffuse_col / PI * diffuse_ndl(dot(n, l)) + spec * ndl) * g.sun_color.rgb * sh;
 
-    // Ambient from the sky gradient: hemisphere for diffuse, reflection vector for specular.
-    let hemi = mix(g.sky_ground.rgb, mix(g.sky_horizon.rgb, g.sky_zenith.rgb, 0.45), n.y * 0.5 + 0.5);
-    let r = reflect(-v, n);
-    let env = mix(sky_gradient(r), hemi, rough);
-    let f_env = f0 + (max(vec3<f32>(1.0 - rough), f0) - f0) * pow(1.0 - ndv, 5.0);
-    let ambient = diffuse_col * hemi + env * f_env * mix(0.35, 1.0, sh);
+    let ambient = ambient_light(diffuse_col, f0, n, v, rough, ndv, sh);
 
     var col = direct + ambient;
-    let fog = 1.0 - exp(-pow(dist * g.camera_pos.w, 2.0));
-    col = mix(col, g.sky_horizon.rgb, clamp(fog, 0.0, 1.0));
+    col = apply_fog(col, in.world_pos);
     return vec4<f32>(col, in.color.a);
 }

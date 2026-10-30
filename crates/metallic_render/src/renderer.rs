@@ -1,7 +1,9 @@
 //! The GPU renderer: buffers, pipelines and the frame stages (shadows, scene into the HDR target,
 //! HDR post passes, finish, LDR post passes; see [`crate::post`]).
+use crate::bloom::{BLOOM_PASS, BloomPass};
 use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
+use crate::lighting::{LightingInputs, LightingUniform, evaluate};
 use crate::meshes::{MeshKind, Vertex};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot};
 use crate::scene::{InstanceRaw, Scene};
@@ -26,6 +28,7 @@ const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
 const FINISH_WGSL: &str = include_str!("../shaders/finish.wgsl");
 const SCENE_WGSL: &str = include_str!("../shaders/scene.wgsl");
 const SKY_WGSL: &str = include_str!("../shaders/sky.wgsl");
+const LIGHTING_WGSL: &str = include_str!("../shaders/lighting.wgsl");
 const SHADOW_WGSL: &str = include_str!("../shaders/shadow.wgsl");
 const SKIN_COMMON_WGSL: &str = include_str!("../shaders/skin_common.wgsl");
 const SKINNED_WGSL: &str = include_str!("../shaders/skinned.wgsl");
@@ -84,6 +87,7 @@ struct Globals {
     sky_horizon: [f32; 4],
     sky_ground: [f32; 4],
     params: [f32; 4],
+    lighting: LightingUniform,
 }
 
 const MESH_ATTRS: [wgpu::VertexAttribute; 2] =
@@ -304,6 +308,9 @@ pub struct Renderer {
     pub finish: FinishSettings,
     post: PostChain,
     finish_gpu: FinishGpu,
+    /// The lighting last applied by [`Renderer::set_lighting`].
+    lighting: Option<LightingInputs>,
+    light_uniform: LightingUniform,
     scene: Scene,
     uploaded_version: Option<u64>,
     meshes: Vec<GpuMesh>,
@@ -443,7 +450,7 @@ impl Renderer {
         );
         let blended = InstanceBuffer::new(&device, 256);
         let finish_gpu = FinishGpu::new(&device);
-        Renderer {
+        let mut renderer = Renderer {
             device,
             queue,
             format: surface_format,
@@ -451,6 +458,8 @@ impl Renderer {
             sky: Sky::default(),
             finish: FinishSettings::default(),
             post: PostChain::default(),
+            lighting: None,
+            light_uniform: LightingUniform::zeroed(),
             finish_gpu,
             scene: Scene::new(),
             uploaded_version: None,
@@ -474,7 +483,10 @@ impl Renderer {
             skin_slots: Vec::new(),
             skinned_draws: Vec::new(),
             skin_scratch: Vec::new(),
-        }
+        };
+        renderer.post.push(Box::new(BloomPass::default()));
+        renderer.set_lighting(&LightingInputs::default());
+        renderer
     }
 
     /// The settings in use.
@@ -526,12 +538,39 @@ impl Renderer {
         self.scene.instance_count()
     }
 
-    /// Reads all BasePart transforms, sizes, colours, materials and transparency from `world`.
+    /// Reads all BasePart transforms, sizes, colours, materials and transparency from `world`,
+    /// and its lighting (the `Lighting` service and its effect children, see
+    /// [`Renderer::set_lighting`]).
     ///
     /// Only parts whose data changed are re-uploaded; an unchanged world costs one read per
     /// property and no GPU work.
     pub fn sync(&mut self, world: &World) {
         self.scene.sync(world);
+        self.set_lighting(&LightingInputs::read(world));
+    }
+
+    /// Applies lighting properties: sets [`Renderer::sky`], [`Renderer::finish`], the bloom
+    /// pass and the shader's lighting block. Does nothing when `inputs` equal the last ones, so
+    /// direct edits of `sky` or `finish` stay until the lighting changes.
+    pub fn set_lighting(&mut self, inputs: &LightingInputs) {
+        if self.lighting.as_ref() == Some(inputs) {
+            return;
+        }
+        let frame = evaluate(inputs);
+        self.sky = frame.sky;
+        self.finish = frame.finish;
+        self.light_uniform = frame.uniform;
+        if let Some(bloom) = self.post.get_mut::<BloomPass>(BLOOM_PASS) {
+            match frame.bloom {
+                Some(b) => {
+                    bloom.intensity = b.intensity;
+                    bloom.size = b.size;
+                    bloom.threshold = b.threshold;
+                }
+                None => bloom.intensity = 0.0,
+            }
+        }
+        self.lighting = Some(inputs.clone());
     }
 
     /// Sets the skinned instances (characters) to draw from the next [`Renderer::render`] on.
@@ -734,6 +773,7 @@ impl Renderer {
             sky_horizon: p(self.sky.horizon, 0.0),
             sky_ground: p(self.sky.ground, 0.0),
             params: [count as f32, 0.0, 0.0, self.shadow_map.resolution as f32],
+            lighting: self.light_uniform,
         }
     }
 
@@ -1215,12 +1255,17 @@ fn make_pipelines(
         &[
             COLOR_WGSL,
             COMMON_WGSL,
+            LIGHTING_WGSL,
             SKIN_COMMON_WGSL,
             SCENE_WGSL,
             SKINNED_WGSL,
         ],
     );
-    let sky_module = shader(device, "metallic sky", &[COLOR_WGSL, COMMON_WGSL, SKY_WGSL]);
+    let sky_module = shader(
+        device,
+        "metallic sky",
+        &[COLOR_WGSL, COMMON_WGSL, LIGHTING_WGSL, SKY_WGSL],
+    );
     // Every scene pipeline writes linear light into the HDR target.
     let format = HDR_FORMAT;
     let shadow_module = shader(device, "metallic shadow", &[SKIN_COMMON_WGSL, SHADOW_WGSL]);

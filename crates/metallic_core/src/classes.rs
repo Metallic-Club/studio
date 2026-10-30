@@ -54,6 +54,13 @@ pub const TOUCH_SLOTS: &[&str] = &["Auto", "Stick", "Look"];
 /// How an `InputAction`'s touch control is placed.
 pub const TOUCH_LAYOUTS: &[&str] = &["Auto", "Custom"];
 
+/// `Lighting.LightingStyle` values.
+pub const LIGHTING_STYLES: &[&str] = &["Realistic", "Soft"];
+
+/// `ColorGradingEffect.TonemapperPreset` values. `Default` and `Retro` are Roblox's names; the
+/// rest are Metallic additions (`docs/research/2026-10-30-lighting.md` 5.4).
+pub const TONEMAPPER_PRESETS: &[&str] = &["Default", "Retro", "AgX", "Neutral", "ACES", "Filmic"];
+
 /// Definition of one property of a class.
 pub struct PropDef {
     /// Property name.
@@ -98,6 +105,16 @@ const fn class(
 }
 
 const GREY: Color3 = Color3::new(163.0, 162.0, 165.0);
+const BLACK: Color3 = Color3::new(0.0, 0.0, 0.0);
+const WHITE: Color3 = Color3::new(255.0, 255.0, 255.0);
+
+const fn num(name: &'static str, default: fn() -> Value) -> PropDef {
+    p(name, ValueType::Number, default)
+}
+
+const fn color(name: &'static str, default: fn() -> Value) -> PropDef {
+    p(name, ValueType::Color3, default)
+}
 
 static CLASSES: &[ClassDef] = &[
     ClassDef {
@@ -125,7 +142,39 @@ static CLASSES: &[ClassDef] = &[
     class("StarterPlayer", "Instance", &[]),
     class("StarterPlayerScripts", "Instance", &[]),
     class("StarterGui", "Instance", &[]),
-    class("Lighting", "Instance", &[]),
+    // Lighting service and its effect children: Roblox names, Metallic defaults and meanings
+    // (docs/research/2026-10-30-lighting.md section 5). Presets: `crate::lighting`.
+    class(
+        "Lighting",
+        "Instance",
+        &[
+            num("ClockTime", || Value::Number(14.5)),
+            num("GeographicLatitude", || Value::Number(41.73)),
+            num("Brightness", || Value::Number(1.0)),
+            num("ExposureCompensation", || Value::Number(0.0)),
+            color("Ambient", || Value::Color3(BLACK)),
+            color("OutdoorAmbient", || Value::Color3(BLACK)),
+            color("ColorShift_Top", || Value::Color3(BLACK)),
+            color("ColorShift_Bottom", || Value::Color3(BLACK)),
+            num("EnvironmentDiffuseScale", || Value::Number(1.0)),
+            num("EnvironmentSpecularScale", || Value::Number(1.0)),
+            p("GlobalShadows", ValueType::Bool, || Value::Bool(true)),
+            num("ShadowSoftness", || Value::Number(0.2)),
+            PropDef {
+                name: "LightingStyle",
+                ty: ValueType::String,
+                default: || Value::String("Realistic".into()),
+                allowed: Some(LIGHTING_STYLES),
+            },
+            color("FogColor", || {
+                Value::Color3(Color3::new(192.0, 192.0, 192.0))
+            }),
+            num("FogStart", || Value::Number(0.0)),
+            num("FogEnd", || Value::Number(100000.0)),
+            num("NightAdaptation", || Value::Number(1.0)),
+            num("MoonBrightness", || Value::Number(1.0)),
+        ],
+    ),
     class("RunService", "Instance", &[]),
     class("Folder", "Instance", &[]),
     class("Model", "Instance", &[]),
@@ -355,6 +404,79 @@ static CLASSES: &[ClassDef] = &[
             }),
         ],
     ),
+    class(
+        "Atmosphere",
+        "Instance",
+        &[
+            num("Density", || Value::Number(0.3)),
+            num("Offset", || Value::Number(0.25)),
+            color("Color", || Value::Color3(Color3::new(199.0, 199.0, 199.0))),
+            color("Decay", || Value::Color3(Color3::new(106.0, 112.0, 125.0))),
+            num("Glare", || Value::Number(2.0)),
+            num("Haze", || Value::Number(1.0)),
+            num("HeightFalloff", || Value::Number(0.02)),
+            num("FogHeight", || Value::Number(0.0)),
+            color("Absorption", || Value::Color3(BLACK)),
+            color("AirColor", || {
+                Value::Color3(Color3::new(116.0, 172.0, 255.0))
+            }),
+        ],
+    ),
+    class(
+        "Sky",
+        "Instance",
+        &[
+            num("SunAngularSize", || Value::Number(1.5)),
+            num("MoonAngularSize", || Value::Number(1.5)),
+            num("StarCount", || Value::Number(3000.0)),
+            p("CelestialBodiesShown", ValueType::Bool, || {
+                Value::Bool(true)
+            }),
+        ],
+    ),
+    class(
+        "Clouds",
+        "Instance",
+        &[
+            p("Enabled", ValueType::Bool, || Value::Bool(true)),
+            num("Cover", || Value::Number(0.0)),
+            color("Color", || Value::Color3(WHITE)),
+        ],
+    ),
+    class(
+        "BloomEffect",
+        "Instance",
+        &[
+            p("Enabled", ValueType::Bool, || Value::Bool(true)),
+            num("Intensity", || Value::Number(0.04)),
+            num("Size", || Value::Number(24.0)),
+            num("Threshold", || Value::Number(0.0)),
+        ],
+    ),
+    class(
+        "ColorCorrectionEffect",
+        "Instance",
+        &[
+            p("Enabled", ValueType::Bool, || Value::Bool(true)),
+            num("Brightness", || Value::Number(0.0)),
+            num("Contrast", || Value::Number(0.0)),
+            num("Saturation", || Value::Number(0.0)),
+            color("TintColor", || Value::Color3(WHITE)),
+        ],
+    ),
+    class(
+        "ColorGradingEffect",
+        "Instance",
+        &[
+            p("Enabled", ValueType::Bool, || Value::Bool(true)),
+            PropDef {
+                name: "TonemapperPreset",
+                ty: ValueType::String,
+                default: || Value::String("Default".into()),
+                allowed: Some(TONEMAPPER_PRESETS),
+            },
+        ],
+    ),
 ];
 
 /// Looks up a class by name.
@@ -393,6 +515,13 @@ pub fn class_def(name: &str) -> Option<&'static ClassDef> {
         "InputContext" => 25,
         "InputAction" => 26,
         "InputBinding" => 27,
+        // Appended after the hot classes so their lookups do not change.
+        "Atmosphere" => 28,
+        "Sky" => 29,
+        "Clouds" => 30,
+        "BloomEffect" => 31,
+        "ColorCorrectionEffect" => 32,
+        "ColorGradingEffect" => 33,
         _ => return None,
     };
     CLASSES.get(index)
