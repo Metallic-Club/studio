@@ -13,6 +13,9 @@ graph LR
   render --> runtime
   runtime --> player[metallic_player]
   runtime --> studio[metallic_studio]
+  anim[metallic_anim] --> runtime
+  anim --> animed[metallic_anim_editor]
+  animed --> studio
 ```
 Arrows point from a dependency to its user. Nothing below `runtime` knows about the apps.
 
@@ -35,6 +38,20 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **metallic_player** (Task 8): `metallic-player <project dir>`; window, input, headless mode for smoke tests.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+- **metallic_anim** (#40, implemented): animation data and playback, pure Rust (glam, no GPU). Typed keyframe
+  `Curve<T>` (f32, Vec2, Vec3, Quat, Color3, bool) with constant, linear, Bezier and Roblox `EasingStyle`/`Direction`
+  interpolation; `Clip` of joint and property tracks plus event markers; `Skeleton`/`Pose` for 3D joints and 2D bones
+  (tracks are offsets from rest, like Roblox Poses); `Animator` (Roblox-style tracks: priority, weight, speed, fades,
+  additive, per-joint masks, marker events); `StateMachine` (bool/float/trigger parameters, 1D blends, exit times);
+  `Tween`/`TweenInfo` (Roblox semantics); two-bone IK and look-at; root-motion extraction; RON text format
+  (`format::clip_to_text`, versioned, one key per line). No Instance or World knowledge: `metallic_runtime` will bind
+  Animator poses to Motor6D-like joints and Tweens to Instance properties.
+- **metallic_anim_editor** (#40, implemented): egui widgets that edit one `EditorState` (a `Clip` plus playhead,
+  selection and views): `DopeSheet` (timeline), `CurveEditor`, `TransportBar`, `KeyInspector` and painter-only
+  previews (2D bone rig, blocky 3D figure). Theme tokens follow the Studio UI design (PR #127). All key edits go
+  through `EditorState` methods so Studio can wrap them in `Command`s; these widgets are the seed of the shared
+  Timeline and Curve editor in `metallic_studio::widgets`. Demo: `cargo run -p metallic_anim_editor --example
+  anim_editor_demo`.
 
 ## Frame loop
 `Game::frame(input, dt)`: input -> scripts (`ScriptHost::step`: Heartbeat, Touched, queued remotes, resumed threads)
@@ -50,6 +67,8 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **A material:** the material list in `classes.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
   procedural detail), and density/friction in `metallic_physics`. Test `material_table_has_every_registry_material`
   must still pass.
+- **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
+  `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
 - **A Studio edit action:** a `Command` in `metallic_studio/src/commands.rs` applied through `History`, never by
   mutating the world directly.
 
