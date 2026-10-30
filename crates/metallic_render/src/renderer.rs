@@ -1,7 +1,9 @@
-//! The GPU renderer: buffers, pipelines and the three passes (shadows, sky + opaque, blended).
+//! The GPU renderer: buffers, pipelines and the frame stages (shadows, scene into the HDR target,
+//! HDR post passes, finish, LDR post passes; see [`crate::post`]).
 use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
 use crate::meshes::{MeshKind, Vertex};
+use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot};
 use crate::scene::{InstanceRaw, Scene};
 use crate::shadows::{
     Cascade, MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
@@ -11,6 +13,7 @@ use crate::skinned::{
     skinned_layout,
 };
 use crate::sky::Sky;
+use crate::tonemap::{FinishSettings, FinishUniform};
 use bytemuck::{Pod, Zeroable};
 use metallic_core::World;
 use std::borrow::Cow;
@@ -18,7 +21,9 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const COLOR_WGSL: &str = include_str!("../shaders/color.wgsl");
 const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
+const FINISH_WGSL: &str = include_str!("../shaders/finish.wgsl");
 const SCENE_WGSL: &str = include_str!("../shaders/scene.wgsl");
 const SKY_WGSL: &str = include_str!("../shaders/sky.wgsl");
 const SHADOW_WGSL: &str = include_str!("../shaders/shadow.wgsl");
@@ -150,10 +155,135 @@ struct Pipelines {
     skinned_shadow: wgpu::RenderPipeline,
 }
 
+/// Size-dependent targets. `hdr[0]` receives the scene; `hdr[1]` and `ldr` are made on demand
+/// when the post chain has HDR or LDR passes. `finish_groups[i]` reads `hdr[i]`.
 struct Attachments {
     size: (u32, u32),
     msaa_color: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
+    hdr: [Option<wgpu::TextureView>; 2],
+    ldr: [Option<wgpu::TextureView>; 2],
+    finish_groups: [Option<wgpu::BindGroup>; 2],
+}
+
+/// The finish pass's GPU objects; pipelines are made per target format on first use.
+struct FinishGpu {
+    layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
+    module: wgpu::ShaderModule,
+    uniform: wgpu::Buffer,
+    pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+}
+
+impl FinishGpu {
+    fn new(device: &wgpu::Device) -> FinishGpu {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("metallic finish layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("metallic finish pipeline layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        FinishGpu {
+            layout,
+            pipeline_layout,
+            module: shader(device, "metallic finish", &[COLOR_WGSL, FINISH_WGSL]),
+            uniform: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("metallic finish uniform"),
+                size: std::mem::size_of::<FinishUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            pipelines: Vec::new(),
+        }
+    }
+
+    fn pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> &wgpu::RenderPipeline {
+        let i = match self.pipelines.iter().position(|(f, _)| *f == format) {
+            Some(i) => i,
+            None => {
+                let p = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("metallic finish"),
+                    layout: Some(&self.pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &self.module,
+                        entry_point: Some("vs_main"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.module,
+                        entry_point: Some("fs_main"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                self.pipelines.push((format, p));
+                self.pipelines.len() - 1
+            }
+        };
+        &self.pipelines[i].1
+    }
+}
+
+fn color_target(
+    device: &wgpu::Device,
+    label: &str,
+    size: (u32, u32),
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 struct CascadeSlot {
@@ -170,6 +300,10 @@ pub struct Renderer {
     settings: RenderSettings,
     /// Environment colours and sun; change fields at any time.
     pub sky: Sky,
+    /// Tone curve, grade and dither of the finish pass; change fields at any time.
+    pub finish: FinishSettings,
+    post: PostChain,
+    finish_gpu: FinishGpu,
     scene: Scene,
     uploaded_version: Option<u64>,
     meshes: Vec<GpuMesh>,
@@ -302,19 +436,22 @@ impl Renderer {
         let cascade_slots = make_cascade_slots(&device, &shadow_layout, settings.cascades());
         let pipelines = make_pipelines(
             &device,
-            surface_format,
             settings.samples(),
             &global_layout,
             &shadow_layout,
             &skin_layout,
         );
         let blended = InstanceBuffer::new(&device, 256);
+        let finish_gpu = FinishGpu::new(&device);
         Renderer {
             device,
             queue,
             format: surface_format,
             settings,
             sky: Sky::default(),
+            finish: FinishSettings::default(),
+            post: PostChain::default(),
+            finish_gpu,
             scene: Scene::new(),
             uploaded_version: None,
             meshes,
@@ -366,13 +503,22 @@ impl Renderer {
             make_cascade_slots(&self.device, &self.shadow_layout, settings.cascades());
         self.pipelines = make_pipelines(
             &self.device,
-            self.format,
             settings.samples(),
             &self.global_layout,
             &self.shadow_layout,
             &self.skin_layout,
         );
         self.attachments = None;
+    }
+
+    /// The post chain, to add, remove or reorder full-screen passes (see [`crate::post`]).
+    pub fn post_mut(&mut self) -> &mut PostChain {
+        &mut self.post
+    }
+
+    /// The post chain.
+    pub fn post(&self) -> &PostChain {
+        &self.post
     }
 
     /// Number of parts currently known to the renderer (drawn or not).
@@ -468,6 +614,7 @@ impl Renderer {
             height: size.1,
             depth_or_array_layers: 1,
         };
+        // Sampleable so post passes that read depth can bind it (stored only when one does).
         let depth = self
             .device
             .create_texture(&wgpu::TextureDescriptor {
@@ -477,7 +624,8 @@ impl Renderer {
                 sample_count: samples,
                 dimension: wgpu::TextureDimension::D2,
                 format: DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -489,7 +637,7 @@ impl Renderer {
                     mip_level_count: 1,
                     sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
-                    format: self.format,
+                    format: HDR_FORMAT,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
                 })
@@ -499,7 +647,59 @@ impl Renderer {
             size,
             msaa_color,
             depth,
+            hdr: [None, None],
+            ldr: [None, None],
+            finish_groups: [None, None],
         });
+        self.ensure_hdr(0);
+    }
+
+    /// Makes HDR target `i` and the finish bind group that reads it.
+    fn ensure_hdr(&mut self, i: usize) {
+        let Some(att) = self.attachments.as_mut() else {
+            return;
+        };
+        if att.hdr[i].is_some() {
+            return;
+        }
+        let view = color_target(&self.device, "metallic hdr", att.size, HDR_FORMAT);
+        att.finish_groups[i] = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("metallic finish group"),
+            layout: &self.finish_gpu.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.finish_gpu.uniform.as_entire_binding(),
+                },
+            ],
+        }));
+        att.hdr[i] = Some(view);
+    }
+
+    /// Makes the post targets the current chain needs.
+    fn ensure_post_targets(&mut self) {
+        if self.post.active(PostSlot::Hdr) > 0 {
+            self.ensure_hdr(1);
+        }
+        let ldr = self.post.active(PostSlot::Ldr);
+        let Some(att) = self.attachments.as_mut() else {
+            return;
+        };
+        // n LDR passes need the finish output plus one spare when n >= 2.
+        for i in 0..ldr.min(2) {
+            if att.ldr[i].is_none() {
+                att.ldr[i] = Some(color_target(
+                    &self.device,
+                    "metallic ldr",
+                    att.size,
+                    LDR_FORMAT,
+                ));
+            }
+        }
     }
 
     fn write_globals(&self, camera: &Camera, size: (u32, u32), cascades: &[Cascade]) -> Globals {
@@ -533,12 +733,7 @@ impl Renderer {
             sky_zenith: p(self.sky.zenith, 0.0),
             sky_horizon: p(self.sky.horizon, 0.0),
             sky_ground: p(self.sky.ground, 0.0),
-            params: [
-                count as f32,
-                if self.format.is_srgb() { 1.0 } else { 0.0 },
-                self.sky.exposure,
-                self.shadow_map.resolution as f32,
-            ],
+            params: [count as f32, 0.0, 0.0, self.shadow_map.resolution as f32],
         }
     }
 
@@ -601,6 +796,7 @@ impl Renderer {
             );
         }
         self.scratch_cascades = cascades;
+        self.ensure_post_targets();
 
         let Some(att) = self.attachments.as_ref() else {
             return;
@@ -634,10 +830,12 @@ impl Renderer {
             self.draw_skinned(&mut pass);
         }
 
+        let keep_depth = self.post.reads_depth();
         {
+            let hdr = att.hdr[0].as_ref().expect("made with the attachments");
             let (view, resolve) = match &att.msaa_color {
-                Some(msaa) => (msaa, Some(target)),
-                None => (target, None),
+                Some(msaa) => (msaa, Some(hdr)),
+                None => (hdr, None),
             };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("metallic main pass"),
@@ -658,7 +856,11 @@ impl Renderer {
                     view: &att.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+                        store: if keep_depth {
+                            wgpu::StoreOp::Store
+                        } else {
+                            wgpu::StoreOp::Discard
+                        },
                     }),
                     stencil_ops: None,
                 }),
@@ -675,7 +877,104 @@ impl Renderer {
             self.draw_skinned(&mut pass);
             self.draw_blended(&mut pass);
         }
+        self.post_and_finish(&mut encoder, target, camera, keep_depth);
         self.queue.submit(Some(encoder.finish()));
+    }
+
+    /// Runs the HDR passes, the finish pass and the LDR passes; the last of them writes
+    /// `target`.
+    fn post_and_finish(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        camera: &Camera,
+        keep_depth: bool,
+    ) {
+        let Some(att) = self.attachments.as_ref() else {
+            return;
+        };
+        let size = att.size;
+        let samples = self.settings.samples();
+        let mut chain = std::mem::take(&mut self.post);
+
+        // HDR passes ping-pong between hdr[0] and hdr[1].
+        let mut cur = 0;
+        for pass in chain.active_mut(PostSlot::Hdr) {
+            let (Some(input), Some(output)) = (&att.hdr[cur], &att.hdr[1 - cur]) else {
+                break;
+            };
+            pass.record(&mut PostContext {
+                device: &self.device,
+                queue: &self.queue,
+                encoder: &mut *encoder,
+                input,
+                output,
+                output_format: HDR_FORMAT,
+                size,
+                depth: keep_depth.then_some(&att.depth),
+                depth_samples: samples,
+                camera,
+            });
+            cur = 1 - cur;
+        }
+
+        let ldr_count = chain.active(PostSlot::Ldr);
+        let (finish_view, finish_format) = match &att.ldr[0] {
+            Some(v) if ldr_count > 0 => (v, LDR_FORMAT),
+            _ => (target, self.format),
+        };
+        let uniform = FinishUniform::new(&self.finish, self.sky.exposure, finish_format.is_srgb());
+        self.queue
+            .write_buffer(&self.finish_gpu.uniform, 0, bytemuck::bytes_of(&uniform));
+        if let Some(group) = &att.finish_groups[cur] {
+            let pipeline = self.finish_gpu.pipeline(&self.device, finish_format);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("metallic finish pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: finish_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // LDR passes: ldr[0] -> ldr[1] -> ldr[0] ..., the last one into the target.
+        let mut cur = 0;
+        for (i, pass) in chain.active_mut(PostSlot::Ldr).enumerate() {
+            let last = i + 1 == ldr_count;
+            let Some(input) = &att.ldr[cur] else {
+                break;
+            };
+            let (output, output_format) = match &att.ldr[1 - cur] {
+                Some(v) if !last => (v, LDR_FORMAT),
+                _ => (target, self.format),
+            };
+            pass.record(&mut PostContext {
+                device: &self.device,
+                queue: &self.queue,
+                encoder: &mut *encoder,
+                input,
+                output,
+                output_format,
+                size,
+                depth: keep_depth.then_some(&att.depth),
+                depth_samples: samples,
+                camera,
+            });
+            cur = 1 - cur;
+        }
+        self.post = chain;
     }
 
     fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -905,7 +1204,6 @@ fn shader(device: &wgpu::Device, label: &str, parts: &[&str]) -> wgpu::ShaderMod
 
 fn make_pipelines(
     device: &wgpu::Device,
-    format: wgpu::TextureFormat,
     samples: u32,
     global_layout: &wgpu::BindGroupLayout,
     shadow_layout: &wgpu::BindGroupLayout,
@@ -914,9 +1212,17 @@ fn make_pipelines(
     let scene_module = shader(
         device,
         "metallic scene",
-        &[COMMON_WGSL, SKIN_COMMON_WGSL, SCENE_WGSL, SKINNED_WGSL],
+        &[
+            COLOR_WGSL,
+            COMMON_WGSL,
+            SKIN_COMMON_WGSL,
+            SCENE_WGSL,
+            SKINNED_WGSL,
+        ],
     );
-    let sky_module = shader(device, "metallic sky", &[COMMON_WGSL, SKY_WGSL]);
+    let sky_module = shader(device, "metallic sky", &[COLOR_WGSL, COMMON_WGSL, SKY_WGSL]);
+    // Every scene pipeline writes linear light into the HDR target.
+    let format = HDR_FORMAT;
     let shadow_module = shader(device, "metallic shadow", &[SKIN_COMMON_WGSL, SHADOW_WGSL]);
 
     let main_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
