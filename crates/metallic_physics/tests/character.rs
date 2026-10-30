@@ -5,7 +5,6 @@ use metallic_physics::{
 };
 
 const DT: f64 = 1.0 / 60.0;
-const TITANIUM: Color3 = Color3::new(142.0, 145.0, 150.0);
 const VIOLET: Color3 = Color3::new(155.0, 130.0, 212.0);
 
 fn part(world: &mut World, class: &str, pos: Vec3, size: Vec3) -> InstanceId {
@@ -156,7 +155,7 @@ fn idle() -> MoveInput {
 fn walk(x: f64, z: f64) -> MoveInput {
     MoveInput {
         dir: Vec3::new(x, 0.0, z),
-        jump: false,
+        ..MoveInput::default()
     }
 }
 
@@ -197,18 +196,19 @@ fn spawns_at_origin_without_spawn_location() {
             .find_first_child(ch, name)
             .unwrap_or_else(|| panic!("missing {name}"));
         assert_eq!(v3(&world, p, "Size"), size, "{name}");
-        assert_eq!(num(&world, p, "Transparency"), 0.0, "{name}");
-        assert_eq!(world.get(p, "Color").unwrap(), Value::Color3(TITANIUM));
     }
-    let visible = world
+    // The body parts are collision and touch volumes; the runtime draws the skinned avatar.
+    let parts: Vec<InstanceId> = world
         .children(ch)
         .iter()
-        .filter(|&&c| world.is_a(c, "BasePart") && num(&world, c, "Transparency") < 1.0)
-        .count();
-    assert_eq!(visible, 6);
-    let torso = world.find_first_child(ch, "Torso").unwrap();
-    let stripe = world.find_first_child(torso, "Stripe").unwrap();
-    assert_eq!(world.get(stripe, "Color").unwrap(), Value::Color3(VIOLET));
+        .copied()
+        .filter(|&c| world.is_a(c, "BasePart"))
+        .collect();
+    assert_eq!(parts.len(), 7);
+    for p in parts {
+        assert_eq!(num(&world, p, "Transparency"), 1.0);
+        assert!(world.children(p).is_empty());
+    }
     // feet on the ground: legs end 3 studs below the root
     let leg = world.find_first_child(ch, "Left Leg").unwrap();
     assert!((v3(&world, leg, "Position").y - 1.0).abs() < 1e-9);
@@ -255,6 +255,29 @@ fn walk_speed_16_studs_per_second() {
 }
 
 #[test]
+fn running_is_one_and_a_half_times_walk_speed_without_changing_it() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let start = sim.root_pos();
+    sim.run(
+        1.0,
+        MoveInput {
+            run: true,
+            ..walk(1.0, 0.0)
+        },
+    );
+    let d = sim.root_pos().x - start.x;
+    assert!((d - 24.0).abs() <= 24.0 * 0.05, "ran {d}");
+    let hum = sim
+        .world
+        .find_first_child(sim.character(), "Humanoid")
+        .unwrap();
+    assert_eq!(num(&sim.world, hum, "WalkSpeed"), 16.0);
+}
+
+#[test]
 fn jump_apex_about_6_4_studs() {
     let mut world = World::new_with_services();
     baseplate(&mut world);
@@ -264,6 +287,7 @@ fn jump_apex_about_6_4_studs() {
     sim.frame(MoveInput {
         dir: Vec3::default(),
         jump: true,
+        ..MoveInput::default()
     });
     assert_eq!(sim.ctl.state(sim.character()), Some(HumanoidState::Jumping));
     let mut apex = sim.root_pos().y;
@@ -360,6 +384,10 @@ fn carried_by_moving_platform() {
     let moved = sim.root_pos().x - x0;
     assert!((moved - 8.0).abs() <= 0.5, "moved {moved}");
     assert_eq!(sim.ctl.state(sim.character()), Some(HumanoidState::Running));
+    // Carried at 8 studs/s while standing still: no own motion (the avatar stays idle).
+    let ch = sim.character();
+    assert!((sim.ctl.velocity(ch).unwrap().x - 8.0).abs() < 0.5);
+    assert!(sim.ctl.relative_velocity(ch).unwrap().magnitude() < 0.5);
 }
 
 #[test]
@@ -614,6 +642,7 @@ fn kill_twice_while_dead_fires_died_once() {
         MoveInput {
             dir: Vec3::new(1.0, 0.0, 0.0),
             jump: true,
+            ..MoveInput::default()
         },
     );
     assert_eq!(sim.died_count(), 1);

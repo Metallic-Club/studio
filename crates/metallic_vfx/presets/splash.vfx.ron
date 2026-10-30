@@ -1,0 +1,194 @@
+(
+  format: 1,
+  name: "Splash",
+  description: "Water splash with droplets, mist and ripples.",
+  tags: [
+    "water",
+    "impact",
+  ],
+  style: Realistic,
+  duration: 1.4,
+  emitters: [
+    (
+      name: "Ripples",
+      capacity: 8,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 1,
+        ),
+        Burst(
+          time: 0.22,
+          count: 1,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 0.03, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.9, 0.9),
+        ),
+        Size(
+          size: (4.0, 4.0),
+        ),
+        Color(
+          choices: [
+            "#D6F1FF",
+          ],
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.1),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.2),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        facing: Ground,
+        texture: Ring,
+        light_emission: 0.4,
+      ),
+    ),
+    (
+      name: "Mist",
+      capacity: 16,
+      spawn: [
+        Burst(
+          time: 0.02,
+          count: 10,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 0.4,
+          ),
+        ),
+        Lifetime(
+          seconds: (0.6, 1.0),
+        ),
+        Velocity(
+          speed: (1.0, 2.5),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (60.0, 60.0),
+        ),
+        Size(
+          size: (0.6, 1.0),
+        ),
+        Color(
+          choices: [
+            "#EAF7FF",
+          ],
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 2.0,
+        ),
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.6),
+              (1.0, 1.8),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.55),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: SoftDot,
+      ),
+    ),
+    (
+      name: "Droplets",
+      capacity: 96,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 50,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Cone(
+            radius: 0.35,
+            angle: 28.0,
+          ),
+        ),
+        Lifetime(
+          seconds: (0.7, 1.1),
+        ),
+        Velocity(
+          speed: (5.0, 8.5),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.12, 0.2),
+        ),
+        Color(
+          choices: [
+            "#DDF3FF",
+            "#A8DBF5",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.0, -18.0, 0.0),
+        ),
+        CollisionPlane(
+          point: (0.0, 0.0, 0.0),
+          normal: (0.0, 1.0, 0.0),
+          bounce: 0.0,
+          friction: 0.0,
+          on_hit: Kill,
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 0.3),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        facing: VelocityParallel,
+        texture: Droplet,
+        light_emission: 0.25,
+        brightness: 1.1,
+      ),
+    ),
+  ],
+)

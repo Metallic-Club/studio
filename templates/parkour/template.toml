@@ -1,0 +1,5 @@
+id = "parkour"
+name = "Parkour"
+description = "Run, jump and reach the finish. Checkpoints save your progress."
+preview = "preview.png"
+order = 1

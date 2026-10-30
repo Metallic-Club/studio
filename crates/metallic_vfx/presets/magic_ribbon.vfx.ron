@@ -1,0 +1,126 @@
+(
+  format: 1,
+  name: "Magic ribbon",
+  description: "A glowing ribbon that follows a moving object, with a sparkle tail.",
+  tags: [
+    "trail",
+    "magic",
+    "ribbon",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Ribbon",
+      capacity: 128,
+      spawn: [
+        Rate(
+          per_second: 60.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+        ),
+        Lifetime(
+          seconds: (0.9, 0.9),
+        ),
+        Size(
+          size: (0.7, 0.7),
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (1.0, 0.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#F2EAFF"),
+              (0.4, "#A88BFF"),
+              (1.0, "#4B2FA8"),
+            ],
+            space: Oklab,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Ribbon(
+          texture_mode: Stretch,
+        ),
+        texture: Band,
+        light_emission: 1.0,
+        brightness: 1.5,
+      ),
+    ),
+    (
+      name: "Sparkle tail",
+      capacity: 128,
+      spawn: [
+        Rate(
+          per_second: 40.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Sphere(
+            radius: 0.25,
+          ),
+        ),
+        Lifetime(
+          seconds: (0.5, 0.9),
+        ),
+        Velocity(
+          speed: (0.2, 0.8),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (360.0, 360.0),
+        ),
+        Size(
+          size: (0.1, 0.2),
+        ),
+        InheritVelocity(
+          amount: 0.15,
+        ),
+        Color(
+          choices: [
+            "#E3D8FF",
+            "#B497FF",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (1.0, 0.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Twinkle,
+        light_emission: 1.0,
+        brightness: 1.8,
+      ),
+    ),
+  ],
+  preview: Orbit,
+)

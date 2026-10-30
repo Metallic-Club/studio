@@ -9,7 +9,8 @@
 //!
 //! Movement (units are studs and seconds):
 //! - horizontal speed is `Humanoid.WalkSpeed` (input direction longer than 1 is shortened to 1),
-//!   with instant acceleration and full air control, as in Roblox;
+//!   with instant acceleration and full air control, as in Roblox; [`MoveInput::run`] multiplies
+//!   it by [`RUN_MULTIPLIER`] (a Metallic addition) without changing `WalkSpeed`;
 //! - a jump sets the upward velocity to `Humanoid.JumpPower` (50 -> apex 50^2 / (2 * 196.2) =
 //!   6.37 studs); holding jump jumps again on landing;
 //! - gravity is [`crate::GRAVITY`] (196.2), integrated exactly for constant acceleration;
@@ -69,6 +70,8 @@ const SNAP_DISTANCE: f64 = 1.5;
 const TOUCH_MARGIN: f64 = 0.1;
 /// Most the character is pushed out of overlapping parts in one step, in studs.
 pub const MAX_PUSH: f64 = 0.5;
+/// Running ([`MoveInput::run`]) moves this many times faster than `Humanoid.WalkSpeed`.
+pub const RUN_MULTIPLIER: f64 = 1.5;
 
 /// Movement wish for one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -78,6 +81,8 @@ pub struct MoveInput {
     pub dir: Vec3,
     /// Jump (when standing on something). Holding it jumps again on landing.
     pub jump: bool,
+    /// Run at [`RUN_MULTIPLIER`] times `Humanoid.WalkSpeed` (scripts still read `WalkSpeed`).
+    pub run: bool,
 }
 
 /// What a character is doing.
@@ -146,6 +151,8 @@ struct Motion {
     dead_time: f64,
     /// Total velocity of the last step.
     velocity: Vec3,
+    /// Velocity of the last step minus what the carrying part (or the part jumped from) added.
+    relative: Vec3,
 }
 
 impl Default for Motion {
@@ -158,15 +165,17 @@ impl Default for Motion {
             yaw: 0.0,
             dead_time: 0.0,
             velocity: Vec3::default(),
+            relative: Vec3::default(),
         }
     }
 }
 
 /// Builds a character for `player` and makes it the player's `Character`.
 ///
-/// The Model is named after the player and holds the avatar parts (an invisible 2x2x1
-/// `HumanoidRootPart`, Head 2x1x1, Torso 2x2x1 with a violet `Stripe`, arms and legs 1x2x1, all
-/// titanium and Anchored) and a `Humanoid` with default properties. The root is placed
+/// The Model is named after the player and holds the avatar parts (a 2x2x1 `HumanoidRootPart`,
+/// Head 2x1x1, Torso 2x2x1, arms and legs 1x2x1, all invisible and Anchored: they are the
+/// character's collision and touch volumes, and the runtime draws the skinned default avatar
+/// over them) and a `Humanoid` with default properties. The root is placed
 /// [`ROOT_HEIGHT`] above the top surface (rotation included) of the player's `RespawnLocation`,
 /// even a non-colliding zone (the character then falls through it), else of the first
 /// `SpawnLocation` in Workspace, else at (0, 3, 0). A previous character of the player is
@@ -298,6 +307,14 @@ impl CharacterController {
         self.motions.get(&character).map(|m| m.velocity)
     }
 
+    /// The character's own velocity during its last step: [`CharacterController::velocity`]
+    /// minus the velocity of the part it stands on (or, in the air, the horizontal velocity kept
+    /// from the part it left). Standing still on a moving platform gives zero; the animation
+    /// uses this to pick idle, walk or run.
+    pub fn relative_velocity(&self, character: InstanceId) -> Option<Vec3> {
+        self.motions.get(&character).map(|m| m.relative)
+    }
+
     /// Takes the events of all steps since the last call, oldest first.
     pub fn drain_events(&mut self) -> Vec<CharacterEvent> {
         std::mem::take(&mut self.events)
@@ -369,7 +386,7 @@ impl CharacterController {
         let input = if alive { input } else { MoveInput::default() };
         let hum = |p: &str, default: f64| num_prop(world, humanoid, p).unwrap_or(default);
         let tuning = Tuning {
-            walk_speed: hum("WalkSpeed", 16.0),
+            walk_speed: hum("WalkSpeed", 16.0) * if input.run { RUN_MULTIPLIER } else { 1.0 },
             jump_power: hum("JumpPower", 50.0),
             max_slope: hum("MaxSlopeAngle", 89.0).clamp(0.0, 89.9),
         };
@@ -534,6 +551,11 @@ fn move_capsule(
     if grounded && !jumping {
         m.inherited = Vec3::new(carry.x, 0.0, carry.z);
     }
+    let carried = if grounded && !jumping {
+        carry
+    } else {
+        m.inherited
+    };
     let horizontal = if grounded && !jumping {
         walk + Vec3::new(carry.x, 0.0, carry.z)
     } else {
@@ -602,6 +624,7 @@ fn move_capsule(
     } else {
         Vec3::default()
     };
+    m.relative = m.velocity - carried;
     new_root
 }
 

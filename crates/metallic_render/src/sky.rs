@@ -3,7 +3,8 @@ use glam::Vec3;
 
 /// Colours and light of the environment. Colours are linear RGB.
 ///
-/// The defaults follow the Metallic brand: graphite ground, silver horizon, deep violet-graphite zenith.
+/// The defaults follow the Metallic brand: graphite ground, a blue-grey horizon (also the fog
+/// colour) and a deep blue-violet zenith, kept dark enough that bright parts stand out against it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sky {
     /// Colour straight up.
@@ -25,12 +26,12 @@ pub struct Sky {
 impl Default for Sky {
     fn default() -> Self {
         Sky {
-            zenith: [0.032, 0.042, 0.15],
-            horizon: [0.36, 0.375, 0.47],
-            ground: [0.085, 0.085, 0.10],
+            zenith: [0.018, 0.04, 0.2],
+            horizon: [0.24, 0.29, 0.42],
+            ground: [0.06, 0.065, 0.085],
             to_sun: Vec3::new(0.5, 0.55, 0.35).normalize(),
             sun_color: [3.5, 3.3, 3.05],
-            fog_density: 1.0 / 900.0,
+            fog_density: 1.0 / 1100.0,
             exposure: 1.0,
         }
     }

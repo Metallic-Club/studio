@@ -15,7 +15,8 @@
 //! [`TELEPORT_SPEED`] or a turn faster than [`TELEPORT_ANGULAR_SPEED`] is a teleport instead:
 //! plain reposition, zero velocity.
 //!
-//! Characters: [`spawn_character`] builds a Roblox-style avatar Model for a Player and
+//! Characters: [`spawn_character`] builds a Roblox-style character Model (invisible body parts
+//! that the runtime draws the skinned avatar over) for a Player and
 //! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
 //! death and respawn, checkpoints, touches). Character parts are anchored, so the physics moves
 //! them as kinematic bodies (they push loose parts) but never reports their touches:
@@ -28,10 +29,10 @@ mod character;
 mod sync;
 mod touched;
 
-pub use avatar::{TITANIUM, VIOLET};
+pub use avatar::VIOLET;
 pub use character::{
     CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT, MoveInput,
-    RESPAWN_DELAY, ROOT_HEIGHT, spawn_character,
+    RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, spawn_character,
 };
 pub use sync::{MaterialProps, material_props};
 

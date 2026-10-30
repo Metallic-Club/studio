@@ -1,0 +1,101 @@
+/* Metallic Studio visual language: tokens for the HTML mockups.
+   The same values live in visual-language.md and map 1:1 to crates/metallic_studio/src/theme/tokens.rs. */
+:root {
+  /* Graphite (neutral, slight violet cast: blue highest, red above green) */
+  --g-950: #0c0b0f; --g-900: #111015; --g-850: #16151b; --g-800: #1c1b22; --g-750: #24222b;
+  --g-700: #2c2a34; --g-650: #35323e; --g-600: #43404d; --g-500: #5f5b6b; --g-400: #817d8c;
+  --g-300: #a3a0ad; --g-200: #c3c0ca; --g-100: #e6e4ea; --g-50: #f4f3f7;
+  /* Violet (accent) */
+  --v-50: #f3f0fc; --v-100: #e4def8; --v-200: #cdc2f2; --v-300: #b4a6ec; --v-400: #9d8be0;
+  --v-500: #8673cf; --v-600: #6f5cb6; --v-700: #584993; --v-800: #3a3354; --v-900: #2a2638; --v-950: #1f1c29;
+
+  /* Roles */
+  --bg-deep: var(--g-900);  --bg-base: var(--g-850); --bg-panel: var(--g-800);
+  --bg-raised: var(--g-750); --bg-hover: var(--g-700); --bg-active: var(--g-650);
+  --select: var(--v-800); --select-weak: var(--v-900);
+  --line: #2b2933; --line-strong: var(--g-600); --line-control: #6e6a79;
+  --text-1: #e6e4ea; --text-2: #aeaab6; --text-3: #8e8a97; --text-off: var(--g-500);
+  --icon: #bdbac4; --accent: var(--v-400); --accent-hover: var(--v-300); --accent-press: var(--v-500);
+  --accent-text: var(--v-300); --on-accent: var(--g-900); --focus: var(--v-300);
+  --highlight: rgba(255,255,255,0.06); /* 1 px top edge on raised metal */
+  --error: #ec7a72; --error-bg: #3a2226; --warning: #e0ad55; --warning-bg: #352c1d;
+  --success: #62bf91; --success-bg: #1d3329; --info: #7fb0e6; --info-bg: #1c2a3a;
+  --danger: #8f3a35; --danger-hover: #a3443e;
+
+  /* Type */
+  --font: 'Archivo', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* Space (4 px grid) */
+  --s1: 2px; --s2: 4px; --s3: 6px; --s4: 8px; --s5: 12px; --s6: 16px; --s7: 20px; --s8: 24px; --s9: 32px; --s10: 40px; --s11: 48px;
+  /* Radii and the cut (the machined chamfer) */
+  --r-xs: 3px; --r-sm: 4px; --r-md: 6px; --r-lg: 10px;
+  --cut-sm: 6px; --cut-md: 10px; --cut-lg: 14px;
+  /* Elevation: only floating surfaces get a shadow */
+  --shadow-pop: 0 8px 24px rgba(0,0,0,0.45);
+  /* Motion */
+  --t-fast: 90ms; --t-base: 140ms; --t-slow: 200ms;
+  --ease-out: cubic-bezier(0.215, 0.61, 0.355, 1); /* egui emath::easing::cubic_out */
+  --ease-in-out: cubic-bezier(0.645, 0.045, 0.355, 1); /* cubic_in_out */
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-fast: 0ms; --t-base: 0ms; --t-slow: 80ms; }
+}
+
+/* Shared type styles (Archivo: wdth 100 = UI voice, wdth 125 = display voice) */
+.t-display { font: 700 30px/36px var(--font); font-stretch: 125%; letter-spacing: -0.01em; }
+.t-title   { font: 680 24px/30px var(--font); font-stretch: 125%; letter-spacing: -0.005em; }
+.t-heading { font: 620 15px/20px var(--font); font-stretch: 112.5%; }
+.t-body    { font: 400 13px/18px var(--font); }
+.t-body-lg { font: 400 14px/20px var(--font); }
+.t-strong  { font: 560 13px/18px var(--font); }
+.t-small   { font: 400 12px/16px var(--font); }
+.t-caption { font: 520 11px/14px var(--font); }
+.t-mono    { font: 400 12px/18px var(--mono); }
+
+/* Icons: Phosphor glyphs drawn as a font, like egui will */
+.ph, .phf { font-style: normal; font-weight: normal; line-height: 1; display: inline-block; speak: never; }
+.ph { font-family: 'Phosphor'; } .phf { font-family: 'Phosphor Fill'; }
+
+/* The cut: one 45 degree chamfer on the top-right corner, other corners keep their radius.
+   egui draws the same outline with a convex polygon (see egui-implementation.md, widgets/cut.rs). */
+.cut-sm { clip-path: polygon(0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm), 100% 100%, 0 100%); }
+.cut-md { clip-path: polygon(0 0, calc(100% - var(--cut-md)) 0, 100% var(--cut-md), 100% 100%, 0 100%); }
+.cut-lg { clip-path: polygon(0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg), 100% 100%, 0 100%); }
+
+/* Focus ring: 2 px violet-300, 2 px outside the control. 8.30:1 on bg.base, 7.81:1 on bg.panel. */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Keycap hint (shortcut text inside or beside a control) */
+.key { font: 520 11px/16px var(--font); padding: 0 5px; border-radius: var(--r-xs); background: var(--g-650); color: var(--text-1); display: inline-block; min-width: 16px; text-align: center; }
+
+/* Buttons */
+.btn { font: 560 13px/18px var(--font); height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-sm); display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-1);
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out); }
+.btn .ph { font-size: 16px; color: var(--icon); }
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--accent); color: var(--on-accent); height: 36px; padding: 0 14px; border-radius: var(--r-sm); }
+.btn-primary .key { background: rgba(17,16,21,0.18); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:active { background: var(--accent-press); }
+.btn-secondary { background: var(--bg-raised); box-shadow: inset 0 1px 0 var(--highlight); }
+.btn-secondary:hover { background: var(--bg-hover); }
+.btn-secondary:active { background: var(--bg-active); }
+.btn-ghost { background: transparent; color: var(--text-2); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text-1); }
+.btn-ghost:active { background: var(--bg-active); }
+.btn-danger { background: var(--danger); }
+.btn-danger:hover { background: var(--danger-hover); }
+.btn[disabled] { background: var(--bg-raised); color: var(--text-off); cursor: not-allowed; box-shadow: none; transform: none; }
+.btn-primary[disabled] .key { background: var(--g-650); color: var(--text-off); }
+
+/* Text field */
+.field-label { font: 520 12px/16px var(--font); color: var(--text-2); display: block; margin-bottom: 6px; }
+.field { height: 32px; background: var(--bg-deep); border: 1px solid var(--line-control); border-radius: var(--r-sm); color: var(--text-1);
+  font: 400 13px/18px var(--font); padding: 0 10px; width: 100%; box-sizing: border-box; transition: border-color var(--t-fast) var(--ease-out); }
+.field:hover { border-color: var(--text-3); }
+.field:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--focus); }
+.field[aria-invalid="true"] { border-color: var(--error); }
+.field-help { font: 400 12px/16px var(--font); color: var(--text-3); margin-top: 6px; }
+.field-error { font: 400 12px/16px var(--font); color: var(--error); margin-top: 6px; display: flex; gap: 6px; align-items: flex-start; }
+.field-error .phf { font-size: 14px; margin-top: 1px; }
