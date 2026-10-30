@@ -1,6 +1,6 @@
 //! The class registry: every class, its superclass and its properties with defaults.
 //!
-//! To add a class, add one [`ClassDef`] entry to `CLASSES` below.
+//! To add a class, add one [`ClassDef`] entry to `CLASSES` below and its index to [`class_def`].
 use crate::value::{Color3, UDim2, Value, ValueType, Vec3};
 
 /// Materials a part may use.
@@ -230,8 +230,6 @@ static CLASSES: &[ClassDef] = &[
             p("Character", ValueType::Ref, || Value::Ref(None)),
         ],
     ),
-    // Appended last: `class_def` is a linear scan and Part/Model reads are on the hot path
-    // (CI instructions gate).
     // Input actions (docs/design/input-actions.md section 3): a context holds actions, an action
     // holds bindings. Client-only; inert on the server.
     class(
@@ -358,8 +356,44 @@ static CLASSES: &[ClassDef] = &[
 ];
 
 /// Looks up a class by name.
+///
+/// A `match` on the name instead of a scan of `CLASSES`: this runs on every property read and
+/// write (through [`find_property`]), and the scan got measurably slower whenever a class was
+/// added (CI instructions gate, PR #278). Keep the indices in `CLASSES` order; the test
+/// `class_def_matches_the_registry` fails if they drift.
 pub fn class_def(name: &str) -> Option<&'static ClassDef> {
-    CLASSES.iter().find(|c| c.name == name)
+    let index = match name {
+        "Instance" => 0,
+        "Workspace" => 1,
+        "Players" => 2,
+        "PlayerGui" => 3,
+        "ReplicatedStorage" => 4,
+        "ServerScriptService" => 5,
+        "StarterPlayer" => 6,
+        "StarterPlayerScripts" => 7,
+        "StarterGui" => 8,
+        "Lighting" => 9,
+        "RunService" => 10,
+        "Folder" => 11,
+        "Model" => 12,
+        "BasePart" => 13,
+        "Part" => 14,
+        "SpawnLocation" => 15,
+        "Checkpoint" => 16,
+        "Script" => 17,
+        "LocalScript" => 18,
+        "RemoteEvent" => 19,
+        "Humanoid" => 20,
+        "ScreenGui" => 21,
+        "Frame" => 22,
+        "TextLabel" => 23,
+        "Player" => 24,
+        "InputContext" => 25,
+        "InputAction" => 26,
+        "InputBinding" => 27,
+        _ => return None,
+    };
+    CLASSES.get(index)
 }
 
 /// True when `class` is `of` or inherits from it.
@@ -412,6 +446,22 @@ pub fn default_value(class: &str, property: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn class_def_matches_the_registry() {
+        for (i, c) in CLASSES.iter().enumerate() {
+            let found =
+                class_def(c.name).unwrap_or_else(|| panic!("{} missing from class_def", c.name));
+            assert!(
+                std::ptr::eq(found, &CLASSES[i]),
+                "{} maps to {}",
+                c.name,
+                found.name
+            );
+        }
+        assert!(class_def("NotAClass").is_none());
+        assert!(class_def("part").is_none());
+    }
 
     #[test]
     fn no_class_redeclares_an_inherited_property() {
