@@ -3494,6 +3494,7 @@ dependencies = [
  "env_logger",
  "glam 0.30.10",
  "log",
+ "metallic_core",
  "metallic_runtime",
  "metallic_update",
  "png",

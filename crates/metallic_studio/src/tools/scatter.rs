@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use glam::{DQuat, DVec2, DVec3, EulerRot};
 
+use super::geom::PartSnapshot;
 use super::rng::SeededRng;
 
 /// Most items one brush set holds.
@@ -429,6 +430,28 @@ pub fn poisson_disk(
     out
 }
 
+/// An instance already in the scene, as a stroke sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrushInstance<I> {
+    /// The instance.
+    pub id: I,
+    /// Its pivot position in world space.
+    pub position: DVec3,
+    /// Its tags. Only instances tagged by the stroke's set ([`BrushSet::owns`]) take part.
+    pub tags: Vec<String>,
+}
+
+impl<I: Copy> BrushInstance<I> {
+    /// An instance from a [`PartSnapshot`] and the part's tags.
+    pub fn from_snapshot(part: &PartSnapshot<I>, tags: Vec<String>) -> Self {
+        Self {
+            id: part.id,
+            position: part.position,
+            tags,
+        }
+    }
+}
+
 /// Paint or erase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrokeMode {
@@ -485,19 +508,24 @@ pub struct Stroke<I> {
 }
 
 impl<I: Copy + PartialEq> Stroke<I> {
-    /// Begins a stroke. `existing` lists the instances that already carry this set's tag,
-    /// with their positions (use [`BrushSet::owns`] to filter the scene).
+    /// Begins a stroke. `existing` may list any scene instances near the brush: the stroke
+    /// keeps only those [`BrushSet::owns`] (tag `Brush:<set name>`), so erase never removes,
+    /// and spacing never counts, an instance this set did not place.
     pub fn begin(
         set: BrushSet,
         settings: &BrushSettings,
         mode: StrokeMode,
-        existing: impl IntoIterator<Item = (I, DVec3)>,
+        existing: impl IntoIterator<Item = BrushInstance<I>>,
     ) -> Self {
         let settings = settings.clamped();
         let min_spacing = settings
             .min_spacing
             .unwrap_or_else(|| set.default_min_spacing());
-        let existing: Vec<(I, DVec3)> = existing.into_iter().collect();
+        let existing: Vec<(I, DVec3)> = existing
+            .into_iter()
+            .filter(|inst| set.owns(&inst.tags))
+            .map(|inst| (inst.id, inst.position))
+            .collect();
         let mut grid = SpacingGrid::new(min_spacing);
         for (_, p) in &existing {
             grid.insert(*p);
@@ -864,10 +892,15 @@ mod tests {
         };
         let probe = Plane::ground();
         let first = paint_once(&settings, &probe);
-        let existing: Vec<(u32, DVec3)> = first
+        let tag = rock_set().tag();
+        let existing: Vec<BrushInstance<u32>> = first
             .iter()
             .enumerate()
-            .map(|(i, p)| (i as u32, p.surface_point))
+            .map(|(i, p)| BrushInstance {
+                id: i as u32,
+                position: p.surface_point,
+                tags: vec![tag.clone()],
+            })
             .collect();
         let mut stroke = Stroke::begin(rock_set(), &settings, StrokeMode::Paint, existing);
         // The disk is already at density, so a dab at the same spot adds nothing;
@@ -1050,12 +1083,13 @@ mod tests {
             ),
             (5, DVec3::new(2.0, 0.0, 2.0), vec![]),
         ];
-        let mine = scene
-            .iter()
-            .filter(|(_, _, tags)| set.owns(tags))
-            .map(|(id, p, _)| (*id, *p))
-            .collect::<Vec<_>>();
-        let mut stroke = Stroke::begin(set, &BrushSettings::default(), StrokeMode::Erase, mine);
+        // The whole scene goes in; the stroke itself keeps only this set's instances.
+        let all = scene.iter().map(|(id, p, tags)| BrushInstance {
+            id: *id,
+            position: *p,
+            tags: tags.clone(),
+        });
+        let mut stroke = Stroke::begin(set, &BrushSettings::default(), StrokeMode::Erase, all);
         let probe = Plane::ground();
         assert_eq!(stroke.dab(&probe, DVec3::ZERO, DVec3::Y, 0.1), 2);
         // A second dab on the same spot finds nothing left.
@@ -1066,6 +1100,49 @@ mod tests {
         assert_eq!(removed, vec![1, 4]);
         assert!(commit.added.is_empty());
         assert_eq!(commit.undo_name(), "Erase Rocks (2 instances)");
+    }
+
+    #[test]
+    fn erase_never_removes_parts_the_brush_did_not_place() {
+        let set = rock_set();
+        // Untagged, other-brush and look-alike tags, all inside the radius.
+        let scene = vec![
+            BrushInstance {
+                id: 1u32,
+                position: DVec3::ZERO,
+                tags: vec![],
+            },
+            BrushInstance {
+                id: 2,
+                position: DVec3::X,
+                tags: vec!["Brush:Trees".into()],
+            },
+            BrushInstance {
+                id: 3,
+                position: DVec3::Z,
+                tags: vec!["Brush:Rocks2".into()],
+            },
+            BrushInstance {
+                id: 4,
+                position: DVec3::NEG_X,
+                tags: vec!["brush:rocks".into()],
+            },
+        ];
+        let mut stroke = Stroke::begin(
+            set.clone(),
+            &BrushSettings::default(),
+            StrokeMode::Erase,
+            scene.clone(),
+        );
+        assert_eq!(stroke.dab(&Plane::ground(), DVec3::ZERO, DVec3::Y, 0.1), 0);
+        assert!(stroke.finish().is_none());
+        // Foreign instances do not block painting either: spacing is only against this set.
+        let crowded = BrushSettings {
+            min_spacing: Some(3.0),
+            ..BrushSettings::default()
+        };
+        let mut paint = Stroke::begin(set, &crowded, StrokeMode::Paint, scene);
+        assert_eq!(paint.dab(&Plane::ground(), DVec3::ZERO, DVec3::Y, 0.1), 16);
     }
 
     /// A toy history target: the scene as a list of brush instances.
@@ -1142,13 +1219,21 @@ mod tests {
         // An erase stroke over the painted area, then undo, restores the painted scene.
         let created_now = scene.apply(&commit, &mut removed);
         let painted = scene.items.clone();
-        let mine: Vec<(u32, DVec3)> = scene
+        let tag = rock_set().tag();
+        let everything: Vec<BrushInstance<u32>> = scene
             .items
             .iter()
-            .filter(|it| created_now.contains(&it.0))
-            .copied()
+            .map(|&(id, position)| BrushInstance {
+                id,
+                position,
+                tags: if created_now.contains(&id) {
+                    vec![tag.clone()]
+                } else {
+                    vec![]
+                },
+            })
             .collect();
-        let mut erase = Stroke::begin(rock_set(), &settings, StrokeMode::Erase, mine);
+        let mut erase = Stroke::begin(rock_set(), &settings, StrokeMode::Erase, everything);
         erase.dab(&probe, DVec3::new(10.0, 0.0, 0.0), DVec3::Y, 0.1);
         let erase_commit = erase.finish().expect("erased something");
         let mut erased_store = Vec::new();

@@ -8,9 +8,12 @@ measure (#220, spec section 10), so the UI can be wired up once Task 10 (#10: vi
 and #213/#215 land. The coordinator scoped this down: no viewport, selection state or undo stack here.
 
 ## Done (`crates/metallic_studio/src/tools/`)
+- `geom.rs`: shared `PartSnapshot { id, position, rotation, size }` (+ `cframe()`, `corners()`, `aabb()`),
+  `snapshot(&World, &[InstanceId])` (BaseParts only, read-only), `Aabb`, `box_corners`, `axis_gaps`, `gap_distance`.
+  No other tool module defines a box type; #307 (arrange) moves onto it (`// pub mod arrange;` waits in `mod.rs`).
 - `rng.rs`: SplitMix64 seeded generator; `for_stream(seed, k)` gives one stream per brush dab.
 - `scatter.rs`: `BrushSet` (1-16 weighted items, tag `Brush:<name>`), `BrushSettings` (spec ranges, `clamped`),
-  `SurfaceProbe` trait (the viewport's raycast), `Stroke` (paint/erase dabs, Poisson-disk dart throwing with a
+  `SurfaceProbe` trait (the viewport's raycast), `Stroke` (takes `BrushInstance`s and keeps only those `BrushSet::owns`, so erase and spacing ignore foreign parts; paint/erase dabs, Poisson-disk dart throwing with a
   spatial hash, density x area / 100 target, dwell allowance per 0.1 s, max 64 per dab, slope and surface filters,
   random yaw/scale, partial alignment to the normal by slerp), `StrokeCommit` (one undo step per stroke, with its
   undo name). `Placement::orientation_degrees` uses the Y-X-Z order `metallic_render` reads.
@@ -18,8 +21,7 @@ and #213/#215 land. The coordinator scoped this down: no viewport, selection sta
   `lasso_hits` (screen-space centre in polygon), `paint_hits` (24 px circle along the trail), `combine`, `invert`,
   `select_similar` with `SimilarKey` (C M L S K N T P), hashed so 50k parts is one pass.
 - `measure.rs`: `Measurement` (distance, deltas, horizontal, angle to ground), `MeasureTool` (two clicks, 8 max,
-  Esc clears), `box_corners`, `snap_to_vertex`, `Aabb` (oriented box to world box, union), `axis_gaps`,
-  `gap_distance`.
+  Esc clears), `snap_to_vertex`; boxes and gaps come from `geom`.
 
 ## Next (after #10, #213, #215)
 - Viewport: implement `SurfaceProbe` with the picker; drive `Stroke::dab` per frame; draw the brush disk.
