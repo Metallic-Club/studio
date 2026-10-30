@@ -93,3 +93,16 @@ fn load_errors_are_reported() {
         Err(CoreError::Io(_))
     ));
 }
+
+#[test]
+fn load_refuses_non_builtin_services_and_abstract_classes() {
+    let f = tmp("plain_service.ron");
+    for class in ["Workspace", "Instance", "BasePart"] {
+        std::fs::write(&f, format!("(version: 1, roots: [(class: \"{class}\")])")).unwrap();
+        assert_eq!(
+            load_scene(&f).err(),
+            Some(CoreError::NotCreatable(class.to_string())),
+            "{class}"
+        );
+    }
+}
