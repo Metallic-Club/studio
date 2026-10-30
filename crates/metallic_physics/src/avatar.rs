@@ -13,12 +13,17 @@
 //! | Left Leg         | 1 x 2 x 1 | (-0.5, -2, 0)  | yes     | no         |
 //! | Right Leg        | 1 x 2 x 1 | (0.5, -2, 0)   | yes     | no         |
 //!
-//! The six visible parts are titanium; the Torso carries a thin violet `Stripe` part as its child.
+//! Default colours follow the classic Roblox look: [`SKIN`] head and arms, a [`SHIRT`] torso and
+//! [`PANTS`] legs; the Torso carries a thin violet `Stripe` part as its child.
 //! All parts are Anchored: the [`crate::CharacterController`] moves them.
 use metallic_core::{Color3, CoreError, InstanceId, Value, Vec3, World};
 
-/// Avatar body colour, titanium `#8e9196`.
-pub const TITANIUM: Color3 = Color3::new(142.0, 145.0, 150.0);
+/// Head and arm colour, a warm skin tone `#eab892`.
+pub const SKIN: Color3 = Color3::new(234.0, 184.0, 146.0);
+/// Torso colour, slate blue `#4a68aa`.
+pub const SHIRT: Color3 = Color3::new(74.0, 104.0, 170.0);
+/// Leg colour, dark graphite `#2e3240`.
+pub const PANTS: Color3 = Color3::new(46.0, 50.0, 64.0);
 /// Accent colour, violet `#9b82d4`: the torso stripe and reached checkpoints.
 pub const VIOLET: Color3 = Color3::new(155.0, 130.0, 212.0);
 
@@ -83,9 +88,11 @@ fn make_part(world: &mut World, parent: InstanceId, l: &Limb) -> Result<Instance
     world.set(id, "CanCollide", Value::Bool(l.can_collide))?;
     world.set(id, "Material", Value::String("SmoothPlastic".into()))?;
     let (color, transparency) = match (l.visible, l.name) {
-        (false, _) => (TITANIUM, 1.0),
+        (false, _) => (SHIRT, 1.0),
         (true, "Stripe") => (VIOLET, 0.0),
-        (true, _) => (TITANIUM, 0.0),
+        (true, "Head" | "Left Arm" | "Right Arm") => (SKIN, 0.0),
+        (true, "Left Leg" | "Right Leg") => (PANTS, 0.0),
+        (true, _) => (SHIRT, 0.0),
     };
     world.set(id, "Color", Value::Color3(color))?;
     world.set(id, "Transparency", Value::Number(transparency))?;

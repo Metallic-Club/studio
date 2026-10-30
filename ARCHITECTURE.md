@@ -34,9 +34,16 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
-- **metallic_runtime** (Task 8): `Game::load/start/frame/stop` ties world, physics, scripts, render, input, third-person
-  camera and in-game GUI (ScreenGui/Frame/TextLabel). Shared by player and Studio.
-- **metallic_player** (Task 8): `metallic-player <project dir>`; window, input, headless mode for smoke tests.
+- **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
+  `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
+  `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
+  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
+  egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
+  `InputState` turns keys, mouse and gamepad into `FrameInput`s without depending on a window library. Shared by
+  player and Studio.
+- **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
+  [--fps] [--capture FRAME:PNG]`; winit window, wgpu surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless
+  mode for smoke tests (no window, no GPU).
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
   Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
@@ -44,9 +51,24 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
 
 ## Frame loop
-`Game::frame(input, dt)`: input -> scripts (`ScriptHost::step`: Heartbeat, Touched, queued remotes, resumed threads)
--> physics (`PhysicsWorld::step`, touched events) -> character (`CharacterController::step`, Humanoid rules)
--> render (`Renderer::sync`, `render`) -> GUI over the 3D view.
+`Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
+`dt` is clamped to 0.25 s), so a headless run of N frames of 1/60 s is deterministic. Each tick:
+
+1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift sets
+   `MoveInput::run`: 1.5 x `Humanoid.WalkSpeed`, which scripts still read unchanged); death, respawn, checkpoints and
+   character touches happen here.
+2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
+3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
+   touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
+   `Respawned` -> `physics.sync_from` and `character_added(player, model)`.
+4. **script step** (`ScriptHost::step`: new scripts, remotes, the inputs above, `RunService.Heartbeat`, resumed waits).
+5. **physics re-sync** when the change journal shows a BasePart under Workspace was created, destroyed, reparented or
+   reshaped (Size, Shape, Material, Anchored, CanCollide); plain moves need no sync.
+
+Then the camera follows the character (frozen where it died while dead; a ray pulls it in front of walls). The app then
+calls `Game::render` (`Renderer::sync` from the change journal, then `render`) and paints the GUI over the 3D view. The
+game never holds a `World` borrow while scripts run. `Game::start` runs the scripts (which creates `Player1`), copies
+`StarterGui` into the `PlayerGui` once, spawns the character and fires `CharacterAdded`.
 
 ## Where to add things
 - **A new Instance class or property:** `metallic_core/src/classes.rs` (registry entry with defaults), a test in

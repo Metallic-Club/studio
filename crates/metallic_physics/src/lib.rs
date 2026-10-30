@@ -35,10 +35,10 @@ mod touched;
 #[cfg(test)]
 mod journal_tests;
 
-pub use avatar::{TITANIUM, VIOLET};
+pub use avatar::{PANTS, SHIRT, SKIN, VIOLET};
 pub use character::{
     CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT, MoveInput,
-    RESPAWN_DELAY, ROOT_HEIGHT, spawn_character,
+    RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, spawn_character,
 };
 pub use sync::{MaterialProps, material_props};
 
