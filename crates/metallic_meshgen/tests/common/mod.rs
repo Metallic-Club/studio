@@ -139,8 +139,7 @@ pub fn assert_valid(m: &MeshData, desc: &MeshDesc, what: &str) {
                 m.uv1[i]
             );
         }
-        for k in 0..3 {
-            let p = m.positions[i][k];
+        for (k, &p) in m.positions[i].iter().enumerate() {
             assert!(
                 p.abs() <= size[k] * 0.5 * (1.0 + 1e-5) + 1e-5,
                 "{what}: vertex {i} outside the box: {:?}",

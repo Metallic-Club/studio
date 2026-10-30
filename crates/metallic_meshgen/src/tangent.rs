@@ -21,7 +21,7 @@ pub(crate) fn generate(mesh: &mut MeshData) {
 
     // Per triangle: unprojected UV tangent and orientation (None when the UVs are degenerate).
     let mut face: Vec<Option<(Vec3, bool)>> = Vec::with_capacity(tri_count);
-    for t in mesh.indices.chunks_exact(3) {
+    for t in mesh.indices.as_chunks::<3>().0 {
         let [a, b, c] = [t[0] as usize, t[1] as usize, t[2] as usize];
         let p0 = Vec3::from(mesh.positions[a]);
         let d1 = Vec3::from(mesh.positions[b]) - p0;

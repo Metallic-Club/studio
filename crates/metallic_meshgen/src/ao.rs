@@ -129,11 +129,11 @@ impl Bvh {
                         continue;
                     }
                     for t in &self.tris[*first..*first + *count] {
-                        if let Some(h) = ray_triangle(o, d, t) {
-                            if h < best {
-                                best = h;
-                                found = true;
-                            }
+                        if let Some(h) = ray_triangle(o, d, t)
+                            && h < best
+                        {
+                            best = h;
+                            found = true;
                         }
                     }
                 }
@@ -190,7 +190,9 @@ fn hemisphere() -> [Vec3; RAYS] {
 /// Ambient occlusion per vertex, 1 = open.
 pub(crate) fn bake(positions: &[[f32; 3]], normals: &[[f32; 3]], indices: &[u32]) -> Vec<f32> {
     let tris: Vec<[Vec3; 3]> = indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| [0, 1, 2].map(|k| Vec3::from(positions[t[k] as usize])))
         .collect();
     let bvh = Bvh::build(tris);

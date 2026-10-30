@@ -114,7 +114,7 @@ impl MeshData {
         for n in &self.normals {
             let _ = writeln!(s, "vn {} {} {}", n[0], n[1], n[2]);
         }
-        for t in self.indices.chunks_exact(3) {
+        for t in self.indices.as_chunks::<3>().0 {
             let [a, b, c] = [t[0] + 1, t[1] + 1, t[2] + 1];
             let _ = writeln!(s, "f {a}/{a}/{a} {b}/{b}/{b} {c}/{c}/{c}");
         }

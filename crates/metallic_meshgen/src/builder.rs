@@ -95,11 +95,11 @@ fn weld(tris: &mut Vec<Tri>, tol: f32) {
             'search: for dx in -1..=1 {
                 for dy in -1..=1 {
                     for dz in -1..=1 {
-                        if let Some(list) = grid.get(&(x + dx, y + dy, z + dz)) {
-                            if let Some(r) = list.iter().find(|r| r.distance_squared(c.p) <= tol2) {
-                                found = Some(*r);
-                                break 'search;
-                            }
+                        if let Some(list) = grid.get(&(x + dx, y + dy, z + dz))
+                            && let Some(r) = list.iter().find(|r| r.distance_squared(c.p) <= tol2)
+                        {
+                            found = Some(*r);
+                            break 'search;
                         }
                     }
                 }
@@ -148,7 +148,7 @@ fn crease_normals(tris: &mut [Tri], angle: f32) {
     }
     let mut out = vec![[Vec3::ZERO; 3]; tris.len()];
     for (ti, t) in tris.iter().enumerate() {
-        for k in 0..3 {
+        for (k, slot) in out[ti].iter_mut().enumerate() {
             let own = normals[ti];
             let mut sum = Vec3::ZERO;
             if let Some(list) = around.get(&pos_key(t.c[k].p)) {
@@ -158,12 +158,12 @@ fn crease_normals(tris: &mut [Tri], angle: f32) {
                     }
                 }
             }
-            out[ti][k] = sum.normalize_or(own);
+            *slot = sum.normalize_or(own);
         }
     }
     for (t, n) in tris.iter_mut().zip(out) {
-        for k in 0..3 {
-            t.c[k].n = n[k];
+        for (c, n) in t.c.iter_mut().zip(n) {
+            c.n = n;
         }
     }
 }

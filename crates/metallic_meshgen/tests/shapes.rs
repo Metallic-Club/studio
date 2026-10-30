@@ -291,7 +291,7 @@ fn random_sizes_bevels_and_params_stay_valid() {
     let seed = std::env::var("MESHGEN_SEED")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0x5eed_35);
+        .unwrap_or(0x005e_ed35);
     let mut rng = Rng::new(seed);
     for round in 0..rounds {
         for shape in Shape::ALL {
@@ -328,6 +328,16 @@ fn random_sizes_bevels_and_params_stay_valid() {
             );
         }
     }
+}
+
+#[test]
+fn flat_wide_pyramid_with_round_bevel_stays_valid() {
+    // Repro from the property test: a very flat pyramid whose bevel is nearly as tall as the apex region.
+    let desc = MeshDesc::new(Shape::Pyramid, [32.95206, 0.4850101, 16.605331])
+        .with_bevel(Bevel::round(0.04650396))
+        .with_lod(Lod::Medium);
+    let m = generate(&desc).unwrap();
+    assert_valid(&m, &desc, "flat wide pyramid, round bevel, medium LOD");
 }
 
 #[test]

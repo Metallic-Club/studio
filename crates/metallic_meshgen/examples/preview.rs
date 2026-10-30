@@ -113,7 +113,7 @@ fn draw(canvas: &mut Canvas, mesh: &MeshData, view: Mat3, x0: usize, y0: usize, 
         .map(|p| [cx + p.x * scale, cy - p.y * scale])
         .collect();
 
-    for t in mesh.indices.chunks_exact(3) {
+    for t in mesh.indices.as_chunks::<3>().0 {
         let [a, b, c] = [t[0], t[1], t[2]].map(|i| i as usize);
         let (pa, pb, pc) = (screen[a], screen[b], screen[c]);
         let edge = |p: [f32; 2], q: [f32; 2], x: f32, y: f32| {
