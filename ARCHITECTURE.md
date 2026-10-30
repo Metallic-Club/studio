@@ -79,6 +79,9 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
   mutating the world directly.
 
 ## Quality bar
+- Local Cargo cache ownership across worktrees: use `tools/cargo_lane.py` for a
+  guarded build/test invocation; [build lanes](docs/build-lanes.md) documents the
+  metadata-derived package clean, process lock and recovery command.
 - Every public item has a `///` doc comment; every crate has a `//!` crate doc.
 - Tests sit next to behaviour (write the failing test first).
 - No `unwrap()` or `expect()` outside tests; return typed errors (`CoreError`, `ScriptError`, `RuntimeError`, `StudioError`).
