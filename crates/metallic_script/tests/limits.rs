@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use common::Rig;
@@ -12,6 +13,17 @@ use metallic_script::{Context, ScriptVm};
 /// Depth of the nested-table bomb; the unit test run for the red/green record may lower it.
 const BOMB_LEVELS: usize = 15;
 
+static LIMITS_TEST: Mutex<()> = Mutex::new(());
+
+// Deliberate CPU-budget exhaustion must not starve queue/payload correctness
+// fixtures in this binary. Acquire before constructing VMs or starting timers;
+// production budgets and each safety assertion remain unchanged.
+fn isolate_limits_test() -> MutexGuard<'static, ()> {
+    LIMITS_TEST
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
 fn rig_with_remote() -> Rig {
     let rig = Rig::new();
     rig.add("RemoteEvent", "Ping", rig.root("ReplicatedStorage"));
@@ -20,6 +32,7 @@ fn rig_with_remote() -> Rig {
 
 #[test]
 fn remote_rejects_exponential_shared_tables() {
+    let _isolation = isolate_limits_test();
     let mut rig = rig_with_remote();
     rig.local_script(
         "Client",
@@ -44,6 +57,7 @@ fn remote_rejects_exponential_shared_tables() {
 
 #[test]
 fn remote_rejects_too_many_arguments_values_and_bytes() {
+    let _isolation = isolate_limits_test();
     let mut rig = rig_with_remote();
     rig.local_script(
         "Client",
@@ -71,6 +85,7 @@ fn remote_rejects_too_many_arguments_values_and_bytes() {
 
 #[test]
 fn remote_queue_is_bounded() {
+    let _isolation = isolate_limits_test();
     let mut rig = rig_with_remote();
     rig.local_script(
         "Client",
@@ -88,9 +103,10 @@ fn remote_queue_is_bounded() {
         "Client2",
         r#"
         local ping = game:GetService("ReplicatedStorage"):WaitForChild("Ping")
+        local payload = string.rep("x", 1000000)
         local sent, lastError = 0, nil
         for i = 1, 30 do
-            local ok, err = pcall(function() ping:FireServer(string.rep("x", 1000000)) end)
+            local ok, err = pcall(function() ping:FireServer(payload) end)
             if ok then sent += 1 else lastError = err end
         end
         print(sent, lastError)
@@ -113,9 +129,10 @@ fn remote_queue_is_bounded() {
         "Client3",
         r#"
         local ping = game:GetService("ReplicatedStorage"):WaitForChild("Ping")
+        local payload = string.rep("x", 1000000)
         local sent = 0
         for i = 1, 30 do
-            if pcall(function() ping:FireServer(string.rep("x", 1000000)) end) then sent += 1 end
+            if pcall(function() ping:FireServer(payload) end) then sent += 1 end
         end
         print("bytes", sent)
         "#,
@@ -127,6 +144,7 @@ fn remote_queue_is_bounded() {
 
 #[test]
 fn too_many_connections_on_one_signal() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     rig.server_script(
         "S",
@@ -147,6 +165,7 @@ fn too_many_connections_on_one_signal() {
 
 #[test]
 fn many_spinning_handlers_do_not_stall_a_step() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     rig.host.set_resume_budget(metallic_script::RESUME_BUDGET);
     let ws = rig.root("Workspace");
@@ -181,6 +200,7 @@ fn many_spinning_handlers_do_not_stall_a_step() {
 
 #[test]
 fn repeat_timeouts_disconnect_script() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     rig.host.set_resume_budget(metallic_script::RESUME_BUDGET);
     rig.server_script(
@@ -224,6 +244,7 @@ fn repeat_timeouts_disconnect_script() {
 
 #[test]
 fn userdata_metatables_are_locked() {
+    let _isolation = isolate_limits_test();
     // mlua protects every userdata metatable with `__metatable = false`: getmetatable returns
     // false and setmetatable errors (the string the lead asked for cannot be set).
     let mut rig = Rig::new();
@@ -256,6 +277,7 @@ fn userdata_metatables_are_locked() {
 
 #[test]
 fn connect_and_operator_errors_are_positioned() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     rig.server_script(
         "S",
@@ -278,6 +300,7 @@ fn connect_and_operator_errors_are_positioned() {
 
 #[test]
 fn destroyed_script_stops_and_its_handlers_stop_firing() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     let ws = rig.root("Workspace");
     let pad = rig.add("Part", "Pad", ws);
@@ -309,6 +332,7 @@ fn destroyed_script_stops_and_its_handlers_stop_firing() {
 
 #[test]
 fn disabled_script_stops() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     let id = rig.server_script(
         "S",
@@ -336,6 +360,7 @@ fn disabled_script_stops() {
 
 #[test]
 fn script_moved_out_of_a_valid_place_stops() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     let id = rig.server_script(
         "S",
@@ -356,6 +381,7 @@ fn script_moved_out_of_a_valid_place_stops() {
 
 #[test]
 fn heartbeat_1000_parts_read_write_cost() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     let ws = rig.root("Workspace");
     for i in 0..1000 {
@@ -385,6 +411,7 @@ fn heartbeat_1000_parts_read_write_cost() {
 
 #[test]
 fn cloned_scripts_with_same_name_stop_independently() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     let ws = rig.root("Workspace");
     let ball = rig.add("Part", "Ball", ws);
@@ -433,6 +460,7 @@ fn cloned_scripts_with_same_name_stop_independently() {
 
 #[test]
 fn full_deferral_queue_stops_building_arguments() {
+    let _isolation = isolate_limits_test();
     let mut rig = Rig::new();
     rig.server_script(
         "Many",

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Usage text printed for bad arguments.
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
 [--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
-[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ]";
+[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>]";
 
 /// Parsed arguments.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +30,10 @@ pub struct Args {
     /// Camera position and look-at point for captured frames instead of the game camera (for
     /// overview screenshots; the window still shows the game camera).
     pub capture_view: Option<[f32; 6]>,
+    /// Input events to play, one per line: `frame device control state [values]` (see
+    /// `metallic_runtime::input::ScriptedSource`). With a script every frame lasts 1/60 s of
+    /// input time, so a run plays the same way every time.
+    pub input_script: Option<PathBuf>,
 }
 
 impl Args {
@@ -46,12 +50,16 @@ impl Args {
             autopilot: false,
             captures: Vec::new(),
             capture_view: None,
+            input_script: None,
         };
         while let Some(a) = it.next() {
             let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
             match a.as_str() {
                 "--scene" => args.scene = Some(PathBuf::from(value("--scene")?)),
                 "--headless" => args.headless = true,
+                "--input-script" => {
+                    args.input_script = Some(PathBuf::from(value("--input-script")?))
+                }
                 "--fps" => args.fps = true,
                 "--autopilot" => args.autopilot = true,
                 "--frames" => {
@@ -127,6 +135,14 @@ mod tests {
         let a = parse("templates/parkour --fps --autopilot").unwrap();
         assert!(a.fps && a.autopilot);
         assert!(!parse("p").unwrap().autopilot);
+    }
+
+    #[test]
+    fn parses_the_input_script_option() {
+        let a = parse("p --headless --input-script runs/jump.txt --frames 90").unwrap();
+        assert_eq!(a.input_script, Some(PathBuf::from("runs/jump.txt")));
+        assert!(parse("p --input-script").is_err());
+        assert_eq!(parse("p").unwrap().input_script, None);
     }
 
     #[test]

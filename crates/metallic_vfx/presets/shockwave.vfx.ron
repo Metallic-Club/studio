@@ -1,0 +1,190 @@
+(
+  format: 1,
+  name: "Shockwave",
+  description: "A ground slam: expanding ring, dust wall and flash.",
+  tags: [
+    "impact",
+    "ground",
+    "one-shot",
+  ],
+  style: Realistic,
+  duration: 1.6,
+  emitters: [
+    (
+      name: "Dust wall",
+      capacity: 64,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 40,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Cone(
+            radius: 0.6,
+            angle: 86.0,
+          ),
+          surface: true,
+          offset: (0.0, 0.2, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.9, 1.4),
+        ),
+        Velocity(
+          speed: (6.0, 9.0),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.6, 0.9),
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (-50.0, 50.0),
+        ),
+        Color(
+          choices: [
+            "#B9AE9C",
+            "#A39784",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 3.0,
+        ),
+        Acceleration(
+          accel: (0.0, 0.6, 0.0),
+        ),
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.6),
+              (1.0, 2.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.06, 0.25),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Smoke,
+      ),
+    ),
+    (
+      name: "Ring",
+      capacity: 4,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 1,
+        ),
+        Burst(
+          time: 0.08,
+          count: 1,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 0.05, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.6, 0.6),
+        ),
+        Size(
+          size: (10.0, 10.0),
+        ),
+        Color(
+          choices: [
+            "#E8EEFF",
+          ],
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.05),
+              (0.35, 0.7),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        facing: Ground,
+        texture: Ring,
+        light_emission: 0.7,
+        brightness: 1.2,
+      ),
+    ),
+    (
+      name: "Flash",
+      capacity: 2,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 1,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 0.4, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.15, 0.15),
+        ),
+        Size(
+          size: (4.0, 4.0),
+        ),
+        Color(
+          choices: [
+            "#F1F4FF",
+          ],
+        ),
+      ],
+      update: [
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.2),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: SoftDot,
+        light_emission: 1.0,
+        brightness: 1.2,
+      ),
+    ),
+  ],
+)
