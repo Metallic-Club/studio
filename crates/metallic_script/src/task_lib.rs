@@ -248,6 +248,7 @@ pub(crate) fn install(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
     let type_fn: Value = globals.get("type")?;
     let tostring: Value = globals.get("tostring")?;
     let sub: Value = globals.get::<mlua::Table>("string")?.get("sub")?;
+    let find: Value = globals.get::<mlua::Table>("string")?.get("find")?;
     let info: Value = globals.get::<mlua::Table>("debug")?.get("info")?;
     let yield_fn: Value = globals.get::<mlua::Table>("coroutine")?.get("yield")?;
 
@@ -257,7 +258,7 @@ pub(crate) fn install(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
     let guard: Function = lua
         .load(
             r#"
-local xpcall, type, tostring, sub, info, okTag, errTag = ...
+local xpcall, type, tostring, sub, info, okTag, errTag, find = ...
 local function describe(e)
     local t = type(e)
     if t == "string" then return e end
@@ -265,6 +266,8 @@ local function describe(e)
     if t == "userdata" then
         local s = tostring(e)
         if sub(s, 1, 15) == "runtime error: " then s = sub(s, 16) end
+        local cut = find(s, "\nstack traceback", 1, true)
+        if cut then s = sub(s, 1, cut - 1) end
         return s
     end
     return "<" .. t .. ">"
@@ -290,7 +293,16 @@ return function(f, ...) return finish(xpcall(f, handler, ...)) end
 "#,
         )
         .set_name("=[engine]")
-        .call((xpcall, type_fn, tostring, sub, info, tag(OK), tag(ERR)))?;
+        .call((
+            xpcall,
+            type_fn,
+            tostring,
+            sub,
+            info,
+            tag(OK),
+            tag(ERR),
+            find,
+        ))?;
     *sched.guard.borrow_mut() = Some(guard);
 
     let task = lua.create_table()?;

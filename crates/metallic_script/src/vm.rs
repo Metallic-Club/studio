@@ -346,6 +346,17 @@ impl ScriptVm {
     /// to the script); library tables are shared and read-only, and `_G` is one
     /// writable table shared by all scripts of this VM.
     pub fn run_script(&mut self, chunk_name: &str, source: &str) -> Result<(), ScriptError> {
+        self.run_script_with(chunk_name, source, Vec::new())
+    }
+
+    /// Like [`ScriptVm::run_script`], and also defines `globals` (for example `script`) in
+    /// this script's own environment only.
+    pub fn run_script_with(
+        &mut self,
+        chunk_name: &str,
+        source: &str,
+        globals: Vec<(&str, Value)>,
+    ) -> Result<(), ScriptError> {
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),
         };
@@ -354,6 +365,9 @@ impl ScriptVm {
         meta.set("__index", self.lib.clone()).map_err(to_err)?;
         env.set_metatable(Some(meta)).map_err(to_err)?;
         env.set("_G", self.shared_g.clone()).map_err(to_err)?;
+        for (name, value) in globals {
+            env.set(name, value).map_err(to_err)?;
+        }
         let function = self
             .lua
             .load(source)
