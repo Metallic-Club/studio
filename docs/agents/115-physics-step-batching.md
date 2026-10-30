@@ -1,6 +1,6 @@
 # Physics pipeline batching: issue 115
 
-Status: implemented; focused physics tests passed; full workspace gates pending.
+Status: implemented and tested; ready for review.
 
 ## Goal
 
@@ -20,6 +20,12 @@ Checked the actual dependency pinned by Cargo.lock, Rapier 0.36.1:
   mechanically equivalent replacement for four collision steps.
 
 No third-party engine or Rapier implementation code was copied.
+
+The Rapier guide recommends a fixed pipeline timestep with an elapsed-time accumulator. A new 1/60 s accumulator
+would increase latency for high-refresh callers, so this policy retains the existing 1/240 s quantum and permits
+pipeline durations of one to four quanta. Callers running a fixed 60 Hz loop get a steady normal timestep; different
+caller cadences can integrate differently. This latency-versus-cadence tradeoff is explicit rather than hidden by
+renaming the former substep constant.
 
 ## Contact experiments and resulting policy
 
@@ -46,15 +52,27 @@ cadences. Optimizing those cases further needs swept/contact sampling designed s
 
 ## Evidence so far
 
-- `cargo test -p metallic_physics -j 4`: 11 unit tests, all 18 character tests, and all 16 existing physics tests passed.
+- `cargo test -p metallic_physics -j 4`: focused physics, character, and existing physics suites passed. Final workspace
+  validation includes 12 physics unit tests (10 new), all 18 character tests, and all 16 existing physics tests.
 - Ordinary 60 Hz frames: one pipeline call instead of four. Empty 30 Hz and 0.25 s catch-up frames use two and 15
   calls respectively. Risky sensor/mover frames retain four and 60 respectively. These are deterministic operation
   counts, not wall-clock benchmarks or a 3x throughput claim.
 - High-refresh and tiny-delta probes verify immediate consumption, residual bounds, and expected gravitational
   velocity; fast-contact probes verify the fallback preserves the events that naive batching lost.
 
-## Validation to finish
+## Final validation
 
-Use the agent's isolated `lane116` Cargo target sequentially, with no other worktree building there concurrently.
-Run workspace tests, Clippy with warnings denied, license checks, and formatting. Update this note with final
-results before opening the PR. No visual interface change is involved.
+Used the agent's isolated `lane116` Cargo target sequentially, with no other worktree building there concurrently.
+Rebased on main at `532c4f7` before final validation.
+
+- Initial parallel workspace test run failed the existing Luau `remote_queue_is_bounded` test: Client2 hit its
+  execution budget under concurrent test/compiler load. This branch changes no script code or budgets.
+- The exact failing test passed alone in 0.09 seconds. Coordinated a quiet compiler window for the script tests.
+- `cargo test --workspace -j 4 -- --test-threads=1`: all 200 tests passed, zero failures or skips. This includes all
+  character, physics, Luau, GPU headless, and Studio suites; time/memory budgets remained unchanged.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed, no warnings.
+- `cargo deny check licenses`: passed (`licenses ok`); only the existing unused MPL-2.0 allowance warning.
+- `cargo fmt --all -- --check`: passed. No visual interface change or windowed manual test.
+
+The parallel quota-test scheduling observation is separate follow-up work; it was not silently patched or hidden
+by changing runtime safety budgets.
