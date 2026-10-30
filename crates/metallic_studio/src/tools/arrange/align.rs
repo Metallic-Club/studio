@@ -152,7 +152,7 @@ pub fn align(world: &World, ids: &[InstanceId], opts: &AlignOptions) -> Result<P
         };
         shift(&mut plan, o, &frame, opts.axis, goal - value);
     }
-    Ok(plan)
+    plan.check_finite()
 }
 
 /// Plans a distribute of the objects `ids` along one axis, ordered by their centres.
@@ -213,7 +213,7 @@ pub fn distribute(
             }
         }
     }
-    Ok(plan)
+    plan.check_finite()
 }
 
 #[cfg(test)]
@@ -505,5 +505,34 @@ mod tests {
         assert!(!plan.is_empty());
         let (changes, _) = w.changes_since(cursor);
         assert_eq!(changes, metallic_core::Changes::Ids(Vec::new()));
+    }
+
+    #[test]
+    fn non_finite_and_huge_numbers_are_rejected() {
+        let mut w = world();
+        let a = part(&mut w, v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        let b = part(&mut w, v(3.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        let c = part(&mut w, v(9.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let o = opts(Axis::X, Edge::Min, RelativeTo::Grid(x));
+            assert!(align(&w, &[a, b], &o).is_err(), "grid {x}");
+            for mode in [DistributeMode::Centres, DistributeMode::Gaps] {
+                let o = dist(Axis::X, mode, Some(x));
+                assert!(
+                    distribute(&w, &[a, b, c], &o).is_err(),
+                    "{mode:?} spacing {x}"
+                );
+            }
+        }
+        for mode in [DistributeMode::Centres, DistributeMode::Gaps] {
+            let o = dist(Axis::X, mode, Some(f64::MAX));
+            assert!(
+                distribute(&w, &[a, b, c], &o).is_err(),
+                "{mode:?} huge spacing"
+            );
+        }
+        // A tiny grid step is fine: the edges already sit on such a fine grid.
+        let o = opts(Axis::X, Edge::Min, RelativeTo::Grid(1e-300));
+        assert!(align(&w, &[a, b], &o).is_ok());
     }
 }

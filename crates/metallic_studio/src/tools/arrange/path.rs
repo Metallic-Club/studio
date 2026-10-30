@@ -29,6 +29,14 @@ impl PathCurve {
     ///
     /// Errors: [`ArrangeError::Invalid`] with fewer than two distinct points.
     pub fn new(points: &[Vec3]) -> Result<PathCurve, ArrangeError> {
+        if points
+            .iter()
+            .any(|p| !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()))
+        {
+            return Err(ArrangeError::Invalid(
+                "path points must be finite numbers".into(),
+            ));
+        }
         let mut pts: Vec<Vec3> = Vec::with_capacity(points.len());
         for &p in points {
             if pts.last().is_none_or(|q: &Vec3| (p - *q).magnitude() > EPS) {
@@ -60,6 +68,9 @@ impl PathCurve {
                 prev = p;
                 curve.table.push((s, seg, u));
             }
+        }
+        if !curve.length().is_finite() {
+            return Err(ArrangeError::Invalid("the path is too long".into()));
         }
         Ok(curve)
     }

@@ -18,6 +18,10 @@ use super::scene::{Object, read_objects, selection_bounds_in, selection_pivot};
 /// make more.
 pub const MAX_COPIES: usize = 1000;
 
+/// The most parts one array may create (copies times parts in the selection), so a big
+/// selection cannot plan millions of entries.
+pub const MAX_CREATED_PARTS: usize = 10_000;
+
 /// Name of the Model that holds the result when grouping is on.
 pub const GROUP_NAME: &str = "Array";
 
@@ -124,9 +128,36 @@ fn check_copies(n: usize) -> Result<(), ArrangeError> {
     Ok(())
 }
 
+fn finite_vec(v: Vec3, what: &str) -> Result<Vec3, ArrangeError> {
+    if v.x.is_finite() && v.y.is_finite() && v.z.is_finite() {
+        Ok(v)
+    } else {
+        Err(ArrangeError::Invalid(format!(
+            "{what} must be a finite number"
+        )))
+    }
+}
+
+/// Errors if `copies` copies of `objects` would create more than [`MAX_CREATED_PARTS`] parts.
+fn check_created_parts(objects: &[Object], copies: usize) -> Result<(), ArrangeError> {
+    let parts: usize = objects.iter().map(|o| o.parts.len()).sum();
+    match parts.checked_mul(copies) {
+        Some(n) if n <= MAX_CREATED_PARTS => Ok(()),
+        _ => Err(ArrangeError::Invalid(format!(
+            "an array creates at most {MAX_CREATED_PARTS} parts ({copies} copies of {parts} parts is too many)"
+        ))),
+    }
+}
+
 /// One rigid transform per new copy, applied to the whole selection.
-fn plan_copies(world: &World, objects: &[Object], transforms: &[Pose], group: bool) -> Plan {
+fn plan_copies(
+    world: &World,
+    objects: &[Object],
+    transforms: &[Pose],
+    group: bool,
+) -> Result<Plan, ArrangeError> {
     let copies = transforms.len();
+    check_created_parts(objects, copies)?;
     let mut plan = Plan {
         label: format!(
             "Array {} ({copies} cop{})",
@@ -144,7 +175,7 @@ fn plan_copies(world: &World, objects: &[Object], transforms: &[Pose], group: bo
             plan.push_copy(world, o, &o.transformed(t));
         }
     }
-    plan
+    plan.check_finite()
 }
 
 /// The centre-to-centre step of a linear array for a selection of size `size`.
@@ -196,14 +227,18 @@ pub fn linear(
     let objects = read_nonempty(world, ids)?;
     check_copies(opts.count)?;
     let size = selection_bounds_in(&objects, &Mat3::IDENTITY).size();
-    let step = linear_step(size, opts.offset, opts.offset_is);
-    if step.magnitude() <= 1e-9 {
-        return Err(ArrangeError::Invalid("the offset must not be zero".into()));
+    let offset = finite_vec(opts.offset, "the offset")?;
+    let step = linear_step(size, offset, opts.offset_is);
+    let len = step.magnitude();
+    if !(len.is_finite() && len > 1e-9) {
+        return Err(ArrangeError::Invalid(
+            "the offset must be finite and not zero".into(),
+        ));
     }
     let transforms: Vec<Pose> = (1..=opts.count)
         .map(|i| Pose::translation(step * i as f64))
         .collect();
-    Ok(plan_copies(world, &objects, &transforms, opts.group))
+    plan_copies(world, &objects, &transforms, opts.group)
 }
 
 /// The angle of each new copy of a radial array, in degrees from the original.
@@ -242,7 +277,7 @@ pub fn radial(
     let centre = match opts.centre {
         RadialCentre::Pivot => selection_pivot(&objects),
         RadialCentre::Active => objects[objects.len() - 1].pivot().pos,
-        RadialCentre::Point(p) => p,
+        RadialCentre::Point(p) => finite_vec(p, "the centre")?,
     };
     let reference = selection_pivot(&objects);
     let transforms: Vec<Pose> = radial_angles(opts.count, opts.angle)
@@ -256,7 +291,7 @@ pub fn radial(
             }
         })
         .collect();
-    Ok(plan_copies(world, &objects, &transforms, opts.group))
+    plan_copies(world, &objects, &transforms, opts.group)
 }
 
 /// Plans a grid array.
@@ -273,6 +308,7 @@ pub fn grid(world: &World, ids: &[InstanceId], opts: &GridOptions) -> Result<Pla
         ));
     }
     check_copies(total - 1)?;
+    finite_vec(opts.spacing, "the spacing")?;
     let mut transforms = Vec::with_capacity(total - 1);
     for iy in 0..ny {
         for iz in 0..nz {
@@ -289,7 +325,7 @@ pub fn grid(world: &World, ids: &[InstanceId], opts: &GridOptions) -> Result<Pla
             }
         }
     }
-    Ok(plan_copies(world, &objects, &transforms, opts.group))
+    plan_copies(world, &objects, &transforms, opts.group)
 }
 
 /// A rotation whose X column is `tangent` and whose Y column is as close to `up` as possible.
@@ -317,12 +353,28 @@ pub fn path_stations(length: f64, fill: PathFill) -> Result<Vec<f64>, ArrangeErr
             if !(s.is_finite() && s > 1e-6) {
                 return Err(ArrangeError::Invalid("the spacing must be positive".into()));
             }
-            let n = (length / s + 1e-9).floor() as usize + 1;
+            if !(length.is_finite() && length >= 0.0) {
+                return Err(ArrangeError::Invalid(
+                    "the path length must be finite".into(),
+                ));
+            }
+            let n = (length / s + 1e-9).floor() + 1.0;
+            if n.is_nan() || n > MAX_COPIES as f64 {
+                return Err(ArrangeError::Invalid(format!(
+                    "an array makes 1 to {MAX_COPIES} copies; this spacing needs more"
+                )));
+            }
+            let n = n as usize;
             check_copies(n)?;
             Ok((0..n).map(|k| s * k as f64).collect())
         }
         PathFill::Count(n) => {
             check_copies(n)?;
+            if !(length.is_finite() && length >= 0.0) {
+                return Err(ArrangeError::Invalid(
+                    "the path length must be finite".into(),
+                ));
+            }
             if n == 1 {
                 return Ok(vec![0.0]);
             }
@@ -368,7 +420,7 @@ pub fn along_path(
             }
         })
         .collect();
-    Ok(plan_copies(world, &objects, &transforms, opts.group))
+    plan_copies(world, &objects, &transforms, opts.group)
 }
 
 /// Where the linear drag handle sits: one step past the last copy.
@@ -379,27 +431,33 @@ pub fn handle_position(pivot: Vec3, step: Vec3, count: usize) -> Vec3 {
 /// The count after dragging the handle `along` studs in the step's direction (negative removes
 /// copies), starting from `start_count`. Clamped to 1..=[`MAX_COPIES`].
 pub fn count_from_drag(start_count: usize, along: f64, step: Vec3) -> usize {
+    let base = start_count.clamp(1, MAX_COPIES);
     let len = step.magnitude();
-    if len <= 1e-9 || !along.is_finite() {
-        return start_count.clamp(1, MAX_COPIES);
+    let ratio = along / len;
+    if !(len.is_finite() && len > 1e-9 && ratio.is_finite()) {
+        return base;
     }
-    let added = (along / len).round() as i64;
-    (start_count as i64 + added).clamp(1, MAX_COPIES as i64) as usize
+    // Clamp in f64 first so the cast and the add cannot overflow.
+    let added = ratio.round().clamp(-(MAX_COPIES as f64), MAX_COPIES as f64) as i64;
+    (base as i64 + added).clamp(1, MAX_COPIES as i64) as usize
 }
 
 /// How far a drag from `from` to `to` moves along the step direction.
 pub fn drag_along(from: Vec3, to: Vec3, step: Vec3) -> f64 {
     let len = step.magnitude();
-    if len <= 1e-9 {
-        0.0
+    let along = dot(to - from, step) / len;
+    if len.is_finite() && len > 1e-9 && along.is_finite() {
+        along
     } else {
-        dot(to - from, step) / len
+        0.0
     }
 }
 
 /// The count after `notches` wheel clicks over the handle (up adds one each).
 pub fn count_from_wheel(count: usize, notches: i32) -> usize {
-    (count as i64 + notches as i64).clamp(1, MAX_COPIES as i64) as usize
+    let base = count.clamp(1, MAX_COPIES) as i64;
+    base.saturating_add(i64::from(notches))
+        .clamp(1, MAX_COPIES as i64) as usize
 }
 
 /// A parsed Count field.
@@ -803,5 +861,191 @@ mod tests {
         assert_vec(c.size, v(3.0, 2.0, 1.0));
         let src = PartState::read(&w, a).unwrap();
         assert!(Mat3::from_orientation(c.orientation).max_diff(&src.pose.rot) < 1e-12);
+    }
+
+    const BAD: [f64; 3] = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+
+    #[test]
+    fn non_finite_and_huge_inputs_are_rejected() {
+        let mut w = world();
+        let a = part(&mut w, v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        let lin = LinearOptions {
+            count: 3,
+            offset: v(1.0, 0.0, 0.0),
+            offset_is: OffsetIs::Distance,
+            group: false,
+        };
+        let rad = RadialOptions {
+            count: 4,
+            angle: 360.0,
+            axis: Axis::Y,
+            centre: RadialCentre::Point(v(0.0, 0.0, 0.0)),
+            rotate_copies: true,
+            group: false,
+        };
+        let grd = GridOptions {
+            counts: [2, 1, 1],
+            spacing: v(1.0, 0.0, 0.0),
+            group: false,
+        };
+        for x in BAD {
+            for offset_is in [OffsetIs::Distance, OffsetIs::Gap] {
+                let o = LinearOptions {
+                    offset: v(x, 0.0, 0.0),
+                    offset_is,
+                    ..lin
+                };
+                assert!(linear(&w, &[a], &o).is_err(), "linear offset {x}");
+            }
+            let o = RadialOptions {
+                centre: RadialCentre::Point(v(0.0, x, 0.0)),
+                ..rad
+            };
+            assert!(radial(&w, &[a], &o).is_err(), "radial centre {x}");
+            assert!(
+                radial(&w, &[a], &RadialOptions { angle: x, ..rad }).is_err(),
+                "angle {x}"
+            );
+            let o = GridOptions {
+                spacing: v(0.0, 0.0, x),
+                ..grd
+            };
+            assert!(grid(&w, &[a], &o).is_err(), "grid spacing {x}");
+            let p = PathOptions {
+                points: vec![v(0.0, 0.0, 0.0), v(x, 0.0, 0.0)],
+                fill: PathFill::Count(2),
+                align: true,
+                up: Axis::Y,
+                group: false,
+            };
+            assert!(along_path(&w, &[a], &p).is_err(), "path point {x}");
+            let p = PathOptions {
+                points: vec![v(0.0, 0.0, 0.0), v(10.0, 0.0, 0.0)],
+                fill: PathFill::Spacing(x),
+                ..p
+            };
+            assert!(along_path(&w, &[a], &p).is_err(), "path spacing {x}");
+        }
+        // Huge but finite values overflow to infinity in the result and are rejected.
+        let o = LinearOptions {
+            offset: v(f64::MAX, 0.0, 0.0),
+            ..lin
+        };
+        assert!(linear(&w, &[a], &o).is_err());
+        let o = GridOptions {
+            spacing: v(f64::MAX, 0.0, 0.0),
+            counts: [3, 1, 1],
+            ..grd
+        };
+        assert!(grid(&w, &[a], &o).is_err());
+        let p = PathOptions {
+            points: vec![
+                v(-1e307, 0.0, 0.0),
+                v(1e307, 0.0, 0.0),
+                v(1e307, 1e307, 0.0),
+            ],
+            fill: PathFill::Count(3),
+            align: false,
+            up: Axis::Y,
+            group: false,
+        };
+        assert!(along_path(&w, &[a], &p).is_err());
+        let o = GridOptions {
+            counts: [usize::MAX, usize::MAX, 2],
+            ..grd
+        };
+        assert!(grid(&w, &[a], &o).is_err());
+    }
+
+    #[test]
+    fn path_stations_never_overflow() {
+        for len in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(
+                path_stations(len, PathFill::Spacing(1.0)).is_err(),
+                "length {len}"
+            );
+            assert!(
+                path_stations(len, PathFill::Count(3)).is_err(),
+                "length {len}"
+            );
+        }
+        assert!(path_stations(1e300, PathFill::Spacing(1e-3)).is_err());
+        assert!(path_stations(f64::MAX, PathFill::Spacing(2e-6)).is_err());
+        assert_eq!(
+            path_stations(10.0, PathFill::Spacing(f64::MAX)).unwrap(),
+            vec![0.0]
+        );
+        assert!(path_stations(10.0, PathFill::Count(usize::MAX)).is_err());
+        assert_eq!(
+            path_stations(10.0, PathFill::Spacing(5.0)).unwrap(),
+            vec![0.0, 5.0, 10.0]
+        );
+    }
+
+    #[test]
+    fn drag_and_wheel_counts_saturate() {
+        let step = v(2.0, 0.0, 0.0);
+        assert_eq!(count_from_drag(3, f64::MAX, step), MAX_COPIES);
+        assert_eq!(count_from_drag(3, -f64::MAX, step), 1);
+        assert_eq!(count_from_drag(usize::MAX, 1e9, step), MAX_COPIES);
+        assert_eq!(count_from_drag(usize::MAX, -1e9, step), 1);
+        assert_eq!(count_from_drag(0, 0.0, step), 1);
+        for x in BAD {
+            assert_eq!(count_from_drag(3, x, step), 3, "along {x}");
+            assert_eq!(count_from_drag(3, 4.0, v(x, 0.0, 0.0)), 3, "step {x}");
+            assert_eq!(drag_along(v(0.0, 0.0, 0.0), v(x, 0.0, 0.0), step), 0.0);
+            assert_eq!(
+                drag_along(v(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(x, 0.0, 0.0)),
+                0.0
+            );
+        }
+        // Tiny step: the ratio is huge but finite and clamps.
+        assert_eq!(count_from_drag(3, 1e300, v(1e-8, 0.0, 0.0)), MAX_COPIES);
+        assert_eq!(count_from_wheel(usize::MAX, i32::MAX), MAX_COPIES);
+        assert_eq!(count_from_wheel(0, i32::MIN), 1);
+        assert_eq!(count_from_wheel(usize::MAX, -1), MAX_COPIES - 1);
+    }
+
+    #[test]
+    fn created_parts_are_capped_across_copies_and_parts() {
+        let mut w = world();
+        let parts: Vec<(Vec3, Vec3)> = (0..20)
+            .map(|i| (v(i as f64, 0.0, 0.0), v(1.0, 1.0, 1.0)))
+            .collect();
+        let (m, _) = model(&mut w, &parts);
+        let o = LinearOptions {
+            count: 500,
+            offset: v(0.0, 0.0, 2.0),
+            offset_is: OffsetIs::Distance,
+            group: false,
+        };
+        // 500 copies x 20 parts = 10,000: at the cap.
+        let plan = linear(&w, &[m], &o).unwrap();
+        assert_eq!(plan.copies.len(), 500);
+        // 501 x 20 = 10,020: over it, although 501 copies alone would be allowed.
+        assert!(linear(&w, &[m], &LinearOptions { count: 501, ..o }).is_err());
+        let r = RadialOptions {
+            count: 600,
+            angle: 360.0,
+            axis: Axis::Y,
+            centre: RadialCentre::Point(v(0.0, 0.0, 50.0)),
+            rotate_copies: true,
+            group: false,
+        };
+        assert!(radial(&w, &[m], &r).is_err());
+        let g = GridOptions {
+            counts: [10, 10, 10],
+            spacing: v(30.0, 2.0, 2.0),
+            group: false,
+        };
+        assert!(grid(&w, &[m], &g).is_err());
+        let p = PathOptions {
+            points: vec![v(0.0, 0.0, 0.0), v(0.0, 0.0, 1000.0)],
+            fill: PathFill::Count(600),
+            align: false,
+            up: Axis::Y,
+            group: false,
+        };
+        assert!(along_path(&w, &[m], &p).is_err());
     }
 }

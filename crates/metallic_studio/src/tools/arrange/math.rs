@@ -210,12 +210,16 @@ impl Mat3 {
         Vec3::new(clean(a), clean(b), clean(c))
     }
 
-    /// The largest absolute difference between entries.
+    /// The largest absolute difference between entries (NaN if any entry is NaN).
     pub fn max_diff(&self, o: &Mat3) -> f64 {
         let mut worst: f64 = 0.0;
         for r in 0..3 {
             for c in 0..3 {
-                worst = worst.max((self.m[r][c] - o.m[r][c]).abs());
+                let d = (self.m[r][c] - o.m[r][c]).abs();
+                if d.is_nan() {
+                    return f64::NAN;
+                }
+                worst = worst.max(d);
             }
         }
         worst

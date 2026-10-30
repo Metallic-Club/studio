@@ -93,6 +93,28 @@ impl Plan {
         self.changes.is_empty() && self.copies.is_empty()
     }
 
+    /// Errors if any planned value is not finite (huge inputs can overflow to infinity), so
+    /// a plan never asks the world to store NaN or infinity.
+    pub fn check_finite(self) -> Result<Plan, ArrangeError> {
+        let ok = |v: &Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
+        let changes_ok = self.changes.iter().all(|c| match &c.after {
+            Value::Vector3(v) => ok(v),
+            _ => true,
+        });
+        let copies_ok = self
+            .copies
+            .iter()
+            .flat_map(|c| &c.parts)
+            .all(|p| ok(&p.position) && ok(&p.orientation) && ok(&p.size));
+        if changes_ok && copies_ok {
+            Ok(self)
+        } else {
+            Err(ArrangeError::Invalid(
+                "the result is out of range (a value is too large)".into(),
+            ))
+        }
+    }
+
     /// The planned value of `property` on `id`, if the plan changes it.
     pub fn after(&self, id: InstanceId, property: &str) -> Option<&Value> {
         self.changes
@@ -102,10 +124,12 @@ impl Plan {
     }
 
     /// Adds the changes that move `before` to `after` (same part). Values within `1e-12` are
-    /// treated as unchanged so a no-op leaves no entry.
+    /// treated as unchanged so a no-op leaves no entry; a NaN counts as changed so
+    /// [`Plan::check_finite`] rejects it.
     pub fn push_part(&mut self, before: &PartState, after: &PartState) {
         debug_assert_eq!(before.id, after.id);
-        let moved = (after.pose.pos - before.pose.pos).magnitude() > 1e-12;
+        let changed = |d: f64| d.is_nan() || d > 1e-12;
+        let moved = changed((after.pose.pos - before.pose.pos).magnitude());
         if moved {
             self.changes.push(PropertyChange {
                 id: before.id,
@@ -114,7 +138,7 @@ impl Plan {
                 after: Value::Vector3(after.pose.pos),
             });
         }
-        if after.pose.rot.max_diff(&before.pose.rot) > 1e-12 {
+        if changed(after.pose.rot.max_diff(&before.pose.rot)) {
             self.changes.push(PropertyChange {
                 id: before.id,
                 property: "Orientation",
@@ -122,7 +146,7 @@ impl Plan {
                 after: Value::Vector3(after.pose.rot.to_orientation()),
             });
         }
-        if (after.size - before.size).magnitude() > 1e-12 {
+        if changed((after.size - before.size).magnitude()) {
             self.changes.push(PropertyChange {
                 id: before.id,
                 property: "Size",

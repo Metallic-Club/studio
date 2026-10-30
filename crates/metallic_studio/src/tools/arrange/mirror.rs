@@ -83,7 +83,14 @@ pub fn mirror(
     let origin = match opts.plane {
         MirrorPlane::Pivot => selection_pivot(&objects),
         MirrorPlane::Active => active.pivot().pos,
-        MirrorPlane::Point(p) => p,
+        MirrorPlane::Point(p) => {
+            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+                return Err(ArrangeError::Invalid(
+                    "the mirror point must be a finite number".into(),
+                ));
+            }
+            p
+        }
     };
     let normal = opts.axis.unit();
     let verb = if opts.copy { "Mirror copy" } else { "Mirror" };
@@ -103,7 +110,7 @@ pub fn mirror(
             plan.push_object(o, &after);
         }
     }
-    Ok(plan)
+    plan.check_finite()
 }
 
 #[cfg(test)]
@@ -296,5 +303,28 @@ mod tests {
             }
             other => panic!("expected an Orientation change, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn non_finite_mirror_points_are_rejected() {
+        let mut w = world();
+        let a = part(&mut w, v(1.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for copy in [false, true] {
+                let o = MirrorOptions {
+                    axis: Axis::X,
+                    plane: MirrorPlane::Point(v(0.0, x, 0.0)),
+                    copy,
+                };
+                assert!(mirror(&w, &[a], &o).is_err(), "point {x}");
+            }
+        }
+        // A huge but finite point overflows the reflected position to infinity.
+        let o = MirrorOptions {
+            axis: Axis::X,
+            plane: MirrorPlane::Point(v(f64::MAX, 0.0, 0.0)),
+            copy: false,
+        };
+        assert!(mirror(&w, &[a], &o).is_err());
     }
 }
