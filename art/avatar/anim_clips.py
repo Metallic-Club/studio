@@ -1121,14 +1121,16 @@ def ual_clips(rig):
         return 2 + (f - 6) * 1.8
     # Arms (directions for the left arm: +x out, -y forward, +z up; the right is mirrored): back
     # in the crouch, then down, forward and UP through the launch (frame 6) with a little
-    # overshoot (9), easing into a soft tuck at the apex (elbows out, fists in front of the chest).
+    # overshoot (9), opening up and OUT at the apex (about 38 degrees from vertical, elbows soft,
+    # fists outside the head's silhouette from front and back), then settling toward the fall
+    # loop's arms (out to the sides) so jump -> fall blends cleanly.
     jump_arm = RC.aim("leftUpperArm", [(4, (0.22, 0.75, -0.62)), (5.5, (0.22, -0.05, -0.97)),
-                                       (7.5, (0.30, -0.90, 0.05)), (9.5, (0.42, -0.78, 0.46)),
-                                       (12.5, (0.58, -0.76, -0.22)), (16, (0.58, -0.76, -0.28))],
+                                       (7.5, (0.45, -0.88, 0.10)), (9.5, (0.58, -0.50, 0.64)),
+                                       (12.5, (0.62, -0.12, 0.78)), (16, (0.80, -0.10, 0.59))],
                       weight=[(2, 0.0), (4, 1.0)])
     jump_fore = RC.aim("leftLowerArm", [(4, (0.15, 0.45, -0.88)), (5.5, (0.15, -0.40, -0.90)),
-                                        (7.5, (0.28, -0.85, 0.42)), (9.5, (0.30, -0.70, 0.65)),
-                                        (12.5, (0.12, -0.84, 0.52)), (16, (0.10, -0.84, 0.53))],
+                                        (7.5, (0.40, -0.80, 0.45)), (9.5, (0.48, -0.40, 0.78)),
+                                        (12.5, (0.45, -0.20, 0.87)), (16, (0.70, -0.30, 0.65))],
                        weight=[(2, 0.0), (4, 1.0)])
     jump_chest = RC.lean("chest", [(0, (0, 0, 0)), (4, (8, 0, 0)), (9, (-7, 0, 0)), (16, (-3, 0, 0))])
     jr = RC.RetargetClip(rig, R1, "jump_src", "Jump_Start", 16, False, timemap=jump_time, feet="lock", spread=(1.0, 0.3),

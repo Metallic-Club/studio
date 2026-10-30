@@ -27,6 +27,8 @@ WIDE = {"swim": ((0, 0.0, 0.55), 2.9), "swim_idle": ((0, 0, 0.70), 2.2), "climb"
         "fall": ((0, 0, 0.85), 2.2), "jump": ((0, 0, 0.85), 2.2), "dance": ((0, 0, 0.80), 2.2),
         "cheer": ((0, 0, 0.85), 2.2), "wave": ((0, 0, 0.80), 2.1)}
 FRONT_CLIPS = None   # every clip gets both views
+# Clips also seen from the gameplay camera (behind the player): a back and a rear 3/4 row.
+GAMEPLAY_VIEWS = {"jump", "fall", "land", "land_hard"}
 
 
 def blender_main(argv):
@@ -113,8 +115,10 @@ def blender_main(argv):
     os.makedirs(RAW, exist_ok=True)
     manifest_path = os.path.join(RAW, "manifest.json")
     manifest = json.load(open(manifest_path)) if os.path.exists(manifest_path) else {}
-    views = {"side": (90, 3), "front": (25, 8)}
     for clip in a.clips:
+        views = {"side": (90, 3), "front": (25, 8)}
+        if clip in GAMEPLAY_VIEWS:
+            views.update({"back": (180, 10), "rear34": (215, 14)})
         act = bpy.data.actions.get(clip)
         if act is None:
             print("[skip]", clip)
