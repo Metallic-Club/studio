@@ -234,6 +234,7 @@ impl ScriptHost {
     /// delivers `Pressed`, `Released`, `Triggered` or `StateChanged` and the handlers of
     /// `ContextActionService`, oldest event time first, at most
     /// [`MAX_ACTION_EVENTS_PER_STEP`](crate::MAX_ACTION_EVENTS_PER_STEP) per step.
+    /// Server-only hosts have no receiver and discard these events at the next step.
     pub fn input_action_event(&mut self, event: InputActionEvent) {
         self.shared.input.push_event(event);
     }
@@ -514,6 +515,9 @@ impl ScriptHost {
     }
 
     fn deliver_input_actions(&mut self) {
+        if !self.run_client {
+            self.shared.input.events.borrow_mut().clear();
+        }
         let changes = std::mem::take(&mut *self.shared.input.type_changes.borrow_mut());
         if !changes.is_empty() {
             for side in self.sides() {
@@ -641,6 +645,7 @@ mod role_tests {
             .unwrap();
         let local = world.create("LocalScript", Some(starter)).unwrap();
         let replicated = world.root("ReplicatedStorage").unwrap();
+        let action = world.create("InputAction", Some(replicated)).unwrap();
         let remote = world.create("RemoteEvent", Some(replicated)).unwrap();
         world
             .set(remote, "Name", CoreValue::String("Notify".into()))
@@ -667,9 +672,18 @@ mod role_tests {
         assert!(host.running.contains_key(&server));
         assert!(!host.running.contains_key(&local));
         assert_eq!(host.shared.remotes.borrow().len(), 1);
+        host.input_action_event(InputActionEvent {
+            action,
+            kind: crate::InputEventKind::Pressed,
+            value: InputValue::Bool(true),
+            time: 0.0,
+        });
+        assert_eq!(host.shared.input.events.borrow().len(), 1);
+        host.dispatch_input_now(0.0);
         host.step(0.1, 0.1);
         assert!(host.shared.remotes.borrow().is_empty());
         assert_eq!(host.shared.queued.get(), [(0, 0); 2]);
+        assert!(host.shared.input.events.borrow().is_empty());
 
         let late = world
             .borrow_mut()

@@ -18,6 +18,8 @@ no `ResetOnSpawn`: the GUI survives respawns).
 synthetic local Player, PlayerGui or PlayerAdded event, and preserves existing world instances. `Players.LocalPlayer`
 is nil; no player is admitted by this constructor. Server events, Heartbeat, waits and script-owner cleanup use the
 existing host paths. Client-targeted RemoteEvents have no receiver and are discarded at the next delivery step.
+Host-injected client action events likewise have no receiver and are discarded on the next step; InputAction state
+access keeps its existing client-only restriction.
 The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
 
 This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,

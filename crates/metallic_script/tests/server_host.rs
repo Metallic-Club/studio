@@ -16,6 +16,7 @@ fn server_rig() -> Rig {
 fn server_startup_heartbeat_wait_and_instance_api_need_no_local_player() {
     let mut rig = server_rig();
     let marker = rig.add("Part", "Marker", rig.root("Workspace"));
+    rig.add("InputAction", "Action", rig.root("ReplicatedStorage"));
     rig.add_script(
         "Script",
         "WorkspaceScript",
@@ -32,6 +33,7 @@ assert(run:IsServer() and not run:IsClient())
 assert(players.LocalPlayer==nil and #players:GetPlayers()==0)
 assert(#players:GetChildren()==0,'synthetic player appeared')
 assert(require==nil,'sandbox changed')
+assert(not pcall(function() return game:GetService('ReplicatedStorage').Action:GetState() end), 'client action state became available on the server')
 players.PlayerAdded:Connect(function() error('synthetic PlayerAdded') end)
 workspace.Marker.Anchored=true
 print('server-start')
