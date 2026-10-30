@@ -3,7 +3,8 @@
 //! This crate holds the app shell (window, theme, splash), the start screen, the template
 //! handling, and the installer side: [`updater`] (update check, download, apply) and
 //! [`github_auth`] (GitHub device sign-in and token storage). The 3D viewport, Explorer and the
-//! rest of the editor arrive in later tasks and plug into [`app::StudioApp`].
+//! rest of the editor arrive in later tasks and plug into [`app::StudioApp`]. [`tools`] holds the
+//! building tools' engine-side cores (for now [`tools::arrange`]: align, distribute, mirror, arrays).
 //!
 //! Library code returns [`StudioError`]; only `main.rs` decides what to show on failure.
 
@@ -18,6 +19,7 @@ pub mod screenshot;
 pub mod start_screen;
 pub mod templates;
 pub mod theme;
+pub mod tools;
 pub mod updater;
 
 pub use error::StudioError;

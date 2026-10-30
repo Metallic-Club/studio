@@ -3493,6 +3493,7 @@ dependencies = [
  "eframe",
  "env_logger",
  "log",
+ "metallic_core",
  "metallic_runtime",
  "metallic_update",
  "png",
