@@ -38,6 +38,14 @@ fn invalid_builtin_markers_are_rejected() {
             "misplaced_service",
             r#"(version: 1, roots: [(class: "Folder", children: [(class: "Workspace", builtin: true)])])"#,
         ),
+        (
+            "duplicate_nested_builtin",
+            r#"(version: 1, roots: [(class: "StarterPlayer", builtin: true, children: [(class: "StarterPlayerScripts", builtin: true), (class: "StarterPlayerScripts", builtin: true)])])"#,
+        ),
+        (
+            "misplaced_nested_builtin",
+            r#"(version: 1, roots: [(class: "Workspace", builtin: true, children: [(class: "StarterPlayerScripts", builtin: true)])])"#,
+        ),
     ] {
         assert!(
             matches!(load_text(name, text), Err(CoreError::Scene(_))),
@@ -63,6 +71,29 @@ fn unknown_fields_are_rejected_instead_of_losing_data() {
 }
 
 #[test]
+fn unknown_value_members_are_rejected_instead_of_losing_data() {
+    for (name, text) in [
+        (
+            "vector_member_typo",
+            r#"(version: 1, roots: [(class: "Part", props: [("Position", Vector3((x: 1.0, y: 2.0, z: 3.0, w: 9.0)))])])"#,
+        ),
+        (
+            "color_member_typo",
+            r#"(version: 1, roots: [(class: "Part", props: [("Color", Color3((r: 1.0, g: 2.0, b: 3.0, alpha: 9.0)))])])"#,
+        ),
+        (
+            "udim_member_typo",
+            r#"(version: 1, roots: [(class: "Frame", props: [("Position", UDim2((x_scale: 0.0, x_offset: 1.0, y_scale: 0.0, y_offset: 2.0, z_offset: 9.0)))])])"#,
+        ),
+    ] {
+        assert!(
+            matches!(load_text(name, text), Err(CoreError::Scene(_))),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn dangling_references_are_rejected() {
     let result = load_text(
         "dangling.ron",
@@ -74,7 +105,7 @@ fn dangling_references_are_rejected() {
 }
 
 fn nested_world(depth: usize) -> World {
-    let mut world = World::new_empty();
+    let mut world = World::new_with_services();
     let mut parent = None;
     for index in 0..depth {
         let node = world.create("Folder", parent).unwrap();
@@ -142,6 +173,71 @@ fn moved_builtin_save_is_rejected_before_replacing_previous_file() {
         std::fs::read_to_string(path).unwrap(),
         "previous complete scene"
     );
+}
+
+#[test]
+fn missing_builtin_cannot_be_silently_recreated_or_shadowed() {
+    let path = tmp("missing_workspace.ron");
+    std::fs::write(&path, "previous complete scene").unwrap();
+    let mut world = World::new_with_services();
+    world.destroy(world.root("Workspace").unwrap());
+    let shadow = world.create("Workspace", None).unwrap();
+    world.create("Part", Some(shadow)).unwrap();
+    assert!(
+        matches!(save_scene(&world, &path), Err(CoreError::Scene(ref message)) if message.contains("missing builtin `Workspace`"))
+    );
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "previous complete scene"
+    );
+}
+
+#[test]
+fn builtinless_utility_world_is_rejected_before_creating_a_scene() {
+    let directory = tmp("builtinless");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("never_created.ron");
+    for populated in [false, true] {
+        let mut world = World::new_empty();
+        // Both empty and nonempty utility worlds have no v1 canonical services.
+        if populated {
+            world.create("Folder", None).unwrap();
+        }
+        assert!(
+            matches!(save_scene(&world, &path), Err(CoreError::Scene(ref message)) if message.contains("missing builtin"))
+        );
+        assert!(!path.exists());
+    }
+    assert_eq!(std::fs::read_dir(directory).unwrap().count(), 0);
+}
+
+#[test]
+fn nested_builtin_must_exist_at_its_canonical_parent() {
+    for moved in [false, true] {
+        let path = tmp(if moved {
+            "moved_nested.ron"
+        } else {
+            "missing_nested.ron"
+        });
+        std::fs::write(&path, "previous complete scene").unwrap();
+        let mut world = World::new_with_services();
+        let starter = world.root("StarterPlayer").unwrap();
+        let nested = world.children(starter)[0];
+        assert_eq!(world.class_name(nested), Some("StarterPlayerScripts"));
+        if moved {
+            world.set_parent(nested, world.root("Workspace")).unwrap();
+        } else {
+            world.destroy(nested);
+        }
+        assert!(matches!(
+            save_scene(&world, &path),
+            Err(CoreError::Scene(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "previous complete scene"
+        );
+    }
 }
 
 #[test]

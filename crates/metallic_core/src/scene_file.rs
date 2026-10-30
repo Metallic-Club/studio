@@ -43,10 +43,37 @@ enum SceneValue {
     Bool(bool),
     Number(f64),
     String(String),
-    Vector3(Vec3),
-    Color3(Color3),
-    UDim2(UDim2),
+    Vector3(#[serde(with = "SceneVec3")] Vec3),
+    Color3(#[serde(with = "SceneColor3")] Color3),
+    UDim2(#[serde(with = "SceneUDim2")] UDim2),
     Ref(Option<usize>),
+}
+
+// Scene-specific strict representations keep the public value types' Serde
+// behavior unchanged for callers using formats other than scene files.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "Vec3", deny_unknown_fields)]
+struct SceneVec3 {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "Color3", deny_unknown_fields)]
+struct SceneColor3 {
+    r: f64,
+    g: f64,
+    b: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "UDim2", deny_unknown_fields)]
+struct SceneUDim2 {
+    x_scale: f64,
+    x_offset: f64,
+    y_scale: f64,
+    y_offset: f64,
 }
 
 #[derive(Deserialize)]
@@ -84,16 +111,19 @@ fn to_scene(v: Value, index_of: &dyn Fn(InstanceId) -> Option<usize>) -> SceneVa
 fn preorder(world: &World, out: &mut Vec<InstanceId>) -> Result<(), CoreError> {
     let standard = World::new_with_services();
     let mut builtin_parents = HashMap::new();
-    let mut builtins = standard.roots().to_vec();
+    let mut builtin_classes = Vec::new();
+    let mut builtins: Vec<_> = standard.roots().iter().rev().copied().collect();
     while let Some(id) = builtins.pop() {
+        builtin_classes.push(standard.class_name(id));
         builtin_parents.insert(
             standard.class_name(id),
             standard
                 .parent(id)
                 .and_then(|parent| standard.class_name(parent)),
         );
-        builtins.extend_from_slice(standard.children(id));
+        builtins.extend(standard.children(id).iter().rev().copied());
     }
+    let mut seen_builtins = HashSet::new();
     let mut pending: Vec<_> = world.roots().iter().rev().map(|&id| (id, 1)).collect();
     while let Some((id, depth)) = pending.pop() {
         if depth > MAX_SCENE_DEPTH {
@@ -102,6 +132,12 @@ fn preorder(world: &World, out: &mut Vec<InstanceId>) -> Result<(), CoreError> {
             )));
         }
         if world.is_builtin(id) {
+            if !seen_builtins.insert(world.class_name(id)) {
+                return Err(CoreError::Scene(format!(
+                    "duplicate builtin `{}`",
+                    world.class_name(id).unwrap_or("unknown")
+                )));
+            }
             let parent = world.parent(id);
             let parent_class = parent.and_then(|parent| world.class_name(parent));
             if parent.is_some_and(|parent| !world.is_builtin(parent))
@@ -115,6 +151,14 @@ fn preorder(world: &World, out: &mut Vec<InstanceId>) -> Result<(), CoreError> {
         }
         out.push(id);
         pending.extend(world.children(id).iter().rev().map(|&id| (id, depth + 1)));
+    }
+    for class in builtin_classes {
+        if !seen_builtins.contains(&class) {
+            return Err(CoreError::Scene(format!(
+                "missing builtin `{}` required by scene version {VERSION}",
+                class.unwrap_or("unknown")
+            )));
+        }
     }
     Ok(())
 }
@@ -171,10 +215,22 @@ fn write_node(
 ///
 /// The complete scene is encoded before a sibling temporary file is written and synced, then
 /// renamed over the destination. Failure before replacement leaves an existing scene untouched.
-/// The tree must be no deeper than [`MAX_SCENE_DEPTH`]; built-in services must remain at their
-/// standard locations so that the loader can match them.
+/// The tree must be no deeper than [`MAX_SCENE_DEPTH`] and must contain every canonical built-in
+/// exactly once at its standard location, including `StarterPlayerScripts`. A builtinless
+/// [`World::new_empty`] is an in-memory utility world and cannot be saved as a v1 game scene:
+/// the v1 loader always creates standard services, so it could not preserve that world.
 ///
-/// Errors: [`CoreError::Io`] if the file cannot be written, [`CoreError::Scene`] if a value cannot be encoded.
+/// Replacement creates a new filesystem entry at `path`: a destination symlink is replaced,
+/// other hard links still refer to the old file, and platform-specific metadata (including
+/// Windows ACLs and alternate streams) is not preserved. Existing Unix permission bits are
+/// copied when destination metadata is available. The temporary file is synced, but the parent
+/// directory is not; this is not a power-loss durability guarantee. A process crash may leave
+/// a temporary sibling. On Windows, sharing/access-denied rename failures receive three short
+/// retries (10, 20, 40 ms); a persistent lock still fails without removing the old destination.
+///
+/// Errors: [`CoreError::Io`] if temporary creation, writing, syncing, permission copying or
+/// replacement fails; [`CoreError::Scene`] for excessive depth, missing/duplicate/moved built-ins
+/// or an encoding failure. Preflight/encoding errors occur before any destination write.
 pub fn save_scene(world: &World, path: &Path) -> Result<(), CoreError> {
     let mut order = Vec::new();
     preorder(world, &mut order)?;
@@ -257,7 +313,37 @@ fn write_atomic(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) ->
     })();
     drop(file);
     written?;
-    std::fs::rename(&pending.0, path)
+    replace_scene(&pending.0, path)
+}
+
+fn replace_scene(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        retry_windows_rename(|| std::fs::rename(from, to))
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(from, to)
+    }
+}
+
+#[cfg(windows)]
+fn retry_windows_rename(mut rename: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    let mut result = rename();
+    for delay_ms in [10, 20, 40] {
+        // ERROR_ACCESS_DENIED / ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION.
+        // Permanent ACL/read-only failures have the same access code, so retries
+        // are bounded and the final OS error is returned without deleting either file.
+        if !matches!(
+            result.as_ref().err().and_then(io::Error::raw_os_error),
+            Some(5 | 32 | 33)
+        ) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        result = rename();
+    }
+    result
 }
 
 struct Loader {
@@ -337,8 +423,10 @@ impl Loader {
 /// Reads a scene file into a new world (built on [`World::new_with_services`]).
 ///
 /// Errors: [`CoreError::Io`] if unreadable, [`CoreError::Scene`] if it does not parse, has an
-/// unsupported version, unknown field, duplicate property, unmatched built-in marker, excessive
+/// unsupported version, unknown field (including typed value members), duplicate property, unmatched built-in marker, excessive
 /// depth or a dangling reference; class/property errors from [`World::create`] and [`World::set`].
+/// Legacy v1 input may omit standard services; they are supplied by the fresh world. The saver
+/// requires the complete canonical service set so it cannot silently save a world that changes on load.
 pub fn load_scene(path: &Path) -> Result<World, CoreError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CoreError::Io(format!("{}: {e}", path.display())))?;
@@ -433,5 +521,111 @@ mod tests {
             "complete replacement"
         );
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn public_save_failure_preserves_destination_and_cleans_temporary_file() {
+        let directory = test_directory();
+        let destination = directory.join("existing_directory");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("keep.txt"), "keep").unwrap();
+        assert!(matches!(
+            save_scene(&World::new_with_services(), &destination),
+            Err(CoreError::Io(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(destination.join("keep.txt")).unwrap(),
+            "keep"
+        );
+        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn loader_itself_rejects_depth_33() {
+        let mut node = SceneNode {
+            class: "Folder".into(),
+            builtin: false,
+            props: vec![],
+            children: vec![],
+        };
+        for _ in 1..=MAX_SCENE_DEPTH {
+            node = SceneNode {
+                class: "Folder".into(),
+                builtin: false,
+                props: vec![],
+                children: vec![node],
+            };
+        }
+        let mut loader = Loader {
+            world: World::new_with_services(),
+            created: vec![],
+            matched: HashSet::new(),
+            pending: vec![],
+        };
+        assert!(
+            matches!(loader.add(node, None, 1), Err(CoreError::Scene(ref message)) if message == "scene depth exceeds 32 instances")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transient_windows_share_lock_is_retried_without_deleting_the_destination() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = test_directory();
+        let source = directory.join("replacement");
+        let destination = directory.join("scene.mscene");
+        std::fs::write(&source, "replacement").unwrap();
+        std::fs::write(&destination, "previous complete scene").unwrap();
+        let mut blocker = Some(
+            OpenOptions::new()
+                .read(true)
+                .share_mode(3)
+                .open(&destination)
+                .unwrap(),
+        );
+        let mut calls = 0;
+        retry_windows_rename(|| {
+            calls += 1;
+            let result = std::fs::rename(&source, &destination);
+            if calls == 1 {
+                assert!(matches!(
+                    result.as_ref().err().and_then(io::Error::raw_os_error),
+                    Some(5 | 32 | 33)
+                ));
+                assert_eq!(
+                    std::fs::read_to_string(&destination).unwrap(),
+                    "previous complete scene"
+                );
+                drop(blocker.take());
+            }
+            result
+        })
+        .unwrap();
+        assert!(calls >= 2);
+        assert_eq!(std::fs::read_to_string(destination).unwrap(), "replacement");
+        assert!(!source.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn persistent_windows_share_lock_fails_safely_through_public_save() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = test_directory();
+        let destination = directory.join("scene.mscene");
+        std::fs::write(&destination, "previous complete scene").unwrap();
+        let _blocker = OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&destination)
+            .unwrap();
+        assert!(matches!(
+            save_scene(&World::new_with_services(), &destination),
+            Err(CoreError::Io(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(destination).unwrap(),
+            "previous complete scene"
+        );
+        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 1);
     }
 }

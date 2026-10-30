@@ -23,7 +23,11 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   only non-default properties, stable order). Scene saves preflight the tree, resolve reference indices through
   a hash map, and sync a temporary sibling file before replacing the destination. Both directions enforce
   `MAX_SCENE_DEPTH` (32 instance levels); loading rejects unknown fields, duplicate property names, unmatched
-  built-in markers and dangling references. Built-ins must remain at their standard locations when saving.
+  built-in markers and dangling references. Scene-specific Serde mirrors also reject unknown members inside
+  vector, color and UDim2 values. Saves require every canonical built-in exactly once at its standard location;
+  builtinless utility worlds cannot be preserved by the v1 loader and are rejected before writing. Windows
+  sharing/access-denied rename failures receive three bounded retries. Replacement changes filesystem identity:
+  symlinks/hard links, ACLs and alternate streams are not preserved (see `save_scene` docs).
   Also `deep_clone()` used by Play.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
