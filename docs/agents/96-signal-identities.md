@@ -24,7 +24,7 @@ including across argument types and after a signal is dropped and recreated.
   Use `try_update` with checked_add; a None result leaves the counter unchanged.
   Relaxed ordering provides identity allocation without publishing handler storage.
 
-## Tests and next
+## Validation
 
 - Tests written first: same-type foreign disconnect, actual World property/child
   signals with different argument types, drop/recreate, 1,024 concurrent independent
@@ -37,6 +37,17 @@ including across argument types and after a signal is dropped and recreated.
   including 1,024 unique concurrent IDs and repeated exhausted-counter failures.
 - Independent root-worker review found no blocking source/test issues; this is a
   worker review, not repository acceptance or approval to merge.
-  Run repository gates with guarded lane121, coordinating builds.
-- Update module docs/architecture, open and attach a reviewable PR, inspect CI.
+- `test --workspace --no-run -j 4`: passed (44.36 s) before the coordinated quiet window.
+- `test --workspace -j 4 -- --test-threads=1`: **218 passed, 0 failed, 0 ignored**,
+  including the complete input-only Parkour route and all Luau timing suites.
+- `clippy --workspace --all-targets -j 4 -- -D warnings`: passed (17.72 s).
+- `cargo deny check licenses`: passed (`licenses ok`; existing unmatched MPL-2.0
+  allowance warning). `cargo fmt --all -- --check` and `git diff --check`: passed.
+- Build/test commands used `python -I ../209-build-lane-guard/tools/cargo_lane.py
+  --workspace . --target-dir <LOCALAPPDATA>/Metallic/cargo-target/lane121 -- ...`.
+  Latest origin/main was rechecked after the gates and remains `fd164c2`.
+
+## Next
+
+- Module behavior docs and ARCHITECTURE.md are updated. Open and attach a reviewable PR; inspect CI.
   Do not merge this session's PR.
