@@ -16,10 +16,23 @@
 //! - gravity is [`crate::GRAVITY`] (196.2), integrated exactly for constant acceleration;
 //! - surfaces up to `Humanoid.MaxSlopeAngle` are walkable and never slid down; steps up to
 //!   [`MAX_STEP_HEIGHT`] (1.5) are climbed; walking down steps and slopes snaps to the ground;
-//! - standing on a part adds that part's velocity ([`PhysicsWorld::velocity`]); leaving it keeps
-//!   its horizontal velocity until landing;
+//! - standing follows the last completed motion of the support's foot contact, including
+//!   rotation; idle facing follows its world-up angular rate. Explicit input still faces the
+//!   world-space movement direction. Jumping keeps the contact's horizontal point velocity
+//!   (`linear + angular × lever arm`) until landing;
 //! - a part that moved into the character pushes it out, at most [`MAX_PUSH`] (0.5) studs per
 //!   step so it can never be shoved through a thin wall in one frame.
+//!
+//! Support carry assumes one controller step before each physics step (the runtime's fixed
+//! tick order). The body-local contact and sampled pose preserve finite rotation arcs rather
+//! than accumulating tangent-integration drift. Collision sweeps can shorten the carry; the
+//! character is not rigidly parented to the support. The capsule/avatar stay upright on tilted
+//! supports, and support pitch/roll never tilt the camera. Removed/rebuilt bodies or a root
+//! position changed by a script discard the old contact. Grounded depenetration restores the
+//! skin clearance under the same push cap, preventing numerical floor interference from
+//! clipping a carry step. Anchored support rates come from PhysicsWorld's cache, because Rapier's mover
+//! velocity is reset after landing at its target pose. Teleport classification belongs to
+//! PhysicsWorld; this controller does not introduce another cutoff.
 //!
 //! Touches: after moving, the controller overlaps the whole avatar (the capsule and every avatar
 //! part, each grown by 0.1 stud) with the scene, sensors included, and reports
@@ -41,7 +54,7 @@ use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::parry::shape::{Capsule, Cuboid, Shape};
-use rapier3d::prelude::{ColliderHandle, Pose, QueryFilter, Vector};
+use rapier3d::prelude::{ColliderHandle, Pose, QueryFilter, RigidBodyHandle, Vector};
 use std::collections::{HashMap, HashSet};
 
 /// Seconds between a character's death and its respawn (the Roblox default).
@@ -135,6 +148,70 @@ pub enum CharacterEvent {
     },
 }
 
+/// Contact on the support after the last controller step. The local point and pose preserve
+/// the finite rotation arc instead of repeatedly approximating it with a tangent.
+#[derive(Debug, Clone, Copy)]
+struct Support {
+    part: InstanceId,
+    body: RigidBodyHandle,
+    local_point: Vector,
+    pose: Pose,
+    root: Vec3,
+}
+
+impl Support {
+    fn sample(
+        physics: &PhysicsWorld,
+        handle: ColliderHandle,
+        point: Vec3,
+        root: Vec3,
+    ) -> Option<Self> {
+        let part = physics.owner_of(handle)?;
+        let entry = physics.entries.get(&part)?;
+        let body = physics.rapier.bodies.get(entry.body)?;
+        Some(Self {
+            part,
+            body: entry.body,
+            local_point: body.position().inverse_transform_point(to_vector(point)),
+            pose: *body.position(),
+            root,
+        })
+    }
+
+    /// Completed support displacement, instantaneous contact velocity and world-up yaw rate.
+    fn motion(self, physics: &PhysicsWorld) -> (Vec3, Vec3, f64) {
+        let Some(entry) = physics
+            .entries
+            .get(&self.part)
+            .filter(|e| e.body == self.body)
+        else {
+            return (Vec3::default(), Vec3::default(), 0.0);
+        };
+        let Some(body) = physics.rapier.bodies.get(entry.body) else {
+            return (Vec3::default(), Vec3::default(), 0.0);
+        };
+        let angular = physics.angular_velocity(self.part).unwrap_or_default();
+        let linear = physics.velocity(self.part).unwrap_or_default();
+        // Anchored movers have been reset to fixed/zero Rapier velocities by PhysicsWorld.
+        // Respect its cached rates, including a zero-rate move classified as a teleport.
+        if linear.magnitude() == 0.0 && angular.magnitude() == 0.0 {
+            return (Vec3::default(), Vec3::default(), 0.0);
+        }
+        let point = body.position().transform_point(self.local_point);
+        let velocity = if body.is_dynamic() {
+            // Rapier accounts for the dynamic body's world centre of mass.
+            body.velocity_at_point(point)
+        } else {
+            to_vector(linear) + to_vector(angular).cross(point - body.translation())
+        };
+        (
+            from_vector(point - self.pose.transform_point(self.local_point)),
+            from_vector(velocity),
+            angular.y,
+        )
+    }
+}
+
 /// Per-character movement state kept between frames.
 #[derive(Debug, Clone, Copy)]
 struct Motion {
@@ -143,8 +220,8 @@ struct Motion {
     vertical: f64,
     /// Horizontal velocity inherited from the part the character left, kept while airborne.
     inherited: Vec3,
-    /// The part stood on after the last step.
-    ground: Option<InstanceId>,
+    /// The contact stood on after the last step.
+    ground: Option<Support>,
     /// Facing in degrees around +Y (0 looks along -Z).
     yaw: f64,
     /// Seconds since death.
@@ -506,8 +583,17 @@ fn move_capsule(
     let queries = physics.queries(filter);
     let shape = capsule();
 
-    // 1. Parts that moved into the character push it out.
-    let root = root + push_out(&queries, &shape, root);
+    // 1. Parts that moved into the character push it out. A grounded capsule also restores
+    // its skin gap; otherwise tiny numerical drift lets a floor clip horizontal carry.
+    let sampled_root = root;
+    let grounded = m.state == HumanoidState::Running;
+    let root = root
+        + push_out(
+            &queries,
+            &shape,
+            root,
+            grounded && m.ground.is_some() && dt > 0.0,
+        );
 
     // 2. Velocity for this frame.
     let mut wish = Vec3::new(input.dir.x, 0.0, input.dir.z);
@@ -515,18 +601,19 @@ fn move_capsule(
         wish = wish.unit();
     }
     let walk = wish * t.walk_speed;
-    let grounded = m.state == HumanoidState::Running;
-    let carry = if grounded {
+    let (support_step, carry, yaw_rate) = if grounded && dt > 0.0 {
         m.ground
-            .and_then(|g| physics.velocity(g))
+            .filter(|support| support.root == sampled_root)
+            .map(|support| support.motion(physics))
             .unwrap_or_default()
     } else {
-        Vec3::default()
+        (Vec3::default(), Vec3::default(), 0.0)
     };
     let jumping = grounded && input.jump;
     let dy = if grounded && !jumping {
         m.vertical = 0.0;
-        carry.y * dt
+        m.yaw += (yaw_rate * dt).to_degrees();
+        support_step.y
     } else {
         if jumping {
             m.vertical = t.jump_power;
@@ -540,11 +627,11 @@ fn move_capsule(
         m.inherited = Vec3::new(carry.x, 0.0, carry.z);
     }
     let horizontal = if grounded && !jumping {
-        walk + Vec3::new(carry.x, 0.0, carry.z)
+        walk * dt + Vec3::new(support_step.x, 0.0, support_step.z)
     } else {
-        walk + m.inherited
+        (walk + m.inherited) * dt
     };
-    let desired = Vec3::new(horizontal.x * dt, dy, horizontal.z * dt);
+    let desired = Vec3::new(horizontal.x, dy, horizontal.z);
 
     // 3. Sweep.
     let slope = (t.max_slope as f32).to_radians();
@@ -586,10 +673,10 @@ fn move_capsule(
     // 5. Ground under the feet.
     m.ground = None;
     if m.vertical <= 0.0
-        && let Some((handle, normal)) = probe_ground(&queries, &shape, new_root)
+        && let Some((handle, normal, point)) = probe_ground(&queries, &shape, new_root)
         && normal.y >= t.max_slope.to_radians().cos()
     {
-        m.ground = physics.owner_of(handle);
+        m.ground = Support::sample(physics, handle, point, new_root);
         m.vertical = 0.0;
         m.inherited = Vec3::default();
     }
@@ -611,8 +698,14 @@ fn move_capsule(
 }
 
 /// Translation that moves the capsule at `root` out of every solid it overlaps.
-fn push_out(queries: &rapier3d::prelude::QueryPipeline, shape: &Capsule, root: Vec3) -> Vec3 {
+fn push_out(
+    queries: &rapier3d::prelude::QueryPipeline,
+    shape: &Capsule,
+    root: Vec3,
+    restore_skin: bool,
+) -> Vec3 {
     let mut total = Vec3::default();
+    let prediction = if restore_skin { SKIN as f32 } else { 0.0 };
     for _ in 0..4 {
         let pose = capsule_pose(root + total);
         let aabb = shape.compute_aabb(&pose);
@@ -622,11 +715,11 @@ fn push_out(queries: &rapier3d::prelude::QueryPipeline, shape: &Capsule, root: V
             let Ok(Some(contact)) =
                 queries
                     .dispatcher
-                    .contact(&pos12, shape, collider.shape(), 0.0)
+                    .contact(&pos12, shape, collider.shape(), prediction)
             else {
                 continue;
             };
-            if contact.dist < -1e-4 {
+            if contact.dist < if restore_skin { prediction } else { -1e-4 } {
                 // normal1 points from the character towards the obstacle.
                 let depth = f64::from(SKIN as f32 - contact.dist);
                 let dir = from_vector(pose.rotation * contact.normal1);
@@ -647,12 +740,12 @@ fn push_out(queries: &rapier3d::prelude::QueryPipeline, shape: &Capsule, root: V
     total
 }
 
-/// The solid part right under the capsule at `root` and its surface normal.
+/// The solid part under the capsule, its world-space surface normal and contact point.
 fn probe_ground(
     queries: &rapier3d::prelude::QueryPipeline,
     shape: &Capsule,
     root: Vec3,
-) -> Option<(ColliderHandle, Vec3)> {
+) -> Option<(ColliderHandle, Vec3, Vec3)> {
     let (handle, hit) = queries.cast_shape(
         &capsule_pose(root),
         Vector::new(0.0, -1.0, 0.0),
@@ -664,5 +757,11 @@ fn probe_ground(
             compute_impact_geometry_on_penetration: true,
         },
     )?;
-    Some((handle, from_vector(hit.normal1)))
+    // A penetrating cast can choose different coplanar witnesses on a broad flat face.
+    // Project the capsule's lowest support point onto that contact plane instead, so an
+    // arbitrary tangential witness shift cannot change the rotation lever arm each tick.
+    let sole = to_vector(root - Vec3::new(0.0, CAPSULE_DROP + HALF_SEGMENT, 0.0))
+        - hit.normal1 * RADIUS as f32;
+    let point = sole - hit.normal1 * (sole - hit.witness1).dot(hit.normal1);
+    Some((handle, from_vector(hit.normal1), from_vector(point)))
 }

@@ -24,7 +24,11 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here.
+  and the Humanoid rules (death, respawn, checkpoints) live here. The controller samples the actual ground contact
+  in body-local coordinates and carries it through the support's next observed pose change, preserving rotation
+  arcs across fixed ticks. Idle facing follows world-up angular rate; explicit movement keeps world-space facing.
+  Jump momentum uses contact point velocity (cached anchored rates, Rapier world-COM velocity for dynamic bodies).
+  The capsule stays upright and collision sweeps can shorten carry; this is not rigid attachment to a platform.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
