@@ -1,0 +1,92 @@
+(
+  format: 1,
+  name: "Smoke",
+  description: "A tall, drifting smoke plume.",
+  tags: [
+    "smoke",
+    "loop",
+    "environment",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Plume",
+      capacity: 256,
+      spawn: [
+        Rate(
+          per_second: 9.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 0.7,
+          ),
+        ),
+        Lifetime(
+          seconds: (3.5, 5.0),
+        ),
+        Velocity(
+          speed: (1.2, 1.9),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (14.0, 14.0),
+        ),
+        Size(
+          size: (1.4, 2.2),
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (-18.0, 18.0),
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.45, 0.25, 0.0),
+        ),
+        Drag(
+          drag: 0.25,
+        ),
+        CurlNoise(
+          strength: 1.8,
+          scale: 4.0,
+          scroll: (0.0, 0.5, 0.0),
+          octaves: 2,
+        ),
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.5),
+              (1.0, 2.6),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#77716B"),
+              (0.5, "#9E9891"),
+              (1.0, "#C8C3BC"),
+            ],
+            space: Oklab,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.12, 0.45),
+              (0.6, 0.65),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Smoke,
+      ),
+    ),
+  ],
+)

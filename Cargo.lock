@@ -2482,6 +2482,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "metallic_vfx"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "naga",
+ "ron",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "metallic_vfx_editor"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui_kittest",
+ "image",
+ "metallic_vfx",
+]
+
+[[package]]
 name = "mikktspace"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

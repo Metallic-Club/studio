@@ -1,0 +1,95 @@
+(
+  format: 1,
+  name: "Sword trail",
+  description: "A blade trail with sparkles; preview swings it like a sword.",
+  tags: [
+    "trail",
+    "combat",
+    "melee",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Sparkles",
+      capacity: 128,
+      spawn: [
+        Distance(
+          per_stud: 3.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Edge(
+            a: (1.2, 1.4, 0.0),
+            b: (3.6, 1.4, 0.0),
+          ),
+        ),
+        Lifetime(
+          seconds: (0.3, 0.5),
+        ),
+        Size(
+          size: (0.12, 0.22),
+        ),
+        Color(
+          choices: [
+            "#E6F4FF",
+            "#9CCBFF",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (1.0, 0.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Twinkle,
+        light_emission: 1.0,
+        brightness: 1.6,
+      ),
+    ),
+  ],
+  trails: [
+    (
+      name: "Blade",
+      attachment0: (1.0, 1.4, 0.0),
+      attachment1: (3.8, 1.4, 0.0),
+      lifetime: 0.32,
+      min_length: 0.05,
+      width_scale: (
+        keys: [
+          (0.0, 1.0),
+          (1.0, 0.35),
+        ],
+      ),
+      color: (
+        keys: [
+          (0.0, "#FFFFFF"),
+          (0.3, "#B6DCFF"),
+          (1.0, "#3E6DFF"),
+        ],
+        space: Oklab,
+      ),
+      transparency: (
+        keys: [
+          (0.0, 0.0),
+          (1.0, 1.0),
+        ],
+        interp: Smooth,
+      ),
+      texture: Band,
+      texture_mode: Stretch,
+      light_emission: 0.85,
+      brightness: 1.3,
+    ),
+  ],
+  preview: Swing,
+)
