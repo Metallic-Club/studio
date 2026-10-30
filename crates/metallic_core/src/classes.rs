@@ -126,6 +126,112 @@ static CLASSES: &[ClassDef] = &[
     class("Lighting", "Instance", &[]),
     class("RunService", "Instance", &[]),
     class("Folder", "Instance", &[]),
+    class("Model", "Instance", &[]),
+    class(
+        "BasePart",
+        "Instance",
+        &[
+            p("Position", ValueType::Vector3, || {
+                Value::Vector3(Vec3::new(0.0, 0.0, 0.0))
+            }),
+            p("Orientation", ValueType::Vector3, || {
+                Value::Vector3(Vec3::new(0.0, 0.0, 0.0))
+            }),
+            p("Size", ValueType::Vector3, || {
+                Value::Vector3(Vec3::new(4.0, 1.0, 2.0))
+            }),
+            p("Color", ValueType::Color3, || Value::Color3(GREY)),
+            PropDef {
+                name: "Material",
+                ty: ValueType::String,
+                default: || Value::String("Plastic".into()),
+                allowed: Some(MATERIALS),
+            },
+            p("Anchored", ValueType::Bool, || Value::Bool(false)),
+            p("CanCollide", ValueType::Bool, || Value::Bool(true)),
+            p("Transparency", ValueType::Number, || Value::Number(0.0)),
+            PropDef {
+                name: "Shape",
+                ty: ValueType::String,
+                default: || Value::String("Block".into()),
+                allowed: Some(SHAPES),
+            },
+        ],
+    ),
+    class("Part", "BasePart", &[]),
+    class("SpawnLocation", "Part", &[]),
+    class(
+        "Checkpoint",
+        "Part",
+        &[p("Order", ValueType::Number, || Value::Number(0.0))],
+    ),
+    class(
+        "Script",
+        "Instance",
+        &[
+            p("Source", ValueType::String, || Value::String(String::new())),
+            p("Enabled", ValueType::Bool, || Value::Bool(true)),
+        ],
+    ),
+    class("LocalScript", "Script", &[]),
+    class("RemoteEvent", "Instance", &[]),
+    class(
+        "Humanoid",
+        "Instance",
+        &[
+            p("Health", ValueType::Number, || Value::Number(100.0)),
+            p("MaxHealth", ValueType::Number, || Value::Number(100.0)),
+            p("WalkSpeed", ValueType::Number, || Value::Number(16.0)),
+            p("JumpPower", ValueType::Number, || Value::Number(50.0)),
+            p("MaxSlopeAngle", ValueType::Number, || Value::Number(89.0)),
+        ],
+    ),
+    class(
+        "ScreenGui",
+        "Instance",
+        &[p("Enabled", ValueType::Bool, || Value::Bool(true))],
+    ),
+    class(
+        "Frame",
+        "Instance",
+        &[
+            p("Position", ValueType::UDim2, || {
+                Value::UDim2(UDim2::new(0.0, 0.0, 0.0, 0.0))
+            }),
+            p("Size", ValueType::UDim2, || {
+                Value::UDim2(UDim2::new(0.0, 100.0, 0.0, 100.0))
+            }),
+            p("BackgroundColor3", ValueType::Color3, || {
+                Value::Color3(GREY)
+            }),
+            p("BackgroundTransparency", ValueType::Number, || {
+                Value::Number(0.0)
+            }),
+            p("Visible", ValueType::Bool, || Value::Bool(true)),
+        ],
+    ),
+    class(
+        "TextLabel",
+        "Frame",
+        &[
+            p("Text", ValueType::String, || Value::String(String::new())),
+            p("TextColor3", ValueType::Color3, || {
+                Value::Color3(Color3::new(0.0, 0.0, 0.0))
+            }),
+            p("TextSize", ValueType::Number, || Value::Number(24.0)),
+        ],
+    ),
+    class(
+        "Player",
+        "Instance",
+        &[
+            p("UserId", ValueType::Number, || Value::Number(0.0)),
+            p("RespawnLocation", ValueType::Ref, || Value::Ref(None)),
+            p("Character", ValueType::Ref, || Value::Ref(None)),
+        ],
+    ),
+    // Appended last: `class_def` is a linear scan and Part/Model reads are on the hot path
+    // (CI instructions gate).
     // Input actions (docs/design/input-actions.md section 3): a context holds actions, an action
     // holds bindings. Client-only; inert on the server.
     class(
@@ -247,110 +353,6 @@ static CLASSES: &[ClassDef] = &[
             p("DisplayImage", ValueType::String, || {
                 Value::String("".into())
             }),
-        ],
-    ),
-    class("Model", "Instance", &[]),
-    class(
-        "BasePart",
-        "Instance",
-        &[
-            p("Position", ValueType::Vector3, || {
-                Value::Vector3(Vec3::new(0.0, 0.0, 0.0))
-            }),
-            p("Orientation", ValueType::Vector3, || {
-                Value::Vector3(Vec3::new(0.0, 0.0, 0.0))
-            }),
-            p("Size", ValueType::Vector3, || {
-                Value::Vector3(Vec3::new(4.0, 1.0, 2.0))
-            }),
-            p("Color", ValueType::Color3, || Value::Color3(GREY)),
-            PropDef {
-                name: "Material",
-                ty: ValueType::String,
-                default: || Value::String("Plastic".into()),
-                allowed: Some(MATERIALS),
-            },
-            p("Anchored", ValueType::Bool, || Value::Bool(false)),
-            p("CanCollide", ValueType::Bool, || Value::Bool(true)),
-            p("Transparency", ValueType::Number, || Value::Number(0.0)),
-            PropDef {
-                name: "Shape",
-                ty: ValueType::String,
-                default: || Value::String("Block".into()),
-                allowed: Some(SHAPES),
-            },
-        ],
-    ),
-    class("Part", "BasePart", &[]),
-    class("SpawnLocation", "Part", &[]),
-    class(
-        "Checkpoint",
-        "Part",
-        &[p("Order", ValueType::Number, || Value::Number(0.0))],
-    ),
-    class(
-        "Script",
-        "Instance",
-        &[
-            p("Source", ValueType::String, || Value::String(String::new())),
-            p("Enabled", ValueType::Bool, || Value::Bool(true)),
-        ],
-    ),
-    class("LocalScript", "Script", &[]),
-    class("RemoteEvent", "Instance", &[]),
-    class(
-        "Humanoid",
-        "Instance",
-        &[
-            p("Health", ValueType::Number, || Value::Number(100.0)),
-            p("MaxHealth", ValueType::Number, || Value::Number(100.0)),
-            p("WalkSpeed", ValueType::Number, || Value::Number(16.0)),
-            p("JumpPower", ValueType::Number, || Value::Number(50.0)),
-            p("MaxSlopeAngle", ValueType::Number, || Value::Number(89.0)),
-        ],
-    ),
-    class(
-        "ScreenGui",
-        "Instance",
-        &[p("Enabled", ValueType::Bool, || Value::Bool(true))],
-    ),
-    class(
-        "Frame",
-        "Instance",
-        &[
-            p("Position", ValueType::UDim2, || {
-                Value::UDim2(UDim2::new(0.0, 0.0, 0.0, 0.0))
-            }),
-            p("Size", ValueType::UDim2, || {
-                Value::UDim2(UDim2::new(0.0, 100.0, 0.0, 100.0))
-            }),
-            p("BackgroundColor3", ValueType::Color3, || {
-                Value::Color3(GREY)
-            }),
-            p("BackgroundTransparency", ValueType::Number, || {
-                Value::Number(0.0)
-            }),
-            p("Visible", ValueType::Bool, || Value::Bool(true)),
-        ],
-    ),
-    class(
-        "TextLabel",
-        "Frame",
-        &[
-            p("Text", ValueType::String, || Value::String(String::new())),
-            p("TextColor3", ValueType::Color3, || {
-                Value::Color3(Color3::new(0.0, 0.0, 0.0))
-            }),
-            p("TextSize", ValueType::Number, || Value::Number(24.0)),
-        ],
-    ),
-    class(
-        "Player",
-        "Instance",
-        &[
-            p("UserId", ValueType::Number, || Value::Number(0.0)),
-            p("RespawnLocation", ValueType::Ref, || Value::Ref(None)),
-            p("Character", ValueType::Ref, || Value::Ref(None)),
         ],
     ),
 ];

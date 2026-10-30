@@ -1089,3 +1089,37 @@ fn a_script_drives_the_character() {
     }
     assert_eq!(walked, 8, "frames 2 to 9");
 }
+
+#[test]
+fn destroying_a_lone_binding_stops_it() {
+    let (mut w, ctx) = world_with_input();
+    add_action(&mut w, ctx, "Dash", "F");
+    let mut rt = InputRuntime::from_world(&w);
+    let dash = w.find_first_child(ctx, "Dash").unwrap();
+    let bind = w.children(dash)[0];
+    w.destroy(bind);
+    assert!(rt.sync(&w), "a destroyed binding reloads the runtime");
+    let mut r = Rig { rt, t: 10.0 };
+    r.key(Control::F, 1.0);
+    r.frame();
+    assert!(
+        !r.rt.bool(r.id("Gameplay/Dash")),
+        "the deleted binding no longer fires"
+    );
+}
+
+#[test]
+fn undrained_events_are_capped_and_the_newest_are_kept() {
+    let mut r = trigger_rig(Trigger::Press);
+    for i in 0..10_000 {
+        press_at(&mut r, 10.0 + f64::from(i) * 0.01, true);
+        press_at(&mut r, 10.005 + f64::from(i) * 0.01, false);
+    }
+    assert!(r.rt.dropped_events() > 0);
+    let ev = r.events();
+    assert!(ev.len() <= 1024);
+    assert!(
+        ev.last().is_some_and(|e| e.time > 109.0),
+        "the newest events survive"
+    );
+}

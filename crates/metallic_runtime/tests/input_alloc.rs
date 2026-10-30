@@ -74,3 +74,34 @@ fn evaluate_makes_no_heap_allocation() {
     assert!(events > 1000, "the load did something: {events} events");
     assert_eq!(allocations, 0, "push, evaluate and drain_events allocated");
 }
+
+/// Nobody drains the events (the Player did not until #251 reads them): the buffer stays bounded,
+/// nothing allocates, the oldest events are dropped and counted, and vector state keeps updating.
+#[test]
+fn undrained_events_stay_bounded_and_state_keeps_updating() {
+    let mut rt = InputRuntime::new(&reference_load::config());
+    let stick = rt.find_action("Ctx3/Action2").expect("a stick action");
+    let dt = 1.0 / 60.0;
+    for f in 0..120u64 {
+        let t = 10.0 + f as f64 * dt;
+        reference_load::push_frame(&mut rt, f, t);
+        rt.evaluate(t, dt as f32);
+    }
+    COUNT.with(|c| c.set(0));
+    ON.with(|on| on.set(true));
+    let mut last = [0.0f32; 2];
+    let mut changes = 0;
+    for f in 120..2000u64 {
+        let t = 10.0 + f as f64 * dt;
+        reference_load::push_frame(&mut rt, f, t);
+        rt.evaluate(t, dt as f32);
+        let v = rt.axis2(stick);
+        changes += usize::from(v != last);
+        last = v;
+    }
+    ON.with(|on| on.set(false));
+    assert_eq!(COUNT.with(Cell::get), 0, "undrained evaluate allocated");
+    assert!(changes > 100, "the stick state kept changing: {changes}");
+    assert!(rt.dropped_events() > 0);
+    assert!(rt.drain_events().count() <= 1024, "bounded");
+}

@@ -18,10 +18,10 @@ use super::control::{
     QUEUE_CAPACITY, RawEvent, RawSource,
 };
 use metallic_core::{ChangeCursor, Changes, InstanceId, World};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 
-/// Events kept for [`InputRuntime::drain_events`] before value-change events are dropped.
+/// Events kept for [`InputRuntime::drain_events`]; when full the oldest is dropped.
 const EVENT_CAPACITY: usize = 1024;
 /// Slack when comparing event times (seconds).
 const EPS: f64 = 1e-9;
@@ -133,7 +133,8 @@ pub struct InputRuntime {
     delta_flag: [bool; CONTROL_COUNT],
     queue: InputQueue,
     scratch: Vec<RawEvent>,
-    events: Vec<ActionEvent>,
+    events: VecDeque<ActionEvent>,
+    dropped_events: u64,
     // Triggers that need the clock.
     timed: Vec<usize>,
     timers_active: u32,
@@ -201,7 +202,8 @@ impl InputRuntime {
             delta_flag: [false; CONTROL_COUNT],
             queue: InputQueue::new(),
             scratch: Vec::with_capacity(QUEUE_CAPACITY),
-            events: Vec::with_capacity(EVENT_CAPACITY),
+            events: VecDeque::with_capacity(EVENT_CAPACITY),
+            dropped_events: 0,
             timed: Vec::new(),
             timers_active: 0,
             clock: 0.0,
@@ -545,7 +547,7 @@ impl InputRuntime {
             }
         }
         self.delta_touched.clear();
-        self.clock = now;
+        self.clock = now.max(self.clock);
     }
 
     /// Evaluates and returns the character's input (spec 6.2).
@@ -570,8 +572,14 @@ impl InputRuntime {
     }
 
     /// Takes the events of the frames evaluated since the last call.
-    pub fn drain_events(&mut self) -> std::vec::Drain<'_, ActionEvent> {
+    pub fn drain_events(&mut self) -> std::collections::vec_deque::Drain<'_, ActionEvent> {
         self.events.drain(..)
+    }
+
+    /// Events dropped because nobody drained them: the buffer keeps the newest
+    /// [`EVENT_CAPACITY`] and never reallocates.
+    pub fn dropped_events(&self) -> u64 {
+        self.dropped_events
     }
 
     /// The value of an action; zero for an unknown id.
@@ -967,16 +975,17 @@ impl InputRuntime {
             return;
         }
         act.emitted = act.value;
-        // Value events are merged away when the buffer is full; the state stays readable.
-        if self.events.len() < EVENT_CAPACITY {
-            let value = self.state(ActionId(a as u16));
-            self.emit(a, ActionEventKind::StateChanged, value, now);
-            self.emit(a, ActionEventKind::Triggered, value, now);
-        }
+        let value = self.state(ActionId(a as u16));
+        self.emit(a, ActionEventKind::StateChanged, value, now);
+        self.emit(a, ActionEventKind::Triggered, value, now);
     }
 
     fn emit(&mut self, a: usize, kind: ActionEventKind, value: ActionValue, time: f64) {
-        self.events.push(ActionEvent {
+        if self.events.len() == EVENT_CAPACITY {
+            self.events.pop_front();
+            self.dropped_events += 1;
+        }
+        self.events.push_back(ActionEvent {
             action: ActionId(a as u16),
             kind,
             value,

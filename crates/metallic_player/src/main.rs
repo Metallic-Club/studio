@@ -87,6 +87,7 @@ fn run_headless(game: &mut Game, frames: u64, mut script: Option<ScriptedSource>
             input.sync(&world);
         }
         let frame_input = input.frame(now, TICK as f32);
+        input.drain_events().for_each(drop);
         game.frame(&frame_input, TICK);
     }
     game.stop();

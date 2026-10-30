@@ -147,6 +147,8 @@ pub struct BindingDef {
     pub pressed_threshold: f32,
     /// ... and as released below this.
     pub released_threshold: f32,
+    /// The instance this came from (`None` for built-in bindings).
+    pub instance: Option<InstanceId>,
 }
 
 impl Default for BindingDef {
@@ -164,6 +166,7 @@ impl Default for BindingDef {
             clamp_magnitude: true,
             pressed_threshold: 0.5,
             released_threshold: 0.4,
+            instance: None,
         }
     }
 }
@@ -420,6 +423,7 @@ impl InputConfig {
             ids.extend(c.instance);
             for a in &c.actions {
                 ids.extend(a.instance);
+                ids.extend(a.bindings.iter().filter_map(|b| b.instance));
             }
         }
         ids
@@ -609,5 +613,6 @@ fn read_binding(w: &World, id: InstanceId, path: &str, warnings: &mut Vec<String
     b.clamp_magnitude = prop_bool(w, id, "ClampMagnitudeToOne", true);
     b.pressed_threshold = prop_num(w, id, "PressedThreshold", 0.5) as f32;
     b.released_threshold = prop_num(w, id, "ReleasedThreshold", 0.4) as f32;
+    b.instance = Some(id);
     b
 }

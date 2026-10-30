@@ -206,6 +206,8 @@ impl App {
             self.input.sync(&world);
         }
         let mut frame_input = self.input.frame(clock, dt as f32);
+        // Nothing consumes action events until the Luau API (#251); do not let them pile up.
+        self.input.drain_events().for_each(drop);
         let want_capture = self.input.wants_mouse_delta();
         self.set_captured(want_capture);
         if self.args.autopilot {

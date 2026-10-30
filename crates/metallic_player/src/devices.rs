@@ -128,6 +128,11 @@ pub fn gamepad_button(button: Button) -> Option<Control> {
     })
 }
 
+/// The analog triggers (L2, R2).
+fn is_trigger(b: Button) -> bool {
+    matches!(b, Button::LeftTrigger2 | Button::RightTrigger2)
+}
+
 /// Every control a gamepad can drive: released together when the pad goes away.
 fn pad_controls() -> impl Iterator<Item = Control> {
     Control::ALL.iter().copied().filter(|c| c.is_gamepad())
@@ -176,19 +181,25 @@ impl RawSource for GamepadSource {
             };
             let device = Device::Gamepad(slot);
             match event.event {
+                // Analog triggers come through `ButtonChanged` only, so a press/release pair
+                // cannot contradict their level.
                 EventType::ButtonPressed(b, _) => {
-                    if let Some(c) = gamepad_button(b) {
+                    if !is_trigger(b)
+                        && let Some(c) = gamepad_button(b)
+                    {
                         out.push(RawEvent::button(device, c, 1.0, time));
                     }
                 }
                 EventType::ButtonReleased(b, _) => {
-                    if let Some(c) = gamepad_button(b) {
+                    if !is_trigger(b)
+                        && let Some(c) = gamepad_button(b)
+                    {
                         out.push(RawEvent::button(device, c, 0.0, time));
                     }
                 }
                 // Triggers are analog: 0 to 1.
                 EventType::ButtonChanged(b, v, _) => {
-                    if matches!(b, Button::LeftTrigger2 | Button::RightTrigger2)
+                    if is_trigger(b)
                         && let Some(c) = gamepad_button(b)
                     {
                         out.push(RawEvent::button(device, c, v.clamp(0.0, 1.0), time));
