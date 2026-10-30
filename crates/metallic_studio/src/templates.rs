@@ -1,11 +1,12 @@
 //! Game templates: listing them from disk and creating a new project from one.
 //!
 //! A template is a folder with a `template.toml` (`id`, `name`, `description`, `preview`, `order`)
-//! next to the project files. Creating a project copies everything except `template.toml` and
-//! writes the creator's project name into `metallic.toml`.
+//! next to the project files. Project settings metadata lives in `metallic.toml` as `[[setting]]`
+//! and survives creation/renaming. Catalog metadata, previews and root test fixtures stay in
+//! the template. Legacy settings in `template.toml` are migrated into the project file.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -13,7 +14,7 @@ use crate::StudioError;
 
 /// Name of the per-template metadata file (never copied into projects).
 pub const TEMPLATE_FILE: &str = "template.toml";
-/// Name of the project file that holds the project name.
+/// Name of the project file that holds the project name and persistent settings metadata.
 pub const PROJECT_FILE: &str = "metallic.toml";
 
 /// One template card on the start screen.
@@ -139,15 +140,94 @@ fn is_empty_or_missing(dir: &Path) -> Result<bool, StudioError> {
     }
 }
 
-/// Copies `from` into `to` recursively, skipping the top-level `template.toml`.
-fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), StudioError> {
+struct CreationMetadata {
+    excluded_files: Vec<PathBuf>,
+    legacy_settings: Option<toml::Value>,
+}
+
+/// Normalize a template-relative asset path without allowing an absolute path or root escape.
+fn relative_asset(path: &Path) -> Option<PathBuf> {
+    let mut relative = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => relative.push(name),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !relative.pop() {
+                    return None;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!relative.as_os_str().is_empty()).then_some(relative)
+}
+
+fn same_relative_path(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        left.to_str()
+            .zip(right.to_str())
+            .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+fn creation_metadata(template: &TemplateInfo) -> Result<CreationMetadata, StudioError> {
+    let path = template.dir.join(TEMPLATE_FILE);
+    let table = match fs::read_to_string(&path) {
+        Ok(text) => text
+            .parse::<toml::Table>()
+            .map_err(|error| StudioError::Metadata {
+                path: path.clone(),
+                message: error.message().to_owned(),
+            })?,
+        // TemplateInfo can also be constructed directly, without a catalog file.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(error) => return Err(StudioError::io(&path, error)),
+    };
+    let mut excluded_files = [TEMPLATE_FILE, "preview.png", "preview.webm"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if let Some(preview) = template
+        .preview_path
+        .strip_prefix(&template.dir)
+        .ok()
+        .and_then(relative_asset)
+    {
+        excluded_files.push(preview);
+    }
+    for field in ["preview", "preview_video"] {
+        if let Some(path) = table
+            .get(field)
+            .and_then(toml::Value::as_str)
+            .and_then(|path| relative_asset(Path::new(path)))
+        {
+            excluded_files.push(path);
+        }
+    }
+    Ok(CreationMetadata {
+        excluded_files,
+        legacy_settings: table.get("setting").cloned(),
+    })
+}
+
+/// Copies project content while excluding catalog files and the root template test directory.
+fn copy_tree(
+    from: &Path,
+    to: &Path,
+    relative: &Path,
+    excluded_files: &[PathBuf],
+) -> Result<(), StudioError> {
     fs::create_dir_all(to).map_err(|e| StudioError::io(to, e))?;
     for entry in fs::read_dir(from).map_err(|e| StudioError::io(from, e))? {
         let entry = entry.map_err(|e| StudioError::io(from, e))?;
         let src = entry.path();
-        if top && entry.file_name() == TEMPLATE_FILE {
-            continue;
-        }
+        let relative_path = relative.join(entry.file_name());
         let kind = entry.file_type().map_err(|e| StudioError::io(&src, e))?;
         if kind.is_symlink() {
             log::warn!(
@@ -156,9 +236,18 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), StudioError> {
             );
             continue;
         }
+        if (kind.is_dir() && same_relative_path(&relative_path, Path::new("tests")))
+            || (kind.is_file()
+                && !same_relative_path(&relative_path, Path::new(PROJECT_FILE))
+                && excluded_files
+                    .iter()
+                    .any(|path| same_relative_path(path, &relative_path)))
+        {
+            continue;
+        }
         let dst = to.join(entry.file_name());
         if kind.is_dir() {
-            copy_tree(&src, &dst, false)?;
+            copy_tree(&src, &dst, &relative_path, excluded_files)?;
         } else {
             fs::copy(&src, &dst).map_err(|e| StudioError::io(&src, e))?;
         }
@@ -167,7 +256,11 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), StudioError> {
 }
 
 /// Writes `name` into `<target>/metallic.toml`, keeping any other keys; creates the file if missing.
-fn set_project_name(target: &Path, name: &str) -> Result<(), StudioError> {
+fn set_project_name(
+    target: &Path,
+    name: &str,
+    legacy_settings: Option<&toml::Value>,
+) -> Result<(), StudioError> {
     let file = target.join(PROJECT_FILE);
     let mut table = match fs::read_to_string(&file) {
         Ok(text) => text
@@ -179,6 +272,16 @@ fn set_project_name(target: &Path, name: &str) -> Result<(), StudioError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
         Err(e) => return Err(StudioError::io(&file, e)),
     };
+    if let Some(legacy) = legacy_settings {
+        match table.get("setting") {
+            None => { table.insert("setting".to_owned(), legacy.clone()); }
+            Some(settings) if settings == legacy => {}
+            Some(_) => return Err(StudioError::Metadata {
+                path: file,
+                message: "The template defines different settings in both template.toml and metallic.toml. Keep one [[setting]] definition in the template's metallic.toml.".to_owned(),
+            }),
+        }
+    }
     table.insert("name".to_owned(), toml::Value::String(name.to_owned()));
     let text = toml::to_string(&table).map_err(|e| StudioError::Metadata {
         path: file.clone(),
@@ -204,6 +307,11 @@ fn clear_dir(dir: &Path) -> std::io::Result<()> {
 ///
 /// `target` must not exist or be empty; otherwise [`StudioError::FolderNotEmpty`] is returned and
 /// nothing is written. If copying fails half-way, the files this call created are removed again.
+/// Root `template.toml`, `preview.png`, `preview.webm`, configured preview files and the root
+/// `tests/` directory are excluded. Tutorials and nested project assets are kept. Legacy
+/// `template.toml` settings migrate to `metallic.toml`; conflicting dual definitions fail
+/// with [`StudioError::Metadata`] and the same rollback as a copy failure.
+/// A directly constructed [`TemplateInfo`] does not require a catalog file; its relative preview is still excluded.
 pub fn create_from_template(
     template: &TemplateInfo,
     target: &Path,
@@ -213,9 +321,21 @@ pub fn create_from_template(
     if !is_empty_or_missing(target)? {
         return Err(StudioError::FolderNotEmpty(target.to_path_buf()));
     }
+    let metadata = creation_metadata(template)?;
     let existed = target.exists();
-    let result = copy_tree(&template.dir, target, true)
-        .and_then(|()| set_project_name(target, project_name.trim()));
+    let result = copy_tree(
+        &template.dir,
+        target,
+        Path::new(""),
+        &metadata.excluded_files,
+    )
+    .and_then(|()| {
+        set_project_name(
+            target,
+            project_name.trim(),
+            metadata.legacy_settings.as_ref(),
+        )
+    });
     if result.is_err() {
         // Best-effort cleanup: the folder was empty or new before, so everything in it is ours.
         let _ = if existed {
