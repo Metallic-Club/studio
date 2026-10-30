@@ -100,3 +100,83 @@ T-pose; the model itself stays in A-pose, which is the better bind pose (section
    construction lines, no normal map.
 3. Feet modelled parallel (VRM rest-pose rule), not splayed as drawn.
 4. Kept the concept's six colour slots for body colours, and noted the one-material path for mobile.
+
+## 7. Phase B: rigging and default animations
+
+Scope: how good platform default characters are rigged and animated, and what `art/avatar/rig_avatar.py` and
+`art/avatar/anim_clips.py` do with it.
+
+### 7.1 Roblox: the default Animate script and its numbers
+
+- The Animate script maps each humanoid state to clips: run, walk, jump, two idle variants (`Animation1`,
+  `Animation2`, picked at random by weight), fall, swim, swim idle and climb, plus emotes
+  ([Roblox, Use animations](https://create.roblox.com/docs/en-us/animation/using);
+  [list of the default R15 IDs](https://devforum.roblox.com/t/list-of-the-default-r15-animation-ids/140425)).
+- Walk and run are blended by speed. Community copies of the R15 script show `setRunSpeed` with
+  `normalizedWalkSpeed = 0.5` ("established empirically") and `normalizedRunSpeed = 1`, where the speed is first
+  multiplied by 1.25 and divided by a height scale, and the playback speed is `speed / 16`
+  ([DevForum, movement animations](https://devforum.roblox.com/t/movement-animations-walk-run-etc-not-playing/3632834);
+  [DevForum, scaled animations](https://devforum.roblox.com/t/did-a-roblox-update-break-scaled-animations/1292468);
+  [DevForum, run trigger speed](https://devforum.roblox.com/t/change-running-animation-trigger-speed/1450249)).
+  Read with care (these are forum quotes of different script versions), but the consequence is clear: at the
+  default WalkSpeed of 16 studs/s Roblox plays its *run* clip, time-warped; the walk clip only carries the
+  character up to about 6 to 8 studs/s. The default R15 run is the Rthro run
+  ([DevForum bug report](https://devforum.roblox.com/t/multiple-character-bundles-with-rthro-animations-included-are-missing-the-run-animation/1747733)).
+- Takeaway for us: 16 studs/s (4.48 m/s) for a 5.5-stud (1.54 m) figure is a jog. Our hip-to-ankle leg is
+  0.64 m, so the Froude number v^2/(gL) is 3.2; people change from walking to running near 0.5. A gait with
+  double support at that speed would need about 7 steps a second. Our "walk" is therefore a light jog with a short
+  flight phase and our "run" a sprint, both authored to the exact controller speeds (numbers in 7.4).
+
+### 7.2 Other platforms
+
+- **Fortnite / Unreal:** cycles are authored at one speed; the engine then changes the play rate to keep the
+  feet from sliding, clamps that rate, and makes up the rest with stride warping (scaling the stride instead of
+  the rate) and foot IK that locks a planted foot until lift-off
+  ([Epic, Distance Matching API](https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/AnimationLocomotionLibraryRuntim-/UAnimDistanceMatchingLibrary);
+  [Unreal forum thread on distance matching, citing Laurent Delayen's Paragon talk](https://forums.unrealengine.com/t/distance-matching-locomotion-giving-it-a-shot/122622);
+  [foot IK sliding fix](https://bugnet.io/blog/how-to-fix-unreal-control-rig-foot-ik-sliding-during-locomotion)).
+  We only author one speed per clip, so the clip has to be exact at that speed; Phase C can add play-rate
+  scaling for speeds in between.
+- **Fall Guys:** no public talk on its animation was found. Mediatonic describes the floppiness as partly
+  physics-driven and networked ([Behind the Schemes](https://indigo-pearl.prezly.com/get-up-close--personal-with-fall-guys-in-behind-the-schemes)).
+  What we take from watching it: short, fast cycles, big readable poses, the head and hands lagging the body.
+  Procedural secondary motion is a later engine feature (#40), not part of the clips.
+
+### 7.3 Animation principles used (The Animator's Survival Kit and course notes)
+
+- **Walk:** contact, down, passing, up; the hips are lowest just after contact ("down") and highest as the body
+  passes over the support leg and pushes ("up"); the four poses repeat mirrored for the second step
+  ([Monmouth course notes on Williams' walk](https://animation.monmouth.edu/instruct/?p=351);
+  [UW CSE 464 walk-cycle assignment](https://courses.cs.washington.edu/courses/cse464/12wi/assignments/assignment_4/index.html)).
+- **Run:** contact, down, push, peak (fully in the air); realistic runs land on the ball of the foot under the
+  body, exaggerated ones reach further and land on the heel; a straight leg at contact against a bent leg at down
+  shows the weight ([AnimSchool, key poses of a run](https://blog.animschool.edu/?p=634)). In a run the stance is
+  short and a planted foot that stays flat for many frames reads slow
+  ([Unit 06 run-cycle notes](https://mattlawsonhall.blogspot.com/2024/10/run-cycles-locomotion-and-mechanics-for.html)).
+- **Speed = cadence x stride.** Game engines usually scale play rate, which only works if the stride already
+  matches ([theodox, one foot in front of the other](https://theodox.github.io/pages/pub/one_foot_in_front)).
+- **Overlap and follow-through:** parts further from the root move later. Implemented as a per-bone time lag
+  (arms 1 to 3 frames, hands 2 to 5, head 2 to 4) in the keyed clips, and as phase lags on the forearm, hand
+  and head in the procedural cycles.
+- **Weight shift in idle (contrapposto):** weight on one leg, that hip higher, the shoulders tilted the other way,
+  head balancing; breathing in the upper chest and shoulders
+  ([weight-shift notes](https://barbaradelpino.myblog.arts.ac.uk/?p=96)).
+- **Anticipation:** the jump goes down and back (arms back, hips down, chest over the knees) before it goes up.
+
+### 7.4 Applied
+
+- **Rig:** root plus 52 VRM-humanoid deform bones (thumb and four fingers with three bones each). Every bone's Y
+  runs along it and X is the hinge axis, so one axis bends each joint the natural way; left and right are exact
+  mirrors. An IK control rig for authoring (foot and hand IK with knee and elbow poles, FK/IK switch per limb) is
+  in the .blend only; only the deform bones export.
+- **Hinge joints as geometry:** elbow and knee are two rigid shells, the upper one ending in a half cylinder round
+  the hinge axis and the lower one starting with a wider rim just outside it; shoulders and hips end in domes
+  centred on the pivot. Rigid weights then never open a gap and never collapse (linear blend skinning shrinks a
+  50/50 ring by cos(angle/2), about 66% at a 140-degree knee).
+- **Walk (16 studs/s = 4.48 m/s):** 16 frames (0.533 s), stride 2.39 m (8.5 studs), step 1.19 m, 225 steps a
+  minute, 4.4 frames of stance (0.66 m of ground) and 3.6 frames of flight per step. **Run (24 studs/s =
+  6.72 m/s):** 16 frames (0.533 s), stride 3.58 m (12.8 studs), step 1.79 m, 3.0 frames of stance (0.68 m) and 5.0
+  of flight. Longer contacts made the 0.64 m leg crouch to reach the ground at both ends (first review round). Same cycle
+  length for both, so blending walk and run is phase-locked. The planted foot is moved backward at exactly the
+  speed (heel strike, flat, roll over the ball, toe-off) and the IK solves the leg, so slip is zero by construction;
+  the export step measures it (under 0.1 mm a frame).
