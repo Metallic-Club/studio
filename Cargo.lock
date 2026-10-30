@@ -2747,6 +2747,7 @@ dependencies = [
 name = "metallic_runtime"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "egui",
  "metallic_core",
  "metallic_physics",

@@ -71,3 +71,44 @@ fn game_load_rejects_missing_main_scene() {
     assert_eq!(out.status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `--input-script` plays input events headless; a broken script is refused with its line number
+/// and exit code 2.
+#[test]
+fn headless_run_plays_an_input_script() {
+    let dir = std::env::temp_dir().join(format!("metallic_input_script_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let good = dir.join("walk.txt");
+    std::fs::write(
+        &good,
+        "# walk forward, jump, stop\n10 keyboard W down\n20 keyboard Space down\n21 keyboard Space up\n\
+         40 gamepad0 Thumbstick1 axis 0.0 1.0\n60 gamepad0 Thumbstick1 axis 0.0 0.0\n70 keyboard W up\n",
+    )
+    .expect("write script");
+    let run = |script: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_metallic-player"))
+            .arg(repo_root().join("templates/parkour"))
+            .args(["--headless", "--frames", "120", "--input-script"])
+            .arg(script)
+            .output()
+            .expect("run metallic-player")
+    };
+    let out = run(&good);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("ran 120 frames"));
+
+    let bad = dir.join("bad.txt");
+    std::fs::write(&bad, "10 keyboard Space down\n20 keyboard Spacebar down\n").expect("write");
+    let out = run(&bad);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("line 2") && stderr.contains("Spacebar"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
