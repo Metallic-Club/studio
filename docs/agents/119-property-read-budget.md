@@ -38,11 +38,11 @@ preserving current Luau behavior. The historical 150 ns getter goal is aspiratio
 - `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed.
 - `cargo deny check licenses`: passed; existing unused allowance warnings only.
 - `cargo fmt --all -- --check` and `git diff --check`: passed.
+- Opened and attached PR #232; issue #119 is `status:review`. CI is running.
 
 ## Next
 
-- Open and attach the PR, mark issue review, then inspect CI and reviewer feedback.
-  Do not merge.
+- Inspect CI and reviewer feedback on PR #232. Do not merge.
 
 ## Open questions
 
