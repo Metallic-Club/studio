@@ -36,6 +36,8 @@ PACK_ID = "MetallicStudio"
 PACK_TITLE = "Metallic Studio"
 MAIN_EXE = "Metallic Studio.exe"
 CARGO_BIN = "metallic_studio"
+# The [[bin]] name in crates/metallic_studio/Cargo.toml, which differs from the package name.
+STUDIO_BUILT_EXE = "metallic-studio.exe"
 REPO_URL = "https://github.com/Metallic-Club/studio"
 ROOT = Path(__file__).resolve().parent.parent
 ICON_PNG = ROOT / "branding" / "placeholder-icon.png"
@@ -199,7 +201,7 @@ def main():
 
     stage = OUT_DIR / "stage"
     notes = OUT_DIR / "release-notes.md"
-    staged = LAUNCHER_FILES if launcher else [(f"{CARGO_BIN}.exe", MAIN_EXE)]
+    staged = LAUNCHER_FILES if launcher else [(STUDIO_BUILT_EXE, MAIN_EXE)]
     for built, name in staged:
         print(f"+ stage {built} as {name} in {stage.relative_to(ROOT)}")
     if not args.dry_run:
