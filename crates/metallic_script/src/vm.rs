@@ -1,14 +1,22 @@
 //! The sandboxed Luau virtual machine.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mlua::{Error, Function, Lua, LuaOptions, MultiValue, StdLib, Value, VmState};
+use mlua::{
+    Error, FromLuaMulti, Function, IntoLuaMulti, Lua, LuaOptions, MultiValue, StdLib, Table,
+    Thread, Value, VmState,
+};
 
-use crate::task_lib::{self, Scheduler};
+use crate::task_lib::{self, Scheduler, TIMEOUT_MSG};
 
 /// Execution budget of one resume of a script thread (0.1 s).
 pub const RESUME_BUDGET: Duration = Duration::from_millis(100);
+
+/// Total time one [`ScriptVm::step`] may spend resuming threads (0.25 s). Threads still
+/// due when it is used up run on the next step.
+pub const STEP_BUDGET_SEC: f64 = 0.25;
 
 /// Memory cap of one VM (256 MB).
 pub const MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
@@ -62,7 +70,12 @@ impl OutputSink for StdioSink {
     }
 }
 
-/// Turns an `mlua` error into the engine's `chunk:line: message` text.
+/// Converts script bytes to text, replacing invalid UTF-8.
+pub(crate) fn lossy(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Turns an `mlua` error into text, dropping tracebacks.
 pub(crate) fn format_error(e: &Error) -> String {
     let text = match e {
         Error::CallbackError { cause, .. } => return format_error(cause),
@@ -76,44 +89,140 @@ pub(crate) fn format_error(e: &Error) -> String {
     }
 }
 
+fn setup_failed(e: Error) -> ScriptError {
+    ScriptError {
+        message: format!("script VM setup failed: {e}"),
+    }
+}
+
+/// Lua that bounds the cost of string functions that run uninterruptibly in C:
+/// inputs over 1 MB, patterns over 1 KB, `string.rep` results over 64 MB and patterns
+/// whose estimated backtracking cost (`(len + 1) ^ quantifiers`, one fewer when
+/// anchored) exceeds 1e8 steps are rejected with an error.
+const STRING_LIMITS: &str = r#"
+local string, type, error = string, type, error
+local find, match, gmatch, gsub, rep, sub = string.find, string.match, string.gmatch, string.gsub, string.rep, string.sub
+local MAX_INPUT, MAX_PATTERN, MAX_COST, MAX_REP = 1048576, 1024, 1e8, 67108864
+local function check(name, s, p, plain)
+    if type(s) == "string" and #s > MAX_INPUT then error(name .. ": input string too long (limit 1 MB)", 3) end
+    if type(p) ~= "string" then return end
+    if #p > MAX_PATTERN then error(name .. ": pattern too long (limit 1 KB)", 3) end
+    if plain then return end
+    local q, i, n = 0, 1, #p
+    while i <= n do
+        local c = sub(p, i, i)
+        if c == "%" then
+            i += 2
+        else
+            if c == "*" or c == "+" or c == "-" then q += 1 end
+            i += 1
+        end
+    end
+    if sub(p, 1, 1) == "^" then q -= 1 end
+    if q >= 2 and (#s + 1) ^ q > MAX_COST then
+        error(name .. ": pattern too expensive for an input of this size", 3)
+    end
+end
+string.find = function(s, p, init, plain) check("string.find", s, p, plain) return find(s, p, init, plain) end
+string.match = function(s, p, init) check("string.match", s, p) return match(s, p, init) end
+string.gmatch = function(s, p) check("string.gmatch", s, p) return gmatch(s, p) end
+string.gsub = function(s, p, r, n) check("string.gsub", s, p) return gsub(s, p, r, n) end
+string.rep = function(s, n)
+    if type(s) == "string" and type(n) == "number" then
+        local total = #s * n
+        if total > MAX_REP then error("string.rep: result too large (limit 64 MB)", 2) end
+    end
+    return rep(s, n)
+end
+"#;
+
+/// A cloneable handle for running Lua functions under the VM's execution budget (see
+/// [`ScriptVm::budget`]). Keeping it alive keeps the `Lua` state alive.
+#[derive(Clone)]
+pub struct Budget {
+    lua: Lua,
+    sched: Rc<Scheduler>,
+}
+
+impl Budget {
+    /// Calls `f(args)` with a 0.1 s budget (or the enclosing budget's remainder when
+    /// called from inside a running script, whichever ends first). Errors, including
+    /// timeouts, are returned as [`ScriptError`] with the `<chunk>:<line>:` prefix.
+    pub fn call<R: FromLuaMulti>(
+        &self,
+        f: &Function,
+        args: impl IntoLuaMulti,
+    ) -> Result<R, ScriptError> {
+        let values = self
+            .sched
+            .call_guarded(&self.lua, f, args)
+            .map_err(|message| ScriptError { message })?;
+        R::from_lua_multi(values, &self.lua).map_err(|e| ScriptError {
+            message: format_error(&e),
+        })
+    }
+
+    /// Resumes a thread that parked itself with a plain `coroutine.yield` (for example
+    /// a future `Event:Wait()`), under the same budget. If it yields again it is
+    /// parked or put to sleep as usual.
+    pub fn resume(&self, thread: &Thread, args: impl IntoLuaMulti) -> Result<(), ScriptError> {
+        let args = args.into_lua_multi(&self.lua).map_err(|e| ScriptError {
+            message: format_error(&e),
+        })?;
+        self.sched
+            .resume_with_budget(thread, args.into_iter().collect())
+            .map_err(|message| ScriptError { message })
+    }
+}
+
 /// One sandboxed Luau VM with its own thread scheduler.
 pub struct ScriptVm {
     lua: Lua,
     sched: Rc<Scheduler>,
     context: Context,
-    setup_error: Option<String>,
+    /// The read-only library table every script environment inherits from.
+    lib: Table,
+    /// The writable `_G` shared by all scripts of this VM.
+    shared_g: Table,
 }
 
 impl ScriptVm {
     /// Creates a VM that prints to stdout/stderr.
-    pub fn new(context: Context) -> ScriptVm {
+    ///
+    /// # Errors
+    /// Returns an error if the Lua state or its sandbox cannot be set up.
+    pub fn new(context: Context) -> Result<ScriptVm, ScriptError> {
         Self::with_output(context, Rc::new(StdioSink))
     }
 
     /// Creates a VM whose `print`/`warn` and thread errors go to `output`.
     ///
-    /// If sandbox setup fails (a bug in this crate, not a script error) the VM refuses
-    /// to run anything: every [`ScriptVm::run_script`] returns the setup error.
-    pub fn with_output(context: Context, output: Rc<dyn OutputSink>) -> ScriptVm {
-        let lua = match Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()) {
-            Ok(lua) => lua,
-            Err(_) => Lua::new(),
-        };
+    /// # Errors
+    /// Returns an error if the Lua state or its sandbox cannot be set up.
+    pub fn with_output(
+        context: Context,
+        output: Rc<dyn OutputSink>,
+    ) -> Result<ScriptVm, ScriptError> {
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).map_err(setup_failed)?;
         let sched = Rc::new(Scheduler::new(output));
-        let setup_error = Self::setup(&lua, &sched)
-            .err()
-            .map(|e| format!("script VM setup failed: {e}"));
-        ScriptVm {
+        let lib = Self::setup(&lua, &sched).map_err(setup_failed)?;
+        let shared_g = lua.create_table().map_err(setup_failed)?;
+        Ok(ScriptVm {
             lua,
             sched,
             context,
-            setup_error,
-        }
+            lib,
+            shared_g,
+        })
     }
 
-    fn setup(lua: &Lua, sched: &Rc<Scheduler>) -> mlua::Result<()> {
+    fn setup(lua: &Lua, sched: &Rc<Scheduler>) -> mlua::Result<Table> {
         let globals = lua.globals();
         let tostring: Function = globals.get("tostring")?;
+
+        // Needs `debug`, `xpcall`, `coroutine`: must run before they are removed.
+        task_lib::install(lua, sched)?;
+        lua.load(STRING_LIMITS).set_name("=[engine]").exec()?;
 
         // Remove everything the sandbox forbids.
         for name in [
@@ -132,7 +241,7 @@ impl ScriptVm {
             globals.set(name, Value::Nil)?;
         }
         let os = lua.create_table()?;
-        let real_os: mlua::Table = globals.get("os")?;
+        let real_os: Table = globals.get("os")?;
         for name in ["clock", "time"] {
             os.set(name, real_os.get::<Value>(name)?)?;
         }
@@ -147,11 +256,12 @@ impl ScriptVm {
             })?,
         )?;
 
-        // print / warn go to the sink.
+        // print / warn go to the sink (invalid UTF-8 is replaced).
         let join = Rc::new(move |args: MultiValue| -> mlua::Result<String> {
             let mut parts = Vec::with_capacity(args.len());
             for v in args {
-                parts.push(tostring.call::<String>(v)?);
+                let s: mlua::LuaString = tostring.call(v)?;
+                parts.push(lossy(&s.as_bytes()));
             }
             Ok(parts.join(" "))
         });
@@ -172,19 +282,41 @@ impl ScriptVm {
             })?,
         )?;
 
-        task_lib::install(lua, sched)?;
-
-        // Execution budget: abort the running thread once its deadline has passed.
+        // Execution budget: abort the running thread once its deadline has passed. The
+        // position is remembered so the timeout error can carry `<chunk>:<line>:`.
         let s = sched.clone();
-        lua.set_interrupt(move |_| match s.deadline.get() {
-            Some(d) if Instant::now() >= d => Err(Error::runtime(
-                "Script timeout: exhausted allowed execution time",
-            )),
+        lua.set_interrupt(move |lua| match s.deadline.get() {
+            Some(d) if Instant::now() >= d => {
+                if s.timeout_loc.borrow().is_none() {
+                    let loc = lua
+                        .inspect_stack(0, |dbg| {
+                            let src = dbg
+                                .source()
+                                .short_src
+                                .map(Cow::into_owned)
+                                .unwrap_or_default();
+                            match dbg.current_line() {
+                                Some(line) if !src.is_empty() => format!("{src}:{line}: "),
+                                _ => String::new(),
+                            }
+                        })
+                        .unwrap_or_default();
+                    *s.timeout_loc.borrow_mut() = Some(loc);
+                }
+                Err(Error::runtime(TIMEOUT_MSG))
+            }
             _ => Ok(VmState::Continue),
         });
 
         lua.set_memory_limit(MEMORY_LIMIT_BYTES)?;
-        lua.sandbox(true)
+
+        // The string metatable is shared by every string: make it read-only.
+        let string_mt: Table = lua.load("return getmetatable('')").eval()?;
+        string_mt.set_readonly(true);
+
+        let lib = globals.clone();
+        lua.sandbox(true)?;
+        Ok(lib)
     }
 
     /// Which side this VM runs on.
@@ -195,41 +327,82 @@ impl ScriptVm {
     /// The underlying `mlua::Lua`, for host APIs (task 7) and the debugger (task 15),
     /// which reaches the raw `lua_State` through `mlua::ffi`.
     ///
-    /// The execution budget uses `Lua::set_interrupt`; Luau's debugger callbacks
+    /// Calls made directly through this handle run **without** an execution budget; use
+    /// [`ScriptVm::call_with_budget`] / [`ScriptVm::budget`] for anything that runs
+    /// script code. The budget uses `Lua::set_interrupt`; Luau's debugger callbacks
     /// (`lua_callbacks`: `debugbreak`, `debugstep`) are separate and do not conflict.
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
 
-    /// Compiles and runs `source` as a new script thread named `chunk_name` (the
-    /// instance's full name). Returns when the script finishes or first yields
-    /// (e.g. in `task.wait`); the rest runs from [`ScriptVm::step`].
-    pub fn run_script(&mut self, chunk_name: &str, source: &str) -> Result<(), ScriptError> {
-        if let Some(message) = &self.setup_error {
-            return Err(ScriptError {
-                message: message.clone(),
-            });
-        }
+    /// Adds (or replaces) a global visible to every script of this VM, e.g. `game` or
+    /// `Instance`. The library table is read-only to scripts; only the host can write it.
+    pub fn set_global(&self, name: &str, value: impl mlua::IntoLua) -> Result<(), ScriptError> {
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),
         };
+        self.lib.set_readonly(false);
+        let result = self.lib.set(name, value).map_err(to_err);
+        self.lib.set_readonly(true);
+        result
+    }
+
+    /// A handle for calling functions and resuming parked threads under the budget. It
+    /// can be moved into host callbacks registered on [`ScriptVm::lua`].
+    pub fn budget(&self) -> Budget {
+        Budget {
+            lua: self.lua.clone(),
+            sched: self.sched.clone(),
+        }
+    }
+
+    /// Calls `f(args)` under the execution budget; see [`Budget::call`].
+    pub fn call_with_budget<R: FromLuaMulti>(
+        &self,
+        f: &Function,
+        args: impl IntoLuaMulti,
+    ) -> Result<R, ScriptError> {
+        self.budget().call(f, args)
+    }
+
+    /// Compiles and runs `source` as a new script thread named `chunk_name` (the
+    /// instance's full name). Returns when the script finishes or first yields
+    /// (e.g. in `task.wait`); the rest runs from [`ScriptVm::step`].
+    ///
+    /// Each script gets its own global environment (assignments to globals stay local
+    /// to the script); library tables are shared and read-only, and `_G` is one
+    /// writable table shared by all scripts of this VM.
+    pub fn run_script(&mut self, chunk_name: &str, source: &str) -> Result<(), ScriptError> {
+        let to_err = |e: Error| ScriptError {
+            message: format_error(&e),
+        };
+        let env = self.lua.create_table().map_err(to_err)?;
+        let meta = self.lua.create_table().map_err(to_err)?;
+        meta.set("__index", self.lib.clone()).map_err(to_err)?;
+        env.set_metatable(Some(meta)).map_err(to_err)?;
+        env.set("_G", self.shared_g.clone()).map_err(to_err)?;
         let function = self
             .lua
             .load(source)
             .set_name(format!("={chunk_name}"))
+            .set_environment(env)
             .into_function()
             .map_err(to_err)?;
-        let thread = self.lua.create_thread(function).map_err(to_err)?;
-        let result = self.sched.resume_with_budget(&thread, Vec::new());
+        let (thread, args) = self
+            .sched
+            .new_thread(&self.lua, function, Vec::new())
+            .map_err(to_err)?;
+        let result = self.sched.resume_with_budget(&thread, args);
         if result.is_err() {
             // Release whatever the failed script allocated (e.g. after the memory cap).
             let _ = self.lua.gc_collect();
         }
-        result.map_err(to_err)
+        result.map_err(|message| ScriptError { message })
     }
 
-    /// Advances the VM clock to `now` (seconds) and resumes every due thread. Errors in
-    /// those threads are reported to the output sink.
+    /// Advances the VM clock to `now` (seconds) and resumes due threads (at most
+    /// [`STEP_BUDGET_SEC`] of work per call). Errors in those threads are reported to
+    /// the output sink.
     pub fn step(&mut self, now: f64) {
         self.sched.step(now);
     }

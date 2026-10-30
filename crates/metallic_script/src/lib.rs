@@ -11,4 +11,7 @@
 mod task_lib;
 mod vm;
 
-pub use vm::{Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
+pub use vm::{
+    Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,
+    ScriptVm,
+};
