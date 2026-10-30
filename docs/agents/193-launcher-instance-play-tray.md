@@ -12,7 +12,7 @@ Branch `studio/launcher-l1-20261030` (shared by all Launcher L1 tasks). Closes #
 - M-5 fixed: `AppEvent::RunScript` goes through `Bridge::guard_script` (same `location.origin` guard as replies).
 - Tests: `tests/{single_instance,protocol,launch}.rs`, two in `tests/bridge.rs`; pipe, real-registry (test key) and spawn tests in `platform::windows`.
   Stand-in Player: `examples/stand_in_player.rs` (writes its arguments to `<its path>.args.txt`).
-- Screenshot: `docs/agents/launcher-l1/tray-menu.png`.
+- Screenshot: removed (it showed other apps in the tray); retake a cropped one after the Metallic Play rename.
 
 ## Decisions
 - Pipe and registry tests are unit tests inside the program crate (`platform` is not part of the library).
