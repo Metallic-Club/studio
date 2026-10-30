@@ -1,6 +1,6 @@
 # #299 Shared graphics-free Simulation foundation
 
-Status: CPU graph and all 18 CPU cases passed; default-feature/full gates pending.
+Status: implemented and all local gates passed; preparing PR for review.
 
 Branch `studio/299-headless-simulation`, initial base
 `fbaa17d03d4321b300e6f3ce6d17dc38d5c36223`. User-prioritized narrow A3 foundation;
@@ -55,28 +55,46 @@ classes/hash and detailed journal files remain with the A2/A1 workers.
   cases (zero failed/ignored), including the duplicate-input/default-idle/respawn
   contract. No simulation defect or production fix is claimed from those initial
   fixture failures. Original diagnostic output is retained separately.
-- The default-feature Game/Simulation trajectory comparison has not run yet.
+- Final default-feature workspace command on 63d526b (base ebf359a) exited zero:
+  1,004 passed, zero failed, six existing tests ignored across 105 harness
+  and doc-test groups. The seven Simulation cases include actual Game/server
+  trajectory parity. Six Parkour cases and both complete keyboard/gamepad route
+  cases passed; runtime input allocation (three), input scripts (five), membership
+  (six), runner process (two) and binary CLI (one) cases also passed.
+  The ignored tests are three existing window tests, two property-getter diagnostic
+  probes and one real-budget pattern acceptance probe. No new test is ignored.
 - The default-feature workspace prebuild passed in 7m45s on fbaa17d. It reported
   unused TICK/TICK_RATE imports after the extraction; these are removed from the
   production import and TICK remains imported only by the existing unit tests.
 - The graph checker now includes normal and build edges. Its actual 83-package
   graph excludes the forbidden presentation crates; both Python policy cases pass.
+- Final CPU-only suite on 63d526b/ebf359a passed all 18 cases, with zero failures
+  or ignored tests: nine library, one CLI unit, two runner process and six Simulation
+  cases. Its prebuild passed in 22.42s. C2's managed prebuild was active during this
+  short actual run; no other actual Lua suite or benchmark was active.
+- Strict `clippy --workspace --all-targets -j 4 -- -D warnings` passed in 3m40s;
+  CPU-only all-target Clippy passed in 1m59s. License, format and whitespace checks
+  passed. All Cargo builds/tests used the guarded lane121 with four build jobs.
+- The root worker coordinator independently reviewed the source without an actionable
+  blocker. Trusted finite/normalized input and distinct Character ownership preconditions
+  are explicit in API/public docs; this layer does not validate network commands.
 - Independent read-only review of issue 293 at 458e118 found no actionable issue
   in canonical hash encoding, property-index ordering or ancestor/reference filtering.
   No extra build or repository acceptance is claimed from that review.
 
 Saved local logs: `metallic-299-cpu-prebuild.log`, `metallic-299-cpu-tests.log`,
 `metallic-299-trajectory-diagnostic.log`, `metallic-299-trajectory-control.log`,
-`metallic-299-trajectory-isolated.log`, `metallic-299-cpu-final.log`.
-No unchanged-main red claim is made for this new API extraction. Full required gates,
-no-default strict Clippy, default compatibility and new Linux CPU CI remain pending.
+`metallic-299-trajectory-isolated.log`, `metallic-299-cpu-final.log`,
+`metallic-299-default-prebuild.log`, `metallic-299-workspace-final.log`,
+`metallic-299-clippy-final.log`, `metallic-299-cpu-clippy-final.log`,
+`metallic-299-cpu-prebuild-final.log`, `metallic-299-cpu-pinned.log` and
+`metallic-299-licenses-final.log`. No unchanged-main red claim is made for this new
+API extraction. New Linux CPU CI remains pending until the PR runs.
 
 ## Next
 
-Refresh once to main ebf359a: the exact diff from fbaa17d contains the M2a plan and
+Refreshed once to main ebf359a: the exact diff from fbaa17d contains the M2a plan and
 release Python tooling/tests only, with no runtime/script/physics or manifest changes.
-Hold actual timing-sensitive tests until the root worker coordinator releases the window.
-Root independently inspected the Simulation/Game delegation and checker without a
-confirmed blocker; the default/Parkour gates remain essential. Run focused default behavior and complete the full workspace,
-Clippy/licenses and dependency checks on a reviewed pinned main base. Update this note,
-open/attach one PR and inspect CI. No own-PR merge or remote machine changes.
+The final CPU suite has exited and lane121/timing ownership is released. Publish
+and attach one PR from the pinned tested base, then inspect CI. This documentation
+result commit changes no tested source behavior. No own-PR merge or remote machine changes.
