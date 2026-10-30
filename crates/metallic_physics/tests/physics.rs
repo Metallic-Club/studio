@@ -313,3 +313,40 @@ fn step_clamps_huge_dt() {
     // 0.25 s of free fall is about 6.1 studs
     assert!(pos(&world, p).y > 990.0, "y = {}", pos(&world, p).y);
 }
+
+#[test]
+fn nan_dt_does_not_freeze() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 100.0, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    phys.step(&mut world, f64::NAN);
+    run(&mut phys, &mut world, 1.0);
+    // 1 s of free fall is about 98 studs; without the guard the part stays at y = 100
+    assert!(pos(&world, p).y < 50.0, "y = {}", pos(&world, p).y);
+}
+
+#[test]
+fn infinite_dt_is_ignored() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 100.0, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    phys.step(&mut world, f64::INFINITY);
+    phys.step(&mut world, f64::NEG_INFINITY);
+    assert_eq!(pos(&world, p), Vec3::new(0.0, 100.0, 0.0));
+    run(&mut phys, &mut world, 1.0);
+    assert!(pos(&world, p).y < 50.0, "y = {}", pos(&world, p).y);
+}
