@@ -23,7 +23,7 @@ core systems, world, rendering, lighting, physics, scripting, animation and char
 data, effects, assets, services, navigation, editor tools, monetisation, security, platforms). Owner's own list:
 
 - 2D and 3D games in one engine, easier to use than any of the four above
-- Game code in C#, Rust, Lua and Java
+- Game code in Luau, C#, Rust, Python and Java (any language the creator knows; owner, 2026-10-30)
 - Strong optimisation; a render system that keeps improving toward Unreal level
 - Physics: Box2D for 2D; a 3D physics engine ("Box3D" in the owner's words, see section 6)
 - Built-in modeller (Blender-like), animation editor and VFX editor, linked live to the game
@@ -40,7 +40,7 @@ The owner will add more; this document covers the direction and the first milest
 ## 3. Non-goals for now
 
 - Consoles (Xbox, PlayStation) and VR: later, after Windows, then macOS/Linux/mobile.
-- Java scripting: last of the four languages (hardest to sandbox well); not before Luau, C# and Rust work.
+- Languages beyond these five: later, through the same WebAssembly path.
 - Monetisation, payouts and the marketplace backend: they belong to the platform repo.
 - Forking an existing engine (Godot, Bevy, Unity, Unreal). Libraries are fine (section 6); the engine is ours.
 
@@ -100,7 +100,15 @@ Assistant's calls (owner may override):
 - **Files are text:** projects and scenes are saved as human-readable text files (one scene per file), so version
   control and Team Create can diff and merge them later.
 - **Languages, in order:** **Luau** first (the sandboxed Lua dialect Roblox uses, MIT, familiar to Roblox creators).
-  Then C#, Rust and Java, each compiled to WebAssembly and run in a sandbox, so they are as safe as Luau.
+  Then Rust, C#, Python and Java in milestone 1D (see "Code in the language you know").
+- **Code in the language you know** (owner, 2026-10-30): Luau, C#, Rust, Python and Java are all first-class, with
+  the same API in each. One API definition (WebAssembly Component Model WIT, generated from the engine's class
+  registry) produces the bindings for every language, so a new class or method appears in all languages at once.
+  Non-Luau scripts compile to WebAssembly and run in `wasmtime` (Apache-2.0) with the same sandbox rules (time
+  budget, memory cap, no file/network/OS access). Toolchains: Rust (native wasm target), C# (componentize-dotnet),
+  Python (componentize-py), Java (TeaVM or GraalVM Wasm, chosen when built). Studio compiles them on save, shows
+  errors inline, and the debugger works for every language (WebAssembly DWARF debug info) after Luau. Language order
+  for the work: Luau (M1), then Rust, C#, Python, Java in milestone **1D**, right after 1C.
 - **Server and client from the start:** scripts are split Roblox-style into server scripts and client scripts with
   RemoteEvents between them, even while milestone 1 runs both in one process.
 
@@ -159,6 +167,17 @@ Milestone 1 details (assistant's calls):
 Acceptance: the owner does steps 1-5 on this PC from a built zip. Performance: at least 60 fps at 1080p on high
 settings on this PC (RTX 3060 Ti, Ryzen 5 5500, 32 GB) while playing Parkour; at least 30 fps at 1080p on low settings
 on integrated laptop graphics (Intel Iris Xe class), checked on such a machine or marked "not verified".
+
+**Debugger** (owner, 2026-10-30: "a very good debugger"; part of 1B, details are the assistant's calls). Better than
+Roblox Studio's:
+- Luau script debugger: breakpoints (click the gutter), conditional breakpoints, logpoints (print without stopping),
+  break on error, step over / into / out, continue, pause a running game; call stack across server and client
+  scripts; locals, upvalues and globals with expandable tables and Instances; watch expressions; hover a variable to
+  see its value; edit a variable's value while paused; the game world freezes while paused and can be inspected.
+- Engine debugging: frame profiler timeline (scripts, physics, character, render per frame, with per-script time),
+  physics debug view (colliders, contacts, velocities, sleeping bodies), render debug views (wireframe, normals,
+  overdraw, shadow cascades), memory per subsystem and per script VM.
+- Works in Play inside Studio first; attaching to a running `metallic-player` comes with multiplayer (milestone 2).
 
 **1C: install and update** (owner asked; details are the assistant's calls):
 - `Metallic Studio Setup.exe` installs per user (no admin prompt), with Start-menu entry, crow icon and uninstaller.

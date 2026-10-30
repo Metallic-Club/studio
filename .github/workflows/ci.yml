@@ -10,8 +10,6 @@ concurrency:
 
 jobs:
   check:
-    # Skipped until the Cargo workspace exists (Task 1).
-    if: hashFiles('Cargo.toml') != ''
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

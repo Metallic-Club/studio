@@ -1,0 +1,9 @@
+[package]
+name = "metallic_studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+metallic_runtime.workspace = true
