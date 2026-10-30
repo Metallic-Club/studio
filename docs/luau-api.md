@@ -99,7 +99,7 @@ remote:FireServer(5)
 - Signals: at most 10,000 connections per signal (`too many connections`). All handlers of a step share a 0.25 s budget per VM;
   the rest run on the next step, in order. A script whose handlers time out 3 times in a row is disconnected (error printed once).
 - A script that is destroyed, disabled (`Enabled = false`) or moved out of a place where scripts run stops: its connections and
-  threads are removed. Scripts with the same full name share one chunk name and are stopped together only when all are gone.
+  threads are removed. Ownership is tracked by the script's instance id, so clones with the same full name stop independently.
 - Userdata metatables are protected (`getmetatable` returns false, `setmetatable` errors).
 - Errors raised by API calls and operators are plain strings with `<script>:<line>:` so `pcall` shows them cleanly.
 

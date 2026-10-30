@@ -379,3 +379,51 @@ fn heartbeat_1000_parts_read_write_cost() {
     #[cfg(not(debug_assertions))]
     assert!(per_beat_ms < 50.0, "{per_beat_ms} ms per Heartbeat");
 }
+
+#[test]
+fn cloned_scripts_with_same_name_stop_independently() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    let ball = rig.add("Part", "Ball", ws);
+    let source = r#"
+        local hit = script.Parent.Hit
+        local tag = tostring(hit.Transparency)
+        game:GetService("RunService").Heartbeat:Connect(function() print("beat" .. tag) end)
+        hit.Touched:Connect(function() print("touched" .. tag) end)
+        task.spawn(function()
+            while true do task.wait() print("tick" .. tag) end
+        end)
+    "#;
+    let mut bricks = Vec::new();
+    for transparency in [0.25, 0.75] {
+        let model = rig.add("Model", "KillBrick", ws);
+        let hit = rig.add("Part", "Hit", model);
+        rig.world
+            .borrow_mut()
+            .set(hit, "Transparency", Value::Number(transparency))
+            .unwrap();
+        let script = rig.add_script("Script", "Script", model, source);
+        bricks.push((script, hit));
+    }
+    rig.host.start().unwrap();
+    let now = rig.run(0.0, 2);
+    let lines = rig.lines();
+    for tag in ["0.25", "0.75"] {
+        assert!(lines.contains(&format!("print:beat{tag}")), "{lines:?}");
+        assert!(lines.contains(&format!("print:tick{tag}")), "{lines:?}");
+    }
+    rig.world.borrow_mut().destroy(bricks[0].0);
+    let now = rig.run(now, 1);
+    let mark = rig.lines().len();
+    rig.host.touched(bricks[0].1, ball);
+    rig.host.touched(bricks[1].1, ball);
+    rig.run(now, 5);
+    let after: Vec<_> = rig.lines()[mark..].to_vec();
+    assert!(after.iter().all(|l| !l.contains("0.25")), "{after:?}");
+    for kind in ["beat", "tick", "touched"] {
+        assert!(
+            after.iter().any(|l| l == &format!("print:{kind}0.75")),
+            "{kind} missing: {after:?}"
+        );
+    }
+}

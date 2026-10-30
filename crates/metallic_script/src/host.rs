@@ -25,10 +25,14 @@ struct Side {
     state: Rc<ApiState>,
 }
 
-/// A script that was started: where it runs and the chunk name its threads carry.
+/// A script that was started: where it runs.
 struct RunningScript {
     context: Context,
-    chunk: String,
+}
+
+/// The owner id a script's threads and connections carry (never 0).
+fn owner_id(id: InstanceId) -> u64 {
+    id.to_bits() + 1
 }
 
 /// An input from another system, delivered on the next `step`.
@@ -312,26 +316,15 @@ impl ScriptHost {
             let Some(script) = self.running.remove(&id) else {
                 continue;
             };
-            // Scripts sharing a full name share a chunk name; keep theirs running.
-            let shared = self
-                .running
-                .values()
-                .any(|r| r.chunk == script.chunk && r.context == script.context);
-            if !shared && let Some(side) = self.side_for(script.context) {
-                side.state.stop_owner(&script.chunk);
+            if let Some(side) = self.side_for(script.context) {
+                side.state.stop_owner(owner_id(id));
             }
         }
         for (id, context, chunk_name, source) in starts {
             if self.running.contains_key(&id) {
                 continue;
             }
-            self.running.insert(
-                id,
-                RunningScript {
-                    context,
-                    chunk: chunk_name.clone(),
-                },
-            );
+            self.running.insert(id, RunningScript { context });
             let Some(side) = self.side_for(context) else {
                 continue;
             };
@@ -342,10 +335,11 @@ impl ScriptHost {
                     message: crate::vm::format_error(&e),
                 })
                 .and_then(|script| {
-                    side.vm.run_script_with(
+                    side.vm.run_script_owned(
                         &chunk_name,
                         &source,
                         vec![("script", Value::UserData(script))],
+                        owner_id(id),
                     )
                 });
             if let Err(e) = result {

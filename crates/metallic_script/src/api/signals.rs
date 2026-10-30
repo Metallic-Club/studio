@@ -57,15 +57,15 @@ struct Connection {
     id: u64,
     func: Function,
     alive: Rc<Cell<bool>>,
-    /// The script (chunk name) that connected it.
-    owner: String,
+    /// The owner id of the script that connected it (0 for none).
+    owner: u64,
 }
 
 /// A handler call waiting for the next step because this one ran out of budget.
 pub(crate) struct Deferred {
     func: Function,
     alive: Rc<Cell<bool>>,
-    owner: String,
+    owner: u64,
     args: Vec<Value>,
 }
 
@@ -81,7 +81,7 @@ impl Hub {
         &self,
         key: SignalKey,
         func: Function,
-        owner: String,
+        owner: u64,
     ) -> mlua::Result<(u64, Rc<Cell<bool>>)> {
         let mut all = self.connections.borrow_mut();
         let list = all.entry(key).or_default();
@@ -106,20 +106,20 @@ impl Hub {
         }
     }
 
-    fn snapshot(&self, key: SignalKey) -> Vec<(Function, Rc<Cell<bool>>, String)> {
+    fn snapshot(&self, key: SignalKey) -> Vec<(Function, Rc<Cell<bool>>, u64)> {
         self.connections
             .borrow()
             .get(&key)
             .map(|list| {
                 list.iter()
-                    .map(|c| (c.func.clone(), c.alive.clone(), c.owner.clone()))
+                    .map(|c| (c.func.clone(), c.alive.clone(), c.owner))
                     .collect()
             })
             .unwrap_or_default()
     }
 
     /// Disconnects everything `owner` connected.
-    fn remove_owner(&self, owner: &str) {
+    fn remove_owner(&self, owner: u64) {
         for list in self.connections.borrow_mut().values_mut() {
             list.retain(|c| {
                 let keep = c.owner != owner;
@@ -150,7 +150,7 @@ impl Hub {
 pub(crate) struct Pacing {
     deadline: Cell<Option<Instant>>,
     deferred: RefCell<VecDeque<Deferred>>,
-    streaks: RefCell<HashMap<String, u32>>,
+    streaks: RefCell<HashMap<u64, u32>>,
     warned_full: Cell<bool>,
 }
 
@@ -184,7 +184,7 @@ impl ApiState {
             let next = self.pacing.deferred.borrow_mut().pop_front();
             let Some(call) = next else { return };
             if call.alive.get() {
-                self.run_handler(call.func, &call.owner, call.args);
+                self.run_handler(call.func, call.owner, call.args);
             }
         }
     }
@@ -227,18 +227,19 @@ impl ApiState {
                 }
                 continue;
             }
-            self.run_handler(func, &owner, values);
+            self.run_handler(func, owner, values);
         }
     }
 
     /// Runs one handler in its own thread; tracks consecutive timeouts of its script.
-    fn run_handler(&self, func: Function, owner: &str, values: Vec<Value>) {
+    fn run_handler(&self, func: Function, owner: u64, values: Vec<Value>) {
+        let name = func.info().short_src.unwrap_or_default();
         let mut all = Vec::with_capacity(values.len() + 1);
         all.push(Value::Function(func));
         all.extend(values);
-        let result = self
-            .budget
-            .call::<MultiValue>(&self.spawn, MultiValue::from_vec(all));
+        let result =
+            self.budget
+                .call_as::<MultiValue>(owner, &self.spawn, MultiValue::from_vec(all));
         let timed_out = match result {
             Ok(_) => false,
             Err(e) => {
@@ -246,29 +247,29 @@ impl ApiState {
                 e.message.ends_with(TIMEOUT_MSG)
             }
         };
-        if owner.is_empty() {
+        if owner == 0 {
             return;
         }
         if !timed_out {
-            self.pacing.streaks.borrow_mut().remove(owner);
+            self.pacing.streaks.borrow_mut().remove(&owner);
             return;
         }
         let streak = {
             let mut streaks = self.pacing.streaks.borrow_mut();
-            let n = streaks.entry(owner.to_string()).or_insert(0);
+            let n = streaks.entry(owner).or_insert(0);
             *n += 1;
             *n
         };
         if streak >= MAX_CONSECUTIVE_TIMEOUTS {
             self.stop_owner(owner);
             self.sink.error(&format!(
-                "{owner}: script disconnected after {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts"
+                "{name}: script disconnected after {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts"
             ));
         }
     }
 
     /// Stops a script: removes its connections, queued calls, waits and sleeping threads.
-    pub(crate) fn stop_owner(&self, owner: &str) {
+    pub(crate) fn stop_owner(&self, owner: u64) {
         self.hub.remove_owner(owner);
         self.pacing
             .deferred
@@ -276,8 +277,8 @@ impl ApiState {
             .retain(|d| d.owner != owner);
         self.waiters
             .borrow_mut()
-            .retain(|w| self.budget.owner_of(&w.thread).as_deref() != Some(owner));
-        self.pacing.streaks.borrow_mut().remove(owner);
+            .retain(|w| self.budget.owner_of(&w.thread) != Some(owner));
+        self.pacing.streaks.borrow_mut().remove(&owner);
         self.budget.cancel_owner(owner);
     }
 
@@ -306,7 +307,7 @@ impl UserData for LuaSignal {
                 errors::guarded_fn(
                     lua,
                     |lua, (this, func): (UserDataRef<LuaSignal>, Function)| {
-                        let owner = func.info().short_src.unwrap_or_default();
+                        let owner = this.state.budget.current_owner();
                         let (id, alive) = this.state.hub.connect(this.key, func, owner)?;
                         lua.create_userdata(LuaConnection {
                             state: this.state.clone(),

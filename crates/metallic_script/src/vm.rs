@@ -135,23 +135,39 @@ impl Budget {
         f: &Function,
         args: impl IntoLuaMulti,
     ) -> Result<R, ScriptError> {
+        self.call_as(self.sched.current_owner(), f, args)
+    }
+
+    /// Like [`Budget::call`], with `owner` (a script's owner id, 0 for none) as the owner
+    /// of the threads and connections the call creates.
+    pub(crate) fn call_as<R: FromLuaMulti>(
+        &self,
+        owner: u64,
+        f: &Function,
+        args: impl IntoLuaMulti,
+    ) -> Result<R, ScriptError> {
         let lua = self.lua()?;
         let values = self
             .sched
-            .call_guarded(&lua, f, args)
+            .call_guarded(&lua, owner, f, args)
             .map_err(|message| ScriptError { message })?;
         R::from_lua_multi(values, &lua).map_err(|e| ScriptError {
             message: format_error(&e),
         })
     }
 
-    /// The script (chunk name) a thread belongs to.
-    pub(crate) fn owner_of(&self, thread: &Thread) -> Option<String> {
+    /// The owner id of the script a thread belongs to.
+    pub(crate) fn owner_of(&self, thread: &Thread) -> Option<u64> {
         self.sched.owner_of(thread)
     }
 
+    /// The owner id of the script whose code is running now (0 outside any script).
+    pub(crate) fn current_owner(&self) -> u64 {
+        self.sched.current_owner()
+    }
+
     /// Cancels the sleeping threads of a script.
-    pub(crate) fn cancel_owner(&self, owner: &str) {
+    pub(crate) fn cancel_owner(&self, owner: u64) {
         self.sched.cancel_owner(owner);
     }
 
@@ -367,6 +383,19 @@ impl ScriptVm {
         source: &str,
         globals: Vec<(&str, Value)>,
     ) -> Result<(), ScriptError> {
+        self.run_script_owned(chunk_name, source, globals, 0)
+    }
+
+    /// Like [`ScriptVm::run_script_with`]. Every thread and connection the script creates
+    /// carries `owner` (not 0), so the host can stop exactly this script later even when
+    /// other scripts share its chunk name.
+    pub fn run_script_owned(
+        &mut self,
+        chunk_name: &str,
+        source: &str,
+        globals: Vec<(&str, Value)>,
+        owner: u64,
+    ) -> Result<(), ScriptError> {
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),
         };
@@ -387,7 +416,9 @@ impl ScriptVm {
             .map_err(to_err)?;
         let (thread, args) = self
             .sched
-            .new_thread(&self.lua, function, Vec::new())
+            .as_owner(owner, || {
+                self.sched.new_thread(&self.lua, function, Vec::new())
+            })
             .map_err(to_err)?;
         let result = self.sched.resume_with_budget(&thread, args);
         if result.is_err() {
