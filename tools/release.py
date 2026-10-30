@@ -98,11 +98,17 @@ def run(command, dry_run, check=True):
     return result.returncode
 
 
+def vpk_version_from_help(text):
+    """vpk 1.3.x has no --version flag; read the version from its -h description line."""
+    match = re.search(r"Velopack CLI (\S+)", text)
+    return match.group(1) if match else None
+
+
 def check_vpk_version(vpk, dry_run):
     if dry_run:
         return
     try:
-        found = subprocess.run([vpk, "--version"], capture_output=True, text=True, check=True).stdout.strip()
+        found = vpk_version_from_help(subprocess.run([vpk, "-h"], capture_output=True, text=True, check=True).stdout)
     except (OSError, subprocess.CalledProcessError):
         sys.exit(f"vpk not found. Install it: dotnet tool install --global vpk --version {VPK_VERSION}")
     if found != VPK_VERSION:
@@ -128,8 +134,8 @@ def make_icon(dry_run):
 
 
 def pack_command(vpk, app, version, channel, stage, icon, notes):
-    """The `vpk pack` command line. Studio's is unchanged; the Launcher's adds the WebView2
-    framework check and uses the Velopack channel `launcher-<channel>`."""
+    """The `vpk pack` command line. Both name runtime win-x64 (vpk otherwise assumes x86); the
+    Launcher's adds the WebView2 framework check and uses the Velopack channel `launcher-<channel>`."""
     if app == "launcher":
         return [vpk, "pack", "--packId", LAUNCHER_PACK_ID, "--packVersion", version,
                 "--packDir", str(stage), "--mainExe", LAUNCHER_MAIN_EXE, "--packTitle", LAUNCHER_PACK_TITLE,
@@ -138,7 +144,7 @@ def pack_command(vpk, app, version, channel, stage, icon, notes):
                 "--releaseNotes", str(notes)]
     return [vpk, "pack", "--packId", PACK_ID, "--packVersion", version,
             "--packDir", str(stage), "--mainExe", MAIN_EXE, "--packTitle", PACK_TITLE,
-            "--icon", str(icon), "--channel", channel, "--outputDir", str(OUT_DIR),
+            "--icon", str(icon), "--runtime", "win-x64", "--channel", channel, "--outputDir", str(OUT_DIR),
             "--releaseNotes", str(notes)]
 
 

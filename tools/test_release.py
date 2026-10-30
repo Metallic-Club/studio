@@ -33,17 +33,29 @@ class VersionTests(unittest.TestCase):
             self.assertFalse(release.valid_version(bad), bad)
 
 
+class VpkVersionTests(unittest.TestCase):
+    # vpk 1.3.x has no --version flag; its version is only printed in the -h description.
+    HELP = ("Description:\n  Velopack CLI 1.3.39-g8d2844f (prerelease), for distributing applications.  \n\n"
+            "Usage:\n  vpk [command] [options]\n")
+
+    def test_reads_version_from_help(self):
+        self.assertEqual(release.vpk_version_from_help(self.HELP), "1.3.39-g8d2844f")
+
+    def test_help_without_version_is_none(self):
+        self.assertIsNone(release.vpk_version_from_help("Usage:\n  vpk [command]\n"))
+
+
 class PackCommandTests(unittest.TestCase):
     ARGS = ("vpk", "STAGE", "ICON", "NOTES")
 
-    def test_studio_pack_line_is_unchanged(self):
+    def test_studio_pack_line(self):
         vpk, stage, icon, notes = self.ARGS
         out = str(release.OUT_DIR)
         self.assertEqual(
             release.pack_command(vpk, "studio", "0.1.0", "dev", stage, icon, notes),
             ["vpk", "pack", "--packId", "MetallicStudio", "--packVersion", "0.1.0", "--packDir", "STAGE",
              "--mainExe", "Metallic Studio.exe", "--packTitle", "Metallic Studio", "--icon", "ICON",
-             "--channel", "dev", "--outputDir", out, "--releaseNotes", "NOTES"])
+             "--runtime", "win-x64", "--channel", "dev", "--outputDir", out, "--releaseNotes", "NOTES"])
 
     def test_launcher_pack_line(self):
         vpk, stage, icon, notes = self.ARGS
@@ -70,7 +82,7 @@ class PackCommandTests(unittest.TestCase):
         self.assertIn("--tag launcher-v", out)
         self.assertNotIn("MetallicStudio", out)
 
-    def test_dry_run_studio_is_unchanged(self):
+    def test_dry_run_studio(self):
         import subprocess
         import sys
         version = release.workspace_version(release.CARGO_TOML.read_text(encoding="utf-8"))
@@ -80,7 +92,7 @@ class PackCommandTests(unittest.TestCase):
         self.assertIn("+ stage metallic_studio.exe as Metallic Studio.exe in ", out)
         self.assertIn(f"--tag v{version}-dev --releaseName \"Metallic Studio {version} (dev)\" --publish --token <token> --pre", out)
         self.assertNotIn("--framework", out)
-        self.assertNotIn("--runtime", out)
+        self.assertIn("--runtime win-x64", out)
         self.assertNotIn("MetallicLauncher", out)
 
 
