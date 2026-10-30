@@ -25,7 +25,9 @@ apps.
 ## Crates
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref); a class registry (`classes.rs`) with typed
-  properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
+  properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
+  cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
+  `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). Also `deep_clone()` used by Play.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
@@ -52,7 +54,8 @@ apps.
   Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
-  (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
+  (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
+  for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
   Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
@@ -84,8 +87,13 @@ apps.
   Decoding/streaming through Symphonia (WAV, OGG Vorbis, FLAC, MP3). Notes: `docs/agents/81-audio.md`.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Template creation preserves project metadata (`metallic.toml`, including `[[setting]]`) while setting the new name;
+  legacy settings migrate from `template.toml`, with conflicting dual definitions rejected and rolled back. Catalog
+  metadata, preview files and root `tests/` stay in the template; tutorials and nested game assets are copied.
+  The runtime reads `name`/`main_scene` and accepts additional metadata; the Game settings panel remains planned.
   Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
-  an injectable `HttpClient`, Velopack for download and apply) and `github_auth.rs` (device sign-in, token in Credential
+  an injectable `HttpClient`, exact-tag `updater/tagged.rs` source for the selected version/channel, Velopack for package
+  transfer, checksum verification and apply) and `github_auth.rs` (device sign-in, token in Credential
   Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
 - **metallic_anim** (#40, implemented): animation data and playback, pure Rust (glam, no GPU). Typed keyframe
   `Curve<T>` (f32, Vec2, Vec3, Quat, Color3, bool) with constant, linear, Bezier and Roblox `EasingStyle`/`Direction`
@@ -175,7 +183,13 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
   mutating the world directly.
 
 ## Quality bar
+- Local Cargo cache ownership across worktrees: use `tools/cargo_lane.py` for a
+  guarded build/test invocation; [build lanes](docs/build-lanes.md) documents the
+  metadata-derived package clean, process lock and recovery command.
 - Every public item has a `///` doc comment; every crate has a `//!` crate doc.
+- `World::set` rejects NaN and infinities in Number, Vector3, Color3, and UDim2 before changing
+  state, signals, or the journal. Instance/property/type errors retain precedence; finite ranges
+  remain governed by the existing class registry.
 - Tests sit next to behaviour (write the failing test first).
 - No `unwrap()` or `expect()` outside tests; return typed errors (`CoreError`, `ScriptError`, `RuntimeError`, `StudioError`).
 - Scripts can never freeze or crash the game: budgets and caps are enforced in `metallic_script`.

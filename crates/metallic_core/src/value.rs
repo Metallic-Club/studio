@@ -155,6 +155,26 @@ impl ValueType {
 }
 
 impl Value {
+    /// Whether every numeric component is finite; nonnumeric variants have no such restriction.
+    pub(crate) fn has_finite_components(&self) -> bool {
+        match self {
+            Value::Number(number) => number.is_finite(),
+            Value::Vector3(vector) => {
+                vector.x.is_finite() && vector.y.is_finite() && vector.z.is_finite()
+            }
+            Value::Color3(color) => {
+                color.r.is_finite() && color.g.is_finite() && color.b.is_finite()
+            }
+            Value::UDim2(value) => {
+                value.x_scale.is_finite()
+                    && value.x_offset.is_finite()
+                    && value.y_scale.is_finite()
+                    && value.y_offset.is_finite()
+            }
+            Value::Nil | Value::Bool(_) | Value::String(_) | Value::Ref(_) => true,
+        }
+    }
+
     /// The type of this value.
     pub fn value_type(&self) -> ValueType {
         match self {
