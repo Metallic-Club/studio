@@ -2549,6 +2549,7 @@ dependencies = [
  "metallic_update",
  "png",
  "serde",
+ "serde_json",
  "tao",
  "tempfile",
  "thiserror 2.0.21",

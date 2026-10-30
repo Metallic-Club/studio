@@ -2,6 +2,7 @@
 
 use url::Url;
 
+use crate::bridge::BridgeEvent;
 use crate::deep_link::DeepLink;
 use crate::local_pages::LocalPage;
 use crate::site_check::SiteStatus;
@@ -22,6 +23,8 @@ pub enum AppEvent {
         /// The message text.
         body: String,
     },
+    /// Tell the current page about something (sent only to the site and bundled pages).
+    Bridge(BridgeEvent),
     /// Run a script in the current page.
     RunScript(String),
     /// A site check finished.

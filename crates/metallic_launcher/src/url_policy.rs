@@ -67,6 +67,26 @@ impl UrlPolicy {
         }
     }
 
+    /// The origins a page may have to use the bridge, as `location.origin` shows them: the site,
+    /// the development origin and the bundled pages. Used only for the convenience check in
+    /// `bridge.js`; [`origin_of`](Self::origin_of) decides.
+    pub fn bridge_origins(&self) -> Vec<String> {
+        let mut origins: Vec<String> = [&self.site, &self.dev_origin]
+            .into_iter()
+            .flatten()
+            .map(SiteOrigin::origin_text)
+            .collect();
+        origins.extend(
+            [
+                "http://metallic-app.localhost",
+                "https://metallic-app.localhost",
+                "metallic-app://local",
+            ]
+            .map(String::from),
+        );
+        origins
+    }
+
     /// Decides a navigation of the main view to `url`.
     pub fn navigation(&self, url: &str) -> NavDecision {
         if url == "about:blank" {

@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::LauncherError;
 use crate::site::SiteOrigin;
@@ -44,14 +44,28 @@ impl Default for LauncherSettings {
     }
 }
 
-/// A change to apply to the settings; `None` leaves a field alone.
-#[derive(Clone, Debug, Default)]
+/// Reads a JSON field that may be absent (`None`), `null` (`Some(None)`) or a value (`Some(Some(v))`).
+fn present_or_null<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// A change to apply to the settings; `None` leaves a field alone. Read from the bridge as
+/// camelCase JSON (`closeToTray`, `developerMode`, `devUrl`); unknown fields are refused.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
     /// New value for `close_to_tray`.
+    #[serde(default)]
     pub close_to_tray: Option<bool>,
     /// New value for `developer_mode`.
+    #[serde(default)]
     pub developer_mode: Option<bool>,
-    /// New value for `dev_url`: `Some(None)` clears it.
+    /// New value for `dev_url`: `Some(None)` (JSON `null`) clears it.
+    #[serde(default, deserialize_with = "present_or_null")]
     pub dev_url: Option<Option<String>>,
 }
 

@@ -16,8 +16,18 @@
   <dl class="facts">
     <dt>Launcher bridge</dt><dd id="bridge-state">Checking...</dd>
     <dt>Browser string</dt><dd id="ua"><code></code></dd>
-    <dt>Install status</dt><dd>Shown here once the Launcher bridge is connected.</dd>
   </dl>
+
+  <h2>Bridge commands</h2>
+  <p>This page is bundled with the Launcher, so it may use only the commands bundled pages are allowed. Pages of the site may use more.</p>
+  <ul class="checks">
+    <li><button type="button" class="btn btn-secondary" data-cmd="getInfo">Get info</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="installStatus">Install status</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="getSettings">Get settings</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="githubSignIn">GitHub sign-in</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="signIn">Site sign-in (refused here)</button></li>
+  </ul>
+  <pre class="out" id="bridge-out" role="status" aria-live="polite"></pre>
 
   <h2>Sample Play link</h2>
   <p>This link uses a made-up ticket, so the Launcher will not find a place to join.</p>

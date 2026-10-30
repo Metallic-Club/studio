@@ -10,10 +10,27 @@
 <main class="card">
   <p class="brand">Metallic</p>
   <h1>Settings</h1>
-  <p>Launcher settings will be available here soon.</p>
-  <div class="actions">
-    <a class="btn btn-secondary" href="/offline.html" data-back>Back</a>
-  </div>
+  <form id="settings-form" novalidate>
+    <label class="check">
+      <input type="checkbox" id="close-to-tray">
+      <span>Keep Metallic running in the tray when I close the window</span>
+    </label>
+
+    <h2>Developer</h2>
+    <label class="check">
+      <input type="checkbox" id="developer-mode">
+      <span>Developer mode</span>
+    </label>
+    <label class="field" for="dev-url">Development address</label>
+    <input class="text" type="text" id="dev-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Address of your development server">
+    <p class="hint">Developer mode and the development address apply after you restart Metallic.</p>
+
+    <div class="actions">
+      <button type="submit" id="save" class="btn btn-primary" disabled>Save</button>
+      <a class="btn btn-ghost" href="/offline.html" data-back>Back</a>
+    </div>
+    <p class="status" id="settings-status" role="status" aria-live="polite"></p>
+  </form>
 </main>
 <script src="/pages.js"></script>
 </body>

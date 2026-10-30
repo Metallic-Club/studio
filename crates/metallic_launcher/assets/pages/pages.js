@@ -4,12 +4,23 @@
 
   var REASONS = ["unreachable", "notconfigured", "loadfailed"];
 
-  function post(message) {
-    if (window.ipc && typeof window.ipc.postMessage === "function") {
-      window.ipc.postMessage(message);
-      return true;
+  // Asks the Launcher to do something. Resolves to the answer, rejects with {code}.
+  function ask(cmd, args) {
+    if (!window.metallic) {
+      return Promise.reject({ code: "notAvailable" });
     }
-    return false;
+    return window.metallic.invoke(cmd, args);
+  }
+
+  var ERROR_TEXT = {
+    badRequest: "That value is not valid.",
+    notAllowed: "This page may not do that.",
+    notAvailable: "Not available yet.",
+    busy: "Busy. Try again in a moment.",
+    failed: "That did not work. Try again."
+  };
+  function errorText(error) {
+    return (error && ERROR_TEXT[error.code]) || ERROR_TEXT.failed;
   }
 
   // Offline page: pick the text for the reason in the address, and wire the Try again button.
@@ -27,7 +38,7 @@
       if (status) {
         status.textContent = "Checking again...";
       }
-      post("local:retry");
+      ask("retrySite").catch(function () {});
       window.setTimeout(function () {
         retry.disabled = false;
         if (status) {
@@ -41,8 +52,66 @@
   var bridgeState = document.getElementById("bridge-state");
   if (bridgeState) {
     bridgeState.textContent = window.metallic
-      ? "Connected"
-      : "Not connected (the bridge arrives in a later step)";
+      ? "Connected (version " + window.metallic.bridgeVersion + ")"
+      : "Not connected";
+  }
+
+  // Demo page: run a bridge command and show the answer. This page is a bundled page, so
+  // commands for the site (play, sign in, Studio) are refused here, and the page says so.
+  var bridgeOut = document.getElementById("bridge-out");
+  Array.prototype.forEach.call(document.querySelectorAll("[data-cmd]"), function (button) {
+    button.addEventListener("click", function () {
+      var cmd = button.getAttribute("data-cmd");
+      ask(cmd).then(
+        function (value) { bridgeOut.textContent = cmd + ": " + JSON.stringify(value); },
+        function (error) { bridgeOut.textContent = cmd + " refused: " + (error && error.code); }
+      );
+    });
+  });
+
+  // Settings page: show the saved values and save changes.
+  var form = document.getElementById("settings-form");
+  if (form) {
+    var closeToTray = document.getElementById("close-to-tray");
+    var developerMode = document.getElementById("developer-mode");
+    var devUrl = document.getElementById("dev-url");
+    var save = document.getElementById("save");
+    var note = document.getElementById("settings-status");
+    var say = function (text, kind) {
+      note.textContent = text;
+      note.className = "status" + (kind ? " " + kind : "");
+    };
+    var syncDevUrl = function () { devUrl.disabled = !developerMode.checked; };
+    developerMode.addEventListener("change", syncDevUrl);
+
+    ask("getSettings").then(function (settings) {
+      closeToTray.checked = settings.closeToTray === true;
+      developerMode.checked = settings.developerMode === true;
+      devUrl.value = typeof settings.devUrl === "string" ? settings.devUrl : "";
+      syncDevUrl();
+      save.disabled = false;
+    }, function () {
+      syncDevUrl();
+      say("Settings can only be changed in the Metallic app.", "error");
+    });
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      save.disabled = true;
+      var address = devUrl.value.trim();
+      var patch = {
+        closeToTray: closeToTray.checked,
+        developerMode: developerMode.checked,
+        devUrl: developerMode.checked && address !== "" ? address : null
+      };
+      ask("setSettings", { patch: patch }).then(function () {
+        say("Saved.", "ok");
+      }, function (error) {
+        say(error && error.code === "badRequest"
+          ? "The development address must be https, or http on localhost."
+          : errorText(error), "error");
+      }).then(function () { save.disabled = false; });
+    });
   }
   var ua = document.querySelector("#ua code");
   if (ua) {

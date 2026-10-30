@@ -57,6 +57,11 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   `SiteStatus`, `start_page`, `user_agent`) and `app_event.rs` (`AppEvent`, `EventSink`: how other parts talk to the window). The
   program is `main.rs` (start-up order, what to show on failure), `shell.rs` (tao window + wry web view + event loop, thin glue)
   and `platform/` (`windows.rs`: system browser, WebView2 message box, failed-load hook, accelerator keys; `other.rs`: stubs).
+  Task 4 adds `bridge.rs` (`Bridge::handle/deliver/event_script`, `BridgeCommand`, `allowed`, `BridgeHost`, `BridgeEvent`,
+  `BridgeErrorCode`) and `assets/bridge.js` (`window.metallic`, main frame only): the checked path from a page to the Launcher. Only the
+  site (and the development origin) and bundled pages may call it; commands are a typed enum with unknown fields refused, 16 KiB
+  message limit, 32 calls in flight, one Player start per 2 s; an answer goes only to a page of the same origin as the asker. The
+  shell implements `BridgeHost` (`ShellHost`); install, Studio, sign-in and updates answer `notAvailable`/`failed` until Tasks 5-7.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

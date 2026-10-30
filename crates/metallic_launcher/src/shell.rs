@@ -11,11 +11,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use metallic_launcher::{
-    AppEvent, EventSink, LauncherConfig, LauncherError, LocalPage, NavDecision, OfflineReason,
-    PageOrigin, SiteOrigin, SiteStatus, StartPage, UrlPolicy, check_site, local_url, serve,
-    start_page, user_agent,
+    AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, DeepLink,
+    EventSink, LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage,
+    NavDecision, OfflineReason, PageOrigin, PlaceId, SettingsPatch, SettingsStore, SiteOrigin,
+    SiteStatus, StartPage, UrlPolicy, check_site, local_url, serve, start_page, user_agent,
 };
 use metallic_update::{HttpClient, UreqClient};
+use serde_json::{Value, json};
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -63,6 +65,142 @@ struct Shared {
     site_loaded: AtomicBool,
     /// The window has been shown.
     shown: AtomicBool,
+}
+
+/// What the bridge can do in this build. Playing, installing, Studio and sign-in arrive in later
+/// steps and answer `notAvailable` until then.
+struct ShellHost {
+    dev_mode: bool,
+    settings: Mutex<LauncherSettings>,
+    store: SettingsStore,
+    http: Arc<dyn HttpClient>,
+    check_origin: Option<SiteOrigin>,
+    sink: Arc<dyn EventSink>,
+}
+
+impl BridgeHost for ShellHost {
+    fn info(&self) -> LauncherInfo {
+        LauncherInfo {
+            launcher_version: env!("CARGO_PKG_VERSION").to_string(),
+            bridge_version: BRIDGE_VERSION,
+            platform: "windows",
+            channel: "stable".to_string(),
+            dev_mode: self.dev_mode,
+        }
+    }
+
+    fn play(&self, _link: DeepLink) -> Result<(), BridgeErrorCode> {
+        log::info!("play was asked for; starting the Player arrives in a later step");
+        Err(BridgeErrorCode::NotAvailable)
+    }
+
+    fn install_status(&self) -> Value {
+        json!({ "player": "notInstalled", "studio": "notInstalled", "launcher": "upToDate" })
+    }
+
+    fn install_studio(&self) -> Result<(), BridgeErrorCode> {
+        Err(BridgeErrorCode::NotAvailable)
+    }
+
+    fn open_studio(&self, _place: Option<PlaceId>) -> Result<(), BridgeErrorCode> {
+        Err(BridgeErrorCode::NotAvailable)
+    }
+
+    fn settings(&self) -> LauncherSettings {
+        self.settings
+            .lock()
+            .map(|settings| settings.clone())
+            .unwrap_or_default()
+    }
+
+    fn update_settings(&self, patch: SettingsPatch) -> Result<LauncherSettings, BridgeErrorCode> {
+        let mut current = self.settings.lock().map_err(|_| BridgeErrorCode::Failed)?;
+        let mut changed = current.clone();
+        changed
+            .apply(patch)
+            .map_err(|_| BridgeErrorCode::BadRequest)?;
+        self.store.save(&changed).map_err(|error| {
+            log::warn!("could not save the settings: {error}");
+            BridgeErrorCode::Failed
+        })?;
+        *current = changed.clone();
+        Ok(changed)
+    }
+
+    fn sign_in(&self) -> Result<Value, BridgeErrorCode> {
+        Err(BridgeErrorCode::NotAvailable)
+    }
+
+    fn sign_out(&self) -> Result<(), BridgeErrorCode> {
+        Err(BridgeErrorCode::NotAvailable)
+    }
+
+    fn github_sign_in(&self) -> Result<Value, BridgeErrorCode> {
+        Err(BridgeErrorCode::NotAvailable)
+    }
+
+    fn retry_site(&self) {
+        match &self.check_origin {
+            Some(origin) => spawn_check(self.http.clone(), origin.clone(), self.sink.clone()),
+            None => self.sink.send(AppEvent::SiteStatus(SiteStatus::Down)),
+        }
+    }
+
+    fn restart_to_update(&self) -> Result<(), BridgeErrorCode> {
+        log::info!("a restart to update was asked for; updates arrive in a later step");
+        Err(BridgeErrorCode::Failed)
+    }
+}
+
+/// True when both addresses are the same document (a `#fragment` does not make a new page).
+fn same_document(a: &str, b: &str) -> bool {
+    match (Url::parse(a), Url::parse(b)) {
+        (Ok(mut a), Ok(mut b)) => {
+            a.set_fragment(None);
+            b.set_fragment(None);
+            a == b
+        }
+        _ => false,
+    }
+}
+
+/// Runs a script in the view, logging a failure.
+fn run_script(view: &WebView, script: &str) {
+    if let Err(error) = view.evaluate_script(script) {
+        log::warn!("could not run a script in the page: {error}");
+    }
+}
+
+/// Handles one message from a page: checks it, runs it and gives the answer back, but only to the
+/// page that asked. A message that does not come from the page the view shows now (a frame, or a
+/// page that has since navigated) gets no answer.
+fn handle_bridge_message(
+    view: &WebView,
+    bridge: &Bridge,
+    host: &ShellHost,
+    page_url: &str,
+    body: &str,
+) {
+    let Ok(shown) = view.url() else { return };
+    if !same_document(page_url, &shown) {
+        log::warn!("dropped a bridge message that did not come from the page on screen");
+        return;
+    }
+    let Some(reply) = bridge.handle(page_url, body, host) else {
+        return;
+    };
+    let Ok(shown) = view.url() else { return };
+    if let Some(script) = bridge.deliver(reply, &shown) {
+        run_script(view, &script);
+    }
+}
+
+/// Tells the page on screen about `event`, if it may hear of it.
+fn send_bridge_event(view: &WebView, bridge: &Bridge, event: &BridgeEvent) {
+    let Ok(shown) = view.url() else { return };
+    if let Some(script) = bridge.event_script(event, &shown) {
+        run_script(view, &script);
+    }
 }
 
 /// Decodes the placeholder icon from `branding/`.
@@ -202,11 +340,24 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
         log::info!("started with a metallic:// link; it is handled in a later step");
     }
 
+    let bridge = Bridge::new(UrlPolicy::new(&config));
+    let host = ShellHost {
+        dev_mode: config.dev_mode,
+        settings: Mutex::new(SettingsStore::open_default().load()),
+        store: SettingsStore::open_default(),
+        http: http.clone(),
+        check_origin: check_origin.clone(),
+        sink: sink.clone(),
+    };
+
     let mut context = WebContext::new(platform::webview_data_dir());
     let mut builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_background_color(BACKGROUND)
         .with_user_agent(user_agent(webview_version, env!("CARGO_PKG_VERSION")))
         .with_devtools(config.dev_mode)
+        // `window.metallic`, for the main frame. (On Windows the script also reaches frames, so
+        // bridge.js checks for that itself and the shell ignores messages from frames.)
+        .with_initialization_script_for_main_only(bridge.init_script(), true)
         .with_url(start_address);
 
     // The demo page is for developer mode only; in a normal run it does not exist.
@@ -250,25 +401,12 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
             PermissionResponse::Deny
         });
 
-    // Messages from pages. Only the Retry button of a bundled page is handled here; the rest
-    // goes on as a bridge message (the bridge arrives in a later step).
+    // Messages from pages go to the bridge, which checks them in the event loop.
     {
-        let policy = policy.clone();
         let sink = sink.clone();
-        let http = http.clone();
-        let origin = check_origin.clone();
         builder = builder.with_ipc_handler(move |request| {
             let page_url = request.uri().to_string();
             let body = request.into_body();
-            if body == "local:retry" {
-                if policy.origin_of(&page_url) == PageOrigin::Local {
-                    match &origin {
-                        Some(origin) => spawn_check(http.clone(), origin.clone(), sink.clone()),
-                        None => sink.send(AppEvent::SiteStatus(SiteStatus::Down)),
-                    }
-                }
-                return;
-            }
             sink.send(AppEvent::BridgeMessage { page_url, body });
         });
     }
@@ -341,11 +479,7 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
                     window.set_minimized(false);
                     window.set_focus();
                 }
-                AppEvent::RunScript(script) => {
-                    if let Err(error) = view.evaluate_script(&script) {
-                        log::warn!("could not run a script in the page: {error}");
-                    }
-                }
+                AppEvent::RunScript(script) => run_script(&view, &script),
                 AppEvent::Navigate(url) => match policy.origin_of(url.as_str()) {
                     PageOrigin::Site => load(&view, &shared, url.as_str(), false),
                     PageOrigin::Local => {
@@ -359,6 +493,13 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
                     load(&view, &shared, &local_address(&page), offline);
                 }
                 AppEvent::SiteStatus(status) => {
+                    send_bridge_event(
+                        &view,
+                        &bridge,
+                        &BridgeEvent::SiteStatus {
+                            up: status == SiteStatus::Up,
+                        },
+                    );
                     let offline = shared.offline.load(Ordering::SeqCst);
                     match status {
                         SiteStatus::Up if offline => {
@@ -379,9 +520,10 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
                 AppEvent::DeepLink(_) => {
                     log::info!("received a metallic:// link; it is handled in a later step");
                 }
-                AppEvent::BridgeMessage { .. } => {
-                    log::debug!("a page sent a message; the bridge is not connected yet");
+                AppEvent::BridgeMessage { page_url, body } => {
+                    handle_bridge_message(&view, &bridge, &host, &page_url, &body);
                 }
+                AppEvent::Bridge(event) => send_bridge_event(&view, &bridge, &event),
             },
             _ => {}
         }

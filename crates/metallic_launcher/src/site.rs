@@ -74,6 +74,11 @@ impl SiteOrigin {
             && url.password().is_none()
     }
 
+    /// The origin as a page sees it in `location.origin`, for example `https://metallic.example`.
+    pub fn origin_text(&self) -> String {
+        self.base.origin().ascii_serialization()
+    }
+
     /// The address of `path` on this origin.
     pub fn url(&self, path: &SitePath) -> Url {
         // A SitePath starts with a single `/` and has no `\`, so the join cannot leave the origin.
