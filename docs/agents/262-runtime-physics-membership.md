@@ -1,0 +1,132 @@
+# #262 Runtime physics membership synchronization
+
+Status: **reproduced on both baselines; focused checks passed, wider gates pending**.
+
+Branch: `studio/262-runtime-physics-membership`; base main
+`69a10d386bd1a662cc7e0f7b55bd6edb824b57e4`. Relevant runtime/core source is unchanged
+from `fd164c2`. Issue freshly checked, unclaimed, then claimed by this worker.
+
+## Problem and evidence boundary
+
+The runtime gates synchronization using only cached BasePart shape fields. A changed
+Humanoid ID, especially a destroyed one, does not compare against an existing part
+cache entry. This can skip character-subtree membership changes that physics needs.
+The issue has source permalinks. The corrected private-composition fixture now reproduces
+both transitions after establishing its ordinary/character observation controls.
+
+The external fixture is `integration-evidence/260/runtime_humanoid_gate.rs`, outside
+the repositories. It checks ordinary/character controls and Humanoid-only creation
+and removal using public Game/World APIs, a real server Script and captured output.
+The root worker will first gate the frozen reviewed composition, then install this
+separately identified scratch fixture for red reproduction. This worker must not
+change the issue #260 tree or its reviewed production inputs.
+
+The initial one-jump moving-sensor fixture was inconclusive because its ordinary
+control also observed zero touches. The corrected fixture keeps the NPC sensor fixed
+and moves the solid target in 0.1-stud increments, matching existing public physics
+coverage. On test tree `6c4aeb0d3bfc744f5a291a0f6853bab8bd9a875e`, ordinary control
+passed with one touch and initial-character control passed with zero; creation failed
+with one instead of zero, and removal failed with zero instead of one (0.39 s).
+That tree differs from reviewed `389090d57d9356144103ddd2290834e72c9aa1b8` only by
+the new runtime fixture; production blobs were unchanged. The corrected fixture was
+copied into this branch as `tests/physics_membership.rs` before any production edits.
+On this branch's main-based source, both controls also passed and both transitions
+failed with the same counts (0.30 s test execution after a 37.89 s compile). The
+actual redirected output is the local `metallic-262-baseline.log` temporary artifact.
+
+## Implementation in progress
+
+The private `physics_sync` module now owns the dependency/signature cache and actual
+physics synchronization call. Game uses it for normal and forced paths, replacing
+the unconditional workspace snapshot. Seven private tests measure real traversal,
+part-read and sync-call sites through cfg(test)-only counters. Public runtime tests
+retain the proven observation controls. Production APIs/dependencies are unchanged;
+all seven private structural/lifecycle tests passed (0.13 s), and all six public
+runtime cases passed (0.55 s), including creation, removal and reparent-in/out while
+both ordinary/character controls remain valid.
+
+The large-scene private test records no physics sync/full scan/part reads for ordinary
+Humanoid property updates. Part pose/color changes read only that part and do not
+sync. Membership changes in a small Model inspect its two affected parts and perform
+one actual physics sync, leaving 500 unrelated parts outside the runtime scan.
+These are runtime cache/call counts, not elapsed-time or physics-wrapper cost claims.
+
+## Proposed private cache
+
+- Own the runtime journal cursor, eligible BasePart shapes, a Humanoid ID to direct
+  Model parent index, and per-Model direct Humanoid counts.
+- Add effective inherited character membership to the cached PartShape comparison.
+  Position/Orientation and unrelated rendering fields remain excluded.
+- Track only eligible Model parents under Workspace. An outside Humanoid entering
+  Workspace can be discovered from its current class/parent; an exiting or destroyed
+  Humanoid is identified through its old cached ID/parent.
+- Preserve existing PhysicsWorld public APIs and dependencies. The cache is private
+  runtime implementation, with no new public test or diagnostic hooks.
+
+## Journal update phases
+
+1. Process Humanoid index changes first. Compare cached old eligible parent against
+   current eligible parent, including a missing current instance. Apply all count
+   deltas before comparing each affected Model's final has-Humanoid boolean with
+   its value before this batch. Ordinary property updates, non-last removals and a
+   same-tick replacement do not cause a membership transition.
+2. Gather current/cached BasePart journal IDs and descendants of live Models whose
+   final character-membership boolean changed. Destroyed parts are found through
+   the old part cache. Deduplicate candidates before reading shapes.
+3. Compute current Workspace eligibility, shape and effective character membership
+   using the updated Model-count index and ancestor chain. Compare/update only the
+   candidate entries. Call physics sync only for a real physical signature or
+   eligibility change, or an explicit forced sync.
+4. World::set_parent journals the entire moved subtree. Its descendant BasePart IDs
+   therefore catch Model/Folder/Part hierarchy moves between character ancestors or
+   into/out of Workspace without retaining a second full hierarchy graph. Class
+   lookup alone is never used to detect a destroyed cached Humanoid/part.
+5. Initial use and journal overflow/world replacement do one full cache reconciliation.
+   Start/respawn keep their explicit query-ready physics sync, but reuse an incremental
+   cache refresh when history is valid. Remove the current unconditional full
+   workspace_parts snapshot after every sync.
+
+## Scope of sparse work
+
+PR #174 is still open. Main's PhysicsWorld::sync_from itself remains a full scan;
+this independent runtime fix can avoid unnecessary calls and full outer cache
+snapshots using the existing API. Complete physics-layer sparsity is verified with
+#174 in composition, not claimed as already merged or copied into this branch.
+Likewise, complete physics-world replacement reset depends on #174. This branch
+only guarantees its own runtime cache fallback on a foreign-world/overflow cursor
+and preserves the existing PhysicsWorld API behavior available on main.
+
+Use private test-only operation counts at actual traversal/sync-call sites to verify
+work on a large static scene. Avoid timing thresholds and public instrumentation.
+Cached entries remain bounded by live eligible parts/Humanoids/Models; deleted and
+reused generation IDs must not leave stale membership dependencies.
+
+## Test matrix
+
+| Case | Required result |
+| --- | --- |
+| External public-runtime controls | Ordinary sensor emits one touch; initially classified character suppresses it; startup marker present, script errors absent |
+| Humanoid-only create/remove | Correct later touch filtering after a normal end-of-tick sync opportunity |
+| Humanoid reparent | Both old and new Model subtrees update, including outside/back into Workspace |
+| Multiple Humanoids/net replacement | Non-last removal/additional child/same-tick replacement preserve classification without redundant subtree work |
+| Nested character Models | Removing an inner marker keeps inherited outer character membership |
+| Model/Folder/Part reparent | Current ancestor membership and Workspace entry/exit update without shape-field edits |
+| Destroy/recreate and slot reuse | Old generation cache entries retire; transient create/destroy does not leave classification |
+| Health/WalkSpeed/JumpPower/Name writes | No physics sync, full snapshot, or dependent subtree traversal when parent is unchanged |
+| Part pose/color and unrelated UI/script IDs | No unnecessary physics sync or full cache reconciliation |
+| Size/Shape/Material/Anchored/CanCollide | Only affected runtime cache entries; one sync decision per journal batch |
+| Initial/overflow/world replacement | Runtime cache fully reconciles once, then sparse updates resume; full physics-world replacement reset is verified only with #174 |
+| Respawn | Incremental cache refresh and query-ready physics before CharacterAdded |
+| Full integration | Existing movement, touches, Parkour route and required repository gates remain intact |
+
+## Next
+
+- Prepare the workspace binaries, coordinate a quiet serial workspace gate, run
+  strict Clippy/license/fmt checks and inspect independent source review.
+- Root-worker review found the outline/matrix sound; world-replacement scope is
+  explicitly limited above. The frozen #260 production composition passed its own
+  277-test workspace gate and strict Clippy before installing the separate fixture.
+- Then implement only in this issue's worktree, with meaningful behavioral and
+  structural-work tests. Coordinate guarded lane121 and four-job build windows.
+- Keep progress/source docs current, open and attach a separate PR, inspect CI.
+  No merges of this worker's PR or changes to published reviewed branches.

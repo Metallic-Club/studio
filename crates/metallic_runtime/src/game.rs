@@ -4,8 +4,9 @@ use crate::avatar::{Avatar, default_model};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
 use crate::input::FrameInput;
 use crate::locomotion::{LocomotionInput, Support};
+use crate::physics_sync::PhysicsSyncCache;
 use crate::project::ProjectConfig;
-use metallic_core::{ChangeCursor, Changes, InstanceId, Value, Vec3, World, load_scene};
+use metallic_core::{InstanceId, Value, Vec3, World, load_scene};
 pub use metallic_physics::RUN_MULTIPLIER;
 use metallic_physics::{
     CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, spawn_character,
@@ -14,7 +15,6 @@ use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
 use metallic_script::{LOCAL_PLAYER_NAME, OutputSink, ScriptHost};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -54,55 +54,6 @@ pub struct FrameOutput {
     pub state: Option<HumanoidState>,
 }
 
-/// The physics-relevant shape of a part; when it changes the physics must re-sync. These are the
-/// properties `PhysicsWorld::sync_from` reads besides the pose (it does not read `CanTouch` or
-/// `CanQuery` in M1).
-#[derive(Debug, Clone, PartialEq)]
-struct PartShape {
-    size: Value,
-    shape: Value,
-    material: Value,
-    anchored: Value,
-    can_collide: Value,
-}
-
-impl PartShape {
-    fn read(world: &World, id: InstanceId) -> PartShape {
-        let get = |p: &str| world.get(id, p).unwrap_or(Value::Nil);
-        PartShape {
-            size: get("Size"),
-            shape: get("Shape"),
-            material: get("Material"),
-            anchored: get("Anchored"),
-            can_collide: get("CanCollide"),
-        }
-    }
-}
-
-fn under_workspace(world: &World, id: InstanceId) -> bool {
-    let mut cur = world.parent(id);
-    while let Some(p) = cur {
-        if world.class_name(p) == Some("Workspace") {
-            return true;
-        }
-        cur = world.parent(p);
-    }
-    false
-}
-
-/// Every BasePart under Workspace with its shape.
-fn workspace_parts(world: &World) -> HashMap<InstanceId, PartShape> {
-    let mut out = HashMap::new();
-    let mut stack: Vec<InstanceId> = world.root("Workspace").into_iter().collect();
-    while let Some(id) = stack.pop() {
-        if world.is_a(id, "BasePart") {
-            out.insert(id, PartShape::read(world, id));
-        }
-        stack.extend_from_slice(world.children(id));
-    }
-    out
-}
-
 /// One running game: the world, its physics, characters, scripts and camera.
 ///
 /// The world is shared with the script host as `Rc<RefCell<World>>`; the game never holds a
@@ -122,10 +73,7 @@ pub struct Game {
     /// Simulated seconds since `start`.
     time: f64,
     accumulator: f64,
-    /// The world's change journal position when the physics was last checked.
-    physics_cursor: Option<ChangeCursor>,
-    /// Shapes of the parts the physics was last synced with.
-    synced_parts: HashMap<InstanceId, PartShape>,
+    physics_sync: PhysicsSyncCache,
     /// The local character's skinned avatar and the character Model it belongs to.
     avatar: Option<(InstanceId, Avatar)>,
     running: bool,
@@ -178,8 +126,7 @@ impl Game {
             focus: Vec3::default(),
             time: 0.0,
             accumulator: 0.0,
-            physics_cursor: None,
-            synced_parts: HashMap::new(),
+            physics_sync: PhysicsSyncCache::default(),
             avatar: None,
             running: false,
         }
@@ -420,31 +367,11 @@ impl Game {
         }
     }
 
-    /// Re-syncs the physics when a part under Workspace appeared, disappeared or changed shape
-    /// since the last check. Moving parts needs no sync.
+    /// Re-syncs changed part signatures and character membership; pose-only changes need no sync.
     fn sync_physics_if_changed(&mut self) {
-        let changed = {
-            let Ok(world) = self.world.try_borrow() else {
-                return;
-            };
-            let Some(cursor) = self.physics_cursor else {
-                drop(world);
-                self.sync_physics_now();
-                return;
-            };
-            let (changes, now) = world.changes_since(cursor);
-            self.physics_cursor = Some(now);
-            match changes {
-                Changes::Overflow => true,
-                Changes::Ids(ids) => ids.iter().any(|&id| {
-                    let shape = (world.is_a(id, "BasePart") && under_workspace(&world, id))
-                        .then(|| PartShape::read(&world, id));
-                    shape.as_ref() != self.synced_parts.get(&id)
-                }),
-            }
-        };
-        if changed {
-            self.sync_physics_now();
+        if let Ok(world) = self.world.try_borrow() {
+            self.physics_sync
+                .synchronize(&mut self.physics, &world, false);
         }
     }
 
@@ -453,9 +380,8 @@ impl Game {
         let Ok(world) = self.world.try_borrow() else {
             return;
         };
-        self.physics.sync_from(&world);
-        self.synced_parts = workspace_parts(&world);
-        self.physics_cursor = Some(world.change_cursor());
+        self.physics_sync
+            .synchronize(&mut self.physics, &world, true);
     }
 
     /// Moves and animates the local character's avatar; a new character (after a respawn) gets a
