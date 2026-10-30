@@ -262,3 +262,36 @@ fn timeout_reported_once() {
     assert_eq!(sink.lines.borrow().len(), 1, "{:?}", sink.lines.borrow());
     assert!(sink.lines.borrow()[0].starts_with("error:V:1: Script timeout"));
 }
+
+/// Runs `src` and asserts it stops with a pattern/timeout error within 0.5 s (#166).
+fn assert_pattern_stops_fast(src: &str) {
+    let (mut vm, _) = vm();
+    let start = Instant::now();
+    let err = vm.run_script("T", src).unwrap_err();
+    let took = start.elapsed();
+    assert!(
+        err.message.contains("pattern too complex") || err.message.contains("Script timeout"),
+        "{}",
+        err.message
+    );
+    assert!(took < Duration::from_millis(500), "took {took:?}");
+    vm.run_script("T", "assert(string.match('abc', '[a-c]+') == 'abc')")
+        .unwrap();
+}
+
+#[test]
+fn long_bracket_class_star_is_bounded() {
+    // A 1 MB class whose only match is its last byte, repeated over 10k characters.
+    assert_pattern_stops_fast(
+        "local class = string.rep('b', 1000000) .. 'a'
+         string.find(string.rep('a', 10000), '[' .. class .. ']*$')",
+    );
+}
+
+#[test]
+fn long_bracket_class_lazy_is_bounded() {
+    assert_pattern_stops_fast(
+        "local class = string.rep('b', 1000000) .. 'a'
+         string.find(string.rep('a', 100000), '[' .. class .. ']-c')",
+    );
+}
