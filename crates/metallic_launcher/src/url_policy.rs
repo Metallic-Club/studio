@@ -1,0 +1,103 @@
+//! What the Launcher's web view may load, and what happens to everything else.
+//!
+//! The rules, in order: the site, the development origin (developer mode), a bundled page and
+//! exactly `about:blank` are allowed; a valid `metallic:` link becomes a deep link and an invalid
+//! one is blocked; any other `https:` address opens in the system browser; everything else
+//! (`file:`, `javascript:`, `data:`, `blob:`, `ms-msdt:`, plain `http:`, UNC paths, ...) is blocked.
+
+use url::Url;
+
+use crate::deep_link::{DeepLink, SCHEME};
+use crate::site::{LauncherConfig, SiteOrigin, is_local_page};
+
+/// Which kind of page an address belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageOrigin {
+    /// The Metallic site (or the development origin in developer mode): may use the bridge.
+    Site,
+    /// A page bundled into the Launcher.
+    Local,
+    /// Anything else, including unparsable text.
+    Other,
+}
+
+/// What to do with a navigation or a new-window request.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NavDecision {
+    /// Let the view load it. For a new window: load it in the main view instead.
+    Allow,
+    /// Do not load it here; open it in the system browser.
+    OpenInBrowser(Url),
+    /// Do not load it; run this deep link instead.
+    HandleDeepLink(DeepLink),
+    /// Refuse it.
+    Block,
+}
+
+/// Decides what the web view may load.
+#[derive(Debug)]
+pub struct UrlPolicy {
+    site: Option<SiteOrigin>,
+    dev_origin: Option<SiteOrigin>,
+}
+
+impl UrlPolicy {
+    /// Builds the policy from the start-up configuration. A site that is not configured means
+    /// no address counts as the site.
+    pub fn new(config: &LauncherConfig) -> Self {
+        UrlPolicy {
+            site: config.site.as_ref().ok().cloned(),
+            dev_origin: config.dev_origin.clone(),
+        }
+    }
+
+    /// Classifies an address.
+    pub fn origin_of(&self, url: &str) -> PageOrigin {
+        let Ok(url) = Url::parse(url) else {
+            return PageOrigin::Other;
+        };
+        let is_site =
+            |origin: &Option<SiteOrigin>| origin.as_ref().is_some_and(|o| o.matches(&url));
+        if is_site(&self.site) || is_site(&self.dev_origin) {
+            PageOrigin::Site
+        } else if is_local_page(&url) {
+            PageOrigin::Local
+        } else {
+            PageOrigin::Other
+        }
+    }
+
+    /// Decides a navigation of the main view to `url`.
+    pub fn navigation(&self, url: &str) -> NavDecision {
+        if url == "about:blank" {
+            return NavDecision::Allow;
+        }
+        if self.origin_of(url) != PageOrigin::Other {
+            return NavDecision::Allow;
+        }
+        let Ok(parsed) = Url::parse(url) else {
+            return NavDecision::Block;
+        };
+        match parsed.scheme() {
+            SCHEME => match DeepLink::parse(url) {
+                Ok(link) => NavDecision::HandleDeepLink(link),
+                Err(error) => {
+                    log::warn!("blocked a bad metallic:// link: {error}");
+                    NavDecision::Block
+                }
+            },
+            "https" => NavDecision::OpenInBrowser(parsed),
+            _ => NavDecision::Block,
+        }
+    }
+
+    /// Decides a request to open `url` in a new window. The site and bundled pages are
+    /// `Allow`, meaning "load it in the main view"; `about:blank` is refused here, because a
+    /// pop-up has no use for it; the rest is decided as in [`navigation`](Self::navigation).
+    pub fn new_window(&self, url: &str) -> NavDecision {
+        if url == "about:blank" {
+            return NavDecision::Block;
+        }
+        self.navigation(url)
+    }
+}

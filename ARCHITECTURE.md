@@ -49,6 +49,10 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   (`ReleaseFeed`, `STUDIO_FEED`, `LAUNCHER_FEED`, `UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub
   Releases feed, Velopack for download and apply), `github_auth.rs` (device sign-in, `GithubAuth`) and `secret.rs`
   (`SecretStore`, `MemorySecretStore`, `KeyringSecretStore::new(service, account)`). Shared by Studio and the Launcher.
+- **metallic_launcher** (Launcher L1 Task 2, library part): no window yet. `deep_link.rs` (`DeepLink::parse/to_uri` for
+  `metallic://play|studio/open|open|install`, `PlaceId`, `JoinTicket`, `SitePath`), `site.rs` (`SiteOrigin`, `LauncherConfig::from_args`,
+  `is_local_page`), `url_policy.rs` (`UrlPolicy::navigation/new_window/origin_of`), `settings.rs` (`LauncherSettings`, `SettingsStore`).
+  Site address: `config/launcher_site_origin.txt`.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

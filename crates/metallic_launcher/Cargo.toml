@@ -1,0 +1,20 @@
+[package]
+name = "metallic_launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "metallic_launcher"
+path = "src/lib.rs"
+
+[dependencies]
+url = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "1.1.8"
+thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
