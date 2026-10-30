@@ -904,15 +904,15 @@ These are assistant's calls (start values), not measurements. The reference load
 
 ## 15. Phasing
 
-Five follow-up issues, each small, in this order. Issue numbers are filled in after filing.
+Five follow-up issues, each small, in this order (filed with PR #247).
 
 | Phase | Issue | Area | Priority | Blocked by |
 |---|---|---|---|---|
-| 1 | Runtime: input actions core and keyboard/gamepad on the Player | runtime | P1 | this PR |
-| 2 | Luau: InputContext, InputAction, ContextActionService and Vector2 | script | P1 | phase 1 |
-| 3 | Player: automatic touch controls and `--emulate` | runtime | P1 | phase 1 |
-| 4 | Studio: Input Actions panel, Preview as, touch layout editing | studio | P2 | phases 2, 3 |
-| 5 | Player: Controls page, rebinding storage, glyphs, accessibility options | runtime | P2 | phases 1, 3 |
+| 1 | #250 Runtime: input actions core and keyboard/gamepad on the Player | runtime | P1 | this PR |
+| 2 | #251 Luau: InputContext, InputAction, ContextActionService and Vector2 | script | P1 | #250 |
+| 3 | #252 Player: automatic touch controls and device emulation | runtime | P1 | #250 |
+| 4 | #253 Studio: Input Actions panel, Preview as and touch layout editing | studio | P2 | #251, #252 |
+| 5 | #254 Player: Controls page, rebinding storage, glyphs and accessibility options | runtime | P2 | #250, #252 |
 
 Phase 1 finishes Parkour on keyboard and gamepad. Phase 3 finishes it in the touch emulator, which completes the issue's
 done-when. Template migrations (section 12) follow as part of each template issue (#84 to #87, #89, #91) once Phase 2 is merged; they are
