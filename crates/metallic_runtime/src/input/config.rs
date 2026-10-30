@@ -9,6 +9,17 @@ use metallic_core::{InstanceId, Value, World};
 
 /// Name of the context that feeds the character and the camera.
 pub const CHARACTER_CONTROLS: &str = "CharacterControls";
+/// Name of the built-in context that holds `Menu` (spec 3.6). It is not in the scene.
+pub const SYSTEM_CONTEXT: &str = "Metallic.System";
+/// Path of the action that opens the Player menu.
+pub const MENU_ACTION: &str = "Metallic.System/Menu";
+/// Rebind group of the system context. Its actions are checked for conflicts against every
+/// group, because the context sinks its controls at the top priority.
+pub const SYSTEM_GROUP: &str = "System";
+/// Rebind group a context has when it does not name one.
+pub const DEFAULT_GROUP: &str = "Game";
+/// Priority of the system context: above every game context.
+pub const SYSTEM_PRIORITY: f64 = 10000.0;
 
 /// Radians the camera turns per pixel of right-drag mouse movement.
 pub const MOUSE_ORBIT_SPEED: f32 = 0.006;
@@ -276,6 +287,9 @@ pub struct ActionDef {
     pub required: bool,
     /// A held Bool action may become a toggle.
     pub can_toggle: bool,
+    /// The player made this Bool action a toggle: a press flips it, a release does nothing
+    /// (spec 11.1). Only set by player overrides; ignored unless `can_toggle`.
+    pub toggle: bool,
     /// Shows an on-screen control.
     pub show_on_touch: bool,
     /// Lower comes first among touch buttons.
@@ -304,6 +318,7 @@ impl ActionDef {
             rebindable: true,
             required: false,
             can_toggle: true,
+            toggle: false,
             show_on_touch: false,
             touch_order: 0.0,
             bindings: Vec::new(),
@@ -360,7 +375,7 @@ impl ContextDef {
             enabled: true,
             priority: 0.0,
             sink: false,
-            rebind_group: "Game".to_string(),
+            rebind_group: DEFAULT_GROUP.to_string(),
             actions: Vec::new(),
             instance: None,
             order: 0,
@@ -386,9 +401,35 @@ impl InputConfig {
         }
     }
 
+    /// The built-in contexts the Player uses for a scene without input instances:
+    /// `CharacterControls` and `Metallic.System` (`Menu`).
+    pub fn player_defaults() -> Self {
+        let mut config = Self::character_controls();
+        config.add_system_context();
+        config
+    }
+
+    /// Adds the built-in `Metallic.System` context (spec 3.6) unless one is already there.
+    pub fn add_system_context(&mut self) {
+        if self.contexts.iter().any(|c| c.name == SYSTEM_CONTEXT) {
+            return;
+        }
+        let mut ctx = system_context();
+        ctx.order = self.contexts.len() as u64;
+        self.contexts.push(ctx);
+    }
+
+    /// The action at `Context/Action`.
+    pub fn action(&self, path: &str) -> Option<(&ContextDef, &ActionDef)> {
+        let (context, action) = path.split_once('/')?;
+        let ctx = self.contexts.iter().find(|c| c.name == context)?;
+        Some((ctx, ctx.actions.iter().find(|a| a.name == action)?))
+    }
+
     /// Reads every `InputContext` under `ReplicatedStorage`, `StarterPlayer` and `Players`
     /// (spec 3.1). When no context named `CharacterControls` exists, the built-in one is added;
-    /// when one exists the scene wins entirely (spec 6.3).
+    /// when one exists the scene wins entirely (spec 6.3). The built-in `Metallic.System`
+    /// context (`Menu`) is always added.
     pub fn from_world(world: &World) -> Self {
         let mut config = InputConfig::default();
         for service in ["ReplicatedStorage", "StarterPlayer", "Players"] {
@@ -413,6 +454,7 @@ impl InputConfig {
             ctx.order = config.contexts.len() as u64;
             config.contexts.push(ctx);
         }
+        config.add_system_context();
         config
     }
 
@@ -428,6 +470,23 @@ impl InputConfig {
         }
         ids
     }
+}
+
+/// The built-in `Metallic.System` context: `Menu` on Escape and Start, priority 10000, sink
+/// (spec 3.6). Players may rebind Menu but it keeps one binding per device (spec 8.3).
+pub fn system_context() -> ContextDef {
+    let mut ctx = ContextDef::new(SYSTEM_CONTEXT);
+    ctx.priority = SYSTEM_PRIORITY;
+    ctx.sink = true;
+    ctx.rebind_group = SYSTEM_GROUP.to_string();
+    let mut menu = ActionDef::new("Menu", ActionType::Bool)
+        .with_role(Role::Menu)
+        .with_binding(BindingDef::key(Control::Escape))
+        .with_binding(BindingDef::key(Control::ButtonStart));
+    menu.required = true;
+    menu.can_toggle = false;
+    ctx.actions = vec![menu];
+    ctx
 }
 
 /// The built-in `CharacterControls` context (spec 6.1).
@@ -451,6 +510,8 @@ pub fn default_character_controls() -> ContextDef {
         .with_binding(BindingDef::key(C::Space))
         .with_binding(BindingDef::key(C::ButtonA));
     jump.show_on_touch = true;
+    // Holding Jump jumps again on landing; a latched jump would never stop.
+    jump.can_toggle = false;
     let mut run = ActionDef::new("Run", ActionType::Bool)
         .with_role(Role::Run)
         .with_binding(BindingDef::key(C::LeftShift))
@@ -525,7 +586,10 @@ fn read_context(w: &World, id: InstanceId, warnings: &mut Vec<String>) -> Contex
     ctx.enabled = prop_bool(w, id, "Enabled", true);
     ctx.priority = prop_num(w, id, "Priority", 0.0);
     ctx.sink = prop_bool(w, id, "Sink", false);
-    ctx.rebind_group = prop_str(w, id, "RebindGroup");
+    let group = prop_str(w, id, "RebindGroup");
+    if !group.is_empty() {
+        ctx.rebind_group = group;
+    }
     ctx.instance = Some(id);
     for &child in w.children(id) {
         if w.class_name(child) == Some("InputAction") {

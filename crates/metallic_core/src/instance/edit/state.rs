@@ -210,6 +210,7 @@ impl Document {
             EditValue::Color3(v) => Value::Color3(*v),
             EditValue::UDim2(v) => Value::UDim2(*v),
             EditValue::Ref(v) => Value::Ref(v.map(|id| self.resolve(id)).transpose()?),
+            EditValue::CFrame(v) => Value::CFrame(v.clone()),
         })
     }
 
@@ -370,6 +371,7 @@ impl Document {
                 v.map(|id| self.id_of(id).ok_or(EditError::InvalidDocument))
                     .transpose()?,
             ),
+            Value::CFrame(v) => EditValue::CFrame(v),
         })
     }
 
@@ -475,6 +477,10 @@ pub(super) fn measure(batch: &EditBatch, limits: EditLimits) -> Result<usize, Ed
                 .ok_or(EditError::Limit("batch bytes"))?)?;
             for (name, value) in properties {
                 add(name.len())?;
+                if let EditValue::CFrame(_) = value {
+                    // The Box pointer is included in EditValue's native metadata; count its owned payload too.
+                    add(std::mem::size_of::<crate::CFrame>())?;
+                }
                 if let EditValue::String(text) = value {
                     if name == "Source" && text.len() > limits.max_script_bytes {
                         return Err(EditError::Limit("script bytes"));

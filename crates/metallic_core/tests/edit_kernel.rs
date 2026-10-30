@@ -577,6 +577,240 @@ fn cframe_math_uses_registered_pose_components_without_a_new_value_escape_hatch(
     assert_eq!(authority.sequence(), 1);
 }
 
+fn frame_value(frame: CFrame) -> EditValue {
+    EditValue::CFrame(Box::new(frame))
+}
+
+fn frame_components(values: [f64; 12]) -> CFrame {
+    CFrame::from_parts(
+        Vec3::new(values[0], values[1], values[2]),
+        [
+            [values[3], values[4], values[5]],
+            [values[6], values[7], values[8]],
+            [values[9], values[10], values[11]],
+        ],
+    )
+}
+
+#[test]
+fn stored_cframes_create_serialize_and_replay_with_stable_references() {
+    let mut authority = authority(initial_world(0));
+    let mut replica_world = initial_world(2);
+    let spare_a = replica_world.create("Folder", None).expect("spare A");
+    let spare_b = replica_world.create("Folder", None).expect("spare B");
+    replica_world.destroy(spare_a);
+    replica_world.destroy(spare_b);
+    let mut replica = EditReplica::new(replica_world, EditLimits::default()).expect("replica");
+    let model = EditId::new(1, 1);
+    let part = EditId::new(1, 2);
+    let frame =
+        CFrame::from_position(Vec3::new(1.0, 2.0, 3.0)) * CFrame::from_euler_yxz(0.2, -0.4, 0.7);
+    let record = commit(
+        &mut authority,
+        A,
+        &batch(
+            1,
+            vec![
+                EditOp::Create {
+                    id: model,
+                    class: "Model".into(),
+                    parent: None,
+                    after: None,
+                    properties: vec![("WorldPivot".into(), frame_value(frame))],
+                },
+                EditOp::Create {
+                    id: part,
+                    class: "Part".into(),
+                    parent: Some(model),
+                    after: None,
+                    properties: vec![("PivotOffset".into(), frame_value(frame.inverse()))],
+                },
+                set(model, "PrimaryPart", EditValue::Ref(Some(part))),
+            ],
+        ),
+    );
+    let encoded = ron::to_string(&record).expect("serialize boxed CFrame record");
+    let decoded: CommittedBatch = ron::from_str(&encoded).expect("deserialize CFrame record");
+    assert_eq!(decoded, record);
+    replica.apply(&decoded).expect("replica");
+    assert_ne!(authority.instance_of(part), replica.instance_of(part));
+    assert_eq!(
+        authority.snapshot().expect("authority"),
+        replica.snapshot().expect("replica")
+    );
+    assert_eq!(
+        replica
+            .world()
+            .get(replica.instance_of(model).expect("model"), "PrimaryPart"),
+        Ok(Value::Ref(replica.instance_of(part)))
+    );
+    assert_eq!(
+        authority
+            .world()
+            .get(authority.instance_of(model).expect("model"), "WorldPivot"),
+        Ok(Value::CFrame(Box::new(frame)))
+    );
+}
+
+#[test]
+fn every_cframe_component_rejects_nonfinite_batches_and_has_exact_request_identity() {
+    let mut world = World::new_empty();
+    let part = world.create("Part", None).expect("part");
+    let calls = Arc::new(Mutex::new(0));
+    let observed = Arc::clone(&calls);
+    world
+        .property_changed(part, "PivotOffset")
+        .connect(move |_| *observed.lock().expect("calls") += 1);
+    let mut authority = authority(world);
+    let id = authority.id_of(part).expect("stable");
+    let before = authority.snapshot().expect("before");
+    let cursor = authority.world().change_cursor();
+    for component in 0..12 {
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut values = CFrame::IDENTITY.components();
+            values[component] = invalid;
+            assert!(matches!(
+                authority.submit(
+                    A,
+                    &batch(
+                        1,
+                        vec![
+                            set(id, "Name", EditValue::String("must roll back".into())),
+                            set(id, "PivotOffset", frame_value(frame_components(values))),
+                        ]
+                    )
+                ),
+                Err(EditError::Core {
+                    operation: 1,
+                    source: CoreError::InvalidValue { .. }
+                })
+            ));
+            assert_eq!(authority.snapshot().expect("unchanged"), before);
+            assert_eq!(authority.world().change_cursor(), cursor);
+        }
+    }
+    assert_eq!(*calls.lock().expect("calls"), 0);
+    let original = batch(
+        1,
+        vec![set(id, "PivotOffset", frame_value(CFrame::IDENTITY))],
+    );
+    commit(&mut authority, A, &original);
+    for component in 0..12 {
+        let mut values = CFrame::IDENTITY.components();
+        values[component] = if values[component] == 0.0 {
+            -0.0
+        } else {
+            f64::from_bits(values[component].to_bits() ^ 1)
+        };
+        assert_eq!(
+            authority.submit(
+                A,
+                &batch(
+                    1,
+                    vec![set(
+                        id,
+                        "PivotOffset",
+                        frame_value(frame_components(values))
+                    ),]
+                )
+            ),
+            Err(EditError::RequestReuse)
+        );
+    }
+    assert_eq!(
+        authority.world().change_cursor(),
+        cursor,
+        "Core's equal-default write stays a no-op"
+    );
+    assert_eq!(*calls.lock().expect("calls"), 0);
+    assert_eq!(
+        authority
+            .submit(A, &original)
+            .expect("exact duplicate")
+            .receipt()
+            .server_sequence,
+        1
+    );
+}
+
+#[test]
+fn cframe_owned_heap_bytes_bound_requests_and_retained_receipts() {
+    let mut world = World::new_empty();
+    let local = world.create("Part", None).expect("part");
+    let mut authority = EditAuthority::new(
+        world,
+        EditLimits {
+            max_batch_bytes: 400,
+            max_receipt_bytes: 700,
+            ..EditLimits::default()
+        },
+    )
+    .expect("limits");
+    authority.set_access(A, EditAccess::Edit).expect("access");
+    let id = authority.id_of(local).expect("id");
+    let before = authority.snapshot().expect("before");
+    let two_frames = batch(
+        1,
+        vec![EditOp::Set {
+            id,
+            properties: vec![
+                ("PivotOffset".into(), frame_value(CFrame::IDENTITY)),
+                ("PivotOffset".into(), frame_value(CFrame::IDENTITY)),
+            ],
+        }],
+    );
+    assert_eq!(
+        authority.submit(A, &two_frames),
+        Err(EditError::Limit("batch bytes"))
+    );
+    let mut metadata_control = two_frames;
+    if let EditOp::Set { properties, .. } = &mut metadata_control.operations[0] {
+        for (_, value) in properties {
+            *value = EditValue::Number(1.0);
+        }
+    }
+    assert!(
+        matches!(
+            authority.submit(A, &metadata_control),
+            Err(EditError::Core {
+                source: CoreError::TypeMismatch { .. },
+                ..
+            })
+        ),
+        "the same native metadata fits; boxed payload bytes exceed the input cap"
+    );
+    assert_eq!(authority.snapshot().expect("unchanged"), before);
+    let first = batch(
+        1,
+        vec![set(
+            id,
+            "PivotOffset",
+            frame_value(CFrame::from_position(Vec3::new(1.0, 0.0, 0.0))),
+        )],
+    );
+    commit(&mut authority, A, &first);
+    for sequence in 2..=3 {
+        commit(
+            &mut authority,
+            A,
+            &batch(
+                sequence,
+                vec![set(
+                    id,
+                    "PivotOffset",
+                    frame_value(CFrame::from_position(Vec3::new(sequence as f64, 0.0, 0.0))),
+                )],
+            ),
+        );
+    }
+    assert_eq!(
+        authority.submit(A, &first),
+        Err(EditError::StaleRequest),
+        "owned CFrame payload bytes must also evict retained receipt history"
+    );
+    assert_eq!(authority.sequence(), 3);
+}
+
 #[test]
 fn replica_sequence_guards_and_stable_references_survive_different_local_allocations() {
     let mut authority = authority(initial_world(0));

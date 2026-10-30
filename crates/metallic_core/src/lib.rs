@@ -16,6 +16,7 @@ pub mod classes;
 mod instance;
 mod scene_file;
 mod signal;
+pub mod transform;
 mod value;
 
 pub use cframe::{CFrame, RotationOrder};

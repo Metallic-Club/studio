@@ -52,8 +52,10 @@ impl Overlay {
             .ctx
             .layer_painter(LayerId::new(Order::Foreground, Id::unique("metallic_gui")));
         game.paint_gui(&painter);
-        let full = self.ctx.end_pass();
-        let primitives = self.ctx.tessellate(full.shapes, full.pixels_per_point);
+        let mut full = self.ctx.end_pass();
+        let primitives = self
+            .ctx
+            .tessellate(std::mem::take(&mut full.shapes), full.pixels_per_point);
         for (id, deltas) in &full.textures_delta.set {
             for delta in deltas {
                 self.renderer.update_texture(device, queue, *id, delta);
@@ -94,5 +96,7 @@ impl Overlay {
         for id in &full.textures_delta.free {
             self.renderer.free_texture(id);
         }
+        // Applied above; debug builds of egui panic when a delta is dropped unhandled.
+        full.textures_delta.clear();
     }
 }

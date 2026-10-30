@@ -7,8 +7,8 @@ use crate::shadows::{
     Cascade, MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
 };
 use crate::skinned::{
-    GpuSkinnedModel, SkinSlot, SkinnedDraw, SkinnedInstance, projected_height, select_lod,
-    skinned_layout,
+    GpuSkinnedModel, SkinSlot, SkinStyle, SkinnedDraw, SkinnedInstance, projected_height,
+    select_lod, skinned_layout,
 };
 use crate::sky::Sky;
 use bytemuck::{Pod, Zeroable};
@@ -79,6 +79,7 @@ struct Globals {
     sky_horizon: [f32; 4],
     sky_ground: [f32; 4],
     params: [f32; 4],
+    viewport: [f32; 4],
 }
 
 const MESH_ATTRS: [wgpu::VertexAttribute; 2] =
@@ -147,6 +148,8 @@ struct Pipelines {
     blended: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
     skinned: wgpu::RenderPipeline,
+    skinned_toon: wgpu::RenderPipeline,
+    skinned_outline: wgpu::RenderPipeline,
     skinned_shadow: wgpu::RenderPipeline,
 }
 
@@ -420,6 +423,7 @@ impl Renderer {
                 slot,
                 center: inst.center,
                 height: inst.height,
+                style: inst.style,
                 lod: 0,
             });
         }
@@ -539,6 +543,12 @@ impl Renderer {
                 self.sky.exposure,
                 self.shadow_map.resolution as f32,
             ],
+            viewport: [
+                size.0 as f32,
+                size.1 as f32,
+                1.0 / size.0.max(1) as f32,
+                1.0 / size.1.max(1) as f32,
+            ],
         }
     }
 
@@ -631,7 +641,7 @@ impl Renderer {
             pass.set_bind_group(0, &slot.bind_group, &[]);
             self.draw_opaque(&mut pass);
             pass.set_pipeline(&self.pipelines.skinned_shadow);
-            self.draw_skinned(&mut pass);
+            self.draw_skinned(&mut pass, None);
         }
 
         {
@@ -672,7 +682,11 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.opaque);
             self.draw_opaque(&mut pass);
             pass.set_pipeline(&self.pipelines.skinned);
-            self.draw_skinned(&mut pass);
+            self.draw_skinned(&mut pass, Some(SkinStyle::Standard));
+            pass.set_pipeline(&self.pipelines.skinned_toon);
+            self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
+            pass.set_pipeline(&self.pipelines.skinned_outline);
+            self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
             self.draw_blended(&mut pass);
         }
         self.queue.submit(Some(encoder.finish()));
@@ -692,9 +706,13 @@ impl Renderer {
         }
     }
 
-    /// Draws every skinned instance with the pipeline already set (main or shadow).
-    fn draw_skinned(&self, pass: &mut wgpu::RenderPass<'_>) {
+    /// Draws the skinned instances of `style` (all of them for `None`) with the pipeline already
+    /// set.
+    fn draw_skinned(&self, pass: &mut wgpu::RenderPass<'_>, style: Option<SkinStyle>) {
         for d in &self.skinned_draws {
+            if style.is_some_and(|s| s != d.style) {
+                continue;
+            }
             let Some(lod) = self.skinned_models[d.model].lods.get(d.lod) else {
                 continue;
             };
@@ -1053,34 +1071,55 @@ fn make_pipelines(
         "vs_skinned",
         &[Some(skinned_layout())],
     );
-    let skinned = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("metallic skinned"),
-        layout: Some(&skinned_layout_main),
-        vertex: wgpu::VertexState {
-            module: &scene_module,
-            entry_point: Some("vs_skinned"),
-            compilation_options: Default::default(),
-            buffers: &[Some(skinned_layout())],
-        },
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        },
-        depth_stencil: Some(depth(true, wgpu::CompareFunction::Less)),
-        multisample,
-        fragment: Some(wgpu::FragmentState {
-            module: &scene_module,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
+    let skinned_pipeline = |label: &str, vs: &str, fs: &str, cull: wgpu::Face| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&skinned_layout_main),
+            vertex: wgpu::VertexState {
+                module: &scene_module,
+                entry_point: Some(vs),
+                compilation_options: Default::default(),
+                buffers: &[Some(skinned_layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(cull),
+                ..Default::default()
+            },
+            depth_stencil: Some(depth(true, wgpu::CompareFunction::Less)),
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &scene_module,
+                entry_point: Some(fs),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let skinned = skinned_pipeline(
+        "metallic skinned",
+        "vs_skinned",
+        "fs_main",
+        wgpu::Face::Back,
+    );
+    let skinned_toon = skinned_pipeline(
+        "metallic skinned toon",
+        "vs_skinned",
+        "fs_toon",
+        wgpu::Face::Back,
+    );
+    // Inverted hull: only the pushed-out back faces show, around the silhouette and creases.
+    let skinned_outline = skinned_pipeline(
+        "metallic skinned outline",
+        "vs_outline",
+        "fs_outline",
+        wgpu::Face::Front,
+    );
     Pipelines {
         sky,
         opaque: scene_pipeline("metallic opaque", None, true),
@@ -1091,6 +1130,8 @@ fn make_pipelines(
         ),
         shadow,
         skinned,
+        skinned_toon,
+        skinned_outline,
         skinned_shadow,
     }
 }

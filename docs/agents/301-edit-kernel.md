@@ -103,3 +103,16 @@ proves that a later virtual CFrame property still rejects the complete batch wit
 
 The earlier 1,005-test/Clippy/CI result at `4447974` is historical evidence for the old base. Fresh merged-source
 focused/workspace/Clippy/license/format gates are pending; compilation is held for the coordinator's next slot.
+
+Before those gates, main advanced further to exact `d1eeccee2c3d46ca61921baffa562af4bd9472e8`. PR 313 adds the
+actual stored `Value::CFrame(Box<CFrame>)` and PivotOffset/WorldPivot properties; this differs from the earlier
+standalone-only `abef7fc` source. A second normal merge is necessary before validation. The exhaustive edit value
+conversion/snapshot paths now retain boxed CFrames, request equality compares all twelve floating-point bit patterns,
+and limits include the separately owned CFrame payload, not only its Box pointer/native enum metadata.
+
+Regressions cover stored-transform Create/serialization/replica replay alongside stable PrimaryPart references;
+all twelve NaN/+infinity/-infinity components rejecting a late batch without values/cursor/signal changes; exact
+request identity including signed zero; and boxed payload bytes enforcing both request rejection and history
+eviction. The virtual BasePart.CFrame rejection case remains correct. Low-level Set continues delegating to
+World::set, without adding hidden-property policy or high-level transform normalization/bookkeeping. All fresh
+merged-source gates remain pending; no prior-base CI result is claimed for this update.

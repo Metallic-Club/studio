@@ -17,7 +17,10 @@ use super::control::{
     CONTROL_COUNT, Control, ControlKind, DEVICE_SLOTS, Device, DeviceKind, InputQueue,
     QUEUE_CAPACITY, RawEvent, RawSource,
 };
+use super::glyph::{GamepadStyle, Glyph, slot_glyph};
+use super::overrides::{PlayerOverrides, binding_device, binding_slot};
 use metallic_core::{ChangeCursor, Changes, InstanceId, World};
+use std::cell::OnceCell;
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 
@@ -88,6 +91,8 @@ struct CompiledAction {
     role: Role,
     trigger: Trigger,
     active: bool,
+    /// The player made this Bool action a toggle (spec 11.1).
+    toggle: bool,
     bindings: Range<usize>,
     instance: Option<InstanceId>,
     /// A script handler answered `Sink` for this action's press.
@@ -100,7 +105,13 @@ struct CompiledAction {
     // State.
     value: [f32; 3],
     emitted: [f32; 3],
+    /// The action's state (for a toggle: the latched state).
     down: bool,
+    /// The bindings' combined state before the toggle.
+    raw_down: bool,
+    /// Press edges so far (wrapping); lets a caller notice a press that was released again
+    /// within the same frame.
+    presses: u32,
     down_since: f64,
     hold_fired: bool,
     last_tap_release: f64,
@@ -166,6 +177,14 @@ pub struct InputRuntime {
     order_counter: u64,
     warnings: Vec<String>,
     character: [Option<ActionId>; 5],
+    // Player overrides (spec 8.4) and glyphs (spec 9).
+    /// The creator's config, before overrides.
+    base: InputConfig,
+    overrides: PlayerOverrides,
+    gamepad_style: GamepadStyle,
+    /// Per action and device kind: the glyphs of its bindings, built on first use.
+    glyphs: Vec<[OnceCell<Vec<Glyph>>; 3]>,
+    glyph_changes: u64,
 }
 
 impl Default for InputRuntime {
@@ -233,6 +252,11 @@ impl InputRuntime {
             order_counter: 1 << 32,
             warnings: Vec::new(),
             character: [None; 5],
+            base: InputConfig::default(),
+            overrides: PlayerOverrides::default(),
+            gamepad_style: GamepadStyle::Letters,
+            glyphs: Vec::new(),
+            glyph_changes: 0,
         };
         rt.load(config);
         rt
@@ -247,9 +271,56 @@ impl InputRuntime {
     }
 
     /// Replaces the contexts. Raw control state and the state of actions that exist both before
-    /// and after (matched by path) are kept, so a held key does not fire a second press.
+    /// and after (matched by path) are kept, so a held key does not fire a second press. The
+    /// player's overrides ([`set_overrides`](Self::set_overrides)) are applied on top.
     pub fn load(&mut self, config: &InputConfig) {
-        let old: Vec<(String, bool, f64, bool, f64)> = self
+        self.base = config.clone();
+        let effective = self.overrides.apply(config);
+        self.compile(&effective);
+    }
+
+    /// Replaces the player's overrides (rebound controls, toggles, stick settings, assists) and
+    /// applies them at once; held actions stay held. Glyphs are rebuilt.
+    pub fn set_overrides(&mut self, overrides: PlayerOverrides) {
+        self.overrides = overrides;
+        let base = std::mem::take(&mut self.base);
+        self.load(&base);
+    }
+
+    /// The player's overrides in use.
+    pub fn overrides(&self) -> &PlayerOverrides {
+        &self.overrides
+    }
+
+    /// The creator's config (from the scene, before the player's overrides).
+    pub fn base_config(&self) -> &InputConfig {
+        &self.base
+    }
+
+    /// Sets the face-button art for gamepad glyphs; glyphs are rebuilt when it changes.
+    pub fn set_gamepad_style(&mut self, style: GamepadStyle) {
+        if style != self.gamepad_style {
+            self.gamepad_style = style;
+            self.reset_glyphs();
+        }
+    }
+
+    /// The face-button art in use.
+    pub fn gamepad_style(&self) -> GamepadStyle {
+        self.gamepad_style
+    }
+
+    fn reset_glyphs(&mut self) {
+        for cells in &mut self.glyphs {
+            for cell in cells.iter_mut() {
+                cell.take();
+            }
+        }
+        self.glyph_changes += 1;
+    }
+
+    fn compile(&mut self, config: &InputConfig) {
+        let old: Vec<(String, bool, f64, bool, f64, bool)> = self
             .actions
             .iter()
             .map(|a| {
@@ -259,6 +330,7 @@ impl InputRuntime {
                     a.down_since,
                     a.hold_fired,
                     a.last_tap_release,
+                    a.raw_down,
                 )
             })
             .collect();
@@ -348,6 +420,7 @@ impl InputRuntime {
                     role: a.role,
                     trigger: a.trigger,
                     active,
+                    toggle: a.toggle && a.can_toggle && a.ty == ActionType::Bool,
                     bindings: start..self.bindings.len(),
                     instance: a.instance,
                     script_sink: false,
@@ -359,6 +432,8 @@ impl InputRuntime {
                     value: [0.0; 3],
                     emitted: [0.0; 3],
                     down: before.is_some_and(|o| o.1) && active,
+                    raw_down: before.is_some_and(|o| o.5) && active,
+                    presses: 0,
                     down_since: before.map_or(0.0, |o| o.2),
                     hold_fired: before.is_some_and(|o| o.3),
                     last_tap_release: before.map_or(f64::NEG_INFINITY, |o| o.4),
@@ -383,6 +458,10 @@ impl InputRuntime {
             self.find_action(&format!("{CHARACTER_CONTROLS}/Look")),
             self.find_action(&format!("{CHARACTER_CONTROLS}/Zoom")),
         ];
+        self.glyphs.clear();
+        self.glyphs
+            .resize_with(self.actions.len(), Default::default);
+        self.glyph_changes += 1;
         self.dirty_all = true;
     }
 
@@ -767,6 +846,79 @@ impl InputRuntime {
         self.last_device
     }
 
+    /// Press edges of an action so far (wrapping). Compare with an earlier value to notice a
+    /// press, even one released again within the frame.
+    pub fn presses(&self, action: ActionId) -> u32 {
+        self.actions.get(action.0 as usize).map_or(0, |a| a.presses)
+    }
+
+    /// True when the action is a toggle for the player.
+    pub fn is_toggle(&self, action: ActionId) -> bool {
+        self.actions
+            .get(action.0 as usize)
+            .is_some_and(|a| a.toggle)
+    }
+
+    /// Releases every latched toggle (the character died, spec 11.1). Fires the release edges.
+    pub fn clear_toggles(&mut self, now: f64) {
+        let t = if now.is_finite() {
+            now.max(self.clock)
+        } else {
+            self.clock
+        };
+        for a in 0..self.actions.len() {
+            if self.actions[a].toggle && self.actions[a].down {
+                self.release(a, t);
+            }
+        }
+    }
+
+    /// The bindings of an action after the player's overrides.
+    pub fn bindings(&self, action: ActionId) -> impl Iterator<Item = &BindingDef> + '_ {
+        let range = self
+            .actions
+            .get(action.0 as usize)
+            .map_or(0..0, |a| a.bindings.clone());
+        self.bindings[range].iter().map(|b| &b.def)
+    }
+
+    /// The glyphs of every binding of an action on a device (spec 9.1 `GetGlyphs`); one
+    /// "Unbound" glyph when it has none there. Built on the first call after a change and cached,
+    /// so later calls allocate nothing. An unknown action gives an empty slice.
+    pub fn glyphs(&self, action: ActionId, device: DeviceKind) -> &[Glyph] {
+        let Some(cells) = self.glyphs.get(action.0 as usize) else {
+            return &[];
+        };
+        cells[device.index()].get_or_init(|| {
+            let toggle = self.is_toggle(action);
+            let mut out: Vec<Glyph> = self
+                .bindings(action)
+                .filter(|b| binding_device(b) == Some(device))
+                .map(|b| slot_glyph(&binding_slot(b), device, self.gamepad_style))
+                .collect();
+            if out.is_empty() {
+                out.push(Glyph::unbound(device));
+            }
+            for g in &mut out {
+                g.toggle = toggle;
+            }
+            out
+        })
+    }
+
+    /// The glyph of an action's first binding on `device`, or on the last-used device
+    /// (spec 9.1 `GetGlyph`). See [`glyphs`](Self::glyphs).
+    pub fn glyph(&self, action: ActionId, device: Option<DeviceKind>) -> Option<&Glyph> {
+        self.glyphs(action, device.unwrap_or(self.last_device))
+            .first()
+    }
+
+    /// Counts changes that can change a glyph: the last-used device, a rebind, a new glyph
+    /// style. Compare with an earlier value to know when to fire `GlyphChanged`.
+    pub fn glyph_changes(&self) -> u64 {
+        self.glyph_changes + self.device_changes
+    }
+
     /// How often [`last_device`](Self::last_device) changed; compare with an earlier value to
     /// notice a change.
     pub fn device_changes(&self) -> u64 {
@@ -1044,6 +1196,17 @@ impl InputRuntime {
             } && v > 0.0;
             down |= b.pressed;
         }
+        let act = &mut self.actions[a];
+        let was_raw = act.raw_down;
+        act.raw_down = down;
+        if act.toggle {
+            // A press flips the latched state; a release does nothing.
+            down = if down && !was_raw {
+                !act.down
+            } else {
+                act.down
+            };
+        }
         if down != self.actions[a].down {
             if down {
                 self.press(a, t);
@@ -1099,6 +1262,7 @@ impl InputRuntime {
     fn press(&mut self, a: usize, t: f64) {
         let act = &mut self.actions[a];
         act.down = true;
+        act.presses = act.presses.wrapping_add(1);
         act.down_since = t;
         act.hold_fired = false;
         act.value[0] = 1.0;

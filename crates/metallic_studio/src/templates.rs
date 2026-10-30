@@ -4,6 +4,9 @@
 //! next to the project files. Project settings metadata lives in `metallic.toml` as `[[setting]]`
 //! and survives creation/renaming. Catalog metadata, previews and root test fixtures stay in
 //! the template. Legacy settings in `template.toml` are migrated into the project file.
+//!
+//! The Baseplate template is also compiled into Studio ([`builtin_baseplate`]), so a game can be
+//! created even when the templates folder is missing.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -26,13 +29,44 @@ pub struct TemplateInfo {
     pub name: String,
     /// One or two sentences for the card.
     pub description: String,
-    /// Path of the preview image (may not exist; the UI shows a placeholder).
+    /// Path of the preview image (may not exist; the UI shows a placeholder). Empty for a
+    /// compiled-in template.
     pub preview_path: PathBuf,
-    /// The template folder.
+    /// The template folder. Empty for a compiled-in template.
     pub dir: PathBuf,
     /// Sort key: lower comes first.
     pub order: i64,
+    /// The template's files when they are compiled into Studio instead of read from `dir`.
+    pub embedded: Option<&'static [EmbeddedFile]>,
 }
+
+/// One file of a template that is compiled into Studio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbeddedFile {
+    /// Path relative to the template folder, with `/` separators.
+    pub path: &'static str,
+    /// The file's contents.
+    pub bytes: &'static [u8],
+}
+
+/// Id of the Baseplate template, which Studio always offers.
+pub const BASEPLATE_ID: &str = "baseplate";
+
+/// `templates/baseplate`, compiled in. A test keeps it byte-identical to the folder.
+const BASEPLATE_FILES: &[EmbeddedFile] = &[
+    EmbeddedFile {
+        path: TEMPLATE_FILE,
+        bytes: include_bytes!("../../../templates/baseplate/template.toml"),
+    },
+    EmbeddedFile {
+        path: PROJECT_FILE,
+        bytes: include_bytes!("../../../templates/baseplate/metallic.toml"),
+    },
+    EmbeddedFile {
+        path: "main.mscene",
+        bytes: include_bytes!("../../../templates/baseplate/main.mscene"),
+    },
+];
 
 #[derive(Deserialize)]
 struct TemplateFile {
@@ -59,10 +93,7 @@ fn read_template(dir: &Path) -> Result<TemplateInfo, String> {
     let file = dir.join(TEMPLATE_FILE);
     let text =
         fs::read_to_string(&file).map_err(|e| format!("cannot read {TEMPLATE_FILE}: {e}"))?;
-    let parsed: TemplateFile = toml::from_str(&text).map_err(|e| e.message().to_owned())?;
-    if parsed.id.trim().is_empty() || parsed.name.trim().is_empty() {
-        return Err("`id` and `name` must not be empty".to_owned());
-    }
+    let parsed = parse_template_file(&text)?;
     Ok(TemplateInfo {
         id: parsed.id,
         name: parsed.name,
@@ -70,7 +101,66 @@ fn read_template(dir: &Path) -> Result<TemplateInfo, String> {
         preview_path: dir.join(parsed.preview),
         dir: dir.to_path_buf(),
         order: parsed.order,
+        embedded: None,
     })
+}
+
+/// Parses and checks a `template.toml`; `Err` carries a short reason for the log.
+fn parse_template_file(text: &str) -> Result<TemplateFile, String> {
+    let parsed: TemplateFile = toml::from_str(text).map_err(|e| e.message().to_owned())?;
+    if parsed.id.trim().is_empty() || parsed.name.trim().is_empty() {
+        return Err("`id` and `name` must not be empty".to_owned());
+    }
+    Ok(parsed)
+}
+
+/// The compiled-in `template.toml` of `files` as text, if there is one.
+fn embedded_catalog(files: &[EmbeddedFile]) -> Option<Result<&str, std::str::Utf8Error>> {
+    files
+        .iter()
+        .find(|file| file.path == TEMPLATE_FILE)
+        .map(|file| std::str::from_utf8(file.bytes))
+}
+
+/// The Baseplate template compiled into Studio: a grey floor and a spawn point. `None` (with a
+/// warning in the log) only if its compiled-in `template.toml` is broken, which a test rules out.
+pub fn builtin_baseplate() -> Option<TemplateInfo> {
+    let parsed = match embedded_catalog(BASEPLATE_FILES) {
+        Some(Ok(text)) => parse_template_file(text),
+        Some(Err(e)) => Err(e.to_string()),
+        None => Err(format!("{TEMPLATE_FILE} is missing")),
+    };
+    match parsed {
+        Ok(parsed) => Some(TemplateInfo {
+            id: parsed.id,
+            name: parsed.name,
+            description: parsed.description,
+            preview_path: PathBuf::new(),
+            dir: PathBuf::new(),
+            order: parsed.order,
+            embedded: Some(BASEPLATE_FILES),
+        }),
+        Err(reason) => {
+            log::warn!("built-in Baseplate template is broken: {reason}");
+            None
+        }
+    }
+}
+
+/// Adds the compiled-in Baseplate to `templates` unless one with its id is already there, so
+/// Studio can always create a game. Keeps the `order` sorting of [`list_templates`].
+pub fn with_builtin(mut templates: Vec<TemplateInfo>) -> Vec<TemplateInfo> {
+    if !templates.iter().any(|t| t.id == BASEPLATE_ID)
+        && let Some(baseplate) = builtin_baseplate()
+    {
+        templates.push(baseplate);
+        sort_templates(&mut templates);
+    }
+    templates
+}
+
+fn sort_templates(templates: &mut [TemplateInfo]) {
+    templates.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.name.cmp(&b.name)));
 }
 
 /// Lists the templates inside `dir`, sorted by `order` (then name). Folders with a missing or
@@ -91,7 +181,7 @@ pub fn list_templates(dir: &Path) -> Vec<TemplateInfo> {
             Err(reason) => log::warn!("skipping template folder {}: {reason}", path.display()),
         }
     }
-    found.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.name.cmp(&b.name)));
+    sort_templates(&mut found);
     found
 }
 
@@ -178,16 +268,32 @@ fn same_relative_path(left: &Path, right: &Path) -> bool {
 
 fn creation_metadata(template: &TemplateInfo) -> Result<CreationMetadata, StudioError> {
     let path = template.dir.join(TEMPLATE_FILE);
-    let table = match fs::read_to_string(&path) {
-        Ok(text) => text
+    let text = match template.embedded {
+        Some(files) => match embedded_catalog(files) {
+            Some(Ok(text)) => Some(text.to_owned()),
+            Some(Err(error)) => {
+                return Err(StudioError::Metadata {
+                    path,
+                    message: error.to_string(),
+                });
+            }
+            None => None,
+        },
+        None => match fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            // TemplateInfo can also be constructed directly, without a catalog file.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(StudioError::io(&path, error)),
+        },
+    };
+    let table = match text {
+        Some(text) => text
             .parse::<toml::Table>()
             .map_err(|error| StudioError::Metadata {
                 path: path.clone(),
                 message: error.message().to_owned(),
             })?,
-        // TemplateInfo can also be constructed directly, without a catalog file.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
-        Err(error) => return Err(StudioError::io(&path, error)),
+        None => toml::Table::new(),
     };
     let mut excluded_files = [TEMPLATE_FILE, "preview.png", "preview.webm"]
         .into_iter()
@@ -216,6 +322,46 @@ fn creation_metadata(template: &TemplateInfo) -> Result<CreationMetadata, Studio
     })
 }
 
+/// True for template entries that stay out of a new project: the root `tests/` directory and
+/// the catalog files in `excluded_files` (never `metallic.toml`).
+fn is_excluded(relative_path: &Path, is_dir: bool, excluded_files: &[PathBuf]) -> bool {
+    if is_dir {
+        return same_relative_path(relative_path, Path::new("tests"));
+    }
+    !same_relative_path(relative_path, Path::new(PROJECT_FILE))
+        && excluded_files
+            .iter()
+            .any(|path| same_relative_path(path, relative_path))
+}
+
+/// Writes compiled-in template files into `to`, with the same exclusions as [`copy_tree`].
+fn write_embedded(
+    files: &[EmbeddedFile],
+    to: &Path,
+    excluded_files: &[PathBuf],
+) -> Result<(), StudioError> {
+    fs::create_dir_all(to).map_err(|e| StudioError::io(to, e))?;
+    for file in files {
+        let Some(relative_path) = relative_asset(Path::new(file.path)) else {
+            log::warn!("skipping compiled-in template file {}", file.path);
+            continue;
+        };
+        let in_tests = relative_path
+            .components()
+            .next()
+            .is_some_and(|first| is_excluded(Path::new(first.as_os_str()), true, excluded_files));
+        if in_tests || is_excluded(&relative_path, false, excluded_files) {
+            continue;
+        }
+        let dst = to.join(&relative_path);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(|e| StudioError::io(parent, e))?;
+        }
+        fs::write(&dst, file.bytes).map_err(|e| StudioError::io(&dst, e))?;
+    }
+    Ok(())
+}
+
 /// Copies project content while excluding catalog files and the root template test directory.
 fn copy_tree(
     from: &Path,
@@ -236,12 +382,8 @@ fn copy_tree(
             );
             continue;
         }
-        if (kind.is_dir() && same_relative_path(&relative_path, Path::new("tests")))
-            || (kind.is_file()
-                && !same_relative_path(&relative_path, Path::new(PROJECT_FILE))
-                && excluded_files
-                    .iter()
-                    .any(|path| same_relative_path(path, &relative_path)))
+        if (kind.is_dir() || kind.is_file())
+            && is_excluded(&relative_path, kind.is_dir(), excluded_files)
         {
             continue;
         }
@@ -312,6 +454,7 @@ fn clear_dir(dir: &Path) -> std::io::Result<()> {
 /// `template.toml` settings migrate to `metallic.toml`; conflicting dual definitions fail
 /// with [`StudioError::Metadata`] and the same rollback as a copy failure.
 /// A directly constructed [`TemplateInfo`] does not require a catalog file; its relative preview is still excluded.
+/// A compiled-in template ([`TemplateInfo::embedded`]) is written from its files by the same rules.
 pub fn create_from_template(
     template: &TemplateInfo,
     target: &Path,
@@ -323,13 +466,16 @@ pub fn create_from_template(
     }
     let metadata = creation_metadata(template)?;
     let existed = target.exists();
-    let result = copy_tree(
-        &template.dir,
-        target,
-        Path::new(""),
-        &metadata.excluded_files,
-    )
-    .and_then(|()| {
+    let written = match template.embedded {
+        Some(files) => write_embedded(files, target, &metadata.excluded_files),
+        None => copy_tree(
+            &template.dir,
+            target,
+            Path::new(""),
+            &metadata.excluded_files,
+        ),
+    };
+    let result = written.and_then(|()| {
         set_project_name(
             target,
             project_name.trim(),

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Usage text printed for bad arguments.
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
 [--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
-[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>]";
+[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist]";
 
 /// Parsed arguments.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +34,11 @@ pub struct Args {
     /// `metallic_runtime::input::ScriptedSource`). With a script every frame lasts 1/60 s of
     /// input time, so a run plays the same way every time.
     pub input_script: Option<PathBuf>,
+    /// Ignore the player's saved controls (and do not save changes).
+    pub no_overrides: bool,
+    /// Start with the Player menu open: `main`, or a Controls tab (`keyboard`, `gamepad`,
+    /// `assist`).
+    pub menu: Option<String>,
 }
 
 impl Args {
@@ -51,6 +56,8 @@ impl Args {
             captures: Vec::new(),
             capture_view: None,
             input_script: None,
+            no_overrides: false,
+            menu: None,
         };
         while let Some(a) = it.next() {
             let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
@@ -61,6 +68,16 @@ impl Args {
                     args.input_script = Some(PathBuf::from(value("--input-script")?))
                 }
                 "--fps" => args.fps = true,
+                "--no-overrides" => args.no_overrides = true,
+                "--menu" => {
+                    let v = value("--menu")?;
+                    if !matches!(v.as_str(), "main" | "keyboard" | "gamepad" | "assist") {
+                        return Err(format!(
+                            "unknown menu page `{v}` (main, keyboard, gamepad or assist)"
+                        ));
+                    }
+                    args.menu = Some(v);
+                }
                 "--autopilot" => args.autopilot = true,
                 "--frames" => {
                     let v = value("--frames")?;
@@ -150,6 +167,15 @@ mod tests {
         let a = parse("p --capture-view 1,2,3,4,5,-6").unwrap();
         assert_eq!(a.capture_view, Some([1.0, 2.0, 3.0, 4.0, 5.0, -6.0]));
         assert!(parse("p --capture-view 1,2,3").is_err());
+    }
+
+    #[test]
+    fn parses_the_menu_and_override_options() {
+        let a = parse("p --menu gamepad --no-overrides").unwrap();
+        assert_eq!(a.menu.as_deref(), Some("gamepad"));
+        assert!(a.no_overrides);
+        assert!(parse("p --menu shop").is_err());
+        assert_eq!(parse("p").unwrap().menu, None);
     }
 
     #[test]

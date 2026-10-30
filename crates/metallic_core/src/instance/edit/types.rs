@@ -1,6 +1,6 @@
 //! Values and limits for the edit-only command boundary.
 
-use crate::{Color3, CoreError, UDim2, Vec3};
+use crate::{CFrame, Color3, CoreError, UDim2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -51,6 +51,8 @@ pub enum EditValue {
     UDim2(UDim2),
     /// A live stable reference, or no target. Raw instance handles are not accepted.
     Ref(Option<EditId>),
+    /// Stored transform value; boxed as in World to avoid enlarging every property value.
+    CFrame(Box<CFrame>),
 }
 
 impl PartialEq for EditValue {
@@ -82,6 +84,11 @@ impl PartialEq for EditValue {
                 ]
             }
             (Self::Ref(a), Self::Ref(b)) => a == b,
+            (Self::CFrame(a), Self::CFrame(b)) => a
+                .components()
+                .into_iter()
+                .zip(b.components())
+                .all(|(a, b)| a.to_bits() == b.to_bits()),
             _ => false,
         }
     }
