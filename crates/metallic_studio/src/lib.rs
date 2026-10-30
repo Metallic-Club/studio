@@ -12,6 +12,7 @@
 pub mod app;
 pub mod error;
 pub mod github_auth;
+pub mod input_actions;
 pub mod png_image;
 pub mod recent;
 pub mod screenshot;
