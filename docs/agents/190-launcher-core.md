@@ -46,6 +46,6 @@ Claimed after verifying no blockers/fresh competing claim and merged plan PR 188
 
 ## Next / open questions
 
-Implementation, local gates and independent source review are complete. Push/open the PR and mark issue 190 for
-review; CI remains pending. No merges. Later tasks build the shell and consume these APIs. No production origin or
-credentials are supplied by this change.
+Implementation, local gates and independent source review are complete. [PR 238](https://github.com/Metallic-Club/studio/pull/238)
+is open and issue 190 is marked for review; CI remains pending. No merges. Later tasks build the shell and consume
+these APIs. No production origin or credentials are supplied by this change.
