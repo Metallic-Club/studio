@@ -78,9 +78,13 @@ lib.rs re-export overlap; this module otherwise has its own files and adds no de
 - `cargo fmt --all --check`, diff whitespace check and `cargo deny check licenses`: passed.
 - Independent C2 and A1 compatibility source reviews found no additional actionable issue. Root's separate private
   four-foundation composition has its own pinned evidence; it is not this branch's full-workspace gate.
-- Refreshed full test binaries and the actual full serial workspace suite after the helper fix: pending.
+- Final guarded lane116 `cargo test --workspace -j 4 -- --test-threads=1` at `7c05e16`: **1,005 passed,
+  zero failed, six existing manual probes ignored**. The command rebuilt necessary local artifacts first, then
+  completed all runtime/Parkour, Lua and Studio tests in the coordinator-reserved timing window.
+- The strict Clippy source is identical to this tested source; the remaining commit changes only this progress note.
 
 ## Next
 
-Refresh test binaries and run the actual full serial workspace suite in the coordinated quiet window. Update this
-note with exact results before publishing a PR. No own merge or acceptance claim.
+Publish the reviewed, tested branch as the single PR for issue 301, attach it to the root task, and leave repository
+CI/lead review visible. No own merge or acceptance claim. Networking, persistence and Studio client integration remain
+separate multiplayer foundations.
