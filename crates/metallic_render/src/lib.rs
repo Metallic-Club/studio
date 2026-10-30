@@ -6,6 +6,10 @@
 //! sky for ambient light, distance fog, optional 4x MSAA and a sorted blended pass for
 //! transparent parts. The device is created by [`RenderContext`] or borrowed from a host
 //! such as the Studio editor.
+//!
+//! Scene sync and renderer sync/render/prewarm entrypoints export optional static CPU scopes via
+//! `metallic_profiling`. Tracy hosts must initialize the client before engine work. Elapsed CPU
+//! scopes can include waits; they are not GPU timestamp measurements or frame-budget integration.
 #![warn(missing_docs)]
 
 pub mod camera;

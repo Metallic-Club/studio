@@ -396,6 +396,7 @@ impl ScriptVm {
         globals: Vec<(&str, Value)>,
         owner: u64,
     ) -> Result<(), ScriptError> {
+        metallic_profiling::backend_scope!("script.run");
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),
         };
@@ -432,6 +433,7 @@ impl ScriptVm {
     /// [`STEP_BUDGET_SEC`] of work per call). Errors in those threads are reported to
     /// the output sink.
     pub fn step(&mut self, now: f64) {
+        metallic_profiling::backend_scope!("script.step");
         self.sched.step(now);
     }
 

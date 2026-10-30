@@ -10,9 +10,15 @@ metallic_core.workspace = true
 metallic_physics.workspace = true
 metallic_script.workspace = true
 metallic_render.workspace = true
+metallic_profiling.workspace = true
 # egui's bundled fonts (OFL-1.1 / Ubuntu-font-1.0, Ruling R11; texts in LICENSES/).
 egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
 wgpu = "30.0.1"
 toml = "1.1.8"
+
+[features]
+default = []
+profiling-puffin = ["metallic_profiling/puffin"]
+profiling-tracy = ["metallic_profiling/tracy"]

@@ -348,6 +348,7 @@ impl Renderer {
     /// Only parts whose data changed are re-uploaded; an unchanged world costs one read per
     /// property and no GPU work.
     pub fn sync(&mut self, world: &World) {
+        metallic_profiling::backend_scope!("render.sync");
         self.scene.sync(world);
     }
 
@@ -458,6 +459,7 @@ impl Renderer {
     /// [`Renderer::new`]) as seen by `camera`. `size` is the target size in pixels; a zero size
     /// (a minimised window) draws nothing.
     pub fn render(&mut self, target: &wgpu::TextureView, camera: &Camera, size: (u32, u32)) {
+        metallic_profiling::backend_scope!("render.cpu");
         if size.0 == 0 || size.1 == 0 {
             return;
         }
@@ -623,6 +625,7 @@ impl Renderer {
     /// compilation, render-target creation and instance-buffer growth happen now instead of in
     /// the first visible frame. Call after [`Renderer::sync`].
     pub fn prewarm(&mut self, size: (u32, u32)) {
+        metallic_profiling::backend_scope!("render.prewarm");
         if size.0 == 0 || size.1 == 0 {
             return;
         }

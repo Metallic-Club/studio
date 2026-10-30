@@ -10,6 +10,12 @@
 //! Simulation runs at a fixed [`TICK_RATE`] (60 Hz) whatever the display rate, so a headless run
 //! of N frames of 1/60 s always does the same thing. See [`Game::frame`] for the order of work
 //! inside a tick.
+//!
+//! [`profiling`] re-exports bounded CPU recording and explicit budget policies. Runtime features
+//! `profiling-puffin` and `profiling-tracy` forward optional backend export; select at most one.
+//! Tracy hosts must initialize their client before engine or third-party profiling code runs.
+//! [`Game::set_cpu_profiling_enabled`] enables bounded simulation-interval reports, excluding the
+//! separate render/GUI calls. Missing required stages prevent an overall budget pass.
 #![warn(missing_docs)]
 
 mod camera_controller;
@@ -18,8 +24,14 @@ pub mod gui;
 mod input;
 mod project;
 
+/// Bounded CPU scopes, availability-aware reports and proposed budget policies.
+pub use metallic_profiling as profiling;
+
 pub use camera_controller::CameraController;
-pub use game::{FrameOutput, Game, MAX_FRAME_DT, RUN_MULTIPLIER, StdoutSink, TICK, TICK_RATE};
+pub use game::{
+    FrameOutput, Game, MAX_FRAME_DT, RUN_MULTIPLIER, SIMULATION_PROFILE_CAPACITY, StdoutSink, TICK,
+    TICK_RATE,
+};
 pub use input::{Action, FrameInput, InputState};
 pub use project::ProjectConfig;
 

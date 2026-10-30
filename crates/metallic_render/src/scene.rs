@@ -75,6 +75,7 @@ impl Scene {
     /// (under every root when the world has no `Workspace`); later calls re-read only changed
     /// instances. Returns true when anything changed; [`Scene::version`] then increases.
     pub fn sync(&mut self, world: &World) -> bool {
+        metallic_profiling::backend_scope!("render.scene_sync");
         let journal = self.cursor.map(|c| world.changes_since(c));
         match journal {
             Some((Changes::Ids(ids), cursor)) => {
