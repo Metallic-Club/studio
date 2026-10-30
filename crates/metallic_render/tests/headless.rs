@@ -120,3 +120,42 @@ fn low_quality_renders_and_resizing_is_safe() {
     let px = r.capture(&camera(), SIZE).expect("capture");
     assert!(distinct_colours(&px) > 200);
 }
+
+#[test]
+fn straight_down_camera_draws_the_part() {
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let mut r = Renderer::new(&ctx, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let top_down = Camera {
+        position: Vec3::new(0.0, 50.0, 0.0),
+        look_at: Vec3::ZERO,
+        fov_deg: 60.0,
+    };
+    // Sky only, from the same camera: the reference for "nothing drawn".
+    r.sync(&World::new_with_services());
+    let empty = r.capture(&top_down, SIZE).expect("capture");
+
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").expect("workspace");
+    let part = w.create("Part", Some(ws)).expect("part");
+    w.set(part, "Size", Value::Vector3(V3::new(20.0, 1.0, 20.0)))
+        .expect("size");
+    w.set(
+        part,
+        "Color",
+        Value::Color3(Color3::new(139.0, 108.0, 214.0)),
+    )
+    .expect("color");
+    r.sync(&w);
+    let px = r.capture(&top_down, SIZE).expect("capture");
+
+    let centre = ((SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2) * 4) as usize;
+    assert_ne!(
+        px[centre..centre + 3],
+        empty[centre..centre + 3],
+        "the part is not drawn at the centre"
+    );
+    assert!(distinct_colours(&px) > 10, "frame looks blank");
+}
