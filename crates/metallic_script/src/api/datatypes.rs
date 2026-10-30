@@ -6,6 +6,7 @@ use std::rc::Rc;
 use metallic_core::{Color3, UDim2, Value as CoreValue, ValueType, Vec3};
 use mlua::{Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods, UserDataRef, Value};
 
+use super::cframe::{LuaCFrame, cframe};
 use super::errors;
 use super::instance::LuaInstance;
 use super::{ApiState, lua_error};
@@ -321,6 +322,7 @@ impl ApiState {
             CoreValue::Color3(c) => Value::UserData(lua.create_userdata(LuaColor3(c))?),
             CoreValue::UDim2(u) => Value::UserData(lua.create_userdata(LuaUDim2(u))?),
             CoreValue::Ref(Some(id)) => Value::UserData(self.wrap(lua, id)?),
+            CoreValue::CFrame(cf) => Value::UserData(lua.create_userdata(LuaCFrame(*cf))?),
         })
     }
 }
@@ -337,6 +339,7 @@ pub(crate) fn lua_to_value(value: &Value, ty: ValueType, prop: &str) -> mlua::Re
         (ValueType::Vector3, v) => vector(v).map(CoreValue::Vector3),
         (ValueType::Color3, v) => color(v).map(CoreValue::Color3),
         (ValueType::UDim2, v) => udim2(v).map(CoreValue::UDim2),
+        (ValueType::CFrame, v) => cframe(v).map(|cf| CoreValue::CFrame(Box::new(cf))),
         (ValueType::Ref, Value::Nil) => Some(CoreValue::Ref(None)),
         (ValueType::Ref, Value::UserData(ud)) => ud
             .borrow::<LuaInstance>()
@@ -363,6 +366,7 @@ pub(crate) fn lua_to_value(value: &Value, ty: ValueType, prop: &str) -> mlua::Re
                 && u.y_scale.is_finite()
                 && u.y_offset.is_finite()
         }
+        CoreValue::CFrame(cf) => cf.is_finite(),
         _ => true,
     };
     if finite {

@@ -383,6 +383,18 @@ static ROTATION_ORDERS: [&str; 6] = {
     names
 };
 
+/// `Enum.NormalId` item names (used by `BasePart:Resize`).
+static NORMAL_IDS: [&str; 6] = {
+    let all = metallic_core::transform::NormalId::ALL;
+    let mut names = [""; 6];
+    let mut i = 0;
+    while i < 6 {
+        names[i] = all[i].name();
+        i += 1;
+    }
+    names
+};
+
 pub(crate) struct Enums {
     pub(crate) table: Table,
     items: HashMap<(&'static str, &'static str), AnyUserData>,
@@ -408,6 +420,7 @@ impl Enums {
             ("PreferredInput", named(PREFERRED_INPUTS)),
             ("ContextActionPriority", CONTEXT_ACTION_PRIORITIES.to_vec()),
             ("RotationOrder", named(&ROTATION_ORDERS)),
+            ("NormalId", named(&NORMAL_IDS)),
         ];
         let table = lua.create_table()?;
         let mut items = HashMap::new();

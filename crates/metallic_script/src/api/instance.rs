@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use metallic_core::classes::{find_property, is_subclass};
+use metallic_core::transform;
 use metallic_core::{CoreError, InstanceId, Value as CoreValue};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, Table, Thread, UserData, UserDataFields,
@@ -21,8 +22,9 @@ use crate::vm::format_error;
 /// How long `WaitForChild` without a timeout waits before it warns (like Roblox).
 const INFINITE_YIELD_WARN_SEC: f64 = 5.0;
 
-/// Methods that exist only on some classes: `(method, class)`. Everything else in the
-/// method table is available on every instance.
+/// Methods that exist only on some classes: `(method, class)`; a method listed more than once
+/// exists on each of those classes. Everything else in the method table is available on every
+/// instance.
 const CLASS_METHODS: &[(&str, &str)] = &[
     ("GetService", "DataModel"),
     ("GetPlayers", "Players"),
@@ -35,6 +37,16 @@ const CLASS_METHODS: &[(&str, &str)] = &[
     ("FireAllClients", "RemoteEvent"),
     ("GetState", "InputAction"),
     ("GetHoldProgress", "InputAction"),
+    // PVInstance methods: BasePart and Model (PVInstance itself is not a registry class).
+    ("GetPivot", "BasePart"),
+    ("GetPivot", "Model"),
+    ("PivotTo", "BasePart"),
+    ("PivotTo", "Model"),
+    ("Resize", "BasePart"),
+    ("ScaleTo", "Model"),
+    ("GetScale", "Model"),
+    ("GetBoundingBox", "Model"),
+    ("GetExtentsSize", "Model"),
 ];
 
 /// The event named `name` on an instance of `class`, if there is one.
@@ -301,6 +313,10 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             let cf = super::cframe::part_cframe(&*state.world()?, this.id).map_err(core_error)?;
             return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
         }
+        "WorldPivot" if is_subclass(class, "Model") => {
+            let cf = transform::world_pivot(&*state.world()?, this.id).map_err(core_error)?;
+            return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
+        }
         "LocalPlayer" if class == "Players" => {
             let player = match state.context {
                 crate::vm::Context::Client => state.shared.local_player.get(),
@@ -312,10 +328,11 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
     }
     state.check_input_member(class, key)?;
     if let Some(method) = state.methods.get(key) {
-        let allowed = CLASS_METHODS
+        let mut owners = CLASS_METHODS
             .iter()
-            .find(|(name, _)| *name == key)
-            .is_none_or(|(_, owner)| is_subclass(class, owner));
+            .filter(|(name, _)| *name == key)
+            .peekable();
+        let allowed = owners.peek().is_none() || owners.any(|(_, owner)| is_subclass(class, owner));
         if allowed {
             return Ok(Value::Function(method.clone()));
         }
@@ -336,7 +353,7 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             key: (this.id, kind),
         })?));
     }
-    if find_property(class, key).is_some() {
+    if find_property(class, key).is_some_and(|d| !d.hidden) {
         return state.get_property(lua, this.id, key);
     }
     let child = state.world()?.find_first_child(this.id, key);
@@ -364,8 +381,18 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
             super::cframe::set_part_cframe(&mut *this.state.world_mut()?, this.id, cf)
                 .map_err(core_error)
         }
+        "WorldPivot" if is_subclass(class, "Model") => {
+            let cf = cframe(value).ok_or_else(|| {
+                lua_error(format!(
+                    "invalid value for property WorldPivot: expected CFrame, got {}",
+                    value.type_name()
+                ))
+            })?;
+            transform::set_world_pivot(&mut *this.state.world_mut()?, this.id, cf)
+                .map_err(core_error)
+        }
         _ => {
-            let Some(def) = find_property(class, key) else {
+            let Some(def) = find_property(class, key).filter(|d| !d.hidden) else {
                 return if this.state.methods.contains_key(key) || event_kind(class, key).is_some() {
                     Err(lua_error(format!("{key} is read-only")))
                 } else {
@@ -452,7 +479,12 @@ pub(crate) fn methods(
     })?;
     let is_a = lua.create_function(|_, (this, class): (UserDataRef<LuaInstance>, String)| {
         this.live()?;
-        Ok(this.state.world()?.is_a(this.id, &class))
+        let world = this.state.world()?;
+        Ok(if class == "PVInstance" {
+            world.is_a(this.id, "BasePart") || world.is_a(this.id, "Model")
+        } else {
+            world.is_a(this.id, &class)
+        })
     })?;
     let destroy = lua.create_function(|_, this: UserDataRef<LuaInstance>| {
         let mut world = this.state.world_mut()?;
