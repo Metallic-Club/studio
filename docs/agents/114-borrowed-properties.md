@@ -72,7 +72,7 @@ engine frame-rate target, and existing physics/render readers need separate migr
 - `cargo deny check licenses`: passed after the rebase (one existing unused MPL-2.0 allowance warning).
 - `cargo fmt --check` and `git diff --check`: passed.
 - Final workspace gates used the isolated task target directory
-  `C:\Users\alexi\AppData\Local\Metallic\cargo-target-114`. An earlier shared-target run picked up another
+  `%LOCALAPPDATA%\Metallic\cargo-target-114`. An earlier shared-target run picked up another
   worktree's incompatible core artifacts and was discarded; the isolated run resolved that environment failure.
 - New dependencies: none. Public API and architecture documentation updated. No UI changes.
 - Push this branch and attach the scoped PR; review remote CI independently. Do not merge it here.
