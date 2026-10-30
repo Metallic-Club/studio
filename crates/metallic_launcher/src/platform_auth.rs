@@ -532,13 +532,56 @@ impl PlatformAuth {
             REFRESH_RETRIES,
             &never,
         )?;
+        let accepted = (200..=299).contains(&response.status);
+        let result = self.finish_refresh(&response, refresh_token.as_str(), now);
+        if accepted && result.is_err() {
+            // The server took the refresh token and has rotated it, so it is spent. Keeping it
+            // would send it again, which the platform treats as theft (the whole family ends).
+            self.drop_spent(&refresh_token);
+        }
+        result
+    }
+
+    /// Deletes the stored session if it still holds `spent` (or cannot be read), so a refresh
+    /// token the server has rotated is never sent again.
+    fn drop_spent(&self, spent: &str) {
+        let mut cache = locked(&self.cache);
+        if self
+            .read_refresh()
+            .ok()
+            .flatten()
+            .is_none_or(|stored| stored == spent)
+        {
+            *cache = None;
+            if let Err(error) = self.store.delete() {
+                log::warn!("could not delete the platform session: {error}");
+            }
+        }
+    }
+
+    /// Forgets the session on this PC without revoking: memory and credential store.
+    fn drop_session(&self) {
+        let mut cache = locked(&self.cache);
+        *cache = None;
+        if let Err(error) = self.store.delete() {
+            log::warn!("could not delete the platform session: {error}");
+        }
+    }
+
+    /// Reads the answer to a refresh and, if it holds new tokens, stores and caches them.
+    fn finish_refresh(
+        &self,
+        response: &HttpResponse,
+        refresh_token: &str,
+        now: u64,
+    ) -> Result<Option<Token>, AuthError> {
         let answer: TokenAnswer = serde_json::from_str(&response.body)
             .map_err(|_| AuthError::BadResponse(format!("HTTP status {}", response.status)))?;
         match answer.error.as_deref() {
             Some("invalid_grant") => {
                 log::info!("the platform refused the refresh token; session cleared");
                 let mut cache = locked(&self.cache);
-                if self.read_refresh()?.as_deref() == Some(refresh_token.as_str()) {
+                if self.read_refresh()?.as_deref() == Some(refresh_token) {
                     self.store.delete()?;
                 }
                 *cache = None;
@@ -556,14 +599,14 @@ impl PlatformAuth {
         // A server that does not rotate keeps the old refresh token valid.
         let new_refresh = match answer.refresh_token {
             Some(token) => capped(token)?,
-            None => refresh_token.clone(),
+            None => refresh_token.to_string(),
         };
         let expires_at = answer
             .expires_in
             .map(|s| now.saturating_add(s.min(MAX_TOKEN_LIFETIME_SECONDS)));
         {
             let mut cache = locked(&self.cache);
-            if self.read_refresh()?.as_deref() != Some(refresh_token.as_str()) {
+            if self.read_refresh()?.as_deref() != Some(refresh_token) {
                 // Signed out (or signed in again) while the request ran: the new tokens are
                 // not wanted.
                 drop(cache);
@@ -594,20 +637,35 @@ impl PlatformAuth {
 
     /// Like [`web_session_code`](Self::web_session_code), and ends early when `cancel` is set.
     pub fn web_session_code_until(&self, cancel: &AtomicBool) -> Result<Token, AuthError> {
-        let token = self.access_token()?.ok_or(AuthError::NotSignedIn)?;
-        let bearer = format!("Bearer {}", token.expose());
-        let response = self.post_retrying(
-            "/v1/oauth/web-session",
-            &[("Authorization", &bearer)],
-            &[],
-            HANDOFF_RETRIES,
-            cancel,
-        )?;
-        match response.status {
-            200..=299 => {}
-            401 | 403 => return Err(AuthError::NotSignedIn),
-            other => return Err(AuthError::BadResponse(format!("HTTP status {other}"))),
-        }
+        let mut rejected = false;
+        let response = loop {
+            let token = self.access_token()?.ok_or(AuthError::NotSignedIn)?;
+            let bearer = format!("Bearer {}", token.expose());
+            let response = self.post_retrying(
+                "/v1/oauth/web-session",
+                &[("Authorization", &bearer)],
+                &[],
+                HANDOFF_RETRIES,
+                cancel,
+            )?;
+            match response.status {
+                200..=299 => break response,
+                401 | 403 if !rejected => {
+                    // The platform no longer takes this access token although it has not
+                    // expired by the clock. Forget it and ask again: that refreshes.
+                    rejected = true;
+                    *locked(&self.cache) = None;
+                }
+                401 | 403 => {
+                    // A freshly refreshed token is refused too: the session is no good, and the
+                    // next sign-in must start from the browser.
+                    log::info!("the platform refused a fresh token; session cleared");
+                    self.drop_session();
+                    return Err(AuthError::NotSignedIn);
+                }
+                other => return Err(AuthError::BadResponse(format!("HTTP status {other}"))),
+            }
+        };
         let answer: WebSessionAnswer = serde_json::from_str(&response.body)
             .map_err(|_| AuthError::BadResponse("unreadable web-session answer".to_string()))?;
         let safe = !answer.code.is_empty()

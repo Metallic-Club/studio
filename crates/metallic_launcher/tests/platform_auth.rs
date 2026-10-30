@@ -911,6 +911,101 @@ fn a_failed_handoff_reports_failed_and_leaves_the_session_for_a_retry() {
     );
 }
 
+#[test]
+fn a_401_from_web_session_forces_a_refresh_and_the_handoff_is_sent() {
+    let store = fresh_store();
+    stored_refresh(&store, "rt-1");
+    let (events, http, opened) = started_flow(
+        vec![
+            ok(&tokens("at-1", "rt-2", 3600)),
+            reply(401, r#"{"error":"invalid_token"}"#),
+            ok(&tokens("at-2", "rt-3", 3600)),
+            ok(r#"{"code":"wsc_second","expiresAt":"x"}"#),
+        ],
+        &OneAtATime::new(),
+        store.clone(),
+    );
+    events.wait_for("signIn signedIn ");
+    assert_eq!(
+        events.handoffs(),
+        ["https://metallic.example/auth/launcher-handoff?code=wsc_second"]
+    );
+    assert!(opened.lock().unwrap().is_empty(), "no browser");
+    let requests = http.requests();
+    assert_eq!(requests.len(), 4);
+    // The second refresh used the rotated token, and the retry carried the new access token.
+    assert!(requests[2].2.contains("refresh_token=rt-2"));
+    assert!(
+        requests[3]
+            .1
+            .contains(&("Authorization".to_string(), "Bearer at-2".to_string()))
+    );
+    assert!(raw(&store).unwrap().contains("rt-3"));
+}
+
+#[test]
+fn a_session_the_platform_keeps_refusing_is_deleted() {
+    // 401 twice, even after a refresh: the session is bad, so the next sign-in must use the browser.
+    let store = fresh_store();
+    stored_refresh(&store, "rt-1");
+    let (events, _, _) = started_flow(
+        vec![
+            ok(&tokens("at-1", "rt-2", 3600)),
+            reply(401, "{}"),
+            ok(&tokens("at-2", "rt-3", 3600)),
+            reply(403, "{}"),
+        ],
+        &OneAtATime::new(),
+        store.clone(),
+    );
+    events.wait_for("signIn failed ");
+    assert!(events.handoffs().is_empty());
+    assert!(store.get_secret().unwrap().is_none());
+
+    // 401, then the refresh itself is refused (`invalid_grant`): also signed out.
+    let store = fresh_store();
+    stored_refresh(&store, "rt-1");
+    let http = MockHttp::with(vec![
+        ok(&tokens("at-1", "rt-2", 3600)),
+        reply(401, "{}"),
+        reply(400, r#"{"error":"invalid_grant"}"#),
+    ]);
+    let (auth, _) = auth_with(http, store.clone());
+    assert!(matches!(
+        auth.web_session_code(),
+        Err(AuthError::NotSignedIn)
+    ));
+    assert!(store.get_secret().unwrap().is_none());
+}
+
+#[test]
+fn errors_after_the_server_accepted_a_refresh_delete_the_spent_token() {
+    let long = "m".repeat(257);
+    let cases: Vec<(String, bool)> = vec![
+        (tokens(&long, "rt-new", 3600), true),
+        (tokens("at", &long, 3600), true),
+        ("not json".to_string(), true),
+        (r#"{"token_type":"bearer"}"#.to_string(), true),
+    ];
+    for (body, _) in cases {
+        let store = fresh_store();
+        stored_refresh(&store, "rt-spent");
+        let (auth, _) = auth_with(MockHttp::with(vec![ok(&body)]), store.clone());
+        assert!(auth.access_token().is_err(), "{body}");
+        assert!(
+            store.get_secret().unwrap().is_none(),
+            "the spent token must not stay: {body}"
+        );
+    }
+    // An error that is not an acceptance (HTTP 400, server_error) leaves the session alone.
+    let store = fresh_store();
+    stored_refresh(&store, "rt-kept");
+    let http = MockHttp::with(vec![reply(400, r#"{"error":"server_error"}"#)]);
+    let (auth, _) = auth_with(http, store.clone());
+    assert!(auth.access_token().is_err());
+    assert!(raw(&store).unwrap().contains("rt-kept"));
+}
+
 /// A platform that never approves, and counts the device-code requests.
 struct Pending(AtomicUsize);
 
