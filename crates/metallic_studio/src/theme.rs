@@ -21,6 +21,8 @@ pub const TEXT_DIM: Color32 = Color32::from_rgb(0x9a, 0x97, 0xa3);
 pub const BORDER: Color32 = Color32::from_rgb(0x3a, 0x35, 0x44);
 /// Hovered surface.
 pub const HOVER: Color32 = Color32::from_rgb(0x31, 0x2c, 0x3a);
+/// Keyboard focus ring (2 px, outside the control): visual-language token `focus` (violet 300).
+pub const FOCUS: Color32 = Color32::from_rgb(0xb4, 0xa6, 0xec);
 /// Error text on dark surfaces.
 pub const ERROR: Color32 = Color32::from_rgb(0xe0, 0x8a, 0x8a);
 
@@ -129,6 +131,14 @@ mod tests {
                     "{text:?} on {surface:?} has contrast {ratio:.2}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn focus_ring_is_visible_on_every_surface() {
+        // WCAG 1.4.11: focus indicators need 3:1 against what surrounds them.
+        for surface in [BASE, PANEL, DEEP, HOVER] {
+            assert!(contrast_ratio(FOCUS, surface) >= 3.0, "{surface:?}");
         }
     }
 

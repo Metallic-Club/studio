@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, FontId, RichText, TextureHandle, Vec2};
 
+use crate::colour::demo::ColourDemo;
 use crate::png_image::{RgbaImage, decode_png};
 use crate::recent::RecentProjects;
 use crate::screenshot::ScreenshotJob;
@@ -32,6 +33,8 @@ pub enum Scene {
     Start,
     /// The start screen after pressing Create on a non-empty folder.
     Error,
+    /// The colour popover demo (stand-in until the editor's Properties panel exists).
+    Colour,
 }
 
 /// Command-line options (all for design review; creators start Studio without any).
@@ -46,7 +49,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// Parses `--screenshot <path>`, `--scene splash|start|error`, `--location <dir>`.
+    /// Parses `--screenshot <path>`, `--scene splash|start|error|colour`, `--location <dir>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut opts = Self::default();
@@ -61,6 +64,7 @@ impl Options {
                         "splash" => Scene::Splash,
                         "start" => Scene::Start,
                         "error" => Scene::Error,
+                        "colour" | "color" => Scene::Colour,
                         other => return Err(format!("unknown scene {other}")),
                     }
                 }
@@ -75,6 +79,7 @@ enum Phase {
     Splash { since: Instant },
     Start,
     Opened { name: String, path: PathBuf },
+    Colour(Box<ColourDemo>),
 }
 
 /// The eframe application.
@@ -113,6 +118,13 @@ impl StudioApp {
             start.set_location(location);
         }
         let phase = match (options.screenshot.is_some(), options.scene) {
+            (shot, Scene::Colour) => {
+                let mut demo = ColourDemo::new(!shot);
+                if shot {
+                    demo.open_at(egui::pos2(420.0, 120.0));
+                }
+                Phase::Colour(Box::new(demo))
+            }
             (_, Scene::Splash) => Phase::Splash {
                 since: Instant::now() + Duration::from_secs(3600),
             },
@@ -158,36 +170,45 @@ impl StudioApp {
 impl eframe::App for StudioApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        match &self.phase {
-            Phase::Splash { since } => {
-                self.splash(ui);
-                if since.elapsed() >= SPLASH_TIME {
-                    self.phase = Phase::Start;
-                }
-                ctx.request_repaint_after(Duration::from_millis(50));
+        if let Phase::Colour(demo) = &mut self.phase {
+            if demo.show(ui) {
+                self.phase = Phase::Start;
+                ctx.request_repaint();
             }
-            Phase::Start => {
-                if self.pending_error_scene {
-                    self.pending_error_scene = false;
-                    self.start
-                        .set_error(&StudioError::FolderNotEmpty(PathBuf::new()).to_string());
+        } else {
+            match &self.phase {
+                Phase::Splash { since } => {
+                    self.splash(ui);
+                    if since.elapsed() >= SPLASH_TIME {
+                        self.phase = Phase::Start;
+                    }
+                    ctx.request_repaint_after(Duration::from_millis(50));
                 }
-                if let Some(StartAction::OpenProject { name, path }) = self.start.show(ui) {
-                    self.phase = Phase::Opened { name, path };
+                Phase::Start => {
+                    if self.pending_error_scene {
+                        self.pending_error_scene = false;
+                        self.start
+                            .set_error(&StudioError::FolderNotEmpty(PathBuf::new()).to_string());
+                    }
+                    if let Some(StartAction::OpenProject { name, path }) = self.start.show(ui) {
+                        self.phase = Phase::Opened { name, path };
+                    }
                 }
-            }
-            Phase::Opened { name, path } => {
-                let (name, path) = (name.clone(), path.clone());
-                let mut back = false;
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.label(RichText::new(name).size(28.0).strong());
-                    ui.label(RichText::new(path.to_string_lossy()).color(theme::TEXT_DIM));
-                    ui.add_space(12.0);
-                    ui.label("The editor opens here in the next step of the roadmap.");
-                    back = ui.button("Back to start").clicked();
-                });
-                if back {
-                    self.phase = Phase::Start;
+                // Drawn above, where it can borrow the phase mutably.
+                Phase::Colour(_) => {}
+                Phase::Opened { name, path } => {
+                    let (name, path) = (name.clone(), path.clone());
+                    let mut back = false;
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.label(RichText::new(name).size(28.0).strong());
+                        ui.label(RichText::new(path.to_string_lossy()).color(theme::TEXT_DIM));
+                        ui.add_space(12.0);
+                        ui.label("The editor opens here in the next step of the roadmap.");
+                        back = ui.button("Back to start").clicked();
+                    });
+                    if back {
+                        self.phase = Phase::Start;
+                    }
                 }
             }
         }
@@ -209,6 +230,12 @@ fn recent_projects(screenshot: bool) -> RecentProjects {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colour_scene_is_parsed() {
+        let opts = Options::parse(["--scene".to_owned(), "colour".to_owned()]).unwrap();
+        assert_eq!(opts.scene, Scene::Colour);
+    }
 
     #[test]
     fn screenshot_mode_never_uses_the_real_config_dir() {

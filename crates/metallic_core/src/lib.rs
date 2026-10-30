@@ -11,6 +11,7 @@
 //! journal entry, or dispatching a property-change signal.
 #![warn(missing_docs)]
 
+mod cframe;
 pub mod classes;
 mod instance;
 pub mod replication;
@@ -18,6 +19,7 @@ mod scene_file;
 mod signal;
 mod value;
 
+pub use cframe::{CFrame, RotationOrder};
 pub use instance::{ChangeCursor, Changes, InstanceId, World};
 pub use scene_file::{load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
