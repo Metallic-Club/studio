@@ -32,13 +32,32 @@ The journal identifies instances rather than properties. Part signatures still d
 - The 5,000-part test records 5,000 examined parts on first sync, zero on an unchanged sync, and one examined/rebuilt
   part after two signature edits to one part. This is an operation-count check, not an elapsed-time benchmark.
 - Rebased onto `origin/main` at `532c4f7` before final gates.
-- Final gates used an isolated lane target directory after the coordinator found artifact collisions between
+- Initial complete gates used an isolated lane target directory after the coordinator found artifact collisions between
   concurrently built worktrees sharing one target directory. Earlier shared-cache runs are not final evidence.
 - `cargo test --workspace -j 4`: passed, 201 tests across all suites, including all 18 character tests, 16 existing
   physics tests, 12 physics unit tests, and GPU headless tests; zero failures.
 - `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed, no warnings.
 - `cargo deny check licenses`: passed (`licenses ok`); existing unused MPL-2.0 allowance warning only.
 - `cargo fmt --all -- --check`: passed. No visual change or windowed manual test.
+
+## Runtime integration refresh
+
+Merged main at `937dcd8` normally into the published branch, keeping the new skin/shirt/pants avatar exports beside
+the journal test module. No force push or pull-request merge was used.
+
+Sequential reuse of a lane target also exposed a stale core artifact: physics could not find `same_world` despite
+the source containing it. Cleaned only the seven Metallic workspace packages from the verified own lane directory,
+preserving third-party dependency artifacts. Rebuilt all seven local crates; compiler output named this issue's
+worktree as their source. Do not rely on sequential cross-worktree cache reuse without that local-package clean.
+
+Final validation after the runtime merge and forced local-package rebuild:
+
+- `cargo test --workspace -j 4 -- --test-threads=1`: all 223 tests passed, zero failures or skips. Includes the input-only
+  bot finishing the full Parkour course, runtime determinism, player smoke, all 19 character tests, 16 existing physics
+  tests, 10 journal regressions, cursor identity, Luau, GPU headless rendering, and Studio tests.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed, no warnings.
+- `cargo deny check licenses`: `licenses ok`; existing unused MPL-2.0 allowance warning only.
+- `cargo fmt --all -- --check`: passed.
 
 ## Commands
 
