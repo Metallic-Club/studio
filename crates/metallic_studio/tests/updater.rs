@@ -197,6 +197,132 @@ fn required_flag_parsed() {
     );
 }
 
+fn fifty_newer_dev_releases(page: u64) -> Vec<String> {
+    (0..50)
+        .map(|index| release(&format!("v0.1.{}-dev", 1_000 - page * 50 - index), ""))
+        .collect()
+}
+
+#[test]
+fn required_update_on_second_page_is_not_lost() {
+    let first: Vec<_> = (2..=51)
+        .rev()
+        .map(|patch| release(&format!("v0.1.{patch}-dev"), ""))
+        .collect();
+    let http = MockHttp::with(vec![
+        ok(&feed(&first)),
+        ok(&feed(&[
+            release("v0.1.1-dev", "required: true"),
+            release("v0.1.0-dev", ""),
+        ])),
+    ]);
+    let update = checker(Channel::Dev, "0.1.0", http.clone())
+        .check()
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.version, Version::new(0, 1, 51));
+    assert!(update.required);
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].0.ends_with("per_page=50&page=2"));
+}
+
+#[test]
+fn installed_version_boundary_finishes_a_full_page() {
+    let mut first = fifty_newer_dev_releases(0);
+    first[49] = release("v0.1.0-dev", "required: true");
+    let http = MockHttp::with(vec![ok(&feed(&first))]);
+    let update = checker(Channel::Dev, "0.1.0", http.clone())
+        .check()
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.version, Version::new(0, 1, 1_000));
+    assert!(
+        !update.required,
+        "an already installed requirement does not count"
+    );
+    assert_eq!(http.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn drafts_and_other_channels_do_not_end_required_history() {
+    let mut first = fifty_newer_dev_releases(0);
+    first[45] = release("v0.1.0-rc.1-dev", "");
+    first[46] = release("v0.1.0+old-dev", "");
+    first[47] = r#"{"tag_name":"v0.0.1-dev","draft":true}"#.into();
+    first[48] = release("v0.0.1-stable", "required: true");
+    first[49] = release("not-a-version-dev", "required: true");
+    let http = MockHttp::with(vec![
+        ok(&feed(&first)),
+        ok(&feed(&[release("v0.1.1-dev", "required: true")])),
+    ]);
+    let update = checker(Channel::Dev, "0.1.0", http.clone())
+        .check()
+        .unwrap()
+        .unwrap();
+    assert!(update.required);
+    assert_eq!(update.version, Version::new(0, 1, 1_000));
+    assert_eq!(http.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn prerelease_and_build_metadata_are_not_release_process_tags() {
+    let http = MockHttp::with(vec![ok(&feed(&[
+        release("v9.0.0-rc.1-dev", "required: true"),
+        release("v9.0.0+local-dev", "required: true"),
+        release("v0.1.0-dev", ""),
+    ]))]);
+    assert!(
+        checker(Channel::Dev, "0.1.0", http)
+            .check()
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn empty_last_page_preserves_the_newest_version() {
+    let first = fifty_newer_dev_releases(0);
+    let http = MockHttp::with(vec![ok(&feed(&first)), ok("[]")]);
+    let update = checker(Channel::Dev, "0.1.0", http.clone())
+        .check()
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.version, Version::new(0, 1, 1_000));
+    assert_eq!(http.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn truncated_history_cannot_certify_an_optional_update() {
+    let http = MockHttp::with(
+        (0..5)
+            .map(|page| ok(&feed(&fifty_newer_dev_releases(page))))
+            .collect(),
+    );
+    assert!(matches!(
+        checker(Channel::Dev, "0.1.0", http.clone()).check(),
+        Err(UpdateError::BadResponse(_))
+    ));
+    assert_eq!(
+        http.requests.lock().unwrap().len(),
+        5,
+        "request count remains bounded"
+    );
+}
+
+#[test]
+fn later_history_failure_cannot_offer_a_partial_required_flag() {
+    let http = MockHttp::with(vec![
+        ok(&feed(&fifty_newer_dev_releases(0))),
+        Err(HttpError::new("offline")),
+    ]);
+    assert!(matches!(
+        checker(Channel::Dev, "0.1.0", http.clone()).check(),
+        Err(UpdateError::Network(_))
+    ));
+    assert_eq!(http.requests.lock().unwrap().len(), 2);
+}
+
 #[test]
 fn network_error_is_not_fatal() {
     // Injected failure.
@@ -426,7 +552,7 @@ fn api_base_must_be_https_or_local() {
 }
 
 #[test]
-fn reads_up_to_five_pages_until_a_match() {
+fn reads_up_to_five_pages_without_certifying_truncated_history() {
     let full_page_of_stable = || {
         let all: Vec<String> = (0..50)
             .map(|i| release(&format!("v1.0.{i}-stable"), ""))
@@ -445,13 +571,27 @@ fn reads_up_to_five_pages_until_a_match() {
     assert_eq!(update.version, Version::new(0, 5, 0));
     assert!(http.requests.lock().unwrap()[1].0.ends_with("&page=2"));
 
-    // Never a match: stops after 5 pages.
+    // No channel boundary in five full pages: bounded, but not proven up to date.
     let http = MockHttp::with((0..8).map(|_| full_page_of_stable()).collect());
-    assert!(
+    assert!(matches!(
+        checker(Channel::Dev, "0.1.0", http.clone()).check(),
+        Err(UpdateError::BadResponse(_))
+    ));
+    assert_eq!(http.requests.lock().unwrap().len(), 5);
+
+    // A boundary on the final allowed full page is still complete.
+    let mut answers: Vec<_> = (0..4).map(|_| full_page_of_stable()).collect();
+    let mut fifth = fifty_newer_dev_releases(0);
+    fifth[49] = release("v0.1.0-dev", "");
+    answers.push(ok(&feed(&fifth)));
+    let http = MockHttp::with(answers);
+    assert_eq!(
         checker(Channel::Dev, "0.1.0", http.clone())
             .check()
             .unwrap()
-            .is_none()
+            .unwrap()
+            .version,
+        Version::new(0, 1, 1_000)
     );
     assert_eq!(http.requests.lock().unwrap().len(), 5);
 }
