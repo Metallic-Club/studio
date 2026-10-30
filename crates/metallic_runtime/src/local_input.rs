@@ -27,7 +27,7 @@ impl LocalInput {
     /// Quantizes finite local input, rounding axis ties away from zero.
     ///
     /// Each non-finite component independently becomes zero. Finite axes saturate
-    /// to [-1, 1]; finite yaw wraps through one turn before rounding. This does not
+    /// to [-1, 1]; finite yaw in radians wraps through one turn before rounding. This does not
     /// alter the current Game input path or provide network admission.
     pub fn from_components(movement: [f32; 2], jump: bool, run: bool, yaw: f32) -> Self {
         fn axis(value: f32) -> i8 {
@@ -84,7 +84,7 @@ impl LocalInput {
 
 /// Converts camera-relative wishes (right, forward) to a flat world-space vector.
 ///
-/// Yaw zero faces -Z and positive yaw turns right. This preserves the existing
+/// Yaw is in radians; zero faces -Z and positive yaw turns right. This preserves the existing
 /// CameraController transform, including its caller-controlled magnitude; use
 /// [`LocalInput::to_move_input`] for bounded quantized commands. Inputs are trusted
 /// finite values. This function does not promise cross-platform physics determinism.

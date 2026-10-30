@@ -1,7 +1,7 @@
 # Issue 315: canonical quantized local movement
 
-Status: implemented; focused tests and source review passed; mandatory workspace/Clippy gates pending.
-Branch: studio/315-canonical-local-input, base e20f082.
+Status: implemented and tested; local mandatory gates and independent source review passed; ready for review.
+Branch: studio/315-canonical-local-input; initial base e20f082, rebased onto cb26593 before expanded gates.
 
 ## Scope and implementation
 
@@ -31,7 +31,16 @@ prebuild passed in 1m16s in guarded lane122 after an owner transition. The five 
 raw-axis/yaw conversions included), followed by the existing camera direction case: one passed, 78 filtered out.
 Logs: <TEMP>/metallic-315-focus-build.log, metallic-315-focus-tests.log and metallic-315-camera-tests.log.
 No performance pass is claimed.
-No dependencies, root manifest or lockfile changes. Required workspace tests and strict all-target Clippy remain pending.
-Use an owned guarded build lane with four jobs; coordinate actual Lua suites with other workers. After initial
-focus checks, get independent source review, finish mandatory gates, publish one PR, then test private composition
+No task-owned dependencies, root manifest or lockfile changes. The updated main includes CFrame/Lua and Studio
+colour changes; the fresh license gate still passed. Full guarded workspace no-run passed on af15671, and strict
+workspace/all-target Clippy passed after a doc-only radians clarification (1m27s). Format/whitespace checks passed.
+Final guarded cargo test --locked --workspace -j 4 -- --test-threads=1 passed: 1,052 tests, zero failures,
+6 existing manual probes ignored. Log: <TEMP>/metallic-315-workspace-final.log. Final no-run refresh also passed
+before this actual command; Clippy uses --locked --workspace --all-targets -j 4 -- -D warnings.
+
+Validation is pinned to cb26593 plus this change. Main continued advancing with independent avatar, physics,
+transport and editor changes afterward; do not relabel the local evidence as a run on those later revisions.
+The PR CI merge build will supply current-main integration evidence.
+
+Use an owned guarded build lane with four jobs; coordinate actual Lua suites with other workers. Publish one PR, monitor its CI/review, then test private composition
 with the existing Simulation foundation so this module stays available without presentation.
