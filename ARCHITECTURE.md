@@ -33,6 +33,16 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  The edit-only `metallic_core::edit` kernel owns the original World, resolves stable `(editor, counter)` object
+  identities, preflights complete typed batches on an independent `deep_clone`, then replays validated operations
+  into the original World. Validation rejection preserves its subscriptions and journal. Staging costs O(world)
+  per batch; accepted callbacks retain existing per-operation behavior. Unexpected replay failures or callback
+  panics terminally poison the authority; partial live effects are not rolled back. Bounded editor counters and
+  exact request/receipt history provide idempotency without recycling destroyed object identities. A trusted
+  host grants edit permissions and whole-script Source ownership; this is not an authentication or lease service.
+  `EditReplica` applies ordered accepted records with stable references and sibling anchors; snapshots include
+  effective properties and ordered children, independently of local instance allocation. There is no network,
+  persistence, optimistic UI, runtime simulation or available Team Create session in this foundation (#301).
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),

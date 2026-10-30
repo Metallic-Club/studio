@@ -17,6 +17,7 @@ mod scene_file;
 mod signal;
 mod value;
 
+pub use instance::edit;
 pub use instance::{ChangeCursor, Changes, InstanceId, World};
 pub use scene_file::{load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
