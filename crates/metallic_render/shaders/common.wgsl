@@ -12,7 +12,8 @@ struct Globals {
     sky_zenith: vec4<f32>,
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
-    params: vec4<f32>,       // x: cascades, y, z: unused (exposure moved to the finish pass), w: shadow map size
+    params: vec4<f32>,       // x: cascades, y: tone curve index, z: exposure incl. curve pre-scale, w: shadow map size
+    viewport: vec4<f32>,     // x, y: target size in pixels; z, w: their reciprocals
     // Lighting block (`LightingUniform` in src/lighting.rs; used by lighting.wgsl).
     light_ambient: vec4<f32>,  // rgb: Ambient, w: EnvironmentDiffuseScale
     light_outdoor: vec4<f32>,  // rgb: OutdoorAmbient, w: EnvironmentSpecularScale
@@ -27,6 +28,7 @@ struct Globals {
     sun_disc: vec4<f32>,       // xyz: toward the sun, w: cos(disc radius)
     moon_disc: vec4<f32>,      // xyz: toward the moon, w: cos(disc radius)
     celestial: vec4<f32>,      // x: sun disc scale, y: moon radiance, z: bodies shown, w: night
+    light_toon: vec4<f32>,     // x: toon light of the default lighting (reference)
 }
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -41,4 +43,11 @@ fn sky_gradient(d: vec3<f32>) -> vec3<f32> {
     let above = mix(g.sky_horizon.rgb, g.sky_zenith.rgb, t);
     let below = mix(g.sky_horizon.rgb, g.sky_ground.rgb, smoothstep(0.0, 0.35, -up));
     return select(above, below, up < 0.0);
+}
+
+// The scene colour that the finish pass maps to the display-linear colour `y` (0..1), before
+// grading: the inverse of the tone curve and exposure. Toon shading picks display colours
+// directly and goes through this, so it lands in the HDR target like any other light.
+fn unfinish(y: vec3<f32>) -> vec3<f32> {
+    return invert_curve(y, u32(g.params.y + 0.5)) / max(g.params.z, 1e-6);
 }

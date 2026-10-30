@@ -11,6 +11,7 @@ use mlua::{
     UserDataMethods, UserDataRef, Value,
 };
 
+use super::cframe::{LuaCFrame, cframe};
 use super::datatypes::lua_to_value;
 use super::errors;
 use super::signals::{EventKind, LuaSignal};
@@ -296,6 +297,10 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             let parent = state.world()?.parent(this.id);
             return state.wrap_opt(lua, parent);
         }
+        "CFrame" if is_subclass(class, "BasePart") => {
+            let cf = super::cframe::part_cframe(&*state.world()?, this.id).map_err(core_error)?;
+            return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
+        }
         "LocalPlayer" if class == "Players" => {
             let player = match state.context {
                 crate::vm::Context::Client => state.shared.local_player.get(),
@@ -349,6 +354,16 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
     match key {
         "ClassName" => Err(lua_error("ClassName is read-only")),
         "Parent" => set_parent(this, value),
+        "CFrame" if is_subclass(class, "BasePart") => {
+            let cf = cframe(value).ok_or_else(|| {
+                lua_error(format!(
+                    "invalid value for property CFrame: expected CFrame, got {}",
+                    value.type_name()
+                ))
+            })?;
+            super::cframe::set_part_cframe(&mut *this.state.world_mut()?, this.id, cf)
+                .map_err(core_error)
+        }
         _ => {
             let Some(def) = find_property(class, key) else {
                 return if this.state.methods.contains_key(key) || event_kind(class, key).is_some() {

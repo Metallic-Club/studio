@@ -29,8 +29,8 @@ mod touched;
 
 pub use avatar::VIOLET;
 pub use character::{
-    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT, MoveInput,
-    RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, spawn_character,
+    CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT,
+    MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, place_character, spawn_character,
 };
 pub use sync::{MaterialProps, material_props};
 
@@ -91,6 +91,8 @@ pub struct PhysicsWorld {
     /// Synced parts that belong to a character; [`Self::drain_touched`] never reports them.
     characters: HashSet<InstanceId>,
     accumulator: f64,
+    /// Replica mode: no body is ever integrated (see [`PhysicsWorld::new_replica`]).
+    replica: bool,
 }
 
 impl Default for PhysicsWorld {
@@ -156,6 +158,18 @@ impl PhysicsWorld {
             touches: TouchTracker::default(),
             characters: HashSet::new(),
             accumulator: 0.0,
+            replica: false,
+        }
+    }
+
+    /// Creates a simulation for clients, which never simulate loose parts: every part becomes a
+    /// fixed collider (kinematic while it moves) that follows its `Position`/`Orientation` in
+    /// the World, so raycasts and character sweeps see it where the server put it. `step` never
+    /// integrates or writes back bodies.
+    pub fn new_replica() -> Self {
+        PhysicsWorld {
+            replica: true,
+            ..Self::new()
         }
     }
 
@@ -199,7 +213,7 @@ impl PhysicsWorld {
     fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) {
         let mat = sync::material_props(&s.material);
         let pose = to_pose(s.position, s.orientation);
-        let builder = if s.anchored {
+        let builder = if s.anchored || self.replica {
             RigidBodyBuilder::fixed()
         } else {
             RigidBodyBuilder::dynamic()
@@ -293,6 +307,7 @@ impl PhysicsWorld {
         self.accumulator = (self.accumulator - substeps as f64 * SUBSTEP).max(0.0);
         let sim_time = substeps as f64 * SUBSTEP;
 
+        let replica = self.replica;
         let ids: Vec<InstanceId> = self.entries.keys().copied().collect();
         // (part, target pose) of anchored parts moving this step.
         let mut movers: Vec<(InstanceId, Pose)> = Vec::new();
@@ -308,7 +323,7 @@ impl PhysicsWorld {
             let Some(body) = self.rapier.bodies.get_mut(e.body) else {
                 continue;
             };
-            if e.signature.anchored {
+            if e.signature.anchored || replica {
                 e.derived_velocity = Vec3::default();
                 e.derived_angular_velocity = Vec3::default();
                 if moved {
@@ -379,7 +394,8 @@ impl PhysicsWorld {
     }
 
     /// Current velocity of a part in studs per second: the body velocity for unanchored parts,
-    /// the velocity derived from the last move for anchored ones. `None` for unknown parts.
+    /// the velocity derived from the last move for anchored ones (in a replica world every part
+    /// reports the derived, kinematic velocity). `None` for unknown parts.
     pub fn velocity(&self, id: InstanceId) -> Option<Vec3> {
         let e = self.entries.get(&id)?;
         let body = self.rapier.bodies.get(e.body)?;
@@ -392,7 +408,7 @@ impl PhysicsWorld {
 
     /// Current angular velocity of a part in radians per second (world rotation axis scaled by
     /// the rate): the body's for unanchored parts, the one derived from the last orientation
-    /// change for anchored ones. A point `p` on the part moves at
+    /// change for anchored ones (in a replica world every part reports the derived value). A point `p` on the part moves at
     /// `velocity + angular_velocity × (p - Position)`. `None` for unknown parts.
     pub fn angular_velocity(&self, id: InstanceId) -> Option<Vec3> {
         let e = self.entries.get(&id)?;

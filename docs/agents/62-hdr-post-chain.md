@@ -23,6 +23,10 @@ ordered, extensible list of post passes (styles research section 13 hooks 1, 2, 
   An empty chain costs one full-screen pass (finish writes the target directly).
 - Depth: always `TEXTURE_BINDING`; stored only when a pass reads it; offered at the scene sample count.
 - Colour helpers moved from `common.wgsl` to `color.wgsl` (no bindings) so every module can include them.
+- Merged main's Toon style (#320): toon shading and the inverted-hull ink outline draw into the HDR target in the
+  main pass. Their display-colour tones go through `unfinish`, which inverts the active curve and exposure
+  (`shaders/tonecurve.wgsl`, shared with the finish pass; Globals `params.y` / `params.z`), so the finish pass maps
+  them back to the chosen colours under any curve. The toon headless test passes unchanged.
 - Tests: `tests/post_chain.rs` (grey under every curve on the GPU, flat image without dither, exposure, grade,
   vignette, HDR and LDR passes in order through both ping-pong targets, depth offered, Low and High), unit tests in
   `tonemap.rs` and `post.rs`. Default image matches main (reference scene: max 9/255 at MSAA edges, mean 0.04).

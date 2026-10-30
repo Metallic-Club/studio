@@ -567,10 +567,35 @@ pub(crate) struct LightingUniform {
     /// x: sun disc radiance scale, y: moon disc radiance, z: 1 when bodies are shown,
     /// w: twilight factor (0 day .. 1 night).
     pub celestial: [f32; 4],
+    /// x: the toon light reference (`toon_light` of the default lighting), so toon shading is
+    /// 1 under a fresh place and follows the scene's displayed brightness otherwise.
+    pub toon: [f32; 4],
+}
+
+/// The light toon shading follows: the sun plus some sky, pre-exposed (as `toon_light` in
+/// `skinned.wgsl` reads it from the frame uniforms).
+fn toon_energy(sky: &Sky) -> f32 {
+    let s: [f32; 3] = std::array::from_fn(|i| {
+        let fill = sky.horizon[i] + (sky.zenith[i] - sky.horizon[i]) * 0.45;
+        sky.sun_color[i] * 0.27 + fill * 0.3
+    });
+    luma(s).max(1e-6)
+}
+
+/// `toon_energy` of the default lighting, computed once.
+fn toon_reference() -> f32 {
+    static REF: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *REF.get_or_init(|| toon_energy(&evaluate_base(&LightingInputs::default()).sky))
 }
 
 /// Turns lighting properties into a frame's settings.
 pub fn evaluate(inp: &LightingInputs) -> LightingFrame {
+    let mut frame = evaluate_base(inp);
+    frame.uniform.toon = [toon_reference(), 0.0, 0.0, 0.0];
+    frame
+}
+
+fn evaluate_base(inp: &LightingInputs) -> LightingFrame {
     let to_sun = sun_direction(inp.clock_time, inp.latitude);
     let elevation = to_sun.y.clamp(-1.0, 1.0).asin().to_degrees();
     let t = sky_at(elevation);
@@ -767,6 +792,7 @@ pub fn evaluate(inp: &LightingInputs) -> LightingFrame {
             if shown { 1.0 } else { 0.0 },
             night,
         ],
+        toon: [1.0, 0.0, 0.0, 0.0],
     };
     LightingFrame {
         sky,

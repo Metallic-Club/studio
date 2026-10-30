@@ -34,5 +34,5 @@ pub use lighting::LightingInputs;
 pub use metallic_asset;
 pub use post::{FullscreenPass, PostChain, PostContext, PostDraw, PostPass, PostSlot};
 pub use renderer::{Quality, RenderSettings, Renderer};
-pub use skinned::SkinnedInstance;
+pub use skinned::{SkinStyle, SkinnedInstance};
 pub use tonemap::{FinishSettings, ToneCurve};
