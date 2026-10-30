@@ -768,3 +768,108 @@ fn a_spinning_input_handler_times_out_and_others_still_run() {
     assert!(lines.contains(&"print:other".to_string()), "{lines:?}");
     assert!(began.elapsed().as_secs_f64() < 1.0, "bounded by the budget");
 }
+
+fn descendant_count(rig: &Rig) -> usize {
+    fn walk(w: &metallic_core::World, id: InstanceId) -> usize {
+        1 + w.children(id).iter().map(|&c| walk(w, c)).sum::<usize>()
+    }
+    let w = rig.world.borrow();
+    let player = w
+        .find_first_child(w.root("Players").unwrap(), "Player1")
+        .unwrap();
+    walk(&w, player)
+}
+
+#[test]
+fn bind_action_is_capped_per_script() {
+    let mut rig = Rig::new();
+    rig.local_script(
+        "Client",
+        r#"
+        local CAS = game:GetService("ContextActionService")
+        local ok, failed, message = 0, 0, nil
+        for i = 1, 300 do
+            local good, err = pcall(function()
+                CAS:BindAction("A" .. i, function() end, false, Enum.KeyCode.A)
+            end)
+            if good then ok += 1 else failed += 1; message = err end
+        end
+        -- Binding an existing name again is not a new action.
+        print(ok, failed, pcall(function()
+            CAS:BindAction("A1", function() end, false, Enum.KeyCode.B)
+        end))
+        print(message)
+        CAS:UnbindAction("A2")
+        print(pcall(function() CAS:BindAction("Again", function() end, false, Enum.KeyCode.C) end))
+        "#,
+    );
+    rig.host.start().unwrap();
+    let lines = rig.lines();
+    assert_eq!(lines[0], "print:256 44 true");
+    assert!(
+        lines[1].contains("too many bound actions") && lines[1].contains("256"),
+        "{lines:?}"
+    );
+    assert_eq!(lines[2], "print:true");
+}
+
+#[test]
+fn a_failed_rebind_keeps_the_old_binding_and_leaves_nothing_behind() {
+    let mut rig = Rig::new();
+    rig.local_script(
+        "Client",
+        r#"
+        local CAS = game:GetService("ContextActionService")
+        CAS:BindAction("Hold", function(name, state) print("old", state.Name) end, false, Enum.KeyCode.H)
+        print(pcall(function()
+            CAS:BindAction("Hold", function() print("new") end, false, Enum.KeyCode.G, 42)
+        end))
+        print(pcall(function()
+            CAS:BindActionAtPriority("Hold", function() print("new") end, false, "high", Enum.KeyCode.G)
+        end))
+        "#,
+    );
+    rig.host.start().unwrap();
+    let hold = bound_action(&rig, "Hold").expect("old action still there");
+    let before = descendant_count(&rig);
+    let lines = rig.lines();
+    assert!(lines[0].starts_with("print:false"), "{lines:?}");
+    assert!(lines[1].starts_with("print:false"), "{lines:?}");
+    rig.host.input_action_event(press(hold, 0.1));
+    rig.run(0.0, 1);
+    assert_eq!(
+        rig.lines()[2],
+        "print:old Begin",
+        "the old handler still works"
+    );
+    assert_eq!(
+        bound_action(&rig, "Hold"),
+        Some(hold),
+        "same action instance"
+    );
+    assert_eq!(descendant_count(&rig), before, "no new instances");
+}
+
+#[test]
+fn unbinding_inside_a_handler_leaves_no_hidden_instances() {
+    let mut rig = Rig::new();
+    rig.local_script(
+        "Client",
+        r#"
+        local CAS = game:GetService("ContextActionService")
+        CAS:BindAction("Once", function(name, state)
+            CAS:UnbindAction("Once")
+        end, false, Enum.KeyCode.H)
+        "#,
+    );
+    rig.host.start().unwrap();
+    let once = bound_action(&rig, "Once").unwrap();
+    rig.host.input_action_event(press(once, 0.1));
+    rig.run(0.0, 2);
+    assert!(bound_action(&rig, "Once").is_none());
+    assert_eq!(
+        descendant_count(&rig),
+        2,
+        "only the player and its PlayerGui are left"
+    );
+}

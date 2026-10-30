@@ -141,7 +141,8 @@ The value is the action's value as the runtime reported it. On the server any of
   priority, ...inputs)`. Inputs are `Enum.KeyCode` or `Enum.UserInputType` values (`Keyboard` binds every key, `Gamepad1` to
   `4` bind the gamepad buttons, `MouseMovement` binds `MouseDelta`). The call creates a hidden `InputAction` (one binding per
   key) in a hidden `InputContext` named `ContextActionService@<priority>` under the local player; binding a name again
-  replaces it. Default priority is 2000.
+  replaces it only once the new one is complete (a failed call changes nothing). A script may have at most 256 bound
+  actions; past that `BindAction` errors with `too many bound actions`. Default priority is 2000.
 - `handler(actionName, state, inputObject)` runs with `Begin`, `End`, `Change` (axis actions) or `Cancel` (the action was
   unbound or its context disabled while pressed). `inputObject` has `KeyCode` (`Unknown`), `UserInputType`, `UserInputState`,
   `Position`, `Delta`. Return `Enum.ContextActionResult.Pass` to let lower consumers see the event; anything else sinks.
