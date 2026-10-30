@@ -70,6 +70,8 @@ SAFE_EXTRACT_EXT = {
 ZIP_MAX_MEMBERS = 5000
 ZIP_MAX_TOTAL = 4 << 30
 ZIP_MAX_RATIO = 250
+# Hosts a download may be redirected to, besides its own host. ambientCG's /get links redirect to its download host.
+REDIRECT_EXTRA_HOSTS = {"acg-download.struffelproductions.com"}
 
 # Default roughness/metalness per Part material, used when a texture set has no map for it.
 # Values follow the renderer's planned material table (metallic_render/src/materials.rs on studio/3-renderer).
@@ -327,6 +329,21 @@ def blob_path(cache: Path, sha: str) -> Path:
     return cache / "blobs" / sha[:2] / sha
 
 
+class _AllowListRedirects(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only to the download's own host or to REDIRECT_EXTRA_HOSTS, and never from https to http."""
+
+    def __init__(self, hosts: set[str]):
+        super().__init__()
+        self.hosts = hosts
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = urllib.parse.urlparse(urllib.parse.urljoin(req.full_url, newurl))
+        old_scheme = urllib.parse.urlparse(req.full_url).scheme
+        if (new.hostname or "") not in self.hosts or (old_scheme == "https" and new.scheme != "https"):
+            raise FetchError(f"{req.full_url}: redirect to {newurl} is not on the allow list")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def download(f: AssetFile, cache: Path, throttle: Throttle, opener=None, log=print) -> Path:
     """Returns the verified blob for `f`, downloading (and resuming) only when needed."""
     final = blob_path(cache, f.sha256)
@@ -340,8 +357,8 @@ def download(f: AssetFile, cache: Path, throttle: Throttle, opener=None, log=pri
     if have > f.size:
         part.unlink()
         have = 0
-    opener = opener or urllib.request.build_opener()
     host = urllib.parse.urlparse(f.url).hostname or ""
+    opener = opener or urllib.request.build_opener(_AllowListRedirects({host} | REDIRECT_EXTRA_HOSTS))
     for attempt in range(4):
         if have < f.size:
             throttle.wait(host)
@@ -397,6 +414,7 @@ def safe_extract_zip(blob: Path, dest: Path, log=print) -> list[str]:
         packed = sum(max(i.compress_size, 1) for i in infos)
         if total > ZIP_MAX_TOTAL or total / packed > ZIP_MAX_RATIO:
             raise FetchError(f"{blob.name}: looks like a zip bomb ({total} bytes unpacked)")
+        extracted = 0
         for info in infos:
             name = info.filename
             if info.is_dir():
@@ -411,8 +429,17 @@ def safe_extract_zip(blob: Path, dest: Path, log=print) -> list[str]:
                 continue
             target = dest.joinpath(*PurePosixPath(name).parts)
             target.parent.mkdir(parents=True, exist_ok=True)
+            # Count the bytes actually written; the declared sizes checked above come from the archive itself.
+            written = 0
             with z.open(info) as src, open(target, "wb") as dst:
-                shutil.copyfileobj(src, dst, CHUNK)
+                while chunk := src.read(CHUNK):
+                    written += len(chunk)
+                    extracted += len(chunk)
+                    if written > info.file_size or extracted > ZIP_MAX_TOTAL:
+                        dst.close()
+                        target.unlink()
+                        raise FetchError(f"{blob.name}: {name} unpacks to more than its declared size")
+                    dst.write(chunk)
             out.append(name)
     return out
 
