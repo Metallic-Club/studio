@@ -88,8 +88,8 @@ Keep valid text scenes deterministic and references efficient as scene sizes gro
   filesystem. A process crash can leave a temporary sibling file for later cleanup.
 - Trees deeper than 32 instance levels now fail with a scene error instead of saving unreadable output.
 - Unknown fields are errors in scene format version 1; format extensions need an explicit version change.
-- Push the review fixes to existing PR #45, answer the review and restore issue #31
-  to review; inspect final-head CI. Do not merge.
+- Review fixes pushed to existing PR #45 and the review answered; issue #31 is back
+  to review. Inspect final-head CI and further feedback. Do not merge.
 - No changes to renderer, physics, scripts, editor UI or the platform repository.
 
 ## API references
