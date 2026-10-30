@@ -38,6 +38,9 @@ pub enum StudioError {
     /// The chosen folder is not a Metallic game.
     #[error("This folder isn't a Metallic game (it has no metallic.toml).")]
     NotAGame(PathBuf),
+    /// A saved colour palette could not be created or changed.
+    #[error("{0}")]
+    Palette(String),
 }
 
 impl StudioError {

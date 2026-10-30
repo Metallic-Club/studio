@@ -36,6 +36,10 @@ PACK_ID = "MetallicStudio"
 PACK_TITLE = "Metallic Studio"
 MAIN_EXE = "Metallic Studio.exe"
 CARGO_BIN = "metallic_studio"
+# The [[bin]] name in crates/metallic_studio/Cargo.toml, which differs from the package name.
+STUDIO_BUILT_EXE = "metallic-studio.exe"
+# Repo folders Studio reads beside its exe at run time (templates_dir() in metallic_studio).
+STUDIO_FOLDERS = ["templates"]
 REPO_URL = "https://github.com/Metallic-Club/studio"
 ROOT = Path(__file__).resolve().parent.parent
 ICON_PNG = ROOT / "branding" / "placeholder-icon.png"
@@ -199,9 +203,12 @@ def main():
 
     stage = OUT_DIR / "stage"
     notes = OUT_DIR / "release-notes.md"
-    staged = LAUNCHER_FILES if launcher else [(f"{CARGO_BIN}.exe", MAIN_EXE)]
+    staged = LAUNCHER_FILES if launcher else [(STUDIO_BUILT_EXE, MAIN_EXE)]
+    folders = [] if launcher else STUDIO_FOLDERS
     for built, name in staged:
         print(f"+ stage {built} as {name} in {stage.relative_to(ROOT)}")
+    for folder in folders:
+        print(f"+ stage folder {folder}/ in {stage.relative_to(ROOT)}")
     if not args.dry_run:
         shutil.rmtree(OUT_DIR / "stage", ignore_errors=True)
         stage.mkdir(parents=True)
@@ -210,6 +217,8 @@ def main():
             if not exe.exists():
                 sys.exit(f"{exe} not found; did the build use another target dir (CARGO_TARGET_DIR)?")
             shutil.copy2(exe, stage / name)
+        for folder in folders:
+            shutil.copytree(ROOT / folder, stage / folder)
         title = LAUNCHER_PACK_TITLE if launcher else PACK_TITLE
         lines = [f"{title} {args.version} ({args.channel})"]
         if args.required:
