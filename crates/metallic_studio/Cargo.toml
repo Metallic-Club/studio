@@ -22,6 +22,8 @@ toml = "1.1.8"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 png = "0.18.1"
+# Double-precision maths for the building-tool cores (src/tools); same version as metallic_render.
+glam = "0.30.10"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 metallic_update.workspace = true

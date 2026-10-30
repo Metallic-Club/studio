@@ -3492,6 +3492,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "env_logger",
+ "glam 0.30.10",
  "log",
  "metallic_runtime",
  "metallic_update",
