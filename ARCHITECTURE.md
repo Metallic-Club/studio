@@ -43,6 +43,8 @@ apps.
   `EditReplica` applies ordered accepted records with stable references and sibling anchors; snapshots include
   effective properties and ordered children, independently of local instance allocation. There is no network,
   persistence, optimistic UI, runtime simulation or available Team Create session in this foundation (#301).
+  `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
+  look-at, inverse, lerp); it is not a stored `Value` type. `BasePart.CFrame` in Luau maps onto Position/Orientation.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),

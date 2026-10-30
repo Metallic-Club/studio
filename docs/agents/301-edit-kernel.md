@@ -88,3 +88,18 @@ lib.rs re-export overlap; this module otherwise has its own files and adds no de
 Publish the reviewed, tested branch as the single PR for issue 301, attach it to the root task, and leave repository
 CI/lead review visible. No own merge or acceptance claim. Networking, persistence and Studio client integration remain
 separate multiplayer foundations.
+
+## Normal merge of main after publication
+
+Main advanced to `abef7fc` with the 0.1.1 template-packaging release and PR 304 CFrame math/Luau adapter. The
+published branch is being refreshed with a normal merge, preserving its existing public history. The only conflicts
+are additive core re-exports and adjacent architecture paragraphs; both APIs and both descriptions are retained.
+
+Exact source inspection confirms CFrame is a standalone math type, not a Value/ValueType variant or registry
+property. The Luau BasePart.CFrame adapter reads/writes registered Position and Orientation. EditValue's existing
+exhaustive conversions, exact numeric equality and accounted size therefore need no invented CFrame variant or
+escape hatch. A new regression applies CFrame-derived registered pose components through the kernel/replica and
+proves that a later virtual CFrame property still rejects the complete batch without changing live state/cursor.
+
+The earlier 1,005-test/Clippy/CI result at `4447974` is historical evidence for the old base. Fresh merged-source
+focused/workspace/Clippy/license/format gates are pending; compilation is held for the coordinator's next slot.

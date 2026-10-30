@@ -3,7 +3,7 @@ use metallic_core::edit::{
     CommittedBatch, EditAccess, EditAuthority, EditBatch, EditError, EditId, EditLimits, EditOp,
     EditReplica, EditSnapshot, EditValue, EditorId, Submission,
 };
-use metallic_core::{Changes, CoreError, Value, World};
+use metallic_core::{CFrame, Changes, CoreError, Value, Vec3, World};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
@@ -519,6 +519,62 @@ fn tree_hash(snapshot: &EditSnapshot) -> u64 {
     let mut hash = DefaultHasher::new();
     canonical.hash(&mut hash);
     hash.finish()
+}
+
+#[test]
+fn cframe_math_uses_registered_pose_components_without_a_new_value_escape_hatch() {
+    let mut authority = authority(initial_world(0));
+    let mut replica = EditReplica::new(initial_world(2), EditLimits::default()).expect("replica");
+    let workspace = authority.world().root("Workspace").expect("workspace");
+    let part = authority.world().children(workspace)[0];
+    let id = authority.id_of(part).expect("stable part");
+    let transform =
+        CFrame::from_position(Vec3::new(1.0, 2.0, 3.0)) * CFrame::from_euler_yxz(0.2, -0.4, 0.7);
+    let position = transform.position;
+    let orientation = transform.orientation_degrees();
+    let record = commit(
+        &mut authority,
+        A,
+        &batch(
+            1,
+            vec![
+                set(id, "Position", EditValue::Vector3(position)),
+                set(id, "Orientation", EditValue::Vector3(orientation)),
+            ],
+        ),
+    );
+    replica.apply(&record).expect("pose replay");
+    assert_eq!(
+        authority.snapshot().expect("authority"),
+        replica.snapshot().expect("replica")
+    );
+    let rebuilt = CFrame::from_position_orientation(position, orientation);
+    for (actual, expected) in rebuilt.components().into_iter().zip(transform.components()) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+    let before = authority
+        .snapshot()
+        .expect("before rejected virtual property");
+    let cursor = authority.world().change_cursor();
+    assert!(matches!(
+        authority.submit(
+            A,
+            &batch(
+                2,
+                vec![
+                    set(id, "Position", EditValue::Vector3(Vec3::new(9.0, 8.0, 7.0))),
+                    set(id, "CFrame", EditValue::Vector3(position)),
+                ]
+            )
+        ),
+        Err(EditError::Core {
+            operation: 1,
+            source: CoreError::UnknownProperty { .. }
+        })
+    ));
+    assert_eq!(authority.snapshot().expect("unchanged"), before);
+    assert_eq!(authority.world().change_cursor(), cursor);
+    assert_eq!(authority.sequence(), 1);
 }
 
 #[test]
