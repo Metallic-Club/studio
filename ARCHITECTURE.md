@@ -28,7 +28,9 @@ apps.
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
-  only non-default properties, stable order). Also `deep_clone()` used by Play.
+  only non-default properties, stable order). Also `deep_clone()` used by Play. The change journal keeps the most
+  recent 16,384 mutation entries in a ring; `changes_since` deduplicates the retained suffix in first-change order.
+  A cursor older than that retained window (or from another world) requires a full rescan.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
@@ -37,7 +39,7 @@ apps.
   `MAX_VERTICES`, `MAX_KEYFRAMES`, ...), and the gltf crate's own validation runs only after our reference checks.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
-: `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
+- **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here.
