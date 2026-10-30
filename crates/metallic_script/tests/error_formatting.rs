@@ -35,7 +35,7 @@ fn native_errors_have_exact_positioned_text_without_internal_tracebacks() {
 #[test]
 fn native_pcall_errors_are_strings_and_keep_argument_diagnostics() {
     run(r#"
-local ok, err = pcall(task.delay, nil, function() end)
+local ok, err = pcall(string.match, {}, 'x')
 assert(not ok and type(err) == 'string', 'native error type: '..type(err))
 assert(string.find(err, 'bad argument #1', 1, true), err)
 assert(not string.find(err, '\nstack traceback', 1, true), err)

@@ -71,3 +71,10 @@ Integration follow-up: the test-only malformed-pattern correction described abov
 error-formatting integration tests in 0.13 s after another guarded lane-ownership cleanup (10.34 s compile,
 both source paths verified). No production code changed. The preceding full 231-test gate remains recorded
 above; CI is rerun on this normal appended commit. Next: inspect final CI and review feedback; do not merge.
+
+Task-duration compatibility follow-up: issue #173 requires nil duration to default to zero, so the original
+`pcall(task.delay, nil, f)` argument-error fixture would become valid. Replaced it with
+`pcall(string.match, {}, 'x')`, a genuinely invalid typed string argument independent of task validation.
+All 16 focused formatter integration tests passed again in 0.14 s after guarded ownership cleanup and a
+13.25 s compile with this worktree's core/script paths verified. This is another normal test-only appended
+commit; no production code changed. CI is rerun on that updated head.
