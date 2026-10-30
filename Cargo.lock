@@ -1838,6 +1838,7 @@ dependencies = [
 name = "metallic_script"
 version = "0.1.0"
 dependencies = [
+ "memchr",
  "metallic_core",
  "mlua",
 ]

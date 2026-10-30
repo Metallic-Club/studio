@@ -5,6 +5,8 @@
 //! large string could hang the host. These versions follow the same semantics (they are a
 //! port of the reference matcher) but count steps and give up with `pattern too complex`
 //! after [`MAX_STEPS`] steps or once the script's time budget is gone.
+//! Plain/literal `string.find` uses a linear-time, constant-space byte search, with
+//! deadline checks at its native call boundaries.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -414,14 +416,23 @@ fn has_specials(pat: &[u8]) -> bool {
     pat.iter().any(|c| b"^$*+?.([%-".contains(c))
 }
 
-fn find_plain(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(from);
+fn find_plain(
+    hay: &[u8],
+    needle: &[u8],
+    from: usize,
+    deadline: Option<Instant>,
+) -> R<Option<usize>> {
+    let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
+    if expired() {
+        return Err(Stop::Timeout);
     }
-    hay[from..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|i| i + from)
+    // memmem guarantees O(hay.len() + needle.len()) time and constant space;
+    // both byte slices remain borrowed from their Lua strings.
+    let found = memchr::memmem::find(&hay[from..], needle).map(|index| index + from);
+    if expired() {
+        return Err(Stop::Timeout);
+    }
+    Ok(found)
 }
 
 fn num(n: usize) -> Value {
@@ -441,7 +452,9 @@ fn find_aux(
     }
     let plain = plain.is_some_and(|v| !matches!(v, Value::Nil | Value::Boolean(false)));
     if find && (plain || !has_specials(&pat)) {
-        return Ok(MultiValue::from_vec(match find_plain(&src, &pat, init) {
+        let found = find_plain(&src, &pat, init, sched.deadline.get())
+            .map_err(|error| stop_error(lua, sched, error))?;
+        return Ok(MultiValue::from_vec(match found {
             Some(i) => vec![num(i + 1), num(i + pat.len())],
             None => vec![Value::Nil],
         }));
@@ -648,4 +661,27 @@ fn stop_error(lua: &Lua, sched: &Scheduler, stop: Stop) -> Error {
         *sched.timeout_loc.borrow_mut() = Some(script_location(lua, 1));
     }
     stop.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_search_rejects_an_expired_deadline_for_matches_misses_and_empty_needles() {
+        let expired = Instant::now() - std::time::Duration::from_secs(1);
+        for needle in [b"a".as_slice(), b"z", b""] {
+            assert!(matches!(
+                find_plain(b"abc", needle, 0, Some(expired)),
+                Err(Stop::Timeout)
+            ));
+        }
+    }
+
+    #[test]
+    fn plain_search_preserves_offsets_without_an_active_deadline() {
+        assert!(matches!(find_plain(b"abcabc", b"bc", 2, None), Ok(Some(4))));
+        assert!(matches!(find_plain(b"abc", b"", 3, None), Ok(Some(3))));
+        assert!(matches!(find_plain(b"abc", b"longer", 0, None), Ok(None)));
+    }
 }

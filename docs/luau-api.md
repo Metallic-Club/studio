@@ -96,6 +96,9 @@ remote:FireServer(5)
 ```
 
 ## Limits
+- Plain/literal `string.find` searches Lua bytes (including NUL/non-UTF-8 data) in worst-case linear time with constant
+  extra space. It checks the enclosing script deadline before and after the native search; an expired call reports
+  the usual script timeout with its script/line location. The search itself is not preempted mid-scan.
 - Remote: at most 32 arguments, 10,000 values (tables and leaves, shared tables counted per reference) and 1 MB of string bytes per
   call (`remote payload too large`); at most 1,000 messages and 16 MB queued per VM per step (`remote queue full`).
 - Signals: at most 10,000 connections per signal (`too many connections`). All handlers of a step share a 0.25 s budget per VM;
