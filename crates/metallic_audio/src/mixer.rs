@@ -164,6 +164,12 @@ impl Source {
         }
     }
 
+    /// Length in seconds when known (assets always; streams when the container states it).
+    pub(crate) fn length_secs(&self) -> Option<f64> {
+        self.len_frames()
+            .map(|f| f as f64 / self.sample_rate() as f64)
+    }
+
     fn len_frames(&self) -> Option<u64> {
         match self {
             Source::Asset(a) => Some(a.frames() as u64),

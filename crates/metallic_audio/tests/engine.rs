@@ -1017,3 +1017,10 @@ fn custom_backends_drive_the_mixer() {
     renderer.render(&mut out);
     assert!(out.iter().all(|s| (*s - 0.25).abs() < 1e-6));
 }
+
+#[test]
+fn engine_and_renderer_can_move_between_threads() {
+    fn assert_send<T: Send>() {}
+    assert_send::<AudioEngine>();
+    assert_send::<MixRenderer>();
+}
