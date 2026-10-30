@@ -31,9 +31,11 @@ pub enum Context {
 }
 
 /// A script error, formatted as `<Instance full name>:<line>: <message>`.
+/// User message text, including newlines and traceback-looking text, is preserved;
+/// structured Rust callback traceback metadata is omitted from this display text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptError {
-    /// The formatted error text.
+    /// The formatted error text. User messages may span multiple lines.
     pub message: String,
 }
 
@@ -75,23 +77,133 @@ pub(crate) fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Turns an `mlua` error into text, dropping tracebacks.
+/// Copies an error for display, removing only structured callback traceback metadata.
+/// The original error and user-provided message text remain unchanged.
+fn without_callback_tracebacks(error: &Error) -> Error {
+    match error {
+        Error::CallbackError { cause, .. } => without_callback_tracebacks(cause),
+        Error::BadArgument {
+            to,
+            pos,
+            name,
+            cause,
+        } => Error::BadArgument {
+            to: to.clone(),
+            pos: *pos,
+            name: name.clone(),
+            cause: std::sync::Arc::new(without_callback_tracebacks(cause)),
+        },
+        Error::WithContext { context, cause } => Error::WithContext {
+            context: context.clone(),
+            cause: std::sync::Arc::new(without_callback_tracebacks(cause)),
+        },
+        other => other.clone(),
+    }
+}
+
+/// Formats an `mlua` error without scanning or truncating user message text.
 pub(crate) fn format_error(e: &Error) -> String {
-    let text = match e {
-        Error::CallbackError { cause, .. } => return format_error(cause),
-        Error::RuntimeError(m) | Error::MemoryError(m) => m.clone(),
-        Error::SyntaxError { message, .. } => message.clone(),
+    match without_callback_tracebacks(e) {
+        Error::RuntimeError(m) | Error::MemoryError(m) => m,
+        Error::SyntaxError { message, .. } => message,
         other => other.to_string(),
-    };
-    match text.find("\nstack traceback") {
-        Some(i) => text[..i].trim_end().to_string(),
-        None => text,
+    }
+}
+
+/// Recognizes mlua's Rust error userdata without stringifying arbitrary Lua values.
+pub(crate) fn callback_message(value: &Value) -> Option<String> {
+    match value {
+        Value::Error(error) => Some(format_error(error)),
+        _ => None,
     }
 }
 
 fn setup_failed(e: Error) -> ScriptError {
     ScriptError {
         message: format!("script VM setup failed: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod error_format_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn runtime_error_keeps_literal_traceback_looking_user_text() {
+        let message = "runtime error: user prefix\nstack traceback:\nkeep user text\n";
+        assert_eq!(format_error(&Error::runtime(message)), message);
+    }
+
+    #[test]
+    fn callback_metadata_is_removed_without_losing_nested_diagnostics() {
+        let error = Error::CallbackError {
+            traceback: "stack traceback:\nINTERNAL OUTER FRAME".into(),
+            cause: Arc::new(Error::BadArgument {
+                to: Some("native".into()),
+                pos: 2,
+                name: None,
+                cause: Arc::new(Error::WithContext {
+                    context: "important context".into(),
+                    cause: Arc::new(Error::CallbackError {
+                        traceback: "stack traceback:\nINTERNAL INNER FRAME".into(),
+                        cause: Arc::new(Error::runtime(
+                            "literal\nstack traceback:\nkeep user text",
+                        )),
+                    }),
+                }),
+            }),
+        };
+        let text = format_error(&error);
+        assert!(text.contains("bad argument #2 to `native`"), "{text}");
+        assert!(text.contains("important context"), "{text}");
+        assert!(
+            text.contains("literal\nstack traceback:\nkeep user text"),
+            "{text}"
+        );
+        assert!(!text.contains("INTERNAL"), "{text}");
+    }
+
+    #[test]
+    fn protected_call_lua_failures_match_the_original_native_function() {
+        let vm = ScriptVm::new(Context::Server).unwrap();
+        let proposed: Function = vm.lua().globals().get("pcall").unwrap();
+        assert_eq!(proposed.info().what, "C");
+        const PROBE: &str = r#"return function(protected)
+local results = {}
+local function record(label, values)
+    table.insert(results, label..': count '..values.n)
+    for i=1,values.n do table.insert(results, type(values[i])..': '..tostring(values[i])) end
+end
+local function capture(f, ...) return table.pack(protected(f, ...)) end
+for _, case in {
+    {label='nil function'},
+    {label='number function', f=17},
+    {label='user error level zero', f=function() error('literal\nstack traceback:\nkept',0) end},
+    {label='user error level one', f=function() error('message',1) end},
+    {label='user error level three', f=function() error('message',3) end},
+} do
+    record(case.label, capture(case.f))
+end
+record('missing argument', table.pack(protected(protected)))
+return results
+end"#;
+        let reference = Lua::new();
+        let original: Function = reference.globals().get("pcall").unwrap();
+        let before: Function = reference
+            .load(PROBE)
+            .set_name("=PcallCompatibility")
+            .eval()
+            .unwrap();
+        let before: Vec<String> = before.call(original).unwrap();
+        let after: Function = vm
+            .lua()
+            .load(PROBE)
+            .set_name("=PcallCompatibility")
+            .eval()
+            .unwrap();
+        let after: Vec<String> = vm.call_with_budget(&after, proposed).unwrap();
+        assert_eq!(before, after);
     }
 }
 
@@ -230,9 +342,18 @@ impl ScriptVm {
         let globals = lua.globals();
         let tostring: Function = globals.get("tostring")?;
 
+        crate::api::errors::install(lua)?;
         // Needs `debug`, `xpcall`, `coroutine`: must run before they are removed.
         task_lib::install(lua, sched)?;
         crate::pattern::install(lua, sched)?;
+        let strings: Table = globals.get("string")?;
+        for name in ["find", "match", "gsub"] {
+            strings.set(name, crate::api::errors::guarded(lua, strings.get(name)?)?)?;
+        }
+        strings.set(
+            "gmatch",
+            crate::api::errors::guarded_iterator_factory(lua, strings.get("gmatch")?)?,
+        )?;
         lua.load(STRING_LIMITS).set_name("=[engine]").exec()?;
 
         // Remove everything the sandbox forbids.
@@ -261,9 +382,11 @@ impl ScriptVm {
         let real_collect: Function = globals.get("collectgarbage")?;
         globals.set(
             "collectgarbage",
-            lua.create_function(move |_, option: Option<String>| match option.as_deref() {
-                Some("count") => real_collect.call::<f64>("count"),
-                _ => Err(Error::runtime("collectgarbage: only \"count\" is allowed")),
+            crate::api::errors::guarded_fn(lua, move |_, option: Option<String>| {
+                match option.as_deref() {
+                    Some("count") => real_collect.call::<f64>("count"),
+                    _ => Err(Error::runtime("collectgarbage: only \"count\" is allowed")),
+                }
             })?,
         )?;
 
@@ -279,7 +402,7 @@ impl ScriptVm {
         let (s, j) = (sched.clone(), join.clone());
         globals.set(
             "print",
-            lua.create_function(move |_, args: MultiValue| {
+            crate::api::errors::guarded_fn(lua, move |_, args: MultiValue| {
                 s.sink.print(&j(args)?);
                 Ok(())
             })?,
@@ -287,7 +410,7 @@ impl ScriptVm {
         let s = sched.clone();
         globals.set(
             "warn",
-            lua.create_function(move |_, args: MultiValue| {
+            crate::api::errors::guarded_fn(lua, move |_, args: MultiValue| {
                 s.sink.warn(&join(args)?);
                 Ok(())
             })?,
@@ -336,6 +459,8 @@ impl ScriptVm {
 
     /// Adds (or replaces) a global visible to every script of this VM, e.g. `game` or
     /// `Instance`. The library table is read-only to scripts; only the host can write it.
+    /// Raw Rust callbacks retain mlua's error userdata when caught by native `pcall`;
+    /// the engine's own API bindings install their positioned-string wrappers separately.
     pub fn set_global(&self, name: &str, value: impl mlua::IntoLua) -> Result<(), ScriptError> {
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),

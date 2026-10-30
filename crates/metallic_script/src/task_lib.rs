@@ -9,7 +9,9 @@ use std::time::Instant;
 
 use mlua::{Error, Function, IntoLuaMulti, LightUserData, Lua, MultiValue, Result, Thread, Value};
 
-use crate::vm::{OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, format_error, lossy};
+use crate::vm::{
+    OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, callback_message, format_error, lossy,
+};
 
 /// Text of the error raised when a thread runs out of budget.
 pub(crate) const TIMEOUT_MSG: &str = "Script timeout: exhausted allowed execution time";
@@ -305,39 +307,33 @@ impl Scheduler {
     }
 }
 
-/// Registers the global `task` table and the thread guard.
+/// Registers the global `task` table and thread guard.
 pub(crate) fn install(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
     let globals = lua.globals();
     let xpcall: Value = globals.get("xpcall")?;
     let type_fn: Value = globals.get("type")?;
     let tostring: Value = globals.get("tostring")?;
     let sub: Value = globals.get::<mlua::Table>("string")?.get("sub")?;
-    let find: Value = globals.get::<mlua::Table>("string")?.get("find")?;
     let info: Value = globals.get::<mlua::Table>("debug")?.get("info")?;
     let yield_fn: Value = globals.get::<mlua::Table>("coroutine")?.get("yield")?;
 
-    // The guard runs every script thread. Its handler turns any error value into a
-    // string without running script code (no `__tostring` of script tables) and adds the
-    // `<chunk>:<line>:` of the nearest Lua frame when the message has none.
+    let callback = lua.create_function(|_, error: Value| Ok(callback_message(&error)))?;
+    // Recognize Rust errors structurally. The thread guard keeps its existing
+    // display rules, including avoiding __tostring on script tables.
     let guard: Function = lua
         .load(
             r#"
-local xpcall, type, tostring, sub, info, okTag, errTag, find = ...
+local xpcall, type, tostring, sub, info, okTag, errTag, callback = ...
 local function describe(e)
+    local native = callback(e)
+    if native ~= nil then return native end
     local t = type(e)
     if t == "string" then return e end
     if t == "nil" or t == "number" or t == "boolean" then return tostring(e) end
-    if t == "userdata" then
-        local s = tostring(e)
-        if sub(s, 1, 15) == "runtime error: " then s = sub(s, 16) end
-        local cut = find(s, "\nstack traceback", 1, true)
-        if cut then s = sub(s, 1, cut - 1) end
-        return s
-    end
+    if t == "userdata" then return tostring(e) end
     return "<" .. t .. ">"
 end
-local function handler(e)
-    local msg = describe(e)
+local function locate(msg)
     local level = 2
     while true do
         local src, line = info(level, "sl")
@@ -349,6 +345,7 @@ local function handler(e)
         level += 1
     end
 end
+local function handler(e) return locate(describe(e)) end
 local function finish(ok, ...)
     if ok then return okTag, ... end
     return errTag, ...
@@ -365,7 +362,7 @@ return function(f, ...) return finish(xpcall(f, handler, ...)) end
             info,
             tag(OK),
             tag(ERR),
-            find,
+            callback,
         ))?;
     *sched.guard.borrow_mut() = Some(guard);
 
@@ -380,7 +377,7 @@ return function(f, ...) return finish(xpcall(f, handler, ...)) end
     let s = sched.clone();
     task.set(
         "spawn",
-        lua.create_function(move |lua, (f, args): (Value, MultiValue)| {
+        crate::api::errors::guarded_fn(lua, move |lua, (f, args): (Value, MultiValue)| {
             let args: Vec<Value> = args.into_iter().collect();
             let (thread, first) = match f {
                 Value::Function(f) => s.new_thread(lua, f, args)?,
@@ -400,16 +397,19 @@ return function(f, ...) return finish(xpcall(f, handler, ...)) end
     let s = sched.clone();
     task.set(
         "delay",
-        lua.create_function(move |lua, (secs, f, args): (f64, Value, MultiValue)| {
-            let args: Vec<Value> = args.into_iter().collect();
-            let (thread, first) = match f {
-                Value::Function(f) => s.new_thread(lua, f, args)?,
-                Value::Thread(t) => (t, args),
-                other => return Err(bad_target(&other)),
-            };
-            s.push(s.now.get() + secs.max(0.0), false, thread.clone(), first);
-            Ok(thread)
-        })?,
+        crate::api::errors::guarded_fn(
+            lua,
+            move |lua, (secs, f, args): (f64, Value, MultiValue)| {
+                let args: Vec<Value> = args.into_iter().collect();
+                let (thread, first) = match f {
+                    Value::Function(f) => s.new_thread(lua, f, args)?,
+                    Value::Thread(t) => (t, args),
+                    other => return Err(bad_target(&other)),
+                };
+                s.push(s.now.get() + secs.max(0.0), false, thread.clone(), first);
+                Ok(thread)
+            },
+        )?,
     )?;
 
     globals.set("task", task)
