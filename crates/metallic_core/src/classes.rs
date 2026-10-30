@@ -54,6 +54,15 @@ pub const TOUCH_SLOTS: &[&str] = &["Auto", "Stick", "Look"];
 /// How an `InputAction`'s touch control is placed.
 pub const TOUCH_LAYOUTS: &[&str] = &["Auto", "Custom"];
 
+/// Registry-level eligibility for a property sent from server to client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repl {
+    /// Eligible for replication, subject to instance and owner visibility rules.
+    Replicated,
+    /// Never sent to a player.
+    ServerOnly,
+}
+
 /// Definition of one property of a class.
 pub struct PropDef {
     /// Property name.
@@ -64,6 +73,8 @@ pub struct PropDef {
     pub default: fn() -> Value,
     /// When set, a String value must be one of these.
     pub allowed: Option<&'static [&'static str]>,
+    /// Registry-level replication policy; container and script-source rules also apply.
+    pub repl: Repl,
 }
 
 /// Definition of one class.
@@ -82,6 +93,7 @@ const fn p(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef
         ty,
         default,
         allowed: None,
+        repl: Repl::Replicated,
     }
 }
 
@@ -148,6 +160,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Plastic".into()),
                 allowed: Some(MATERIALS),
+                repl: Repl::Replicated,
             },
             p("Anchored", ValueType::Bool, || Value::Bool(false)),
             p("CanCollide", ValueType::Bool, || Value::Bool(true)),
@@ -157,6 +170,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Block".into()),
                 allowed: Some(SHAPES),
+                repl: Repl::Replicated,
             },
         ],
     ),
@@ -255,6 +269,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Bool".into()),
                 allowed: Some(INPUT_ACTION_TYPES),
+                repl: Repl::Replicated,
             },
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
             p("DisplayName", ValueType::String, || {
@@ -265,6 +280,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Press".into()),
                 allowed: Some(INPUT_TRIGGERS),
+                repl: Repl::Replicated,
             },
             p("HoldTime", ValueType::Number, || Value::Number(500.0)),
             p("TapTime", ValueType::Number, || Value::Number(200.0)),
@@ -278,6 +294,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("None".into()),
                 allowed: Some(INPUT_ROLES),
+                repl: Repl::Replicated,
             },
             p("Rebindable", ValueType::Bool, || Value::Bool(true)),
             p("Required", ValueType::Bool, || Value::Bool(false)),
@@ -289,6 +306,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Auto".into()),
                 allowed: Some(TOUCH_SLOTS),
+                repl: Repl::Replicated,
             },
             p("TouchLabel", ValueType::String, || Value::String("".into())),
             p("TouchImage", ValueType::String, || Value::String("".into())),
@@ -297,6 +315,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Auto".into()),
                 allowed: Some(TOUCH_LAYOUTS),
+                repl: Repl::Replicated,
             },
             p("TouchPosition", ValueType::UDim2, || {
                 Value::UDim2(UDim2::new(0.0, 0.0, 0.0, 0.0))
@@ -355,6 +374,18 @@ static CLASSES: &[ClassDef] = &[
             }),
         ],
     ),
+    // Appended to retain existing registry class order. Runtime APIs are separate work.
+    class("ServerStorage", "Instance", &[]),
+    class(
+        "ModuleScript",
+        "Instance",
+        &[p("Source", ValueType::String, || {
+            Value::String(String::new())
+        })],
+    ),
+    class("RemoteFunction", "Instance", &[]),
+    class("UnreliableRemoteEvent", "Instance", &[]),
+    class("PlayerScripts", "Instance", &[]),
 ];
 
 /// Looks up a class by name.
@@ -393,6 +424,11 @@ pub fn class_def(name: &str) -> Option<&'static ClassDef> {
         "InputContext" => 25,
         "InputAction" => 26,
         "InputBinding" => 27,
+        "ServerStorage" => 28,
+        "ModuleScript" => 29,
+        "RemoteFunction" => 30,
+        "UnreliableRemoteEvent" => 31,
+        "PlayerScripts" => 32,
         _ => return None,
     };
     CLASSES.get(index)
@@ -509,4 +545,37 @@ mod tests {
             );
         }
     }
+}
+
+/// Classes in canonical registry order. Protocol fingerprints include this order.
+pub fn registry_classes() -> &'static [ClassDef] {
+    CLASSES
+}
+
+static INDEXED_PROPERTIES: LazyLock<HashMap<&'static str, Vec<&'static PropDef>>> =
+    LazyLock::new(|| {
+        CLASSES
+            .iter()
+            .map(|class| (class.name, all_properties(class.name)))
+            .collect()
+    });
+
+/// The stable, zero-based property index within a class, including inherited properties.
+///
+/// Indices are meaningful only with an equal replication registry hash. The immutable table
+/// initializes once; successful warm lookups allocate nothing. Unknown classes/properties return None.
+pub fn property_index(class: &str, property: &str) -> Option<u16> {
+    let index = INDEXED_PROPERTIES
+        .get(class)?
+        .iter()
+        .position(|def| def.name == property)?;
+    u16::try_from(index).ok()
+}
+
+/// Resolves a class-relative protocol index. Unknown classes and indices return None.
+pub fn property_by_index(class: &str, index: u16) -> Option<&'static PropDef> {
+    INDEXED_PROPERTIES
+        .get(class)?
+        .get(usize::from(index))
+        .copied()
 }

@@ -13,6 +13,7 @@
 
 pub mod classes;
 mod instance;
+pub mod replication;
 mod scene_file;
 mod signal;
 mod value;

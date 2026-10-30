@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 ron = "0.12.3"
 serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.10.9"
 thiserror = "2.0.21"
 
 [dev-dependencies]

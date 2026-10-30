@@ -299,3 +299,24 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - Benchmarks: criterion benches live in `crates/<crate>/benches/` (`cargo bench -p metallic_core --bench world` exists;
   render sync, physics step and script step follow). Budgets, bench names and the perf-CI plan are in
   `docs/research/2026-10-30-performance-and-scale.md`; record numbers in `docs/agents/`.
+
+
+### Core replication schema and visibility (issue 293)
+
+`metallic_core::classes` defines registry-level `Repl` eligibility and class-relative `property_index` /
+`property_by_index` lookups in base-first declaration order. `replication::registry_hash()` returns a cached
+SHA-256 compatibility fingerprint of ordered class names, inheritance, effective properties, types, defaults,
+allowed values and policy. Its versioned encoding uses explicit lengths and little-endian numeric bits. Peers
+must agree on this fingerprint before using property indices; it is neither a credential nor a scene hash.
+
+`replication::{instance_visible, property_visible, property_value}` implement the play-client filter. They hide
+ServerStorage/ServerScriptService subtrees and server Script.Source, restrict private PlayerGui/PlayerScripts
+subtrees to their owning trusted Player, and turn references to invisible instances into Ref(None). Queries are
+uncached and reflect reparenting immediately. The caller supplies a Player from its authenticated, same-world
+roster; these functions do not authenticate it or send any data. Authorized edit sessions need their own snapshot
+policy. Combined-mode client/server VMs still share one World until the runtime split and transport are integrated.
+
+Core definitions now include ServerStorage (a standard service), ModuleScript, RemoteFunction,
+UnreliableRemoteEvent and PlayerScripts. Registration does not implement require or the new classes' Luau remote
+methods. Existing class order is retained by appending definitions. The small `registry_hash` core example prints
+only the fingerprint for comparing separate processes, without loading creator content.
