@@ -1,0 +1,4695 @@
+# 3D models for templates (glTF/GLB). Generated with tools/assets/curate.py; see assets/README.md.
+
+[[asset]]
+id = "mdl-nature-rock-moss-set-01"
+kind = "model"
+name = "Rock Moss Set 01"
+source = "polyhaven"
+source_id = "rock_moss_set_01"
+page_url = "https://polyhaven.com/a/rock_moss_set_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rock_moss_set_01/rock_moss_set_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/rock_moss_set_01 (type 2, 'Rock Moss Set 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Kless Gyzen"
+attribution = "Rock Moss Set 01 by Kless Gyzen, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1937065
+category = "nature"
+look = "realistic"
+polycount = 63127
+tags = ["collection-pine-forest", "dirt", "nature", "outdoor", "pebbles", "realistic", "rock", "rocks", "stones"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rock_moss_set_01/rock_moss_set_01_1k.gltf"
+sha256 = "c36675aca9c6b2be7785c2534cf413b03ec82a5a2a5407a2b1c0cdb0346c9727"
+size = 9987
+map = "model"
+path = "rock_moss_set_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_moss_set_01/rock_moss_set_01.bin"
+sha256 = "de8360e6175879aaf02c171911069cf5f1852547f9ca7f10e440085dbcc3315e"
+size = 1466380
+map = "include"
+path = "rock_moss_set_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_diff_1k.jpg"
+sha256 = "40cea65d8aa4ee73a93b04af19963834d061eee9779c3fc2c1cba76eef812ccc"
+size = 168099
+map = "include"
+path = "textures/rock_moss_set_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_nor_gl_1k.jpg"
+sha256 = "eb4aad3f207f1dc5b624d74ae240372171626a66912bd71adf7bd3e518181d6e"
+size = 209975
+map = "include"
+path = "textures/rock_moss_set_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_01/rock_moss_set_01_rough_1k.jpg"
+sha256 = "4d6ec46623abd8e2cdb855f59c7ce31873ad61b36b60e4de579e9e776a497c6b"
+size = 82624
+map = "include"
+path = "textures/rock_moss_set_01_rough_1k.jpg"
+
+[[asset]]
+id = "mdl-nature-rock-moss-set-02"
+kind = "model"
+name = "Rock Moss Set 02"
+source = "polyhaven"
+source_id = "rock_moss_set_02"
+page_url = "https://polyhaven.com/a/rock_moss_set_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rock_moss_set_02/rock_moss_set_02_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/rock_moss_set_02 (type 2, 'Rock Moss Set 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Kless Gyzen"
+attribution = "Rock Moss Set 02 by Kless Gyzen, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1942240
+category = "nature"
+look = "realistic"
+polycount = 57647
+tags = ["collection-pine-forest", "dirt", "nature", "outdoor", "pebbles", "realistic", "rock", "rocks", "stones"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rock_moss_set_02/rock_moss_set_02_1k.gltf"
+sha256 = "c3b992a7622e94f7d8da97a47277a2a5177a513af0312a127ec908d4056c97db"
+size = 11608
+map = "model"
+path = "rock_moss_set_02_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rock_moss_set_02/rock_moss_set_02.bin"
+sha256 = "2df9d8eaaca4207529b0f613d4886d3962d0b9ffc0cdfd2bc4bf35dbcd391cb5"
+size = 1316572
+map = "include"
+path = "rock_moss_set_02.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_02/rock_moss_set_02_diff_1k.jpg"
+sha256 = "91dd2cc77d5198b067d77e5bdb3fa8ee7b8950aeff5aec2c1ccaddb76dcca481"
+size = 194307
+map = "include"
+path = "textures/rock_moss_set_02_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_02/rock_moss_set_02_nor_gl_1k.jpg"
+sha256 = "dd2503789089fb72ef469efd14364d393e769c0de8781a251475cac7e0b6f51d"
+size = 273527
+map = "include"
+path = "textures/rock_moss_set_02_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rock_moss_set_02/rock_moss_set_02_rough_1k.jpg"
+sha256 = "12252219a98a560940359973e83af831abdcfab0ead3f0a2a7b135a0143105f1"
+size = 146226
+map = "include"
+path = "textures/rock_moss_set_02_rough_1k.jpg"
+
+[[asset]]
+id = "mdl-nature-boulder-01"
+kind = "model"
+name = "Boulder 01"
+source = "polyhaven"
+source_id = "boulder_01"
+page_url = "https://polyhaven.com/a/boulder_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/boulder_01/boulder_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/boulder_01 (type 2, 'Boulder 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers"
+attribution = "Boulder 01 by Rico Cilliers, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 5771986
+category = "nature"
+look = "realistic"
+polycount = 123976
+tags = ["boulder", "cliff", "collection-verdant-trail", "formation", "geology", "landscape", "lichen", "nature", "realistic", "rock", "rock-face", "rocks", "weathered"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/boulder_01/boulder_01_1k.gltf"
+sha256 = "51487934db898b4c24072780a451e34eca5c02e3ada24a62bbc600bbc4019e92"
+size = 2773
+map = "model"
+path = "boulder_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/boulder_01/boulder_01.bin"
+sha256 = "7f5b06503d62bd95bfe9c6b8a354a5cc8ff04a4d271a8cf87a3e3125db4232d7"
+size = 2938808
+map = "include"
+path = "boulder_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/boulder_01/boulder_01_arm_1k.jpg"
+sha256 = "c57187c5746b6be913fa53846cb44ff78743e7ca5000f131c9627b99563c2b87"
+size = 659386
+map = "include"
+path = "textures/boulder_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/boulder_01/boulder_01_diff_1k.jpg"
+sha256 = "c38f0e918f6dc16b8d386ba3cdd89805c78320c119a1ceec85856f82b09a65b8"
+size = 987467
+map = "include"
+path = "textures/boulder_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/boulder_01/boulder_01_nor_gl_1k.jpg"
+sha256 = "0810cf6e89d89bb6eb065b4d2e2855288f5dcbd2c15c6e40ab90d462021b50aa"
+size = 1183552
+map = "include"
+path = "textures/boulder_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-nature-fern-02"
+kind = "model"
+name = "Fern 02"
+source = "polyhaven"
+source_id = "fern_02"
+page_url = "https://polyhaven.com/a/fern_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fern_02/fern_02_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/fern_02 (type 2, 'Fern 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers, Rob Tuytel"
+attribution = "Fern 02 by Rico Cilliers, Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1146361
+category = "nature"
+look = "realistic"
+polycount = 6232
+tags = ["bush", "collection-pine-forest", "collection-smugglers-cove", "fern", "foliage", "forest", "green", "jungle", "leaf", "leaves", "nature", "outdoor", "plant", "plants", "realistic", "shrub"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fern_02/fern_02_1k.gltf"
+sha256 = "33974295ee19670af4877705fc7d91f33f42d6302f0d44a625e072271223031f"
+size = 6899
+map = "model"
+path = "fern_02_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/fern_02/fern_02.bin"
+sha256 = "fe1abb762bcbbc7ad9e86925c8080437a62add257d9280e9142fdc85c226e64c"
+size = 176176
+map = "include"
+path = "fern_02.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_arm_1k.jpg"
+sha256 = "ebfb5d76ce9cbdaec20bcd22dce9b755f0b1b8650ef29ca13555e3e6961025d7"
+size = 280359
+map = "include"
+path = "textures/fern_02_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_diff_1k.jpg"
+sha256 = "a828a6e7b4c01c826911e2eac4b3afc7457dab7b3b392a31c681ed88b7d50029"
+size = 315705
+map = "include"
+path = "textures/fern_02_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fern_02/fern_02_nor_gl_1k.jpg"
+sha256 = "45bce132c6e96a0864bc89ab5da51361ab3f4afa83a6669ae499ab5ca811f621"
+size = 367222
+map = "include"
+path = "textures/fern_02_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-nature-shrub-sorrel-01"
+kind = "model"
+name = "Shrub Sorrel 01"
+source = "polyhaven"
+source_id = "shrub_sorrel_01"
+page_url = "https://polyhaven.com/a/shrub_sorrel_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/shrub_sorrel_01/shrub_sorrel_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/shrub_sorrel_01 (type 2, 'Shrub Sorrel 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers"
+attribution = "Shrub Sorrel 01 by Rico Cilliers, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1186333
+category = "nature"
+look = "realistic"
+polycount = 3319
+tags = ["bush", "collection-smugglers-cove", "field", "floral", "flower", "flowers", "forest", "green", "leaf", "leaves", "nature", "plants", "potplant", "realistic", "shrub", "small", "sorrel"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/shrub_sorrel_01/shrub_sorrel_01_1k.gltf"
+sha256 = "97e2c9b564610a1077de9e15de07acbf19f2e66619016aeebb7987e191ad3ce1"
+size = 17428
+map = "model"
+path = "shrub_sorrel_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/shrub_sorrel_01/shrub_sorrel_01.bin"
+sha256 = "725f46bf6d330486bf22d4b897fa1d8ef01cdc77a72f1400a3939f86740b4e5d"
+size = 110936
+map = "include"
+path = "shrub_sorrel_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/shrub_sorrel_01/shrub_sorrel_01_arm_1k.jpg"
+sha256 = "a1b49322e2b0ea988336fca959145dbb53b483b8f9ff2ec5f23dda20c486bdb8"
+size = 201949
+map = "include"
+path = "textures/shrub_sorrel_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/shrub_sorrel_01/shrub_sorrel_01_diff_1k.jpg"
+sha256 = "9aa62e57767f5b964b8d52e6406ebadb0205fa469d5a369a946fba13a3bc950f"
+size = 385129
+map = "include"
+path = "textures/shrub_sorrel_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/shrub_sorrel_01/shrub_sorrel_01_nor_gl_1k.jpg"
+sha256 = "0bb2e2aba7831a4e642ad6b1985ad82b0a574930ec6982f9a1a66ad8b41a94b3"
+size = 470891
+map = "include"
+path = "textures/shrub_sorrel_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-nature-dry-branches-medium-01"
+kind = "model"
+name = "Dry Branches Medium 01"
+source = "polyhaven"
+source_id = "dry_branches_medium_01"
+page_url = "https://polyhaven.com/a/dry_branches_medium_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/dry_branches_medium_01/dry_branches_medium_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/dry_branches_medium_01 (type 2, 'Dry Branches Medium 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers"
+attribution = "Dry Branches Medium 01 by Rico Cilliers, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3251642
+category = "nature"
+look = "realistic"
+polycount = 16803
+tags = ["botany", "branches", "collection-pine-forest", "collection-verdant-trail", "dead", "dry", "foliage", "forest", "ground-cover", "jungle", "medium", "natural", "nature", "outdoor", "plant", "plants", "props", "realistic", "shrub", "stick", "twig", "wood"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/dry_branches_medium_01/dry_branches_medium_01_1k.gltf"
+sha256 = "23f328ded9be1e151ccd7994b303c70221551544c4857a71474c1c01a14b8a22"
+size = 5844
+map = "model"
+path = "dry_branches_medium_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/dry_branches_medium_01/dry_branches_medium_01.bin"
+sha256 = "969da1e8cbb2d8201e7fa0fc0dac5b19ef354b32c3d8c62dd9faa7cb3833d8ca"
+size = 465172
+map = "include"
+path = "dry_branches_medium_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/dry_branches_medium_01/dry_branches_medium_01_arm_1k.jpg"
+sha256 = "6d1ba6f4763d2815301a15bf62eaf68c345cecafb107e2681d12f26fbc657f5a"
+size = 831180
+map = "include"
+path = "textures/dry_branches_medium_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/dry_branches_medium_01/dry_branches_medium_01_diff_1k.jpg"
+sha256 = "1fbaf810a9ca29d2faf0a179834e8dce10cf4854bafe13f63af111030b3ec660"
+size = 778799
+map = "include"
+path = "textures/dry_branches_medium_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/dry_branches_medium_01/dry_branches_medium_01_nor_gl_1k.jpg"
+sha256 = "62f5205bfec599000bb7a430e003bbada939bc8d7976a7d3ab7709fd5893413c"
+size = 1170647
+map = "include"
+path = "textures/dry_branches_medium_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-nature-potted-plant-04"
+kind = "model"
+name = "Potted Plant 04"
+source = "polyhaven"
+source_id = "potted_plant_04"
+page_url = "https://polyhaven.com/a/potted_plant_04"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/potted_plant_04/potted_plant_04_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/potted_plant_04 (type 2, 'Potted Plant 04'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "James Ray Cock"
+attribution = "Potted Plant 04 by James Ray Cock, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2122625
+category = "nature"
+look = "realistic"
+polycount = 6097
+tags = ["aloe", "cactus", "decor", "decorative", "nature", "plant", "plants", "pot", "potplant", "potted-plants", "realistic", "small", "succulent"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/potted_plant_04/potted_plant_04_1k.gltf"
+sha256 = "b3a3bc3e97da75844999c4da07b7104b6c023f729a7c045979929b9504184339"
+size = 7081
+map = "model"
+path = "potted_plant_04_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/potted_plant_04/potted_plant_04.bin"
+sha256 = "158c1d27503d4845eb3573f00c01ae3f4f77f1d6ca8754c67bf1762745946f7f"
+size = 241800
+map = "include"
+path = "potted_plant_04.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/potted_plant_04/potted_plant_04_arm_1k.jpg"
+sha256 = "7f3288345570ef700c851ea382ed267490ffc8c901ccc31f2ec5507e4d098e48"
+size = 478413
+map = "include"
+path = "textures/potted_plant_04_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/potted_plant_04/potted_plant_04_diff_1k.jpg"
+sha256 = "8693a971557fbafb12a24a2e23c1a04ab6b04ecdc4d26808c5ad3516a4971f24"
+size = 577545
+map = "include"
+path = "textures/potted_plant_04_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/potted_plant_04/potted_plant_04_nor_gl_1k.jpg"
+sha256 = "66e4627f6691a2d8104a6c53a39b41daddbd5bad8103e73f372c39166a3dcb07"
+size = 817786
+map = "include"
+path = "textures/potted_plant_04_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-nature-tree-stump-01"
+kind = "model"
+name = "Tree Stump 01"
+source = "polyhaven"
+source_id = "tree_stump_01"
+page_url = "https://polyhaven.com/a/tree_stump_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tree_stump_01/tree_stump_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/tree_stump_01 (type 2, 'Tree Stump 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Tree Stump 01 by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3939674
+category = "nature"
+look = "realistic"
+polycount = 41046
+tags = ["bark", "collection-pine-forest", "dead", "dead-tree", "debris", "decayed", "dry", "environment", "foliage", "forest", "forest-floor", "ground-cover", "leaf", "log", "moss", "mossy", "natural", "nature", "plants", "realistic", "roots", "rough-texture", "stump", "tree", "trees", "trunk", "woodland"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tree_stump_01/tree_stump_01_1k.gltf"
+sha256 = "9c66ba87d693f35eb404acaa96e0eeff831c295b61a0a903795584cbcc3527c9"
+size = 2793
+map = "model"
+path = "tree_stump_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_stump_01/tree_stump_01_arm_1k.jpg"
+sha256 = "d845cd6ab45288c546267d059ebe1f8a737e174330fe9375e5f99e753f2f95d8"
+size = 825646
+map = "include"
+path = "textures/tree_stump_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_stump_01/tree_stump_01_diff_1k.jpg"
+sha256 = "781ebe420ac4d84f2e44b9e9937a596e3d5d90711d978a1392f8bf3771b5bf31"
+size = 907451
+map = "include"
+path = "textures/tree_stump_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/tree_stump_01/tree_stump_01_nor_gl_1k.jpg"
+sha256 = "425117514b0386bb6df41cb64a61a624d2596472e05777483d4021b3285e3ceb"
+size = 1238404
+map = "include"
+path = "textures/tree_stump_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/tree_stump_01/tree_stump_01.bin"
+sha256 = "b4d9ca70b3c908c4a638fbd6a23ed96c84055bbbf14cf44b89e31ad59fa21e0a"
+size = 965380
+map = "include"
+path = "tree_stump_01.bin"
+
+[[asset]]
+id = "mdl-nature-dead-tree-trunk"
+kind = "model"
+name = "Dead Tree Trunk"
+source = "polyhaven"
+source_id = "dead_tree_trunk"
+page_url = "https://polyhaven.com/a/dead_tree_trunk"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/dead_tree_trunk/dead_tree_trunk_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/dead_tree_trunk (type 2, 'Dead Tree Trunk'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Dead Tree Trunk by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 4787539
+category = "nature"
+look = "realistic"
+polycount = 101802
+tags = ["bark", "collection-pine-forest", "collection-verdant-trail", "dead", "dead-tree", "decayed", "dry", "foliage", "forest", "forest-floor", "ground-cover", "log", "natural", "nature", "plant", "plants", "realistic", "rough-texture", "tree", "trunk", "woodland"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/dead_tree_trunk/dead_tree_trunk_1k.gltf"
+sha256 = "8baaf1ff66ba1f79acdceed0dc3797a882990a3abb10b18abe56762f34c26e39"
+size = 2812
+map = "model"
+path = "dead_tree_trunk_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/dead_tree_trunk/dead_tree_trunk.bin"
+sha256 = "c1ac6b3195246e8647a28eee2fbfdd4712a045c7cf2dcb4f5abcc2d40a446ca6"
+size = 2293788
+map = "include"
+path = "dead_tree_trunk.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/dead_tree_trunk/dead_tree_trunk_arm_1k.jpg"
+sha256 = "0e0f7d64ac4ee3a7e7861a48f4bbd1ec2c026facd8f48b756f6b5d4557af3fd3"
+size = 724384
+map = "include"
+path = "textures/dead_tree_trunk_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/dead_tree_trunk/dead_tree_trunk_diff_1k.jpg"
+sha256 = "bc31d7d23db90d90cfb568c583914eeec11b29716b79096818b706a9e3e0216c"
+size = 713480
+map = "include"
+path = "textures/dead_tree_trunk_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/dead_tree_trunk/dead_tree_trunk_nor_gl_1k.jpg"
+sha256 = "b7c393204c93f0c67535ff3b5d723b26598f9dbb2b5110b74249ab88189f026f"
+size = 1053075
+map = "include"
+path = "textures/dead_tree_trunk_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-barrel-01"
+kind = "model"
+name = "Barrel_01"
+source = "polyhaven"
+source_id = "Barrel_01"
+page_url = "https://polyhaven.com/a/Barrel_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Barrel_01/Barrel_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/Barrel_01 (type 2, 'Barrel_01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Jorge Camacho"
+attribution = "Barrel_01 by Jorge Camacho, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 692947
+category = "prop"
+look = "realistic"
+polycount = 2682
+tags = ["barrel", "containers", "drums", "explosive", "explosive-barrel", "fuel-barrel", "industrial", "metal", "oil", "oil-barrel", "prop", "radioactive", "realistic", "red-barrel"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Barrel_01/Barrel_01_1k.gltf"
+sha256 = "e084945dedd6a3379c6f3e97842cac89df7169797707e123a5e5b42c135d6888"
+size = 2711
+map = "model"
+path = "Barrel_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/Barrel_01/Barrel_01.bin"
+sha256 = "fe8369c1ac796059b62a091c0db7367dc420aa2cee212672e48f991f4208da98"
+size = 81756
+map = "include"
+path = "Barrel_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Barrel_01/Barrel_01_explosive_arm_1k.jpg"
+sha256 = "eab507df7719f0e7a3615bd22bb7bc0c09fed83bfc44e72a51451f8069c2d374"
+size = 243594
+map = "include"
+path = "textures/Barrel_01_explosive_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Barrel_01/Barrel_01_explosive_diff_1k.jpg"
+sha256 = "a7e5a7b03bbe0c9c56bf1ac09b24121a5d19148428e9e6eac326c803fc297098"
+size = 179308
+map = "include"
+path = "textures/Barrel_01_explosive_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Barrel_01/Barrel_01_explosive_nor_gl_1k.jpg"
+sha256 = "fa4750d64c6f568c8de3e36bc631348710329cf2d6d9c8c87bd2e47a96bc4fcb"
+size = 185578
+map = "include"
+path = "textures/Barrel_01_explosive_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-wooden-crate-01"
+kind = "model"
+name = "Wooden Crate 01"
+source = "polyhaven"
+source_id = "wooden_crate_01"
+page_url = "https://polyhaven.com/a/wooden_crate_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_crate_01/wooden_crate_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/wooden_crate_01 (type 2, 'Wooden Crate 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "James Ray Cock"
+attribution = "Wooden Crate 01 by James Ray Cock, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2277087
+category = "prop"
+look = "realistic"
+polycount = 6576
+tags = ["antique", "box", "chest", "collection-smugglers-cove", "colonial", "commercial", "container", "containers", "crate", "fancy", "farmhouse", "maritime", "old", "prop", "realistic", "vintage", "wood", "wooden"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_crate_01/wooden_crate_01_1k.gltf"
+sha256 = "fd9c6073acfc671e12b64666053f2805ae33aff5d3dbbcfe5c97c08c06644927"
+size = 5612
+map = "model"
+path = "wooden_crate_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_crate_01/wooden_crate_01_arm_1k.jpg"
+sha256 = "cd0b031c3924905e16ffd78ead062c2cc274148c4104d09635310097738b4679"
+size = 776699
+map = "include"
+path = "textures/wooden_crate_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_crate_01/wooden_crate_01_diff_1k.jpg"
+sha256 = "16653f4abaf4c1d9bca94bde3bd8c54d0ea9a5298d1648abcf57de1f7ecc34cc"
+size = 711292
+map = "include"
+path = "textures/wooden_crate_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_crate_01/wooden_crate_01_nor_gl_1k.jpg"
+sha256 = "f4ea44c7dc1686123d337039cb713d74e8a2dbc6d1bd2beeac276d06f5df3fab"
+size = 594076
+map = "include"
+path = "textures/wooden_crate_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/wooden_crate_01/wooden_crate_01.bin"
+sha256 = "85f381f8035f7a6f2f3b848640894c6d3333b261946dd8a338c0fe19e0bea21e"
+size = 189408
+map = "include"
+path = "wooden_crate_01.bin"
+
+[[asset]]
+id = "mdl-prop-cardboard-box-01"
+kind = "model"
+name = "Cardboard Box 01"
+source = "polyhaven"
+source_id = "cardboard_box_01"
+page_url = "https://polyhaven.com/a/cardboard_box_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/cardboard_box_01/cardboard_box_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/cardboard_box_01 (type 2, 'Cardboard Box 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rahul Chaudhary"
+attribution = "Cardboard Box 01 by Rahul Chaudhary, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2168437
+category = "prop"
+look = "realistic"
+polycount = 16952
+tags = ["box", "broken", "collection-the-shed", "containers", "damaged", "garage", "industrial", "old", "paper", "prop", "realistic", "shed", "storage", "warehouse", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/cardboard_box_01/cardboard_box_01_1k.gltf"
+sha256 = "6038bcc5bba5a08a5f6643a265977e37e3d14553e62981e144c33a89f10b78e1"
+size = 2903
+map = "model"
+path = "cardboard_box_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/cardboard_box_01/cardboard_box_01.bin"
+sha256 = "7212d43b4cb56459e46d31ab34dc7c310fcfbe170f4a588416dea07ae5628a4b"
+size = 381936
+map = "include"
+path = "cardboard_box_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cardboard_box_01/cardboard_box_01_arm_1k.jpg"
+sha256 = "5db63828d0f904c6a8d9c83afc912260b2a27261c15a28d06360519384574d2b"
+size = 398433
+map = "include"
+path = "textures/cardboard_box_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cardboard_box_01/cardboard_box_01_diff_1k.jpg"
+sha256 = "122c7ba8c5935e289804a730b480677a4bffdf74a45c91970cba682df92e171c"
+size = 567741
+map = "include"
+path = "textures/cardboard_box_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cardboard_box_01/cardboard_box_01_nor_gl_1k.jpg"
+sha256 = "d2d1f529a851966b65411b5094510dd9eba03cd5c0a89921f79325c377a8e8eb"
+size = 817424
+map = "include"
+path = "textures/cardboard_box_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-metal-trash-can"
+kind = "model"
+name = "Metal Trash Can"
+source = "polyhaven"
+source_id = "metal_trash_can"
+page_url = "https://polyhaven.com/a/metal_trash_can"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/metal_trash_can/metal_trash_can_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/metal_trash_can (type 2, 'Metal Trash Can'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "GurJas Studios"
+attribution = "Metal Trash Can by GurJas Studios, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 4994983
+category = "prop"
+look = "realistic"
+polycount = 13960
+tags = ["bin", "collection-hidden-alley", "containers", "disposal", "dumpster", "garbage", "industrial", "litter", "outdoor-trash-can", "prop", "realistic", "rubbish", "urban", "utility"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/metal_trash_can/metal_trash_can_1k.gltf"
+sha256 = "ccdc55ecfe43db2174c9257891e92551882a874564bb9a7908cafc5268b46c0c"
+size = 15481
+map = "model"
+path = "metal_trash_can_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/metal_trash_can/metal_trash_can.bin"
+sha256 = "a9b9f526b655bef865933335f2cfc8c8f0bd1a35fda05b290a93e3061f2b6c8a"
+size = 378288
+map = "include"
+path = "metal_trash_can.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/metal_trash_can/metal_trash_can_arm_1k.jpg"
+sha256 = "b23dcdb2ed40c1c6cfbd2d2779c6f075025b7269bfbbed2a70c6bdb7167e47fb"
+size = 731776
+map = "include"
+path = "textures/metal_trash_can_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/metal_trash_can/metal_trash_can_diff_1k.jpg"
+sha256 = "920c895a31b1cd2c000123c0592c70c33d46562752987da98070e7e0eebb662f"
+size = 551939
+map = "include"
+path = "textures/metal_trash_can_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/metal_trash_can/metal_trash_can_nor_gl_1k.jpg"
+sha256 = "b977f17aa9d4718ffc91a62868b7171b4479578b8cffd1d32001d92552af81a4"
+size = 842945
+map = "include"
+path = "textures/metal_trash_can_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/metal_trash_can/metal_trash_can_rust_arm_1k.jpg"
+sha256 = "31a6269e98a3a8b2a2d6db8f58724e0151d5312b5137e6d59b5a2ba873989159"
+size = 620549
+map = "include"
+path = "textures/metal_trash_can_rust_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/metal_trash_can/metal_trash_can_rust_diff_1k.jpg"
+sha256 = "51c44248305b111d978f7e0cbfe4a71ab7f49549968ce37c54b635d74c2cfba1"
+size = 768161
+map = "include"
+path = "textures/metal_trash_can_rust_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/metal_trash_can/metal_trash_can_rust_nor_gl_1k.jpg"
+sha256 = "a5497588e00e5e56db72e701457fc8a46d3a1fa7d9dd7bf9d79e02cada09e84b"
+size = 1085844
+map = "include"
+path = "textures/metal_trash_can_rust_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-treasure-chest"
+kind = "model"
+name = "Treasure Chest"
+source = "polyhaven"
+source_id = "treasure_chest"
+page_url = "https://polyhaven.com/a/treasure_chest"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/treasure_chest/treasure_chest_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/treasure_chest (type 2, 'Treasure Chest'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers"
+attribution = "Treasure Chest by Rico Cilliers, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 5483750
+category = "prop"
+look = "realistic"
+polycount = 103330
+tags = ["antique", "box", "chest", "collection-smugglers-cove", "colonial", "container", "containers", "crate", "decorative", "gold", "maritime", "metal", "old", "ornate", "pirates", "prop", "props", "realistic", "treasure", "wood", "wooden", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/treasure_chest/treasure_chest_1k.gltf"
+sha256 = "5edb8df3a45d2709b9407102ba4dd63025adff401ed8eba939d0117a74dd8dd5"
+size = 8584
+map = "model"
+path = "treasure_chest_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/treasure_chest/treasure_chest_arm_1k.jpg"
+sha256 = "1f09896cfad5b2f80483ab440b732fb03e94a67c3b09eee4c864af7ad2c6cc12"
+size = 958484
+map = "include"
+path = "textures/treasure_chest_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/treasure_chest/treasure_chest_diff_1k.jpg"
+sha256 = "4a2ee3b53835e7d4a3e411863c7829f37df1221aeb1cd78d89e24239cf8bbd0b"
+size = 812089
+map = "include"
+path = "textures/treasure_chest_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/treasure_chest/treasure_chest_nor_gl_1k.jpg"
+sha256 = "c86a694f7d40e46dfdd0293a5a9bae32061a8476132bbd679b63404cc1795b68"
+size = 893221
+map = "include"
+path = "textures/treasure_chest_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/treasure_chest/treasure_chest.bin"
+sha256 = "6e8fd5b5c641c3535bf26767fc7b0e7295c314d43613726da9679ee8cffecb03"
+size = 2811372
+map = "include"
+path = "treasure_chest.bin"
+
+[[asset]]
+id = "mdl-prop-wine-barrel-01"
+kind = "model"
+name = "Wine Barrel 01"
+source = "polyhaven"
+source_id = "wine_barrel_01"
+page_url = "https://polyhaven.com/a/wine_barrel_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wine_barrel_01/wine_barrel_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/wine_barrel_01 (type 2, 'Wine Barrel 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "James Ray Cock"
+attribution = "Wine Barrel 01 by James Ray Cock, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 924683
+category = "prop"
+look = "realistic"
+polycount = 10820
+tags = ["barrel", "celler", "containers", "farm", "farmhouse", "grape", "old", "prop", "realistic", "wine", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wine_barrel_01/wine_barrel_01_1k.gltf"
+sha256 = "503d3339677217c3241a3cdbc1c803ed1eb82d1a48f51436d1545ec5745ae8d8"
+size = 6673
+map = "model"
+path = "wine_barrel_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wine_barrel_01/wine_barrel_01_arm_1k.jpg"
+sha256 = "be658e1389dbe8669e847b8fc7df8affdce46d6582f01ac701555b6446a40b9d"
+size = 172531
+map = "include"
+path = "textures/wine_barrel_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wine_barrel_01/wine_barrel_01_diff_1k.jpg"
+sha256 = "6bea25b4fadda0636b6b7e46e0cc15153eda21ef62c823d5ee2e06a5a7589214"
+size = 195980
+map = "include"
+path = "textures/wine_barrel_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wine_barrel_01/wine_barrel_01_nor_gl_1k.jpg"
+sha256 = "86cdb0729b44d1687c75d895e6d0ef650f7580d70f3bcb52bce6fedc5fd79b6f"
+size = 163587
+map = "include"
+path = "textures/wine_barrel_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/wine_barrel_01/wine_barrel_01.bin"
+sha256 = "d827c31afed824b923ea9168462c93ab3ad3a88c4a68b155bd35efb1a02cbf00"
+size = 385912
+map = "include"
+path = "wine_barrel_01.bin"
+
+[[asset]]
+id = "mdl-prop-lantern-01"
+kind = "model"
+name = "Lantern 01"
+source = "polyhaven"
+source_id = "Lantern_01"
+page_url = "https://polyhaven.com/a/Lantern_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Lantern_01/Lantern_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/Lantern_01 (type 2, 'Lantern 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rajil Jose Macatangay"
+attribution = "Lantern 01 by Rajil Jose Macatangay, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1420416
+category = "prop"
+look = "realistic"
+polycount = 33902
+tags = ["antique", "brass", "bronze", "copper", "glass", "hurricane", "lamp", "lantern", "lighting", "metal", "oldfashioned", "prop", "props", "realistic", "vintage"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Lantern_01/Lantern_01_1k.gltf"
+sha256 = "d3f8d7a7afec96d55d3b7f20c3e329c909d19d37047902a826bc157f77c27819"
+size = 4866
+map = "model"
+path = "Lantern_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/Lantern_01/Lantern_01.bin"
+sha256 = "cb0c7eaaea361546201ba1c4324581ac7147c221851657b6e23d2f854beabe49"
+size = 864852
+map = "include"
+path = "Lantern_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Lantern_01/Lantern_01_brass_arm_1k.jpg"
+sha256 = "479e7105b170713373fdcca0c2f7dcce81913990f60cd4cfba1631f80f550191"
+size = 229054
+map = "include"
+path = "textures/Lantern_01_brass_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Lantern_01/Lantern_01_brass_diff_1k.jpg"
+sha256 = "d19d4c9417719a89ad824ce3a142f38f5e58c47b8640edca5eacca66918b608e"
+size = 140998
+map = "include"
+path = "textures/Lantern_01_brass_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Lantern_01/Lantern_01_brass_nor_gl_1k.jpg"
+sha256 = "95f89554c659712c7591a2a3d61178c9c0c0ef2c26e133005f24e2366a10f9b8"
+size = 180646
+map = "include"
+path = "textures/Lantern_01_brass_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-street-lamp-01"
+kind = "model"
+name = "Street Lamp 01"
+source = "polyhaven"
+source_id = "street_lamp_01"
+page_url = "https://polyhaven.com/a/street_lamp_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/street_lamp_01/street_lamp_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/street_lamp_01 (type 2, 'Street Lamp 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Josh Dean"
+attribution = "Street Lamp 01 by Josh Dean, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2166163
+category = "prop"
+look = "realistic"
+polycount = 30610
+tags = ["city", "collection-hidden-alley", "industrial", "lamppost", "light", "lighting", "night", "outdoor", "pole", "prop", "realistic", "road", "sidewalk", "street", "urban"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/street_lamp_01/street_lamp_01_1k.gltf"
+sha256 = "5d0358ede168b5e04547780b99d8e6d651cbe644e468e67cb505019047cbd5c8"
+size = 6419
+map = "model"
+path = "street_lamp_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/street_lamp_01/street_lamp_01.bin"
+sha256 = "c283db9b6d95835d9e8fc1692829acadcb21a0623b2daaa7231cec1440488401"
+size = 748908
+map = "include"
+path = "street_lamp_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/street_lamp_01/street_lamp_01_arm_1k.jpg"
+sha256 = "4b5487a6c7ee300c3cf5449629e01c35409e5c7ac1695edb9fe69d4821853c7c"
+size = 664324
+map = "include"
+path = "textures/street_lamp_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/street_lamp_01/street_lamp_01_diff_1k.jpg"
+sha256 = "3e9d3471b33eb1f8075ed741c2b1932103598626d057ca12ef38005ea5fcb165"
+size = 307889
+map = "include"
+path = "textures/street_lamp_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/street_lamp_01/street_lamp_01_nor_gl_1k.jpg"
+sha256 = "172af0fd7ed4999e9f520b9f56e1f357a6dba87adbd7b8aa87e0a0b95840c63d"
+size = 438623
+map = "include"
+path = "textures/street_lamp_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-wetfloorsign-01"
+kind = "model"
+name = "Wet Floor Sign 01"
+source = "polyhaven"
+source_id = "WetFloorSign_01"
+page_url = "https://polyhaven.com/a/WetFloorSign_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/WetFloorSign_01/WetFloorSign_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/WetFloorSign_01 (type 2, 'Wet Floor Sign 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Fran Calvente"
+attribution = "Wet Floor Sign 01 by Fran Calvente, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 266447
+category = "prop"
+look = "realistic"
+polycount = 228
+tags = ["caution", "hazard", "industrial", "office", "plastic", "prop", "props", "realistic", "safety", "sign", "slippery", "slippery-when-wet", "utility", "warning", "yellow"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/WetFloorSign_01/WetFloorSign_01_1k.gltf"
+sha256 = "ba5b10d2de7bb60b77dc3e44a96446181a078e35597947a490a4b6de906059e4"
+size = 2688
+map = "model"
+path = "WetFloorSign_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/WetFloorSign_01/WetFloorSign_01.bin"
+sha256 = "d23cdec8975ac452d64ae97b08f1eecd22e38f052bd5d588d352dbc0f0373af0"
+size = 9496
+map = "include"
+path = "WetFloorSign_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/WetFloorSign_01/WetFloorSign_01_arm_1k.jpg"
+sha256 = "6cd1d7c6648c36d2d66a7ddfc620ea78374ac770a5726f879b6914366e133e1a"
+size = 126370
+map = "include"
+path = "textures/WetFloorSign_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/WetFloorSign_01/WetFloorSign_01_diff_1k.jpg"
+sha256 = "01e18486a858defc0f44a73ec5037c4bee770bae88e7fed5beb6877df120fa90"
+size = 39755
+map = "include"
+path = "textures/WetFloorSign_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/WetFloorSign_01/WetFloorSign_01_nor_gl_1k.jpg"
+sha256 = "62269358f3b30569783c1872613d1d70d5eda36babe5b5f04fcfd5e92de1af62"
+size = 88138
+map = "include"
+path = "textures/WetFloorSign_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-power-box-01"
+kind = "model"
+name = "Power Box 01"
+source = "polyhaven"
+source_id = "power_box_01"
+page_url = "https://polyhaven.com/a/power_box_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/power_box_01/power_box_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/power_box_01 (type 2, 'Power Box 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers, Yann Kervran"
+attribution = "Power Box 01 by Rico Cilliers, Yann Kervran, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2725643
+category = "prop"
+look = "realistic"
+polycount = 21272
+tags = ["board", "box", "breakers", "circuit", "collection-the-shed", "damaged", "db-board", "electrical", "electronics", "industrial", "infrastructure", "modern", "power", "prop", "props", "realistic", "rigged", "switch", "tools", "utility", "wiring"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/power_box_01/power_box_01_1k.gltf"
+sha256 = "edb54e68fb1229e9f59906459d782c2ddc576f6bd1141cf09ad864f48d7cb93b"
+size = 4417
+map = "model"
+path = "power_box_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/power_box_01/power_box_01.bin"
+sha256 = "b46efdf668ec2d4e04ff51604b5f1486caf20df632f442aab62601718058db05"
+size = 782096
+map = "include"
+path = "power_box_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/power_box_01/power_box_01_arm_1k.jpg"
+sha256 = "4601e901e2f7c1584ab5ecf65e0e192a99a4be86da505527f1622658e1b1e527"
+size = 801803
+map = "include"
+path = "textures/power_box_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/power_box_01/power_box_01_diff_1k.jpg"
+sha256 = "845c425ebc0ded263a7d49909e2c26710dd6160da11c0ca44aebd723f4f6f168"
+size = 490782
+map = "include"
+path = "textures/power_box_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/power_box_01/power_box_01_nor_gl_1k.jpg"
+sha256 = "199b6fe93776aa0934f7bc36d8c82f1b4db9be9243e82e0cb3727bbcf25d85f1"
+size = 646545
+map = "include"
+path = "textures/power_box_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-concrete-road-barrier-02"
+kind = "model"
+name = "Concrete Road Barrier 02"
+source = "polyhaven"
+source_id = "concrete_road_barrier_02"
+page_url = "https://polyhaven.com/a/concrete_road_barrier_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/concrete_road_barrier_02/concrete_road_barrier_02_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/concrete_road_barrier_02 (type 2, 'Concrete Road Barrier 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Amal Kumar"
+attribution = "Concrete Road Barrier 02 by Amal Kumar, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2928100
+category = "prop"
+look = "realistic"
+polycount = 42578
+tags = ["blockade", "collection-hidden-alley", "industrial", "prop", "realistic", "road", "road-barrier", "road-block", "safety-barrier", "structures", "traffic-barrier", "wall"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/concrete_road_barrier_02/concrete_road_barrier_02_1k.gltf"
+sha256 = "52d13b5105ce861db5dd1413a1a924ad5594dee5a8eb37dbe1a9df441fcd7caf"
+size = 2910
+map = "model"
+path = "concrete_road_barrier_02_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/concrete_road_barrier_02/concrete_road_barrier_02.bin"
+sha256 = "254ee05467733e224e127dc76e019e5b5211c0da4248fa3fc75117ec005d7c90"
+size = 542900
+map = "include"
+path = "concrete_road_barrier_02.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/concrete_road_barrier_02/concrete_road_barrier_02_arm_1k.jpg"
+sha256 = "6fb282f242ce86a3e44663678c2e0366c37de8244b08acc003d99771cb780e53"
+size = 717138
+map = "include"
+path = "textures/concrete_road_barrier_02_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/concrete_road_barrier_02/concrete_road_barrier_02_diff_1k.jpg"
+sha256 = "9329260ebfc8632a5d47d9b344ab6f916e26604e73ebd2c495fee544df4bdefa"
+size = 741673
+map = "include"
+path = "textures/concrete_road_barrier_02_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/concrete_road_barrier_02/concrete_road_barrier_02_nor_gl_1k.jpg"
+sha256 = "42ec702843df209f0aef1d247c76dfb91385f0bf3b226b752d22a4c0e3780a31"
+size = 923479
+map = "include"
+path = "textures/concrete_road_barrier_02_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-sofa-02"
+kind = "model"
+name = "Sofa 02"
+source = "polyhaven"
+source_id = "sofa_02"
+page_url = "https://polyhaven.com/a/sofa_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/sofa_02/sofa_02_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/sofa_02 (type 2, 'Sofa 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Kirill Sannikov"
+attribution = "Sofa 02 by Kirill Sannikov, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 427171
+category = "prop"
+look = "realistic"
+polycount = 2728
+tags = ["chair", "couch", "fabric", "furniture", "leather", "prop", "realistic", "seating", "wood"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/sofa_02/sofa_02_1k.gltf"
+sha256 = "5df114209f9b956ccd4831eaeef469a81339ab371d0056eb6d5d29eee08eb431"
+size = 4183
+map = "model"
+path = "sofa_02_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/sofa_02/sofa_02.bin"
+sha256 = "cb337e03211be0309afa1ded2b6cbb2d402c0f794aaf8828fba559d27a42d3f5"
+size = 74864
+map = "include"
+path = "sofa_02.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/sofa_02/sofa_02_arm_1k.jpg"
+sha256 = "f2813f32cd9ec42a9080590d0953ac9e272d9baa0b22fdb5910bf325157393c6"
+size = 121752
+map = "include"
+path = "textures/sofa_02_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/sofa_02/sofa_02_diff_1k.jpg"
+sha256 = "4ff65c782578b52eee89cb96cc4e258ce1b6848e1a7655019af1f7207c749840"
+size = 86514
+map = "include"
+path = "textures/sofa_02_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/sofa_02/sofa_02_nor_gl_1k.jpg"
+sha256 = "c97a359703a8ce1cee62cbd9dc4013b611d821afb7769810983b464ebc5d0cfe"
+size = 139858
+map = "include"
+path = "textures/sofa_02_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-wooden-table-02"
+kind = "model"
+name = "Wooden Table 02"
+source = "polyhaven"
+source_id = "wooden_table_02"
+page_url = "https://polyhaven.com/a/wooden_table_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_table_02/wooden_table_02_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/wooden_table_02 (type 2, 'Wooden Table 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Serhii Khromov"
+attribution = "Wooden Table 02 by Serhii Khromov, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 485316
+category = "prop"
+look = "realistic"
+polycount = 196
+tags = ["furniture", "natural", "prop", "realistic", "rural", "simple", "table", "village", "wooden", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_table_02/wooden_table_02_1k.gltf"
+sha256 = "bb38e301840cb629d72c43c83fdb7fb308518efe2d0bc01e1ed0e9a9e43ed9d3"
+size = 2687
+map = "model"
+path = "wooden_table_02_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_table_02/wooden_table_02_arm_1k.jpg"
+sha256 = "b970a81e4b03f3b8a341c9eb639f112fff1782d681c846255ebc9073cd803ced"
+size = 174545
+map = "include"
+path = "textures/wooden_table_02_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_table_02/wooden_table_02_diff_1k.jpg"
+sha256 = "2334ac3e23d69222322515d9bad066b4e90d7d81989fe231b8fb12f39179ad9e"
+size = 178379
+map = "include"
+path = "textures/wooden_table_02_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_table_02/wooden_table_02_nor_gl_1k.jpg"
+sha256 = "9470e08e5dab4ab6a7cafab2a488a50fb54fa8f38890e9032c39dcbf7f5846d2"
+size = 122129
+map = "include"
+path = "textures/wooden_table_02_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/wooden_table_02/wooden_table_02.bin"
+sha256 = "52ed7cc67b3aa403375cf9bd18050e8cc21bcced6532a0183c1a733f0965df6d"
+size = 7576
+map = "include"
+path = "wooden_table_02.bin"
+
+[[asset]]
+id = "mdl-prop-plastic-monobloc-chair-01"
+kind = "model"
+name = "Plastic Monobloc Chair 01"
+source = "polyhaven"
+source_id = "plastic_monobloc_chair_01"
+page_url = "https://polyhaven.com/a/plastic_monobloc_chair_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/plastic_monobloc_chair_01/plastic_monobloc_chair_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/plastic_monobloc_chair_01 (type 2, 'Plastic Monobloc Chair 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Kuutti Siitonen"
+attribution = "Plastic Monobloc Chair 01 by Kuutti Siitonen, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1952867
+category = "prop"
+look = "realistic"
+polycount = 3356
+tags = ["cheap", "collection-the-shed", "dirty", "furniture", "monobloc", "old", "outdoor", "plastic", "prop", "realistic", "seating", "shed"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/plastic_monobloc_chair_01/plastic_monobloc_chair_01_1k.gltf"
+sha256 = "899bf148139ab8d1718c25ec06112a652631f9476b5aaeeacb9eb1da9b7f1d3a"
+size = 2892
+map = "model"
+path = "plastic_monobloc_chair_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/plastic_monobloc_chair_01/plastic_monobloc_chair_01.bin"
+sha256 = "db5c778488d01d7e7d3409e2cda53ee8f6dd523a327c080000d549dd0f83b375"
+size = 124808
+map = "include"
+path = "plastic_monobloc_chair_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/plastic_monobloc_chair_01/plastic_monobloc_chair_01_arm_1k.jpg"
+sha256 = "78a67659a19a9df9efc0ef71789de0c949a727db62ade4c4c8887cd2c803c1a2"
+size = 634320
+map = "include"
+path = "textures/plastic_monobloc_chair_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/plastic_monobloc_chair_01/plastic_monobloc_chair_01_diff_1k.jpg"
+sha256 = "fdd1255a02bf684cfcff2eae75c0e3eea0db1fb5ecbfbd8c4f9beab8fd83ff6c"
+size = 560823
+map = "include"
+path = "textures/plastic_monobloc_chair_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/plastic_monobloc_chair_01/plastic_monobloc_chair_01_nor_gl_1k.jpg"
+sha256 = "9ffa876b37d72ae1c0aed84d4dc1f62c956c844b3efec1f786f9080c10f63c9e"
+size = 630024
+map = "include"
+path = "textures/plastic_monobloc_chair_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-steel-frame-shelves-01"
+kind = "model"
+name = "Steel Frame Shelves 01"
+source = "polyhaven"
+source_id = "steel_frame_shelves_01"
+page_url = "https://polyhaven.com/a/steel_frame_shelves_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/steel_frame_shelves_01/steel_frame_shelves_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/steel_frame_shelves_01 (type 2, 'Steel Frame Shelves 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "James Ray Cock"
+attribution = "Steel Frame Shelves 01 by James Ray Cock, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1597356
+category = "prop"
+look = "realistic"
+polycount = 4348
+tags = ["bookshelf", "collection-the-shed", "commercial", "furniture", "industrial", "metal", "modern", "prop", "realistic", "shelf", "shelves", "wood"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/steel_frame_shelves_01/steel_frame_shelves_01_1k.gltf"
+sha256 = "4eff8994825d654e337f8dc425e959ed6add7f4773188c87ba64402d9edd9842"
+size = 2766
+map = "model"
+path = "steel_frame_shelves_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/steel_frame_shelves_01/steel_frame_shelves_01.bin"
+sha256 = "306d7e72d12a5d3047b8a189f8d0add51075eaf7f51f935286fda4e1c16dd066"
+size = 142312
+map = "include"
+path = "steel_frame_shelves_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/steel_frame_shelves_01/steel_frame_shelves_01_arm_1k.jpg"
+sha256 = "858629eeaa8f68ddb4fc1a813afe6ed988ded3d6d49184ec45a14611760f0bb3"
+size = 655560
+map = "include"
+path = "textures/steel_frame_shelves_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/steel_frame_shelves_01/steel_frame_shelves_01_diff_1k.jpg"
+sha256 = "85e205b334e15e05bec9b02be1258da6ab949ae908aa57e0bee6b94ba45b4415"
+size = 477882
+map = "include"
+path = "textures/steel_frame_shelves_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/steel_frame_shelves_01/steel_frame_shelves_01_nor_gl_1k.jpg"
+sha256 = "2a67ed7dd4f53c3e225396e6381992b768fe58b5261be703d540678e366e46ed"
+size = 318836
+map = "include"
+path = "textures/steel_frame_shelves_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-wooden-picnic-table"
+kind = "model"
+name = "Wooden Picnic Table"
+source = "polyhaven"
+source_id = "wooden_picnic_table"
+page_url = "https://polyhaven.com/a/wooden_picnic_table"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_picnic_table/wooden_picnic_table_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/wooden_picnic_table (type 2, 'Wooden Picnic Table'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Ulan Cabanilla"
+attribution = "Wooden Picnic Table by Ulan Cabanilla, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 4308296
+category = "prop"
+look = "realistic"
+polycount = 10210
+tags = ["bench", "countryside", "furniture", "old", "outdoor", "outdoor-seating", "park", "prop", "realistic", "seating", "table", "vintage", "weathered", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_picnic_table/wooden_picnic_table_1k.gltf"
+sha256 = "6b0dd9916fd87dba2e5baad06e20c0badf68bc68a5761a13854fa9a215c6bd50"
+size = 5099
+map = "model"
+path = "wooden_picnic_table_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_picnic_table/wooden_picnic_table_bottom_arm_1k.jpg"
+sha256 = "555226136c1d754d4aa5da42385a9152a146c5175382c77cced611a6880efd35"
+size = 699984
+map = "include"
+path = "textures/wooden_picnic_table_bottom_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_picnic_table/wooden_picnic_table_bottom_diff_1k.jpg"
+sha256 = "887b9a57213f87196fb090419e14d00095af8fa56c93ca6cd7d0d70ef4e5fd27"
+size = 680087
+map = "include"
+path = "textures/wooden_picnic_table_bottom_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_picnic_table/wooden_picnic_table_bottom_nor_gl_1k.jpg"
+sha256 = "c5d6eb388eceb6d98e92ff31d3f3346d411b1bbcb15c05dc9da71e4a7e398539"
+size = 548315
+map = "include"
+path = "textures/wooden_picnic_table_bottom_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_picnic_table/wooden_picnic_table_top_arm_1k.jpg"
+sha256 = "50d2b7a0b15c56bf82bc0c918e6eaa5f590a6fd61d32311c8da85c414ace297d"
+size = 747432
+map = "include"
+path = "textures/wooden_picnic_table_top_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_picnic_table/wooden_picnic_table_top_diff_1k.jpg"
+sha256 = "4aefdef35bf343410dbebd8577dfc968f1d6420ccddc601b19912e84b2accc0a"
+size = 722582
+map = "include"
+path = "textures/wooden_picnic_table_top_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_picnic_table/wooden_picnic_table_top_nor_gl_1k.jpg"
+sha256 = "1e65787457f9edfdd04f1ee3f777ac2d2a9d43bfbbd3cb40c1e086f939bba419"
+size = 625681
+map = "include"
+path = "textures/wooden_picnic_table_top_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/wooden_picnic_table/wooden_picnic_table.bin"
+sha256 = "1efd51c292843194fbd709452d56d06c9ddc770f43a013db57ca79bfc2731b01"
+size = 279116
+map = "include"
+path = "wooden_picnic_table.bin"
+
+[[asset]]
+id = "mdl-prop-television-01"
+kind = "model"
+name = "Television 01"
+source = "polyhaven"
+source_id = "Television_01"
+page_url = "https://polyhaven.com/a/Television_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Television_01/Television_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/Television_01 (type 2, 'Television 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Gabriel Radić"
+attribution = "Television 01 by Gabriel Radić, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 531294
+category = "prop"
+look = "realistic"
+polycount = 1918
+tags = ["audio", "collection-the-shed", "electronics", "furniture", "metal", "prop", "props", "realistic", "television", "tv", "video", "vintage", "wood"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Television_01/Television_01_1k.gltf"
+sha256 = "ef4376366ea956519c1a1d06146a8e8cc2bb0fcbd5c6b9f919a54ce31d05d530"
+size = 2933
+map = "model"
+path = "Television_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/Television_01/Television_01.bin"
+sha256 = "fc32dd3e6722cfa093910d8b5b4e6173b0c92a13d58b55b8e9c6007a9218b0a0"
+size = 90548
+map = "include"
+path = "Television_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Television_01/Television_01_arm_1k.jpg"
+sha256 = "b55594884fec13e47e22d1fdc3c89a528728454f65a7c26b482d9f3ec9200015"
+size = 190774
+map = "include"
+path = "textures/Television_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Television_01/Television_01_diff_1k.jpg"
+sha256 = "38e45263d115ab2832a4a2e99f93f03ff5f49c0aa0d5256528677a77c3ca4568"
+size = 102231
+map = "include"
+path = "textures/Television_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Television_01/Television_01_nor_gl_1k.jpg"
+sha256 = "289519da9f2fa5aeca0246bbb6d42ea1b03e5f54865d8881d3b1e0b3116d300f"
+size = 144808
+map = "include"
+path = "textures/Television_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-old-tyre"
+kind = "model"
+name = "Old Tyre"
+source = "polyhaven"
+source_id = "old_tyre"
+page_url = "https://polyhaven.com/a/old_tyre"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/old_tyre/old_tyre_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/old_tyre (type 2, 'Old Tyre'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "MP"
+attribution = "Old Tyre by MP, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2237203
+category = "prop"
+look = "realistic"
+polycount = 2880
+tags = ["abandoned", "automotive", "car", "collection-hidden-alley", "garage", "garbage", "industrial", "junkyard", "prop", "props", "realistic", "scrapyard", "trash", "vehicle", "wheel", "wheels"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/old_tyre/old_tyre_1k.gltf"
+sha256 = "ba7b417eb3dc747c356ac3cd1f125754755684eb664737a9f1fc9e490c0b766e"
+size = 2734
+map = "model"
+path = "old_tyre_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/old_tyre/old_tyre.bin"
+sha256 = "659e7982c2de92ca1d13194c97bf112b6dec22d91daecc88e3912d37ce1b7252"
+size = 84160
+map = "include"
+path = "old_tyre.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/old_tyre/old_tyre_arm_1k.jpg"
+sha256 = "3bcf192f5b99a7a574f9e21e75927043e6726c601a5da15e3210a31db05e12d4"
+size = 776823
+map = "include"
+path = "textures/old_tyre_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/old_tyre/old_tyre_diff_1k.jpg"
+sha256 = "0e34ce658c0844c0c94022233226d495930d514c917a5fa15ffee4760567439e"
+size = 650708
+map = "include"
+path = "textures/old_tyre_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/old_tyre/old_tyre_nor_gl_1k.jpg"
+sha256 = "34b716e140408985ddbab7d4bf1d8d430edf834cd2fd4639d82b14cb393fa73e"
+size = 722778
+map = "include"
+path = "textures/old_tyre_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-fire-hydrant"
+kind = "model"
+name = "Fire Hydrant"
+source = "polyhaven"
+source_id = "fire_hydrant"
+page_url = "https://polyhaven.com/a/fire_hydrant"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fire_hydrant/fire_hydrant_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/fire_hydrant (type 2, 'Fire Hydrant'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Gonçalo Felício"
+attribution = "Fire Hydrant by Gonçalo Felício, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 5521480
+category = "prop"
+look = "realistic"
+polycount = 86316
+tags = ["city", "collection-hidden-alley", "emergency", "extinguisher", "industrial", "infrastructure", "municipal", "prop", "realistic", "road", "street", "structures", "urban", "utility", "valve"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fire_hydrant/fire_hydrant_1k.gltf"
+sha256 = "aaca81b2904e6e5f1fb10a854c7b9a921232624387d1f8757b5c6bdaedcd9eb0"
+size = 20926
+map = "model"
+path = "fire_hydrant_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/fire_hydrant/fire_hydrant.bin"
+sha256 = "a3c7ed023bc4aff190902764326e7f83ae1a108f6bac2a1b637c38a8e03eb516"
+size = 1928772
+map = "include"
+path = "fire_hydrant.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fire_hydrant/fire_hydrant_aged_arm_1k.jpg"
+sha256 = "9c46b014735a4e8df5a80e4c030ddb321c9aeaa715ad4ea3eb60e6f0909c9d0a"
+size = 665642
+map = "include"
+path = "textures/fire_hydrant_aged_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fire_hydrant/fire_hydrant_aged_diff_1k.jpg"
+sha256 = "3198cabcaf5107e59109bd07dfe8e4c87b3f0533173d10fafdaf86f8024a291e"
+size = 629331
+map = "include"
+path = "textures/fire_hydrant_aged_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fire_hydrant/fire_hydrant_aged_nor_gl_1k.jpg"
+sha256 = "6fadc78fd5d696bf594ff021aaf93a0c6aced761830f9aa6971c51b17c869c35"
+size = 543768
+map = "include"
+path = "textures/fire_hydrant_aged_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fire_hydrant/fire_hydrant_arm_1k.jpg"
+sha256 = "d15bf8fc6389ae48a1060a38057c2093469e62f585c8033d300b80af81d40f9d"
+size = 671743
+map = "include"
+path = "textures/fire_hydrant_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fire_hydrant/fire_hydrant_diff_1k.jpg"
+sha256 = "a3d0b8b6fcd8a39c8d5067f8ef95e3290053131887398f89baf57c1f8d24ab45"
+size = 570746
+map = "include"
+path = "textures/fire_hydrant_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/fire_hydrant/fire_hydrant_nor_gl_1k.jpg"
+sha256 = "f6786775276c7b48f0582fdd7c43984b63b15b7a8e0ea0e2f2af8cdab98c06d7"
+size = 490552
+map = "include"
+path = "textures/fire_hydrant_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-prop-rubber-duck-toy"
+kind = "model"
+name = "Rubber Duck Toy"
+source = "polyhaven"
+source_id = "rubber_duck_toy"
+page_url = "https://polyhaven.com/a/rubber_duck_toy"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rubber_duck_toy/rubber_duck_toy_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/rubber_duck_toy (type 2, 'Rubber Duck Toy'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Plat251"
+attribution = "Rubber Duck Toy by Plat251, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 735058
+category = "prop"
+look = "realistic"
+polycount = 4288
+tags = ["animal", "bathroom", "child", "collection-the-shed", "cute", "decorative", "float", "fun", "home", "kids", "plastic", "play", "prop", "props", "realistic", "shed", "toy"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rubber_duck_toy/rubber_duck_toy_1k.gltf"
+sha256 = "dcf036297843dad2775841fc41208fae8c776066848d3f6e26efa42eb98d5016"
+size = 3180
+map = "model"
+path = "rubber_duck_toy_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/rubber_duck_toy/rubber_duck_toy.bin"
+sha256 = "381e1373b99a4ff23d5ee02cb66bfb5e7d897eaa280581f19b652c38ffd83314"
+size = 105376
+map = "include"
+path = "rubber_duck_toy.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rubber_duck_toy/rubber_duck_toy_arm_1k.jpg"
+sha256 = "07df1a805350811e8522dafce6133b98ce2f191326e7256315a15dfaaa4193a0"
+size = 346707
+map = "include"
+path = "textures/rubber_duck_toy_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rubber_duck_toy/rubber_duck_toy_diff_1k.jpg"
+sha256 = "c968d6185c3ec57a430818e6af85c2ba2880c7ee19ccb1a0171730926175cfd6"
+size = 231027
+map = "include"
+path = "textures/rubber_duck_toy_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rubber_duck_toy/rubber_duck_toy_nor_gl_1k.jpg"
+sha256 = "fc00541d9708328f383498914a5ed9935231a87f15ec002d5675af3f2347b544"
+size = 48768
+map = "include"
+path = "textures/rubber_duck_toy_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-modular-fort-01"
+kind = "model"
+name = "Modular Fort 01"
+source = "polyhaven"
+source_id = "modular_fort_01"
+page_url = "https://polyhaven.com/a/modular_fort_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_fort_01/modular_fort_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/modular_fort_01 (type 2, 'Modular Fort 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers"
+attribution = "Modular Fort 01 by Rico Cilliers, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 10638723
+category = "building"
+look = "realistic"
+polycount = 28218
+tags = ["ancient", "building", "buildings", "castle", "collection-smugglers-cove", "colonial", "fort", "modular", "old", "ramparts", "realistic", "stone", "structure", "structures", "wall"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_fort_01/modular_fort_01_1k.gltf"
+sha256 = "829ac97d4c5c5672d3055d772e0ef4b545ad93cb4b639296f34e3ddf04cf9faf"
+size = 71433
+map = "model"
+path = "modular_fort_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/modular_fort_01/modular_fort_01.bin"
+sha256 = "de86e71af4cd5b37006914a8e7ae7de59b245b73364317f1886285a6aa797f57"
+size = 1288144
+map = "include"
+path = "modular_fort_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_plaster_arm_1k.jpg"
+sha256 = "d51902ce06084dd828cf82d60fcbc733160cc27ada41d5e57b38bafbe5d12327"
+size = 872242
+map = "include"
+path = "textures/modular_fort_01_plaster_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_plaster_diff_1k.jpg"
+sha256 = "d453b45cec06da3da9e67b38d016f6358c7c310a99db9b066e07e3a494731f4d"
+size = 995332
+map = "include"
+path = "textures/modular_fort_01_plaster_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_plaster_nor_gl_1k.jpg"
+sha256 = "567953f0b7da39f6d4f173cc98ff948d31e07b516c8d2e0e0b0ec69de35cab3e"
+size = 1478355
+map = "include"
+path = "textures/modular_fort_01_plaster_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_trim_arm_1k.jpg"
+sha256 = "d6a9e67be3f171857bb06af436ebaefedd1fd3ca4e1212c8ad42be7ef6038c91"
+size = 807245
+map = "include"
+path = "textures/modular_fort_01_trim_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_trim_diff_1k.jpg"
+sha256 = "fe5811560cf0471321fe6af08114f279a7f957412b8aa6e2c224112990760556"
+size = 945345
+map = "include"
+path = "textures/modular_fort_01_trim_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_trim_nor_gl_1k.jpg"
+sha256 = "c5a21bd71f1ed0186fedaad18edb74713527a9426f5d136a5b21c3e09a71e1c3"
+size = 1070875
+map = "include"
+path = "textures/modular_fort_01_trim_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_wall_arm_1k.jpg"
+sha256 = "6d3327658794a90fc1b52c19dfbb57059b7ea9801f59abd13417e4be7bf40a34"
+size = 936858
+map = "include"
+path = "textures/modular_fort_01_wall_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_wall_diff_1k.jpg"
+sha256 = "8bdefadca0688e9b3fd91b4d12f341918b0a3670c25537c18a777fa51bb90bea"
+size = 978641
+map = "include"
+path = "textures/modular_fort_01_wall_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fort_01/modular_fort_01_wall_nor_gl_1k.jpg"
+sha256 = "6e8b0e1abac9c6ab0f9a36c04300ea3d0ca83dede3b49485c969a71494ce8d53"
+size = 1194253
+map = "include"
+path = "textures/modular_fort_01_wall_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-modular-wooden-pier"
+kind = "model"
+name = "Modular Wooden Pier"
+source = "polyhaven"
+source_id = "modular_wooden_pier"
+page_url = "https://polyhaven.com/a/modular_wooden_pier"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_wooden_pier/modular_wooden_pier_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/modular_wooden_pier (type 2, 'Modular Wooden Pier'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers"
+attribution = "Modular Wooden Pier by Rico Cilliers, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 7841928
+category = "building"
+look = "realistic"
+polycount = 84780
+tags = ["building", "collection-smugglers-cove", "dock", "jetty", "landing", "maritime", "modular", "mossy", "ocean", "old", "pier", "realistic", "scaffolding", "sea", "ship", "structure", "structures", "water", "wharf", "wood", "wooden", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_wooden_pier/modular_wooden_pier_1k.gltf"
+sha256 = "eeea9853deb63e43510f8d9d6af21963c88adab77e17ccac9f9b8d3a7d34a923"
+size = 21127
+map = "model"
+path = "modular_wooden_pier_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/modular_wooden_pier/modular_wooden_pier.bin"
+sha256 = "6ec10b84aaaa02800b095850fc92cf850632e5becd76698dc6609f40f05e1b60"
+size = 2651092
+map = "include"
+path = "modular_wooden_pier.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_wooden_pier/modular_wooden_pier_planks_arm_1k.jpg"
+sha256 = "4c03bcee7d0fb9708be5e5ebc4dd5fd73789f4eb24b6391dff6167f11c3ce95d"
+size = 722511
+map = "include"
+path = "textures/modular_wooden_pier_planks_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_wooden_pier/modular_wooden_pier_planks_diff_1k.jpg"
+sha256 = "2670a7eae2a3104e8537e61d90a8d8b169c7eb0f69b51622bec10e9472dc4573"
+size = 764066
+map = "include"
+path = "textures/modular_wooden_pier_planks_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_wooden_pier/modular_wooden_pier_planks_nor_gl_1k.jpg"
+sha256 = "b23d7b0c23c9a41d50b7e1691e183902765aa4c21ac6ca6da678e874c4ddfb04"
+size = 1055218
+map = "include"
+path = "textures/modular_wooden_pier_planks_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_wooden_pier/modular_wooden_pier_poles_arm_1k.jpg"
+sha256 = "dacaff86f936bef10220aa60843efadae53039f064ad1a6fad735b912f1ba285"
+size = 813524
+map = "include"
+path = "textures/modular_wooden_pier_poles_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_wooden_pier/modular_wooden_pier_poles_diff_1k.jpg"
+sha256 = "da9e017b41e052d5e47558bb98e61b577f66e9d44eb2d26dc9b085e317bede9e"
+size = 836152
+map = "include"
+path = "textures/modular_wooden_pier_poles_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_wooden_pier/modular_wooden_pier_poles_nor_gl_1k.jpg"
+sha256 = "9b2d7ca04642e249428969fa32189f36fcea8577a282dbccca1ac15d59dce18e"
+size = 978238
+map = "include"
+path = "textures/modular_wooden_pier_poles_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-modular-chainlink-fence"
+kind = "model"
+name = "Modular Chainlink Fence"
+source = "polyhaven"
+source_id = "modular_chainlink_fence"
+page_url = "https://polyhaven.com/a/modular_chainlink_fence"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_chainlink_fence/modular_chainlink_fence_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/modular_chainlink_fence (type 2, 'Modular Chainlink Fence'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Amal Kumar, James Ray Cock"
+attribution = "Modular Chainlink Fence by Amal Kumar, James Ray Cock, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 7292015
+category = "building"
+look = "realistic"
+polycount = 89232
+tags = ["barrier", "boundary", "building", "buildings", "city", "collection-hidden-alley", "fencing", "industrial", "infrastructure", "realistic", "security", "structures", "urban", "wall", "wire"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_chainlink_fence/modular_chainlink_fence_1k.gltf"
+sha256 = "4204f151f809b4abd41ea0b18b1b6a5d9c23e6bcc0b6a81e44d03690f26604e9"
+size = 41838
+map = "model"
+path = "modular_chainlink_fence_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/modular_chainlink_fence/modular_chainlink_fence.bin"
+sha256 = "be9ea1817089fd35b0927a8271358f6abd2ec80b306a085de435613d936fcb9a"
+size = 3168016
+map = "include"
+path = "modular_chainlink_fence.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_chainlink_fence/modular_chainlink_fence_posts_arm_1k.jpg"
+sha256 = "1694ecc2746ddaa93951ea5d2f2b830f544adf929f7ac9fae855f8b8fdfbad50"
+size = 839858
+map = "include"
+path = "textures/modular_chainlink_fence_posts_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_chainlink_fence/modular_chainlink_fence_posts_diff_1k.jpg"
+sha256 = "ec273fedef04fbcac26460b996beeeceeff3f91c1bea73ed2c6db1d0fdb30b73"
+size = 707116
+map = "include"
+path = "textures/modular_chainlink_fence_posts_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_chainlink_fence/modular_chainlink_fence_posts_nor_gl_1k.jpg"
+sha256 = "b43b8214c90a55bb84222d2a27430b31080d68dc14879632b86dbd316cb5f060"
+size = 505743
+map = "include"
+path = "textures/modular_chainlink_fence_posts_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_chainlink_fence/modular_chainlink_fence_wire_arm_1k.jpg"
+sha256 = "88af8364890b0645cd730eca11b30e6cd1c7578ad3aa1f012bb84915b9be5a03"
+size = 694743
+map = "include"
+path = "textures/modular_chainlink_fence_wire_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_chainlink_fence/modular_chainlink_fence_wire_diff_1k.jpg"
+sha256 = "79253847a00b67a616148d753df8f4e44ba4615f848b82310426618b5a8dd79b"
+size = 670536
+map = "include"
+path = "textures/modular_chainlink_fence_wire_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_chainlink_fence/modular_chainlink_fence_wire_nor_gl_1k.jpg"
+sha256 = "5cbf280f80e948de2422f0bb2fe2223a3b6f8e6fc75f54b00cd8d3e070938230"
+size = 664165
+map = "include"
+path = "textures/modular_chainlink_fence_wire_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-large-castle-door"
+kind = "model"
+name = "Large Castle Door"
+source = "polyhaven"
+source_id = "large_castle_door"
+page_url = "https://polyhaven.com/a/large_castle_door"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/large_castle_door/large_castle_door_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/large_castle_door (type 2, 'Large Castle Door'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Tina"
+attribution = "Large Castle Door by Tina, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3271006
+category = "building"
+look = "realistic"
+polycount = 12640
+tags = ["building", "buildings", "castle", "collection-hidden-alley", "crusades", "door", "entrance", "fort", "fortified-gate", "gate", "realistic", "stronghold", "structures"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/large_castle_door/large_castle_door_1k.gltf"
+sha256 = "e43e0a7bf56cb4f37402a133ae8bed3a010120362ef1a52ff4e59b0d83b2d656"
+size = 6111
+map = "model"
+path = "large_castle_door_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/large_castle_door/large_castle_door.bin"
+sha256 = "7db2eb9d2b81207a30c849ba5de0f2c25085add88e437bc69764ce792758ff76"
+size = 422436
+map = "include"
+path = "large_castle_door.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/large_castle_door/large_castle_door_arm_1k.jpg"
+sha256 = "2b1e832840d7393ac8a4d058630f8a8378254ad56f6601da08f1135851861955"
+size = 1016111
+map = "include"
+path = "textures/large_castle_door_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/large_castle_door/large_castle_door_diff_1k.jpg"
+sha256 = "06b9640df9702ceee23cfd042e858ca03b8c68818a691c55d4ea2a65258db97a"
+size = 803253
+map = "include"
+path = "textures/large_castle_door_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/large_castle_door/large_castle_door_nor_gl_1k.jpg"
+sha256 = "297929524f3a2e6634543ec1c6f0278369d3649a2eba888fa3bf9caf72ab2af1"
+size = 1023095
+map = "include"
+path = "textures/large_castle_door_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-rollershutter-door"
+kind = "model"
+name = "Rollershutter Door"
+source = "polyhaven"
+source_id = "rollershutter_door"
+page_url = "https://polyhaven.com/a/rollershutter_door"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rollershutter_door/rollershutter_door_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/rollershutter_door (type 2, 'Rollershutter Door'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "MP"
+attribution = "Rollershutter Door by MP, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2342983
+category = "building"
+look = "realistic"
+polycount = 1104
+tags = ["building", "buildings", "collection-hidden-alley", "commercial", "garage-door", "industrial", "realistic", "roller-garage-door", "security-shutter", "shutter-door", "structures", "urban", "warehouse-door"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/rollershutter_door/rollershutter_door_1k.gltf"
+sha256 = "913b2689f88f99cb75f8a6575e315ee90437e59976a2a3ce0b260d5636a14d30"
+size = 5378
+map = "model"
+path = "rollershutter_door_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/rollershutter_door/rollershutter_door.bin"
+sha256 = "155cd44e199d4edd19769503c7ed22b0b4007869166d0193a7e2d5e3134dc38d"
+size = 46192
+map = "include"
+path = "rollershutter_door.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rollershutter_door/rollershutter_door_arm_1k.jpg"
+sha256 = "0a45cf8585a339ae542ef891f3aa697258079b98f1755b2d6716ea542d3de14a"
+size = 626069
+map = "include"
+path = "textures/rollershutter_door_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rollershutter_door/rollershutter_door_diff_1k.jpg"
+sha256 = "b8cd7ad14fe5c691484fe240213c379bf18f21336afe6622bfa20c731eca010d"
+size = 600354
+map = "include"
+path = "textures/rollershutter_door_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rollershutter_door/rollershutter_door_graffiti_diff_1k.jpg"
+sha256 = "7438bee86fc32e3b6ca23ec694f179576749554dff7c3b281f30acd917c250af"
+size = 683274
+map = "include"
+path = "textures/rollershutter_door_graffiti_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/rollershutter_door/rollershutter_door_nor_gl_1k.jpg"
+sha256 = "3eaad465ac23e4b3d5fbf2e315b738f8d3039cd244a69ab8adcc7a0e786cdffb"
+size = 381716
+map = "include"
+path = "textures/rollershutter_door_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-modular-fire-escape"
+kind = "model"
+name = "Modular Fire Escape"
+source = "polyhaven"
+source_id = "modular_fire_escape"
+page_url = "https://polyhaven.com/a/modular_fire_escape"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_fire_escape/modular_fire_escape_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/modular_fire_escape (type 2, 'Modular Fire Escape'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Juniix"
+attribution = "Modular Fire Escape by Juniix, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 4806126
+category = "building"
+look = "realistic"
+polycount = 11322
+tags = ["building", "collection-hidden-alley", "emergency", "evacuation", "fire-egress", "industrial", "infrastructure", "modular", "pieces", "realistic", "safety", "stairs", "structures", "urban", "utility"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/modular_fire_escape/modular_fire_escape_1k.gltf"
+sha256 = "3a28e24cf2b6fc32c86f4fd378a372f9c3babfb9c2206036c6276d5bb47df2fd"
+size = 13672
+map = "model"
+path = "modular_fire_escape_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/modular_fire_escape/modular_fire_escape.bin"
+sha256 = "5173033f47b33cbfe47fb38fb18ad99e6d78070ab7e1faf6fcc5a002afe98728"
+size = 515356
+map = "include"
+path = "modular_fire_escape.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fire_escape/modular_fire_escape_01_arm_1k.jpg"
+sha256 = "ca4ada942209b9b880b180f0646e1bf7c86f46b7599b12ff56b4ef6ad533c44d"
+size = 711858
+map = "include"
+path = "textures/modular_fire_escape_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fire_escape/modular_fire_escape_01_diff_1k.jpg"
+sha256 = "50b15363269bee95c4c4aeb54a4a4df31a3e52680877fe286259c92885c17b74"
+size = 591379
+map = "include"
+path = "textures/modular_fire_escape_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fire_escape/modular_fire_escape_01_nor_gl_1k.jpg"
+sha256 = "2db2bfc1d9d487cec32f68a846883ded440a1d10a328d81d8dcc522be45e7734"
+size = 685951
+map = "include"
+path = "textures/modular_fire_escape_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fire_escape/modular_fire_escape_02_arm_1k.jpg"
+sha256 = "b4b65ebcd05e6c4502240a46eebd6535e9f83c0c65e0baaebaf25dae207c7c95"
+size = 732941
+map = "include"
+path = "textures/modular_fire_escape_02_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fire_escape/modular_fire_escape_02_diff_1k.jpg"
+sha256 = "9e969f5912b61aee6a6aa6dac3d98a4be3a4c92bf3b8f71e80fedc068493aa18"
+size = 615280
+map = "include"
+path = "textures/modular_fire_escape_02_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/modular_fire_escape/modular_fire_escape_02_nor_gl_1k.jpg"
+sha256 = "d9024407844f8baf514d005354ea4a729aff3659753e36cbab92fb09d0df3565"
+size = 939689
+map = "include"
+path = "textures/modular_fire_escape_02_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-stone-fire-pit"
+kind = "model"
+name = "Stone Fire Pit"
+source = "polyhaven"
+source_id = "stone_fire_pit"
+page_url = "https://polyhaven.com/a/stone_fire_pit"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/stone_fire_pit/stone_fire_pit_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/stone_fire_pit (type 2, 'Stone Fire Pit'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Sebastian Platen"
+attribution = "Stone Fire Pit by Sebastian Platen, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2535945
+category = "building"
+look = "realistic"
+polycount = 3887
+tags = ["backyard", "bbq", "building", "buildings", "collection-the-shed", "entertainment", "farm", "farmhouse", "fire", "furniture", "garden", "landscaping", "outdoor", "patio", "realistic", "relaxation", "stone", "structures"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/stone_fire_pit/stone_fire_pit_1k.gltf"
+sha256 = "40034b326d28c06f25cf1cdb39a5ab3f3b1d1a9415d490af39621efe6c31cee6"
+size = 2792
+map = "model"
+path = "stone_fire_pit_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/stone_fire_pit/stone_fire_pit.bin"
+sha256 = "83528a314ac1ff67a583a59640612e7f8dca803dbb581188b8226d9b661ef0d6"
+size = 96220
+map = "include"
+path = "stone_fire_pit.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/stone_fire_pit/stone_fire_pit_arm_1k.jpg"
+sha256 = "9812f7511ccbddcb8340fd47a6fffcf3897820fad31004241639d6d2ea523e2c"
+size = 681441
+map = "include"
+path = "textures/stone_fire_pit_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/stone_fire_pit/stone_fire_pit_diff_1k.jpg"
+sha256 = "3f2a2340a7dc7207d5b24deb7697c11c43bbd1963533b8f7c41644d32872d1ff"
+size = 785670
+map = "include"
+path = "textures/stone_fire_pit_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/stone_fire_pit/stone_fire_pit_nor_gl_1k.jpg"
+sha256 = "6ba240fbdc1ab6dac4b06ac342e7fca9fa6064c7d4f98e75cfccad44214c533a"
+size = 969822
+map = "include"
+path = "textures/stone_fire_pit_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-building-large-iron-gate"
+kind = "model"
+name = "Large Iron Gate"
+source = "polyhaven"
+source_id = "large_iron_gate"
+page_url = "https://polyhaven.com/a/large_iron_gate"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/large_iron_gate/large_iron_gate_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/large_iron_gate (type 2, 'Large Iron Gate'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Josh Dean"
+attribution = "Large Iron Gate by Josh Dean, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3128181
+category = "building"
+look = "realistic"
+polycount = 38140
+tags = ["building", "buildings", "cast-iron", "collection-hidden-alley", "drive-way", "entrance", "gate", "iron", "realistic", "security", "structures", "stylish"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/large_iron_gate/large_iron_gate_1k.gltf"
+sha256 = "fd46dd0fc634c0529656dca3d275e4eb81fbfbb5105228dc9d4e215b0b4bec77"
+size = 7101
+map = "model"
+path = "large_iron_gate_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/large_iron_gate/large_iron_gate.bin"
+sha256 = "973f9f7b7e968a5b22bcf07aac03312af5b74bac125750c887934ee30d986c8f"
+size = 971848
+map = "include"
+path = "large_iron_gate.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/large_iron_gate/large_iron_gate_arm_1k.jpg"
+sha256 = "f528b46396e097324af2c14cc2f15b855b5f9b909bf6a8da9819f528e6ebde4a"
+size = 840287
+map = "include"
+path = "textures/large_iron_gate_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/large_iron_gate/large_iron_gate_diff_1k.jpg"
+sha256 = "422b17616829c7a48805211fcca9699c0aec63dee40a8d851f5ba81fcf329575"
+size = 610309
+map = "include"
+path = "textures/large_iron_gate_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/large_iron_gate/large_iron_gate_nor_gl_1k.jpg"
+sha256 = "c46a14086705f0d4bc2858c461aa8dfdd3bf7a09955c370591511612429d60fb"
+size = 698636
+map = "include"
+path = "textures/large_iron_gate_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-weapon-service-pistol"
+kind = "model"
+name = "Service Pistol"
+source = "polyhaven"
+source_id = "service_pistol"
+page_url = "https://polyhaven.com/a/service_pistol"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/service_pistol/service_pistol_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/service_pistol (type 2, 'Service Pistol'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Mateusz Sadek"
+attribution = "Service Pistol by Mateusz Sadek, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3297684
+category = "weapon"
+look = "realistic"
+polycount = 27548
+tags = ["bullet", "cold-war", "collection-project-lighthouse", "firearms", "fps", "gun", "handgun", "metal", "props", "realistic", "semi-automatic", "vintage", "weapon", "weapons"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/service_pistol/service_pistol_1k.gltf"
+sha256 = "e18f346e76187ab4b5b3b7293ec39077ad2ff508fcf561b47f93ac48957e7e50"
+size = 17614
+map = "model"
+path = "service_pistol_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/service_pistol/service_pistol.bin"
+sha256 = "a97b6d31ca8865384a76d31289017e25a326a67b3b254162b2a02ecbd97600bc"
+size = 1052048
+map = "include"
+path = "service_pistol.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/service_pistol/service_pistol_arm_1k.jpg"
+sha256 = "a1b45605ba70a8a78a5bbb14aeb4f06755ad8505a682b0e4c804b8d5bd7b347e"
+size = 921086
+map = "include"
+path = "textures/service_pistol_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/service_pistol/service_pistol_diff_1k.jpg"
+sha256 = "34c536275a34438b578520531868fe4cd0b9b6825b39b30092029d79f33bd718"
+size = 718216
+map = "include"
+path = "textures/service_pistol_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/service_pistol/service_pistol_nor_gl_1k.jpg"
+sha256 = "e93c1cdfa5029e64ad87df4f7b2378827b01381593b98d2bec3c6d27de4aac42"
+size = 588720
+map = "include"
+path = "textures/service_pistol_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-weapon-bolt-action-rifle-7-62"
+kind = "model"
+name = "Bolt Action Rifle 7.62"
+source = "polyhaven"
+source_id = "bolt_action_rifle_7_62"
+page_url = "https://polyhaven.com/a/bolt_action_rifle_7_62"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/bolt_action_rifle_7_62 (type 2, 'Bolt Action Rifle 7.62'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Mateusz Sadek"
+attribution = "Bolt Action Rifle 7.62 by Mateusz Sadek, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 6040615
+category = "weapon"
+look = "realistic"
+polycount = 19985
+tags = ["aged", "bullet", "collection-project-lighthouse", "firearms", "fps", "gun", "old", "realistic", "scope", "vintage", "weapon", "weapons", "weathered", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_1k.gltf"
+sha256 = "60a5c7a745625dd38275756ca359170ffadcd427827ff5a161af3149bdabb9ec"
+size = 15369
+map = "model"
+path = "bolt_action_rifle_7_62_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/bolt_action_rifle_7_62/bolt_action_rifle_7_62.bin"
+sha256 = "c9a32b6471ef08b6d901f9c1865a31c22d37b254a3f772a3c3348d0fa8203ed0"
+size = 736616
+map = "include"
+path = "bolt_action_rifle_7_62.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_accesories_arm_1k.jpg"
+sha256 = "d45228bcdd1fb969f2a5fe07dacb4864c68baf27cd0bfc821ea9ae0b9f0bafed"
+size = 984292
+map = "include"
+path = "textures/bolt_action_rifle_7_62_accesories_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_accesories_diff_1k.jpg"
+sha256 = "624908d9514c958f0f17cd967ca93a3060b613eda97d6d94bc25aa40edcaa8f9"
+size = 878584
+map = "include"
+path = "textures/bolt_action_rifle_7_62_accesories_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_accesories_nor_gl_1k.jpg"
+sha256 = "a437112195ecebbb809d208a444e38581c769ab4849d9a714f65c1d8bde414b4"
+size = 1007303
+map = "include"
+path = "textures/bolt_action_rifle_7_62_accesories_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_arm_1k.jpg"
+sha256 = "8206367baa98eda75c09bca5c43341e382eb4365c1a08cf7abbdfaa3801c46f5"
+size = 892057
+map = "include"
+path = "textures/bolt_action_rifle_7_62_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_diff_1k.jpg"
+sha256 = "81a7a97770e7f8d5e19bb45b35d2ba97404d6bd44ab1d29487c3c3b431883c4a"
+size = 856375
+map = "include"
+path = "textures/bolt_action_rifle_7_62_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/bolt_action_rifle_7_62/bolt_action_rifle_7_62_nor_gl_1k.jpg"
+sha256 = "cc0477d86301ea63fdd877416f80d70a9b8fe0598a8772c9cbd754b212d9c2ea"
+size = 670019
+map = "include"
+path = "textures/bolt_action_rifle_7_62_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-weapon-antique-katana-01"
+kind = "model"
+name = "Antique Katana 01"
+source = "polyhaven"
+source_id = "antique_katana_01"
+page_url = "https://polyhaven.com/a/antique_katana_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/antique_katana_01/antique_katana_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/antique_katana_01 (type 2, 'Antique Katana 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Tal Swicegood"
+attribution = "Antique Katana 01 by Tal Swicegood, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 647055
+category = "weapon"
+look = "realistic"
+polycount = 6670
+tags = ["antique", "blade", "japanese", "katana", "ninja", "props", "realistic", "sharp", "sword", "weapon"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/antique_katana_01/antique_katana_01_1k.gltf"
+sha256 = "e54b4d289b86c8f61b13bd5ea64da0d8ef9a5f6a8225726ea0777832a49ef881"
+size = 2718
+map = "model"
+path = "antique_katana_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/antique_katana_01/antique_katana_01.bin"
+sha256 = "8ad394f302068d4d639bc611335e396f97e2cc551beb42c7ab004b79d19b8a6c"
+size = 221940
+map = "include"
+path = "antique_katana_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/antique_katana_01/antique_katana_01_arm_1k.jpg"
+sha256 = "41cae90b51960c1f576a78cc84477192ef13e743ca0a2df6e72f8c29d958cb48"
+size = 152738
+map = "include"
+path = "textures/antique_katana_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/antique_katana_01/antique_katana_01_diff_1k.jpg"
+sha256 = "f6d7662ee955b27376f6f34954d289da477618d20ba8d1d6316656272463717a"
+size = 173883
+map = "include"
+path = "textures/antique_katana_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/antique_katana_01/antique_katana_01_nor_gl_1k.jpg"
+sha256 = "154aa175d29b93030b3a0c5e810195d5ef0c00f055b1c28a3769b72c5b1ad521"
+size = 95776
+map = "include"
+path = "textures/antique_katana_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-weapon-machete"
+kind = "model"
+name = "Machete"
+source = "polyhaven"
+source_id = "machete"
+page_url = "https://polyhaven.com/a/machete"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/machete/machete_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/machete (type 2, 'Machete'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Ulan Cabanilla"
+attribution = "Machete by Ulan Cabanilla, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2424502
+category = "weapon"
+look = "realistic"
+polycount = 3032
+tags = ["blade", "collection-the-shed", "combat", "gardening", "iron", "jungle", "knife", "metal", "props", "realistic", "sharp", "shed", "steel", "survival", "tool", "weapon"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/machete/machete_1k.gltf"
+sha256 = "dc35353927e65a54e41a1e053a5b27d505101ae4ae23d72bce0a3e87994c254c"
+size = 2716
+map = "model"
+path = "machete_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/machete/machete.bin"
+sha256 = "d04ed0a65e50b4d00db6d51b74f8e099f16267c8b1a51efead1829ea1306a3a6"
+size = 74416
+map = "include"
+path = "machete.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/machete/machete_arm_1k.jpg"
+sha256 = "bc6aa9ef54abffe6c312633e2966509fb34f1805855f27b5ede7bfca550c40c3"
+size = 752047
+map = "include"
+path = "textures/machete_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/machete/machete_diff_1k.jpg"
+sha256 = "ccecb7324eaa72102290b4caeb9d9d328146d8e360006e77283ad41a3e787433"
+size = 679468
+map = "include"
+path = "textures/machete_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/machete/machete_nor_gl_1k.jpg"
+sha256 = "92617bfb6077d2131feb32c4ceb009f85e1878ee9174ed1842b7e61f2fd5551e"
+size = 915855
+map = "include"
+path = "textures/machete_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-weapon-stick-grenade"
+kind = "model"
+name = "Stick Grenade"
+source = "polyhaven"
+source_id = "stick_grenade"
+page_url = "https://polyhaven.com/a/stick_grenade"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/stick_grenade/stick_grenade_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/stick_grenade (type 2, 'Stick Grenade'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "singaii"
+attribution = "Stick Grenade by singaii, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1900903
+category = "weapon"
+look = "realistic"
+polycount = 6250
+tags = ["bomb", "collection-project-lighthouse", "explosive", "fps", "german", "hand-grenade", "realistic", "weapon", "weapons", "wooden-handle", "world-war-2"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/stick_grenade/stick_grenade_1k.gltf"
+sha256 = "801b507e80075faf87cbbd2f4cf7832b723a0c5878512af230aac21d8e860d67"
+size = 2785
+map = "model"
+path = "stick_grenade_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/stick_grenade/stick_grenade.bin"
+sha256 = "239b287bd831629014cc2eeb679deb5ba4c4ce13aaa57f7f6378b42a8d1cf8c8"
+size = 121592
+map = "include"
+path = "stick_grenade.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/stick_grenade/stick_grenade_arm_1k.jpg"
+sha256 = "4eac502b4f88b1ca3655c2e363ece98e60a4cd2130dbcf8e1405006b3d17142e"
+size = 439094
+map = "include"
+path = "textures/stick_grenade_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/stick_grenade/stick_grenade_diff_1k.jpg"
+sha256 = "e49424dff57ecfa9a4eb90c2f61bb453d9974b156dd1434b58cd5ab4b1f4d24a"
+size = 552519
+map = "include"
+path = "textures/stick_grenade_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/stick_grenade/stick_grenade_nor_gl_1k.jpg"
+sha256 = "cc96aa989974de7f7736e9ab19fcae070446f36fb7bba995d522ec05e95122f0"
+size = 784913
+map = "include"
+path = "textures/stick_grenade_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-weapon-kite-shield"
+kind = "model"
+name = "Kite Shield"
+source = "polyhaven"
+source_id = "kite_shield"
+page_url = "https://polyhaven.com/a/kite_shield"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/kite_shield/kite_shield_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/kite_shield (type 2, 'Kite Shield'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Ulan Cabanilla"
+attribution = "Kite Shield by Ulan Cabanilla, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3817680
+category = "weapon"
+look = "realistic"
+polycount = 10306
+tags = ["collection-the-shed", "crusades", "knight", "metal", "old", "props", "realistic", "shed", "shield", "war", "weapon", "wooden"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/kite_shield/kite_shield_1k.gltf"
+sha256 = "269a2467ca0c52df75bc5272a5246e2bcaf6cfe128eecf801542696a7bfef61d"
+size = 6826
+map = "model"
+path = "kite_shield_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/kite_shield/kite_shield.bin"
+sha256 = "5f936bc82f628fe243b062f2a240ea11549995fbf24d1c1055bdc29292cf96a9"
+size = 289804
+map = "include"
+path = "kite_shield.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/kite_shield/kite_shield_body_arm_1k.jpg"
+sha256 = "a4b6e349a5f33cae71c00f9ab98ee41b2b06817d87d0ef07e8e815f0dc628e38"
+size = 563372
+map = "include"
+path = "textures/kite_shield_body_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/kite_shield/kite_shield_body_diff_1k.jpg"
+sha256 = "7ed490545ccf4df0902d9b9cd71910cdbacb2f4cfef9aac72ca04134436d471b"
+size = 761392
+map = "include"
+path = "textures/kite_shield_body_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/kite_shield/kite_shield_body_nor_gl_1k.jpg"
+sha256 = "562b943c11ff3ba16cc0e10b49976faba38f7602c83d501cb36dee5b3ea027db"
+size = 843237
+map = "include"
+path = "textures/kite_shield_body_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/kite_shield/kite_shield_clamps_trim_arm_1k.jpg"
+sha256 = "2e1fe58aab65306124a63b8878fece977382b4662e23a2957c434e71272dc190"
+size = 521972
+map = "include"
+path = "textures/kite_shield_clamps_trim_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/kite_shield/kite_shield_clamps_trim_diff_1k.jpg"
+sha256 = "fd786e98045804fc772b1a3005b38a936fe30852919644a30d9241c7beb67f98"
+size = 417567
+map = "include"
+path = "textures/kite_shield_clamps_trim_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/kite_shield/kite_shield_clamps_trim_nor_gl_1k.jpg"
+sha256 = "e430f8032662bccd15ef42037e6971c94277da6eb3549d00965d61b7e3f604d2"
+size = 413510
+map = "include"
+path = "textures/kite_shield_clamps_trim_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-weapon-cannon-01"
+kind = "model"
+name = "Cannon 01"
+source = "polyhaven"
+source_id = "cannon_01"
+page_url = "https://polyhaven.com/a/cannon_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/cannon_01/cannon_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/cannon_01 (type 2, 'Cannon 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "James Ray Cock, Yann Kervran"
+attribution = "Cannon 01 by James Ray Cock, Yann Kervran, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3485413
+category = "weapon"
+look = "realistic"
+polycount = 41444
+tags = ["barrel", "cannon", "cast", "cast-iron", "collection-smugglers-cove", "colonial", "cove", "gun", "gunpowder", "iron", "maritime", "metal", "old", "pirates", "prop", "props", "realistic", "rigged", "ship", "weapon", "wooden"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/cannon_01/cannon_01_1k.gltf"
+sha256 = "d46d014e0fa1818c51222260fe6cab3bc34b7568b6bf19f196e14b24406168ee"
+size = 16567
+map = "model"
+path = "cannon_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/cannon_01/cannon_01.bin"
+sha256 = "4f035b40eecfd21cf29c7c2c13a85bb91804b0b486e11f6072a77c583f3a49e9"
+size = 1143768
+map = "include"
+path = "cannon_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cannon_01/cannon_01_arm_1k.jpg"
+sha256 = "7a7afd1a036964272219b514f9deaa29e512e9792ac6df9d33dcfd9ea909a881"
+size = 837622
+map = "include"
+path = "textures/cannon_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cannon_01/cannon_01_diff_1k.jpg"
+sha256 = "5ea48e1e18f8a9156b9f6464d8a8679db169d6aa07e479cec54e3b61bb015fac"
+size = 729247
+map = "include"
+path = "textures/cannon_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cannon_01/cannon_01_nor_gl_1k.jpg"
+sha256 = "f041013490c5549c797485abf8479adbd8f4977438daa75eb42ff234c0175b4c"
+size = 758209
+map = "include"
+path = "textures/cannon_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-horror-gothiccabinet-01"
+kind = "model"
+name = "Gothic Cabinet 01"
+source = "polyhaven"
+source_id = "GothicCabinet_01"
+page_url = "https://polyhaven.com/a/GothicCabinet_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/GothicCabinet_01/GothicCabinet_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/GothicCabinet_01 (type 2, 'Gothic Cabinet 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Kirill Sannikov"
+attribution = "Gothic Cabinet 01 by Kirill Sannikov, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1015446
+category = "horror"
+look = "realistic"
+polycount = 12170
+tags = ["decorative", "furniture", "gothic", "horror", "realistic", "shelf", "shelves", "table", "vintage", "wood"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/GothicCabinet_01/GothicCabinet_01_1k.gltf"
+sha256 = "1b3506f78e263c66e90d4a84b9efa883fe0bb02a13ff8ead2b3a265024e045ce"
+size = 8968
+map = "model"
+path = "GothicCabinet_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/GothicCabinet_01/GothicCabinet_01.bin"
+sha256 = "f1019b130872cad82d5bf5e27528a980fabbd69a9128340e5eb7530ea2d7c17b"
+size = 486532
+map = "include"
+path = "GothicCabinet_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/GothicCabinet_01/GothicCabinet_01_arm_1k.jpg"
+sha256 = "46b4a66b23836d37d5771ec024abfdc935c7b2bb17d73e2d802abca37edb6994"
+size = 213632
+map = "include"
+path = "textures/GothicCabinet_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/GothicCabinet_01/GothicCabinet_01_diff_1k.jpg"
+sha256 = "9b9586d9a840045d3f27ea4237ec56d713212fb877aceb2d0fc1cb75c7d59b98"
+size = 136344
+map = "include"
+path = "textures/GothicCabinet_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/GothicCabinet_01/GothicCabinet_01_nor_gl_1k.jpg"
+sha256 = "8c413ff4acbc3b4c7b58cb08e9a921f1781817a24533e0e9af6880ef40bfd68c"
+size = 169970
+map = "include"
+path = "textures/GothicCabinet_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-horror-gothicbed-01"
+kind = "model"
+name = "Gothic Bed 01"
+source = "polyhaven"
+source_id = "GothicBed_01"
+page_url = "https://polyhaven.com/a/GothicBed_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/GothicBed_01/GothicBed_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/GothicBed_01 (type 2, 'Gothic Bed 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Kirill Sannikov"
+attribution = "Gothic Bed 01 by Kirill Sannikov, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1155213
+category = "horror"
+look = "realistic"
+polycount = 18741
+tags = ["bed", "decorative", "furniture", "gothic", "horror", "realistic", "vintage", "wood"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/GothicBed_01/GothicBed_01_1k.gltf"
+sha256 = "67df189dd3a645936827f3cc123fb9e97ca9d2201d1e4090762bf477cab82fc0"
+size = 2683
+map = "model"
+path = "GothicBed_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/GothicBed_01/GothicBed_01.bin"
+sha256 = "2276e86480c49dfb63a4671a9637621f88727708cf83342156c157a1d89f747b"
+size = 658648
+map = "include"
+path = "GothicBed_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/GothicBed_01/GothicBed_01_arm_1k.jpg"
+sha256 = "049014a0bb54fd3da3b555d90966b63cad7e35feb5470b578524a7b1cec8506a"
+size = 180642
+map = "include"
+path = "textures/GothicBed_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/GothicBed_01/GothicBed_01_diff_1k.jpg"
+sha256 = "f7e8611a731a87a42a35d92e59f78b848ac20475827b79cb8aa34df0dd5bcbd5"
+size = 116672
+map = "include"
+path = "textures/GothicBed_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/GothicBed_01/GothicBed_01_nor_gl_1k.jpg"
+sha256 = "27533a33617689035cf9880803ed19af45550864442734ee9898697933b7319f"
+size = 196568
+map = "include"
+path = "textures/GothicBed_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-horror-vintage-grandfather-clock-01"
+kind = "model"
+name = "Vintage Grandfather Clock 01"
+source = "polyhaven"
+source_id = "vintage_grandfather_clock_01"
+page_url = "https://polyhaven.com/a/vintage_grandfather_clock_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/vintage_grandfather_clock_01/vintage_grandfather_clock_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/vintage_grandfather_clock_01 (type 2, 'Vintage Grandfather Clock 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "James Ray Cock, Yann Kervran"
+attribution = "Vintage Grandfather Clock 01 by James Ray Cock, Yann Kervran, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2362182
+category = "horror"
+look = "realistic"
+polycount = 12604
+tags = ["antique", "appliances", "clock", "decorative", "fancy", "horror", "old", "ornate", "realistic", "rigged", "time", "vintage", "wooden"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/vintage_grandfather_clock_01/vintage_grandfather_clock_01_1k.gltf"
+sha256 = "5d3aa1d5daabe830aed603e448a8f14f3993ec8a1116e083c181420a4fe1573a"
+size = 7868
+map = "model"
+path = "vintage_grandfather_clock_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_grandfather_clock_01/vintage_grandfather_clock_01_arm_1k.jpg"
+sha256 = "e0425b70773bc624f296f3b83f3a8001ac05f3d2cbcd1b1e1bd79dd1ca4b94de"
+size = 748415
+map = "include"
+path = "textures/vintage_grandfather_clock_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_grandfather_clock_01/vintage_grandfather_clock_01_diff_1k.jpg"
+sha256 = "2da73ab925dd5c18aa4c428f34519919a115dc45c37cf27976a3a15323ef7d9f"
+size = 628931
+map = "include"
+path = "textures/vintage_grandfather_clock_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_grandfather_clock_01/vintage_grandfather_clock_01_nor_gl_1k.jpg"
+sha256 = "a41aff853e19918f81c6b3d2a4b14034ca002b136779f8e5daa10d33cbdbecf7"
+size = 639744
+map = "include"
+path = "textures/vintage_grandfather_clock_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/vintage_grandfather_clock_01/vintage_grandfather_clock_01.bin"
+sha256 = "a6369fa664dd13d281e87c63f0ba31a0350291c93322fd10ec63f2ba4d252fd3"
+size = 337224
+map = "include"
+path = "vintage_grandfather_clock_01.bin"
+
+[[asset]]
+id = "mdl-horror-wheelchair-01"
+kind = "model"
+name = "Wheelchair 01"
+source = "polyhaven"
+source_id = "wheelchair_01"
+page_url = "https://polyhaven.com/a/wheelchair_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wheelchair_01/wheelchair_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/wheelchair_01 (type 2, 'Wheelchair 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Garreth Dean"
+attribution = "Wheelchair 01 by Garreth Dean, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1748394
+category = "horror"
+look = "realistic"
+polycount = 40252
+tags = ["clinic", "foldingwheelchair", "horror", "hospital", "infirmary", "medical", "mobilityaid", "props", "realistic", "wheelchair"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wheelchair_01/wheelchair_01_1k.gltf"
+sha256 = "6a59d638ceb35e46fe543f4b8b5e94b00fe2c6f15045c1d3cd7d9f46de34f645"
+size = 2702
+map = "model"
+path = "wheelchair_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wheelchair_01/wheelchair_01_arm_1k.jpg"
+sha256 = "29f5b9aab6d63ca1a218f8e34d03a78e9c92e8d643a8728978882223139c9192"
+size = 225508
+map = "include"
+path = "textures/wheelchair_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wheelchair_01/wheelchair_01_diff_1k.jpg"
+sha256 = "15be1e2a5bd86a4c20f99157e8337016f873d4e4f2d3effc656729430214ac00"
+size = 126137
+map = "include"
+path = "textures/wheelchair_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wheelchair_01/wheelchair_01_nor_gl_1k.jpg"
+sha256 = "534469bf7bb00549fb383f533b7fcc0a7b4256fe59f42ec7495d1f121700f392"
+size = 210295
+map = "include"
+path = "textures/wheelchair_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/wheelchair_01/wheelchair_01.bin"
+sha256 = "66c7c1779171228f1a4691ec572a0346a258f65a88ca71ecc72b81b3bc765996"
+size = 1183752
+map = "include"
+path = "wheelchair_01.bin"
+
+[[asset]]
+id = "mdl-horror-chandelier-01"
+kind = "model"
+name = "Chandelier 01"
+source = "polyhaven"
+source_id = "Chandelier_01"
+page_url = "https://polyhaven.com/a/Chandelier_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Chandelier_01/Chandelier_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/Chandelier_01 (type 2, 'Chandelier 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Kirill Sannikov"
+attribution = "Chandelier 01 by Kirill Sannikov, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1306295
+category = "horror"
+look = "realistic"
+polycount = 26860
+tags = ["ceiling", "chandelier", "decorative", "fixture", "hanging", "horror", "lighting", "ornate", "realistic", "vintage"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Chandelier_01/Chandelier_01_1k.gltf"
+sha256 = "19a63453965dde6ace3159e2059c30adee81905e95a6beaf62b7f47d9283e724"
+size = 4438
+map = "model"
+path = "Chandelier_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/Chandelier_01/Chandelier_01.bin"
+sha256 = "f476cc0c0eed8ccc31c49fc797e00ac6a0c8666c345aa933a9accd5762c06cd1"
+size = 892104
+map = "include"
+path = "Chandelier_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Chandelier_01/Chandelier_01_arm_1k.jpg"
+sha256 = "f557f4872ed9a586728df285b5ee7d1e4a48aef81d8040d1e423a7fc02602e4e"
+size = 151301
+map = "include"
+path = "textures/Chandelier_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Chandelier_01/Chandelier_01_diff_1k.jpg"
+sha256 = "b52eaa35e990d61842006ee8c4a24e08c82e36d87e9ff7a751a6400547a0eba2"
+size = 86766
+map = "include"
+path = "textures/Chandelier_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Chandelier_01/Chandelier_01_nor_gl_1k.jpg"
+sha256 = "0830646c51d8d7a8af90b716768052aba973f9b2e43ac40fdaf7e5aeacbe0244"
+size = 171686
+map = "include"
+path = "textures/Chandelier_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-horror-vintage-oil-lamp"
+kind = "model"
+name = "Vintage Oil Lamp"
+source = "polyhaven"
+source_id = "vintage_oil_lamp"
+page_url = "https://polyhaven.com/a/vintage_oil_lamp"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/vintage_oil_lamp/vintage_oil_lamp_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/vintage_oil_lamp (type 2, 'Vintage Oil Lamp'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Monsta3D"
+attribution = "Vintage Oil Lamp by Monsta3D, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2070002
+category = "horror"
+look = "realistic"
+polycount = 7208
+tags = ["antique", "decorative", "historic", "horror", "lamp", "lighting", "manor", "oil", "realistic", "victorian"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/vintage_oil_lamp/vintage_oil_lamp_1k.gltf"
+sha256 = "ae570b98ea30b0337f62d8e7f551c03a05de00b238f3fac8f1ca5a1f1dbd1add"
+size = 7786
+map = "model"
+path = "vintage_oil_lamp_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_oil_lamp/vintage_oil_lamp_arm_1k.jpg"
+sha256 = "004b7b6238632e4fc9e2ad7e76529caa292cfd96f5a42d6564531207f25c3e92"
+size = 655961
+map = "include"
+path = "textures/vintage_oil_lamp_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_oil_lamp/vintage_oil_lamp_diff_1k.jpg"
+sha256 = "a96cc1383fb056618eca80a0cf4ae192286c8752f8e83cb52f9fec02ca94a471"
+size = 536650
+map = "include"
+path = "textures/vintage_oil_lamp_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_oil_lamp/vintage_oil_lamp_flame_diff_1k.jpg"
+sha256 = "827c6a4fa9274141636cee9415f416a32937f2f257901bbe8488b22b862509f1"
+size = 92425
+map = "include"
+path = "textures/vintage_oil_lamp_flame_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_oil_lamp/vintage_oil_lamp_glass_arm_1k.jpg"
+sha256 = "0ef2b0eb2087895851be979afc5ccb2c11076f71bc667f9e586b7f8038efc158"
+size = 282607
+map = "include"
+path = "textures/vintage_oil_lamp_glass_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_oil_lamp/vintage_oil_lamp_glass_diff_1k.jpg"
+sha256 = "dbe33017c012a00c74419bb8f05b16a2eeee5e06e2ceab49a80462d25c7a7c0a"
+size = 39058
+map = "include"
+path = "textures/vintage_oil_lamp_glass_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_oil_lamp/vintage_oil_lamp_glass_nor_gl_1k.jpg"
+sha256 = "2752589c8f6c7724bf2aa5d097010bd9257fff8ca0f85add13ec2ac702909df0"
+size = 42123
+map = "include"
+path = "textures/vintage_oil_lamp_glass_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/vintage_oil_lamp/vintage_oil_lamp_nor_gl_1k.jpg"
+sha256 = "54db7efff64c4117782e25851544a0eb4881e5e28a13a06917a16d15ce26b1db"
+size = 227296
+map = "include"
+path = "textures/vintage_oil_lamp_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/vintage_oil_lamp/vintage_oil_lamp.bin"
+sha256 = "4064065c8e288beaa58639c139c801db337bfc6183e73378a9177157f0587167"
+size = 186096
+map = "include"
+path = "vintage_oil_lamp.bin"
+
+[[asset]]
+id = "mdl-horror-crowbar-01"
+kind = "model"
+name = "Crowbar 01"
+source = "polyhaven"
+source_id = "crowbar_01"
+page_url = "https://polyhaven.com/a/crowbar_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/crowbar_01/crowbar_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/crowbar_01 (type 2, 'Crowbar 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Alexander Otterbeck"
+attribution = "Crowbar 01 by Alexander Otterbeck, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 1588321
+category = "horror"
+look = "realistic"
+polycount = 2300
+tags = ["carpentry", "collection-the-shed", "construction", "dirty", "farmhouse", "garage", "horror", "industrial", "metal", "nails", "props", "realistic", "shed", "tools", "used", "workshop"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/crowbar_01/crowbar_01_1k.gltf"
+sha256 = "bb1d8974df16b2d75a786b2e019a0382a38aacab9850efe94df40899c7d0bab3"
+size = 2741
+map = "model"
+path = "crowbar_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/crowbar_01/crowbar_01.bin"
+sha256 = "85e90d3ac56ace801b3036c806f9578aed78cce85724aa01b7c5b32e8606996d"
+size = 58664
+map = "include"
+path = "crowbar_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/crowbar_01/crowbar_01_arm_1k.jpg"
+sha256 = "e6a836987045f155b6856f739369081fd0aa93578282c57723318cc834a3d739"
+size = 514358
+map = "include"
+path = "textures/crowbar_01_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/crowbar_01/crowbar_01_diff_1k.jpg"
+sha256 = "940d6566a26806daf0e729cbe1a641a964d96a0bc073aba769973f757a92adb3"
+size = 488739
+map = "include"
+path = "textures/crowbar_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/crowbar_01/crowbar_01_nor_gl_1k.jpg"
+sha256 = "09689be72e5dedb35ba6be5eaca4cc7865f5fb0899d9a91f856f040adec3a31e"
+size = 523819
+map = "include"
+path = "textures/crowbar_01_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-horror-wooden-axe"
+kind = "model"
+name = "Wooden Axe"
+source = "polyhaven"
+source_id = "wooden_axe"
+page_url = "https://polyhaven.com/a/wooden_axe"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_axe/wooden_axe_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/wooden_axe (type 2, 'Wooden Axe'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Ulan Cabanilla"
+attribution = "Wooden Axe by Ulan Cabanilla, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2030240
+category = "horror"
+look = "realistic"
+polycount = 3348
+tags = ["axe", "camping", "chopping", "firewood", "forestry", "forestry-tools", "garden", "gardening", "hand-tool", "horror", "lumberjack", "props", "realistic", "sharp", "survival", "tool", "weapon"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_axe/wooden_axe_1k.gltf"
+sha256 = "c1f0015f482a7ac0dd0378e28df5948d4281f951c89485015d392c8b7b1218ee"
+size = 2744
+map = "model"
+path = "wooden_axe_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_axe/wooden_axe_arm_1k.jpg"
+sha256 = "32b74d486ac8246965f5ae1c168f589328baca306a6206a4fcb0f0f44a312a8e"
+size = 698691
+map = "include"
+path = "textures/wooden_axe_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_axe/wooden_axe_diff_1k.jpg"
+sha256 = "941e5af6c2152ecc3e031d6044385d3949d758cf51e9dd65c61bead9b78f1d95"
+size = 694821
+map = "include"
+path = "textures/wooden_axe_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/wooden_axe/wooden_axe_nor_gl_1k.jpg"
+sha256 = "003712db67956ee8a96557a7f5f997037fbe5fb9f5c1fe286c7197af04eeff7c"
+size = 542696
+map = "include"
+path = "textures/wooden_axe_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/wooden_axe/wooden_axe.bin"
+sha256 = "f94ea2e160f43b6a50e7d0ca270faf55a3fa5cd6b6e424f6e56b8623da26f658"
+size = 91288
+map = "include"
+path = "wooden_axe.bin"
+
+[[asset]]
+id = "mdl-horror-marble-bust-01"
+kind = "model"
+name = "Marble Bust 01"
+source = "polyhaven"
+source_id = "marble_bust_01"
+page_url = "https://polyhaven.com/a/marble_bust_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/marble_bust_01/marble_bust_01_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/marble_bust_01 (type 2, 'Marble Bust 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rico Cilliers"
+attribution = "Marble Bust 01 by Rico Cilliers, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 898283
+category = "horror"
+look = "realistic"
+polycount = 17456
+tags = ["art", "bust", "decorative", "horror", "man", "mansion", "marble", "realistic", "renaissance", "sandstone", "sculpt", "sculpture", "statue"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/marble_bust_01/marble_bust_01_1k.gltf"
+sha256 = "b6f192fc01be4349470b66f6f6948bd37620267bdbc86f4568e4d078f97ff09b"
+size = 2793
+map = "model"
+path = "marble_bust_01_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/marble_bust_01/marble_bust_01.bin"
+sha256 = "0bb757c1bd00bfe42005c84e7f76df98ce04a532e595a2ddda8a0335cd959e33"
+size = 416608
+map = "include"
+path = "marble_bust_01.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/marble_bust_01/marble_bust_01_diff_1k.jpg"
+sha256 = "cbb7dccdc62d7eaa240eef7b4956969bf6e73c7338b64f1378629838ea22383c"
+size = 160337
+map = "include"
+path = "textures/marble_bust_01_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/marble_bust_01/marble_bust_01_nor_gl_1k.jpg"
+sha256 = "3d355904cd54c2de90d5d4310b80d43816fa2dd509f0a3445d654eab8e237c5f"
+size = 124627
+map = "include"
+path = "textures/marble_bust_01_nor_gl_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/marble_bust_01/marble_bust_01_rough_1k.jpg"
+sha256 = "1c4502352dc936dd1f1c1a81b418706df1ce0445949874215015325f9b8921fb"
+size = 193918
+map = "include"
+path = "textures/marble_bust_01_rough_1k.jpg"
+
+[[asset]]
+id = "mdl-animal-street-rat"
+kind = "model"
+name = "Street Rat"
+source = "polyhaven"
+source_id = "street_rat"
+page_url = "https://polyhaven.com/a/street_rat"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/street_rat/street_rat_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/street_rat (type 2, 'Street Rat'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Sean Buckley"
+attribution = "Street Rat by Sean Buckley, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 3610113
+category = "animal"
+look = "realistic"
+polycount = 14286
+tags = ["alleyway", "animal", "collection-hidden-alley", "creature", "feral", "horror", "mouse", "nature", "pest", "rat", "realistic", "rodent", "vermin"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/street_rat/street_rat_1k.gltf"
+sha256 = "66d822f0828838a5ffd1f82b846bdf90c962c73781bf8f1da22b487eef6950b2"
+size = 2770
+map = "model"
+path = "street_rat_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/street_rat/street_rat.bin"
+sha256 = "8b7a6b9bba805537b2009a5e3f7678558edc8a365fb8e5ee2af8dc7ed0bf9f56"
+size = 1365280
+map = "include"
+path = "street_rat.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/street_rat/street_rat_arm_1k.jpg"
+sha256 = "c511beb5d626f9fc9ec02be9d96322d309904f50746146b7ec1188200e7582c2"
+size = 982063
+map = "include"
+path = "textures/street_rat_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/street_rat/street_rat_diff_1k.jpg"
+sha256 = "afdbbe2bb1dd7176561c2dce1bf401930e109c5669ad6496384d0fbae24d62a7"
+size = 529505
+map = "include"
+path = "textures/street_rat_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/street_rat/street_rat_nor_gl_1k.jpg"
+sha256 = "22b82eb903e46be050c454903879d0ff867b8cbc58f2c3e8c87b52085154f8b9"
+size = 730495
+map = "include"
+path = "textures/street_rat_nor_gl_1k.jpg"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-platform"
+kind = "model"
+name = "Platform"
+source = "polypizza"
+source_id = "aEsU846H8u"
+page_url = "https://poly.pizza/m/aEsU846H8u"
+download_url = "https://static.poly.pizza/8debb92d-1ef5-429b-94d0-02c0b76a2a40.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/aEsU846H8u: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Platform by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 27932
+category = "platformer"
+look = "lowpoly"
+polycount = 508
+animated = false
+tags = ["lowpoly", "other", "platformer", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/8debb92d-1ef5-429b-94d0-02c0b76a2a40.glb"
+sha256 = "9399dbedc1225e0702d79f5242ea1ce224c93600948d7f25461b29ee417d189b"
+size = 27932
+map = "model"
+path = "platform.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-spike-platform"
+kind = "model"
+name = "Spike Platform"
+source = "polypizza"
+source_id = "vBafePBZaf"
+page_url = "https://poly.pizza/m/vBafePBZaf"
+download_url = "https://static.poly.pizza/39a88371-0965-42de-a17c-d899d0bc0889.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/vBafePBZaf: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Spike Platform by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 22424
+category = "platformer"
+look = "lowpoly"
+polycount = 502
+animated = false
+tags = ["hazard", "lowpoly", "objects", "obstacle", "platformer", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/39a88371-0965-42de-a17c-d899d0bc0889.glb"
+sha256 = "558581cb40f47d7fdcff94c4a78e353aac4c9882669a47c850a8fc1b79986dad"
+size = 22424
+map = "model"
+path = "spike-platform.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-coin"
+kind = "model"
+name = "Coin"
+source = "polypizza"
+source_id = "zsScrcPRgW"
+page_url = "https://poly.pizza/m/zsScrcPRgW"
+download_url = "https://static.poly.pizza/850fae80-54cc-43a8-8cdb-9016425c6c71.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/zsScrcPRgW: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Coin by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 97616
+category = "platformer"
+look = "lowpoly"
+polycount = 1399
+animated = false
+tags = ["coin", "currency", "gold", "lowpoly", "objects", "pickup", "platformer", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/850fae80-54cc-43a8-8cdb-9016425c6c71.glb"
+sha256 = "0f4fc550524678baf8f1f4eb9c68d5c06332bc5612e95afccbec77e362ce7336"
+size = 97616
+map = "model"
+path = "coin.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-star"
+kind = "model"
+name = "Star"
+source = "polypizza"
+source_id = "Tyau1aS2r0"
+page_url = "https://poly.pizza/m/Tyau1aS2r0"
+download_url = "https://static.poly.pizza/da14b872-e62f-42f7-bbc3-ef37031d5530.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/Tyau1aS2r0: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Star by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 6784
+category = "platformer"
+look = "lowpoly"
+polycount = 90
+animated = false
+tags = ["lowpoly", "other", "pickup", "platformer", "powerup", "star-symbol", "stylized", "symbol"]
+[[asset.files]]
+url = "https://static.poly.pizza/da14b872-e62f-42f7-bbc3-ef37031d5530.glb"
+sha256 = "ed738d6e8b143812e963835550002aa5bddff70573daeda5670500d53d3b762d"
+size = 6784
+map = "model"
+path = "star.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-pickup-heart"
+kind = "model"
+name = "Pickup Heart"
+source = "polypizza"
+source_id = "Zj4GUkxCG9"
+page_url = "https://poly.pizza/m/Zj4GUkxCG9"
+download_url = "https://static.poly.pizza/38716c7c-cd82-4254-8cce-51a6c2491e8a.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/Zj4GUkxCG9: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Pickup Heart by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 35576
+category = "platformer"
+look = "lowpoly"
+polycount = 784
+animated = false
+tags = ["heart", "lowpoly", "objects", "pickup", "platformer", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/38716c7c-cd82-4254-8cce-51a6c2491e8a.glb"
+sha256 = "5d5bdcccbfae9d26657e78458b53cf31f996a0d08460a5c2a4c2d32ca1498ce6"
+size = 35576
+map = "model"
+path = "pickup-heart.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-spikes"
+kind = "model"
+name = "Spikes"
+source = "polypizza"
+source_id = "wGAKoYCOVK"
+page_url = "https://poly.pizza/m/wGAKoYCOVK"
+download_url = "https://static.poly.pizza/0a9b0ebe-897a-47fc-99aa-ebaab7dc5719.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/wGAKoYCOVK: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Spikes by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 38152
+category = "platformer"
+look = "lowpoly"
+polycount = 1568
+animated = false
+tags = ["hazard", "lowpoly", "objects", "platformer", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/0a9b0ebe-897a-47fc-99aa-ebaab7dc5719.glb"
+sha256 = "6400965217351c00609bb217632eb5a7c063f3c0aae801ee3566ab45a3da820b"
+size = 38152
+map = "model"
+path = "spikes.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-cloud"
+kind = "model"
+name = "Cloud"
+source = "polypizza"
+source_id = "P1cMV8qtN2"
+page_url = "https://poly.pizza/m/P1cMV8qtN2"
+download_url = "https://static.poly.pizza/46e91434-8a45-4ed8-9ebc-239e1bc176f3.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/P1cMV8qtN2: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Cloud by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 12872
+category = "platformer"
+look = "lowpoly"
+polycount = 508
+animated = false
+tags = ["lowpoly", "nature", "platformer", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/46e91434-8a45-4ed8-9ebc-239e1bc176f3.glb"
+sha256 = "682902c5c8fe3f922d0b65056234a611842cffc608c27383b73a18741d8a36b7"
+size = 12872
+map = "model"
+path = "cloud.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-chest"
+kind = "model"
+name = "Chest"
+source = "polypizza"
+source_id = "RfSBvgcZUD"
+page_url = "https://poly.pizza/m/RfSBvgcZUD"
+download_url = "https://static.poly.pizza/ef0714ea-b808-423d-af60-e5aba72476b4.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/RfSBvgcZUD: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Chest by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 162464
+category = "platformer"
+look = "lowpoly"
+polycount = 3422
+animated = false
+tags = ["chest", "container", "furniture-decor", "lowpoly", "platformer", "storage", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/ef0714ea-b808-423d-af60-e5aba72476b4.glb"
+sha256 = "8270bbc44966c5f8a777a3c9b125deea3cb934bea43d6c1b583fc8c259b17cb4"
+size = 162464
+map = "model"
+path = "chest.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-key"
+kind = "model"
+name = "Key"
+source = "polypizza"
+source_id = "dZzratHeeG"
+page_url = "https://poly.pizza/m/dZzratHeeG"
+download_url = "https://static.poly.pizza/44845f55-ebb6-4a5d-bbdb-82d2406a7001.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/dZzratHeeG: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Key by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 19792
+category = "platformer"
+look = "lowpoly"
+polycount = 472
+animated = false
+tags = ["key", "lowpoly", "objects", "pickup", "platformer", "stylized", "tape"]
+[[asset.files]]
+url = "https://static.poly.pizza/44845f55-ebb6-4a5d-bbdb-82d2406a7001.glb"
+sha256 = "f1febdc24fcdd2ebf0de5c8bc308d8d5b17d2385f32d9b862a912aec75d7f1aa"
+size = 19792
+map = "model"
+path = "key.glb"
+
+[[asset]]
+id = "mdl-platformer-lowpoly-bridge"
+kind = "model"
+name = "Bridge"
+source = "polypizza"
+source_id = "Iw8iXLqVs5"
+page_url = "https://poly.pizza/m/Iw8iXLqVs5"
+download_url = "https://static.poly.pizza/7280b13a-75e9-49e9-93e5-2bd55c32e3fb.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/Iw8iXLqVs5: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Bridge by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 26932
+category = "platformer"
+look = "lowpoly"
+polycount = 486
+animated = false
+tags = ["castle", "lowpoly", "objects", "platformer", "stylized", "swing"]
+[[asset.files]]
+url = "https://static.poly.pizza/7280b13a-75e9-49e9-93e5-2bd55c32e3fb.glb"
+sha256 = "2e549f431ac55bb0066a205e5f16b3720d44bdcc242ffd53057cd665245bf276"
+size = 26932
+map = "model"
+path = "bridge.glb"
+
+[[asset]]
+id = "mdl-character-lowpoly-platformer-character"
+kind = "model"
+name = "Animated Platformer Character"
+source = "polypizza"
+source_id = "kKtL4zvS3n"
+page_url = "https://poly.pizza/m/kKtL4zvS3n"
+download_url = "https://static.poly.pizza/906e29d9-2e15-4c5c-a38a-fb99023acc9c.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/kKtL4zvS3n: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Animated Platformer Character by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 453384
+category = "character"
+look = "lowpoly"
+polycount = 2348
+animated = true
+tags = ["animated", "character", "cute", "lowpoly", "people-characters", "platformer", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/906e29d9-2e15-4c5c-a38a-fb99023acc9c.glb"
+sha256 = "140d72d10993ebe83815170fc0a061a9190b499e41b63ded0e10c8c4ec876108"
+size = 453384
+map = "model"
+path = "animated-platformer-character.glb"
+
+[[asset]]
+id = "mdl-weapon-lowpoly-pistol"
+kind = "model"
+name = "Pistol"
+source = "polypizza"
+source_id = "Yp4GwKdHHO"
+page_url = "https://poly.pizza/m/Yp4GwKdHHO"
+download_url = "https://static.poly.pizza/580a61fb-bc2a-44b4-860d-8c83cf9ff749.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/Yp4GwKdHHO: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Pistol by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 70240
+category = "weapon"
+look = "lowpoly"
+polycount = 1446
+animated = false
+tags = ["fps", "futuristic", "lowpoly", "ship", "spacecraft", "stylized", "transport", "weapon"]
+[[asset.files]]
+url = "https://static.poly.pizza/580a61fb-bc2a-44b4-860d-8c83cf9ff749.glb"
+sha256 = "27461616829690f1dc65c8351f1c8ecb8ab51a3ab65a09c8a768e7722239970e"
+size = 70240
+map = "model"
+path = "pistol.glb"
+
+[[asset]]
+id = "mdl-weapon-lowpoly-assault-rifle"
+kind = "model"
+name = "Assault Rifle"
+source = "polypizza"
+source_id = "K2lXTYFSLC"
+page_url = "https://poly.pizza/m/K2lXTYFSLC"
+download_url = "https://static.poly.pizza/b3e6be61-0299-4866-a227-58f5f3fe610b.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/K2lXTYFSLC: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Assault Rifle by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 74028
+category = "weapon"
+look = "lowpoly"
+polycount = 1304
+animated = false
+tags = ["fps", "gun", "lowpoly", "rifle", "stylized", "weapon", "weaponry", "weapons"]
+[[asset.files]]
+url = "https://static.poly.pizza/b3e6be61-0299-4866-a227-58f5f3fe610b.glb"
+sha256 = "5cdb78109f81e2f31cd657bbd133c2c63c3bc0d55a4e7ba4264f09456452a5d7"
+size = 74028
+map = "model"
+path = "assault-rifle.glb"
+
+[[asset]]
+id = "mdl-weapon-lowpoly-shotgun"
+kind = "model"
+name = "Shotgun"
+source = "polypizza"
+source_id = "8Z4HaN1NyS"
+page_url = "https://poly.pizza/m/8Z4HaN1NyS"
+download_url = "https://static.poly.pizza/2739ab8d-2dd4-4d97-b05b-2c804d81276c.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/8Z4HaN1NyS: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Shotgun by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 76768
+category = "weapon"
+look = "lowpoly"
+polycount = 1542
+animated = false
+tags = ["blaster", "fps", "lowpoly", "science-fiction", "stylized", "weapon", "weapons"]
+[[asset.files]]
+url = "https://static.poly.pizza/2739ab8d-2dd4-4d97-b05b-2c804d81276c.glb"
+sha256 = "96b88bd1b60ca70e22b6015873d5668f74cf16a955329c2de2a1fac8824c460c"
+size = 76768
+map = "model"
+path = "shotgun.glb"
+
+[[asset]]
+id = "mdl-weapon-lowpoly-sniper-rifle"
+kind = "model"
+name = "Sniper Rifle"
+source = "polypizza"
+source_id = "ASOMZIErq3"
+page_url = "https://poly.pizza/m/ASOMZIErq3"
+download_url = "https://static.poly.pizza/f03e21b7-e3b7-49fd-b47d-d1908649fcee.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/ASOMZIErq3: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Sniper Rifle by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 76652
+category = "weapon"
+look = "lowpoly"
+polycount = 1382
+animated = false
+tags = ["fps", "gun", "lowpoly", "rifle", "stylized", "weapon", "weaponry", "weapons"]
+[[asset.files]]
+url = "https://static.poly.pizza/f03e21b7-e3b7-49fd-b47d-d1908649fcee.glb"
+sha256 = "a780e291a22babe8c3472ae9fd0c0f4b98f22382e25c7da3f5507a5761dffc5b"
+size = 76652
+map = "model"
+path = "sniper-rifle.glb"
+
+[[asset]]
+id = "mdl-weapon-lowpoly-smg"
+kind = "model"
+name = "Smg"
+source = "polypizza"
+source_id = "sRkpgScNzi"
+page_url = "https://poly.pizza/m/sRkpgScNzi"
+download_url = "https://static.poly.pizza/11175694-5ef2-4d9d-b401-809f466af101.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/sRkpgScNzi: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Smg by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 133152
+category = "weapon"
+look = "lowpoly"
+polycount = 2497
+animated = false
+tags = ["firearm", "fps", "gun", "lowpoly", "pistol", "stylized", "weapon", "weapons"]
+[[asset.files]]
+url = "https://static.poly.pizza/11175694-5ef2-4d9d-b401-809f466af101.glb"
+sha256 = "55c72e9ea9f215fb8131ad8ff3ea571c1e1622fc327837e08e02979bdcaf4bc4"
+size = 133152
+map = "model"
+path = "smg.glb"
+
+[[asset]]
+id = "mdl-weapon-lowpoly-revolver"
+kind = "model"
+name = "Revolver"
+source = "polypizza"
+source_id = "q4h8j4nK2k"
+page_url = "https://poly.pizza/m/q4h8j4nK2k"
+download_url = "https://static.poly.pizza/97d1c672-c069-48c0-993c-01a906f44877.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/q4h8j4nK2k: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Revolver by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 74496
+category = "weapon"
+look = "lowpoly"
+polycount = 1354
+animated = false
+tags = ["firearm", "fps", "gun", "handgun", "lowpoly", "stylized", "weapon", "weapons"]
+[[asset.files]]
+url = "https://static.poly.pizza/97d1c672-c069-48c0-993c-01a906f44877.glb"
+sha256 = "5f7d3acee26fde43b73de5b70698ac87c6cf1e2e4a3a8f5bc4a5d7d52a2ec410"
+size = 74496
+map = "model"
+path = "revolver.glb"
+
+[[asset]]
+id = "mdl-weapon-lowpoly-scifi-pistol"
+kind = "model"
+name = "Scifi Pistol"
+source = "polypizza"
+source_id = "U0Q1BrKL1y"
+page_url = "https://poly.pizza/m/U0Q1BrKL1y"
+download_url = "https://static.poly.pizza/f5fbbeae-7e3f-4185-a262-3f457fdf9202.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/U0Q1BrKL1y: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Scifi Pistol by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 88464
+category = "weapon"
+look = "lowpoly"
+polycount = 2614
+animated = false
+tags = ["fps", "lowpoly", "sci-fi", "scifi", "stylized", "weapon", "weaponry", "weapons"]
+[[asset.files]]
+url = "https://static.poly.pizza/f5fbbeae-7e3f-4185-a262-3f457fdf9202.glb"
+sha256 = "5c6e3e7b4ab68452c3e90513a36391d77d21dba3f890d1800e8d9216ef2c357e"
+size = 88464
+map = "model"
+path = "scifi-pistol.glb"
+
+[[asset]]
+id = "mdl-character-lowpoly-woman"
+kind = "model"
+name = "Animated Woman"
+source = "polypizza"
+source_id = "nIItLV9nxS"
+page_url = "https://poly.pizza/m/nIItLV9nxS"
+download_url = "https://static.poly.pizza/46d6db5a-3c9f-4238-8cdf-8eb7194498dc.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/nIItLV9nxS: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Animated Woman by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 1491780
+category = "character"
+look = "lowpoly"
+polycount = 3282
+animated = true
+tags = ["animated", "character", "clothing", "dress", "female", "girl", "lowpoly", "people-characters", "stylized", "woman"]
+[[asset.files]]
+url = "https://static.poly.pizza/46d6db5a-3c9f-4238-8cdf-8eb7194498dc.glb"
+sha256 = "a6522fe53d15de21130a957d1bf2b8a9a58d4e4e9a12af646645b667a9bb2d17"
+size = 1491780
+map = "model"
+path = "animated-woman.glb"
+
+[[asset]]
+id = "mdl-character-lowpoly-man"
+kind = "model"
+name = "Man"
+source = "polypizza"
+source_id = "fjHyMd5Wxw"
+page_url = "https://poly.pizza/m/fjHyMd5Wxw"
+download_url = "https://static.poly.pizza/985eacbf-9dde-44b7-9270-4e35c8400b13.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/fjHyMd5Wxw: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Man by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 498160
+category = "character"
+look = "lowpoly"
+polycount = 1854
+animated = true
+tags = ["character", "clothing", "human", "lowpoly", "people-characters", "person", "sleeve", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/985eacbf-9dde-44b7-9270-4e35c8400b13.glb"
+sha256 = "40c62848350df6d13cc6eed20f30c3406a7761542236d8a9f6c3a4060d005e97"
+size = 498160
+map = "model"
+path = "man.glb"
+
+[[asset]]
+id = "mdl-character-lowpoly-zombie"
+kind = "model"
+name = "Zombie"
+source = "polypizza"
+source_id = "VlXjG0N8Eg"
+page_url = "https://poly.pizza/m/VlXjG0N8Eg"
+download_url = "https://static.poly.pizza/c4002f69-6979-42e8-ad6e-2f4e14fc3a9d.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/VlXjG0N8Eg: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Zombie by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 981672
+category = "character"
+look = "lowpoly"
+polycount = 7570
+animated = true
+tags = ["cartoon", "character", "horror", "lowpoly", "monster", "people-characters", "stylized", "zombie"]
+[[asset.files]]
+url = "https://static.poly.pizza/c4002f69-6979-42e8-ad6e-2f4e14fc3a9d.glb"
+sha256 = "3afd2837b117f264afd037a350759b96d6f837fc9b381cca35cf6796b4bab09d"
+size = 981672
+map = "model"
+path = "zombie.glb"
+
+[[asset]]
+id = "mdl-character-lowpoly-soldier"
+kind = "model"
+name = "Character Soldier"
+source = "polypizza"
+source_id = "PpLF4rt4ah"
+page_url = "https://poly.pizza/m/PpLF4rt4ah"
+download_url = "https://static.poly.pizza/1083c1d3-d1d4-4682-adf6-bc516d06ac84.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/PpLF4rt4ah: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Character Soldier by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 1333700
+category = "character"
+look = "lowpoly"
+polycount = 7929
+animated = true
+tags = ["cartoon", "character", "fps", "helmet", "lowpoly", "people-characters", "person", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/1083c1d3-d1d4-4682-adf6-bc516d06ac84.glb"
+sha256 = "06597e2cd20840eee8bed03790f32138e379ba3d6c7f61eb87e29f0c672d4d54"
+size = 1333700
+map = "model"
+path = "character-soldier.glb"
+
+[[asset]]
+id = "mdl-character-lowpoly-wizard"
+kind = "model"
+name = "Wizard"
+source = "polypizza"
+source_id = "tabnmuxQBl"
+page_url = "https://poly.pizza/m/tabnmuxQBl"
+download_url = "https://static.poly.pizza/3df4bc4f-54a7-43e4-a35d-35d05610d0eb.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/tabnmuxQBl: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Wizard by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 297096
+category = "character"
+look = "lowpoly"
+polycount = 6227
+animated = false
+tags = ["character", "fantasy", "lowpoly", "magic", "people-characters", "stylized", "wizard"]
+[[asset.files]]
+url = "https://static.poly.pizza/3df4bc4f-54a7-43e4-a35d-35d05610d0eb.glb"
+sha256 = "29ea5f59c41a8c3a9d96b4503e0af0bc3c37179788e030b5b1811ae9fe4a0a79"
+size = 297096
+map = "model"
+path = "wizard.glb"
+
+[[asset]]
+id = "mdl-character-lowpoly-cube-guy"
+kind = "model"
+name = "Cube Guy Character"
+source = "polypizza"
+source_id = "K1IczhnvQ5"
+page_url = "https://poly.pizza/m/K1IczhnvQ5"
+download_url = "https://static.poly.pizza/7e2096d0-0a62-4d8e-bd51-eb4eaea4e660.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/K1IczhnvQ5: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Cube Guy Character by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 342324
+category = "character"
+look = "lowpoly"
+polycount = 3122
+animated = true
+tags = ["character", "lowpoly", "male", "man", "people-characters", "person", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/7e2096d0-0a62-4d8e-bd51-eb4eaea4e660.glb"
+sha256 = "9605e477f0e8873c685de8f11820b9c0b35e027d00e8fee1efa6acc1de90a63d"
+size = 342324
+map = "model"
+path = "cube-guy-character.glb"
+
+[[asset]]
+id = "mdl-animal-lowpoly-fox"
+kind = "model"
+name = "Fox"
+source = "polypizza"
+source_id = "Bc97C66HKi"
+page_url = "https://poly.pizza/m/Bc97C66HKi"
+download_url = "https://static.poly.pizza/e18e86df-1692-48d8-ac6e-1e25ab4ad574.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/Bc97C66HKi: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Fox by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 960228
+category = "animal"
+look = "lowpoly"
+polycount = 1826
+animated = true
+tags = ["animal", "animals", "fox", "lowpoly", "red-fox", "stylized", "wildlife"]
+[[asset.files]]
+url = "https://static.poly.pizza/e18e86df-1692-48d8-ac6e-1e25ab4ad574.glb"
+sha256 = "9917771e1414c46557b011cbaaee6de82a827605008227a364c3862f0be62ddc"
+size = 960228
+map = "model"
+path = "fox.glb"
+
+[[asset]]
+id = "mdl-animal-lowpoly-wolf"
+kind = "model"
+name = "Wolf"
+source = "polypizza"
+source_id = "XU7oNeKShV"
+page_url = "https://poly.pizza/m/XU7oNeKShV"
+download_url = "https://static.poly.pizza/2cd00c92-295b-4652-b1a3-c3a1394e5d83.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/XU7oNeKShV: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Wolf by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 253068
+category = "animal"
+look = "lowpoly"
+polycount = 2740
+animated = true
+tags = ["animal", "animals", "dog", "lowpoly", "stylized", "wolf"]
+[[asset.files]]
+url = "https://static.poly.pizza/2cd00c92-295b-4652-b1a3-c3a1394e5d83.glb"
+sha256 = "c36fd15453f6d93c3eff98f99a14fd5792b0f4377a83cc134222732d75e50832"
+size = 253068
+map = "model"
+path = "wolf.glb"
+
+[[asset]]
+id = "mdl-animal-lowpoly-deer"
+kind = "model"
+name = "Deer"
+source = "polypizza"
+source_id = "T6Cs7tmMHJ"
+page_url = "https://poly.pizza/m/T6Cs7tmMHJ"
+download_url = "https://static.poly.pizza/4b6c2a41-43c7-404c-ae37-e8c4645ff93b.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/T6Cs7tmMHJ: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Deer by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 1007564
+category = "animal"
+look = "lowpoly"
+polycount = 1892
+animated = true
+tags = ["animal", "animals", "deer", "lowpoly", "stylized", "wildlife"]
+[[asset.files]]
+url = "https://static.poly.pizza/4b6c2a41-43c7-404c-ae37-e8c4645ff93b.glb"
+sha256 = "fabf360b22eaccccd056ee99d698a9562d15aa245821f96e4fbad6db3751604e"
+size = 1007564
+map = "model"
+path = "deer.glb"
+
+[[asset]]
+id = "mdl-animal-lowpoly-horse"
+kind = "model"
+name = "Horse"
+source = "polypizza"
+source_id = "D3hAeqeDBE"
+page_url = "https://poly.pizza/m/D3hAeqeDBE"
+download_url = "https://static.poly.pizza/52b9bf67-bf41-4aec-a4ff-e93e630289f2.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/D3hAeqeDBE: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Horse by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 237360
+category = "animal"
+look = "lowpoly"
+polycount = 2652
+animated = true
+tags = ["animal", "animals", "cartoon", "horse", "lowpoly", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/52b9bf67-bf41-4aec-a4ff-e93e630289f2.glb"
+sha256 = "513a1fac7ebccb01496108196601e20e59d87932c1122b2e052b837f7f2f5085"
+size = 237360
+map = "model"
+path = "horse.glb"
+
+[[asset]]
+id = "mdl-animal-lowpoly-dog"
+kind = "model"
+name = "Dog"
+source = "polypizza"
+source_id = "2kUk0QqpCg"
+page_url = "https://poly.pizza/m/2kUk0QqpCg"
+download_url = "https://static.poly.pizza/de55d76a-f578-4979-97ff-2a62edac32f3.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/2kUk0QqpCg: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Dog by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 296880
+category = "animal"
+look = "lowpoly"
+polycount = 3604
+animated = true
+tags = ["animal", "animals", "dog", "lowpoly", "pet", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/de55d76a-f578-4979-97ff-2a62edac32f3.glb"
+sha256 = "4beaff05eca771dab58479316e410a721e5c04660169e5b6e231839855bbec2d"
+size = 296880
+map = "model"
+path = "dog.glb"
+
+[[asset]]
+id = "mdl-animal-lowpoly-chicken"
+kind = "model"
+name = "Chicken"
+source = "polypizza"
+source_id = "Z3RCoCYss4"
+page_url = "https://poly.pizza/m/Z3RCoCYss4"
+download_url = "https://static.poly.pizza/9ba093a4-6525-4f3b-927d-98dca72e1e40.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/Z3RCoCYss4: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Chicken by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 172692
+category = "animal"
+look = "lowpoly"
+polycount = 2140
+animated = true
+tags = ["animal", "animals", "bird", "lowpoly", "pixelated", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/9ba093a4-6525-4f3b-927d-98dca72e1e40.glb"
+sha256 = "89876da1f94d735b6e1cf0a2ca7151b18623c48fd9b8cb469271de370e092730"
+size = 172692
+map = "model"
+path = "chicken.glb"
+
+[[asset]]
+id = "mdl-animal-lowpoly-cow"
+kind = "model"
+name = "Cow"
+source = "polypizza"
+source_id = "26zM1outCr"
+page_url = "https://poly.pizza/m/26zM1outCr"
+download_url = "https://static.poly.pizza/382b3d4a-a7c9-4c03-9858-3df630d90047.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/26zM1outCr: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Cow by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 1028584
+category = "animal"
+look = "lowpoly"
+polycount = 2130
+animated = true
+tags = ["animal", "animals", "cattle", "cow", "lowpoly", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/382b3d4a-a7c9-4c03-9858-3df630d90047.glb"
+sha256 = "aa0dfbd619bc14838b48f6db02a56c2ee96f055930d957fcc5ef63af567b21ce"
+size = 1028584
+map = "model"
+path = "cow.glb"
+
+[[asset]]
+id = "mdl-horror-lowpoly-skull"
+kind = "model"
+name = "Skull"
+source = "polypizza"
+source_id = "VGtSTNRf2O"
+page_url = "https://poly.pizza/m/VGtSTNRf2O"
+download_url = "https://static.poly.pizza/2a686e08-5456-405f-a6ef-03274e080b2f.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/VGtSTNRf2O: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Skull by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 93372
+category = "horror"
+look = "lowpoly"
+polycount = 3132
+animated = false
+tags = ["bone", "head", "horror", "lowpoly", "mouth", "people-characters", "person", "stylized", "teeth"]
+[[asset.files]]
+url = "https://static.poly.pizza/2a686e08-5456-405f-a6ef-03274e080b2f.glb"
+sha256 = "3a05ac7a8fe56832e988285d24f755f2d22db51cc0e70f2bd559077f6324349b"
+size = 93372
+map = "model"
+path = "skull.glb"
+
+[[asset]]
+id = "mdl-horror-lowpoly-ghost"
+kind = "model"
+name = "Ghost"
+source = "polypizza"
+source_id = "Iip30bDHmu"
+page_url = "https://poly.pizza/m/Iip30bDHmu"
+download_url = "https://static.poly.pizza/810f60a2-6e45-4c4e-a0d5-da91cd7288bd.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/Iip30bDHmu: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Ghost by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 203360
+category = "horror"
+look = "lowpoly"
+polycount = 2056
+animated = true
+tags = ["enemy", "horror", "lowpoly", "monster", "objects", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/810f60a2-6e45-4c4e-a0d5-da91cd7288bd.glb"
+sha256 = "4ed7656e2155d47b7d5fe08f31a7e764d79255f477d90040e4472552d7d5ac68"
+size = 203360
+map = "model"
+path = "ghost.glb"
+
+[[asset]]
+id = "mdl-horror-lowpoly-spider"
+kind = "model"
+name = "Spider"
+source = "polypizza"
+source_id = "yRYJiAJyiM"
+page_url = "https://poly.pizza/m/yRYJiAJyiM"
+download_url = "https://static.poly.pizza/4259fbdb-afb5-4d40-9108-363625dd6b6e.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/yRYJiAJyiM: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Spider by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 449008
+category = "horror"
+look = "lowpoly"
+polycount = 2712
+animated = true
+tags = ["animals", "horror", "insect", "invertebrate", "lowpoly", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/4259fbdb-afb5-4d40-9108-363625dd6b6e.glb"
+sha256 = "d759e35f6cf5adc7eb7e3f70135cd2a808787fc36337a523015592ba840ccd6d"
+size = 449008
+map = "model"
+path = "spider.glb"
+
+[[asset]]
+id = "mdl-horror-lowpoly-pumpkin"
+kind = "model"
+name = "Pumpkin"
+source = "polypizza"
+source_id = "bvLvqnU1jX"
+page_url = "https://poly.pizza/m/bvLvqnU1jX"
+download_url = "https://static.poly.pizza/49202ae4-62ac-4035-9726-1834228e7d08.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/bvLvqnU1jX: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Pumpkin by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 37424
+category = "horror"
+look = "lowpoly"
+polycount = 644
+animated = false
+tags = ["food-drink", "halloween", "horror", "lowpoly", "plant", "produce", "pumpkin", "stylized", "vegetable"]
+[[asset.files]]
+url = "https://static.poly.pizza/49202ae4-62ac-4035-9726-1834228e7d08.glb"
+sha256 = "af4ae31ba704f8b05b69bec18726468feaf527a221e929bbfdf11d6b4c26bd0b"
+size = 37424
+map = "model"
+path = "pumpkin.glb"
+
+[[asset]]
+id = "mdl-horror-lowpoly-bat"
+kind = "model"
+name = "Bat"
+source = "polypizza"
+source_id = "hNO9XvjlKa"
+page_url = "https://poly.pizza/m/hNO9XvjlKa"
+download_url = "https://static.poly.pizza/4ae13ae9-c257-41ed-86b5-1b4760924ebc.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/hNO9XvjlKa: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Bat by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 231476
+category = "horror"
+look = "lowpoly"
+polycount = 772
+animated = true
+tags = ["animal", "animals", "creature", "flying", "horror", "lowpoly", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/4ae13ae9-c257-41ed-86b5-1b4760924ebc.glb"
+sha256 = "ff20d0c0d68be4ed4ba3a402b8ceaeaf54de5d0c9dc3968117749214aee63c9b"
+size = 231476
+map = "model"
+path = "bat.glb"
+
+[[asset]]
+id = "mdl-prop-lowpoly-exploding-barrel"
+kind = "model"
+name = "Exploding Barrel"
+source = "polypizza"
+source_id = "1orHe0kCc1"
+page_url = "https://poly.pizza/m/1orHe0kCc1"
+download_url = "https://static.poly.pizza/dbb58868-50d4-4ef0-945a-12b07222fb69.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/1orHe0kCc1: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Exploding Barrel by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 19056
+category = "prop"
+look = "lowpoly"
+polycount = 516
+animated = false
+tags = ["cup", "food-drink", "fps", "lowpoly", "prop", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/dbb58868-50d4-4ef0-945a-12b07222fb69.glb"
+sha256 = "730a8da4cb342533ddc20fdb8f52a47f3befd20d0bafa44b668eac066252f2f3"
+size = 19056
+map = "model"
+path = "exploding-barrel.glb"
+
+[[asset]]
+id = "mdl-prop-lowpoly-crate"
+kind = "model"
+name = "Crate"
+source = "polypizza"
+source_id = "CnMGEDwg8s"
+page_url = "https://poly.pizza/m/CnMGEDwg8s"
+download_url = "https://static.poly.pizza/fbfe4b47-02fd-403e-bdfe-eca895ed7a7f.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/CnMGEDwg8s: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Crate by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 23140
+category = "prop"
+look = "lowpoly"
+polycount = 324
+animated = false
+tags = ["box", "lowpoly", "objects", "pottery", "prop", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/fbfe4b47-02fd-403e-bdfe-eca895ed7a7f.glb"
+sha256 = "997f0a0f09a031697a35fb6ad9c367e4a8ddf609ba9d8003cd031d3aaec193f6"
+size = 23140
+map = "model"
+path = "crate.glb"
+
+[[asset]]
+id = "mdl-prop-lowpoly-barrel"
+kind = "model"
+name = "Barrel"
+source = "polypizza"
+source_id = "MraIiFnpAY"
+page_url = "https://poly.pizza/m/MraIiFnpAY"
+download_url = "https://static.poly.pizza/1f4a7592-6157-4726-8159-49842c361f11.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/MraIiFnpAY: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Barrel by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 44640
+category = "prop"
+look = "lowpoly"
+polycount = 882
+animated = false
+tags = ["barrel", "container", "lowpoly", "objects", "prop", "storage", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/1f4a7592-6157-4726-8159-49842c361f11.glb"
+sha256 = "0f21493c781b05915051fb857600b24e4d9c154e4b19099e2d5932c296fb4834"
+size = 44640
+map = "model"
+path = "barrel.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-pine"
+kind = "model"
+name = "Pine"
+source = "polypizza"
+source_id = "699sFuLCN2"
+page_url = "https://poly.pizza/m/699sFuLCN2"
+download_url = "https://static.poly.pizza/c55b8641-4679-4a85-8bd8-2a20e79abecd.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/699sFuLCN2: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Pine by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 2261060
+category = "nature"
+look = "lowpoly"
+polycount = 4502
+animated = false
+tags = ["evergreen", "forest", "lowpoly", "nature", "stylized", "tree"]
+[[asset.files]]
+url = "https://static.poly.pizza/c55b8641-4679-4a85-8bd8-2a20e79abecd.glb"
+sha256 = "3a5db923999bd47281f1f38cf8451c1544acfad33d953892fa95ca74765be361"
+size = 2261060
+map = "model"
+path = "pine.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-tree"
+kind = "model"
+name = "Tree"
+source = "polypizza"
+source_id = "t9KbsfYdXz"
+page_url = "https://poly.pizza/m/t9KbsfYdXz"
+download_url = "https://static.poly.pizza/7f84a768-ac30-48d4-9c5d-f760492e7867.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/t9KbsfYdXz: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Tree by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 2385268
+category = "nature"
+look = "lowpoly"
+polycount = 3182
+animated = false
+tags = ["forest", "lowpoly", "nature", "stylized", "tree"]
+[[asset.files]]
+url = "https://static.poly.pizza/7f84a768-ac30-48d4-9c5d-f760492e7867.glb"
+sha256 = "6ddb7b1d81a325cfbe3053f43c96ce8b6a871dc866702ef3993dbecc79430b70"
+size = 2385268
+map = "model"
+path = "tree.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-twisted-tree"
+kind = "model"
+name = "Twisted Tree"
+source = "polypizza"
+source_id = "8oraKn9m0x"
+page_url = "https://poly.pizza/m/8oraKn9m0x"
+download_url = "https://static.poly.pizza/24873d46-c90a-4c3e-8981-a98d3bd816c5.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/8oraKn9m0x: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Twisted Tree by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 3089768
+category = "nature"
+look = "lowpoly"
+polycount = 10089
+animated = false
+tags = ["lowpoly", "nature", "red-leaves", "stylized", "tree"]
+[[asset.files]]
+url = "https://static.poly.pizza/24873d46-c90a-4c3e-8981-a98d3bd816c5.glb"
+sha256 = "b2fb1ec0bdb495b7dca7dbd213b0b5349e6da8d7b7143d62d8563820f2997d83"
+size = 3089768
+map = "model"
+path = "twisted-tree.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-dead-tree"
+kind = "model"
+name = "Dead Tree"
+source = "polypizza"
+source_id = "CD4edbPSGm"
+page_url = "https://poly.pizza/m/CD4edbPSGm"
+download_url = "https://static.poly.pizza/4db29f97-8e10-413d-be54-39ecda1a7c8d.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/CD4edbPSGm: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Dead Tree by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 2597644
+category = "nature"
+look = "lowpoly"
+polycount = 5648
+animated = false
+tags = ["bare", "horror", "lowpoly", "nature", "stylized", "tree", "winter"]
+[[asset.files]]
+url = "https://static.poly.pizza/4db29f97-8e10-413d-be54-39ecda1a7c8d.glb"
+sha256 = "c6a2b34de53ea610d4dcf20785340b12b023bd3b648a8f3db3dcdb962008b9d3"
+size = 2597644
+map = "model"
+path = "dead-tree.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-rock"
+kind = "model"
+name = "Rock Medium"
+source = "polypizza"
+source_id = "s1OJ3bBzqc"
+page_url = "https://poly.pizza/m/s1OJ3bBzqc"
+download_url = "https://static.poly.pizza/be5fef3a-4fa1-4d08-b2d4-82e02284588d.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/s1OJ3bBzqc: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Rock Medium by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 1064792
+category = "nature"
+look = "lowpoly"
+polycount = 342
+animated = false
+tags = ["boulder", "lowpoly", "nature", "rock", "stone", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/be5fef3a-4fa1-4d08-b2d4-82e02284588d.glb"
+sha256 = "99881282aa8ee2bc89ac782911b90909c84e33d693c3a9c2ef5085f1d8214ffe"
+size = 1064792
+map = "model"
+path = "rock-medium.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-bush"
+kind = "model"
+name = "Bush"
+source = "polypizza"
+source_id = "EoTERLq3z2"
+page_url = "https://poly.pizza/m/EoTERLq3z2"
+download_url = "https://static.poly.pizza/5d3066f4-58ac-46d4-899c-39d9e566e9df.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/EoTERLq3z2: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Bush by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 164712
+category = "nature"
+look = "lowpoly"
+polycount = 900
+animated = false
+tags = ["foliage", "leaves", "lowpoly", "nature", "plant", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/5d3066f4-58ac-46d4-899c-39d9e566e9df.glb"
+sha256 = "1e73125867d602884365e891158c4ed80772ea1a1ed764a5ae267f3687568d28"
+size = 164712
+map = "model"
+path = "bush.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-fern"
+kind = "model"
+name = "Fern"
+source = "polypizza"
+source_id = "jqcanvH7D6"
+page_url = "https://poly.pizza/m/jqcanvH7D6"
+download_url = "https://static.poly.pizza/f94d836f-4eb4-4db0-aa53-3ecdddffa527.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/jqcanvH7D6: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Fern by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 692724
+category = "nature"
+look = "lowpoly"
+polycount = 288
+animated = false
+tags = ["green", "leaves", "lowpoly", "nature", "plant", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/f94d836f-4eb4-4db0-aa53-3ecdddffa527.glb"
+sha256 = "800c02671b865fd3f524a58fa72b498185a8f43dfe627ef546092027ee73d468"
+size = 692724
+map = "model"
+path = "fern.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-mushroom"
+kind = "model"
+name = "Mushroom"
+source = "polypizza"
+source_id = "aOW08oSrd4"
+page_url = "https://poly.pizza/m/aOW08oSrd4"
+download_url = "https://static.poly.pizza/abade6e4-375f-457a-898e-66644673f54e.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/aOW08oSrd4: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Mushroom by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 1208932
+category = "nature"
+look = "lowpoly"
+polycount = 880
+animated = false
+tags = ["fungus", "lowpoly", "mushroom", "nature", "plant", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/abade6e4-375f-457a-898e-66644673f54e.glb"
+sha256 = "1fb94fcb913b9971e441c30799d8a60ff8277f1c0e2488bfcb7dcc9a25e4c4af"
+size = 1208932
+map = "model"
+path = "mushroom.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-palm-tree"
+kind = "model"
+name = "Palm Tree"
+source = "polypizza"
+source_id = "DsrrAYmucG"
+page_url = "https://poly.pizza/m/DsrrAYmucG"
+download_url = "https://static.poly.pizza/21d44b5b-efef-4abd-96ad-fc59e4ad373b.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/DsrrAYmucG: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Palm Tree by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 115980
+category = "nature"
+look = "lowpoly"
+polycount = 3208
+animated = false
+tags = ["beach", "leaf", "lowpoly", "nature", "palm-tree", "plant", "stylized", "tree"]
+[[asset.files]]
+url = "https://static.poly.pizza/21d44b5b-efef-4abd-96ad-fc59e4ad373b.glb"
+sha256 = "b02dc9c28a8ec98dcce6660affa8ae8ae8e6951f9ee871ca44b4d64c849936f4"
+size = 115980
+map = "model"
+path = "palm-tree.glb"
+
+[[asset]]
+id = "mdl-nature-lowpoly-grass"
+kind = "model"
+name = "Grass"
+source = "polypizza"
+source_id = "vUJjrRsFp4"
+page_url = "https://poly.pizza/m/vUJjrRsFp4"
+download_url = "https://static.poly.pizza/0a84d74b-eb09-4794-ad58-dd10eed6b11e.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/vUJjrRsFp4: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Grass by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 79796
+category = "nature"
+look = "lowpoly"
+polycount = 155
+animated = false
+tags = ["foliage", "grass", "lowpoly", "nature", "plant", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/0a84d74b-eb09-4794-ad58-dd10eed6b11e.glb"
+sha256 = "aaeb71f0d56dcd7b952ea9341d222ea3cd76525b6fc0afddf0a6321502ccaab5"
+size = 79796
+map = "model"
+path = "grass.glb"
+
+[[asset]]
+id = "mdl-building-lowpoly-house"
+kind = "model"
+name = "House"
+source = "polypizza"
+source_id = "g7eSJLFi4V"
+page_url = "https://poly.pizza/m/g7eSJLFi4V"
+download_url = "https://static.poly.pizza/e2e97c7d-3a18-46a7-a88e-b8f34bf1953e.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/g7eSJLFi4V: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "House by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 812052
+category = "building"
+look = "lowpoly"
+polycount = 11878
+animated = false
+tags = ["boat", "building", "lowpoly", "nautical", "ship", "stylized", "transport"]
+[[asset.files]]
+url = "https://static.poly.pizza/e2e97c7d-3a18-46a7-a88e-b8f34bf1953e.glb"
+sha256 = "d0a3d590b7a2b04b363018802606cc0682404f6962a5cfc349e3ae6ca5f50cb8"
+size = 812052
+map = "model"
+path = "house.glb"
+
+[[asset]]
+id = "mdl-building-lowpoly-castle"
+kind = "model"
+name = "Castle"
+source = "polypizza"
+source_id = "y15yE6kWLY"
+page_url = "https://poly.pizza/m/y15yE6kWLY"
+download_url = "https://static.poly.pizza/dafe12fb-8ec0-4d2b-826a-4917d7ed78a3.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/y15yE6kWLY: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Castle by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 544976
+category = "building"
+look = "lowpoly"
+polycount = 8460
+animated = false
+tags = ["architecture", "building", "buildings", "fantasy", "fortress", "landscape", "lowpoly", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/dafe12fb-8ec0-4d2b-826a-4917d7ed78a3.glb"
+sha256 = "4fba9f5b8a0d66f2bca58d4c08740a527abbda8b3feaf331267b09017a9901d9"
+size = 544976
+map = "model"
+path = "castle.glb"
+
+[[asset]]
+id = "mdl-building-lowpoly-water-tower"
+kind = "model"
+name = "Water Tower"
+source = "polypizza"
+source_id = "tMK8bhapAK"
+page_url = "https://poly.pizza/m/tMK8bhapAK"
+download_url = "https://static.poly.pizza/abaa700a-0aaf-4baa-aa8b-b29d1fc12a0a.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/tMK8bhapAK: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Water Tower by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 63428
+category = "building"
+look = "lowpoly"
+polycount = 1158
+animated = false
+tags = ["building", "buildings-architecture", "lowpoly", "storage", "structure", "stylized", "water-tower"]
+[[asset.files]]
+url = "https://static.poly.pizza/abaa700a-0aaf-4baa-aa8b-b29d1fc12a0a.glb"
+sha256 = "d340f6c9d872bdd2eb8cba3f1192c1a745910eddd99fadcf90294cf61c5d141d"
+size = 63428
+map = "model"
+path = "water-tower.glb"
+
+[[asset]]
+id = "mdl-building-lowpoly-watch-tower"
+kind = "model"
+name = "Small Watch Tower"
+source = "polypizza"
+source_id = "CygapExMf5"
+page_url = "https://poly.pizza/m/CygapExMf5"
+download_url = "https://static.poly.pizza/8bec6466-329a-4f83-99d9-600a00e2c437.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/CygapExMf5: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Small Watch Tower by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 38744
+category = "building"
+look = "lowpoly"
+polycount = 588
+animated = false
+tags = ["building", "buildings", "lowpoly", "plywood", "stylized", "wood"]
+[[asset.files]]
+url = "https://static.poly.pizza/8bec6466-329a-4f83-99d9-600a00e2c437.glb"
+sha256 = "697dbc949daa279858e3e4ebed1b3039137bfb9e5be97d783be323a7786dd27f"
+size = 38744
+map = "model"
+path = "small-watch-tower.glb"
+
+[[asset]]
+id = "mdl-building-lowpoly-fence"
+kind = "model"
+name = "Fence"
+source = "polypizza"
+source_id = "JfSPlkPhRD"
+page_url = "https://poly.pizza/m/JfSPlkPhRD"
+download_url = "https://static.poly.pizza/970fb137-7a91-46ca-8f30-0d636c0b090c.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/JfSPlkPhRD: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Fence by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 12132
+category = "building"
+look = "lowpoly"
+polycount = 424
+animated = false
+tags = ["barricade", "building", "crib", "fence", "lowpoly", "objects", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/970fb137-7a91-46ca-8f30-0d636c0b090c.glb"
+sha256 = "5ca7f29343614054f7cc0d86bffe6d5b297b3ab930fa7bb5ac99f73c7d077cb8"
+size = 12132
+map = "model"
+path = "fence.glb"
+
+[[asset]]
+id = "mdl-building-lowpoly-door"
+kind = "model"
+name = "Door"
+source = "polypizza"
+source_id = "LbrIuy3mMR"
+page_url = "https://poly.pizza/m/LbrIuy3mMR"
+download_url = "https://static.poly.pizza/ec05b3f9-a62d-4c54-8406-aff898ecb495.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/LbrIuy3mMR: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Door by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 23696
+category = "building"
+look = "lowpoly"
+polycount = 324
+animated = false
+tags = ["building", "buildings-architecture", "door", "entrance", "lowpoly", "panel", "stylized"]
+[[asset.files]]
+url = "https://static.poly.pizza/ec05b3f9-a62d-4c54-8406-aff898ecb495.glb"
+sha256 = "0b8a27b3eae479ec62e42b2c41a573937e275168b2a91998c4f0c5f6b9ebaaf1"
+size = 23696
+map = "model"
+path = "door.glb"
+
+[[asset]]
+id = "mdl-building-lowpoly-brick-wall"
+kind = "model"
+name = "Brick Wall"
+source = "polypizza"
+source_id = "7uEf9KAU9q"
+page_url = "https://poly.pizza/m/7uEf9KAU9q"
+download_url = "https://static.poly.pizza/e0072371-89a5-43ef-bbc5-fb6728913ea7.glb"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://poly.pizza/m/7uEf9KAU9q: model data \"Licence\":\"CC0 1.0\""
+licence_checked = "2026-10-30"
+author = "Quaternius"
+attribution = "Brick Wall by Quaternius on Poly Pizza (CC0 1.0)"
+format = "glb"
+resolution = "n/a"
+size = 7564
+category = "building"
+look = "lowpoly"
+polycount = 108
+animated = false
+tags = ["brick", "building", "buildings-architecture", "lowpoly", "structure", "stylized", "wall"]
+[[asset.files]]
+url = "https://static.poly.pizza/e0072371-89a5-43ef-bbc5-fb6728913ea7.glb"
+sha256 = "25be4854a298ade370f78d84b2cf731c2c4b73b1cf2cf925dce42a74d6ccce84"
+size = 7564
+map = "model"
+path = "brick-wall.glb"
+
+[[asset]]
+id = "mdl-horror-old-gas-mask"
+kind = "model"
+name = "Old Gas Mask"
+source = "polyhaven"
+source_id = "old_gas_mask"
+page_url = "https://polyhaven.com/a/old_gas_mask"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/old_gas_mask/old_gas_mask_1k.gltf"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/old_gas_mask (type 2, 'Old Gas Mask'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Michał Wiśniewski"
+attribution = "Old Gas Mask by Michał Wiśniewski, Poly Haven (CC0 1.0)"
+format = "gltf"
+resolution = "1k"
+size = 2262447
+category = "horror"
+look = "realistic"
+polycount = 18900
+tags = ["airfilter", "antique", "chemical", "collection-project-lighthouse", "gasmask", "horror", "industrial", "postapocalyptic", "props", "respirator", "tools", "vintage", "warfare"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/old_gas_mask/old_gas_mask_1k.gltf"
+sha256 = "8967edcb1ec88d367f573bf96e21a24433500bd5dac6408441f7306df73ed299"
+size = 2773
+map = "model"
+path = "old_gas_mask_1k.gltf"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/old_gas_mask/old_gas_mask.bin"
+sha256 = "c0dfb1fb0dd4346b4172c1d5f441d34b801128cca32dceff290affef7f988777"
+size = 535000
+map = "include"
+path = "old_gas_mask.bin"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/old_gas_mask/old_gas_mask_arm_1k.jpg"
+sha256 = "e5fbd70928bc5cc10d9d891f2647431029bfc2bf611b0d8089919dec3681d709"
+size = 786017
+map = "include"
+path = "textures/old_gas_mask_arm_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/old_gas_mask/old_gas_mask_diff_1k.jpg"
+sha256 = "05f4f8cef2063d6ada63a68b4eca05b237331f9a1ac3d71eaf210170477e0c43"
+size = 484784
+map = "include"
+path = "textures/old_gas_mask_diff_1k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/old_gas_mask/old_gas_mask_nor_gl_1k.jpg"
+sha256 = "0edf4657152771337d188f86584ed73605021334d39ec61902efb288b832fcb8"
+size = 453873
+map = "include"
+path = "textures/old_gas_mask_nor_gl_1k.jpg"

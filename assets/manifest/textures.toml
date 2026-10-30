@@ -1,0 +1,1932 @@
+# PBR texture sets. One primary + alternates per Part material, plus stylized and pixel sets.
+# Generated with tools/assets/curate.py; see assets/README.md.
+
+[[asset]]
+id = "tex-plastic-plastic013a"
+kind = "texture"
+name = "Plastic 013 A"
+source = "ambientcg"
+source_id = "Plastic013A"
+page_url = "https://ambientcg.com/a/Plastic013A"
+download_url = "https://ambientcg.com/get?file=Plastic013A_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Plastic013A: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Plastic 013 A from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 26490010
+material = "Plastic"
+role = "primary"
+look = "realistic"
+tags = ["neutral", "plastic", "realistic", "tintable", "white"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Plastic013A_2K-JPG.zip"
+sha256 = "df2bd7a76a4f8269249f7dfeb5105fbc60ce4d462095fe0e81abe95824947c67"
+size = 26490010
+map = "archive"
+path = "Plastic013A_2K-JPG.zip"
+
+[[asset]]
+id = "tex-plastic-plastic018a"
+kind = "texture"
+name = "Plastic 018 A"
+source = "ambientcg"
+source_id = "Plastic018A"
+page_url = "https://ambientcg.com/a/Plastic018A"
+download_url = "https://ambientcg.com/get?file=Plastic018A_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Plastic018A: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Plastic 018 A from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 27087975
+material = "Plastic"
+role = "alternate"
+look = "realistic"
+tags = ["grey", "neutral", "plastic", "realistic", "textured", "tintable"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Plastic018A_2K-JPG.zip"
+sha256 = "3807b48821418891518b21416837760996880455c99717b13ff367c80d794a59"
+size = 27087975
+map = "archive"
+path = "Plastic018A_2K-JPG.zip"
+
+[[asset]]
+id = "tex-plastic-plastic012a"
+kind = "texture"
+name = "Plastic 012 A"
+source = "ambientcg"
+source_id = "Plastic012A"
+page_url = "https://ambientcg.com/a/Plastic012A"
+download_url = "https://ambientcg.com/get?file=Plastic012A_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Plastic012A: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Plastic 012 A from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 26659883
+material = "Plastic"
+role = "alternate"
+look = "realistic"
+tags = ["black", "dark", "plastic", "realistic", "textured"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Plastic012A_2K-JPG.zip"
+sha256 = "33deb7f731bc5f739eb3801712119669a8c2b59ad16a8eb1594b02407131c8f6"
+size = 26659883
+map = "archive"
+path = "Plastic012A_2K-JPG.zip"
+
+[[asset]]
+id = "tex-smoothplastic-plastic010"
+kind = "texture"
+name = "Plastic 010"
+source = "ambientcg"
+source_id = "Plastic010"
+page_url = "https://ambientcg.com/a/Plastic010"
+download_url = "https://ambientcg.com/get?file=Plastic010_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Plastic010: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Plastic 010 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 12649692
+material = "SmoothPlastic"
+role = "primary"
+look = "realistic"
+tags = ["neutral", "plastic", "realistic", "smooth", "tintable", "white"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Plastic010_2K-JPG.zip"
+sha256 = "81aebd803039a36f0c7b9c25d15f1a39a50758214d540df281eac0e13e3cd1a7"
+size = 12649692
+map = "archive"
+path = "Plastic010_2K-JPG.zip"
+
+[[asset]]
+id = "tex-smoothplastic-plastic014a"
+kind = "texture"
+name = "Plastic 014 A"
+source = "ambientcg"
+source_id = "Plastic014A"
+page_url = "https://ambientcg.com/a/Plastic014A"
+download_url = "https://ambientcg.com/get?file=Plastic014A_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Plastic014A: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Plastic 014 A from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 21131012
+material = "SmoothPlastic"
+role = "alternate"
+look = "realistic"
+tags = ["glossy", "orange", "plastic", "realistic", "red", "smooth"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Plastic014A_2K-JPG.zip"
+sha256 = "a5b01b4e7b718db219b5dc2b4496b55e7cdb366378c38105d51708f804585fef"
+size = 21131012
+map = "archive"
+path = "Plastic014A_2K-JPG.zip"
+
+[[asset]]
+id = "tex-smoothplastic-plastic015a"
+kind = "texture"
+name = "Plastic 015 A"
+source = "ambientcg"
+source_id = "Plastic015A"
+page_url = "https://ambientcg.com/a/Plastic015A"
+download_url = "https://ambientcg.com/get?file=Plastic015A_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Plastic015A: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Plastic 015 A from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 17568922
+material = "SmoothPlastic"
+role = "alternate"
+look = "realistic"
+tags = ["blue", "glossy", "plastic", "realistic", "smooth"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Plastic015A_2K-JPG.zip"
+sha256 = "3dc610d8e516b21d0ed567489d7fff53fd5252215aec0ef96a8ffb5f94cfaa1d"
+size = 17568922
+map = "archive"
+path = "Plastic015A_2K-JPG.zip"
+
+[[asset]]
+id = "tex-metal-metal009"
+kind = "texture"
+name = "Metal 009"
+source = "ambientcg"
+source_id = "Metal009"
+page_url = "https://ambientcg.com/a/Metal009"
+download_url = "https://ambientcg.com/get?file=Metal009_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Metal009: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Metal 009 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 16660145
+material = "Metal"
+role = "primary"
+look = "realistic"
+tags = ["brushed", "bumpy", "metal", "realistic", "scratches", "silver", "steel", "tintable"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Metal009_2K-JPG.zip"
+sha256 = "6f79f53d5073e65707c5765316fa9257f4604e1790093be5a51ed8226761a7f0"
+size = 16660145
+map = "archive"
+path = "Metal009_2K-JPG.zip"
+
+[[asset]]
+id = "tex-metal-metalplates001"
+kind = "texture"
+name = "Metal Plates 001"
+source = "ambientcg"
+source_id = "MetalPlates001"
+page_url = "https://ambientcg.com/a/MetalPlates001"
+download_url = "https://ambientcg.com/get?file=MetalPlates001_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/MetalPlates001: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Metal Plates 001 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 15634887
+material = "Metal"
+role = "alternate"
+look = "realistic"
+tags = ["brushed", "bumpy", "metal", "plates", "realistic", "rivets", "sci-fi", "scratches", "silver", "steel"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=MetalPlates001_2K-JPG.zip"
+sha256 = "9e17012c7d2c735ac63d07255c1231a249d72eb13e931ef15d9e335abc39411d"
+size = 15634887
+map = "archive"
+path = "MetalPlates001_2K-JPG.zip"
+
+[[asset]]
+id = "tex-metal-diamondplate008c"
+kind = "texture"
+name = "Diamond Plate 008 C"
+source = "ambientcg"
+source_id = "DiamondPlate008C"
+page_url = "https://ambientcg.com/a/DiamondPlate008C"
+download_url = "https://ambientcg.com/get?file=DiamondPlate008C_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/DiamondPlate008C: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Diamond Plate 008 C from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 24298010
+material = "Metal"
+role = "alternate"
+look = "realistic"
+tags = ["diamond", "diamond-plate", "floor", "industrial", "metal", "plate", "realistic", "tread"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=DiamondPlate008C_2K-JPG.zip"
+sha256 = "0c7afb58ec80b3d46af307099451e1bc71c643c7b2ba2d45c7d69663d8d3f909"
+size = 24298010
+map = "archive"
+path = "DiamondPlate008C_2K-JPG.zip"
+
+[[asset]]
+id = "tex-metal-corrugated-iron"
+kind = "texture"
+name = "Corrugated Iron"
+source = "polyhaven"
+source_id = "corrugated_iron"
+page_url = "https://polyhaven.com/a/corrugated_iron"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/corrugated_iron/corrugated_iron_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/corrugated_iron (type 1, 'Corrugated Iron'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Dimitrios Savva, Jenelle van Heerden"
+attribution = "Corrugated Iron by Dimitrios Savva, Jenelle van Heerden, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 10148411
+material = "Metal"
+role = "alternate"
+look = "realistic"
+tile_size_m = 1.12
+tags = ["corrugated", "corrugated-iron", "corrugation", "galvanized", "industrial", "iron", "man-made", "metal", "metal-sheet", "metallic", "realistic", "roof", "roofing", "rust", "rusty", "sheet", "steel", "steel-sheeting", "wall", "weathered"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/corrugated_iron/corrugated_iron_diff_2k.jpg"
+sha256 = "d904c2f294c0c8f0f198e115517fcdd6fc3a314d28c10e69881eac2890f028df"
+size = 2605861
+map = "albedo"
+path = "corrugated_iron_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/corrugated_iron/corrugated_iron_nor_gl_2k.jpg"
+sha256 = "86a2c9e5111ef0354961c355f863868e9705f4ff2f5e3e46220ac1e1425fd892"
+size = 3453777
+map = "normal_gl"
+path = "corrugated_iron_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/corrugated_iron/corrugated_iron_rough_2k.jpg"
+sha256 = "5da4c3d958657b404e1d5ab1284662fe2000fabc8025030c805a5e1906f2f2b2"
+size = 1680186
+map = "roughness"
+path = "corrugated_iron_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/corrugated_iron/corrugated_iron_ao_2k.jpg"
+sha256 = "5e9e3faff9db8d649da7782a86ca79ad5d3bf20c01d4c6c091601b495da9d5f7"
+size = 884922
+map = "ao"
+path = "corrugated_iron_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/corrugated_iron/corrugated_iron_metal_2k.jpg"
+sha256 = "96cb8fce6715c455becf9e57cb0b19d5c5d6517412831559dd008c0e87584bba"
+size = 741795
+map = "metalness"
+path = "corrugated_iron_metal_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/corrugated_iron/corrugated_iron_disp_2k.jpg"
+sha256 = "de66994f5c93e4c58f6904b318157a58edfc15488b5903d41dfc8aad853cfaca"
+size = 781870
+map = "height"
+path = "corrugated_iron_disp_2k.jpg"
+
+[[asset]]
+id = "tex-metal-blue-metal-plate"
+kind = "texture"
+name = "Blue Metal Plate"
+source = "polyhaven"
+source_id = "blue_metal_plate"
+page_url = "https://polyhaven.com/a/blue_metal_plate"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/blue_metal_plate/blue_metal_plate_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/blue_metal_plate (type 1, 'Blue Metal Plate'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Blue Metal Plate by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 4282370
+material = "Metal"
+role = "extra"
+look = "realistic"
+tile_size_m = 2.5
+tags = ["abrasion-marks", "blue", "industrial", "metal", "metal-plate", "metal-sheet", "painted", "realistic", "scratched", "scratches", "scuffed", "steel-panel", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/blue_metal_plate/blue_metal_plate_diff_2k.jpg"
+sha256 = "82855f6297ad07ea7ea4d1c501e6b56ed4c9c758653ca126bda9fd0ebba63c59"
+size = 1518621
+map = "albedo"
+path = "blue_metal_plate_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/blue_metal_plate/blue_metal_plate_nor_gl_2k.jpg"
+sha256 = "4cd3069a918cf891295b369b26f47c0a0631c634d0fd1006b6b7412a8f2b3550"
+size = 948237
+map = "normal_gl"
+path = "blue_metal_plate_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/blue_metal_plate/blue_metal_plate_rough_2k.jpg"
+sha256 = "dd1726d8217fe4f6c3947cb20700d51774a0773e9abaeb4120769c8f6fce1d69"
+size = 1588770
+map = "roughness"
+path = "blue_metal_plate_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/blue_metal_plate/blue_metal_plate_ao_2k.jpg"
+sha256 = "6e58210d25dadef4b6617a9b03f27a89e5a6013da71ebfc8651afba520e54183"
+size = 101861
+map = "ao"
+path = "blue_metal_plate_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/blue_metal_plate/blue_metal_plate_disp_2k.jpg"
+sha256 = "2dcd9487679b94bc273bfa0c0992dacfe72b81dd1e8c1e4b8711f6b26d7c99ce"
+size = 124881
+map = "height"
+path = "blue_metal_plate_disp_2k.jpg"
+
+[[asset]]
+id = "tex-wood-wood049"
+kind = "texture"
+name = "Wood 049"
+source = "ambientcg"
+source_id = "Wood049"
+page_url = "https://ambientcg.com/a/Wood049"
+download_url = "https://ambientcg.com/get?file=Wood049_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Wood049: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Wood 049 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 23170632
+material = "Wood"
+role = "primary"
+look = "realistic"
+tags = ["brown", "furniture", "grain", "horizontal", "interior", "modern", "natural", "oak", "plain", "realistic", "smooth", "tintable", "wood", "wood049"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Wood049_2K-JPG.zip"
+sha256 = "a9dd578788a1e05434d126f5cb66b15520f98f5108ac535790145905fc176c54"
+size = 23170632
+map = "archive"
+path = "Wood049_2K-JPG.zip"
+
+[[asset]]
+id = "tex-wood-wood-planks"
+kind = "texture"
+name = "Wood Planks"
+source = "polyhaven"
+source_id = "wood_planks"
+page_url = "https://polyhaven.com/a/wood_planks"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/wood_planks/wood_planks_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/wood_planks (type 1, 'Wood Planks'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Amal Kumar"
+attribution = "Wood Planks by Amal Kumar, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 8528428
+material = "Wood"
+role = "alternate"
+look = "realistic"
+tile_size_m = 1.5
+tags = ["aged", "discolored", "floor", "grain", "man-made", "old", "plank", "planks", "raw-wood", "realistic", "rough", "scratched", "timber", "weathered", "wood", "wooden", "wooden-flooring", "wooden-planks", "worn"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/wood_planks/wood_planks_diff_2k.jpg"
+sha256 = "caa1e71809521050fe0753ee7c17aa2faf32055fe53aff013415bc459dd23ea7"
+size = 2387732
+map = "albedo"
+path = "wood_planks_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/wood_planks/wood_planks_nor_gl_2k.jpg"
+sha256 = "908d0fe05d5abd963f2e518776bbff0db9617d3ccbb09e5e8503290572caaf27"
+size = 2906326
+map = "normal_gl"
+path = "wood_planks_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/wood_planks/wood_planks_rough_2k.jpg"
+sha256 = "56e3bafda8dfbeb8730b10d59c7541e983cff43b5b74f58d6d2c437f2b9455a1"
+size = 1151798
+map = "roughness"
+path = "wood_planks_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/wood_planks/wood_planks_ao_2k.jpg"
+sha256 = "08d0c16665dd88be24eff9ca2fbab983b8d8c56af76f689377c674f1da3679f1"
+size = 1404358
+map = "ao"
+path = "wood_planks_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/wood_planks/wood_planks_disp_2k.jpg"
+sha256 = "55397640a3cfa24f45e685411bd05b3ddf80c4fba1fa18705fb8c25940958cd6"
+size = 678214
+map = "height"
+path = "wood_planks_disp_2k.jpg"
+
+[[asset]]
+id = "tex-wood-oak-wood-planks"
+kind = "texture"
+name = "Oak Wood Planks"
+source = "polyhaven"
+source_id = "oak_wood_planks"
+page_url = "https://polyhaven.com/a/oak_wood_planks"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/oak_wood_planks (type 1, 'Oak Wood Planks'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Dimitrios Savva"
+attribution = "Oak Wood Planks by Dimitrios Savva, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 11776036
+material = "Wood"
+role = "alternate"
+look = "realistic"
+tile_size_m = 1.2
+tags = ["coated", "light", "oak", "plank", "planks", "realistic", "timber", "varnished", "wood", "wooden-floor", "wooden-flooring", "wooden-planks"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_diff_2k.jpg"
+sha256 = "ec3d2deb1fe21150ede5f987b48c691b3c7dbffe4183850a9b8717e904917a46"
+size = 2736142
+map = "albedo"
+path = "oak_wood_planks_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_nor_gl_2k.jpg"
+sha256 = "340a51d81e5ec2ead28a1c864637375becb00a1e11861e47a72dde4c03950968"
+size = 2125233
+map = "normal_gl"
+path = "oak_wood_planks_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_rough_2k.jpg"
+sha256 = "18b2a97f44b18e1a794652dbb2ec4bbdfc35869e2f028e4bbb85441258da1018"
+size = 3396426
+map = "roughness"
+path = "oak_wood_planks_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_ao_2k.jpg"
+sha256 = "576633bf0b497cfa39f799d92318b5e57d33c5ad6083abb1a0f69bdc9c13ba89"
+size = 2745574
+map = "ao"
+path = "oak_wood_planks_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_disp_2k.jpg"
+sha256 = "00fde4caabb0538e3b058627fcf2105178c9d80f807e2653d5e4f0fb75c0e35d"
+size = 772661
+map = "height"
+path = "oak_wood_planks_disp_2k.jpg"
+
+[[asset]]
+id = "tex-wood-woodfloor043"
+kind = "texture"
+name = "Wood Floor 043"
+source = "ambientcg"
+source_id = "WoodFloor043"
+page_url = "https://ambientcg.com/a/WoodFloor043"
+download_url = "https://ambientcg.com/get?file=WoodFloor043_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/WoodFloor043: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Wood Floor 043 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 10308598
+material = "Wood"
+role = "alternate"
+look = "realistic"
+tags = ["floor", "parquet", "planks", "realistic", "varnished", "wood"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=WoodFloor043_2K-JPG.zip"
+sha256 = "5f9cab5c67eeeb441a6aa6744f9ebbd56186dfeab4f9c1d924220d3d43b73bdb"
+size = 10308598
+map = "archive"
+path = "WoodFloor043_2K-JPG.zip"
+
+[[asset]]
+id = "tex-concrete-concrete034"
+kind = "texture"
+name = "Concrete 034"
+source = "ambientcg"
+source_id = "Concrete034"
+page_url = "https://ambientcg.com/a/Concrete034"
+download_url = "https://ambientcg.com/get?file=Concrete034_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Concrete034: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Concrete 034 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 10598720
+material = "Concrete"
+role = "primary"
+look = "realistic"
+tags = ["clean", "concrete", "grey", "light", "plaster", "realistic", "smooth", "tintable"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Concrete034_2K-JPG.zip"
+sha256 = "fafd7cd3aee2b703abbb12b7810ef565ab76ac7ea3b1ea9a73b088e423e670b3"
+size = 10598720
+map = "archive"
+path = "Concrete034_2K-JPG.zip"
+
+[[asset]]
+id = "tex-concrete-concrete-wall-008"
+kind = "texture"
+name = "Concrete Wall 008"
+source = "polyhaven"
+source_id = "concrete_wall_008"
+page_url = "https://polyhaven.com/a/concrete_wall_008"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_008/concrete_wall_008_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/concrete_wall_008 (type 1, 'Concrete Wall 008'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Charlotte Baglioni, Dario Barresi"
+attribution = "Concrete Wall 008 by Charlotte Baglioni, Dario Barresi, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 9977585
+material = "Concrete"
+role = "alternate"
+look = "realistic"
+tile_size_m = 2.71
+tags = ["cement", "chipped", "concrete", "cracked", "damaged", "dry", "man-made", "outdoor", "panels", "plaster", "plaster-concrete", "realistic", "scratched", "stained", "wall", "weathered"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_008/concrete_wall_008_diff_2k.jpg"
+sha256 = "a3eb7b24c5cf6f113ec9b3be8ab1715360ef3cbf4b1699979414e44341f54846"
+size = 2666189
+map = "albedo"
+path = "concrete_wall_008_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_008/concrete_wall_008_nor_gl_2k.jpg"
+sha256 = "58ce9b818772d37fe16e1154ea0278f3ab423ed34073357e786ef44f9ceef052"
+size = 2342650
+map = "normal_gl"
+path = "concrete_wall_008_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_008/concrete_wall_008_rough_2k.jpg"
+sha256 = "f88aab6f11e0cbe3d366a2beb4ea1e50468e8e31da32bf1ea4a098b3be2f984e"
+size = 1458273
+map = "roughness"
+path = "concrete_wall_008_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_008/concrete_wall_008_ao_2k.jpg"
+sha256 = "19cc50a0c3d375ae3d85c57fce63f22886daed4cbb6fedc46d034af0132c3ee4"
+size = 2733036
+map = "ao"
+path = "concrete_wall_008_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete_wall_008/concrete_wall_008_disp_2k.jpg"
+sha256 = "95d38f253bdd8767a2b4b2ce9dcf832355c71fd03627a42a24f8373df801465a"
+size = 777437
+map = "height"
+path = "concrete_wall_008_disp_2k.jpg"
+
+[[asset]]
+id = "tex-concrete-concrete"
+kind = "texture"
+name = "Concrete"
+source = "polyhaven"
+source_id = "concrete"
+page_url = "https://polyhaven.com/a/concrete"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete/concrete_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/concrete (type 1, 'Concrete'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Concrete by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 5929592
+material = "Concrete"
+role = "alternate"
+look = "realistic"
+tile_size_m = 4.0
+tags = ["bare", "board-formed", "concrete", "dirty", "man-made", "old", "outdoor", "panels", "plaster-concrete", "realistic", "wall", "weathered"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete/concrete_diff_2k.jpg"
+sha256 = "92a0b37c2f64630ba776b514f3276ecbb98cd59a23dea2c7b83b3c63bc3e4f7a"
+size = 2265804
+map = "albedo"
+path = "concrete_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete/concrete_nor_gl_2k.jpg"
+sha256 = "74bd74e02c00565c84d89f6a73fe672ba4fe254c5b43d83eaca0eb7be5159265"
+size = 589619
+map = "normal_gl"
+path = "concrete_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete/concrete_rough_2k.jpg"
+sha256 = "d58060aa195ffd5fc90fc2468491f9e6fd8a8d374362605d8cfe7ddeabcdc84c"
+size = 961406
+map = "roughness"
+path = "concrete_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete/concrete_ao_2k.jpg"
+sha256 = "0356e19784c8413e2fd201f160403b919b95fd09e30c1743d063a691975684a4"
+size = 1543459
+map = "ao"
+path = "concrete_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/concrete/concrete_disp_2k.jpg"
+sha256 = "9c2da331a1f05a92684612a866b294f7f72aac02ba218f20aa0666de943ac160"
+size = 569304
+map = "height"
+path = "concrete_disp_2k.jpg"
+
+[[asset]]
+id = "tex-concrete-dirty-concrete"
+kind = "texture"
+name = "Dirty Concrete"
+source = "polyhaven"
+source_id = "dirty_concrete"
+page_url = "https://polyhaven.com/a/dirty_concrete"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dirty_concrete/dirty_concrete_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/dirty_concrete (type 1, 'Dirty Concrete'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Dirty Concrete by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 7509402
+material = "Concrete"
+role = "extra"
+look = "realistic"
+tile_size_m = 3.0
+tags = ["concrete", "dirty", "floor", "horror", "man-made", "mud", "outdoor", "plaster-concrete", "realistic", "rough", "sand"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dirty_concrete/dirty_concrete_diff_2k.jpg"
+sha256 = "774ed7fec21f4fe14d625b3d21d3fd882a766a7f63e16217f32f8513b93f78bc"
+size = 2952697
+map = "albedo"
+path = "dirty_concrete_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dirty_concrete/dirty_concrete_nor_gl_2k.jpg"
+sha256 = "c41502c1d07f7644428ad6c2141cc131ff04319672bf74b7dc8d5c3fe5f60610"
+size = 1507149
+map = "normal_gl"
+path = "dirty_concrete_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dirty_concrete/dirty_concrete_rough_2k.jpg"
+sha256 = "daab680ba06253257879a9ec9775d2d232abe70da56db4997d97ca74e6076d53"
+size = 1273849
+map = "roughness"
+path = "dirty_concrete_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dirty_concrete/dirty_concrete_ao_2k.jpg"
+sha256 = "eceb48aeec6a3f94db166227f65a01f93b796809a3ea884f447f7f4d6a9fc284"
+size = 963187
+map = "ao"
+path = "dirty_concrete_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/dirty_concrete/dirty_concrete_disp_2k.jpg"
+sha256 = "8a70bcefee84a796a27e6cdd88a3b8ca17ceeca5cab0ea3e2ba2d5acf0877ec6"
+size = 812520
+map = "height"
+path = "dirty_concrete_disp_2k.jpg"
+
+[[asset]]
+id = "tex-glass-surfaceimperfections013"
+kind = "texture"
+name = "Surface Imperfections 013"
+source = "ambientcg"
+source_id = "SurfaceImperfections013"
+page_url = "https://ambientcg.com/a/SurfaceImperfections013"
+download_url = "https://ambientcg.com/get?file=SurfaceImperfections013_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/SurfaceImperfections013: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Surface Imperfections 013 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 23067138
+material = "Glass"
+role = "primary"
+look = "realistic"
+tags = ["imperfections", "realistic", "scratches", "smear", "smudge", "stains", "surface"]
+notes = "Imperfection overlay for glass: albedo alpha (from opacity) = coverage."
+[asset.texture]
+tint = "overlay"
+[[asset.files]]
+url = "https://ambientcg.com/get?file=SurfaceImperfections013_2K-JPG.zip"
+sha256 = "eb4b9d3e7a325c6c3039157ba27ba6001b10c51016eaebbc712be5c0844499c1"
+size = 23067138
+map = "archive"
+path = "SurfaceImperfections013_2K-JPG.zip"
+
+[[asset]]
+id = "tex-glass-fingerprints002"
+kind = "texture"
+name = "Fingerprints 002"
+source = "ambientcg"
+source_id = "Fingerprints002"
+page_url = "https://ambientcg.com/a/Fingerprints002"
+download_url = "https://ambientcg.com/get?file=Fingerprints002_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Fingerprints002: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Fingerprints 002 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 17502366
+material = "Glass"
+role = "alternate"
+look = "realistic"
+tags = ["dirt", "finger", "fingerprints", "imperfection", "print", "realistic", "smear", "smudge", "smudges", "surface"]
+[asset.texture]
+tint = "overlay"
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Fingerprints002_2K-JPG.zip"
+sha256 = "fea72d46495851524f40b4b9b668de637afb2e6727a3a2f2c8150afb264ead99"
+size = 17502366
+map = "archive"
+path = "Fingerprints002_2K-JPG.zip"
+
+[[asset]]
+id = "tex-glass-surfaceimperfections003"
+kind = "texture"
+name = "Surface Imperfections 003"
+source = "ambientcg"
+source_id = "SurfaceImperfections003"
+page_url = "https://ambientcg.com/a/SurfaceImperfections003"
+download_url = "https://ambientcg.com/get?file=SurfaceImperfections003_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/SurfaceImperfections003: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Surface Imperfections 003 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 18857904
+material = "Glass"
+role = "alternate"
+look = "realistic"
+tags = ["dirt", "imperfections", "realistic", "smear", "smudge", "streaks", "surface"]
+[asset.texture]
+tint = "overlay"
+[[asset.files]]
+url = "https://ambientcg.com/get?file=SurfaceImperfections003_2K-JPG.zip"
+sha256 = "11675d43dcc2ae0c2c886ae1c67ae5bd29fa704ab81a45cfb8918133745835c0"
+size = 18857904
+map = "archive"
+path = "SurfaceImperfections003_2K-JPG.zip"
+
+[[asset]]
+id = "tex-grass-grass004"
+kind = "texture"
+name = "Grass 004"
+source = "ambientcg"
+source_id = "Grass004"
+page_url = "https://ambientcg.com/a/Grass004"
+download_url = "https://ambientcg.com/get?file=Grass004_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Grass004: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Grass 004 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 39900302
+material = "Grass"
+role = "primary"
+look = "realistic"
+tags = ["dense", "garden", "grass", "grass004", "green", "ground", "lawn", "lush", "natural", "park", "realistic", "short", "soft", "suburban"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Grass004_2K-JPG.zip"
+sha256 = "d7d3f08e8bb1e59aed0c3dbb85ea0b46d5308481f89b6a3fd62c0ec9e862245b"
+size = 39900302
+map = "archive"
+path = "Grass004_2K-JPG.zip"
+
+[[asset]]
+id = "tex-grass-grass001"
+kind = "texture"
+name = "Grass 001"
+source = "ambientcg"
+source_id = "Grass001"
+page_url = "https://ambientcg.com/a/Grass001"
+download_url = "https://ambientcg.com/get?file=Grass001_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Grass001: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Grass 001 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 38930280
+material = "Grass"
+role = "alternate"
+look = "realistic"
+tags = ["cover", "dark", "dense", "fresh", "garden", "grass", "grass001", "green", "ground", "lawn", "leaves", "natural", "park", "realistic", "short", "soft"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Grass001_2K-JPG.zip"
+sha256 = "a47570077b55f260a6c54890a560087caffb9eb8b2b78a84f8247ba1966d7d1d"
+size = 38930280
+map = "archive"
+path = "Grass001_2K-JPG.zip"
+
+[[asset]]
+id = "tex-grass-leafy-grass"
+kind = "texture"
+name = "Leafy Grass"
+source = "polyhaven"
+source_id = "leafy_grass"
+page_url = "https://polyhaven.com/a/leafy_grass"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/leafy_grass/leafy_grass_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/leafy_grass (type 1, 'Leafy Grass'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Charlotte Baglioni"
+attribution = "Leafy Grass by Charlotte Baglioni, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 19808862
+material = "Grass"
+role = "alternate"
+look = "realistic"
+tile_size_m = 2.0
+tags = ["floor", "foliage", "grass", "green", "ground", "leaves", "meadow", "nature", "outdoor", "outdoors", "plants", "realistic", "sticks", "trampled", "twigs"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/leafy_grass/leafy_grass_diff_2k.jpg"
+sha256 = "8e1c6d21365d4b89bc5a35ab664da98a78dbc3ab9ba6100474881c8619a5b113"
+size = 4766204
+map = "albedo"
+path = "leafy_grass_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/leafy_grass/leafy_grass_nor_gl_2k.jpg"
+sha256 = "df0cf0ce96e653f033e5b934d5b12995464bda027aa53bd12e329be889aa9f45"
+size = 6047262
+map = "normal_gl"
+path = "leafy_grass_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/leafy_grass/leafy_grass_rough_2k.jpg"
+sha256 = "34e1733bf4064b6950a575ff57e78c8b7ff71b63749eb48a49221bd65de6fb4f"
+size = 2274652
+map = "roughness"
+path = "leafy_grass_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/leafy_grass/leafy_grass_ao_2k.jpg"
+sha256 = "bcce4368f6a1affe11b4a643e14cfed7dfb46abf6bb9e6a28a3b87c2de2ddb11"
+size = 4175463
+map = "ao"
+path = "leafy_grass_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/leafy_grass/leafy_grass_disp_2k.jpg"
+sha256 = "de34be0f135a3c92fe6e55cca9501a4cc40e02e84de9cc4c7fefded1da5bd3f3"
+size = 2545281
+map = "height"
+path = "leafy_grass_disp_2k.jpg"
+
+[[asset]]
+id = "tex-brick-red-brick-03"
+kind = "texture"
+name = "Red Brick 03"
+source = "polyhaven"
+source_id = "red_brick_03"
+page_url = "https://polyhaven.com/a/red_brick_03"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/red_brick_03 (type 1, 'Red Brick 03'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Red Brick 03 by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 10246308
+material = "Brick"
+role = "primary"
+look = "realistic"
+tile_size_m = 1.0
+tags = ["brick", "brown", "clean", "factory", "industrial", "man-made", "outdoor", "realistic", "red", "wall"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_diff_2k.jpg"
+sha256 = "c37ef11bb94a533d1c758c5c7d7199264e90f19b23946766c7c59aa189c11ff6"
+size = 2969950
+map = "albedo"
+path = "red_brick_03_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_nor_gl_2k.jpg"
+sha256 = "3bcb8714c450369915a9608a9e5318433a5e5df932184519bdbfd993dec16a9f"
+size = 3684630
+map = "normal_gl"
+path = "red_brick_03_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_rough_2k.jpg"
+sha256 = "54cbcc8acdbdfbc0a38407509ef72058ef5847b5713e689fa37ce9cc504c41c1"
+size = 1329161
+map = "roughness"
+path = "red_brick_03_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_ao_2k.jpg"
+sha256 = "3891e9f879575b70fef2abc854ececd813c906f26bb6e333b9d91f3ff39615ab"
+size = 1666638
+map = "ao"
+path = "red_brick_03_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/red_brick_03/red_brick_03_disp_2k.jpg"
+sha256 = "f48b733ec52e43ef35fd9285a9fd4592356cf25ec86e29d711a0ad33ef3dfc7a"
+size = 595929
+map = "height"
+path = "red_brick_03_disp_2k.jpg"
+
+[[asset]]
+id = "tex-brick-bricks060"
+kind = "texture"
+name = "Bricks 060"
+source = "ambientcg"
+source_id = "Bricks060"
+page_url = "https://ambientcg.com/a/Bricks060"
+download_url = "https://ambientcg.com/get?file=Bricks060_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Bricks060: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Bricks 060 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 26798917
+material = "Brick"
+role = "alternate"
+look = "realistic"
+tags = ["brick", "bricks", "bright", "light", "painted", "realistic", "tintable", "wall", "white"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Bricks060_2K-JPG.zip"
+sha256 = "a0dc1530f188b584aed1957a91007485ebdfa91f0028ecfcc254fa614398368b"
+size = 26798917
+map = "archive"
+path = "Bricks060_2K-JPG.zip"
+
+[[asset]]
+id = "tex-brick-brick-wall-02"
+kind = "texture"
+name = "Brick Wall 02"
+source = "polyhaven"
+source_id = "brick_wall_02"
+page_url = "https://polyhaven.com/a/brick_wall_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_02/brick_wall_02_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/brick_wall_02 (type 1, 'Brick Wall 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Dimitrios Savva"
+attribution = "Brick Wall 02 by Dimitrios Savva, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 14650660
+material = "Brick"
+role = "alternate"
+look = "realistic"
+tile_size_m = 2.0
+tags = ["brick", "bricks", "concrete", "cracked", "exterior", "man-made", "old", "outdoor", "realistic", "red-brick", "scratched", "wall", "weathered"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_02/brick_wall_02_diff_2k.jpg"
+sha256 = "58c268fc076af4f8a6f645db037141ae12b6a8e045320ad4526e02e9840753ac"
+size = 4009824
+map = "albedo"
+path = "brick_wall_02_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_02/brick_wall_02_nor_gl_2k.jpg"
+sha256 = "87fb0bb453347772015ba124db0ebb39fb5a9687a8f3e4d77172fabd017a0fd3"
+size = 4531120
+map = "normal_gl"
+path = "brick_wall_02_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_02/brick_wall_02_rough_2k.jpg"
+sha256 = "1345da86696c75612ff4d76db9a6f2294376eb48c9a1579b008e43459046e97e"
+size = 1642309
+map = "roughness"
+path = "brick_wall_02_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_02/brick_wall_02_ao_2k.jpg"
+sha256 = "df33eba938fa50a830529f73f551d8af1972c6c666183cb028f5003debcb5315"
+size = 3145438
+map = "ao"
+path = "brick_wall_02_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/brick_wall_02/brick_wall_02_disp_2k.jpg"
+sha256 = "451a0f6ef353172d20928b250df0620f365880de479cd8c4a770bb1a7c2f76b3"
+size = 1321969
+map = "height"
+path = "brick_wall_02_disp_2k.jpg"
+
+[[asset]]
+id = "tex-ice-ice002"
+kind = "texture"
+name = "Ice 002"
+source = "ambientcg"
+source_id = "Ice002"
+page_url = "https://ambientcg.com/a/Ice002"
+download_url = "https://ambientcg.com/get?file=Ice002_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Ice002: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Ice 002 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 19813045
+material = "Ice"
+role = "primary"
+look = "realistic"
+tags = ["cracked", "crystal", "frozen", "green", "ice", "lake", "realistic", "shiny", "water"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Ice002_2K-JPG.zip"
+sha256 = "a4b534fd7fbb4be522a755618ec01f5f05e432dbc253f5c48a104b6f3cf96f64"
+size = 19813045
+map = "archive"
+path = "Ice002_2K-JPG.zip"
+
+[[asset]]
+id = "tex-ice-ice004"
+kind = "texture"
+name = "Ice 004"
+source = "ambientcg"
+source_id = "Ice004"
+page_url = "https://ambientcg.com/a/Ice004"
+download_url = "https://ambientcg.com/get?file=Ice004_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Ice004: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Ice 004 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 18517784
+material = "Ice"
+role = "alternate"
+look = "realistic"
+tags = ["crystal", "frozen", "green", "ice", "lake", "light", "realistic", "shiny", "water"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Ice004_2K-JPG.zip"
+sha256 = "d648880717cff4f6dd739e6ac9c2ea6080b6aa6642a659049679347102d6ca13"
+size = 18517784
+map = "archive"
+path = "Ice004_2K-JPG.zip"
+
+[[asset]]
+id = "tex-ice-ice003"
+kind = "texture"
+name = "Ice 003"
+source = "ambientcg"
+source_id = "Ice003"
+page_url = "https://ambientcg.com/a/Ice003"
+download_url = "https://ambientcg.com/get?file=Ice003_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Ice003: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Ice 003 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 15559387
+material = "Ice"
+role = "alternate"
+look = "realistic"
+tags = ["crystal", "deep", "frozen", "green", "ice", "lake", "realistic", "shiny", "water"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Ice003_2K-JPG.zip"
+sha256 = "7e46df58180500ce8d7aae37a5ae64c96d484b00107a4afd3c658240bb18446d"
+size = 15559387
+map = "archive"
+path = "Ice003_2K-JPG.zip"
+
+[[asset]]
+id = "tex-ice-snow-02"
+kind = "texture"
+name = "Snow 02"
+source = "polyhaven"
+source_id = "snow_02"
+page_url = "https://polyhaven.com/a/snow_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/snow_02/snow_02_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/snow_02 (type 1, 'Snow 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Snow 02 by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 8492973
+material = "Ice"
+role = "extra"
+look = "realistic"
+tile_size_m = 2.0
+tags = ["frosty", "natural", "outdoor", "powdery", "realistic", "smooth", "snow", "snowfield", "soft", "terrain", "uneven", "wintery"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/snow_02/snow_02_diff_2k.jpg"
+sha256 = "d185c2853c7e674161789db4eed1c5708d85e4f6e3dcb5698209568adf02aa98"
+size = 1314409
+map = "albedo"
+path = "snow_02_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/snow_02/snow_02_nor_gl_2k.jpg"
+sha256 = "288539ee33387e91035be4dc8d10da574bf6a95c8374d33b6b1dc465c6949e8f"
+size = 4761595
+map = "normal_gl"
+path = "snow_02_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/snow_02/snow_02_rough_2k.jpg"
+sha256 = "9cfa994318ef190d4540875a166c7c745184c1a166e82271bca7c0a628f8820f"
+size = 628467
+map = "roughness"
+path = "snow_02_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/snow_02/snow_02_ao_2k.jpg"
+sha256 = "3bb1a13af0ce8d5b8a0cc80e1d5b4f36a36b0d612b65b3dc16ebc4b7ea36f4cb"
+size = 1356103
+map = "ao"
+path = "snow_02_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/snow_02/snow_02_disp_2k.jpg"
+sha256 = "c3fe9fe26907138e23e685c53c43152858f27042b802931e0f71bc0c62286fdd"
+size = 432399
+map = "height"
+path = "snow_02_disp_2k.jpg"
+
+[[asset]]
+id = "tex-sand-sand-01"
+kind = "texture"
+name = "Sand 01"
+source = "polyhaven"
+source_id = "sand_01"
+page_url = "https://polyhaven.com/a/sand_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sand_01/sand_01_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/sand_01 (type 1, 'Sand 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Sand 01 by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 6729772
+material = "Sand"
+role = "primary"
+look = "realistic"
+tile_size_m = 1.5
+tags = ["beach", "clay", "dry", "natural", "outdoor", "plaster", "realistic", "sand", "terrain", "trampled", "uneven"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sand_01/sand_01_diff_2k.jpg"
+sha256 = "f311767ab68e132cb9de4160493a71ff17ec765c699d411facd5154d9a9a9c18"
+size = 1984816
+map = "albedo"
+path = "sand_01_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sand_01/sand_01_nor_gl_2k.jpg"
+sha256 = "b784b6a0526b79c81635bf423be9bc517ad36278ae5d68a4ff30f46eac56f0e3"
+size = 2503853
+map = "normal_gl"
+path = "sand_01_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sand_01/sand_01_rough_2k.jpg"
+sha256 = "60ec73993d245be5dab83f9debb67cab4303a0af9d4cec3f28868a58f939f8db"
+size = 757435
+map = "roughness"
+path = "sand_01_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sand_01/sand_01_ao_2k.jpg"
+sha256 = "869cb6a93c2fb37fbe37236b33e386871134a5b154354396c7ba000f1be09b22"
+size = 1021179
+map = "ao"
+path = "sand_01_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/sand_01/sand_01_disp_2k.jpg"
+sha256 = "3edaf84b5075600a0c26665d69e4c45dc8bf9df045f126fd18686d0688448a5f"
+size = 462489
+map = "height"
+path = "sand_01_disp_2k.jpg"
+
+[[asset]]
+id = "tex-sand-coast-sand-01"
+kind = "texture"
+name = "Coast Sand 01"
+source = "polyhaven"
+source_id = "coast_sand_01"
+page_url = "https://polyhaven.com/a/coast_sand_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_diff_2k.jpg"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/coast_sand_01 (type 1, 'Coast Sand 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Rob Tuytel"
+attribution = "Coast Sand 01 by Rob Tuytel, Poly Haven (CC0 1.0)"
+format = "jpg"
+resolution = "2k"
+size = 13429081
+material = "Sand"
+role = "alternate"
+look = "realistic"
+tile_size_m = 15.0
+tags = ["aerial", "beach", "brown", "collection-smugglers-cove", "collection-verdant-trail", "costal", "damp", "dirt", "gravel", "natural", "ocean", "outdoor", "realistic", "rough", "sand", "seaside", "stones", "terrain", "wet"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_diff_2k.jpg"
+sha256 = "e1c37ea8b4282fda612b0584d864ca4eef2da28c2fa9f3930cad9209414eb979"
+size = 3552676
+map = "albedo"
+path = "coast_sand_01_diff_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_nor_gl_2k.jpg"
+sha256 = "e5b1430c751727c8ab0332adfd8960c48342936146de258aa9b7736630cdbb62"
+size = 4630126
+map = "normal_gl"
+path = "coast_sand_01_nor_gl_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_rough_2k.jpg"
+sha256 = "93caeb7332d1593702d97a59040ce178a27c9d705b30c55413e0d2507e09a762"
+size = 1389332
+map = "roughness"
+path = "coast_sand_01_rough_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_ao_2k.jpg"
+sha256 = "23b8d335931871b04ebe5c2a77b62ecb14a169058d784ff86426d57c5e6bb9cc"
+size = 2814916
+map = "ao"
+path = "coast_sand_01_ao_2k.jpg"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_disp_2k.jpg"
+sha256 = "063a569b436f64f3efd32e4dee256814b40cdb3994c55b4de5748bd074941db5"
+size = 1042031
+map = "height"
+path = "coast_sand_01_disp_2k.jpg"
+
+[[asset]]
+id = "tex-sand-ground080"
+kind = "texture"
+name = "Ground 080"
+source = "ambientcg"
+source_id = "Ground080"
+page_url = "https://ambientcg.com/a/Ground080"
+download_url = "https://ambientcg.com/get?file=Ground080_2K-JPG.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence_evidence = "https://ambientcg.com/a/Ground080: 'All assets are released under the Creative Commons CC0 license'"
+licence_checked = "2026-10-30"
+author = "Lennart Demes (ambientCG)"
+attribution = "Ground 080 from ambientCG.com, licensed under CC0 1.0"
+format = "zip (jpg)"
+resolution = "2K-JPG"
+size = 24890799
+material = "Sand"
+role = "alternate"
+look = "realistic"
+tags = ["beach", "brown", "desert", "dirt", "dunes", "ground", "realistic", "sand", "yellow"]
+[[asset.files]]
+url = "https://ambientcg.com/get?file=Ground080_2K-JPG.zip"
+sha256 = "7b8593f653a782eaa31e3cd504594b3eb7f940a742b11d91681ae28c7914f67f"
+size = 24890799
+map = "archive"
+path = "Ground080_2K-JPG.zip"
+
+[[asset]]
+id = "tex-brick-stylized-hand-painted-brick"
+kind = "texture"
+name = "Hand painted brick wall"
+source = "opengameart"
+source_id = "hand-painted-brick-wall"
+page_url = "https://opengameart.org/content/hand-painted-brick-wall"
+download_url = "https://opengameart.org/sites/default/files/stonewall_0.png"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/hand-painted-brick-wall: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "PamNawi"
+attribution = "Hand painted brick wall by PamNawi, OpenGameArt.org (CC0)"
+format = "png"
+resolution = "native"
+size = 1441329
+material = "Brick"
+role = "stylized"
+look = "stylized"
+tags = ["hand-painted", "stylized", "toon"]
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/stonewall_0.png"
+sha256 = "bcb986dafb04e1912e9486e20b82cd22eab6fbdd64c26eb2655989a5dbee6b8d"
+size = 1441329
+map = "albedo"
+path = "stonewall_0.png"
+
+[[asset]]
+id = "tex-grass-stylized-hand-painted-grass"
+kind = "texture"
+name = "Hand Painted Grass"
+source = "opengameart"
+source_id = "hand-painted-grass"
+page_url = "https://opengameart.org/content/hand-painted-grass"
+download_url = "https://opengameart.org/sites/default/files/grass2_2.png"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/hand-painted-grass: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "PamNawi"
+attribution = "Hand Painted Grass by PamNawi, OpenGameArt.org (CC0)"
+format = "png"
+resolution = "native"
+size = 1311673
+material = "Grass"
+role = "stylized"
+look = "stylized"
+tags = ["hand-painted", "stylized", "toon"]
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/grass2_2.png"
+sha256 = "1c58a554a65fa8d7974a232dfa5d04495e57568d098d7c98a68ce568f792793d"
+size = 1311673
+map = "albedo"
+path = "grass2_2.png"
+
+[[asset]]
+id = "tex-wood-stylized-hand-painted-floor"
+kind = "texture"
+name = "Wooden Floors (2K)"
+source = "opengameart"
+source_id = "wooden-floors-2k"
+page_url = "https://opengameart.org/content/wooden-floors-2k"
+download_url = "https://opengameart.org/sites/default/files/woodenfloor_1.png"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/wooden-floors-2k: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "PamNawi"
+attribution = "Wooden Floors (2K) by PamNawi, OpenGameArt.org (CC0)"
+format = "png"
+resolution = "native"
+size = 4889019
+material = "Wood"
+role = "stylized"
+look = "stylized"
+tags = ["hand-painted", "planks", "stylized", "toon"]
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/woodenfloor_1.png"
+sha256 = "6f8d01588e0362ffee5c42ce42ff032f03d320a76110c993586195717c5f575e"
+size = 4889019
+map = "albedo"
+path = "woodenfloor_1.png"
+
+[[asset]]
+id = "tex-wood-stylized-hand-painted-planks"
+kind = "texture"
+name = "Hand-painted Planks"
+source = "opengameart"
+source_id = "handpainted-rock-textures"
+page_url = "https://opengameart.org/content/handpainted-rock-textures"
+download_url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/handpainted-rock-textures: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "rubberduck"
+attribution = "handpainted rock textures by rubberduck, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 16556408
+material = "Wood"
+role = "stylized"
+look = "stylized"
+tags = ["hand-painted", "planks", "stylized", "toon"]
+[asset.texture]
+members = { albedo = "rock_04/rock_04.png", normal_gl = "rock_04/rock_04_norm.png", roughness = "rock_04/rock_04_rough.png", height = "rock_04/rock_04_height.png" }
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+sha256 = "9912a489dd91f11f3ed3f592aaa85bd2c1dd4ef8445d642c927f8cdcda493ac8"
+size = 16556408
+map = "archive"
+path = "hptex_pack_4_1k.zip"
+
+[[asset]]
+id = "tex-concrete-stylized-hptex-rock-02"
+kind = "texture"
+name = "Hand-painted Cracked Slab"
+source = "opengameart"
+source_id = "handpainted-rock-textures"
+page_url = "https://opengameart.org/content/handpainted-rock-textures"
+download_url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/handpainted-rock-textures: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "rubberduck"
+attribution = "handpainted rock textures by rubberduck, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 16556408
+material = "Concrete"
+role = "stylized"
+look = "stylized"
+tags = ["cracked", "hand-painted", "slab", "stylized", "toon"]
+[asset.texture]
+members = { albedo = "rock_02/rock_02.png", normal_gl = "rock_02/rock_02_norm.png", roughness = "rock_02/rock_02_rough.png", height = "rock_02/rock_02_height.png" }
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+sha256 = "9912a489dd91f11f3ed3f592aaa85bd2c1dd4ef8445d642c927f8cdcda493ac8"
+size = 16556408
+map = "archive"
+path = "hptex_pack_4_1k.zip"
+
+[[asset]]
+id = "tex-concrete-stylized-hptex-rock-03"
+kind = "texture"
+name = "Hand-painted Cobblestone"
+source = "opengameart"
+source_id = "handpainted-rock-textures"
+page_url = "https://opengameart.org/content/handpainted-rock-textures"
+download_url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/handpainted-rock-textures: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "rubberduck"
+attribution = "handpainted rock textures by rubberduck, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 16556408
+material = "Concrete"
+role = "stylized"
+look = "stylized"
+tags = ["cobblestone", "hand-painted", "stylized", "toon"]
+[asset.texture]
+members = { albedo = "rock_03/rock_03.png", normal_gl = "rock_03/rock_03_norm.png", roughness = "rock_03/rock_03_rough.png", height = "rock_03/rock_03_height.png" }
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+sha256 = "9912a489dd91f11f3ed3f592aaa85bd2c1dd4ef8445d642c927f8cdcda493ac8"
+size = 16556408
+map = "archive"
+path = "hptex_pack_4_1k.zip"
+
+[[asset]]
+id = "tex-sand-stylized-hptex-rock-01"
+kind = "texture"
+name = "Hand-painted Rocky Ground"
+source = "opengameart"
+source_id = "handpainted-rock-textures"
+page_url = "https://opengameart.org/content/handpainted-rock-textures"
+download_url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/handpainted-rock-textures: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "rubberduck"
+attribution = "handpainted rock textures by rubberduck, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 16556408
+material = "Sand"
+role = "stylized"
+look = "stylized"
+tags = ["ground", "hand-painted", "rocky", "stylized", "toon"]
+[asset.texture]
+members = { albedo = "rock_01/rock_01.png", normal_gl = "rock_01/rock_01_norm.png", roughness = "rock_01/rock_01_rough.png", height = "rock_01/rock_01_height_1.png" }
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/hptex_pack_4_1k.zip"
+sha256 = "9912a489dd91f11f3ed3f592aaa85bd2c1dd4ef8445d642c927f8cdcda493ac8"
+size = 16556408
+map = "archive"
+path = "hptex_pack_4_1k.zip"
+
+[[asset]]
+id = "tex-concrete-toon-flat-rock"
+kind = "texture"
+name = "Simple Stylized Toon Seamless Rock or Stone Texture"
+source = "opengameart"
+source_id = "simple-stylized-toon-seamless-rock-or-stone-texture"
+page_url = "https://opengameart.org/content/simple-stylized-toon-seamless-rock-or-stone-texture"
+download_url = "https://opengameart.org/sites/default/files/rock_seemless_color.png"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/simple-stylized-toon-seamless-rock-or-stone-texture: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "Feraly"
+attribution = "Simple Stylized Toon Seamless Rock or Stone Texture by Feraly, OpenGameArt.org (CC0)"
+format = "png"
+resolution = "native"
+size = 1311856
+material = "Concrete"
+role = "stylized"
+look = "toon"
+tags = ["flat", "rock", "toon"]
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/rock_seemless_color.png"
+sha256 = "0d11e93dfc63be64c0603276eb22a00fc433f0fdb13f9e5ad4b416914ea229f3"
+size = 268287
+map = "albedo"
+path = "rock_seemless_color.png"
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/rock_seemless_normal.png"
+sha256 = "92bd2d318c4e68158dd8ee7a7154d804357b6b02b67e978200e98ee4e402dc04"
+size = 683205
+map = "normal_gl"
+path = "rock_seemless_normal.png"
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/rock_seemless_roughness.png"
+sha256 = "452d197d330bc6dd5527a3a946ce878b6492ba705115893712be42ef4a844225"
+size = 360364
+map = "roughness"
+path = "rock_seemless_roughness.png"
+
+[[asset]]
+id = "tex-brick-pixel-n64-bricks"
+kind = "texture"
+name = "N64 Bricks (N64 Texture Pack B)"
+source = "opengameart"
+source_id = "n64-texture-pack-b"
+page_url = "https://opengameart.org/content/n64-texture-pack-b"
+download_url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack-b: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack B by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 2907878
+material = "Brick"
+role = "pixel"
+look = "pixel"
+tags = ["bricks", "n64", "pixel", "pixel-art", "retro"]
+[asset.texture]
+members = { albedo = "N64 Texture Pack B/Textures/Bricks.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+sha256 = "30d8fb3adc7af3875e50eeb00486f9ae1b0ae063bddd0e957a7e9afeccd5659c"
+size = 2907878
+map = "archive"
+path = "n64_texture_pack_b.zip"
+
+[[asset]]
+id = "tex-wood-pixel-n64-planks"
+kind = "texture"
+name = "N64 Planks (N64 Texture Pack)"
+source = "opengameart"
+source_id = "n64-texture-pack"
+page_url = "https://opengameart.org/content/n64-texture-pack"
+download_url = "https://opengameart.org/sites/default/files/files_3.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 164578
+material = "Wood"
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "planks", "retro"]
+[asset.texture]
+members = { albedo = "Planks.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/files_3.zip"
+sha256 = "94ff6f1ba60334e71cbd3a4f3d68d1845b1b0a50d6bd6a6af64898fbb04d9a4e"
+size = 164578
+map = "archive"
+path = "files_3.zip"
+
+[[asset]]
+id = "tex-grass-pixel-n64-grass"
+kind = "texture"
+name = "N64 Grass (N64 Texture Pack B)"
+source = "opengameart"
+source_id = "n64-texture-pack-b"
+page_url = "https://opengameart.org/content/n64-texture-pack-b"
+download_url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack-b: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack B by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 2907878
+material = "Grass"
+role = "pixel"
+look = "pixel"
+tags = ["grass", "n64", "pixel", "pixel-art", "retro"]
+[asset.texture]
+members = { albedo = "N64 Texture Pack B/Textures/Grass.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+sha256 = "30d8fb3adc7af3875e50eeb00486f9ae1b0ae063bddd0e957a7e9afeccd5659c"
+size = 2907878
+map = "archive"
+path = "n64_texture_pack_b.zip"
+
+[[asset]]
+id = "tex-concrete-pixel-n64-stone-slab"
+kind = "texture"
+name = "N64 Stone slab (N64 Texture Pack)"
+source = "opengameart"
+source_id = "n64-texture-pack"
+page_url = "https://opengameart.org/content/n64-texture-pack"
+download_url = "https://opengameart.org/sites/default/files/files_3.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 164578
+material = "Concrete"
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "retro", "stone"]
+[asset.texture]
+members = { albedo = "Stone slab.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/files_3.zip"
+sha256 = "94ff6f1ba60334e71cbd3a4f3d68d1845b1b0a50d6bd6a6af64898fbb04d9a4e"
+size = 164578
+map = "archive"
+path = "files_3.zip"
+
+[[asset]]
+id = "tex-metal-pixel-n64-metal-plates"
+kind = "texture"
+name = "N64 Metal plates (N64 Texture Pack)"
+source = "opengameart"
+source_id = "n64-texture-pack"
+page_url = "https://opengameart.org/content/n64-texture-pack"
+download_url = "https://opengameart.org/sites/default/files/files_3.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 164578
+material = "Metal"
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "plates", "retro"]
+[asset.texture]
+members = { albedo = "Metal plates.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/files_3.zip"
+sha256 = "94ff6f1ba60334e71cbd3a4f3d68d1845b1b0a50d6bd6a6af64898fbb04d9a4e"
+size = 164578
+map = "archive"
+path = "files_3.zip"
+
+[[asset]]
+id = "tex-glass-pixel-n64-window"
+kind = "texture"
+name = "N64 Window (N64 Texture Pack)"
+source = "opengameart"
+source_id = "n64-texture-pack"
+page_url = "https://opengameart.org/content/n64-texture-pack"
+download_url = "https://opengameart.org/sites/default/files/files_3.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 164578
+material = "Glass"
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "retro", "window"]
+[asset.texture]
+members = { albedo = "Window.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/files_3.zip"
+sha256 = "94ff6f1ba60334e71cbd3a4f3d68d1845b1b0a50d6bd6a6af64898fbb04d9a4e"
+size = 164578
+map = "archive"
+path = "files_3.zip"
+
+[[asset]]
+id = "tex-sand-pixel-n64-sand"
+kind = "texture"
+name = "N64 Sand (N64 Texture Pack B)"
+source = "opengameart"
+source_id = "n64-texture-pack-b"
+page_url = "https://opengameart.org/content/n64-texture-pack-b"
+download_url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack-b: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack B by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 2907878
+material = "Sand"
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "retro", "sand"]
+[asset.texture]
+members = { albedo = "N64 Texture Pack B/Textures/Sand.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+sha256 = "30d8fb3adc7af3875e50eeb00486f9ae1b0ae063bddd0e957a7e9afeccd5659c"
+size = 2907878
+map = "archive"
+path = "n64_texture_pack_b.zip"
+
+[[asset]]
+id = "tex-ice-pixel-n64-snow-2"
+kind = "texture"
+name = "N64 Snow 2 (N64 Texture Pack B)"
+source = "opengameart"
+source_id = "n64-texture-pack-b"
+page_url = "https://opengameart.org/content/n64-texture-pack-b"
+download_url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack-b: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack B by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 2907878
+material = "Ice"
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "retro", "snow"]
+[asset.texture]
+members = { albedo = "N64 Texture Pack B/Textures/Snow 2.png" }
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+sha256 = "30d8fb3adc7af3875e50eeb00486f9ae1b0ae063bddd0e957a7e9afeccd5659c"
+size = 2907878
+map = "archive"
+path = "n64_texture_pack_b.zip"
+
+[[asset]]
+id = "texpack-sbs-tiny-texture-pack-1"
+kind = "texture_pack"
+name = "Tiny Texture Pack 1"
+source = "opengameart"
+source_id = "tiny-texture-pack-1"
+page_url = "https://opengameart.org/content/tiny-texture-pack-1"
+download_url = "https://opengameart.org/sites/default/files/sbs_-_tiny_texture_pack_-_128x128.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/tiny-texture-pack-1: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "Screaming Brain Studios"
+attribution = "Tiny Texture Pack 1 by Screaming Brain Studios, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 10377175
+role = "pixel"
+look = "pixel"
+tags = ["bricks", "grass", "pixel", "pixel-art", "retro", "roofs", "tiles", "wood"]
+[asset.texture]
+convert = "none"
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/sbs_-_tiny_texture_pack_-_128x128.zip"
+sha256 = "a4f1ff1a3c217f1d24e4bdb1c2b1c599df7cf783590803672911bddd5ef7e499"
+size = 10377175
+map = "archive"
+path = "sbs_-_tiny_texture_pack_-_128x128.zip"
+
+[[asset]]
+id = "texpack-n64-texture-pack-a"
+kind = "texture_pack"
+name = "N64 Texture Pack"
+source = "opengameart"
+source_id = "n64-texture-pack"
+page_url = "https://opengameart.org/content/n64-texture-pack"
+download_url = "https://opengameart.org/sites/default/files/files_3.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 164578
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "retro"]
+[asset.texture]
+convert = "none"
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/files_3.zip"
+sha256 = "94ff6f1ba60334e71cbd3a4f3d68d1845b1b0a50d6bd6a6af64898fbb04d9a4e"
+size = 164578
+map = "archive"
+path = "files_3.zip"
+
+[[asset]]
+id = "texpack-n64-texture-pack-b"
+kind = "texture_pack"
+name = "N64 Texture Pack B"
+source = "opengameart"
+source_id = "n64-texture-pack-b"
+page_url = "https://opengameart.org/content/n64-texture-pack-b"
+download_url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/n64-texture-pack-b: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "n64guy"
+attribution = "N64 Texture Pack B by n64guy, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 2907878
+role = "pixel"
+look = "pixel"
+tags = ["n64", "pixel", "pixel-art", "retro"]
+[asset.texture]
+convert = "none"
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/n64_texture_pack_b.zip"
+sha256 = "30d8fb3adc7af3875e50eeb00486f9ae1b0ae063bddd0e957a7e9afeccd5659c"
+size = 2907878
+map = "archive"
+path = "n64_texture_pack_b.zip"
+
+[[asset]]
+id = "texpack-various-retro-textures"
+kind = "texture_pack"
+name = "Various Retro Textures"
+source = "opengameart"
+source_id = "various-retro-textures"
+page_url = "https://opengameart.org/content/various-retro-textures"
+download_url = "https://opengameart.org/sites/default/files/variousretrotextures_0.zip"
+licence = "CC0-1.0"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence_evidence = "https://opengameart.org/content/various-retro-textures: licence block lists CC0"
+licence_checked = "2026-10-30"
+author = "GoldenThumbs"
+attribution = "Various Retro Textures by GoldenThumbs, OpenGameArt.org (CC0)"
+format = "zip"
+resolution = "native"
+size = 224877
+role = "pixel"
+look = "pixel"
+tags = ["pixel", "pixel-art", "retro"]
+[asset.texture]
+convert = "none"
+nearest = true
+[[asset.files]]
+url = "https://opengameart.org/sites/default/files/variousretrotextures_0.zip"
+sha256 = "97dbbb87f2e0f6e058978e2e5404365e6710df44e38c819a10675244fd5ad708"
+size = 224877
+map = "archive"
+path = "variousretrotextures_0.zip"
