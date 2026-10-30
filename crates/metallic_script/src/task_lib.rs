@@ -289,6 +289,7 @@ end
 return function(f, ...) return finish(xpcall(f, handler, ...)) end
 "#,
         )
+        .set_name("=[engine]")
         .call((xpcall, type_fn, tostring, sub, info, tag(OK), tag(ERR)))?;
     *sched.guard.borrow_mut() = Some(guard);
 
@@ -311,7 +312,10 @@ return function(f, ...) return finish(xpcall(f, handler, ...)) end
                 other => return Err(bad_target(&other)),
             };
             if let Err(e) = s.resume_inline(&thread, first) {
-                s.sink.error(&e);
+                // A timeout is reported once, by the resume that owns the budget.
+                if s.timeout_loc.borrow().is_none() {
+                    s.sink.error(&e);
+                }
             }
             Ok(thread)
         })?,

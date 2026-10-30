@@ -8,6 +8,7 @@
 
 #![warn(missing_docs)]
 
+mod pattern;
 mod task_lib;
 mod vm;
 

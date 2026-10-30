@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use mlua::{
     Error, FromLuaMulti, Function, IntoLuaMulti, Lua, LuaOptions, MultiValue, StdLib, Table,
-    Thread, Value, VmState,
+    Thread, Value, VmState, WeakLua,
 };
 
 use crate::task_lib::{self, Scheduler, TIMEOUT_MSG};
@@ -95,56 +95,38 @@ fn setup_failed(e: Error) -> ScriptError {
     }
 }
 
-/// Lua that bounds the cost of string functions that run uninterruptibly in C:
-/// inputs over 1 MB, patterns over 1 KB, `string.rep` results over 64 MB and patterns
-/// whose estimated backtracking cost (`(len + 1) ^ quantifiers`, one fewer when
-/// anchored) exceeds 1e8 steps are rejected with an error.
+/// Lua that bounds `string.rep` (results over 64 MB are rejected, also when the count is
+/// a numeric string). The pattern functions are bounded in `pattern.rs`.
 const STRING_LIMITS: &str = r#"
-local string, type, error = string, type, error
-local find, match, gmatch, gsub, rep, sub = string.find, string.match, string.gmatch, string.gsub, string.rep, string.sub
-local MAX_INPUT, MAX_PATTERN, MAX_COST, MAX_REP = 1048576, 1024, 1e8, 67108864
-local function check(name, s, p, plain)
-    if type(s) == "string" and #s > MAX_INPUT then error(name .. ": input string too long (limit 1 MB)", 3) end
-    if type(p) ~= "string" then return end
-    if #p > MAX_PATTERN then error(name .. ": pattern too long (limit 1 KB)", 3) end
-    if plain then return end
-    local q, i, n = 0, 1, #p
-    while i <= n do
-        local c = sub(p, i, i)
-        if c == "%" then
-            i += 2
-        else
-            if c == "*" or c == "+" or c == "-" then q += 1 end
-            i += 1
-        end
-    end
-    if sub(p, 1, 1) == "^" then q -= 1 end
-    if q >= 2 and (#s + 1) ^ q > MAX_COST then
-        error(name .. ": pattern too expensive for an input of this size", 3)
-    end
-end
-string.find = function(s, p, init, plain) check("string.find", s, p, plain) return find(s, p, init, plain) end
-string.match = function(s, p, init) check("string.match", s, p) return match(s, p, init) end
-string.gmatch = function(s, p) check("string.gmatch", s, p) return gmatch(s, p) end
-string.gsub = function(s, p, r, n) check("string.gsub", s, p) return gsub(s, p, r, n) end
+local string, type, error, tonumber, tostring = string, type, error, tonumber, tostring
+local rep = string.rep
+local MAX_REP = 67108864
 string.rep = function(s, n)
-    if type(s) == "string" and type(n) == "number" then
-        local total = #s * n
-        if total > MAX_REP then error("string.rep: result too large (limit 64 MB)", 2) end
+    local count = tonumber(n)
+    if count ~= nil and (type(s) == "string" or type(s) == "number") and #tostring(s) * count > MAX_REP then
+        error("string.rep: result too large (limit 64 MB)", 2)
     end
     return rep(s, n)
 end
 "#;
 
 /// A cloneable handle for running Lua functions under the VM's execution budget (see
-/// [`ScriptVm::budget`]). Keeping it alive keeps the `Lua` state alive.
+/// [`ScriptVm::budget`]). It holds the Lua state weakly, so closures registered on the VM
+/// may capture it without keeping the VM alive; once the VM is gone its methods return an
+/// error.
 #[derive(Clone)]
 pub struct Budget {
-    lua: Lua,
+    lua: WeakLua,
     sched: Rc<Scheduler>,
 }
 
 impl Budget {
+    fn lua(&self) -> Result<Lua, ScriptError> {
+        self.lua.try_upgrade().ok_or_else(|| ScriptError {
+            message: "script VM no longer exists".to_string(),
+        })
+    }
+
     /// Calls `f(args)` with a 0.1 s budget (or the enclosing budget's remainder when
     /// called from inside a running script, whichever ends first). Errors, including
     /// timeouts, are returned as [`ScriptError`] with the `<chunk>:<line>:` prefix.
@@ -153,11 +135,12 @@ impl Budget {
         f: &Function,
         args: impl IntoLuaMulti,
     ) -> Result<R, ScriptError> {
+        let lua = self.lua()?;
         let values = self
             .sched
-            .call_guarded(&self.lua, f, args)
+            .call_guarded(&lua, f, args)
             .map_err(|message| ScriptError { message })?;
-        R::from_lua_multi(values, &self.lua).map_err(|e| ScriptError {
+        R::from_lua_multi(values, &lua).map_err(|e| ScriptError {
             message: format_error(&e),
         })
     }
@@ -166,7 +149,8 @@ impl Budget {
     /// a future `Event:Wait()`), under the same budget. If it yields again it is
     /// parked or put to sleep as usual.
     pub fn resume(&self, thread: &Thread, args: impl IntoLuaMulti) -> Result<(), ScriptError> {
-        let args = args.into_lua_multi(&self.lua).map_err(|e| ScriptError {
+        let lua = self.lua()?;
+        let args = args.into_lua_multi(&lua).map_err(|e| ScriptError {
             message: format_error(&e),
         })?;
         self.sched
@@ -222,6 +206,7 @@ impl ScriptVm {
 
         // Needs `debug`, `xpcall`, `coroutine`: must run before they are removed.
         task_lib::install(lua, sched)?;
+        crate::pattern::install(lua, sched)?;
         lua.load(STRING_LIMITS).set_name("=[engine]").exec()?;
 
         // Remove everything the sandbox forbids.
@@ -288,19 +273,7 @@ impl ScriptVm {
         lua.set_interrupt(move |lua| match s.deadline.get() {
             Some(d) if Instant::now() >= d => {
                 if s.timeout_loc.borrow().is_none() {
-                    let loc = lua
-                        .inspect_stack(0, |dbg| {
-                            let src = dbg
-                                .source()
-                                .short_src
-                                .map(Cow::into_owned)
-                                .unwrap_or_default();
-                            match dbg.current_line() {
-                                Some(line) if !src.is_empty() => format!("{src}:{line}: "),
-                                _ => String::new(),
-                            }
-                        })
-                        .unwrap_or_default();
+                    let loc = script_location(lua, 0);
                     *s.timeout_loc.borrow_mut() = Some(loc);
                 }
                 Err(Error::runtime(TIMEOUT_MSG))
@@ -351,7 +324,7 @@ impl ScriptVm {
     /// can be moved into host callbacks registered on [`ScriptVm::lua`].
     pub fn budget(&self) -> Budget {
         Budget {
-            lua: self.lua.clone(),
+            lua: self.lua.weak(),
             sched: self.sched.clone(),
         }
     }
@@ -411,4 +384,27 @@ impl ScriptVm {
     pub fn shutdown(self) {
         self.sched.clear();
     }
+}
+
+/// `"<chunk>:<line>: "` of the nearest script frame at or above stack `level`, skipping C
+/// and engine frames; empty if there is none.
+pub(crate) fn script_location(lua: &Lua, level: usize) -> String {
+    for l in level..level + 8 {
+        let found = lua.inspect_stack(l, |dbg| {
+            let src = dbg
+                .source()
+                .short_src
+                .map(Cow::into_owned)
+                .unwrap_or_default();
+            (src, dbg.current_line())
+        });
+        match found {
+            None => break,
+            Some((src, Some(line))) if !src.starts_with('[') && !src.is_empty() => {
+                return format!("{src}:{line}: ");
+            }
+            Some(_) => {}
+        }
+    }
+    String::new()
 }
