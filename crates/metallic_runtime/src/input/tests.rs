@@ -1123,3 +1123,11 @@ fn undrained_events_are_capped_and_the_newest_are_kept() {
         "the newest events survive"
     );
 }
+
+#[test]
+fn luau_key_codes_match_the_controls() {
+    // `Enum.KeyCode` (metallic_script) lists `Unknown` and then every control, in this order.
+    let controls: Vec<&str> = Control::ALL.iter().map(|c| c.name()).collect();
+    assert_eq!(metallic_script::KEY_CODES[0], "Unknown");
+    assert_eq!(&metallic_script::KEY_CODES[1..], controls.as_slice());
+}

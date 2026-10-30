@@ -202,12 +202,7 @@ impl App {
         self.last = now;
         let clock = self.input_clock();
         self.poll_devices(clock);
-        if let Ok(world) = self.game.world().try_borrow() {
-            self.input.sync(&world);
-        }
-        let mut frame_input = self.input.frame(clock, dt as f32);
-        // Nothing consumes action events until the Luau API (#251); do not let them pile up.
-        self.input.drain_events().for_each(drop);
+        let mut frame_input = self.game.input_frame(&mut self.input, clock, dt as f32);
         let want_capture = self.input.wants_mouse_delta();
         self.set_captured(want_capture);
         if self.args.autopilot {

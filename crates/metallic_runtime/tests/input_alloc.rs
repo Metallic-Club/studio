@@ -105,3 +105,44 @@ fn undrained_events_stay_bounded_and_state_keeps_updating() {
     assert!(rt.dropped_events() > 0);
     assert!(rt.drain_events().count() <= 1024, "bounded");
 }
+
+#[test]
+fn input_frame_makes_no_heap_allocation_once_warm() {
+    use metallic_core::{Value, World};
+    use metallic_runtime::input::{Control, Device, RawEvent};
+    use metallic_runtime::{Game, StdoutSink};
+    use std::rc::Rc;
+
+    // A scene action on Space with no script: events and values still go to the script host.
+    let mut w = World::new_with_services();
+    let rs = w.root("ReplicatedStorage").unwrap();
+    let ctx = w.create("InputContext", Some(rs)).unwrap();
+    let action = w.create("InputAction", Some(ctx)).unwrap();
+    let key = w.create("InputBinding", Some(action)).unwrap();
+    w.set(key, "KeyCode", Value::String("Space".into()))
+        .unwrap();
+    let mut game = Game::from_world("alloc".into(), w, Rc::new(StdoutSink));
+    game.start().unwrap();
+    let mut rt = InputRuntime::from_world(&game.world().borrow());
+    let dt = 1.0 / 60.0;
+    let mut frame = |rt: &mut InputRuntime, f: u64| {
+        let t = 10.0 + f as f64 * dt;
+        rt.push(RawEvent::button(
+            Device::KeyboardMouse,
+            Control::Space,
+            if f.is_multiple_of(2) { 1.0 } else { 0.0 },
+            t,
+        ));
+        game.input_frame(rt, t, dt as f32);
+    };
+    for f in 0..200u64 {
+        frame(&mut rt, f);
+    }
+    COUNT.with(|c| c.set(0));
+    ON.with(|on| on.set(true));
+    for f in 200..400u64 {
+        frame(&mut rt, f);
+    }
+    ON.with(|on| on.set(false));
+    assert_eq!(COUNT.with(Cell::get), 0, "input_frame allocated");
+}
