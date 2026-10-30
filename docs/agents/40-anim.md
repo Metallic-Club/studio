@@ -27,6 +27,10 @@ cargo bench -p metallic_anim --bench sample -j 4 -- --warm-up-time 1 --measureme
 cargo run -p metallic_anim_editor --example anim_editor_demo
 ```
 
+## Verification on wave-crates-1 (2026-10-30, branch studio/wave-crates-1)
+Ran: `CARGO_TARGET_DIR=<shared> CARGO_INCREMENTAL=0 cargo test -p metallic_anim -p metallic_anim_editor -j 2` and `cargo clippy -p metallic_anim -p metallic_anim_editor --all-targets -j 2 -- -D warnings` on a tree merged onto main #244. Result: 80 tests pass across both crates. Clippy clean. Screenshots not re-rendered. Benchmarks not re-run.
+Workspace gate (fmt, clippy, test, deny): see the PR body. The older status section below is superseded where it disagrees.
+
 ## Pending: clippy after rebase
 After the rebase onto main `947c1dc`, fmt, the tests and `cargo deny check licenses` passed. Clippy has not been rerun: C: was full, and all cargo builds are frozen until the owner reboots the PC. The last clean clippy run was on this code just before the rebase. The rebase changed only `criterion.workspace = true` and the `Cargo.lock` merge. After the reboot, with at least 4 GB free on C:, use the shared target with DEBUG=0 and run:
 ```

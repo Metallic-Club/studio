@@ -110,6 +110,10 @@ fan and fail with `NonManifold` when there is none.
 - All new dependencies are MIT OR Apache-2.0 (glam, serde_json, thiserror; dev: proptest, gltf, eframe, egui_kittest,
   image). egui's `default_fonts` stays off (OFL/Ubuntu-font licence); the demo loads system fonts at run time.
 
+## Verification on wave-crates-1 (2026-10-30, branch studio/wave-crates-1)
+Ran: `CARGO_TARGET_DIR=<shared> CARGO_INCREMENTAL=0 cargo test -p metallic_modeling -j 2` and `cargo clippy -p metallic_modeling --all-targets -j 2 -- -D warnings` on a tree merged onto main #244. Result: 59 tests pass (4 unit, 39 ops, 3 props, 12 uv_export, 1 doc). Clippy clean (collapsible_if, is_multiple_of, keys loop, bound in two places) and rustfmt applied. Lock was regenerated from main. Not run: demo screenshots, benchmark.
+Workspace gate (fmt, clippy, test, deny): see the PR body. The older status section below is superseded where it disagrees.
+
 ## Verification state (2026-10-30, at the build freeze)
 Verified (ran green on this machine):
 - `cargo build -p metallic_modeling --lib` and `--example modeling_demo`: no errors, no warnings.

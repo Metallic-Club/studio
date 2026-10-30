@@ -40,6 +40,10 @@ Build with `-j 2` while other agents share the machine, and only when C: has at 
 - OBJ files for Blender: `cargo run -p metallic_meshgen --example export_obj -j 2 -- out_dir [--lod low]`
 - Benchmarks: `cargo bench -p metallic_meshgen -j 2`.
 
+## Verification on wave-crates-1 (2026-10-30, branch studio/wave-crates-1)
+Ran: `CARGO_TARGET_DIR=<shared> CARGO_INCREMENTAL=0 cargo test -p metallic_meshgen -j 2` and `cargo clippy -p metallic_meshgen --all-targets -j 2 -- -D warnings` on a tree merged onto main #244. Result: 37 tests pass (7 unit, 8 keys, 21 shapes, 1 doc). Clippy clean (fixed collapsible_if, needless_range_loop, chunks_exact, hex literal grouping). The failing property test `random_sizes_bevels_and_params_stay_valid` did not reproduce on the merged tree (default seed, plus seeds 1-4); the Pyramid repro is now the named test `flat_wide_pyramid_with_round_bevel_stays_valid` and passes. No code fix was needed for it, so the cause was probably fixed by the last lane commit. Not run: `examples/preview.rs` and `export_obj.rs` (compiled by clippy only), benchmarks, `bytemuck` feature build.
+Workspace gate (fmt, clippy, test, deny): see the PR body. The older status section below is superseded where it disagrees.
+
 ## Status at handoff (2026-10-30): checks NOT run yet
 All cargo builds were frozen (C: full, page file could not grow) until the owner reboots. This commit is
 **unverified**. None of the following has run against it:

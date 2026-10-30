@@ -167,6 +167,10 @@ This crate takes plain structs, so either option below works without changing it
 - The HUD shows grounded, wall, coyote and buffer state.
 - `-- --screenshot out.png` renders headless through egui_kittest and wgpu, with no window.
 
+## Verification on wave-crates-1 (2026-10-30, branch studio/wave-crates-1)
+Ran: `CARGO_TARGET_DIR=<shared> CARGO_INCREMENTAL=0 cargo test -p metallic_physics2d -j 2` and `cargo clippy -p metallic_physics2d --all-targets -j 2 -- -D warnings` on a tree merged onto main #244. Result: 43 tests pass (13 unit, 12 character, 18 physics2d). Real bugs fixed: (1) `sync_from` ended with `detect_collisions`, which consumed rapier's new-body list without registering bodies in the island manager, so dynamic bodies never moved and the first contact hit the `active_island_id != u32::MAX` debug assertion; they are now marked modified again after that pass. (2) The character push read its velocity after the wall stop zeroed it, so crates were never pushed; it now uses the speed before the reaction. (3) Contact spring frequency is scaled by sqrt(g/9.81) in solver units, since rapier's defaults sag stacks at 196 studs/s^2 (stack test: 10 boxes now sag 0.128). (4) The ramp test scenario got an end wall, because at this gravity the ball rolls off the end of the chain. Clippy clean. Not run: demo screenshot, benchmark, `cross-platform-determinism` feature.
+Workspace gate (fmt, clippy, test, deny): see the PR body. The older status section below is superseded where it disagrees.
+
 ## Verification status (honest; read before merging)
 The C: drive filled up (the page file grew under parallel builds), and the coordinator froze all builds until the owner reboots. So far:
 - **Ran and passed before the freeze** (debug, `-j 4`):

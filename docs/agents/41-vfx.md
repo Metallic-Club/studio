@@ -6,6 +6,10 @@ Branch `studio/41-vfx`, worktree `metallic-studio-worktrees/41-vfx`.
 `metallic_vfx` (effect model, deterministic CPU simulator, presets) and `metallic_vfx_editor` (egui editor: module
 stack, node graph, curve/gradient/timeline widgets, live preview).
 
+## Verification on wave-crates-1 (2026-10-30, branch studio/wave-crates-1)
+Ran: `CARGO_TARGET_DIR=<shared> CARGO_INCREMENTAL=0 cargo test -p metallic_vfx -p metallic_vfx_editor -j 2` and `cargo clippy -p metallic_vfx -p metallic_vfx_editor --all-targets -j 2 -- -D warnings` on a tree merged onto main #244. Result: 57 tests pass (vfx 55, editor 2). Clippy fixed: `Rgb::mul` renamed `modulate`, `clamp`, `vec![..; n]`, NaN-safe lifetime check, a type alias, an iterator zip, a redundant `must_use`. The editor now uses root `[workspace.dependencies]` (egui, eframe, egui_kittest, image, criterion). Not run: screenshot example, benchmark.
+Workspace gate (fmt, clippy, test, deny): see the PR body. The older status section below is superseded where it disagrees.
+
 ## Status: implemented, NOT tested
 - `crates/metallic_vfx`: committed (effect model, simulator, 26 `.vfx.ron` presets, `benches/update.rs`).
 - `crates/metallic_vfx_editor`: committed (src, `examples/vfx_editor_demo.rs`, `examples/vfx_screenshots.rs`).

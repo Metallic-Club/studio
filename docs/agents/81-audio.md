@@ -45,6 +45,10 @@ effects, voice limiting, streaming, and a headless backend for tests and servers
 - `spatial_demo -- 2 --mute` on the real device ("Speakers (G06-BT)", 48 kHz WASAPI): 96,576 frames rendered in about
   2 s, so the device path runs in real time. Not listened to (owner asleep), hence `--mute`.
 
+## Verification on wave-crates-1 (2026-10-30, branch studio/wave-crates-1)
+Ran: `CARGO_TARGET_DIR=<shared> CARGO_INCREMENTAL=0 cargo test -p metallic_audio -j 2` and `cargo clippy -p metallic_audio --all-targets -j 2 -- -D warnings` on a tree merged onto main #244. Result: 65 tests pass; commit 6017177 compiles. Clippy clean. Not run: the cpal device backend against real hardware, benchmark, `spatial_demo` example.
+Workspace gate (fmt, clippy, test, deny): see the PR body. The older status section below is superseded where it disagrees.
+
 ## Checks pending (builds frozen 2026-10-30 until the owner reboots; C: full, page file holding the space)
 The last commit (`6017177`, stream `TimeLength` reported up front + `AudioEngine: Send` assertion, touching
 `src/engine.rs`, `src/mixer.rs`, `tests/decode.rs`, `tests/engine.rs`) has **not been compiled**. The 64 tests
