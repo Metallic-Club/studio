@@ -165,6 +165,27 @@ fn literal_patterns_with_function_or_table_replacements_keep_native_results() {
 }
 
 #[test]
+fn literal_gsub_keeps_the_result_cap_even_with_zero_replacements() {
+    let vm = ScriptVm::new(Context::Server).unwrap();
+    let subject = vm
+        .lua()
+        .create_string(vec![b'a'; 64 * 1024 * 1024 + 1])
+        .unwrap();
+    let function = string_function(&vm, "gsub");
+    // A zero replacement maximum still returns the entire subject, so it must
+    // enforce the output cap before allocating/copying that result.
+    let error = function
+        .call::<LuaString>((subject, "a", "b", 0))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("string.gsub: result too large (limit 64 MB)"),
+        "{error}"
+    );
+}
+
+#[test]
 fn native_large_linear_match_completes_without_aggregate_complexity_rejection() {
     // Raw native invocation deliberately has no scheduler deadline: isolate the
     // complexity policy from the separate, unchanged 100 ms script budget.

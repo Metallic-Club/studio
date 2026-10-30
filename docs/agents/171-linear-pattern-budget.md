@@ -59,20 +59,39 @@ Actual probes under the unchanged 100 ms budget (coordinated builds held; OS/bac
 
 | Build | Precreated match | Precreated gsub | Original end-to-end match | Original end-to-end gsub |
 |---|---|---|---|---|
-| Debug | succeeded, 1.8918 ms | timeout, 100.8655 ms | succeeded, 6.7841 ms | timeout, 101.5283 ms |
+| Debug, earlier focused | succeeded, 1.8918 ms | timeout, 100.8655 ms | succeeded, 6.7841 ms | timeout, 101.5283 ms |
+| Debug, final workspace | succeeded, 2.2638 ms | succeeded, 85.2862 ms | succeeded, 6.9565 ms | succeeded, 80.8623 ms |
 | Release, final | succeeded, 7.8784 ms | succeeded, 44.9659 ms | succeeded, 8.6664 ms | succeeded, 45.4529 ms |
 
-The release row ran after the pre-allocation deadline review fix. Debug results preceded only that additional
-deadline check. They are individual host observations, not a cross-profile speed comparison or a universal
-latency claim. The original release repro acceptance is met; debug gsub remains explicitly limited.
+The release and final workspace debug rows ran after the pre-allocation deadline review fix. Earlier focused
+debug results preceded only that additional check. These are individual observations with different Cargo
+feature graphs, not a cross-profile speed comparison or a universal latency claim. The original release repro
+acceptance is met, and the final workspace debug probe also passed. Earlier debug gsub timeouts remain part of
+the evidence: the deadline depends on build configuration and machine load.
 
 The manual probe is ignored by default because it measures actual wall-clock acceptance; its release build
 asserts 4/4 successes after validating returned bytes/counts. An initial optimized probe rejected an Integer
 count because the fixture assumed Number only. Corrected that extractor to accept either numeric variant;
 this was a fixture error, not a product failure. The corrected complete release probe passed 4/4.
 
-## Remaining validation
+## Final local validation
 
-Next: full guarded workspace prebuild and quiet serial suite, unchanged catastrophic-pattern tests (including
-an optimized focused run), strict Clippy, licenses, fmt/diff and final independent review. Publish only after
-the required gates pass; do not merge. Full workspace gates are pending.
+- `cargo test --workspace -j 4 -- --test-threads=1` through the reviewed lane guard: 226 passed, zero failures,
+  one explicitly named manual probe ignored. Includes the new >64 MB gsub-output rejection with max_n=0,
+  unchanged pathological tests and all Lua timeout/recovery suites.
+- The manual probe was separately exercised against the final workspace debug build and optimized build:
+  4/4 actual budgeted successes in each, with observations and earlier limitations above.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings` through the lane guard: passed, 21.46 s.
+- `cargo deny check licenses`: passed (`licenses ok`; existing unused MPL-2.0 allowance warning).
+- `cargo fmt --all -- --check` and `git diff --check`: passed.
+- Optimized existing tests, unchanged: `cargo test -p metallic_script --test vm --test vm_round2 --release
+  pathological -j 4 -- --nocapture --test-threads=1` through the lane guard: both passed (0.17 s and 0.50 s).
+- Independent read-only accounting/helper review: no blocking findings. The requested deadline check before
+  gsub buffer allocation was implemented before the final full gate and optimized probe.
+
+All builds used the owned `cargo-target-114` lane and `-j 4`. Forced local-package cleanup before the workspace
+prebuild removed 77.0 MiB, retained third-party cache and compiled all seven packages from this worktree in
+55.52 s. A subsequent test-only cap regression was compiled with the exact workspace feature graph before the
+actual suite. Release pathological binaries were separately prebuilt before their quiet timing window.
+
+All required local gates are complete. Next: publish the PR, inspect final CI and review feedback; do not merge.
