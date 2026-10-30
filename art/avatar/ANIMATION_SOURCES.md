@@ -39,14 +39,15 @@ clip's source into `out/default_avatar_clips.json` (`source`) and the glb action
 | `walk_slow` | UAL 1 `Walk_Loop` (trunk, arms, head) | Legs are procedural (`Locomotion`): exact foot plants, left heel strike at phase 0 and right at 0.5, 0.07-cycle roll-in. The upper body is phase-warped to those contacts. About 6 studs/s. |
 | `walk` | UAL 1 `Jog_Fwd_Loop` (trunk, arms, head) | Same leg method, 16 studs/s. Trunk twist toned down, loose hands. |
 | `run` | UAL 1 `Sprint_Loop` (trunk, arms, head) | Same leg method, 24 studs/s. Less hunched (spine back 8 degrees), fists. |
-| `jump` | UAL 1 `Jump_Start` | Starts from idle's pose, crouch, launch at frame 6 (the runtime starts here), then a faster tuck. Planted feet pinned until launch. |
-| `fall` | UAL 1 `Jump_Loop` | Arms raised and paddling, legs apart and pedalling, head levelled. |
+| `jump` | UAL 1 `Jump_Start` | Starts from idle's pose, crouch, launch at frame 6 (the runtime starts here), then a faster tuck. Planted feet pinned until launch. The arms are keyed: back in the crouch, then down, forward and up through the launch into a soft tuck, with loose fists. |
+| `fall` | UAL 1 `Jump_Loop` | Arms raised and paddling, legs apart and pedalling, head levelled, relaxed hands. |
 | `land` | UAL 1 `Jump_Land` | Shallower, faster squash (deepest at frame 3) and settles into idle's first pose. |
 | `land_hard` | UAL 1 `Jump_Land` | Deep squash held longer, settles into idle. Plays for touchdowns faster than 75 studs/s. |
 | `swim`, `swim_idle` | UAL 1 `Swim_Fwd_Loop`, `Swim_Idle_Loop` | Retimed, head and arm lag. |
 | `sit` | UAL 1 `Sitting_Idle_Loop` | Head levelled. |
 | `dance` | UAL 1 `Dance_Loop` | Moves pushed further (arms, spine and hips), hips bounce on the beat (120 bpm). |
-| `wave`, `point` | Procedural upper body over UAL 1 `Idle_Loop` legs | Our key poses. UAL Standard has no wave or point. |
-| `cheer`, `climb` | Procedural (`anim_clips.py`) | UAL Standard has no cheer. Its only climb (`ClimbUp_1m_RM`) is a one-off ledge mantle, not a ladder/truss loop. |
+| `wave`, `cheer` | UAL 1 `Idle_Loop` plus keyed arms | The idle body with arm directions keyed in code (`retarget_clips.aim`), so they retarget. Both have overlap (head, forearm and wrist lag), a weight shift and a chest counter-move. Cheer adds a dip before the thrust. UAL Standard has no wave or cheer. |
+| `point` | Procedural upper body over UAL 1 `Idle_Loop` legs | Our key poses. UAL Standard has no point. |
+| `climb` | Procedural (`anim_clips.py`) | Hand and foot IK on the rungs. The head follows the reaching hand with a lag, and there is a chest twist, a hips weight shift and an arcing reach. UAL 1 and 2 Standard have no ladder or wall climb; the only climb is `ClimbUp_1m_RM`, a one-off ledge mantle. |
 
 The `pose_*` clips are still concept poses, not animation.

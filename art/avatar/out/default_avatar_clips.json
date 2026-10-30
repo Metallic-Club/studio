@@ -257,6 +257,34 @@
     0.0
    ]
   },
+  "wave": {
+   "frames": 61,
+   "first": 0,
+   "last": 60,
+   "seconds": 2.0,
+   "loop": false,
+   "export": true,
+   "priority": 3,
+   "source": "Quaternius UAL 1 Idle_Loop + keyed wave arm",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ]
+  },
+  "cheer": {
+   "frames": 49,
+   "first": 0,
+   "last": 48,
+   "seconds": 1.6,
+   "loop": false,
+   "export": true,
+   "priority": 3,
+   "source": "Quaternius UAL 1 Idle_Loop + keyed cheer",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.01
+   ]
+  },
   "climb": {
    "frames": 25,
    "first": 0,
@@ -274,20 +302,6 @@
     0.0
    ]
   },
-  "wave": {
-   "frames": 61,
-   "first": 0,
-   "last": 60,
-   "seconds": 2.0,
-   "loop": false,
-   "export": true,
-   "priority": 3,
-   "source": "procedural upper body over Quaternius UAL 1 Idle_Loop legs",
-   "max_ground_slip_mm_per_frame": [
-    0.0,
-    0.0
-   ]
-  },
   "point": {
    "frames": 46,
    "first": 0,
@@ -300,19 +314,6 @@
    "max_ground_slip_mm_per_frame": [
     0.0,
     0.0
-   ]
-  },
-  "cheer": {
-   "frames": 49,
-   "first": 0,
-   "last": 48,
-   "seconds": 1.6,
-   "loop": false,
-   "export": true,
-   "priority": 3,
-   "max_ground_slip_mm_per_frame": [
-    20.22,
-    20.22
    ]
   },
   "pose_hand_on_hip": {

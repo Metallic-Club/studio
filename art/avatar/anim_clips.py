@@ -779,21 +779,27 @@ def p2_clips(rig):
     def climb_sample(f):
         ph0 = f / N
         two = 2 * math.pi
-        rot = {"hips": (2, 3 * math.cos(two * ph0), 2 * math.cos(two * ph0)), "spine": (2, 0, 0),
-               "chest": (4, -4 * math.cos(two * ph0), 0), "neck": (-8, 0, 0), "head": (-14, 0, 0)}
+        # The head looks up after the reaching hand (lagging it by ~0.1 of a cycle), the chest
+        # twists toward it and the hips swing over the foot that holds.
+        look = math.cos(two * (ph0 - 0.10))
+        up = abs(math.sin(two * (ph0 - 0.10)))
+        rot = {"hips": (2, 5 * math.cos(two * ph0), 3 * math.cos(two * ph0)), "spine": (2, 2 * math.cos(two * ph0), 0),
+               "chest": (4, -7 * math.cos(two * (ph0 - 0.05)), 0), "neck": (-8 - 3 * up, 4 * look, 0),
+               "head": (-14 - 6 * up, 9 * look, 3 * math.cos(two * (ph0 - 0.18)))}
         vals = {}
         for side in ("left", "right"):
             ph = (ph0 + (0 if side == "left" else 0.5)) % 1
-            z, reach = held(ph, 1.32)
+            z, reach = held(ph, 1.42)
+            # The reaching hand arcs out (away from the wall and to the side) and back in.
             vals.update({("hand", side, i): v for i, v in enumerate(
-                (0.15, wall_y - 0.02 + 0.06 * reach, z - 0.06, 0.0, -0.25, 1.0, 0.0, -1.0, -0.15))})
+                (0.15 + 0.05 * reach, wall_y - 0.02 + 0.11 * reach, z - 0.06, 0.0, -0.25, 1.0, 0.0, -1.0, -0.15))})
             fz, lift = held((ph + 0.5) % 1, 0.40)
             vals.update({("foot", side, i): v for i, v in enumerate(
                 (0.13, wall_y + 0.09 + 0.06 * lift, fz + 0.03 * lift, -6 + 10 * lift, 6, 0))})
             rot.update(side_rot(hand("grip"), side))
             rot.update(side_rot({"leftShoulder": (6 * reach, 0, -4)}, side))
         vals.update(flat_rot(rot))
-        vals[("hips", 0)] = 0.012 * math.cos(two * ph0)
+        vals[("hips", 0)] = 0.026 * math.cos(two * (ph0 - 0.05))
         vals[("hips", 1)] = 0.08          # hips back so the knees stay behind the rungs
         vals[("hips", 2)] = -0.04 + 0.015 * math.cos(2 * two * ph0)
         vals[("pole", "elbow", 0)], vals[("pole", "elbow", 1)], vals[("pole", "elbow", 2)] = 1.0, 0.4, -0.6
@@ -1113,8 +1119,22 @@ def ual_clips(rig):
         if f <= 6:
             return f - 4
         return 2 + (f - 6) * 1.8
+    # Arms (directions for the left arm: +x out, -y forward, +z up; the right is mirrored): back
+    # in the crouch, then down, forward and UP through the launch (frame 6) with a little
+    # overshoot (9), easing into a soft tuck at the apex (elbows out, fists in front of the chest).
+    jump_arm = RC.aim("leftUpperArm", [(4, (0.22, 0.75, -0.62)), (5.5, (0.22, -0.05, -0.97)),
+                                       (7.5, (0.30, -0.90, 0.05)), (9.5, (0.42, -0.78, 0.46)),
+                                       (12.5, (0.58, -0.76, -0.22)), (16, (0.58, -0.76, -0.28))],
+                      weight=[(2, 0.0), (4, 1.0)])
+    jump_fore = RC.aim("leftLowerArm", [(4, (0.15, 0.45, -0.88)), (5.5, (0.15, -0.40, -0.90)),
+                                        (7.5, (0.28, -0.85, 0.42)), (9.5, (0.30, -0.70, 0.65)),
+                                        (12.5, (0.12, -0.84, 0.52)), (16, (0.10, -0.84, 0.53))],
+                       weight=[(2, 0.0), (4, 1.0)])
+    jump_chest = RC.lean("chest", [(0, (0, 0, 0)), (4, (8, 0, 0)), (9, (-7, 0, 0)), (16, (-3, 0, 0))])
     jr = RC.RetargetClip(rig, R1, "jump_src", "Jump_Start", 16, False, timemap=jump_time, feet="lock", spread=(1.0, 0.3),
-                         layers=[RC.abduct(6), RC.level_head(0.4), toe_out], lag={"head": 1, "*Hand": 1})
+                         layers=[jump_chest, jump_arm, jump_fore, RC.level_head(0.4), toe_out],
+                         lag={"head": 2, "neck": 1, "*LowerArm": 1, "*Hand": 1.5},
+                         hands={"left": ("loose", 0.9), "right": ("loose", 0.9)})
     stand = idle
 
     def jump(f):
@@ -1135,7 +1155,8 @@ def ual_clips(rig):
             ctx.rotate_world(s + "UpperLeg", (0, -sg, 0), 7)     # legs apart: no crossing shins
             ctx.rotate_world(s + "UpperLeg", (1, 0, 0), 10 * sg * math.sin(a * 2 / 3))
             ctx.rotate_world(s + "LowerLeg", (1, 0, 0), -9 * sg * math.sin(a * 2 / 3 - 0.9))
-    out.append(RC.RetargetClip(rig, R1, "fall", "Jump_Loop", 75, True, feet="fk",
+    relaxed = {"left": ("relaxed", 0.9), "right": ("relaxed", 0.9)}
+    out.append(RC.RetargetClip(rig, R1, "fall", "Jump_Loop", 75, True, feet="fk", hands=relaxed,
                                layers=[RC.abduct(28), flail, RC.level_head(0.4)], lag={"head": 3, **arm_lag}))
 
     # ---- land (soft) and land_hard: the source landing; soft is shallower and quicker.
@@ -1155,22 +1176,23 @@ def ual_clips(rig):
     land = RC.RetargetClip(rig, R1, "land", "Jump_Land", 16, False, timemap=soft_time, spread=(1.0, 0.3),
                                layers=[soften(0.6), RC.abduct(6), RC.level_head(0.5), toe_out],
                                exaggerate={"spine": 0.6, "chest": 0.6, "upperChest": 0.6},
-                               lag={"head": 2, **arm_lag})
+                               lag={"head": 2, **arm_lag}, hands=relaxed)
     out.append(RC.FnClip("land", 16, False, settle(land, 8), meta=land.meta))
     hard_time = RC.piecewise([(0, 0), (3, 5.5), (8, 8), (28, 34)])
     hard = RC.RetargetClip(rig, R1, "land_hard", "Jump_Land", 28, False, timemap=hard_time, spread=(1.0, 0.3),
-                           layers=[RC.abduct(6), RC.level_head(0.3), toe_out], lag={"head": 2, **arm_lag})
+                           layers=[RC.abduct(6), RC.level_head(0.3), toe_out], lag={"head": 2, **arm_lag},
+                           hands=relaxed)
     out.append(RC.FnClip("land_hard", 28, False, settle(hard, 16), meta=hard.meta))
 
     # ---- swim and swim idle, legs FK.
     out.append(RC.RetargetClip(rig, R1, "swim", "Swim_Fwd_Loop", 40, True, feet="fk", priority=2,
                                lag={"head": 2, **arm_lag}))
     out.append(RC.RetargetClip(rig, R1, "swim_idle", "Swim_Idle_Loop", 100, True, feet="fk", priority=2,
-                               lag={"head": 3, **arm_lag}))
+                               lag={"head": 3, **arm_lag}, hands=relaxed))
 
     # ---- sit, dance, idle_b.
     out.append(RC.RetargetClip(rig, R1, "sit", "Sitting_Idle_Loop", 60, True, priority=2,
-                               layers=[RC.level_head(0.3)], lag={"head": 3, **arm_lag}))
+                               layers=[RC.level_head(0.3)], lag={"head": 3, **arm_lag}, hands=relaxed))
     bounce = RC.move_hips(lambda c: (0, 0, -0.03 * (0.5 - 0.5 * math.cos(two * 2 * c.u))))
     out.append(RC.RetargetClip(rig, R1, "dance", "Dance_Loop", 30, True, priority=3,
                                layers=[RC.abduct(8), bounce, toe_out],
@@ -1178,7 +1200,74 @@ def ual_clips(rig):
                                            "upperChest": 1.4, "hips": 1.5, "head": 1.5},
                                lag={"head": 2, **arm_lag}, meta={"bpm": 120, "frames_per_beat": 15}))
     out.append(RC.RetargetClip(rig, R2, "idle_b", "Idle_FoldArms_Loop", 90, True, priority=2,
-                               spread=(1.0, 0.3), layers=[head, toe_out], lag={"head": 3, "neck": 2}))
+                               spread=(1.0, 0.3), layers=[head, toe_out], lag={"head": 3, "neck": 2},
+                               hands={"left": ("relaxed", 0.5), "right": ("relaxed", 0.5)}))
+
+    # ---- wave (right hand), 2 s, over the idle. The arm rises out to the side on an arc, the
+    # forearm swings from upright-and-out toward upright (the hand stays clear of the big head),
+    # the wrist trails each swing, the chest counters and the weight goes onto the left leg.
+    idle_time = idle.timemap
+    on = [(0, 0.0), (8, 1.0), (50, 1.0), (59, 0.0)]
+    swing_a, swing_b = (-0.50, -0.20, 0.84), (-0.10, -0.22, 0.97)
+    fore = [(0, (-0.15, -0.10, -0.98)), (5, (-0.85, -0.30, 0.42)), (11, swing_a)]
+    for i, f in enumerate(range(16, 46, 5)):
+        fore.append((f, swing_b if i % 2 == 0 else swing_a))
+    fore += [(50, (-0.35, -0.25, 0.90)), (55, (-0.60, -0.20, -0.77)), (60, (-0.15, -0.10, -0.98))]
+    wrist = [(0, 0)] + [(f, -16 if i % 2 == 0 else 16) for i, f in enumerate(range(11, 47, 5))] + [(50, 0)]
+    wave_layers = [
+        RC.hips_keys([(0, (0, 0, 0)), (10, (0.018, 0, -0.008)), (50, (0.018, 0, -0.008)), (60, (0, 0, 0))]),
+        RC.lean("chest", [(0, (0, 0, 0)), (10, (0, 3, 0))]
+                + [(f, (0, 3 + (1.5 if i % 2 == 0 else -1.5), 0)) for i, f in enumerate(range(16, 46, 5))]
+                + [(50, (0, 2, 0)), (60, (0, 0, 0))]),
+        RC.aim("rightUpperArm", [(0, (-0.20, 0.0, -0.98)), (5, (-0.92, -0.30, 0.05)), (10, (-0.92, -0.20, 0.36)),
+                                 (14, (-0.90, -0.24, 0.30)), (50, (-0.90, -0.24, 0.30)),
+                                 (55, (-0.80, -0.12, -0.58)), (60, (-0.20, 0.0, -0.98))],
+               weight=on, mirror=False),
+        RC.aim("rightLowerArm", fore, weight=on, mirror=False),
+        RC.spin("rightHand", 2, wrist, mirror=False),
+        RC.lean("head", [(0, (0, 0, 0)), (12, (-3, -5, -10)), (48, (-3, -5, -10)), (60, (0, 0, 0))]),
+        head, toe_out]
+
+    def wave_hands(f):
+        w = RC.keyed([(0, 0.0), (6, 0.9), (50, 0.9), (58, 0.0)], f, lambda a, b, t: a + (b - a) * t)
+        return {"right": ("open", w) if w > 0.05 else ("relaxed", 0.6), "left": ("relaxed", 0.6)}
+    out.append(RC.RetargetClip(rig, R1, "wave", "Idle_Loop", 60, False, priority=3, timemap=idle_time,
+                               spread=(1.0, 0.3), layers=wave_layers, hands=wave_hands,
+                               lag={"head": 3, "neck": 2, "rightLowerArm": 1, "rightHand": 2.5, "*Proximal": 2,
+                                    "*Intermediate": 2.5, "*Distal": 3},
+                               meta={"source": "Quaternius UAL 1 Idle_Loop + keyed wave arm"}))
+
+    # ---- cheer, 1.6 s, over the idle: anticipation (knees dip, chest curls, fists pulled back to
+    # the hips), then both fists thrown up in a wide V with the chest opening and the head looking
+    # up, two pumps with the knees, and back down. Head and forearms trail (lag).
+    cheer_on = [(0, 0.0), (4, 1.0), (38, 1.0), (47, 0.0)]
+    up_v, up_lo = (0.62, -0.15, 0.77), (0.50, -0.10, 0.86)
+    pump, pump_lo = (0.86, -0.20, 0.34), (0.48, -0.22, 0.85)
+    cheer_layers = [
+        RC.hips_keys([(0, (0, 0, 0)), (7, (0, 0.012, -0.065)), (11, (0.006, 0, 0.02)), (14, (0.01, 0, 0)),
+                      (18, (0.016, 0, -0.03)), (21, (0.016, 0, 0.01)), (25, (0.016, 0, -0.03)),
+                      (28, (0.012, 0, 0.005)), (36, (0.006, 0, -0.012)), (48, (0, 0, 0))]),
+        RC.lean("chest", [(0, (0, 0, 0)), (7, (11, 0, 0)), (11, (-9, 0, 0)), (18, (-3, 2, 0)), (21, (-7, 0, 0)),
+                          (25, (-3, -2, 0)), (28, (-6, 0, 0)), (38, (0, 0, 0))]),
+        RC.aim("leftUpperArm", [(0, (0.22, 0.0, -0.97)), (7, (0.22, 0.45, -0.86)), (9, (0.55, -0.35, -0.10)),
+                                (11, up_v), (14, (0.58, -0.10, 0.80)), (18, pump), (21, up_v), (25, pump),
+                                (28, up_v), (34, (0.62, -0.25, 0.55)), (41, (0.25, 0.0, -0.97))],
+               weight=cheer_on),
+        RC.aim("leftLowerArm", [(0, (0.15, -0.10, -0.98)), (7, (0.10, -0.75, -0.65)), (9, (0.40, -0.70, 0.30)),
+                                (11, up_lo), (14, (0.45, -0.12, 0.88)), (18, pump_lo), (21, up_lo), (25, pump_lo),
+                                (28, up_lo), (34, (0.30, -0.40, 0.86)), (41, (0.15, -0.10, -0.98))],
+               weight=cheer_on),
+        RC.lean("head", [(0, (0, 0, 0)), (7, (10, 0, 0)), (12, (-14, 0, 0)), (18, (-8, 3, 0)), (21, (-12, 0, 0)),
+                         (25, (-8, -3, 0)), (28, (-10, 0, 0)), (40, (0, 0, 0))]),
+        toe_out]
+
+    def cheer_hands(f):
+        w = RC.keyed([(0, 0.0), (5, 1.0), (36, 1.0), (44, 0.0)], f, lambda a, b, t: a + (b - a) * t)
+        return {s: ("fist", w) if w > 0.05 else ("relaxed", 0.6) for s in ("left", "right")}
+    out.append(RC.RetargetClip(rig, R1, "cheer", "Idle_Loop", 48, False, priority=3, timemap=idle_time,
+                               spread=(1.0, 0.3), layers=cheer_layers, hands=cheer_hands,
+                               lag={"head": 3, "neck": 2, "*LowerArm": 1.5, "*Hand": 2},
+                               meta={"source": "Quaternius UAL 1 Idle_Loop + keyed cheer"}))
     return out
 
 
@@ -1208,7 +1297,7 @@ def all_clips(arm):
     done = {c.name for c in clips}
     proc = idle_clips(rig) + jump_clips(rig) + p2_clips(rig) + emote_clips(rig)
     idle = next(c for c in clips if c.name == "idle")
-    clips += [on_idle_legs(c, idle) if c.name in ("wave", "point") else c
+    clips += [on_idle_legs(c, idle) if c.name == "point" else c
               for c in proc if c.name not in done]
     clips += concept_poses(rig) + test_clips(rig)
     return clips

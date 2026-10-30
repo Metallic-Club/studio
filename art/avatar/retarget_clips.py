@@ -490,6 +490,94 @@ def piecewise(points):
     return m
 
 
+def ease(t):
+    t = min(1.0, max(0.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def keyed(keys, f, mix):
+    """Value at frame f of [(frame, value), ...]: held before the first key and after the last,
+    eased (smoothstep) between keys, blended with mix(a, b, w)."""
+    if f <= keys[0][0]:
+        return keys[0][1]
+    for (fa, va), (fb, vb) in zip(keys, keys[1:]):
+        if f <= fb:
+            return mix(va, vb, ease((f - fa) / (fb - fa)))
+    return keys[-1][1]
+
+
+def _mix_dir(a, b, w):
+    a, b = Vector(a).normalized(), Vector(b).normalized()
+    return a.slerp(b, w) if a.dot(b) > -0.999 else (a * (1 - w) + b * w).normalized()
+
+
+def _mix_num(a, b, w):
+    return a + (b - a) * w
+
+
+def aim(bone, keys, weight=None, mirror=True):
+    """Swing a bone (and its subtree) so that it points along a world direction, keyed over time.
+
+    keys: [(frame, (x, y, z)), ...] in the target rig's space, as written for `bone`; with mirror
+    and a "left..." bone, the right side gets the same keys with x negated. Blender
+    world: -Y is forward, +Z up, +X the character's left. weight: [(frame, w), ...] (default 1),
+    blending from the clip's own pose to the aimed one. Directions are slerped between keys, so
+    a limb moves on an arc. The swing is the shortest one, so the bone keeps its twist."""
+    sides = [(bone, 1)]
+    if mirror and bone.startswith("left"):
+        sides.append(("right" + bone[4:], -1))
+
+    def layer(ctx):
+        w = keyed(weight, ctx.f, _mix_num) if weight else 1.0
+        if w <= 0:
+            return
+        for b, sx in sides:
+            d = Vector(keyed(keys, ctx.f, _mix_dir))
+            d.x *= sx
+            cur = ctx.axis(b, 1)
+            q = cur.rotation_difference(d.normalized())
+            ctx.rotate(b, qpow(q, w).to_matrix())
+    return layer
+
+
+def spin(bone, axis_index, keys, mirror=True, sign_right=-1):
+    """Rotate a bone about its own axis (0 = X hinge, 1 = Y along, 2 = Z side) by keyed degrees
+    [(frame, deg), ...]; the right side mirrored with sign_right."""
+    sides = [(bone, 1)]
+    if mirror and bone.startswith("left"):
+        sides.append(("right" + bone[4:], sign_right))
+
+    def layer(ctx):
+        d = keyed(keys, ctx.f, _mix_num)
+        for b, sg in sides:
+            if d:
+                ctx.rotate_local(b, axis_index, d * sg)
+    return layer
+
+
+def lean(bone, keys):
+    """Rotate a bone's subtree about world axes by keyed (pitch, roll, yaw) degrees: positive
+    pitch tips the top forward (about +X), positive roll tips it toward the character's left
+    (+X, about +Y), positive yaw turns it toward the left (about +Z)."""
+    def layer(ctx):
+        p, r, y = keyed(keys, ctx.f, lambda a, b, w: tuple(x + (z - x) * w for x, z in zip(a, b)))
+        if p:
+            ctx.rotate_world(bone, (1, 0, 0), p)
+        if r:
+            ctx.rotate_world(bone, (0, 1, 0), r)
+        if y:
+            ctx.rotate_world(bone, (0, 0, 1), y)
+    return layer
+
+
+def hips_keys(keys):
+    """Keyed world offset of the hips [(frame, (dx, dy, dz)), ...]."""
+    def layer(ctx):
+        d = keyed(keys, ctx.f, lambda a, b, w: tuple(x + (z - x) * w for x, z in zip(a, b)))
+        ctx.hips = ctx.hips + Vector(d)
+    return layer
+
+
 def move_hips(fn):
     """Add a world offset (function of ctx -> Vector) to the hips."""
     def layer(ctx):
