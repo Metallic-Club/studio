@@ -146,3 +146,68 @@ fn input_frame_makes_no_heap_allocation_once_warm() {
     ON.with(|on| on.set(false));
     assert_eq!(COUNT.with(Cell::get), 0, "input_frame allocated");
 }
+
+/// With player overrides applied (a toggle, stick settings), frames and cached glyph lookups
+/// allocate nothing once warm (#254).
+#[test]
+fn overrides_toggles_and_glyph_lookups_make_no_heap_allocation() {
+    use metallic_runtime::input::overrides::{Stick, StickSettings};
+    use metallic_runtime::input::{
+        Control, Device, DeviceKind, InputConfig, MENU_ACTION, PlayerOverrides, RawEvent,
+    };
+    let mut o = PlayerOverrides::default();
+    o.action_mut("CharacterControls/Run").toggle = Some(true);
+    o.set_stick(
+        Stick::Right,
+        StickSettings {
+            sensitivity: 1.5,
+            invert_y: true,
+            ..Default::default()
+        },
+    );
+    let mut rt = InputRuntime::new(&InputConfig::player_defaults());
+    rt.set_overrides(o);
+    let ids: Vec<_> = [
+        "CharacterControls/Jump",
+        "CharacterControls/Run",
+        MENU_ACTION,
+    ]
+    .iter()
+    .map(|p| rt.find_action(p).unwrap())
+    .collect();
+    let dt = 1.0 / 60.0;
+    let frame = |rt: &mut InputRuntime, f: u64| {
+        let t = 10.0 + f as f64 * dt;
+        let v = if f.is_multiple_of(7) { 1.0 } else { 0.0 };
+        rt.push(RawEvent::button(
+            Device::KeyboardMouse,
+            Control::LeftShift,
+            v,
+            t,
+        ));
+        let pad = Device::Gamepad(0);
+        rt.push(RawEvent::vector(pad, Control::Thumbstick2, [0.5, 0.2], t));
+        rt.frame(t, dt as f32);
+        rt.drain_events().for_each(drop);
+        let mut n = 0;
+        for &id in &ids {
+            n += rt.glyph(id, None).map_or(0, |g| usize::from(g.count));
+            n += rt.glyphs(id, DeviceKind::Gamepad).len();
+        }
+        std::hint::black_box(n);
+    };
+    for f in 0..120u64 {
+        frame(&mut rt, f);
+    }
+    COUNT.with(|c| c.set(0));
+    ON.with(|on| on.set(true));
+    for f in 120..600u64 {
+        frame(&mut rt, f);
+    }
+    ON.with(|on| on.set(false));
+    assert_eq!(
+        COUNT.with(Cell::get),
+        0,
+        "frames or glyph lookups allocated"
+    );
+}

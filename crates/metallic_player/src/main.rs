@@ -4,11 +4,15 @@
 //! metallic-player <project dir> [--scene <file relative to project>] [--headless --frames N]
 //!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
 //!                 [--capture FRAME:PNG]... [--input-script <file>]
+//!                 [--no-overrides] [--menu main|keyboard|gamepad|assist]
 //! ```
 //! Windowed by default. Input is read as actions (`metallic_runtime::input`); the default
 //! `CharacterControls`: WASD/arrows or the d-pad move, Space or A jumps, Shift or L3 runs,
 //! right-drag or the right stick turns the camera, the wheel or R1/L1 zoom; the left stick
-//! moves; Esc quits. `--headless` runs N frames of 1/60 s without a window or GPU (smoke tests).
+//! moves; Esc (or Start) opens the Player menu: Resume, Controls (rebinding, hold or toggle,
+//! stick and mouse settings; saved per game in the Player's data folder) and Leave game.
+//! `--no-overrides` ignores the saved controls; `--menu main|keyboard|gamepad|assist` starts with
+//! the menu or a Controls tab open (for screenshots). `--headless` runs N frames of 1/60 s without a window or GPU (smoke tests).
 //! `--input-script <file>` plays input events (`frame device control state [values]`, for
 //! example `30 keyboard Space down`) in either mode, with 1/60 s of input time per frame. `--fps` plays 60 s in a fixed 1920x1080 window without
 //! vsync and prints frame-rate statistics; with `--autopilot` the character runs in a circle and
@@ -20,7 +24,10 @@
 
 mod args;
 mod capture;
+mod controls_store;
+mod data_dir;
 mod devices;
+mod menu;
 mod overlay;
 mod window;
 
@@ -56,11 +63,16 @@ fn main() -> ExitCode {
         }
         None => None,
     };
+    let controls = if args.no_overrides {
+        controls_store::Controls::disabled()
+    } else {
+        controls_store::Controls::open(game.name())
+    };
     if args.headless {
-        run_headless(&mut game, args.frames.unwrap_or(600), script);
+        run_headless(&mut game, args.frames.unwrap_or(600), script, &controls);
         ExitCode::SUCCESS
     } else {
-        window::run(game, &args, script)
+        window::run(game, &args, script, controls)
     }
 }
 
@@ -72,8 +84,14 @@ fn load_script(path: &std::path::Path) -> Result<ScriptedSource, String> {
 }
 
 /// Runs `frames` frames of exactly one tick each, with the events of `script` (none: no input).
-fn run_headless(game: &mut Game, frames: u64, mut script: Option<ScriptedSource>) {
+fn run_headless(
+    game: &mut Game,
+    frames: u64,
+    mut script: Option<ScriptedSource>,
+    controls: &controls_store::Controls,
+) {
     let mut input = InputRuntime::from_world(&game.world().borrow());
+    controls.apply(&mut input);
     for frame in 0..frames {
         let now = frame as f64 * TICK;
         if let Some(script) = script.as_mut() {

@@ -656,6 +656,12 @@ Local first, cloud later.
 - Cloud later: the same JSON stored with the account per game; merge per action by `updated`; the last change wins.
   Local file stays the working copy so offline play works. Not in the first phases.
 - Writes happen when the page closes or the game exits, never per frame, atomically (write a temp file, rename).
+- Implemented (#254): the folder is `%APPDATA%\MetallicPlayer` on Windows (`METALLIC_PLAYER_DATA_DIR` overrides it), so
+  the file is `%APPDATA%\MetallicPlayer\input\<game id>\local.json`. Stick and mouse settings are stored per stick under
+  `"sticks"` (`Thumbstick1`, `Thumbstick2`, `MouseDelta`: `sensitivity`, `invertX`, `invertY`, `deadzone`) rather than
+  per action, so a stick swap keeps them; assist options under `"assist"` (`toggleAll`, `replaceHolds`,
+  `holdTimeScale`). An empty slot is stored as `"key": "None"`. A file that cannot be read is renamed to
+  `local.json.corrupt` and the creator's controls apply.
 
 ## 9. Glyphs
 
@@ -694,6 +700,9 @@ May depict:
   **Letters**: A, B, X, Y in a plain sans-serif font, bottom, right, left, top. **Shapes**: a circle, a cross, a square and a
   triangle as simple outline shapes, in the same positions.
 - Positions are named as positions in our docs (South, East, West, North); `ButtonA` is the bottom button.
+- Implemented (#254): **Letters** and a generic **Positions** style (a diamond of four dots with the pressed one
+  filled, words "Bottom Button" and so on). **Shapes** waits for an owner decision. Auto picks Positions for pads with the
+  Sony or Nintendo vendor id and Letters otherwise; the player can choose on the Gamepad tab.
 
 May not depict:
 
