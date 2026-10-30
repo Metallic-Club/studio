@@ -133,7 +133,7 @@ def pack_command(vpk, app, version, channel, stage, icon, notes):
     if app == "launcher":
         return [vpk, "pack", "--packId", LAUNCHER_PACK_ID, "--packVersion", version,
                 "--packDir", str(stage), "--mainExe", LAUNCHER_MAIN_EXE, "--packTitle", LAUNCHER_PACK_TITLE,
-                "--icon", str(icon), "--framework", "webview2",
+                "--icon", str(icon), "--framework", "webview2", "--runtime", "win-x64",
                 "--channel", f"{LAUNCHER_CHANNEL_PREFIX}{channel}", "--outputDir", str(OUT_DIR),
                 "--releaseNotes", str(notes)]
     return [vpk, "pack", "--packId", PACK_ID, "--packVersion", version,
@@ -226,7 +226,8 @@ def main():
         print("Packed; not uploading (--no-upload).")
         return
 
-    release_name = f"Metallic Launcher {args.version} ({args.channel})" if launcher         else f"Metallic Studio {args.version} ({args.channel})"
+    app_title = "Metallic Launcher" if launcher else "Metallic Studio"
+    release_name = f"{app_title} {args.version} ({args.channel})"
     upload = [args.vpk, "upload", "github", "--repoUrl", REPO_URL, "--channel", pack_channel,
               "--outputDir", str(OUT_DIR), "--tag", tag, "--releaseName", release_name,
               "--publish", "--token", token]

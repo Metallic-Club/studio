@@ -96,8 +96,9 @@ same repo as Studio. Studio's release path is unchanged.
   a `launcher-v*` tag runs the Launcher release in `.github/workflows/release.yml` (same "commit must be on `main`" check, same
   pinned actions, same version check against `[workspace.package] version`).
 - **Velopack channel:** `launcher-<channel>` (`launcher-dev`). The Launcher's own updater reads that channel
-  (`LAUNCHER_FEED` in `metallic_update`). Velopack names the installer `<packId>-<channel>-Setup.exe`, so the file is expected to be
-  `MetallicLauncher-launcher-dev-Setup.exe`; confirm the exact name on the first real release.
+  (`LAUNCHER_FEED` in `metallic_update`). Velopack names the installer `<packId>-<channel>-Setup.exe`, so the file is
+  `MetallicLauncher-launcher-dev-Setup.exe` (`MetallicLauncher-launcher-stable-Setup.exe` on stable). Studio's and the
+  Launcher's updaters each pick releases by tag prefix (`v` / `launcher-v`), so they ignore each other's releases.
 - **By hand** (needs .NET and the pinned `vpk`, see above): `GITHUB_TOKEN` from `gh auth token`, then
   `python tools/release.py --app launcher --channel dev --version 0.1.1`. `--dry-run` prints the commands (cargo build of
   `metallic_launcher` and `metallic_player`, `vpk pack ... --framework webview2 --channel launcher-dev`, `vpk upload`).

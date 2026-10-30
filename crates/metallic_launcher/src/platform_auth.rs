@@ -51,7 +51,7 @@ pub const CLIENT_ID: &str = "metallic-launcher";
 /// The scopes the Launcher asks for: the profile (needed for the web-session handoff) and play.
 pub const SCOPES: &str = "profile play";
 /// Credential Manager entry: service name.
-pub const KEYRING_SERVICE: &str = "Metallic";
+pub const KEYRING_SERVICE: &str = "MetallicLauncher";
 /// Credential Manager entry: account name.
 pub const KEYRING_ACCOUNT: &str = "platform";
 /// The longest token accepted from the server, in bytes (the platform rejects longer ones too).

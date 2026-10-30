@@ -89,13 +89,13 @@ pub fn show_webview_missing() -> bool {
 }
 
 pub fn webview_data_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(
-        PathBuf::from(base)
-            .join("Metallic")
-            .join("Launcher")
-            .join("WebView2"),
-    )
+    let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+    if let Err(error) = metallic_launcher::data_dirs::create_owned(
+        &metallic_launcher::data_dirs::local_data_dir(&base),
+    ) {
+        log::warn!("could not create the data folder: {error}");
+    }
+    Some(metallic_launcher::data_dirs::webview_dir(&base))
 }
 
 pub fn webview_local_url(url: &Url) -> Url {
@@ -676,25 +676,23 @@ fn register_this_copy() {
     }
 }
 
-/// Removes the registration (if it is ours) and the Launcher's data folders. Only the two
-/// `Metallic\Launcher` folders are touched.
+/// Removes the registration (if it is ours) and the Launcher's own data folders. A folder
+/// is removed only when it holds the marker this Launcher wrote; nothing else is touched.
 fn clean_up_this_copy() {
     if let Ok(exe) = std::env::current_exe()
         && let Err(error) = unregister_protocol(&exe)
     {
         log::warn!("could not remove the metallic:// registration: {error}");
     }
-    for variable in ["LOCALAPPDATA", "APPDATA"] {
-        let Some(base) = std::env::var_os(variable).filter(|base| !base.is_empty()) else {
-            continue;
-        };
-        let folder = PathBuf::from(base).join("Metallic").join("Launcher");
-        if let Err(error) = std::fs::remove_dir_all(&folder)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            log::warn!("could not remove a data folder: {error}");
-        }
-    }
+    let base = |variable| {
+        std::env::var_os(variable)
+            .filter(|base| !base.is_empty())
+            .map(PathBuf::from)
+    };
+    metallic_launcher::data_dirs::clean_up_in(
+        base("LOCALAPPDATA").as_deref(),
+        base("APPDATA").as_deref(),
+    );
 }
 
 /// Velopack's start-up logic with the Launcher's hooks. These run inside the installer's

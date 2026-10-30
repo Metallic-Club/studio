@@ -54,3 +54,15 @@ fn a_clock_that_steps_back_does_not_panic_or_refill() {
     assert!(limiter.allow_at(t0));
     assert!(!limiter.allow_at(t0 - Duration::from_secs(5)));
 }
+
+#[test]
+fn one_gate_covers_every_launch_path() {
+    use metallic_launcher::{LaunchGate, LauncherError};
+    // Player links, the bridge's play command and Studio-open links all ask the same gate.
+    let gate = LaunchGate::new(PlayLimiter::new(2, Duration::from_secs(2)));
+    let t0 = Instant::now();
+    assert!(gate.permit_at(t0).is_ok()); // a Play link
+    assert!(gate.permit_at(t0).is_ok()); // a Studio link
+    assert!(matches!(gate.permit_at(t0), Err(LauncherError::Busy(_)))); // the bridge's play
+    assert!(gate.permit_at(t0 + Duration::from_secs(2)).is_ok());
+}

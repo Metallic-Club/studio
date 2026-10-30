@@ -6,7 +6,7 @@ Branch `studio/launcher-l1-20261030` (shared by all Launcher L1 tasks). Closes #
 - `Metallic.exe` (`crates/metallic_launcher/src/main.rs`): Velopack hook, logging, settings, `LauncherConfig`,
   WebView2 check (missing: message box, exit 1), then `shell::run`.
 - Window `Metallic` 1280x800 (min 960x600), icon from `branding/`, hidden until the first page has loaded
-  (or 2.5 s), graphite web view background; WebView2 data in `%LOCALAPPDATA%\Metallic\Launcher\WebView2`.
+  (or 2.5 s), graphite web view background; WebView2 data in `%LOCALAPPDATA%\MetallicLauncher\data\WebView2`.
 - Bundled pages in `assets/pages/` (offline, demo, settings placeholder), served by the `metallic-app` protocol with a strict CSP.
 - Navigation, pop-ups, downloads and permissions go through `UrlPolicy` or are refused (see the manual check below).
 - A failed main-frame load shows the offline page (`LoadFailed`); while offline the site is re-checked after 10 s, doubling to 60 s.

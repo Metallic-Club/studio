@@ -52,6 +52,7 @@ class PackCommandTests(unittest.TestCase):
         self.assertEqual(pairs["--packId"], "MetallicLauncher")
         self.assertEqual(pairs["--mainExe"], "Metallic.exe")
         self.assertEqual(pairs["--framework"], "webview2")
+        self.assertEqual(pairs["--runtime"], "win-x64")
         self.assertEqual(pairs["--channel"], "launcher-dev")
         self.assertEqual(pairs["--packTitle"], "Metallic")
 
@@ -79,6 +80,7 @@ class PackCommandTests(unittest.TestCase):
         self.assertIn("+ stage metallic_studio.exe as Metallic Studio.exe in ", out)
         self.assertIn(f"--tag v{version}-dev --releaseName \"Metallic Studio {version} (dev)\" --publish --token <token> --pre", out)
         self.assertNotIn("--framework", out)
+        self.assertNotIn("--runtime", out)
         self.assertNotIn("MetallicLauncher", out)
 
 

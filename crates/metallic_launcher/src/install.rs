@@ -136,12 +136,9 @@ pub fn studio_root_for(local_app_data: &Path) -> PathBuf {
     local_app_data.join("MetallicStudio")
 }
 
-/// Where installers are downloaded: `%LOCALAPPDATA%\Metallic\Launcher\Downloads`.
+/// Where installers are downloaded: `%LOCALAPPDATA%\MetallicLauncher\data\Downloads`.
 pub fn downloads_dir_for(local_app_data: &Path) -> PathBuf {
-    local_app_data
-        .join("Metallic")
-        .join("Launcher")
-        .join("Downloads")
+    crate::data_dirs::downloads_dir(local_app_data)
 }
 
 /// The name of Studio's installer for `channel`, as Velopack names it.

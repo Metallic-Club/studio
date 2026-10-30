@@ -2,7 +2,10 @@
 //! the protocol handler, a click in the page), so a page that sends many `metallic://play` links
 //! cannot start many Players.
 
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use crate::error::LauncherError;
 
 /// A token bucket: `burst` launches at once, then one more every `interval`.
 #[derive(Debug)]
@@ -51,6 +54,36 @@ impl PlayLimiter {
             true
         } else {
             false
+        }
+    }
+}
+
+/// One limiter shared by every way of starting a program: Play links (pipe, protocol handler,
+/// page clicks, first-start argument), the bridge's `play` and Studio-open links, and the tray.
+#[derive(Debug)]
+pub struct LaunchGate(Mutex<PlayLimiter>);
+
+impl LaunchGate {
+    /// A gate that uses `limiter`.
+    pub fn new(limiter: PlayLimiter) -> Self {
+        LaunchGate(Mutex::new(limiter))
+    }
+
+    /// Ok when a launch may go ahead now; `Busy` otherwise.
+    pub fn permit(&self) -> Result<(), LauncherError> {
+        self.permit_at(Instant::now())
+    }
+
+    /// Like [`permit`](Self::permit) with the time given (for tests).
+    pub fn permit_at(&self, now: Instant) -> Result<(), LauncherError> {
+        let mut limiter = self
+            .0
+            .lock()
+            .map_err(|_| LauncherError::Busy("launching"))?;
+        if limiter.allow_at(now) {
+            Ok(())
+        } else {
+            Err(LauncherError::Busy("too many launches in a short time"))
         }
     }
 }

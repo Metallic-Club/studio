@@ -73,7 +73,7 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   `platform/windows.rs` (`tray-icon` crate, MIT/Apache-2.0; icon only from `branding/`). Every script the shell runs into a page
   (`AppEvent::RunScript`, `Bridge::guard_script`) carries the same in-page `location.origin` guard as bridge replies.
   Task 6 adds `install.rs` (`Installer::install_studio/start_install_studio`: looks up `MetallicStudio-<channel>-Setup.exe` on
-  `STUDIO_FEED`, `download_verified` into `%LOCALAPPDATA%\Metallic\Launcher\Downloads`, runs it with `--silent` through
+  `STUDIO_FEED`, `download_verified` into `%LOCALAPPDATA%\MetallicLauncher\data\Downloads`, runs it with `--silent` through
   `Spawner::spawn_and_wait` only after the SHA-256 matched, deletes it; one install at a time; `ProductStatus`,
   `LauncherUpdateState`, `InstallStatus`, `read_installed_version`, `github_sign_in`) and `self_update.rs` (`SelfUpdater`: check on
   start and every `CHECK_INTERVAL`, background download, `on_quit` applies silently without restart only when `ProcessTracker`
@@ -94,10 +94,10 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   `metallic://studio/open?place=..` is ignored for now).
   Task 9 (release and hardening): `tools/release.py --app launcher` packs `Metallic.exe` + `metallic-player.exe` as Velopack
   `MetallicLauncher` (`--framework webview2`, channel `launcher-<channel>`, tag `launcher-v<version>-<channel>`; see
-  `docs/releasing.md`). `play_limit.rs` (`PlayLimiter`, burst 3 then one per 2 s) drops floods of Play links that arrive through
-  the pipe, the protocol handler or the page (the bridge has its own one-per-2-s limit). `url_policy::remote_content_allowed`: if
+  `docs/releasing.md`). `play_limit.rs` (`PlayLimiter`, burst 3 then one per 2 s; `LaunchGate`) is one gate for every program start: Play and
+  Studio links (pipe, protocol handler, page clicks, start argument), the bridge `play`/`openStudio` and the tray (the bridge also keeps its own one-per-2-s Play limit). `url_policy::remote_content_allowed`: if
   the WebView2 `FrameNavigationStarting` handler cannot be registered, iframes would be unpoliced, so the Launcher shows the bundled
-  offline page and loads no remote page (fail closed). CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
+  offline page and loads no remote page (fail closed). Own data folders (`data_dirs.rs`): `%LOCALAPPDATA%\MetallicLauncher\data` (`Downloads`, `WebView2`) and `%APPDATA%\MetallicLauncher` (settings), never under `Metallic\` (another app may own it); each holds a `.metallic-launcher` marker written when the Launcher creates it, and the uninstall hook deletes only marked folders. Keyring service `MetallicLauncher`. The view starts on `about:blank`; the start page loads only after registration. CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

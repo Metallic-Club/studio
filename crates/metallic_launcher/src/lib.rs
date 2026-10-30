@@ -16,6 +16,7 @@
 
 pub mod app_event;
 pub mod bridge;
+pub mod data_dirs;
 pub mod deep_link;
 pub mod error;
 pub mod install;
@@ -53,7 +54,7 @@ pub use platform_auth::{
     HandoffUrl, OneAtATime, PlatformAuth, Revocation, SignInReply, SignInTicket, platform_sign_in,
     sign_out_in_background,
 };
-pub use play_limit::PlayLimiter;
+pub use play_limit::{LaunchGate, PlayLimiter};
 pub use protocol::{
     MemoryRegistry, PROTOCOL_KEY, UriRegistry, is_installed_copy, is_registered_to, register,
     unregister,

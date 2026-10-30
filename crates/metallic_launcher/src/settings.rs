@@ -1,6 +1,6 @@
 //! The Launcher's settings file, `settings.toml`.
 //!
-//! Stored in `%APPDATA%\Metallic\Launcher`, or in the folder named by the environment variable
+//! Stored in `%APPDATA%\MetallicLauncher`, or in the folder named by the environment variable
 //! `METALLIC_LAUNCHER_CONFIG_DIR` (tests, portable runs). A missing or damaged file gives the
 //! defaults; saving writes a temporary file and renames it, so a crash never leaves half a file.
 
@@ -108,14 +108,14 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
-    /// The default location: `METALLIC_LAUNCHER_CONFIG_DIR`, else `%APPDATA%\Metallic\Launcher`.
+    /// The default location: `METALLIC_LAUNCHER_CONFIG_DIR`, else `%APPDATA%\MetallicLauncher`.
     /// With neither, loading gives the defaults and saving fails.
     pub fn open_default() -> Self {
         let dir = std::env::var_os(CONFIG_DIR_ENV)
             .map(PathBuf::from)
             .or_else(|| {
                 std::env::var_os("APPDATA")
-                    .map(|appdata| PathBuf::from(appdata).join("Metallic").join("Launcher"))
+                    .map(|appdata| crate::data_dirs::config_dir(&PathBuf::from(appdata)))
             });
         SettingsStore {
             path: dir.map(|dir| dir.join(FILE_NAME)),
@@ -161,7 +161,8 @@ impl SettingsStore {
         let text =
             toml::to_string_pretty(settings).map_err(|e| LauncherError::Io(e.to_string()))?;
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(io)?;
+            // A folder created here is marked as ours; one that existed is left unmarked.
+            crate::data_dirs::create_owned(dir).map_err(io)?;
         }
         let mut temp = path.clone().into_os_string();
         temp.push(".tmp");

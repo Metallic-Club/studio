@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use metallic_launcher::deep_link::SitePath;
@@ -15,13 +15,13 @@ use metallic_launcher::platform_auth::{KEYRING_ACCOUNT, KEYRING_SERVICE};
 use metallic_launcher::{
     AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction,
     DeepLink, EventSink, GithubAssets, HandoffListener, HandoffMessage, InstallStatus, Installer,
-    LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage, NavDecision,
-    OfflineReason, OneAtATime, PageOrigin, PlaceId, PlatformAuth, PlayLimiter, PlayerWatcher,
-    ProcessTracker, RestartError, SelfUpdater, SettingsPatch, SettingsStore, SiteOrigin,
-    SiteStatus, StartPage, TrayAction, UrlPolicy, check_site, downloads_dir_for, github_sign_in,
-    is_installed_copy, local_url, on_close_requested, platform_sign_in, player_status,
-    product_paths, remote_content_allowed, serve, sign_out_in_background, start_page, start_player,
-    start_studio, studio_root_for, tray_menu, user_agent,
+    LaunchGate, LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage,
+    NavDecision, OfflineReason, OneAtATime, PageOrigin, PlaceId, PlatformAuth, PlayLimiter,
+    PlayerWatcher, ProcessTracker, RestartError, SelfUpdater, SettingsPatch, SettingsStore,
+    SiteOrigin, SiteStatus, StartPage, TrayAction, UrlPolicy, check_site, downloads_dir_for,
+    github_sign_in, is_installed_copy, local_url, on_close_requested, platform_sign_in,
+    player_status, product_paths, remote_content_allowed, serve, sign_out_in_background,
+    start_page, start_player, start_studio, studio_root_for, tray_menu, user_agent,
 };
 use metallic_update::github_auth::{StoredTokenProvider, embedded_client_id};
 use metallic_update::{
@@ -144,6 +144,7 @@ impl BridgeHost for ShellHost {
         start_the_player(&link, &self.updater).map_err(|error| match error {
             LauncherError::NotInstalled(_) => BridgeErrorCode::NotInstalled,
             LauncherError::UpdateRequired => BridgeErrorCode::UpdateRequired,
+            LauncherError::Busy(_) => BridgeErrorCode::Busy,
             _ => BridgeErrorCode::Failed,
         })
     }
@@ -169,6 +170,7 @@ impl BridgeHost for ShellHost {
     fn open_studio(&self, place: Option<PlaceId>) -> Result<(), BridgeErrorCode> {
         start_the_studio(place).map_err(|error| match error {
             LauncherError::NotInstalled(_) => BridgeErrorCode::NotInstalled,
+            LauncherError::Busy(_) => BridgeErrorCode::Busy,
             _ => BridgeErrorCode::Failed,
         })
     }
@@ -269,10 +271,17 @@ impl BridgeHost for ShellHost {
     }
 }
 
+/// The limit on starting programs, for every path (links, the bridge, the tray).
+static LAUNCH_GATE: LazyLock<LaunchGate> =
+    LazyLock::new(|| LaunchGate::new(PlayLimiter::standard()));
+
 /// Starts the Player for a Play link and logs the outcome (never the link: it holds a ticket).
 /// Refused while a required Launcher update waits.
 fn start_the_player(link: &DeepLink, updater: &SelfUpdater) -> Result<(), LauncherError> {
     updater.allow_play()?;
+    LAUNCH_GATE
+        .permit()
+        .inspect_err(|_| log::info!("dropped a Player start: too many in a short time"))?;
     match start_player(&SystemSpawner, &product_paths(), link) {
         Ok(pid) => {
             log::info!("started the Player (process {pid})");
@@ -287,6 +296,9 @@ fn start_the_player(link: &DeepLink, updater: &SelfUpdater) -> Result<(), Launch
 
 /// Starts Metallic Studio. It does not take a place yet, so a place is ignored (and logged).
 fn start_the_studio(place: Option<PlaceId>) -> Result<(), LauncherError> {
+    LAUNCH_GATE
+        .permit()
+        .inspect_err(|_| log::info!("dropped a Studio start: too many in a short time"))?;
     if place.is_some() {
         log::info!("Studio does not take a place yet; the place is ignored");
     }
@@ -400,7 +412,6 @@ fn handle_deep_link(
     offline: bool,
     sink: &dyn EventSink,
     updater: &SelfUpdater,
-    play_limit: &mut PlayLimiter,
 ) {
     // The Install flow: show the window and the downloads page, or the local page when offline.
     let show_downloads = || {
@@ -415,11 +426,6 @@ fn handle_deep_link(
     };
     match &link {
         DeepLink::Play { .. } => {
-            // Links from the pipe, the protocol handler and the page can come in floods.
-            if !play_limit.allow() {
-                log::info!("dropped a Play link: too many in a short time");
-                return;
-            }
             match start_the_player(&link, updater) {
                 Err(LauncherError::NotInstalled(_)) => show_downloads(),
                 // The site shows the update state; bring the window up so the user sees it.
@@ -634,7 +640,14 @@ pub fn run(
     };
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
     let (studio_root, downloads) = match &local_app_data {
-        Some(base) => (studio_root_for(base), downloads_dir_for(base)),
+        Some(base) => {
+            if let Err(error) = metallic_launcher::data_dirs::create_owned(
+                &metallic_launcher::data_dirs::local_data_dir(base),
+            ) {
+                log::warn!("could not create the data folder: {error}");
+            }
+            (studio_root_for(base), downloads_dir_for(base))
+        }
         None => Default::default(),
     };
     let installer = Arc::new(Installer::new(
@@ -683,7 +696,8 @@ pub fn run(
         // `window.metallic`, for the main frame. (On Windows the script also reaches frames, so
         // bridge.js checks for that itself and the shell ignores messages from frames.)
         .with_initialization_script_for_main_only(bridge.init_script(), true)
-        .with_url(start_address);
+        // Nothing remote loads until the frame handler is registered (see below).
+        .with_url("about:blank");
 
     // The demo page is for developer mode only; in a normal run it does not exist.
     let dev_mode = config.dev_mode;
@@ -744,7 +758,7 @@ pub fn run(
         let exit_after_load = config.exit_after_load;
         let exit_started = Arc::new(AtomicBool::new(false));
         builder = builder.with_on_page_load_handler(move |event, url| {
-            if !matches!(event, PageLoadEvent::Finished) {
+            if !matches!(event, PageLoadEvent::Finished) || url == "about:blank" {
                 return;
             }
             if policy.origin_of(&url) == PageOrigin::Site {
@@ -786,9 +800,12 @@ pub fn run(
     if !platform::watch_frame_navigations(&view, policy.clone()) {
         // Iframes would go unchecked: show the bundled offline page and load nothing remote.
         shared.frames_policed.store(false, Ordering::SeqCst);
-        sink.send(AppEvent::ShowLocal(LocalPage::Offline(
-            OfflineReason::LoadFailed,
-        )));
+        let page = LocalPage::Offline(OfflineReason::LoadFailed);
+        load(&view, &shared, &local_address(&page), true);
+    } else {
+        // The view started on about:blank; the start page loads only now that frames are policed.
+        let offline = matches!(start, StartPage::Local(LocalPage::Offline(_)));
+        load(&view, &shared, &start_address, offline);
     }
 
     // Check the site in the background; a Down answer before the site has loaded shows the offline page.
@@ -821,7 +838,6 @@ pub fn run(
         });
     }
 
-    let mut play_limit = PlayLimiter::standard();
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
@@ -914,7 +930,6 @@ pub fn run(
                     shared.offline.load(Ordering::SeqCst),
                     sink.as_ref(),
                     &host.updater,
-                    &mut play_limit,
                 ),
                 AppEvent::BridgeMessage { page_url, body } => {
                     handle_bridge_message(&view, &bridge, &host, &page_url, &body);
