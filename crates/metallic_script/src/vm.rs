@@ -334,6 +334,13 @@ impl ScriptVm {
         &self.lua
     }
 
+    /// Sets how long one resume may run before it times out ([`RESUME_BUDGET`] by default).
+    /// The budget is wall-clock time, so test rigs on loaded machines raise it; tests of the
+    /// timeout itself keep the default.
+    pub fn set_resume_budget(&self, budget: Duration) {
+        self.sched.resume_budget.set(budget);
+    }
+
     /// Adds (or replaces) a global visible to every script of this VM, e.g. `game` or
     /// `Instance`. The library table is read-only to scripts; only the host can write it.
     pub fn set_global(&self, name: &str, value: impl mlua::IntoLua) -> Result<(), ScriptError> {

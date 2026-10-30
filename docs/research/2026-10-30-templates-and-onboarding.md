@@ -356,7 +356,7 @@ positional sound, `Sound` and `SoundService`), and should be planned before M3 s
 
 ### 6.3 Studio work (not in M1's plan)
 
-- **Game settings panel** reading `[[setting]]` from `template.toml` (README section 2).
+- **Game settings panel** reading `[[setting]]` from the copied `metallic.toml` project file (README sections 1.2 and 2).
 - **Look presets**: preset files, role tags, one-command apply, a look picker with thumbnails (README section 3).
 - **Tutorial runner** reading `tutorial.toml`, coach marks and completion checks (README section 5).
 - **Design notes** shown on selection (4.2).

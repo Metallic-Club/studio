@@ -25,6 +25,9 @@ impl OutputSink for Capture {
     }
 }
 
+/// Resume budget for rig tests that do not test the timeout.
+pub const TEST_RESUME_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub struct Rig {
     pub world: Rc<RefCell<World>>,
     pub host: ScriptHost,
@@ -35,7 +38,10 @@ impl Rig {
     pub fn new() -> Rig {
         let world = Rc::new(RefCell::new(World::new_with_services()));
         let out = Rc::new(Capture::default());
-        let host = ScriptHost::new(world.clone(), out.clone());
+        let mut host = ScriptHost::new(world.clone(), out.clone());
+        // The resume budget is wall-clock time; parallel debug tests on a small CI runner can be
+        // descheduled past 100 ms. Tests of the timeout itself set `RESUME_BUDGET` back.
+        host.set_resume_budget(TEST_RESUME_BUDGET);
         Rig { world, host, out }
     }
 

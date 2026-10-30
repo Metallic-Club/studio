@@ -22,6 +22,8 @@ All API tables are read-only.
 - Members: `Name`, `Parent`, `ClassName` (read-only), `FindFirstChild(name, recursive?)`, `WaitForChild(name, timeout?)`,
   `GetChildren()`, `GetDescendants()`, `IsA(class)`, `Destroy()`, `Clone()`, and every registry property of the class by name.
 - `instance.ChildName` finds a child. Unknown member: `<Name> is not a valid member of <ClassName>`.
+- Member keys must be strings; numeric keys are rejected. Invalid UTF-8 bytes in a string key keep the existing
+  replacement-character behavior for lookup and errors.
 - Wrong property type: `invalid value for property Position: expected Vector3, got number`. Numbers and vectors must be finite.
 - The same instance is always the same Lua object (`a == b`, usable as a table key).
 - A destroyed instance errors on use: `Brick has been destroyed`. Services cannot be destroyed, cloned or reparented.
@@ -36,6 +38,7 @@ print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,
   unary `-`, `==`.
+  Components retain the engine's f64 precision in userdata.
 - `Color3.fromRGB(r, g, b)`: `R G B` read as 0..1.
 - `UDim2.new(xs, xo, ys, yo)`: `X` and `Y` read as `{Scale, Offset}`.
 
@@ -96,6 +99,10 @@ remote:FireServer(5)
 ```
 
 ## Limits
+- Pattern matching: the 10 million charged-step complexity allowance applies separately to each starting-position
+  attempt. Deadline polling continues across attempts and substitutions; the script's 0.1 s execution budget still
+  applies to the complete call. A larger linear operation can therefore time out even when it passes the complexity
+  check. The separate 200-level matcher depth, 32-capture and 64 MB gsub-result limits are unchanged.
 - Remote: at most 32 arguments, 10,000 values (tables and leaves, shared tables counted per reference) and 1 MB of string bytes per
   call (`remote payload too large`); at most 1,000 messages and 16 MB queued per VM per step (`remote queue full`).
 - Signals: at most 10,000 connections per signal (`too many connections`). All handlers of a step share a 0.25 s budget per VM;

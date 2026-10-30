@@ -14,3 +14,9 @@ fn vs_main(v: ShadowIn) -> @builtin(position) vec4<f32> {
     let model = mat4x4<f32>(v.m0, v.m1, v.m2, v.m3);
     return light_vp * (model * vec4<f32>(v.pos, 1.0));
 }
+
+// Skinned meshes (skin_common.wgsl is prepended to this module).
+@vertex
+fn vs_skinned(v: SkinIn) -> @builtin(position) vec4<f32> {
+    return light_vp * (skin_matrix(v.joints, v.weights) * vec4<f32>(v.pos, 1.0));
+}
