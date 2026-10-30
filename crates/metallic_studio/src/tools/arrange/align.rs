@@ -3,11 +3,12 @@
 //! Both work on each object's bounding box along one axis of a frame: the world axes, or the
 //! active object's axes in Local space. Objects only translate along that axis.
 
-use metallic_core::{InstanceId, World};
+use glam::DMat3;
 
-use super::math::{Aabb, Axis, Mat3, Pose};
+use super::math::{Axis, Pose};
 use super::plan::{ArrangeError, Plan, describe};
-use super::scene::{Object, read_objects, selection_bounds_in};
+use super::scene::{Object, centre, selection_bounds_in};
+use crate::tools::geom::Aabb;
 
 /// Which edge of the bounding box lines up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,19 +80,19 @@ pub struct DistributeOptions {
 fn edge_of(b: &Aabb, axis: Axis, edge: Edge) -> f64 {
     match edge {
         Edge::Min => axis.of(b.min),
-        Edge::Centre => axis.of(b.centre()),
+        Edge::Centre => axis.of(centre(b)),
         Edge::Max => axis.of(b.max),
     }
 }
 
-fn frame_for(objects: &[Object], space: Space) -> Mat3 {
+fn frame_for(objects: &[Object], space: Space) -> DMat3 {
     match space {
-        Space::World => Mat3::IDENTITY,
-        Space::Local => objects.last().map_or(Mat3::IDENTITY, |o| o.pivot().rot),
+        Space::World => DMat3::IDENTITY,
+        Space::Local => objects.last().map_or(DMat3::IDENTITY, |o| o.pivot().rot),
     }
 }
 
-fn shift(plan: &mut Plan, object: &Object, frame: &Mat3, axis: Axis, delta: f64) {
+fn shift(plan: &mut Plan, object: &Object, frame: &DMat3, axis: Axis, delta: f64) {
     if delta.abs() <= 1e-12 {
         return;
     }
@@ -99,12 +100,12 @@ fn shift(plan: &mut Plan, object: &Object, frame: &Mat3, axis: Axis, delta: f64)
     plan.push_object(object, &object.transformed(&t));
 }
 
-/// Plans an align of the objects `ids` (the last is the active object).
+/// Plans an align of `objects` (the last is the active object; see
+/// [`read_objects`](super::scene::read_objects)).
 ///
 /// Errors: [`ArrangeError::NeedMore`] with fewer than 2 objects (Active, Selection) or none (Grid);
 /// [`ArrangeError::Invalid`] for a grid step that is not positive.
-pub fn align(world: &World, ids: &[InstanceId], opts: &AlignOptions) -> Result<Plan, ArrangeError> {
-    let objects = read_objects(world, ids)?;
+pub fn align(objects: &[Object], opts: &AlignOptions) -> Result<Plan, ArrangeError> {
     let needed = if matches!(opts.relative, RelativeTo::Grid(_)) {
         1
     } else {
@@ -116,7 +117,7 @@ pub fn align(world: &World, ids: &[InstanceId], opts: &AlignOptions) -> Result<P
             got: objects.len(),
         });
     }
-    let frame = frame_for(&objects, opts.space);
+    let frame = frame_for(objects, opts.space);
     let target = match opts.relative {
         RelativeTo::Active => Some(edge_of(
             &objects[objects.len() - 1].bounds_in(&frame),
@@ -124,7 +125,7 @@ pub fn align(world: &World, ids: &[InstanceId], opts: &AlignOptions) -> Result<P
             opts.edge,
         )),
         RelativeTo::Selection => Some(edge_of(
-            &selection_bounds_in(&objects, &frame),
+            &selection_bounds_in(objects, &frame),
             opts.axis,
             opts.edge,
         )),
@@ -136,12 +137,12 @@ pub fn align(world: &World, ids: &[InstanceId], opts: &AlignOptions) -> Result<P
         }
     };
     let mut plan = Plan {
-        label: format!("Align {}", describe(&objects)),
+        label: format!("Align {}", describe(objects)),
         ..Plan::default()
     };
     let movers = match opts.relative {
         RelativeTo::Active => &objects[..objects.len() - 1],
-        _ => &objects[..],
+        _ => objects,
     };
     for o in movers {
         let value = edge_of(&o.bounds_in(&frame), opts.axis, opts.edge);
@@ -155,16 +156,11 @@ pub fn align(world: &World, ids: &[InstanceId], opts: &AlignOptions) -> Result<P
     plan.check_finite()
 }
 
-/// Plans a distribute of the objects `ids` along one axis, ordered by their centres.
+/// Plans a distribute of `objects` along one axis, ordered by their centres.
 ///
 /// Errors: [`ArrangeError::NeedMore`] with fewer than 3 objects; [`ArrangeError::Invalid`] for a
 /// non-finite spacing or a negative centre spacing.
-pub fn distribute(
-    world: &World,
-    ids: &[InstanceId],
-    opts: &DistributeOptions,
-) -> Result<Plan, ArrangeError> {
-    let objects = read_objects(world, ids)?;
+pub fn distribute(objects: &[Object], opts: &DistributeOptions) -> Result<Plan, ArrangeError> {
     if objects.len() < 3 {
         return Err(ArrangeError::NeedMore {
             needed: 3,
@@ -178,25 +174,25 @@ pub fn distribute(
             "the spacing must be a finite number (centres: not negative)".into(),
         ));
     }
-    let frame = frame_for(&objects, opts.space);
+    let frame = frame_for(objects, opts.space);
     let axis = opts.axis;
     let mut items: Vec<(&Object, Aabb)> =
         objects.iter().map(|o| (o, o.bounds_in(&frame))).collect();
     // Stable sort keeps selection order for equal centres.
-    items.sort_by(|a, b| axis.of(a.1.centre()).total_cmp(&axis.of(b.1.centre())));
+    items.sort_by(|a, b| axis.of(centre(&a.1)).total_cmp(&axis.of(centre(&b.1))));
     let n = items.len();
     let mut plan = Plan {
-        label: format!("Distribute {}", describe(&objects)),
+        label: format!("Distribute {}", describe(objects)),
         ..Plan::default()
     };
     match opts.mode {
         DistributeMode::Centres => {
-            let first = axis.of(items[0].1.centre());
-            let last = axis.of(items[n - 1].1.centre());
+            let first = axis.of(centre(&items[0].1));
+            let last = axis.of(centre(&items[n - 1].1));
             let step = opts.spacing.unwrap_or((last - first) / (n - 1) as f64);
             for (i, (o, b)) in items.iter().enumerate() {
                 let goal = first + step * i as f64;
-                shift(&mut plan, o, &frame, axis, goal - axis.of(b.centre()));
+                shift(&mut plan, o, &frame, axis, goal - axis.of(centre(b)));
             }
         }
         DistributeMode::Gaps => {
@@ -242,8 +238,7 @@ mod tests {
             v(0.0, 0.0, 0.0),
         );
         let plan = align(
-            &w,
-            &[a, b, active],
+            &objs(&w, &[a, b, active]),
             &opts(Axis::X, Edge::Min, RelativeTo::Active),
         )
         .unwrap();
@@ -273,8 +268,7 @@ mod tests {
             v(0.0, 0.0, 0.0),
         );
         let plan = align(
-            &w,
-            &[r, active],
+            &objs(&w, &[r, active]),
             &opts(Axis::X, Edge::Max, RelativeTo::Active),
         )
         .unwrap();
@@ -295,8 +289,7 @@ mod tests {
             v(0.0, 0.0, 0.0),
         );
         let plan = align(
-            &w,
-            &[r, active],
+            &objs(&w, &[r, active]),
             &opts(Axis::X, Edge::Min, RelativeTo::Active),
         )
         .unwrap();
@@ -316,16 +309,14 @@ mod tests {
         );
         // Selection Y: -1 .. 12, centre 5.5.
         let plan = align(
-            &w,
-            &[a, b],
+            &objs(&w, &[a, b]),
             &opts(Axis::Y, Edge::Centre, RelativeTo::Selection),
         )
         .unwrap();
         assert_vec(pos_after(&plan, a), v(0.0, 5.5, 0.0));
         assert_vec(pos_after(&plan, b), v(0.0, 5.5, 0.0));
         let plan = align(
-            &w,
-            &[a, b],
+            &objs(&w, &[a, b]),
             &opts(Axis::Y, Edge::Max, RelativeTo::Selection),
         )
         .unwrap();
@@ -339,8 +330,7 @@ mod tests {
         let a = part(&mut w, v(0.3, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         let b = part(&mut w, v(3.9, 0.0, 0.0), v(3.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         let plan = align(
-            &w,
-            &[a, b],
+            &objs(&w, &[a, b]),
             &opts(Axis::X, Edge::Min, RelativeTo::Grid(1.0)),
         )
         .unwrap();
@@ -371,7 +361,7 @@ mod tests {
             relative: RelativeTo::Active,
             space: Space::Local,
         };
-        let plan = align(&w, &[a, active], &o).unwrap();
+        let plan = align(&objs(&w, &[a, active]), &o).unwrap();
         assert_vec(pos_after(&plan, a), v(0.0, 0.0, 10.0));
     }
 
@@ -393,8 +383,7 @@ mod tests {
         );
         // Selecting a child too must not move it twice.
         let plan = align(
-            &w,
-            &[m, kids[0], active],
+            &objs(&w, &[m, kids[0], active]),
             &opts(Axis::Y, Edge::Max, RelativeTo::Active),
         )
         .unwrap();
@@ -409,10 +398,19 @@ mod tests {
         let mut w = world();
         let a = part(&mut w, v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         assert!(matches!(
-            align(&w, &[a], &opts(Axis::X, Edge::Min, RelativeTo::Active)),
+            align(
+                &objs(&w, &[a]),
+                &opts(Axis::X, Edge::Min, RelativeTo::Active)
+            ),
             Err(ArrangeError::NeedMore { needed: 2, got: 1 })
         ));
-        assert!(align(&w, &[a], &opts(Axis::X, Edge::Min, RelativeTo::Grid(0.0))).is_err());
+        assert!(
+            align(
+                &objs(&w, &[a]),
+                &opts(Axis::X, Edge::Min, RelativeTo::Grid(0.0))
+            )
+            .is_err()
+        );
     }
 
     fn dist(axis: Axis, mode: DistributeMode, spacing: Option<f64>) -> DistributeOptions {
@@ -437,8 +435,7 @@ mod tests {
         let b = part(&mut w, v(1.0, 0.0, 0.0), v(5.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         let d = part(&mut w, v(2.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         let plan = distribute(
-            &w,
-            &[a, c, b, d],
+            &objs(&w, &[a, c, b, d]),
             &dist(Axis::X, DistributeMode::Centres, None),
         )
         .unwrap();
@@ -461,13 +458,16 @@ mod tests {
             v(2.0, 1.0, 1.0),
             v(0.0, 0.0, 0.0),
         );
-        let plan = distribute(&w, &[a, b, c], &dist(Axis::X, DistributeMode::Gaps, None)).unwrap();
+        let plan = distribute(
+            &objs(&w, &[a, b, c]),
+            &dist(Axis::X, DistributeMode::Gaps, None),
+        )
+        .unwrap();
         // b min = 1 + 7 = 8 -> centre 10.
         assert_vec(pos_after(&plan, b), v(10.0, 0.0, 0.0));
         assert!(plan.after(c, "Position").is_none());
         let plan = distribute(
-            &w,
-            &[a, b, c],
+            &objs(&w, &[a, b, c]),
             &dist(Axis::X, DistributeMode::Gaps, Some(0.5)),
         )
         .unwrap();
@@ -475,8 +475,7 @@ mod tests {
         assert_vec(pos_after(&plan, b), v(3.5, 0.0, 0.0));
         assert_vec(pos_after(&plan, c), v(7.0, 0.0, 0.0));
         let plan = distribute(
-            &w,
-            &[a, b, c],
+            &objs(&w, &[a, b, c]),
             &dist(Axis::X, DistributeMode::Centres, Some(3.0)),
         )
         .unwrap();
@@ -490,7 +489,10 @@ mod tests {
         let a = part(&mut w, v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         let b = part(&mut w, v(3.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         assert!(matches!(
-            distribute(&w, &[a, b], &dist(Axis::X, DistributeMode::Gaps, None)),
+            distribute(
+                &objs(&w, &[a, b]),
+                &dist(Axis::X, DistributeMode::Gaps, None)
+            ),
             Err(ArrangeError::NeedMore { needed: 3, got: 2 })
         ));
     }
@@ -501,7 +503,11 @@ mod tests {
         let a = part(&mut w, v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         let b = part(&mut w, v(3.0, 2.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         let cursor = w.change_cursor();
-        let plan = align(&w, &[a, b], &opts(Axis::Y, Edge::Min, RelativeTo::Active)).unwrap();
+        let plan = align(
+            &objs(&w, &[a, b]),
+            &opts(Axis::Y, Edge::Min, RelativeTo::Active),
+        )
+        .unwrap();
         assert!(!plan.is_empty());
         let (changes, _) = w.changes_since(cursor);
         assert_eq!(changes, metallic_core::Changes::Ids(Vec::new()));
@@ -515,11 +521,11 @@ mod tests {
         let c = part(&mut w, v(9.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
         for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let o = opts(Axis::X, Edge::Min, RelativeTo::Grid(x));
-            assert!(align(&w, &[a, b], &o).is_err(), "grid {x}");
+            assert!(align(&objs(&w, &[a, b]), &o).is_err(), "grid {x}");
             for mode in [DistributeMode::Centres, DistributeMode::Gaps] {
                 let o = dist(Axis::X, mode, Some(x));
                 assert!(
-                    distribute(&w, &[a, b, c], &o).is_err(),
+                    distribute(&objs(&w, &[a, b, c]), &o).is_err(),
                     "{mode:?} spacing {x}"
                 );
             }
@@ -527,12 +533,12 @@ mod tests {
         for mode in [DistributeMode::Centres, DistributeMode::Gaps] {
             let o = dist(Axis::X, mode, Some(f64::MAX));
             assert!(
-                distribute(&w, &[a, b, c], &o).is_err(),
+                distribute(&objs(&w, &[a, b, c]), &o).is_err(),
                 "{mode:?} huge spacing"
             );
         }
         // A tiny grid step is fine: the edges already sit on such a fine grid.
         let o = opts(Axis::X, Edge::Min, RelativeTo::Grid(1e-300));
-        assert!(align(&w, &[a, b], &o).is_ok());
+        assert!(align(&objs(&w, &[a, b]), &o).is_ok());
     }
 }

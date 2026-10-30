@@ -110,8 +110,9 @@ apps.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
-  `linear`, `radial`, `grid` and `along_path` arrays from `&World` plus selected ids and returns a `Plan` (property
-  changes with old and new values, planned copies, optional "Array" Model). It never writes the world; #10's
+  `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
+  `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
+  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; #10's
   `History` and #213's preview turn a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,

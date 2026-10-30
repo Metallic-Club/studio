@@ -6,7 +6,7 @@
 //! evaluated with the Barry-Goldman pyramid; the two ends get mirrored phantom points so the curve
 //! starts and ends exactly on the first and last picked points.
 
-use metallic_core::Vec3;
+use glam::DVec3;
 
 use super::math::EPS;
 use super::plan::ArrangeError;
@@ -19,7 +19,7 @@ const SAMPLES_PER_SEGMENT: usize = 128;
 #[derive(Debug, Clone)]
 pub struct PathCurve {
     /// Control points with one phantom point at each end.
-    ctrl: Vec<Vec3>,
+    ctrl: Vec<DVec3>,
     /// `(arc length, segment, u)` at each sample, arc length increasing.
     table: Vec<(f64, usize, f64)>,
 }
@@ -28,18 +28,15 @@ impl PathCurve {
     /// Builds the curve through `points`. Repeated consecutive points are dropped.
     ///
     /// Errors: [`ArrangeError::Invalid`] with fewer than two distinct points.
-    pub fn new(points: &[Vec3]) -> Result<PathCurve, ArrangeError> {
-        if points
-            .iter()
-            .any(|p| !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()))
-        {
+    pub fn new(points: &[DVec3]) -> Result<PathCurve, ArrangeError> {
+        if !points.iter().all(|p| p.is_finite()) {
             return Err(ArrangeError::Invalid(
                 "path points must be finite numbers".into(),
             ));
         }
-        let mut pts: Vec<Vec3> = Vec::with_capacity(points.len());
+        let mut pts: Vec<DVec3> = Vec::with_capacity(points.len());
         for &p in points {
-            if pts.last().is_none_or(|q: &Vec3| (p - *q).magnitude() > EPS) {
+            if pts.last().is_none_or(|q: &DVec3| (p - *q).length() > EPS) {
                 pts.push(p);
             }
         }
@@ -64,7 +61,7 @@ impl PathCurve {
             for i in 1..=SAMPLES_PER_SEGMENT {
                 let u = i as f64 / SAMPLES_PER_SEGMENT as f64;
                 let p = curve.eval(seg, u);
-                s += (p - prev).magnitude();
+                s += (p - prev).length();
                 prev = p;
                 curve.table.push((s, seg, u));
             }
@@ -81,20 +78,20 @@ impl PathCurve {
     }
 
     /// The point on segment `seg` at `u` in 0..=1 (u = 0 is picked point `seg`).
-    pub fn eval(&self, seg: usize, u: f64) -> Vec3 {
+    pub fn eval(&self, seg: usize, u: f64) -> DVec3 {
         let [p0, p1, p2, p3] = [
             self.ctrl[seg],
             self.ctrl[seg + 1],
             self.ctrl[seg + 2],
             self.ctrl[seg + 3],
         ];
-        let knot = |a: Vec3, b: Vec3| (b - a).magnitude().sqrt().max(EPS);
+        let knot = |a: DVec3, b: DVec3| (b - a).length().sqrt().max(EPS);
         let t0 = 0.0;
         let t1 = t0 + knot(p0, p1);
         let t2 = t1 + knot(p1, p2);
         let t3 = t2 + knot(p2, p3);
         let t = t1 + (t2 - t1) * u;
-        let lerp = |a: Vec3, b: Vec3, ta: f64, tb: f64| {
+        let lerp = |a: DVec3, b: DVec3, ta: f64, tb: f64| {
             a * ((tb - t) / (tb - ta)) + b * ((t - ta) / (tb - ta))
         };
         let a1 = lerp(p0, p1, t0, t1);
@@ -126,27 +123,27 @@ impl PathCurve {
     }
 
     /// The point at arc length `s`.
-    pub fn point_at(&self, s: f64) -> Vec3 {
+    pub fn point_at(&self, s: f64) -> DVec3 {
         let (seg, u) = self.locate(s);
         self.eval(seg, u)
     }
 
     /// The unit tangent at arc length `s`.
-    pub fn tangent_at(&self, s: f64) -> Vec3 {
+    pub fn tangent_at(&self, s: f64) -> DVec3 {
         let (seg, u) = self.locate(s);
         let h = 1e-4;
         let (a, b) = (
             self.eval(seg, (u - h).max(0.0)),
             self.eval(seg, (u + h).min(1.0)),
         );
-        (b - a).unit()
+        (b - a).normalize_or_zero()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::arrange::testing::v;
+    use crate::tools::arrange::testing::d as v;
 
     #[test]
     fn passes_through_every_point() {
@@ -158,18 +155,18 @@ mod tests {
         ];
         let c = PathCurve::new(&pts).unwrap();
         for (i, p) in pts.iter().enumerate().take(3) {
-            assert!((c.eval(i, 0.0) - *p).magnitude() < 1e-9);
+            assert!((c.eval(i, 0.0) - *p).length() < 1e-9);
         }
-        assert!((c.eval(2, 1.0) - pts[3]).magnitude() < 1e-9);
-        assert!((c.point_at(c.length()) - pts[3]).magnitude() < 1e-6);
+        assert!((c.eval(2, 1.0) - pts[3]).length() < 1e-9);
+        assert!((c.point_at(c.length()) - pts[3]).length() < 1e-6);
     }
 
     #[test]
     fn two_points_make_a_straight_line() {
         let c = PathCurve::new(&[v(0.0, 0.0, 0.0), v(0.0, 0.0, 8.0)]).unwrap();
         assert!((c.length() - 8.0).abs() < 1e-9);
-        assert!((c.point_at(2.0) - v(0.0, 0.0, 2.0)).magnitude() < 1e-9);
-        assert!((c.tangent_at(4.0) - v(0.0, 0.0, 1.0)).magnitude() < 1e-6);
+        assert!((c.point_at(2.0) - v(0.0, 0.0, 2.0)).length() < 1e-9);
+        assert!((c.tangent_at(4.0) - v(0.0, 0.0, 1.0)).length() < 1e-6);
     }
 
     #[test]

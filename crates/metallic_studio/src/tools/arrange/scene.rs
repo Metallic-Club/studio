@@ -1,14 +1,20 @@
-//! Reads the objects an arrange operation works on from a [`World`].
+//! The objects an arrange operation works on, built from [`PartSnapshot`]s.
+//!
+//! [`read_objects`] is the only function here that reads the world (through
+//! [`geom::snapshot`](crate::tools::geom::snapshot) plus `Shape`, the stored `Orientation` and the
+//! parent). Every operation then works on the returned [`Object`]s alone.
 //!
 //! A selected `BasePart` is one object. A selected `Model` (or `Folder`) is one object made of
 //! every `BasePart` below it; it moves as a rigid unit. An id whose ancestor is also selected is
 //! skipped, so selecting a Model and one of its parts moves the Model once. Ids of other classes
 //! (scripts, services) are ignored.
 
-use metallic_core::{InstanceId, Value, Vec3, World};
+use glam::{DMat3, DQuat, DVec3};
+use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 
-use super::math::{Aabb, Mat3, Pose, box_corners};
+use super::math::Pose;
 use super::plan::ArrangeError;
+use crate::tools::geom::{Aabb, PartSnapshot, box_corners, snapshot};
 
 /// The `Shape` property of a part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,61 +41,62 @@ impl Shape {
     }
 }
 
-/// One part's placement and size.
+/// One part: its snapshot plus what arrange needs beyond it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PartState {
-    /// The part.
-    pub id: InstanceId,
-    /// Centre and rotation.
-    pub pose: Pose,
-    /// `Size`.
-    pub size: Vec3,
+    /// Placement and size.
+    pub snap: PartSnapshot,
     /// `Shape`.
     pub shape: Shape,
-    /// The `Orientation` value as read from the world (kept so a planned change records the
-    /// exact value it replaces; not updated by [`PartState::transformed`]).
+    /// The `Orientation` value as stored, so a planned change records the exact value it
+    /// replaces. Not updated by [`PartState::transformed`].
     pub read_orientation: Vec3,
 }
 
 impl PartState {
-    /// Reads a part. Errors if `id` is not a live `BasePart`.
-    pub fn read(world: &World, id: InstanceId) -> Result<PartState, ArrangeError> {
-        let pos = vec3(world, id, "Position")?;
-        let orientation = vec3(world, id, "Orientation")?;
-        let size = vec3(world, id, "Size")?;
-        let shape = match world.get(id, "Shape")? {
-            Value::String(s) => Shape::from_name(&s),
-            _ => Shape::Block,
-        };
-        Ok(PartState {
-            id,
-            pose: Pose {
-                pos,
-                rot: Mat3::from_orientation(orientation),
-            },
-            size,
+    /// Builds a part from a snapshot. `read_orientation` is the stored `Orientation`.
+    pub fn new(snap: PartSnapshot, shape: Shape, read_orientation: Vec3) -> PartState {
+        PartState {
+            snap,
             shape,
-            read_orientation: orientation,
-        })
+            read_orientation,
+        }
+    }
+
+    /// The part's id.
+    pub fn id(&self) -> InstanceId {
+        self.snap.id
+    }
+
+    /// Centre and rotation matrix.
+    pub fn pose(&self) -> Pose {
+        Pose {
+            pos: self.snap.position,
+            rot: DMat3::from_quat(self.snap.rotation),
+        }
+    }
+
+    /// The same part with a new pose (`rot` must be a proper rotation).
+    pub fn with_pose(&self, pose: &Pose) -> PartState {
+        let mut out = *self;
+        out.snap.position = pose.pos;
+        out.snap.rotation = DQuat::from_mat3(&pose.rot).normalize();
+        out
     }
 
     /// The same part moved rigidly by `t` (applied after the current pose).
     pub fn transformed(&self, t: &Pose) -> PartState {
-        PartState {
-            pose: t.compose(&self.pose),
-            ..*self
-        }
+        self.with_pose(&t.compose(&self.pose()))
     }
 
-    /// The part's bounding box expressed in `frame` (coordinates along `frame`'s columns).
-    pub fn bounds_in(&self, frame: &Mat3) -> Aabb {
-        let to_frame = frame.transpose();
-        let corners = box_corners(&self.pose, self.size);
-        let mut b = Aabb::point(to_frame.apply(corners[0]));
-        for c in &corners[1..] {
-            b.include(to_frame.apply(*c));
+    /// The part's bounding box in `frame` (coordinates along `frame`'s columns).
+    pub fn bounds_in(&self, frame: &DMat3) -> Aabb {
+        if *frame == DMat3::IDENTITY {
+            return self.snap.aabb();
         }
-        b
+        let to_frame = frame.transpose();
+        let corners = box_corners(self.snap.position, self.snap.rotation, self.snap.size);
+        Aabb::from_points(corners.iter().map(|&c| to_frame * c)).unwrap_or_else(|| self.snap.aabb())
     }
 }
 
@@ -107,15 +114,17 @@ pub enum ObjectKind {
 pub struct Object {
     /// The selected instance.
     pub id: InstanceId,
+    /// Its parent (where copies go).
+    pub parent: Option<InstanceId>,
     /// Part or group.
     pub kind: ObjectKind,
-    /// The part itself, or every `BasePart` below the group in tree order.
+    /// The part itself, or every `BasePart` below the group in tree order. Never empty.
     pub parts: Vec<PartState>,
 }
 
 impl Object {
     /// The object's bounding box in `frame`.
-    pub fn bounds_in(&self, frame: &Mat3) -> Aabb {
+    pub fn bounds_in(&self, frame: &DMat3) -> Aabb {
         let mut b = self.parts[0].bounds_in(frame);
         for p in &self.parts[1..] {
             b = b.union(&p.bounds_in(frame));
@@ -125,15 +134,15 @@ impl Object {
 
     /// World bounding box.
     pub fn bounds(&self) -> Aabb {
-        self.bounds_in(&Mat3::IDENTITY)
+        self.bounds_in(&DMat3::IDENTITY)
     }
 
     /// The pivot: a part's own pose; a group's world bounding-box centre with no rotation (the
     /// engine has no `WorldPivot` property yet).
     pub fn pivot(&self) -> Pose {
         match self.kind {
-            ObjectKind::Part => self.parts[0].pose,
-            ObjectKind::Group => Pose::translation(self.bounds().centre()),
+            ObjectKind::Part => self.parts[0].pose(),
+            ObjectKind::Group => Pose::translation(centre(&self.bounds())),
         }
     }
 
@@ -143,49 +152,66 @@ impl Object {
     }
 }
 
+/// The centre of a box.
+pub fn centre(b: &Aabb) -> DVec3 {
+    (b.min + b.max) * 0.5
+}
+
 /// Reads the objects for `ids` in selection order (the last one is the active object).
 ///
-/// Errors: [`ArrangeError::Core`] for a destroyed id or unreadable part property.
+/// Errors: [`ArrangeError::Core`] for a destroyed id.
 pub fn read_objects(world: &World, ids: &[InstanceId]) -> Result<Vec<Object>, ArrangeError> {
     let mut out: Vec<Object> = Vec::new();
     for (i, &id) in ids.iter().enumerate() {
         if !world.is_alive(id) {
-            return Err(ArrangeError::Core(
-                metallic_core::CoreError::InvalidInstance,
-            ));
+            return Err(ArrangeError::Core(CoreError::InvalidInstance));
         }
         if ids[..i].contains(&id) || has_selected_ancestor(world, id, ids) {
             continue;
         }
-        if world.is_a(id, "BasePart") {
-            out.push(Object {
-                id,
-                kind: ObjectKind::Part,
-                parts: vec![PartState::read(world, id)?],
-            });
+        let (kind, part_ids) = if world.is_a(id, "BasePart") {
+            (ObjectKind::Part, vec![id])
         } else if world.is_a(id, "Model") || world.is_a(id, "Folder") {
-            let mut parts = Vec::new();
+            let mut found = Vec::new();
             let mut stack: Vec<InstanceId> = world.children(id).iter().rev().copied().collect();
             while let Some(cur) = stack.pop() {
                 if world.is_a(cur, "BasePart") {
-                    parts.push(PartState::read(world, cur)?);
+                    found.push(cur);
                 }
                 stack.extend(world.children(cur).iter().rev());
             }
-            if !parts.is_empty() {
-                out.push(Object {
-                    id,
-                    kind: ObjectKind::Group,
-                    parts,
-                });
-            }
+            (ObjectKind::Group, found)
+        } else {
+            continue;
+        };
+        let parts: Vec<PartState> = snapshot(world, &part_ids)
+            .into_iter()
+            .map(|snap| {
+                let shape = match world.get_ref(snap.id, "Shape") {
+                    Ok(Value::String(s)) => Shape::from_name(s),
+                    _ => Shape::Block,
+                };
+                let orientation = match world.get_ref(snap.id, "Orientation") {
+                    Ok(Value::Vector3(v)) => *v,
+                    _ => Vec3::default(),
+                };
+                PartState::new(snap, shape, orientation)
+            })
+            .collect();
+        if !parts.is_empty() {
+            out.push(Object {
+                id,
+                parent: world.parent(id),
+                kind,
+                parts,
+            });
         }
     }
     Ok(out)
 }
 
-/// The bounding box of all objects in `frame`.
-pub fn selection_bounds_in(objects: &[Object], frame: &Mat3) -> Aabb {
+/// The bounding box of all objects in `frame`. `objects` must not be empty.
+pub fn selection_bounds_in(objects: &[Object], frame: &DMat3) -> Aabb {
     let mut b = objects[0].bounds_in(frame);
     for o in &objects[1..] {
         b = b.union(&o.bounds_in(frame));
@@ -194,10 +220,10 @@ pub fn selection_bounds_in(objects: &[Object], frame: &Mat3) -> Aabb {
 }
 
 /// The selection's pivot point: one object's pivot, or the centre of several objects' bounds.
-pub fn selection_pivot(objects: &[Object]) -> Vec3 {
+pub fn selection_pivot(objects: &[Object]) -> DVec3 {
     match objects {
         [one] => one.pivot().pos,
-        _ => selection_bounds_in(objects, &Mat3::IDENTITY).centre(),
+        _ => centre(&selection_bounds_in(objects, &DMat3::IDENTITY)),
     }
 }
 
@@ -210,11 +236,4 @@ fn has_selected_ancestor(world: &World, id: InstanceId, ids: &[InstanceId]) -> b
         cur = world.parent(p);
     }
     false
-}
-
-fn vec3(world: &World, id: InstanceId, prop: &str) -> Result<Vec3, ArrangeError> {
-    match world.get(id, prop)? {
-        Value::Vector3(v) => Ok(v),
-        _ => Err(ArrangeError::Invalid(format!("{prop} is not a Vector3"))),
-    }
 }

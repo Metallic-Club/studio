@@ -1,11 +1,13 @@
 //! What an arrange operation returns: planned property changes and planned copies.
 //!
-//! A [`Plan`] never touches the world. Studio's editing layer (#10, #213) turns it into one undo
+//! Operations take [`Object`]s (built from `tools::geom::PartSnapshot`s by
+//! [`read_objects`](super::scene::read_objects)), so a [`Plan`] never touches the world. Studio's editing layer (#10, #213) turns it into one undo
 //! step on commit, and draws it as a preview (moved parts and ghost copies) while a popover is
 //! open. One plan is one gesture.
 
-use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
+use metallic_core::{CoreError, InstanceId, Value, Vec3};
 
+use super::math::{max_diff, orientation_of, to_core};
 use super::scene::{Object, ObjectKind, PartState};
 
 /// Why an operation could not be planned.
@@ -127,31 +129,31 @@ impl Plan {
     /// treated as unchanged so a no-op leaves no entry; a NaN counts as changed so
     /// [`Plan::check_finite`] rejects it.
     pub fn push_part(&mut self, before: &PartState, after: &PartState) {
-        debug_assert_eq!(before.id, after.id);
+        debug_assert_eq!(before.id(), after.id());
         let changed = |d: f64| d.is_nan() || d > 1e-12;
-        let moved = changed((after.pose.pos - before.pose.pos).magnitude());
-        if moved {
+        let (b, a) = (before.pose(), after.pose());
+        if changed((a.pos - b.pos).length()) {
             self.changes.push(PropertyChange {
-                id: before.id,
+                id: before.id(),
                 property: "Position",
-                before: Value::Vector3(before.pose.pos),
-                after: Value::Vector3(after.pose.pos),
+                before: Value::Vector3(to_core(b.pos)),
+                after: Value::Vector3(to_core(a.pos)),
             });
         }
-        if changed(after.pose.rot.max_diff(&before.pose.rot)) {
+        if changed(max_diff(&a.rot, &b.rot)) {
             self.changes.push(PropertyChange {
-                id: before.id,
+                id: before.id(),
                 property: "Orientation",
                 before: Value::Vector3(before.read_orientation),
-                after: Value::Vector3(after.pose.rot.to_orientation()),
+                after: Value::Vector3(orientation_of(&a.rot)),
             });
         }
-        if changed((after.size - before.size).magnitude()) {
+        if changed((after.snap.size - before.snap.size).length()) {
             self.changes.push(PropertyChange {
-                id: before.id,
+                id: before.id(),
                 property: "Size",
-                before: Value::Vector3(before.size),
-                after: Value::Vector3(after.size),
+                before: Value::Vector3(to_core(before.snap.size)),
+                after: Value::Vector3(to_core(after.snap.size)),
             });
         }
     }
@@ -164,19 +166,22 @@ impl Plan {
     }
 
     /// Adds a copy of `object` with its parts placed at `after` (same order).
-    pub fn push_copy(&mut self, world: &World, object: &Object, after: &[PartState]) {
+    pub fn push_copy(&mut self, object: &Object, after: &[PartState]) {
         self.copies.push(PlannedCopy {
             source: object.id,
-            parent: world.parent(object.id),
+            parent: object.parent,
             parts: object
                 .parts
                 .iter()
                 .zip(after)
-                .map(|(src, a)| CopiedPart {
-                    source_part: src.id,
-                    position: a.pose.pos,
-                    orientation: a.pose.rot.to_orientation(),
-                    size: a.size,
+                .map(|(src, a)| {
+                    let pose = a.pose();
+                    CopiedPart {
+                        source_part: src.id(),
+                        position: to_core(pose.pos),
+                        orientation: orientation_of(&pose.rot),
+                        size: to_core(a.snap.size),
+                    }
                 })
                 .collect(),
         });
