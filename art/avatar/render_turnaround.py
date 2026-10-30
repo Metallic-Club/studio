@@ -1,4 +1,5 @@
-"""Turnaround stills of the default avatar (Phase A), in grey clay and in the concept's toon look.
+"""Quick rest-pose turnaround of the unrigged mesh (iteration tool), in grey clay and in the concept's toon look.
+The committed v3 stills come from render_phaseB.py (rigged, fists) and owner_review.py.
 
 Two steps, one file:
   1. Render (inside Blender, EEVEE, low samples):
@@ -6,7 +7,7 @@ Two steps, one file:
      Builds the mesh with build_avatar.py, then writes transparent RGBA renders to art/avatar/out/raw/.
   2. Compose (plain Python 3 with Pillow and numpy):
        python art/avatar/render_turnaround.py --compose
-     Puts each raw render on its background into art/avatar/renders/phaseA/ and lays out the
+     Puts each raw render on its background into art/avatar/out/turnaround/ and lays out the
      contact sheets like the concept sheet.
 
 The camera orbits the figure; lights ride with the camera so every view is lit from the same screen
@@ -19,7 +20,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RAW = os.path.join(HERE, "out", "raw")
-OUT = os.path.join(HERE, "renders", "phaseA")
+OUT = os.path.join(HERE, "out", "turnaround")
 
 # name: (part groups or None for the whole body, target, ortho size, azimuth, elevation, (w, h)).
 # A target is a point, or (vertex group, offset) = the centre of that group's bounding box plus offset.
