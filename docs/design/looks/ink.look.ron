@@ -1,0 +1,45 @@
+// Ink: Moebius and sketchbook. Wobbly lines, tonal hatching, near-monochrome paper.
+(
+    format: "metallic.look",
+    version: 1,
+    id: "ink",
+    name: "Ink",
+    base: None,
+    dimension: ThreeD,
+    shading: (
+        default: Toon(bands: 3, softness: 0.05, shadow_tint: Rgb(255, 255, 255), flatten: 0.9, spec_size: 0.0, spec_strength: 0.0, rim_width: 0.0, rim_color: Rgb(255, 255, 255), light_step_ev: 0.0),
+        classes: {},
+        materials: {},
+    ),
+    lighting: (
+        preset: "Clear Day",
+        also_good: ["Overcast", "Golden Hour", "Horror Fog"],
+        style: Soft,
+        shadows: Tent,
+        softness_min: 0.0,
+        ambient_scale: 1.0,
+        ao: PatternOnly,
+        volumetrics: Off,
+    ),
+    exposure: (mode: Auto, compensation: 0.3),
+    tonemap: Neutral,
+    outlines: (
+        hull: Off,
+        edges: On(mode: All, width_px: 1.5, color: Rgb(30, 28, 34), strength: 1.0, depth_threshold: 0.04, normal_threshold: 0.25, highlight: 0.0, wobble_px: 0.6),
+    ),
+    hdr: [],
+    grade: (contrast: 0.1, saturation: -0.6, brightness: 0.0, tint: Rgb(255, 250, 240), lut: None, lut_strength: 0.0, vignette: 0.0),
+    ldr: [
+        Pattern(kind: Hatch, source: Luminance, from: 0.0, to: 0.6, cell_px: 4.0, angle: 45.0, ink: Rgb(30, 28, 34), strength: 0.8),
+        Pattern(kind: Hatch, source: Luminance, from: 0.0, to: 0.38, cell_px: 4.0, angle: -45.0, ink: Rgb(30, 28, 34), strength: 0.8),
+        Pattern(kind: Hatch, source: Luminance, from: 0.0, to: 0.18, cell_px: 4.0, angle: 0.0, ink: Rgb(30, 28, 34), strength: 0.8),
+        Paper(texture: Fibre, strength: 0.35, tint: Rgb(242, 236, 222)),
+    ],
+    palette: Off,
+    render: (scale: Relative(1.0), upscale: Bilinear, snap: Off, subpixel: false, aa: Msaa4, detail_texels_per_stud: 0),
+    output: [],
+    fog: (mode: Height, density_scale: 0.5, color: Rgb(242, 236, 222)),
+    tiers: {
+        Low: (aa: Some(Fxaa)),
+    },
+)
