@@ -226,10 +226,19 @@ pub fn all_properties(class: &str) -> Vec<&'static PropDef> {
 }
 
 /// Finds a property (own or inherited) of a class.
+///
+/// Runs on every property read and write, so it walks the class chain without allocating.
+/// No class redeclares an inherited property (a test checks this), so the search order does
+/// not change the result.
 pub fn find_property(class: &str, property: &str) -> Option<&'static PropDef> {
-    all_properties(class)
-        .into_iter()
-        .find(|d| d.name == property)
+    let mut cur = class_def(class);
+    while let Some(c) = cur {
+        if let Some(d) = c.props.iter().find(|d| d.name == property) {
+            return Some(d);
+        }
+        cur = c.superclass.and_then(class_def);
+    }
+    None
 }
 
 /// The default value of a property; `Name` defaults to the class name.
@@ -238,4 +247,20 @@ pub fn default_value(class: &str, property: &str) -> Option<Value> {
         return class_def(class).map(|c| Value::String(c.name.to_string()));
     }
     find_property(class, property).map(|d| (d.default)())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_class_redeclares_an_inherited_property() {
+        for c in CLASSES {
+            let names: Vec<&str> = all_properties(c.name).iter().map(|d| d.name).collect();
+            let mut unique = names.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(names.len(), unique.len(), "class {} repeats a property", c.name);
+        }
+    }
 }
