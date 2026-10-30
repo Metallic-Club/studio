@@ -542,6 +542,7 @@ fn events_not_sent_to_other_origins() {
         BridgeEvent::SignIn {
             state: "pending".to_string(),
             user_code: Some("ABCD-EFGH".to_string()),
+            verification_uri: None,
         },
     ] {
         for page in [
@@ -591,14 +592,16 @@ fn events_have_the_names_and_fields_the_site_reads() {
     assert_eq!(
         to_json(BridgeEvent::SignIn {
             state: "pending".to_string(),
-            user_code: Some("ABCD-EFGH".to_string())
+            user_code: Some("ABCD-EFGH".to_string()),
+            verification_uri: None
         }),
         json!({"event": "signIn", "state": "pending", "userCode": "ABCD-EFGH"})
     );
     assert_eq!(
         to_json(BridgeEvent::SignIn {
             state: "signedIn".to_string(),
-            user_code: None
+            user_code: None,
+            verification_uri: None
         }),
         json!({"event": "signIn", "state": "signedIn"})
     );
@@ -619,6 +622,7 @@ fn only_the_five_sign_in_states_are_sent() {
         let event = BridgeEvent::SignIn {
             state: state.to_string(),
             user_code: None,
+            verification_uri: None,
         };
         assert!(bridge.event_script(&event, SITE).is_some(), "{state}");
     }
@@ -626,6 +630,7 @@ fn only_the_five_sign_in_states_are_sent() {
         let event = BridgeEvent::SignIn {
             state: state.to_string(),
             user_code: None,
+            verification_uri: None,
         };
         assert!(bridge.event_script(&event, SITE).is_none(), "{state}");
     }

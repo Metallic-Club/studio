@@ -4,21 +4,24 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use metallic_launcher::platform_auth::{CLIENT_ID, DeviceCode, SCOPES};
 use metallic_launcher::{
-    AppEvent, BridgeEvent, EventSink, LauncherError, OneAtATime, PlatformAuth, SiteOrigin,
-    platform_sign_in,
+    AppEvent, BridgeEvent, EventSink, OneAtATime, PlatformAuth, SiteOrigin, platform_sign_in,
+    sign_out_in_background,
 };
 use metallic_update::{
-    AuthError, HttpClient, HttpError, HttpResponse, MemorySecretStore, SecretStore, UreqClient,
+    AuthError, HttpClient, HttpError, HttpResponse, MAX_SECRET_BYTES, MemorySecretStore,
+    SecretStore, UreqClient,
 };
 use url::Url;
 
 const SITE: &str = "https://metallic.example";
+const PENDING_LINE: &str = "signIn pending ABCD-1234 https://metallic.example/device";
 
 /// A cancel flag that is never set.
 fn never() -> AtomicBool {
@@ -27,6 +30,19 @@ fn never() -> AtomicBool {
 
 /// One recorded request: url, headers, form body.
 type Recorded = (String, Vec<(String, String)>, String);
+
+fn record(log: &Mutex<Vec<Recorded>>, url: &str, headers: &[(&str, &str)], form: &[(&str, &str)]) {
+    let headers = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let body = form
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    log.lock().unwrap().push((url.to_string(), headers, body));
+}
 
 /// A scripted HTTP client: one canned answer per call, every request recorded.
 #[derive(Default)]
@@ -45,6 +61,12 @@ impl MockHttp {
     fn requests(&self) -> Vec<Recorded> {
         self.requests.lock().unwrap().clone()
     }
+    fn count(&self, path: &str) -> usize {
+        self.requests()
+            .iter()
+            .filter(|r| r.0.ends_with(path))
+            .count()
+    }
 }
 
 impl HttpClient for MockHttp {
@@ -57,19 +79,7 @@ impl HttpClient for MockHttp {
         headers: &[(&str, &str)],
         form: &[(&str, &str)],
     ) -> Result<HttpResponse, HttpError> {
-        let headers = headers
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        let body = form
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("&");
-        self.requests
-            .lock()
-            .unwrap()
-            .push((url.to_string(), headers, body));
+        record(&self.requests, url, headers, form);
         self.answers
             .lock()
             .unwrap()
@@ -117,19 +127,25 @@ fn code_for(auth: &PlatformAuth, http: &MockHttp, body: String) -> DeviceCode {
     auth.start().unwrap()
 }
 
-fn future(seconds: u64) -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        + seconds
+/// Puts a refresh token into the store the way the Launcher keeps it.
+fn stored_refresh(store: &MemorySecretStore, token: &str) {
+    store
+        .set_secret(format!(r#"{{"version":1,"refresh_token":"{token}"}}"#).as_bytes())
+        .unwrap();
 }
 
-fn session(access: &str, refresh: &str, expires_in: u64) -> String {
+fn tokens(access: &str, refresh: &str, expires_in: u64) -> String {
     format!(
-        r#"{{"access_token":"{access}","refresh_token":"{refresh}","expires_at":{}}}"#,
-        future(expires_in)
+        r#"{{"access_token":"{access}","refresh_token":"{refresh}","expires_in":{expires_in}}}"#
     )
+}
+
+/// What the store holds, as text.
+fn raw(store: &MemorySecretStore) -> Option<String> {
+    store
+        .get_secret()
+        .unwrap()
+        .map(|b| String::from_utf8(b).unwrap())
 }
 
 #[test]
@@ -141,7 +157,7 @@ fn device_flow_happy_path() {
             900,
         )),
         ok(r#"{"error":"authorization_pending"}"#),
-        ok(r#"{"access_token":"at-1","refresh_token":"rt-1","expires_in":3600}"#),
+        ok(&tokens("at-1", "rt-1", 3600)),
     ]);
     let store = Arc::new(MemorySecretStore::default());
     let (auth, waits) = auth_with(http.clone(), store.clone());
@@ -172,9 +188,22 @@ fn device_flow_happy_path() {
     assert_eq!(
         auth.access_token().unwrap().unwrap().expose(),
         "at-1",
-        "the new session is stored and read back"
+        "the access token is kept in memory"
     );
-    assert!(store.get().unwrap().unwrap().contains("rt-1"));
+    // Only the refresh token is stored; the access token stays in memory.
+    let stored = raw(&store).unwrap();
+    assert!(stored.contains("rt-1") && !stored.contains("at-1"));
+}
+
+#[test]
+fn a_missing_interval_means_five_seconds() {
+    let body = r#"{"device_code":"dc","user_code":"ABCD-1234","verification_uri":"https://metallic.example/device","expires_in":900}"#;
+    let http = MockHttp::with(vec![ok(r#"{"access_token":"at","expires_in":3600}"#)]);
+    let (auth, waits) = auth_with(http.clone(), Arc::new(MemorySecretStore::default()));
+    let code = code_for(&auth, &http, body.to_string());
+    assert_eq!(code.interval, 5);
+    auth.poll_until_done(&code, &never()).unwrap();
+    assert_eq!(*waits.lock().unwrap(), [5]);
 }
 
 #[test]
@@ -190,6 +219,15 @@ fn oauth_errors_may_arrive_as_http_400() {
         Err(AuthError::Denied)
     ));
     assert_eq!(http.requests().len(), 3, "start, pending, denied");
+}
+
+#[test]
+fn an_error_code_with_odd_characters_is_not_passed_on() {
+    let http = MockHttp::with(vec![ok("{\"error\":\"bad\\nINJECTED line\"}")]);
+    let (auth, _) = auth_with(http.clone(), Arc::new(MemorySecretStore::default()));
+    let code = code_for(&auth, &http, device_code("", 1, 900));
+    let error = auth.poll_until_done(&code, &never()).unwrap_err();
+    assert_eq!(format!("{error}"), "sign-in failed: unknown");
 }
 
 #[test]
@@ -265,7 +303,7 @@ fn denied_reports_denied() {
         auth.poll_until_done(&code, &never()),
         Err(AuthError::Denied)
     ));
-    assert!(store.get().unwrap().is_none());
+    assert!(store.get_secret().unwrap().is_none());
 }
 
 #[test]
@@ -282,44 +320,238 @@ fn cancel_stops_the_poll() {
 }
 
 #[test]
+fn a_token_over_256_bytes_is_refused() {
+    let long = "m".repeat(257);
+    let store = Arc::new(MemorySecretStore::default());
+    let http = MockHttp::with(vec![ok(&tokens(&long, "rt", 3600))]);
+    let (auth, _) = auth_with(http.clone(), store.clone());
+    let code = code_for(&auth, &http, device_code("", 1, 900));
+    assert!(matches!(
+        auth.poll_until_done(&code, &never()),
+        Err(AuthError::TokenTooLong)
+    ));
+    assert!(store.get_secret().unwrap().is_none());
+    // The same for a refresh token, and for the answer to a refresh.
+    let http = MockHttp::with(vec![ok(&tokens("at", &long, 3600))]);
+    let (auth, _) = auth_with(http.clone(), Arc::new(MemorySecretStore::default()));
+    let code = code_for(&auth, &http, device_code("", 1, 900));
+    assert!(matches!(
+        auth.poll_until_done(&code, &never()),
+        Err(AuthError::TokenTooLong)
+    ));
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt");
+    let (auth, _) = auth_with(MockHttp::with(vec![ok(&tokens(&long, "rt2", 3600))]), store);
+    assert!(matches!(auth.access_token(), Err(AuthError::TokenTooLong)));
+}
+
+/// A credential store that is always too small.
+struct FullStore;
+
+impl SecretStore for FullStore {
+    fn get(&self) -> Result<Option<String>, AuthError> {
+        Ok(None)
+    }
+    fn set(&self, _: &str) -> Result<(), AuthError> {
+        Err(AuthError::TooLarge)
+    }
+    fn delete(&self) -> Result<(), AuthError> {
+        Ok(())
+    }
+    fn set_secret(&self, _: &[u8]) -> Result<(), AuthError> {
+        Err(AuthError::TooLarge)
+    }
+}
+
+#[test]
+fn a_session_that_does_not_fit_is_a_typed_error_and_the_new_token_is_revoked() {
+    let http = MockHttp::with(vec![ok(&tokens("at", "rt-big", 3600))]);
+    let waits = Arc::new(Mutex::new(Vec::new()));
+    let recorded = waits.clone();
+    let auth = PlatformAuth::new(site(), http.clone(), Arc::new(FullStore))
+        .with_sleeper(move |d: Duration| recorded.lock().unwrap().push(d.as_secs()));
+    let code = code_for(&auth, &http, device_code("", 1, 900));
+    assert!(matches!(
+        auth.poll_until_done(&code, &never()),
+        Err(AuthError::TooLarge)
+    ));
+    assert!(
+        http.requests()
+            .iter()
+            .any(|r| r.0.ends_with("/revoke") && r.2.contains("token=rt-big"))
+    );
+}
+
+#[test]
+fn the_memory_store_has_the_credential_manager_limit() {
+    let store = MemorySecretStore::default();
+    assert_eq!(MAX_SECRET_BYTES, 2560);
+    store.set_secret(&vec![b'x'; MAX_SECRET_BYTES]).unwrap();
+    assert!(matches!(
+        store.set_secret(&vec![b'x'; MAX_SECRET_BYTES + 1]),
+        Err(AuthError::TooLarge)
+    ));
+    // Text is stored as UTF-16 on Windows: two bytes a character.
+    store.set(&"x".repeat(MAX_SECRET_BYTES / 2)).unwrap();
+    assert!(matches!(
+        store.set(&"x".repeat(MAX_SECRET_BYTES / 2 + 1)),
+        Err(AuthError::TooLarge)
+    ));
+}
+
+#[test]
 fn refresh_rotates_and_stores_new_token() {
     let store = Arc::new(MemorySecretStore::default());
-    store.set(&session("old-at", "old-rt", 10)).unwrap();
-    let http = MockHttp::with(vec![ok(
-        r#"{"access_token":"new-at","refresh_token":"new-rt","expires_in":3600}"#,
-    )]);
+    stored_refresh(&store, "old-rt");
+    let http = MockHttp::with(vec![ok(&tokens("new-at", "new-rt", 3600))]);
     let (auth, _) = auth_with(http.clone(), store.clone());
+    // After a restart only the refresh token is there, so the first use refreshes.
     assert_eq!(auth.access_token().unwrap().unwrap().expose(), "new-at");
 
     let requests = http.requests();
     assert!(requests[0].2.contains("grant_type=refresh_token"));
     assert!(requests[0].2.contains("refresh_token=old-rt"));
-    let raw = store.get().unwrap().unwrap();
-    assert!(raw.contains("new-rt") && !raw.contains("old-rt"));
+    let stored = raw(&store).unwrap();
+    assert!(stored.contains("new-rt") && !stored.contains("old-rt") && !stored.contains("new-at"));
     // A fresh token is not refreshed again.
     assert_eq!(auth.access_token().unwrap().unwrap().expose(), "new-at");
     assert_eq!(http.requests().len(), 1);
 }
 
 #[test]
-fn a_token_with_time_left_is_used_without_a_request() {
+fn a_refresh_that_does_not_rotate_keeps_the_old_refresh_token() {
     let store = Arc::new(MemorySecretStore::default());
-    store.set(&session("at", "rt", 3600)).unwrap();
-    let http = MockHttp::with(vec![]);
-    let (auth, _) = auth_with(http.clone(), store);
-    assert_eq!(auth.access_token().unwrap().unwrap().expose(), "at");
-    assert!(http.requests().is_empty());
+    stored_refresh(&store, "keep-rt");
+    let http = MockHttp::with(vec![ok(r#"{"access_token":"at","expires_in":3600}"#)]);
+    let (auth, _) = auth_with(http, store.clone());
+    assert!(auth.access_token().unwrap().is_some());
+    assert!(raw(&store).unwrap().contains("keep-rt"));
+}
+
+#[test]
+fn a_token_with_time_left_is_used_without_a_request() {
+    let http = MockHttp::with(vec![
+        ok(&device_code("", 1, 900)),
+        ok(&tokens("at-1", "rt-1", 3600)),
+    ]);
+    let (auth, _) = auth_with(http.clone(), Arc::new(MemorySecretStore::default()));
+    let code = auth.start().unwrap();
+    auth.poll_until_done(&code, &never()).unwrap();
+    assert_eq!(auth.access_token().unwrap().unwrap().expose(), "at-1");
+    assert_eq!(http.requests().len(), 2, "no refresh request");
 }
 
 #[test]
 fn invalid_grant_clears_session() {
     let store = Arc::new(MemorySecretStore::default());
-    store.set(&session("old-at", "old-rt", 1)).unwrap();
+    stored_refresh(&store, "old-rt");
     // As HTTP 400, the usual shape for an OAuth error.
     let http = MockHttp::with(vec![reply(400, r#"{"error":"invalid_grant"}"#)]);
     let (auth, _) = auth_with(http, store.clone());
     assert!(auth.access_token().unwrap().is_none());
-    assert!(store.get().unwrap().is_none());
+    assert!(store.get_secret().unwrap().is_none());
+}
+
+#[test]
+fn a_lost_refresh_answer_is_retried_once_with_the_same_token() {
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt-a");
+    let http = MockHttp::with(vec![
+        Err(HttpError::new("reset")),
+        ok(&tokens("at", "rt-b", 3600)),
+    ]);
+    let (auth, _) = auth_with(http.clone(), store.clone());
+    assert!(auth.access_token().unwrap().is_some());
+    let requests = http.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|r| r.2.contains("refresh_token=rt-a")));
+    assert!(raw(&store).unwrap().contains("rt-b"));
+
+    // Two lost answers in a row: an error, and no third try.
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt-a");
+    let http = MockHttp::with(vec![Err(HttpError::new("x")), Err(HttpError::new("y"))]);
+    let (auth, _) = auth_with(http.clone(), store.clone());
+    assert!(auth.access_token().is_err());
+    assert_eq!(http.requests().len(), 2);
+    assert!(raw(&store).unwrap().contains("rt-a"), "still stored");
+
+    // The retry finds the token spent (the first request had got through): signed out.
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt-a");
+    let http = MockHttp::with(vec![
+        Err(HttpError::new("x")),
+        reply(400, r#"{"error":"invalid_grant"}"#),
+    ]);
+    let (auth, _) = auth_with(http, store.clone());
+    assert!(auth.access_token().unwrap().is_none());
+    assert!(store.get_secret().unwrap().is_none());
+}
+
+#[test]
+fn an_answered_refresh_is_never_repeated_with_the_old_token() {
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt-a");
+    let http = MockHttp::with(vec![reply(400, r#"{"error":"server_error"}"#)]);
+    let (auth, _) = auth_with(http.clone(), store);
+    assert!(matches!(auth.access_token(), Err(AuthError::Provider(_))));
+    assert_eq!(http.requests().len(), 1);
+}
+
+/// A platform that is slow to refresh, and counts the refresh requests.
+struct SlowRefresh(AtomicUsize);
+
+impl HttpClient for SlowRefresh {
+    fn get(&self, _: &str, _: &[(&str, &str)]) -> Result<HttpResponse, HttpError> {
+        Err(HttpError::new("no"))
+    }
+    fn post_form(
+        &self,
+        _: &str,
+        _: &[(&str, &str)],
+        _: &[(&str, &str)],
+    ) -> Result<HttpResponse, HttpError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(200));
+        ok(&tokens("at-shared", "rt-new", 3600))
+    }
+}
+
+#[test]
+fn concurrent_refreshes_make_one_request() {
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt-old");
+    let http = Arc::new(SlowRefresh(AtomicUsize::new(0)));
+    let auth = Arc::new(PlatformAuth::new(site(), http.clone(), store.clone()));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let auth = auth.clone();
+            std::thread::spawn(move || auth.access_token().unwrap().unwrap().expose().to_string())
+        })
+        .collect();
+    for handle in handles {
+        assert_eq!(handle.join().unwrap(), "at-shared");
+    }
+    assert_eq!(http.0.load(Ordering::SeqCst), 1, "one refresh, not two");
+    assert!(raw(&store).unwrap().contains("rt-new"));
+}
+
+#[test]
+fn a_new_device_flow_revokes_the_session_it_replaces() {
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "old-rt");
+    let http = MockHttp::with(vec![ok(&tokens("at", "new-rt", 3600)), ok("{}")]);
+    let (auth, _) = auth_with(http.clone(), store.clone());
+    let code = code_for(&auth, &http, device_code("", 1, 900));
+    auth.poll_until_done(&code, &never()).unwrap();
+    let revoke: Vec<_> = http
+        .requests()
+        .into_iter()
+        .filter(|r| r.0.ends_with("/revoke"))
+        .collect();
+    assert_eq!(revoke.len(), 1);
+    assert!(revoke[0].2.contains("token=old-rt"));
+    assert!(raw(&store).unwrap().contains("new-rt"));
 }
 
 #[test]
@@ -336,19 +568,20 @@ fn web_session_code_requires_signed_in() {
 #[test]
 fn web_session_code_is_asked_with_the_bearer_and_builds_the_handoff_address() {
     let store = Arc::new(MemorySecretStore::default());
-    store.set(&session("at-9", "rt", 3600)).unwrap();
-    let http = MockHttp::with(vec![ok(
-        r#"{"code":"wsc_AbC123-x","expiresAt":"2026-10-30T10:00:00Z"}"#,
-    )]);
+    stored_refresh(&store, "rt");
+    let http = MockHttp::with(vec![
+        ok(&tokens("at-9", "rt-2", 3600)),
+        ok(r#"{"code":"wsc_AbC123-x","expiresAt":"2026-10-30T10:00:00Z"}"#),
+    ]);
     let (auth, _) = auth_with(http.clone(), store);
     let code = auth.web_session_code().unwrap();
     let requests = http.requests();
     assert_eq!(
-        requests[0].0,
+        requests[1].0,
         "https://metallic.example/v1/oauth/web-session"
     );
     assert!(
-        requests[0]
+        requests[1]
             .1
             .contains(&("Authorization".to_string(), "Bearer at-9".to_string()))
     );
@@ -360,6 +593,36 @@ fn web_session_code_is_asked_with_the_bearer_and_builds_the_handoff_address() {
 }
 
 #[test]
+fn the_web_session_request_is_made_three_times_at_most() {
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt");
+    let http = MockHttp::with(vec![
+        ok(&tokens("at", "rt-2", 3600)),
+        reply(503, ""),
+        Err(HttpError::new("reset")),
+        ok(r#"{"code":"wsc_ok","expiresAt":"x"}"#),
+    ]);
+    let (auth, waits) = auth_with(http.clone(), store.clone());
+    assert!(auth.web_session_code().is_ok());
+    assert_eq!(http.count("/web-session"), 3);
+    assert_eq!(*waits.lock().unwrap(), [1, 2]);
+
+    let http = MockHttp::with(vec![
+        ok(&tokens("at", "rt-2", 3600)),
+        reply(503, ""),
+        reply(503, ""),
+        reply(503, ""),
+        ok(r#"{"code":"wsc_late","expiresAt":"x"}"#),
+    ]);
+    let (auth, _) = auth_with(http.clone(), store);
+    assert!(matches!(
+        auth.web_session_code(),
+        Err(AuthError::Network(_))
+    ));
+    assert_eq!(http.count("/web-session"), 3);
+}
+
+#[test]
 fn a_web_session_code_with_a_strange_shape_is_refused() {
     for bad in [
         r#"{"code":""}"#,
@@ -368,8 +631,9 @@ fn a_web_session_code_with_a_strange_shape_is_refused() {
         "{}",
     ] {
         let store = Arc::new(MemorySecretStore::default());
-        store.set(&session("at", "rt", 3600)).unwrap();
-        let (auth, _) = auth_with(MockHttp::with(vec![ok(bad)]), store);
+        stored_refresh(&store, "rt");
+        let http = MockHttp::with(vec![ok(&tokens("at", "rt-2", 3600)), ok(bad)]);
+        let (auth, _) = auth_with(http, store);
         assert!(auth.web_session_code().is_err(), "{bad}");
     }
 }
@@ -392,7 +656,7 @@ fn verification_uri_off_site_is_not_opened() {
             "{uri}"
         );
     }
-    // Through the bridge entry point: nothing is opened, nothing is polled, an error comes back.
+    // Through the bridge entry point: nothing is opened, nothing is polled, `failed` comes back.
     let http = MockHttp::with(vec![ok(&device_code(
         r#","verification_uri_complete":"https://evil.test/device""#,
         1,
@@ -402,41 +666,63 @@ fn verification_uri_off_site_is_not_opened() {
     let opened = Arc::new(Mutex::new(0));
     let counter = opened.clone();
     let events = Arc::new(Events::default());
-    let result = platform_sign_in(
+    platform_sign_in(
         Arc::new(auth),
         events.clone(),
         Arc::new(move |_| *counter.lock().unwrap() += 1),
         &OneAtATime::new(),
-    );
-    assert!(result.is_err());
+    )
+    .unwrap();
+    events.wait_for("signIn failed ");
     assert_eq!(*opened.lock().unwrap(), 0);
-    assert!(events.all().is_empty());
+    assert!(
+        events
+            .all()
+            .iter()
+            .all(|l| !l.starts_with("signIn pending"))
+    );
     assert_eq!(http.requests().len(), 1, "no poll after a refused address");
 }
 
 #[test]
 fn sign_out_revokes_then_deletes_even_when_revoke_fails() {
     let store = Arc::new(MemorySecretStore::default());
-    store
-        .set(r#"{"access_token":"at","refresh_token":"rt-77"}"#)
-        .unwrap();
+    stored_refresh(&store, "rt-77");
     let http = MockHttp::with(vec![ok("{}")]);
     let (auth, _) = auth_with(http.clone(), store.clone());
     auth.sign_out().unwrap();
     let requests = http.requests();
     assert_eq!(requests[0].0, "https://metallic.example/v1/oauth/revoke");
     assert!(requests[0].2.contains("token=rt-77"));
-    assert!(store.get().unwrap().is_none());
+    assert!(store.get_secret().unwrap().is_none());
 
-    store
-        .set(r#"{"access_token":"at","refresh_token":"rt-77"}"#)
-        .unwrap();
+    stored_refresh(&store, "rt-77");
     let (auth, _) = auth_with(
         MockHttp::with(vec![Err(HttpError::new("down"))]),
         store.clone(),
     );
     auth.sign_out().unwrap();
-    assert!(store.get().unwrap().is_none());
+    assert!(store.get_secret().unwrap().is_none());
+}
+
+#[test]
+fn background_sign_out_forgets_at_once_and_revokes_on_a_worker() {
+    let store = Arc::new(MemorySecretStore::default());
+    stored_refresh(&store, "rt-bg");
+    let http = MockHttp::with(vec![ok("{}")]);
+    let (auth, _) = auth_with(http.clone(), store.clone());
+    sign_out_in_background(Arc::new(auth), &OneAtATime::new()).unwrap();
+    assert!(
+        store.get_secret().unwrap().is_none(),
+        "gone before the call returned"
+    );
+    for _ in 0..100 {
+        if http.count("/revoke") == 1 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("the revoke never ran");
 }
 
 // ---- the bridge entry point ------------------------------------------------------------------
@@ -461,13 +747,25 @@ impl Events {
         }
         panic!("never saw {text:?}; saw {:?}", self.all());
     }
+    fn handoffs(&self) -> Vec<String> {
+        self.handoffs.lock().unwrap().clone()
+    }
 }
 
 impl EventSink for Events {
     fn send(&self, event: AppEvent) {
         let line = match event {
-            AppEvent::Bridge(BridgeEvent::SignIn { state, user_code }) => {
-                format!("signIn {state} {}", user_code.unwrap_or_default())
+            AppEvent::Bridge(BridgeEvent::SignIn {
+                state,
+                user_code,
+                verification_uri,
+            }) => {
+                let mut line = format!("signIn {state} {}", user_code.unwrap_or_default());
+                if let Some(uri) = verification_uri {
+                    line.push(' ');
+                    line.push_str(&uri);
+                }
+                line
             }
             AppEvent::Handoff(url) => {
                 self.handoffs.lock().unwrap().push(url.expose().to_string());
@@ -481,22 +779,32 @@ impl EventSink for Events {
 
 type Flow = (Arc<Events>, Arc<MockHttp>, Arc<Mutex<Vec<String>>>);
 
-fn started_flow(answers: Vec<Result<HttpResponse, HttpError>>, guard: &OneAtATime) -> Flow {
+fn started_flow(
+    answers: Vec<Result<HttpResponse, HttpError>>,
+    guard: &OneAtATime,
+    store: Arc<MemorySecretStore>,
+) -> Flow {
     let http = MockHttp::with(answers);
-    let (auth, _) = auth_with(http.clone(), Arc::new(MemorySecretStore::default()));
+    let (auth, _) = auth_with(http.clone(), store);
     let events = Arc::new(Events::default());
     let opened = Arc::new(Mutex::new(Vec::new()));
     let sink_opened = opened.clone();
-    let started = platform_sign_in(
+    let reply = platform_sign_in(
         Arc::new(auth),
         events.clone(),
         Arc::new(move |url: &Url| sink_opened.lock().unwrap().push(url.to_string())),
         guard,
     )
     .unwrap();
-    assert_eq!(started.user_code, "ABCD-1234");
-    assert_eq!(started.verification_uri, "https://metallic.example/device");
+    assert!(
+        reply.user_code.is_none(),
+        "the first call answers `pending` and nothing else"
+    );
     (events, http, opened)
+}
+
+fn fresh_store() -> Arc<MemorySecretStore> {
+    Arc::new(MemorySecretStore::default())
 }
 
 #[test]
@@ -508,25 +816,27 @@ fn sign_in_reports_pending_then_signed_in_and_hands_off() {
                 1,
                 900,
             )),
-            ok(r#"{"access_token":"at-5","refresh_token":"rt-5","expires_in":3600}"#),
+            ok(&tokens("at-5", "rt-5", 3600)),
             ok(r#"{"code":"wsc_OneTimeCode","expiresAt":"x"}"#),
         ],
         &OneAtATime::new(),
+        fresh_store(),
     );
     events.wait_for("signIn signedIn ");
-    assert_eq!(events.all()[0], "signIn pending ABCD-1234");
+    // The code and the page arrive as an event, not in the reply.
+    assert_eq!(events.all()[0], PENDING_LINE);
     assert_eq!(
         *opened.lock().unwrap(),
         ["https://metallic.example/device?user_code=ABCD-1234"]
     );
     for _ in 0..100 {
-        if !events.handoffs.lock().unwrap().is_empty() {
+        if !events.handoffs().is_empty() {
             break;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(
-        *events.handoffs.lock().unwrap(),
+        events.handoffs(),
         ["https://metallic.example/auth/launcher-handoff?code=wsc_OneTimeCode"]
     );
     // The event text the window sees about the handoff holds no code.
@@ -544,27 +854,65 @@ fn sign_in_reports_denied_expired_and_failed() {
         let (events, _, _) = started_flow(
             vec![ok(&device_code("", 1, 900)), ok(answer)],
             &OneAtATime::new(),
+            fresh_store(),
         );
         events.wait_for(&format!("signIn {state} "));
-        assert!(events.handoffs.lock().unwrap().is_empty());
+        assert!(events.handoffs().is_empty());
     }
 }
 
 #[test]
-fn a_failed_handoff_code_reports_failed() {
-    let (events, _, _) = started_flow(
+fn a_signed_in_launcher_skips_the_browser_and_only_signs_the_web_view_in() {
+    let store = fresh_store();
+    stored_refresh(&store, "rt-old");
+    let (events, http, opened) = started_flow(
         vec![
-            ok(&device_code("", 1, 900)),
-            ok(r#"{"access_token":"at","expires_in":3600}"#),
+            ok(&tokens("at", "rt-new", 3600)),
+            ok(r#"{"code":"wsc_again","expiresAt":"x"}"#),
+        ],
+        &OneAtATime::new(),
+        store,
+    );
+    events.wait_for("signIn signedIn ");
+    assert_eq!(http.count("/device/code"), 0);
+    assert!(opened.lock().unwrap().is_empty());
+    assert!(
+        events
+            .all()
+            .iter()
+            .all(|l| !l.starts_with("signIn pending"))
+    );
+    assert_eq!(
+        events.handoffs(),
+        ["https://metallic.example/auth/launcher-handoff?code=wsc_again"]
+    );
+}
+
+#[test]
+fn a_failed_handoff_reports_failed_and_leaves_the_session_for_a_retry() {
+    let store = fresh_store();
+    stored_refresh(&store, "rt-old");
+    let (events, http, _) = started_flow(
+        vec![
+            ok(&tokens("at", "rt-new", 3600)),
+            reply(500, ""),
+            reply(500, ""),
             reply(500, ""),
         ],
         &OneAtATime::new(),
+        store.clone(),
     );
     events.wait_for("signIn failed ");
+    assert!(events.handoffs().is_empty(), "no Handoff after a failure");
+    assert_eq!(http.count("/web-session"), 3);
+    assert!(
+        raw(&store).unwrap().contains("rt-new"),
+        "still signed in: the next try needs no browser"
+    );
 }
 
-/// A platform that never approves.
-struct Pending;
+/// A platform that never approves, and counts the device-code requests.
+struct Pending(AtomicUsize);
 
 impl HttpClient for Pending {
     fn get(&self, _: &str, _: &[(&str, &str)]) -> Result<HttpResponse, HttpError> {
@@ -577,6 +925,7 @@ impl HttpClient for Pending {
         _: &[(&str, &str)],
     ) -> Result<HttpResponse, HttpError> {
         if url.ends_with("/device/code") {
+            self.0.fetch_add(1, Ordering::SeqCst);
             ok(&device_code("", 1, 900))
         } else {
             ok(r#"{"error":"authorization_pending"}"#)
@@ -585,32 +934,29 @@ impl HttpClient for Pending {
 }
 
 #[test]
-fn second_sign_in_while_pending_is_busy() {
+fn second_sign_in_while_pending_returns_the_running_code() {
     let guard = OneAtATime::new();
-    let make = || {
-        Arc::new(
-            PlatformAuth::new(
-                site(),
-                Arc::new(Pending),
-                Arc::new(MemorySecretStore::default()),
-            )
+    let http = Arc::new(Pending(AtomicUsize::new(0)));
+    let auth = Arc::new(
+        PlatformAuth::new(site(), http.clone(), fresh_store())
             .with_sleeper(|_| std::thread::sleep(Duration::from_millis(5))),
-        )
-    };
+    );
     let events = Arc::new(Events::default());
     let open: Arc<dyn Fn(&Url) + Send + Sync> = Arc::new(|_| {});
-    platform_sign_in(make(), events.clone(), open.clone(), &guard).unwrap();
-    let second = platform_sign_in(make(), events.clone(), open.clone(), &guard);
-    assert!(matches!(second, Err(LauncherError::Busy(_))));
+    let first = platform_sign_in(auth.clone(), events.clone(), open.clone(), &guard).unwrap();
+    assert!(first.user_code.is_none());
+    events.wait_for(PENDING_LINE);
+
+    let second = platform_sign_in(auth.clone(), events.clone(), open.clone(), &guard).unwrap();
+    assert_eq!(second.user_code.as_deref(), Some("ABCD-1234"));
     assert_eq!(
-        events
-            .all()
-            .iter()
-            .filter(|l| l.starts_with("signIn pending"))
-            .count(),
-        1,
-        "the refused call announced nothing"
+        second.verification_uri.as_deref(),
+        Some("https://metallic.example/device")
     );
+    let pending = events.all().iter().filter(|l| *l == PENDING_LINE).count();
+    assert_eq!(pending, 2, "the event is sent again");
+    assert_eq!(http.0.load(Ordering::SeqCst), 1, "no second device code");
+
     // Cancelling ends the first, and the place is free again.
     guard.cancel_running();
     events.wait_for("signIn failed ");
@@ -621,6 +967,81 @@ fn second_sign_in_while_pending_is_busy() {
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("the guard was never released");
+}
+
+/// A platform whose token request waits until the test lets it answer.
+struct Gate {
+    requests: Mutex<Vec<Recorded>>,
+    entered: Mutex<Sender<()>>,
+    release: Mutex<Receiver<()>>,
+}
+
+impl HttpClient for Gate {
+    fn get(&self, _: &str, _: &[(&str, &str)]) -> Result<HttpResponse, HttpError> {
+        Err(HttpError::new("no"))
+    }
+    fn post_form(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        form: &[(&str, &str)],
+    ) -> Result<HttpResponse, HttpError> {
+        record(&self.requests, url, headers, form);
+        if url.ends_with("/device/code") {
+            ok(&device_code("", 1, 900))
+        } else if url.ends_with("/oauth/token") {
+            self.entered.lock().unwrap().send(()).unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+            ok(&tokens("at-late", "rt-late", 3600))
+        } else if url.ends_with("/web-session") {
+            ok(r#"{"code":"wsc_never","expiresAt":"x"}"#)
+        } else {
+            ok("{}")
+        }
+    }
+}
+
+#[test]
+fn signing_out_during_the_poll_stores_nothing_and_sends_no_handoff() {
+    let (entered_tx, entered_rx) = channel();
+    let (release_tx, release_rx) = channel();
+    let gate = Arc::new(Gate {
+        requests: Mutex::default(),
+        entered: Mutex::new(entered_tx),
+        release: Mutex::new(release_rx),
+    });
+    let store = fresh_store();
+    let auth =
+        Arc::new(PlatformAuth::new(site(), gate.clone(), store.clone()).with_sleeper(|_| {}));
+    let guard = OneAtATime::new();
+    let events = Arc::new(Events::default());
+    platform_sign_in(auth.clone(), events.clone(), Arc::new(|_: &Url| {}), &guard).unwrap();
+    events.wait_for(PENDING_LINE);
+    // The worker is inside the token request. The user approves in the browser, and at the same
+    // moment signs out in the Launcher.
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    sign_out_in_background(auth.clone(), &guard).unwrap();
+    release_tx.send(()).unwrap();
+
+    events.wait_for("signIn failed ");
+    assert!(store.get_secret().unwrap().is_none(), "nothing stored");
+    assert!(events.handoffs().is_empty(), "no Handoff");
+    let requests = gate.requests.lock().unwrap().clone();
+    assert!(
+        requests
+            .iter()
+            .any(|r| r.0.ends_with("/revoke") && r.2.contains("token=rt-late")),
+        "the tokens that arrived late are revoked"
+    );
+    assert!(requests.iter().all(|r| !r.0.ends_with("/web-session")));
+    assert!(
+        auth.access_token().unwrap().is_none(),
+        "and not kept in memory"
+    );
 }
 
 // ---- a real server on this PC ----------------------------------------------------------------
@@ -682,18 +1103,15 @@ fn the_whole_flow_over_http_against_a_local_fake_server() {
     let (origin, server) = fake_server(vec![
         (200, device.to_string()),
         (400, r#"{"error":"authorization_pending"}"#.to_string()),
-        (
-            200,
-            r#"{"access_token":"at-wire","refresh_token":"rt-wire","expires_in":3600}"#.to_string(),
-        ),
+        (200, tokens("at-wire", "rt-wire", 3600)),
         (200, r#"{"code":"wsc_wire","expiresAt":"x"}"#.to_string()),
     ]);
     // A local development site may be plain http on the loopback address.
     let site = SiteOrigin::parse(&origin, true).unwrap();
-    let store = Arc::new(MemorySecretStore::default());
+    let store = fresh_store();
     let auth = PlatformAuth::new(
         site,
-        Arc::new(UreqClient::new(Duration::from_secs(5))),
+        Arc::new(UreqClient::without_redirects(Duration::from_secs(5))),
         store,
     )
     .with_sleeper(|_| {});
@@ -765,19 +1183,15 @@ fn tokens_never_in_debug_or_logs() {
         ok(&body),
         reply(503, &format!("overloaded {AT} {RT} {DC}")),
         // The token lives one second, so the next call refreshes it first.
-        ok(&format!(
-            r#"{{"access_token":"{AT}","refresh_token":"{RT}","expires_in":1}}"#
-        )),
+        ok(&tokens(AT, RT, 1)),
         reply(
             400,
             &format!(r#"{{"error":"server_error","detail":"{AT} {RT}"}}"#),
         ),
-        ok(&format!(
-            r#"{{"access_token":"{AT}","refresh_token":"{RT}","expires_in":3600}}"#
-        )),
+        ok(&tokens(AT, RT, 3600)),
         ok(&format!(r#"{{"code":"{WS}","expiresAt":"x"}}"#)),
     ]);
-    let store = Arc::new(MemorySecretStore::default());
+    let store = fresh_store();
     let (auth, _) = auth_with(http.clone(), store.clone());
     let code = auth.start().unwrap();
     auth.poll_until_done(&code, &never()).unwrap();
@@ -786,7 +1200,9 @@ fn tokens_never_in_debug_or_logs() {
     let ws = auth.web_session_code().unwrap();
     let handoff = auth.handoff_url(&ws).unwrap();
     let token = auth.access_token().unwrap().unwrap();
-    auth.sign_out().unwrap();
+    let revocation = auth.sign_out_local().unwrap();
+    let revocation_text = format!("{revocation:?}");
+    auth.revoke(revocation);
 
     let events = Events::default();
     events.send(AppEvent::Handoff(handoff.clone()));
@@ -801,6 +1217,7 @@ fn tokens_never_in_debug_or_logs() {
         format!("{token:?} {token}"),
         format!("{handoff:?}"),
         format!("{:?}", AppEvent::Handoff(handoff.clone())),
+        revocation_text,
         events.all().join("\n"),
         format!("{:?}", failed_refresh.err()),
         format!("{:?}", auth.browser_address(&code)),

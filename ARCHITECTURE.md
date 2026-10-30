@@ -81,11 +81,14 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   `UpdateRequired`; `StartedPlayers`, `UpdateSource`). `settings.rs` gains `channel` (local-only: the site may not change it).
   The tray shows "Restart to update" once an update is downloaded.
   Task 7 adds `platform_auth.rs` (`PlatformAuth`: OAuth device flow against `<site>/v1/oauth/*` with client `metallic-launcher`, scopes
-  `profile play`; session as one JSON value in the Credential Manager entry `Metallic`/`platform`; `platform_sign_in` answers `{userCode,
-  verificationUri}` and emits `signIn` events `pending|signedIn|denied|expired|failed`; the verification page is opened only if it is https
-  on the site origin). After sign-in `web_session_code` (`POST /v1/oauth/web-session`, single use, 60 s) becomes
-  `AppEvent::Handoff(HandoffUrl)` = `<site>/auth/launcher-handoff?code=..`, which the site redeems itself; the code is a redacting
-  `Token`/`HandoffUrl` and never logged. `OneAtATime` makes a second `signIn` or `githubSignIn` answer `busy`.
+  `profile play`. Only the refresh token is stored (UTF-8 bytes, Credential Manager entry `Metallic`/`platform`, 2560-byte check); the
+  access token stays in memory; tokens over 256 bytes are refused; refreshes are serialised, the new refresh token is stored before use.
+  `platform_sign_in` answers `{state:"pending"}` at once and a worker emits `signIn` events `pending` (with `userCode`, `verificationUri`),
+  then `signedIn|denied|expired|failed`; a second call returns the running flow's code; a signed-in Launcher skips the browser. The
+  verification page is opened only if it is https on the site origin. `signOut` forgets the session at once, revokes on a worker.) After
+  sign-in `web_session_code` (`POST /v1/oauth/web-session`, single use, 60 s, 3 tries) becomes `AppEvent::Handoff(HandoffUrl)` =
+  `<site>/auth/launcher-handoff?code=..`, which the site redeems itself; the code is a redacting `Token`/`HandoffUrl`, never logged.
+  `OneAtATime` makes a second `githubSignIn` answer `busy`.
   **Player contract:** `metallic-player.exe <metallic://play?place=<id>&ticket=<ticket>>`: exactly one argument, the canonical link from
   `DeepLink::to_uri`, started without a shell; the Player sits beside `Metallic.exe`. Studio is started with no arguments (a place in
   `metallic://studio/open?place=..` is ignored for now).

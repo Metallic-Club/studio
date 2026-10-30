@@ -32,10 +32,15 @@
 //! (`notInstalled`, `installed` + `version`, `installing` + `percent`, `failed` + `reason`; for
 //! the launcher `notInstalledCopy`, `upToDate`, `checking`, `downloading` + `percent`,
 //! `readyToRestart` + `version` + `required`, `needsGithubSignIn`, `failed` + `reason`).
-//! `signIn` answers `{userCode, verificationUri}` and opens the verification page in the system
-//! browser; `signIn` events (`pending`, `signedIn`, `denied`, `expired`, `failed`) tell how it goes, and
-//! on success the Launcher signs the web view in itself (see `platform_auth`). A second `signIn` (or
-//! `githubSignIn`) while one is running answers `busy`.
+//! `signIn` answers at once with `{state: "pending"}` and does the rest on a worker: the code to
+//! type arrives as a `signIn` event `{state: "pending", userCode, verificationUri}` and the
+//! Launcher opens the verification page in the system browser. Later `signIn` events are
+//! `signedIn`, `denied`, `expired` or `failed`, and on success the Launcher signs the web view
+//! in itself (see `platform_auth`). A second `signIn` while one is running answers `pending`
+//! again, with `userCode` and `verificationUri` once they are known, and repeats the event.
+//! A signed-in Launcher skips the browser step and only signs the web view in. `signOut` forgets
+//! the session at once and revokes it in the background. A second `githubSignIn` while one is
+//! running answers `busy`.
 //! `githubSignIn` starts the GitHub sign-in and answers at once; the code to type arrives in
 //! `githubSignIn` events, which only bundled pages receive.
 
@@ -280,6 +285,9 @@ pub enum BridgeEvent {
         /// The code the user types in the browser, while pending.
         #[serde(skip_serializing_if = "Option::is_none")]
         user_code: Option<String>,
+        /// The page where the code is typed (on the site's origin), while pending.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        verification_uri: Option<String>,
     },
     /// The GitHub sign-in for team builds moved on. Only bundled pages receive it.
     GithubSignIn {

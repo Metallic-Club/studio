@@ -22,6 +22,6 @@ pub use feed::{
 };
 pub use github_auth::{AuthError, GithubAuth};
 pub use http::{HttpClient, HttpError, HttpResponse, Token, TokenProvider, UreqClient};
-pub use secret::{KeyringSecretStore, MemorySecretStore, SecretStore};
+pub use secret::{KeyringSecretStore, MAX_SECRET_BYTES, MemorySecretStore, SecretStore};
 /// Re-export so the apps name the same Velopack version (`VelopackApp::build().run()`).
 pub use velopack;

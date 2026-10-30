@@ -190,6 +190,19 @@ impl UreqClient {
         }
     }
 
+    /// Creates a client that does not follow redirects: a 3xx answer is returned as it is.
+    /// The platform sign-in uses it, so a redirect can never send it to another host.
+    pub fn without_redirects(timeout: Duration) -> Self {
+        let mut client = Self::new(timeout);
+        client.agent = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .into();
+        client
+    }
+
     /// Replaces the time a download may go without receiving a byte (default
     /// [`DOWNLOAD_STALL_TIMEOUT`]).
     pub fn with_stall_timeout(mut self, stall_timeout: Duration) -> Self {

@@ -20,7 +20,8 @@ use metallic_launcher::{
     RestartError, SelfUpdater, SettingsPatch, SettingsStore, SiteOrigin, SiteStatus, StartPage,
     TrayAction, UrlPolicy, check_site, downloads_dir_for, github_sign_in, is_installed_copy,
     local_url, on_close_requested, platform_sign_in, player_status, product_paths, serve,
-    start_page, start_player, start_studio, studio_root_for, tray_menu, user_agent,
+    sign_out_in_background, start_page, start_player, start_studio, studio_root_for, tray_menu,
+    user_agent,
 };
 use metallic_update::github_auth::{StoredTokenProvider, embedded_client_id};
 use metallic_update::{
@@ -46,7 +47,7 @@ const BACKGROUND: (u8, u8, u8, u8) = (22, 21, 27, 255);
 
 /// How long the site check may take (the health check and the offline re-checks).
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long a request of the Metallic sign-in may take.
+/// How long a request of the Metallic sign-in may take (it runs on a worker).
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(8);
 /// The first wait between re-checks while offline, and the longest.
 const RECHECK_FIRST: Duration = Duration::from_secs(10);
@@ -111,7 +112,7 @@ struct ShellHost {
     github_flight: OneAtATime,
 }
 
-/// What a sign-in start becomes on the bridge: `busy` while one runs, else `failed`.
+/// What a GitHub sign-in start becomes on the bridge: `busy` while one runs, else `failed`.
 fn sign_in_code(error: LauncherError) -> BridgeErrorCode {
     match error {
         LauncherError::Busy(_) => BridgeErrorCode::Busy,
@@ -188,7 +189,8 @@ impl BridgeHost for ShellHost {
         let Some(auth) = self.platform.clone() else {
             return Err(BridgeErrorCode::NotAvailable);
         };
-        let started = platform_sign_in(
+        // Answers at once: the code to type follows as a `signIn` event from the worker.
+        let reply = platform_sign_in(
             auth,
             self.sink.clone(),
             Arc::new(|address| {
@@ -199,18 +201,19 @@ impl BridgeHost for ShellHost {
             &self.platform_flight,
         )
         .map_err(sign_in_code)?;
-        Ok(json!({
-            "userCode": started.user_code,
-            "verificationUri": started.verification_uri,
-        }))
+        let mut answer = json!({ "state": "pending" });
+        if let (Some(code), Some(address)) = (reply.user_code, reply.verification_uri) {
+            answer["userCode"] = json!(code);
+            answer["verificationUri"] = json!(address);
+        }
+        Ok(answer)
     }
 
     fn sign_out(&self) -> Result<(), BridgeErrorCode> {
         let Some(auth) = &self.platform else {
             return Err(BridgeErrorCode::NotAvailable);
         };
-        self.platform_flight.cancel_running();
-        auth.sign_out().map_err(|error| {
+        sign_out_in_background(auth.clone(), &self.platform_flight).map_err(|error| {
             log::warn!("could not sign out: {error}");
             BridgeErrorCode::Failed
         })
@@ -605,7 +608,7 @@ pub fn run(
     let platform_auth = check_origin.clone().map(|origin| {
         Arc::new(PlatformAuth::new(
             origin,
-            Arc::new(UreqClient::new(SIGN_IN_TIMEOUT)),
+            Arc::new(UreqClient::without_redirects(SIGN_IN_TIMEOUT)),
             Arc::new(KeyringSecretStore::new(KEYRING_SERVICE, KEYRING_ACCOUNT)),
         ))
     });

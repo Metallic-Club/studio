@@ -49,7 +49,8 @@ pub use launch::{
 };
 pub use local_pages::{LOCAL_CSP, LocalPage, LocalResponse, OfflineReason, local_url, serve};
 pub use platform_auth::{
-    HandoffUrl, OneAtATime, PlatformAuth, SignInStarted, SignInTicket, platform_sign_in,
+    HandoffUrl, OneAtATime, PlatformAuth, Revocation, SignInReply, SignInTicket, platform_sign_in,
+    sign_out_in_background,
 };
 pub use protocol::{
     MemoryRegistry, PROTOCOL_KEY, UriRegistry, is_installed_copy, is_registered_to, register,

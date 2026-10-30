@@ -60,6 +60,10 @@ pub enum AuthError {
     UnsafeAddress,
     /// The sign-in was cancelled on this PC before the user finished.
     Cancelled,
+    /// The value is larger than the credential store takes ([`crate::secret::MAX_SECRET_BYTES`]).
+    TooLarge,
+    /// The server sent a token longer than the Launcher accepts.
+    TokenTooLong,
 }
 
 impl fmt::Display for AuthError {
@@ -69,17 +73,19 @@ impl fmt::Display for AuthError {
                 "GitHub sign-in is not set up yet: put the GitHub App's client ID into \
                  config/github_app_client_id.txt (see docs/releasing.md) and rebuild",
             ),
-            AuthError::Network(m) => write!(f, "could not reach GitHub: {m}"),
-            AuthError::BadResponse(m) => write!(f, "unexpected answer from GitHub: {m}"),
-            AuthError::Denied => f.write_str("sign-in was refused on the GitHub page"),
+            AuthError::Network(m) => write!(f, "could not reach the server: {m}"),
+            AuthError::BadResponse(m) => write!(f, "unexpected answer from the server: {m}"),
+            AuthError::Denied => f.write_str("sign-in was refused"),
             AuthError::Expired => f.write_str("the sign-in code expired; start again"),
-            AuthError::Provider(code) => write!(f, "GitHub sign-in failed: {code}"),
+            AuthError::Provider(code) => write!(f, "sign-in failed: {code}"),
             AuthError::Store(m) => write!(f, "credential store error: {m}"),
             AuthError::NotSignedIn => f.write_str("not signed in"),
             AuthError::UnsafeAddress => {
                 f.write_str("the sign-in page is not on the expected site; it was not opened")
             }
             AuthError::Cancelled => f.write_str("the sign-in was cancelled"),
+            AuthError::TooLarge => f.write_str("the session is too large for the credential store"),
+            AuthError::TokenTooLong => f.write_str("the server sent a token that is too long"),
         }
     }
 }
