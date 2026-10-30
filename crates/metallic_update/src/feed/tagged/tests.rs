@@ -1,5 +1,6 @@
 use super::*;
-use crate::updater::{HttpError, HttpResponse, UpdateChecker, UpdateInfo, UreqClient};
+use crate::feed::{STUDIO_FEED, UpdateChecker, UpdateInfo};
+use crate::http::{HttpError, HttpResponse, UreqClient};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -23,7 +24,7 @@ fn asset() -> VelopackAsset {
 fn metadata() -> serde_json::Value {
     serde_json::json!({"tag_name": "v0.2.0-stable", "draft": false, "assets": [
         {"id": 1, "name": "releases.stable.json", "url": "https://untrusted.invalid/feed"},
-        {"id": 2, "name": PACKAGE, "browser_download_url": "https://untrusted.invalid/package"}
+        {"id": 2, "name": PACKAGE, "url": "https://untrusted.invalid/api-asset", "browser_download_url": "https://untrusted.invalid/package"}
     ]})
 }
 
@@ -58,6 +59,7 @@ impl HttpClient for FakeHttp {
 
 fn source(responses: Vec<HttpResponse>) -> TaggedGithubSource {
     TaggedGithubSource::new(
+        STUDIO_FEED,
         Channel::Stable,
         Version::new(0, 2, 0),
         Token::new(TEST_TOKEN.into()),
@@ -294,27 +296,31 @@ fn stable_download_resolves_beneath_fifteen_newer_dev_releases() {
     let binary = b"package\0with\xffbinary\x80bytes";
     let server = Server::new(HashMap::from([
         (
-            format!("/repos/{RELEASE_REPO}/releases?per_page=50&page=1"),
+            format!("/repos/{}/releases?per_page=50&page=1", STUDIO_FEED.repo),
             serde_json::to_vec(&releases).unwrap(),
         ),
         (
-            format!("/repos/{RELEASE_REPO}/releases/tags/v0.2.0-stable"),
+            format!("/repos/{}/releases/tags/v0.2.0-stable", STUDIO_FEED.repo),
             serde_json::to_vec(&metadata()).unwrap(),
         ),
         (
-            format!("/repos/{RELEASE_REPO}/releases/assets/1"),
+            format!("/repos/{}/releases/assets/1", STUDIO_FEED.repo),
             feed().into_bytes(),
         ),
         (
-            format!("/repos/{RELEASE_REPO}/releases/assets/2"),
+            format!("/repos/{}/releases/assets/2", STUDIO_FEED.repo),
             binary.to_vec(),
         ),
     ]));
-    let checker = UpdateChecker::new(Channel::Stable, Arc::new(Token::new(TEST_TOKEN.into())))
-        .with_api_base(server.base.clone())
-        .unwrap()
-        .with_current_version(Version::new(0, 1, 0))
-        .with_http(Arc::new(UreqClient::new(Duration::from_secs(2))));
+    let checker = UpdateChecker::new(
+        STUDIO_FEED,
+        Channel::Stable,
+        Arc::new(Token::new(TEST_TOKEN.into())),
+    )
+    .with_api_base(server.base.clone())
+    .unwrap()
+    .with_current_version(Version::new(0, 1, 0))
+    .with_http(Arc::new(UreqClient::new(Duration::from_secs(2))));
     let update = checker
         .check()
         .unwrap_or_else(|error| {

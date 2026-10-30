@@ -18,6 +18,8 @@ metallic_physics = { path = "crates/metallic_physics" }
 metallic_physics2d = { path = "crates/metallic_physics2d" }
 metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
+metallic_update = { path = "crates/metallic_update" }
+metallic_tokens = { path = "crates/metallic_tokens" }
 metallic_audio = { path = "crates/metallic_audio" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 egui = { version = "0.37.0", default-features = false }

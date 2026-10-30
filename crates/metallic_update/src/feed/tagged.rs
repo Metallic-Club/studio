@@ -1,4 +1,4 @@
-//! Velopack feed and packages pinned to the release selected by Studio's update check.
+//! Velopack feed and packages pinned to the release selected by the update check.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc::Sender};
@@ -8,7 +8,8 @@ use serde::Deserialize;
 use velopack::sources::UpdateSource;
 use velopack::{Error, HttpHeader, HttpOptions, VelopackAsset, VelopackAssetFeed};
 
-use super::{Channel, HttpClient, RELEASE_REPO, Token, USER_AGENT, form_encode};
+use super::{Channel, ReleaseFeed, USER_AGENT};
+use crate::http::{HttpClient, Token, form_encode};
 
 // Package transfers need more time than metadata, but must not wait forever.
 const PACKAGE_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
@@ -27,6 +28,7 @@ struct Asset {
 }
 
 pub(super) struct TaggedGithubSource {
+    feed: ReleaseFeed,
     channel: Channel,
     version: Version,
     token: Token,
@@ -41,6 +43,7 @@ fn failure(message: &str) -> Error {
 
 impl TaggedGithubSource {
     pub(super) fn new(
+        feed: ReleaseFeed,
         channel: Channel,
         version: Version,
         token: Token,
@@ -48,6 +51,7 @@ impl TaggedGithubSource {
         http: Arc<dyn HttpClient>,
     ) -> Self {
         Self {
+            feed,
             channel,
             version,
             token,
@@ -99,10 +103,16 @@ impl TaggedGithubSource {
         if let Some(release) = cached.as_ref() {
             return Ok(release.clone());
         }
-        let tag = format!("v{}-{}", self.version, self.channel.as_str());
+        let tag = format!(
+            "{}{}-{}",
+            self.feed.tag_prefix,
+            self.version,
+            self.channel.as_str()
+        );
         let url = format!(
-            "{}/repos/{RELEASE_REPO}/releases/tags/{}",
+            "{}/repos/{}/releases/tags/{}",
             self.api_base,
+            self.feed.repo,
             form_encode(&tag)
         );
         let text = self.get_text(&url, "application/vnd.github+json")?;
@@ -131,8 +141,8 @@ impl TaggedGithubSource {
         // Construct the authenticated API URL from the numeric ID. Never send the token
         // to an arbitrary URL embedded in release metadata or feed filenames.
         Ok(format!(
-            "{}/repos/{RELEASE_REPO}/releases/assets/{}",
-            self.api_base, asset.id
+            "{}/repos/{}/releases/assets/{}",
+            self.api_base, self.feed.repo, asset.id
         ))
     }
 }
@@ -144,7 +154,7 @@ impl UpdateSource for TaggedGithubSource {
         _app: &velopack::bundle::Manifest,
         _staged_user_id: &str,
     ) -> Result<VelopackAssetFeed, Error> {
-        if channel != self.channel.as_str() {
+        if channel != self.feed.velopack_channel(self.channel) {
             return Err(failure(
                 "the update feed channel differs from the selected release",
             ));

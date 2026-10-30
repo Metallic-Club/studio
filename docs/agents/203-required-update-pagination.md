@@ -3,6 +3,8 @@
 Status: implemented and locally tested; independent code review passed; PR/CI pending.
 Branch: `studio/203-required-update-pagination`, based on `ebb94f3`.
 
+Note: after the Launcher L1 merge this logic lives in `crates/metallic_update/src/feed.rs` (`fetch_releases`, `version_from_tag`) and its tests in `crates/metallic_update/tests/updater.rs`; it applies to the Studio and Launcher feeds.
+
 ## Goal
 
 Do not lose required-update flags from skipped releases on a later page. Keep the newest offered version while
