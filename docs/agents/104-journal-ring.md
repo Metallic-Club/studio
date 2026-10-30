@@ -1,6 +1,6 @@
 # #104 Full-capacity world change journal
 
-Status: implemented and tested; PR CI pending.
+Status: implemented and tested; current-main integration gates passed; updated PR CI pending.
 Branch: `studio/104-journal-ring`.
 
 ## Goal
@@ -22,6 +22,14 @@ Keep the complete documented 16,384-mutation history so ordinary large-world fra
 - Full workspace tests: 193 passed, 0 failed on base `532c4f7`; strict all-targets clippy and licenses passed.
 - Formatting and diff checks passed. No timing or renderer throughput claim.
 
+Integration update: normal-merged current main `ebb94f3` into this published branch at `30a7e27`, without rewriting
+published history. The diff against main remains the four journal source/test/doc files. Reviewed #209 guard
+scoped-cleaned local workspace packages on lane transition; the six journal tests passed again after source
+recompilation from this worktree. Full `cargo test --workspace -j 4 -- --test-threads=1` then passed all 215 tests,
+including the current Parkour route/player smoke. Strict all-targets Clippy, licenses, formatting and diff checks
+passed again. The source merge changed no journal behavior; the original red/green evidence remains above.
+
 ## Next
 
-Inspect PR CI. The ring is still bounded; a reader more than 16,384 mutations behind must rescan.
+Inspect updated PR #186 CI after the normal integration push. The ring is still bounded;
+a reader more than 16,384 mutations behind must rescan.
