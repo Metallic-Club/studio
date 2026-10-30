@@ -510,6 +510,39 @@ pub fn default_value(class: &str, property: &str) -> Option<Value> {
     find_property(class, property).map(|d| (d.default)())
 }
 
+/// Classes in canonical registry order. Protocol fingerprints include this order.
+pub fn registry_classes() -> &'static [ClassDef] {
+    CLASSES
+}
+
+static INDEXED_PROPERTIES: LazyLock<HashMap<&'static str, Vec<&'static PropDef>>> =
+    LazyLock::new(|| {
+        CLASSES
+            .iter()
+            .map(|class| (class.name, all_properties(class.name)))
+            .collect()
+    });
+
+/// The stable, zero-based property index within a class, including inherited properties.
+///
+/// Indices are meaningful only with an equal replication registry hash. The immutable table
+/// initializes once; successful warm lookups allocate nothing. Unknown classes/properties return None.
+pub fn property_index(class: &str, property: &str) -> Option<u16> {
+    let index = INDEXED_PROPERTIES
+        .get(class)?
+        .iter()
+        .position(|def| def.name == property)?;
+    u16::try_from(index).ok()
+}
+
+/// Resolves a class-relative protocol index. Unknown classes and indices return None.
+pub fn property_by_index(class: &str, index: u16) -> Option<&'static PropDef> {
+    INDEXED_PROPERTIES
+        .get(class)?
+        .get(usize::from(index))
+        .copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,37 +578,4 @@ mod tests {
             );
         }
     }
-}
-
-/// Classes in canonical registry order. Protocol fingerprints include this order.
-pub fn registry_classes() -> &'static [ClassDef] {
-    CLASSES
-}
-
-static INDEXED_PROPERTIES: LazyLock<HashMap<&'static str, Vec<&'static PropDef>>> =
-    LazyLock::new(|| {
-        CLASSES
-            .iter()
-            .map(|class| (class.name, all_properties(class.name)))
-            .collect()
-    });
-
-/// The stable, zero-based property index within a class, including inherited properties.
-///
-/// Indices are meaningful only with an equal replication registry hash. The immutable table
-/// initializes once; successful warm lookups allocate nothing. Unknown classes/properties return None.
-pub fn property_index(class: &str, property: &str) -> Option<u16> {
-    let index = INDEXED_PROPERTIES
-        .get(class)?
-        .iter()
-        .position(|def| def.name == property)?;
-    u16::try_from(index).ok()
-}
-
-/// Resolves a class-relative protocol index. Unknown classes and indices return None.
-pub fn property_by_index(class: &str, index: u16) -> Option<&'static PropDef> {
-    INDEXED_PROPERTIES
-        .get(class)?
-        .get(usize::from(index))
-        .copied()
 }

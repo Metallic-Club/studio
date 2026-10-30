@@ -1,7 +1,7 @@
 # Issue 293: core replication schema and play-client visibility
 
-Status: implemented; initial core checks passed; final gates pending.
-Branch: studio/293-replication-registry, from main fbaa17d.
+Status: implemented and tested; full workspace, strict Clippy, license and source-review gates passed; publication pending.
+Branch: studio/293-replication-registry; initial base fbaa17d, rebased onto main 7c238f8 before expanded gates.
 
 ## Scope
 
@@ -28,10 +28,19 @@ these filters must be used by the future replicator before any data is sent.
 
 ## Validation plan and evidence
 
-The first guarded core suite passed before the final trusted-root/viewer hardening and additional schema tests.
-Final focused tests, separate-process fingerprint checks, expanded workspace tests, strict Clippy, license, format
-and whitespace gates remain pending. Initial log: <TEMP>/metallic-293-core.log. One additional direct dependency is
-sha2 0.10.9, already present in the workspace lockfile; it is MIT/Apache-2.0 and the license gate will verify it.
+- Guarded final core suite: 54 passed, zero failed. Log: <TEMP>/metallic-293-core-final.log.
+- The registry example was built in guarded lane122 and run as two separate processes; both printed
+  fe04c70d4e3b4760ca8950572985b7fd5a2dbf2b8a476c3dcc5780c396da5607.
+- Independent source review by engine_research at 458e118 found no actionable findings. It checked hash field
+  boundaries, inherited/default metadata and service/viewer/source/reference privacy; this was source review only.
+- Guarded cargo test --workspace -j 4 -- --test-threads=1: 1004 passed, zero failed, six baseline manual tests ignored.
+  Three ignored tests open windows; three are manual allocation/timing probes. Log: <TEMP>/metallic-293-workspace-final.log.
+- Guarded cargo clippy --workspace --all-targets -j 4 -- -D warnings: passed. The first attempt caught new registry
+  items placed after an existing test module; moving them before the module resolved it, with no policy change.
+  Final log: <TEMP>/metallic-293-clippy-final.log. The subsequent full test suite uses this final ordering.
+- cargo deny check licenses: licenses ok; cargo fmt --all -- --check and git diff --check passed.
+- Full workspace no-run prebuild also passed in 8m57s; provenance-guarded lane122 was used for all Rust gates.
+- The single new direct dependency is sha2 0.10.9, already in the workspace lockfile, MIT/Apache-2.0.
 
 Root owns classes.rs/replication.rs and only the ServerStorage SERVICES/doc lines in instance.rs. The journal and
 edit-kernel workers own other locations. Future composition must retain all changes; no other branch is modified.
@@ -39,5 +48,6 @@ No running backend/server changes, credentials, public exposure, capacity guaran
 
 ## Next
 
-Complete final gates in guarded lane122 after a team slot releases, record exact results and limits, obtain source
-review, publish one PR and move this issue to review. Keep source/base evidence pinned if main advances.
+Publish one PR and move this issue to review. The last main delta is release Python tooling only; if rebasing,
+verify that the tested crates tree is unchanged and run the updated release helper tests. Owner/lead merges only.
+After all four foundation branches are ready, validate a private composition before planning a live-play claim.
