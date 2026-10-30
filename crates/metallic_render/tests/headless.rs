@@ -120,3 +120,82 @@ fn low_quality_renders_and_resizing_is_safe() {
     let px = r.capture(&camera(), SIZE).expect("capture");
     assert!(distinct_colours(&px) > 200);
 }
+
+/// The default avatar drawn skinned in its rest pose: it covers the middle of the frame, the
+/// close view uses LOD0 and a far view LOD2; clearing the instances removes it again.
+#[test]
+fn skinned_avatar_draws_and_picks_its_level_of_detail() {
+    use metallic_render::SkinnedInstance;
+    use metallic_render::glam::Mat4;
+    use metallic_render::metallic_asset::{Pose, SkinnedModel};
+    use std::sync::Arc;
+
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let glb = include_bytes!("../../../art/avatar/out/default_avatar.glb");
+    let model = Arc::new(SkinnedModel::from_glb(glb).expect("avatar"));
+    // Metres to studs; the avatar stands at the origin facing the camera (+Z).
+    let scale = 1.0 / 0.28;
+    let mut joints = Vec::new();
+    Pose::rest(&model.skeleton).skin_matrices(
+        &model.skeleton,
+        Mat4::from_scale(Vec3::splat(scale)),
+        &mut joints,
+    );
+    let mut r = Renderer::with_settings(
+        &ctx,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        RenderSettings {
+            quality: Quality::Low,
+        },
+    );
+    let empty = World::new_with_services();
+    r.sync(&empty);
+    let close = Camera {
+        position: Vec3::new(0.0, 2.75, 4.0),
+        look_at: Vec3::new(0.0, 2.75, 0.0),
+        fov_deg: 60.0,
+    };
+    let before = r.capture(&close, SIZE).expect("capture");
+    let instance = SkinnedInstance {
+        model: &model,
+        joints: &joints,
+        slot_colors: &[],
+        center: Vec3::new(0.0, 2.75, 0.0),
+        height: 5.5,
+        detail_scale: scale,
+    };
+    r.set_skinned(&[instance]);
+    let with = r.capture(&close, SIZE).expect("capture");
+    assert_eq!(r.skinned_lods(), [0]);
+    let centre = |px: &[u8]| {
+        let i = ((SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    assert_ne!(centre(&before), centre(&with), "nothing drawn at the torso");
+    let changed = before
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(with.as_chunks::<4>().0)
+        .filter(|(a, b)| a != b)
+        .count();
+    let share = changed as f32 / (SIZE.0 * SIZE.1) as f32;
+    assert!(
+        (0.05..0.6).contains(&share),
+        "avatar covers {share} of the frame"
+    );
+
+    let far = Camera {
+        position: Vec3::new(0.0, 2.75, 200.0),
+        ..close
+    };
+    r.capture(&far, SIZE).expect("capture");
+    assert_eq!(r.skinned_lods(), [2]);
+
+    r.set_skinned(&[]);
+    let cleared = r.capture(&close, SIZE).expect("capture");
+    assert_eq!(centre(&before), centre(&cleared));
+}

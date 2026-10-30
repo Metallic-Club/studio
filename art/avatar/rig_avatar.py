@@ -467,6 +467,10 @@ def foot_slip(clip, contacts, speed):
 
 
 def export_glb(path, arm, meshes, clips):
+    # Key times in the glb are frame / scene fps: without this the factory 24 fps stretches every
+    # clip by 30/24 (the first Phase B export had that bug).
+    bpy.context.scene.render.fps = FPS
+    bpy.context.scene.render.fps_base = 1.0
     bpy.ops.object.select_all(action="DESELECT")
     arm.select_set(True)
     hidden = [m for m in meshes if m.hide_get()]
@@ -506,6 +510,10 @@ def export_glb(path, arm, meshes, clips):
 def validate_glb(path, clips):
     """Re-import into an empty scene and check bones, influences, materials and clips."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    # The importer turns key times into frames at the scene rate; at the factory 24 fps a clip
+    # exported at 24 fps would also read back with the right frame count, hiding a time-scale bug.
+    bpy.context.scene.render.fps = FPS
+    bpy.context.scene.render.fps_base = 1.0
     bpy.ops.import_scene.gltf(filepath=path)
     arms = [o for o in bpy.data.objects if o.type == "ARMATURE"]
     # The importer adds an "Icosphere" bone-display mesh of its own; only check the avatar meshes.

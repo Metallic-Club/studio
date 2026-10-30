@@ -1,7 +1,7 @@
 use metallic_core::{Color3, InstanceId, Value, Vec3, World};
 use metallic_physics::{
-    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MoveInput, PANTS, PhysicsWorld,
-    RESPAWN_DELAY, SHIRT, SKIN, spawn_character,
+    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MoveInput, PhysicsWorld,
+    RESPAWN_DELAY, spawn_character,
 };
 
 const DT: f64 = 1.0 / 60.0;
@@ -184,34 +184,31 @@ fn spawns_at_origin_without_spawn_location() {
     assert_eq!(num(&world, hum, "WalkSpeed"), 16.0);
 
     let limbs = [
-        ("Head", Vec3::new(2.0, 1.0, 1.0), SKIN),
-        ("Torso", Vec3::new(2.0, 2.0, 1.0), SHIRT),
-        ("Left Arm", Vec3::new(1.0, 2.0, 1.0), SKIN),
-        ("Right Arm", Vec3::new(1.0, 2.0, 1.0), SKIN),
-        ("Left Leg", Vec3::new(1.0, 2.0, 1.0), PANTS),
-        ("Right Leg", Vec3::new(1.0, 2.0, 1.0), PANTS),
+        ("Head", Vec3::new(2.0, 1.0, 1.0)),
+        ("Torso", Vec3::new(2.0, 2.0, 1.0)),
+        ("Left Arm", Vec3::new(1.0, 2.0, 1.0)),
+        ("Right Arm", Vec3::new(1.0, 2.0, 1.0)),
+        ("Left Leg", Vec3::new(1.0, 2.0, 1.0)),
+        ("Right Leg", Vec3::new(1.0, 2.0, 1.0)),
     ];
-    for (name, size, color) in limbs {
+    for (name, size) in limbs {
         let p = world
             .find_first_child(ch, name)
             .unwrap_or_else(|| panic!("missing {name}"));
         assert_eq!(v3(&world, p, "Size"), size, "{name}");
-        assert_eq!(num(&world, p, "Transparency"), 0.0, "{name}");
-        assert_eq!(
-            world.get(p, "Color").unwrap(),
-            Value::Color3(color),
-            "{name}"
-        );
     }
-    let visible = world
+    // The body parts are collision and touch volumes; the runtime draws the skinned avatar.
+    let parts: Vec<InstanceId> = world
         .children(ch)
         .iter()
-        .filter(|&&c| world.is_a(c, "BasePart") && num(&world, c, "Transparency") < 1.0)
-        .count();
-    assert_eq!(visible, 6);
-    let torso = world.find_first_child(ch, "Torso").unwrap();
-    let stripe = world.find_first_child(torso, "Stripe").unwrap();
-    assert_eq!(world.get(stripe, "Color").unwrap(), Value::Color3(VIOLET));
+        .copied()
+        .filter(|&c| world.is_a(c, "BasePart"))
+        .collect();
+    assert_eq!(parts.len(), 7);
+    for p in parts {
+        assert_eq!(num(&world, p, "Transparency"), 1.0);
+        assert!(world.children(p).is_empty());
+    }
     // feet on the ground: legs end 3 studs below the root
     let leg = world.find_first_child(ch, "Left Leg").unwrap();
     assert!((v3(&world, leg, "Position").y - 1.0).abs() < 1e-9);
@@ -387,6 +384,10 @@ fn carried_by_moving_platform() {
     let moved = sim.root_pos().x - x0;
     assert!((moved - 8.0).abs() <= 0.5, "moved {moved}");
     assert_eq!(sim.ctl.state(sim.character()), Some(HumanoidState::Running));
+    // Carried at 8 studs/s while standing still: no own motion (the avatar stays idle).
+    let ch = sim.character();
+    assert!((sim.ctl.velocity(ch).unwrap().x - 8.0).abs() < 0.5);
+    assert!(sim.ctl.relative_velocity(ch).unwrap().magnitude() < 0.5);
 }
 
 #[test]
