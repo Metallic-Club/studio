@@ -59,6 +59,7 @@ worktree. All Cargo builds use `-j 4`.
 - `cargo deny check licenses`: passed (`licenses ok`; existing unused MPL-2.0 allowance warning).
 - Final `cargo fmt --all -- --check` and `git diff --check`: passed.
 
-Independent source review found no blocking findings. Rebased onto current main `12a6a6b` (avatar assets only
-since the original base). All required local gates are complete. Next: publish the PR, inspect CI and address
-review feedback; do not merge.
+Independent source review found no blocking findings. Local gates ran after rebasing onto main `12a6a6b`
+(avatar assets only since the original base). Before publication, rebased again onto `fd164c2`; that advance
+changes only the input-actions design, HTML mockup and progress note, with no Rust/config changes. All required
+local gates are complete. Next: publish the PR, inspect CI and address review feedback; do not merge.
