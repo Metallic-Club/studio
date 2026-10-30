@@ -135,14 +135,40 @@ impl Budget {
         f: &Function,
         args: impl IntoLuaMulti,
     ) -> Result<R, ScriptError> {
+        self.call_as(self.sched.current_owner(), f, args)
+    }
+
+    /// Like [`Budget::call`], with `owner` (a script's owner id, 0 for none) as the owner
+    /// of the threads and connections the call creates.
+    pub(crate) fn call_as<R: FromLuaMulti>(
+        &self,
+        owner: u64,
+        f: &Function,
+        args: impl IntoLuaMulti,
+    ) -> Result<R, ScriptError> {
         let lua = self.lua()?;
         let values = self
             .sched
-            .call_guarded(&lua, f, args)
+            .call_guarded(&lua, owner, f, args)
             .map_err(|message| ScriptError { message })?;
         R::from_lua_multi(values, &lua).map_err(|e| ScriptError {
             message: format_error(&e),
         })
+    }
+
+    /// The owner id of the script a thread belongs to.
+    pub(crate) fn owner_of(&self, thread: &Thread) -> Option<u64> {
+        self.sched.owner_of(thread)
+    }
+
+    /// The owner id of the script whose code is running now (0 outside any script).
+    pub(crate) fn current_owner(&self) -> u64 {
+        self.sched.current_owner()
+    }
+
+    /// Cancels the sleeping threads of a script.
+    pub(crate) fn cancel_owner(&self, owner: u64) {
+        self.sched.cancel_owner(owner);
     }
 
     /// Resumes a thread that parked itself with a plain `coroutine.yield` (for example
@@ -346,6 +372,30 @@ impl ScriptVm {
     /// to the script); library tables are shared and read-only, and `_G` is one
     /// writable table shared by all scripts of this VM.
     pub fn run_script(&mut self, chunk_name: &str, source: &str) -> Result<(), ScriptError> {
+        self.run_script_with(chunk_name, source, Vec::new())
+    }
+
+    /// Like [`ScriptVm::run_script`], and also defines `globals` (for example `script`) in
+    /// this script's own environment only.
+    pub fn run_script_with(
+        &mut self,
+        chunk_name: &str,
+        source: &str,
+        globals: Vec<(&str, Value)>,
+    ) -> Result<(), ScriptError> {
+        self.run_script_owned(chunk_name, source, globals, 0)
+    }
+
+    /// Like [`ScriptVm::run_script_with`]. Every thread and connection the script creates
+    /// carries `owner` (not 0), so the host can stop exactly this script later even when
+    /// other scripts share its chunk name.
+    pub fn run_script_owned(
+        &mut self,
+        chunk_name: &str,
+        source: &str,
+        globals: Vec<(&str, Value)>,
+        owner: u64,
+    ) -> Result<(), ScriptError> {
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),
         };
@@ -354,6 +404,9 @@ impl ScriptVm {
         meta.set("__index", self.lib.clone()).map_err(to_err)?;
         env.set_metatable(Some(meta)).map_err(to_err)?;
         env.set("_G", self.shared_g.clone()).map_err(to_err)?;
+        for (name, value) in globals {
+            env.set(name, value).map_err(to_err)?;
+        }
         let function = self
             .lua
             .load(source)
@@ -363,7 +416,9 @@ impl ScriptVm {
             .map_err(to_err)?;
         let (thread, args) = self
             .sched
-            .new_thread(&self.lua, function, Vec::new())
+            .as_owner(owner, || {
+                self.sched.new_thread(&self.lua, function, Vec::new())
+            })
             .map_err(to_err)?;
         let result = self.sched.resume_with_budget(&thread, args);
         if result.is_err() {

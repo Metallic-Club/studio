@@ -1,0 +1,163 @@
+//! The Roblox-named Luau API: `game`, `workspace`, `Instance`, the datatypes, services,
+//! signals and `RemoteEvent`.
+//!
+//! Every VM gets one [`ApiState`] that the userdata and functions of this module share. It
+//! holds the world, the signal hub and the threads parked in `WaitForChild`. Nothing here
+//! keeps a `World` borrow while Lua code runs: handlers may change the world, so the host
+//! collects what to call, releases the borrow and only then calls into Lua.
+
+mod datatypes;
+mod errors;
+mod instance;
+mod remote;
+mod services;
+mod signals;
+
+use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
+use metallic_core::{InstanceId, World};
+use mlua::{Error, Function, Table, WeakLua};
+
+use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
+
+pub(crate) use remote::{QueuedRemote, RemoteTarget};
+pub(crate) use signals::{EventKind, Hub, Pacing};
+
+/// State shared by the server VM and the client VM of one [`ScriptHost`](crate::ScriptHost).
+#[derive(Default)]
+pub(crate) struct HostShared {
+    /// Remote events fired since the last `step`, delivered by the next one.
+    pub(crate) remotes: RefCell<Vec<QueuedRemote>>,
+    /// Messages and bytes queued since the last delivery, for the server (0) and client (1) VM.
+    pub(crate) queued: Cell<[(usize, usize); 2]>,
+    /// Players whose `PlayerAdded` was delivered (what `GetPlayers` returns).
+    pub(crate) joined: RefCell<HashSet<InstanceId>>,
+    /// The player of the client VM (`Players.LocalPlayer`).
+    pub(crate) local_player: Cell<Option<InstanceId>>,
+}
+
+/// Everything the API functions of one VM need.
+pub(crate) struct ApiState {
+    pub(crate) world: Rc<RefCell<World>>,
+    pub(crate) context: Context,
+    pub(crate) budget: Budget,
+    pub(crate) sink: Rc<dyn OutputSink>,
+    pub(crate) shared: Rc<HostShared>,
+    pub(crate) hub: Hub,
+    pub(crate) pacing: Pacing,
+    pub(crate) lua: WeakLua,
+    /// Weak-valued table `instance id -> userdata`, so one instance is one Lua object.
+    cache: Table,
+    /// `task.spawn`: every handler runs in its own thread, so it may yield.
+    spawn: Function,
+    /// The VM clock, set by the host on every step.
+    pub(crate) now: Rc<Cell<f64>>,
+    pub(crate) waiters: Rc<RefCell<Vec<instance::Waiter>>>,
+    /// Instance methods by name (`FindFirstChild`, `GetPlayers`, ...).
+    methods: HashMap<&'static str, Function>,
+}
+
+impl ApiState {
+    /// Read access to the world; an error (not a panic) if the host has it borrowed.
+    pub(crate) fn world(&self) -> mlua::Result<Ref<'_, World>> {
+        self.world
+            .try_borrow()
+            .map_err(|_| Error::runtime("the world is busy"))
+    }
+
+    /// Write access to the world.
+    pub(crate) fn world_mut(&self) -> mlua::Result<RefMut<'_, World>> {
+        self.world
+            .try_borrow_mut()
+            .map_err(|_| Error::runtime("the world is busy"))
+    }
+}
+
+fn setup_failed(e: Error) -> ScriptError {
+    ScriptError {
+        message: format!("script API setup failed: {}", format_error(&e)),
+    }
+}
+
+/// Installs the whole API into `vm` and returns the state the host drives it with.
+pub(crate) fn install(
+    vm: &ScriptVm,
+    world: Rc<RefCell<World>>,
+    shared: Rc<HostShared>,
+    sink: Rc<dyn OutputSink>,
+) -> Result<Rc<ApiState>, ScriptError> {
+    build(vm, world, shared, sink).map_err(setup_failed)
+}
+
+fn build(
+    vm: &ScriptVm,
+    world: Rc<RefCell<World>>,
+    shared: Rc<HostShared>,
+    sink: Rc<dyn OutputSink>,
+) -> mlua::Result<Rc<ApiState>> {
+    let lua = vm.lua();
+    errors::install(lua)?;
+    let cache = lua.create_table()?;
+    let weak_values = lua.create_table()?;
+    weak_values.set("__mode", "v")?;
+    cache.set_metatable(Some(weak_values))?;
+    let spawn: Function = lua.globals().get::<Table>("task")?.get("spawn")?;
+
+    let now = Rc::new(Cell::new(0.0));
+    let waiters = Rc::new(RefCell::new(Vec::new()));
+    let mut methods = HashMap::new();
+    let mut raw = instance::methods(lua, &waiters, &now)?;
+    raw.extend(services::methods(lua)?);
+    raw.extend(remote::methods(lua)?);
+    for (name, function) in raw {
+        // `WaitForChild` is Luau code that calls guarded functions itself.
+        let function = if name == "WaitForChild" {
+            function
+        } else {
+            errors::guarded(lua, function)?
+        };
+        methods.insert(name, function);
+    }
+
+    let state = Rc::new(ApiState {
+        world,
+        context: vm.context(),
+        budget: vm.budget(),
+        sink,
+        shared,
+        hub: Hub::default(),
+        pacing: Pacing::default(),
+        lua: lua.weak(),
+        cache,
+        spawn,
+        now,
+        waiters,
+        methods,
+    });
+
+    let set = |name: &str, value: mlua::Value| vm.set_global(name, value);
+    let to_err = |e: ScriptError| Error::runtime(e.message);
+    set(
+        "Instance",
+        mlua::Value::Table(instance::constructor(lua, &state)?),
+    )
+    .map_err(to_err)?;
+    for (name, table) in datatypes::constructors(lua)? {
+        set(name, mlua::Value::Table(table)).map_err(to_err)?;
+    }
+    set("game", mlua::Value::UserData(services::game(lua, &state)?)).map_err(to_err)?;
+    let workspace = state.world()?.root("Workspace");
+    let workspace = match workspace {
+        Some(id) => mlua::Value::UserData(state.wrap(lua, id)?),
+        None => mlua::Value::Nil,
+    };
+    set("workspace", workspace).map_err(to_err)?;
+    Ok(state)
+}
+
+/// Makes a Lua error from anything printable.
+pub(crate) fn lua_error(message: impl std::fmt::Display) -> Error {
+    Error::runtime(message.to_string())
+}

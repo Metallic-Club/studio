@@ -84,6 +84,8 @@ static CLASSES: &[ClassDef] = &[
         })],
     ),
     class("Players", "Instance", &[]),
+    // Child of each Player; the player's GUI and LocalScripts live here.
+    class("PlayerGui", "Instance", &[]),
     class("ReplicatedStorage", "Instance", &[]),
     class("ServerScriptService", "Instance", &[]),
     class("StarterPlayer", "Instance", &[]),

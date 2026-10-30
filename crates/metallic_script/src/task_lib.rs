@@ -2,6 +2,7 @@
 //! script threads, and the execution budget.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::time::Instant;
@@ -52,6 +53,11 @@ pub(crate) struct Scheduler {
     /// running code (possibly empty).
     pub(crate) timeout_loc: RefCell<Option<String>>,
     pending: RefCell<Vec<Pending>>,
+    /// Thread (by address) -> the owner id of the script it belongs to. Removed when the
+    /// thread finishes. Owner 0 means "no script".
+    owners: RefCell<HashMap<usize, u64>>,
+    /// The owner of the code that is running now; new threads and connections inherit it.
+    current: Cell<u64>,
     seq: Cell<u64>,
     pub(crate) sink: Rc<dyn OutputSink>,
     /// Lua function `guard(f, ...)`: runs `f` under `xpcall` with the error normaliser.
@@ -65,6 +71,8 @@ impl Scheduler {
             deadline: Cell::new(None),
             timeout_loc: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
+            owners: RefCell::new(HashMap::new()),
+            current: Cell::new(0),
             seq: Cell::new(0),
             sink,
             guard: RefCell::new(None),
@@ -74,6 +82,7 @@ impl Scheduler {
     /// Forgets every sleeping thread.
     pub(crate) fn clear(&self) {
         self.pending.borrow_mut().clear();
+        self.owners.borrow_mut().clear();
         *self.guard.borrow_mut() = None;
     }
 
@@ -92,10 +101,49 @@ impl Scheduler {
         args: Vec<Value>,
     ) -> Result<(Thread, Vec<Value>)> {
         let thread = lua.create_thread(self.guard()?)?;
+        let owner = self.current.get();
+        if owner != 0 {
+            self.owners
+                .borrow_mut()
+                .insert(thread.to_pointer() as usize, owner);
+        }
         let mut all = Vec::with_capacity(args.len() + 1);
         all.push(Value::Function(f));
         all.extend(args);
         Ok((thread, all))
+    }
+
+    /// The owner id of the script a thread belongs to.
+    pub(crate) fn owner_of(&self, thread: &Thread) -> Option<u64> {
+        self.owners
+            .borrow()
+            .get(&(thread.to_pointer() as usize))
+            .copied()
+    }
+
+    /// The owner of the code that is running now (0 outside any script).
+    pub(crate) fn current_owner(&self) -> u64 {
+        self.current.get()
+    }
+
+    /// Runs `run` with `owner` as the current owner, restoring the previous one after.
+    pub(crate) fn as_owner<T>(&self, owner: u64, run: impl FnOnce() -> T) -> T {
+        let prev = self.current.replace(owner);
+        let out = run();
+        self.current.set(prev);
+        out
+    }
+
+    /// Forgets the sleeping threads of `owner`; they are never resumed again.
+    pub(crate) fn cancel_owner(&self, owner: u64) {
+        let owners = self.owners.borrow();
+        self.pending.borrow_mut().retain(|p| {
+            owners
+                .get(&(p.thread.to_pointer() as usize))
+                .is_none_or(|o| *o != owner)
+        });
+        drop(owners);
+        self.owners.borrow_mut().retain(|_, o| *o != owner);
     }
 
     fn push(&self, wake: f64, is_wait: bool, thread: Thread, args: Vec<Value>) {
@@ -118,6 +166,11 @@ impl Scheduler {
         thread: &Thread,
         raw: Result<MultiValue>,
     ) -> std::result::Result<(), String> {
+        if thread.status() != mlua::thread::ThreadStatus::Resumable {
+            self.owners
+                .borrow_mut()
+                .remove(&(thread.to_pointer() as usize));
+        }
         let values = raw.map_err(|e| format_error(&e))?;
         if thread.status() == mlua::thread::ThreadStatus::Resumable {
             if is_tag(values.front(), SLEEP) {
@@ -170,9 +223,14 @@ impl Scheduler {
         thread: &Thread,
         args: Vec<Value>,
     ) -> std::result::Result<(), String> {
-        let (raw, timeout) =
-            self.budgeted(|| thread.resume::<MultiValue>(MultiValue::from_vec(args)));
+        let owner = self.owner_of(thread).unwrap_or(0);
+        let (raw, timeout) = self.as_owner(owner, || {
+            self.budgeted(|| thread.resume::<MultiValue>(MultiValue::from_vec(args)))
+        });
         if let Some(msg) = timeout {
+            self.owners
+                .borrow_mut()
+                .remove(&(thread.to_pointer() as usize));
             return Err(msg);
         }
         self.after_resume(thread, raw)
@@ -180,7 +238,10 @@ impl Scheduler {
 
     /// Resumes `thread` inside the caller's budget (used by `task.spawn`).
     fn resume_inline(&self, thread: &Thread, args: Vec<Value>) -> std::result::Result<(), String> {
-        let raw = thread.resume::<MultiValue>(MultiValue::from_vec(args));
+        let owner = self.owner_of(thread).unwrap_or(self.current.get());
+        let raw = self.as_owner(owner, || {
+            thread.resume::<MultiValue>(MultiValue::from_vec(args))
+        });
         self.after_resume(thread, raw)
     }
 
@@ -188,13 +249,16 @@ impl Scheduler {
     pub(crate) fn call_guarded(
         &self,
         lua: &Lua,
+        owner: u64,
         f: &Function,
         args: impl IntoLuaMulti,
     ) -> std::result::Result<MultiValue, String> {
         let guard = self.guard().map_err(|e| format_error(&e))?;
         let mut all = vec![Value::Function(f.clone())];
         all.extend(args.into_lua_multi(lua).map_err(|e| format_error(&e))?);
-        let (raw, timeout) = self.budgeted(|| guard.call::<MultiValue>(MultiValue::from_vec(all)));
+        let (raw, timeout) = self.as_owner(owner, || {
+            self.budgeted(|| guard.call::<MultiValue>(MultiValue::from_vec(all)))
+        });
         if let Some(msg) = timeout {
             return Err(msg);
         }
@@ -248,6 +312,7 @@ pub(crate) fn install(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
     let type_fn: Value = globals.get("type")?;
     let tostring: Value = globals.get("tostring")?;
     let sub: Value = globals.get::<mlua::Table>("string")?.get("sub")?;
+    let find: Value = globals.get::<mlua::Table>("string")?.get("find")?;
     let info: Value = globals.get::<mlua::Table>("debug")?.get("info")?;
     let yield_fn: Value = globals.get::<mlua::Table>("coroutine")?.get("yield")?;
 
@@ -257,7 +322,7 @@ pub(crate) fn install(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
     let guard: Function = lua
         .load(
             r#"
-local xpcall, type, tostring, sub, info, okTag, errTag = ...
+local xpcall, type, tostring, sub, info, okTag, errTag, find = ...
 local function describe(e)
     local t = type(e)
     if t == "string" then return e end
@@ -265,6 +330,8 @@ local function describe(e)
     if t == "userdata" then
         local s = tostring(e)
         if sub(s, 1, 15) == "runtime error: " then s = sub(s, 16) end
+        local cut = find(s, "\nstack traceback", 1, true)
+        if cut then s = sub(s, 1, cut - 1) end
         return s
     end
     return "<" .. t .. ">"
@@ -290,7 +357,16 @@ return function(f, ...) return finish(xpcall(f, handler, ...)) end
 "#,
         )
         .set_name("=[engine]")
-        .call((xpcall, type_fn, tostring, sub, info, tag(OK), tag(ERR)))?;
+        .call((
+            xpcall,
+            type_fn,
+            tostring,
+            sub,
+            info,
+            tag(OK),
+            tag(ERR),
+            find,
+        ))?;
     *sched.guard.borrow_mut() = Some(guard);
 
     let task = lua.create_table()?;

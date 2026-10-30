@@ -36,6 +36,14 @@ pub struct InstanceId {
     generation: u32,
 }
 
+impl InstanceId {
+    /// The id packed into one number (generation in the high half). Unique per live instance; use it
+    /// as a map key where the id itself cannot be one (for example a Lua table).
+    pub fn to_bits(self) -> u64 {
+        (u64::from(self.generation) << 32) | u64::from(self.index)
+    }
+}
+
 #[derive(Clone)]
 struct Node {
     class: &'static str,

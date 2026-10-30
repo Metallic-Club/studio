@@ -243,3 +243,18 @@ fn destroy_ignores_stale_generation_signal_id() {
     w.set(survivor, "Anchored", Value::Bool(true)).unwrap();
     assert_eq!(seen.lock().unwrap().as_slice(), &[Value::Bool(true)]);
 }
+
+#[test]
+fn player_gui_is_a_registered_class_with_unique_bits() {
+    let mut w = world();
+    let player = w
+        .create("Player", Some(w.root("Players").unwrap()))
+        .unwrap();
+    let gui = w.create("PlayerGui", Some(player)).unwrap();
+    assert_eq!(w.class_name(gui), Some("PlayerGui"));
+    assert!(w.is_a(gui, "Instance"));
+    assert_ne!(gui.to_bits(), player.to_bits());
+    w.destroy(gui);
+    let again = w.create("PlayerGui", Some(player)).unwrap();
+    assert_ne!(again.to_bits(), gui.to_bits());
+}
