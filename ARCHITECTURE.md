@@ -60,6 +60,10 @@ apps.
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
+  Task queue ownership uses weak thread keys and fresh lease identities; task-created callbacks bind their
+  function/arguments at creation. Coroutine admission adapters consume private scheduler markers while ordinary
+  result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
+  retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
   Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
