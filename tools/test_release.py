@@ -102,8 +102,10 @@ class PhaseTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("-p") + 1], release.CARGO_PACKAGE)
         self.assertEqual(argv[argv.index("--bin") + 1], release.CARGO_BIN)
         self.assertEqual(argv[argv.index("--target-dir") + 1], str(self.root / "target"))
-        self.assertNotIn("GITHUB_TOKEN", child.call_args.kwargs["env"])
-        self.assertNotIn("GH_TOKEN", child.call_args.kwargs["env"])
+        # A failing regression must not dump unrelated environment values.
+        environment_keys = set(child.call_args.kwargs["env"])
+        self.assertNotIn("GITHUB_TOKEN", environment_keys)
+        self.assertNotIn("GH_TOKEN", environment_keys)
 
     def test_publish_only_never_builds_and_preserves_pack_upload_flow(self):
         with (patch.dict(os.environ, {"GITHUB_TOKEN": "test-only-token"}),
