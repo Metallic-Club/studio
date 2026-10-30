@@ -185,6 +185,7 @@ class DownloadTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
 
     def setUp(self):
         self.cache = Path(tempfile.mkdtemp())

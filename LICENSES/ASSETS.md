@@ -30,7 +30,6 @@ attribution; we credit the authors anyway. Licence proof for each source is link
 | [N64 Stone slab (N64 Texture Pack)](https://opengameart.org/content/n64-texture-pack) (`tex-concrete-pixel-n64-stone-slab`) | n64guy | OpenGameArt.org | CC0-1.0 |
 | [Hand-painted Cracked Slab](https://opengameart.org/content/handpainted-rock-textures) (`tex-concrete-stylized-hptex-rock-02`) | rubberduck | OpenGameArt.org | CC0-1.0 |
 | [Hand-painted Cobblestone](https://opengameart.org/content/handpainted-rock-textures) (`tex-concrete-stylized-hptex-rock-03`) | rubberduck | OpenGameArt.org | CC0-1.0 |
-| [Simple Stylized Toon Seamless Rock or Stone Texture](https://opengameart.org/content/simple-stylized-toon-seamless-rock-or-stone-texture) (`tex-concrete-toon-flat-rock`) | Feraly | OpenGameArt.org | CC0-1.0 |
 | [Fingerprints 002](https://ambientcg.com/a/Fingerprints002) (`tex-glass-fingerprints002`) | Lennart Demes (ambientCG) | ambientCG | CC0-1.0 |
 | [N64 Window (N64 Texture Pack)](https://opengameart.org/content/n64-texture-pack) (`tex-glass-pixel-n64-window`) | n64guy | OpenGameArt.org | CC0-1.0 |
 | [Surface Imperfections 003](https://ambientcg.com/a/SurfaceImperfections003) (`tex-glass-surfaceimperfections003`) | Lennart Demes (ambientCG) | ambientCG | CC0-1.0 |

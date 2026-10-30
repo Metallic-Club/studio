@@ -1524,46 +1524,6 @@ map = "archive"
 path = "hptex_pack_4_1k.zip"
 
 [[asset]]
-id = "tex-concrete-toon-flat-rock"
-kind = "texture"
-name = "Simple Stylized Toon Seamless Rock or Stone Texture"
-source = "opengameart"
-source_id = "simple-stylized-toon-seamless-rock-or-stone-texture"
-page_url = "https://opengameart.org/content/simple-stylized-toon-seamless-rock-or-stone-texture"
-download_url = "https://opengameart.org/sites/default/files/rock_seemless_color.png"
-licence = "CC0-1.0"
-licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
-licence_evidence = "https://opengameart.org/content/simple-stylized-toon-seamless-rock-or-stone-texture: licence block lists CC0"
-licence_checked = "2026-10-30"
-author = "Feraly"
-attribution = "Simple Stylized Toon Seamless Rock or Stone Texture by Feraly, OpenGameArt.org (CC0)"
-format = "png"
-resolution = "native"
-size = 1311856
-material = "Concrete"
-role = "stylized"
-look = "toon"
-tags = ["flat", "rock", "toon"]
-[[asset.files]]
-url = "https://opengameart.org/sites/default/files/rock_seemless_color.png"
-sha256 = "0d11e93dfc63be64c0603276eb22a00fc433f0fdb13f9e5ad4b416914ea229f3"
-size = 268287
-map = "albedo"
-path = "rock_seemless_color.png"
-[[asset.files]]
-url = "https://opengameart.org/sites/default/files/rock_seemless_normal.png"
-sha256 = "92bd2d318c4e68158dd8ee7a7154d804357b6b02b67e978200e98ee4e402dc04"
-size = 683205
-map = "normal_gl"
-path = "rock_seemless_normal.png"
-[[asset.files]]
-url = "https://opengameart.org/sites/default/files/rock_seemless_roughness.png"
-sha256 = "452d197d330bc6dd5527a3a946ce878b6492ba705115893712be42ef4a844225"
-size = 360364
-map = "roughness"
-path = "rock_seemless_roughness.png"
-
-[[asset]]
 id = "tex-brick-pixel-n64-bricks"
 kind = "texture"
 name = "N64 Bricks (N64 Texture Pack B)"

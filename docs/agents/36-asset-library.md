@@ -7,9 +7,9 @@ Lots of free, high-quality, permissively licensed textures, HDRIs and models so 
 per-asset licence proof and SHA-256, a fetch/convert tool, and nothing large in git.
 
 ## Done
-- `assets/manifest/` (184 entries, all CC0 1.0, every file hashed):
-  - 51 texture sets + 4 pixel texture packs. Every Part material (Plastic, SmoothPlastic, Metal, Wood, Concrete,
-    Glass, Grass, Brick, Ice, Sand) has 1 `primary` + 2 or 3 `alternate`; 3 `extra`; 8 `stylized`/toon (hand painted,
+- `assets/manifest/` (183 entries, all CC0 1.0, every file hashed):
+  - 50 texture sets + 4 pixel texture packs. Every Part material (Plastic, SmoothPlastic, Metal, Wood, Concrete,
+    Glass, Grass, Brick, Ice, Sand) has 1 `primary` + 2 or 3 `alternate`; 3 `extra`; 7 `stylized`/toon (hand painted,
     OpenGameArt) and 8 `pixel` (N64-style 32 px) sets mapped to materials.
   - 20 HDRIs from Poly Haven (4 day, 4 sunset, 3 overcast/fog, 3 night, 6 interior), each 4k + 1k `.hdr`.
   - 109 models: 55 Poly Haven (realistic glTF, 1k textures) + 54 Poly Pizza (Quaternius low poly GLB; 16 animated).
@@ -25,7 +25,7 @@ per-asset licence proof and SHA-256, a fetch/convert tool, and nothing large in 
   stamps, pixel native size, CLI, committed `LICENSES/ASSETS.md` freshness, real-manifest coverage rules).
 - `tools/assets/previews.py` + `blender_render.py`: contact sheets rendered from the CC0 files themselves
   (`docs/agents/36-asset-library/{textures,hdris,models}.jpg`). Weak picks replaced after looking: pixel Brick (blue
-  bricks), Grass (yellow) and Ice (pink crystal) swapped for red bricks, green grass and tintable snow; dropped two weak models (Wizard scene, flat Brick Wall).
+  bricks), Grass (yellow) and Ice (pink crystal) swapped for red bricks, green grass and tintable snow; dropped two weak models (Wizard scene, flat Brick Wall) and one near-black toon rock texture.
 - `assets/README.md`: how it works, fields, licence policy, exclusions, how to add an asset.
 
 ## Commands
