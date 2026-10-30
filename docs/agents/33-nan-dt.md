@@ -10,7 +10,7 @@ Treat any non-finite `dt` as 0, keep negative -> 0 and large -> `MAX_STEP`.
 - test, clippy, deny pass (see commands).
 
 ## Next
-- Open the PR (`Closes #33`) after review by the lead.
+- PR open (`Closes #33`); waiting for review. Nothing else to do here.
 
 ## Commands
 ```
@@ -21,4 +21,4 @@ cargo deny check licenses
 ```
 
 ## Open questions
-- The issue suggests the same guard in `Game::frame` (#8) and `ScriptHost::step`; not done here (out of scope, separate issue/PR).
+- The same guard in `ScriptHost::step` (#6) and `Game::frame` (#8) is out of scope here; filed as #48.
