@@ -15,6 +15,14 @@ pub trait Spawner {
     /// Starts `exe` with exactly `args`, without a shell and without a console window, and
     /// returns its process id.
     fn spawn(&self, exe: &Path, args: &[OsString]) -> Result<u32, LauncherError>;
+
+    /// Starts `exe` like [`spawn`](Self::spawn), waits until it ends and returns its exit code.
+    /// Used for installers. The default says "unsupported", so a spawner that cannot wait never
+    /// pretends an installer finished.
+    fn spawn_and_wait(&self, exe: &Path, args: &[OsString]) -> Result<i32, LauncherError> {
+        let _ = (exe, args);
+        Err(LauncherError::Unsupported("waiting for a program"))
+    }
 }
 
 /// Where the programs this Launcher starts are.

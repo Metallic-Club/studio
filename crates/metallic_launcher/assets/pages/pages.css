@@ -132,6 +132,7 @@ ul.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: w
   border-radius: var(--r-sm);
   font: 400 13px/18px var(--mono);
 }
+select.text { font-family: var(--font); }
 .text::placeholder { color: var(--text-3); }
 .text:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .text[disabled] { border-color: var(--line); color: var(--text-3); }

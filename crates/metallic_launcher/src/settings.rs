@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use metallic_update::Channel;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::LauncherError;
@@ -32,6 +33,10 @@ pub struct LauncherSettings {
     /// A development server to trust like the site (loopback `http` allowed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dev_url: Option<String>,
+    /// Which releases the Launcher and Studio installs follow. Default `dev`. Only the Launcher's
+    /// own settings page may change it, and it applies after a restart.
+    #[serde(default)]
+    pub channel: Channel,
 }
 
 impl Default for LauncherSettings {
@@ -40,6 +45,7 @@ impl Default for LauncherSettings {
             close_to_tray: default_close_to_tray(),
             developer_mode: false,
             dev_url: None,
+            channel: Channel::default(),
         }
     }
 }
@@ -54,7 +60,7 @@ where
 }
 
 /// A change to apply to the settings; `None` leaves a field alone. Read from the bridge as
-/// camelCase JSON (`closeToTray`, `developerMode`, `devUrl`); unknown fields are refused.
+/// camelCase JSON (`closeToTray`, `developerMode`, `devUrl`, `channel`); unknown fields are refused.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
@@ -67,6 +73,9 @@ pub struct SettingsPatch {
     /// New value for `dev_url`: `Some(None)` (JSON `null`) clears it.
     #[serde(default, deserialize_with = "present_or_null")]
     pub dev_url: Option<Option<String>>,
+    /// New value for `channel` (`"dev"` or `"stable"`).
+    #[serde(default)]
+    pub channel: Option<Channel>,
 }
 
 impl LauncherSettings {
@@ -84,6 +93,9 @@ impl LauncherSettings {
         }
         if let Some(value) = patch.dev_url {
             self.dev_url = value;
+        }
+        if let Some(value) = patch.channel {
+            self.channel = value;
         }
         Ok(())
     }

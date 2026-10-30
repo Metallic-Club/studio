@@ -12,6 +12,8 @@ pub enum TrayAction {
     OpenStudio,
     /// Look for a Launcher update.
     CheckUpdates,
+    /// Restart into the downloaded Launcher update.
+    RestartToUpdate,
     /// Close the Launcher.
     Quit,
 }
@@ -23,6 +25,7 @@ impl TrayAction {
             TrayAction::Show => "show",
             TrayAction::OpenStudio => "studio",
             TrayAction::CheckUpdates => "updates",
+            TrayAction::RestartToUpdate => "restart",
             TrayAction::Quit => "quit",
         }
     }
@@ -33,6 +36,7 @@ impl TrayAction {
             TrayAction::Show,
             TrayAction::OpenStudio,
             TrayAction::CheckUpdates,
+            TrayAction::RestartToUpdate,
             TrayAction::Quit,
         ]
         .into_iter()
@@ -41,11 +45,14 @@ impl TrayAction {
 }
 
 /// The tray menu, in order: `Open Metallic`, `Open Studio` (only when installed),
-/// `Check for updates`, `Quit`.
-pub fn tray_menu(studio_installed: bool) -> Vec<(TrayAction, &'static str)> {
+/// `Restart to update` (only when an update is downloaded), `Check for updates`, `Quit`.
+pub fn tray_menu(studio_installed: bool, update_ready: bool) -> Vec<(TrayAction, &'static str)> {
     let mut items = vec![(TrayAction::Show, "Open Metallic")];
     if studio_installed {
         items.push((TrayAction::OpenStudio, "Open Studio"));
+    }
+    if update_ready {
+        items.push((TrayAction::RestartToUpdate, "Restart to update"));
     }
     items.push((TrayAction::CheckUpdates, "Check for updates"));
     items.push((TrayAction::Quit, "Quit"));

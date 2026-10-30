@@ -151,19 +151,39 @@ fn close_hides_when_close_to_tray() {
 
 #[test]
 fn tray_menu_order() {
-    assert_eq!(tray_menu(false).last().unwrap().0, TrayAction::Quit);
-    let with: Vec<&str> = tray_menu(true).iter().map(|(_, text)| *text).collect();
+    assert_eq!(tray_menu(false, false).last().unwrap().0, TrayAction::Quit);
+    let with: Vec<&str> = tray_menu(true, false)
+        .iter()
+        .map(|(_, text)| *text)
+        .collect();
     assert_eq!(
         with,
         ["Open Metallic", "Open Studio", "Check for updates", "Quit"]
     );
-    let without: Vec<&str> = tray_menu(false).iter().map(|(_, text)| *text).collect();
+    let without: Vec<&str> = tray_menu(false, false)
+        .iter()
+        .map(|(_, text)| *text)
+        .collect();
     assert_eq!(without, ["Open Metallic", "Check for updates", "Quit"]);
+    let ready: Vec<&str> = tray_menu(true, true)
+        .iter()
+        .map(|(_, text)| *text)
+        .collect();
+    assert_eq!(
+        ready,
+        [
+            "Open Metallic",
+            "Open Studio",
+            "Restart to update",
+            "Check for updates",
+            "Quit"
+        ]
+    );
 }
 
 #[test]
 fn tray_action_ids_round_trip() {
-    for (action, _) in tray_menu(true) {
+    for (action, _) in tray_menu(true, true) {
         assert_eq!(TrayAction::from_id(action.id()), Some(action));
     }
     assert_eq!(TrayAction::from_id("rm -rf"), None);

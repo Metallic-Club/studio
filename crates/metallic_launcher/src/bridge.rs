@@ -22,9 +22,18 @@
 //! `setSettings`, `signIn`, `signOut`, `restartToUpdate` (site pages), and `githubSignIn`,
 //! `retrySite` (bundled pages only).
 //!
-//! `restartToUpdate` takes no arguments. On success it resolves, or the page simply closes as
-//! the Launcher restarts; on failure it rejects with `busy` or `failed`. Until the update
-//! step brings real updates, the shell answers `failed` and logs a line.
+//! `restartToUpdate` takes no arguments. On success the Launcher closes and restarts into the
+//! update, so the page simply goes away; if the update cannot be applied it rejects with `busy`
+//! (a Player is running) or `failed` (nothing is downloaded, or applying did not start).
+//!
+//! `installStudio` answers at once (`busy` when an install is already running) and the install
+//! goes on in the background: `installProgress` and `installFinished` events tell how it goes,
+//! and `installStatus` answers `{player, studio, launcher}`, each an object with a `state`
+//! (`notInstalled`, `installed` + `version`, `installing` + `percent`, `failed` + `reason`; for
+//! the launcher `notInstalledCopy`, `upToDate`, `checking`, `downloading` + `percent`,
+//! `readyToRestart` + `version` + `required`, `needsGithubSignIn`, `failed` + `reason`).
+//! `githubSignIn` starts the GitHub sign-in and answers at once; the code to type arrives in
+//! `githubSignIn` events, which only bundled pages receive.
 
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,7 +52,9 @@ use crate::url_policy::{PageOrigin, UrlPolicy};
 pub const BRIDGE_VERSION: u32 = 1;
 /// The longest message the Launcher reads, in bytes. Longer ones are dropped unread.
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
-/// The most calls that may wait for an answer at once. More are answered `busy`.
+/// The most calls that may be running at once. More are answered `busy`. A call counts only
+/// while the host works on it: an answer that waits to be delivered holds no place, and long
+/// work (an install, a download) is done in the background, so it holds none either.
 pub const MAX_IN_FLIGHT: usize = 32;
 /// The shortest time between two Player starts.
 const PLAY_INTERVAL: Duration = Duration::from_secs(2);
@@ -148,6 +159,7 @@ pub fn allowed(origin: PageOrigin, cmd: &BridgeCommand) -> bool {
                     close_to_tray: _,
                     developer_mode: None,
                     dev_url: None,
+                    channel: None,
                 } = patch
                 else {
                     return false;
@@ -265,6 +277,14 @@ pub enum BridgeEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         user_code: Option<String>,
     },
+    /// The GitHub sign-in for team builds moved on. Only bundled pages receive it.
+    GithubSignIn {
+        /// One of `pending`, `signedIn`, `denied`, `expired`, `failed`.
+        state: String,
+        /// The code the user types on GitHub's page, while pending.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_code: Option<String>,
+    },
     /// A Launcher update is ready.
     UpdateReady {
         /// The new version.
@@ -282,7 +302,7 @@ pub enum BridgeEvent {
 /// The sign-in states a page may be told about.
 const SIGN_IN_STATES: [&str; 5] = ["pending", "signedIn", "denied", "expired", "failed"];
 
-/// Counts calls that have been read and not yet answered; gives its slot back when dropped.
+/// Counts a call while the host runs it; gives its place back when dropped.
 struct InFlight(Arc<AtomicUsize>);
 
 impl Drop for InFlight {
@@ -291,7 +311,7 @@ impl Drop for InFlight {
     }
 }
 
-/// An answer waiting to be delivered to the page that asked. Dropping it unsent frees its slot.
+/// An answer waiting to be delivered to the page that asked.
 pub struct PendingReply {
     id: u32,
     /// Where the asking page came from; the answer goes only to a page with this origin.
@@ -299,7 +319,6 @@ pub struct PendingReply {
     /// The `location.origin` values the answer may run in (checked in the page as well).
     guard: Vec<String>,
     outcome: Result<Value, BridgeErrorCode>,
-    _slot: Option<InFlight>,
 }
 
 /// Prints the call id only: the value may hold anything the host returned.
@@ -440,6 +459,7 @@ fn settings_view(origin: PageOrigin, settings: &LauncherSettings) -> Value {
             "closeToTray": settings.close_to_tray,
             "developerMode": settings.developer_mode,
             "devUrl": settings.dev_url,
+            "channel": settings.channel.as_str(),
         })
     } else {
         json!({ "closeToTray": settings.close_to_tray })
@@ -550,24 +570,27 @@ impl Bridge {
                 origin_key,
                 guard,
                 outcome: Err(BridgeErrorCode::Busy),
-                _slot: None,
             });
         }
 
+        // The place is held while the host works and is given back before the answer is
+        // delivered, so an answer that waits (or a long job the host runs in the background)
+        // never takes a place from other calls.
         let reserved = self.in_flight.fetch_add(1, Ordering::SeqCst);
-        let slot = InFlight(self.in_flight.clone());
-        let outcome = if reserved >= MAX_IN_FLIGHT {
-            log::warn!("too many bridge calls waiting; answered busy");
-            Err(BridgeErrorCode::Busy)
-        } else {
-            self.run(origin, &message, &name, host)
+        let outcome = {
+            let _place = InFlight(self.in_flight.clone());
+            if reserved >= MAX_IN_FLIGHT {
+                log::warn!("too many bridge calls running; answered busy");
+                Err(BridgeErrorCode::Busy)
+            } else {
+                self.run(origin, &message, &name, host)
+            }
         };
         Some(PendingReply {
             id,
             origin_key,
             guard,
             outcome,
-            _slot: Some(slot),
         })
     }
 
@@ -674,8 +697,16 @@ impl Bridge {
     pub fn event_script(&self, event: &BridgeEvent, current_page_url: &str) -> Option<String> {
         let guard = self.guard_origins(current_page_url)?;
         let event = match event {
-            BridgeEvent::SignIn { state, .. } if !SIGN_IN_STATES.contains(&state.as_str()) => {
+            BridgeEvent::SignIn { state, .. } | BridgeEvent::GithubSignIn { state, .. }
+                if !SIGN_IN_STATES.contains(&state.as_str()) =>
+            {
                 log::warn!("not sending a sign-in event with an unknown state");
+                return None;
+            }
+            // The GitHub code is for the Launcher's own pages; the site never hears of it.
+            BridgeEvent::GithubSignIn { .. }
+                if self.policy.origin_of(current_page_url) != PageOrigin::Local =>
+            {
                 return None;
             }
             BridgeEvent::InstallProgress { product, percent } => BridgeEvent::InstallProgress {

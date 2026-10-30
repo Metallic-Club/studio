@@ -362,7 +362,7 @@ fn bundled_settings_page_can_change_everything_and_see_everything() {
     let value = set(json!({"developerMode": true, "devUrl": "http://127.0.0.1:5173"}));
     assert_eq!(
         value,
-        json!({"ok": {"closeToTray": true, "developerMode": true, "devUrl": "http://127.0.0.1:5173"}})
+        json!({"ok": {"closeToTray": true, "developerMode": true, "devUrl": "http://127.0.0.1:5173", "channel": "dev"}})
     );
     // null clears the address; a bad address changes nothing.
     let value = set(json!({"devUrl": null}));
@@ -631,27 +631,145 @@ fn only_the_five_sign_in_states_are_sent() {
     }
 }
 
+/// A host whose `install_status` waits until the test lets it go, to hold calls "in flight".
+struct BlockingHost {
+    inside: std::sync::atomic::AtomicUsize,
+    gate: std::sync::Mutex<bool>,
+    opened: std::sync::Condvar,
+}
+
+impl BlockingHost {
+    fn new() -> Self {
+        BlockingHost {
+            inside: std::sync::atomic::AtomicUsize::new(0),
+            gate: std::sync::Mutex::new(false),
+            opened: std::sync::Condvar::new(),
+        }
+    }
+    fn open(&self) {
+        *self.gate.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+}
+
+impl BridgeHost for BlockingHost {
+    fn info(&self) -> LauncherInfo {
+        FakeHost::default().info()
+    }
+    fn play(&self, _link: DeepLink) -> Result<(), BridgeErrorCode> {
+        Ok(())
+    }
+    fn install_status(&self) -> Value {
+        self.inside
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut open = self.gate.lock().unwrap();
+        while !*open {
+            open = self.opened.wait(open).unwrap();
+        }
+        json!({})
+    }
+    fn install_studio(&self) -> Result<(), BridgeErrorCode> {
+        Ok(())
+    }
+    fn open_studio(&self, _place: Option<PlaceId>) -> Result<(), BridgeErrorCode> {
+        Ok(())
+    }
+    fn settings(&self) -> LauncherSettings {
+        LauncherSettings::default()
+    }
+    fn update_settings(&self, _patch: SettingsPatch) -> Result<LauncherSettings, BridgeErrorCode> {
+        Ok(LauncherSettings::default())
+    }
+    fn sign_in(&self) -> Result<Value, BridgeErrorCode> {
+        Ok(json!({}))
+    }
+    fn sign_out(&self) -> Result<(), BridgeErrorCode> {
+        Ok(())
+    }
+    fn github_sign_in(&self) -> Result<Value, BridgeErrorCode> {
+        Ok(json!({}))
+    }
+    fn retry_site(&self) {}
+    fn restart_to_update(&self) -> Result<(), BridgeErrorCode> {
+        Ok(())
+    }
+}
+
 #[test]
-fn at_most_32_calls_wait_for_an_answer() {
+fn at_most_32_calls_run_at_once() {
+    use std::sync::atomic::Ordering;
+    let (bridge, host) = (bridge(), BlockingHost::new());
+    let slow = r#"{"id":1,"cmd":"installStatus"}"#;
+    std::thread::scope(|scope| {
+        // The bridge's own message budget (a burst of 40) is not what is tested here.
+        let runners: Vec<_> = (0..MAX_IN_FLIGHT)
+            .map(|_| scope.spawn(|| bridge.handle(SITE, slow, &host).unwrap()))
+            .collect();
+        while host.inside.load(Ordering::SeqCst) < MAX_IN_FLIGHT {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // All 32 places are taken by calls the host is working on: the next one is `busy` and
+        // never reaches the host.
+        let extra = bridge.handle(SITE, slow, &host).unwrap();
+        assert_eq!(error_of(bridge.deliver(extra, SITE)), "busy");
+        assert_eq!(host.inside.load(Ordering::SeqCst), MAX_IN_FLIGHT);
+        host.open();
+        for runner in runners {
+            assert!(bridge.deliver(runner.join().unwrap(), SITE).is_some());
+        }
+    });
+    // Finished calls give their places back.
+    assert!(call_blocking_free(&bridge, &host));
+}
+
+fn call_blocking_free(bridge: &Bridge, host: &BlockingHost) -> bool {
+    let reply = bridge
+        .handle(SITE, r#"{"id":1,"cmd":"installStatus"}"#, host)
+        .unwrap();
+    bridge.deliver(reply, SITE).is_some()
+}
+
+#[test]
+fn undelivered_answers_do_not_hold_places() {
+    // Task 4 review finding I-3: an answer that waits to be delivered (or a long job that the
+    // host runs in the background and reports by events) must not starve other calls.
     let (bridge, host) = (bridge(), FakeHost::default());
     let msg = r#"{"id":1,"cmd":"getInfo"}"#;
-    let mut waiting: Vec<_> = (0..MAX_IN_FLIGHT)
-        .map(|_| bridge.handle(SITE, msg, &host).unwrap())
-        .collect();
-    let extra = bridge.handle(SITE, msg, &host).unwrap();
-    assert_eq!(error_of(bridge.deliver(extra, SITE)), "busy");
-    assert_eq!(
-        host.calls().len(),
-        MAX_IN_FLIGHT,
-        "the extra call never reached the host"
+    let mut waiting = Vec::new();
+    // 40 calls is the message budget's burst, so none is refused for coming too fast.
+    for _ in 0..(MAX_IN_FLIGHT + 8) {
+        let reply = bridge.handle(SITE, msg, &host).unwrap();
+        waiting.push(reply);
+    }
+    assert!(
+        host.calls().len() > MAX_IN_FLIGHT,
+        "calls beyond {MAX_IN_FLIGHT} undelivered answers still reached the host"
     );
-    // Delivering (or dropping) an answer frees its place.
-    let first = waiting.pop().unwrap();
-    assert!(bridge.deliver(first, SITE).is_some());
-    let again = bridge.handle(SITE, msg, &host).unwrap();
-    assert!(bridge.deliver(again, SITE).is_some());
-    waiting.clear();
-    assert!(call(&bridge, &host, SITE, msg).is_some());
+    for reply in waiting {
+        let script = bridge.deliver(reply, SITE).unwrap();
+        assert!(
+            answer(&script).get("ok").is_some(),
+            "no call was answered busy"
+        );
+    }
+}
+
+#[test]
+fn github_sign_in_events_go_to_bundled_pages_only() {
+    let bridge = bridge();
+    let pending = BridgeEvent::GithubSignIn {
+        state: "pending".to_string(),
+        user_code: Some("ABCD-1234".to_string()),
+    };
+    let script = bridge.event_script(&pending, LOCAL).unwrap();
+    assert!(script.contains("githubSignIn") && script.contains("ABCD-1234"));
+    assert!(bridge.event_script(&pending, SITE).is_none());
+    assert!(bridge.event_script(&pending, DEV).is_none());
+    let unknown = BridgeEvent::GithubSignIn {
+        state: "launched".to_string(),
+        user_code: None,
+    };
+    assert!(bridge.event_script(&unknown, LOCAL).is_none());
 }
 
 #[test]
@@ -701,6 +819,8 @@ fn site_cannot_set_local_only_settings() {
         json!({"devUrl": "http://127.0.0.1:5173"}),
         json!({"devUrl": null}),
         json!({"closeToTray": true, "developerMode": true, "devUrl": null}),
+        json!({"channel": "stable"}),
+        json!({"closeToTray": true, "channel": "dev"}),
     ] {
         for page in [SITE, DEV] {
             let body = json!({"id": 1, "cmd": "setSettings", "args": {"patch": patch}}).to_string();

@@ -15,7 +15,7 @@
   var ERROR_TEXT = {
     badRequest: "That value is not valid.",
     notAllowed: "This page may not do that.",
-    notAvailable: "Not available yet.",
+    notAvailable: "Not available in this build.",
     busy: "Busy. Try again in a moment.",
     failed: "That did not work. Try again."
   };
@@ -75,6 +75,9 @@
     var closeToTray = document.getElementById("close-to-tray");
     var developerMode = document.getElementById("developer-mode");
     var devUrl = document.getElementById("dev-url");
+    var channel = document.getElementById("channel");
+    var githubButton = document.getElementById("github-sign-in");
+    var githubStatus = document.getElementById("github-status");
     var save = document.getElementById("save");
     var note = document.getElementById("settings-status");
     var say = function (text, kind) {
@@ -88,6 +91,7 @@
       closeToTray.checked = settings.closeToTray === true;
       developerMode.checked = settings.developerMode === true;
       devUrl.value = typeof settings.devUrl === "string" ? settings.devUrl : "";
+      channel.value = settings.channel === "stable" ? "stable" : "dev";
       syncDevUrl();
       save.disabled = false;
     }, function () {
@@ -102,7 +106,8 @@
       var patch = {
         closeToTray: closeToTray.checked,
         developerMode: developerMode.checked,
-        devUrl: developerMode.checked && address !== "" ? address : null
+        devUrl: developerMode.checked && address !== "" ? address : null,
+        channel: channel.value
       };
       ask("setSettings", { patch: patch }).then(function () {
         say("Saved.", "ok");
@@ -113,6 +118,42 @@
       }).then(function () { save.disabled = false; });
     });
   }
+  // GitHub sign-in for team builds: the Launcher opens GitHub in the browser; the page shows
+  // the code to type there.
+  if (githubButton && githubStatus) {
+    var GITHUB_TEXT = {
+      signedIn: ["Signed in to GitHub.", "ok"],
+      denied: ["Sign-in was refused on the GitHub page.", "error"],
+      expired: ["The code expired. Start again.", "error"],
+      failed: ["GitHub sign-in did not work. Try again.", "error"]
+    };
+    var sayGithub = function (text, kind) {
+      githubStatus.textContent = text;
+      githubStatus.className = "status" + (kind ? " " + kind : "");
+    };
+    if (window.metallic) {
+      window.metallic.on("githubSignIn", function (event) {
+        if (event.state === "pending" && typeof event.userCode === "string") {
+          sayGithub("Type " + event.userCode + " on the GitHub page that opened.", "");
+          return;
+        }
+        var text = GITHUB_TEXT[event.state];
+        if (text) {
+          sayGithub(text[0], text[1]);
+          githubButton.disabled = false;
+        }
+      });
+    }
+    githubButton.addEventListener("click", function () {
+      githubButton.disabled = true;
+      sayGithub("Opening GitHub...", "");
+      ask("githubSignIn").catch(function (error) {
+        sayGithub(errorText(error), "error");
+        githubButton.disabled = false;
+      });
+    });
+  }
+
   var ua = document.querySelector("#ua code");
   if (ua) {
     ua.textContent = navigator.userAgent;

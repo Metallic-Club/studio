@@ -29,4 +29,16 @@ pub enum LauncherError {
     /// The operating system refused or failed a call.
     #[error("platform error: {0}")]
     Platform(String),
+    /// The same kind of step is already running (the text names it).
+    #[error("{0} is already running")]
+    Busy(&'static str),
+    /// This Launcher must update before it can start the Player.
+    #[error("the Launcher must update first")]
+    UpdateRequired,
+    /// The team build feed needs a GitHub sign-in first.
+    #[error("sign in to GitHub for team builds first")]
+    NeedsGithubSignIn,
+    /// An install or update step failed (a fixed phrase, never a token or an address).
+    #[error("{0}")]
+    Update(String),
 }

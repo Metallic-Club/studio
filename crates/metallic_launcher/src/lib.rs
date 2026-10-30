@@ -7,7 +7,8 @@
 //! accepts ([`app_event`]), the checked bridge from pages to the Launcher
 //! ([`bridge`]), the hand-over between Launchers ([`single_instance`]), the `metallic://`
 //! registration ([`protocol`]), starting the Player and Studio ([`launch`]) and the tray
-//! rules ([`tray`]). The window itself is in the `Metallic` program (`main.rs`, `shell.rs`).
+//! rules ([`tray`]), installing Studio ([`install`]) and the Launcher's own update
+//! ([`self_update`]). The window itself is in the `Metallic` program (`main.rs`, `shell.rs`).
 //!
 //! Library code returns [`LauncherError`]; only `main.rs` decides what to show on failure.
 
@@ -17,9 +18,11 @@ pub mod app_event;
 pub mod bridge;
 pub mod deep_link;
 pub mod error;
+pub mod install;
 pub mod launch;
 pub mod local_pages;
 pub mod protocol;
+pub mod self_update;
 pub mod settings;
 pub mod single_instance;
 pub mod site;
@@ -34,6 +37,11 @@ pub use bridge::{
 };
 pub use deep_link::{DeepLink, DeepLinkError, JoinTicket, PlaceId, SitePath};
 pub use error::LauncherError;
+pub use install::{
+    AssetSource, GithubAssets, InstallStatus, Installer, LauncherUpdateState, ProductStatus,
+    downloads_dir_for, github_sign_in, launcher_error, player_status, read_installed_version,
+    studio_root_for, studio_setup_name,
+};
 pub use launch::{
     ProductPaths, Spawner, product_paths, product_paths_for, start_player, start_studio,
 };
@@ -42,6 +50,7 @@ pub use protocol::{
     MemoryRegistry, PROTOCOL_KEY, UriRegistry, is_installed_copy, is_registered_to, register,
     unregister,
 };
+pub use self_update::{ProcessTracker, RestartError, SelfUpdater, StartedPlayers, UpdateSource};
 pub use settings::{LauncherSettings, SettingsPatch, SettingsStore};
 pub use single_instance::{
     Acquired, HandoffListener, HandoffMessage, HandoffSender, MAX_HANDOFF_BYTES, decode, encode,

@@ -36,7 +36,7 @@ use ::windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW, RegSetValueExW,
 };
 use ::windows::Win32::System::Threading::{
-    CreateEventW, INFINITE, ResetEvent, WaitForSingleObject,
+    CreateEventW, GetExitCodeProcess, INFINITE, ResetEvent, WaitForSingleObject,
 };
 use ::windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -722,12 +722,61 @@ impl Spawner for SystemSpawner {
             .map_err(|e| platform_error("could not start the program", e))?;
         Ok(child.id())
     }
+
+    fn spawn_and_wait(&self, exe: &Path, args: &[OsString]) -> Result<i32, LauncherError> {
+        let status = Command::new(exe)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .map_err(|e| platform_error("could not run the program", e))?;
+        Ok(status.code().unwrap_or(-1))
+    }
+}
+
+/// True while the process with id `pid` is running.
+pub fn process_alive(pid: u32) -> bool {
+    /// The exit code Windows reports for a process that has not ended.
+    const STILL_ACTIVE: u32 = 259;
+    // SAFETY: OpenProcess takes plain values and returns a handle we own; GetExitCodeProcess
+    // writes one u32 through a valid pointer; the handle is closed before returning.
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let mut code = 0u32;
+        let alive = GetExitCodeProcess(handle, &mut code).is_ok() && code == STILL_ACTIVE;
+        let _ = CloseHandle(handle);
+        alive
+    }
 }
 
 // ---- Tray ----------------------------------------------------------------------------------
 
 /// The tray icon. It disappears when this value is dropped.
-pub struct Tray(#[allow(dead_code)] TrayIcon);
+pub struct Tray(TrayIcon);
+
+impl Tray {
+    /// Replaces the menu with `items`. Must be called on the thread that runs the event loop.
+    pub fn set_items(&self, items: &[(TrayAction, &'static str)]) {
+        match build_menu(items) {
+            Ok(menu) => self.0.set_menu(Some(Box::new(menu))),
+            Err(error) => log::warn!("could not update the tray menu: {error}"),
+        }
+    }
+}
+
+fn build_menu(items: &[(TrayAction, &'static str)]) -> Result<Menu, LauncherError> {
+    let menu = Menu::new();
+    for (action, text) in items {
+        let item = MenuItem::with_id(MenuId::new(action.id()), *text, true, None);
+        menu.append(&item)
+            .map_err(|e| platform_error("tray menu", e))?;
+    }
+    Ok(menu)
+}
 
 /// Shows the tray icon with `items`. Menu choices and a left click on the icon are posted to
 /// `sink` as [`AppEvent::Tray`]. Must be called on the thread that runs the event loop.
@@ -740,12 +789,7 @@ pub fn create_tray(
 ) -> Result<Tray, LauncherError> {
     let icon = tray_icon::Icon::from_rgba(icon_rgba, width, height)
         .map_err(|e| platform_error("tray icon", e))?;
-    let menu = Menu::new();
-    for (action, text) in items {
-        let item = MenuItem::with_id(MenuId::new(action.id()), *text, true, None);
-        menu.append(&item)
-            .map_err(|e| platform_error("tray menu", e))?;
-    }
+    let menu = build_menu(items)?;
     {
         let sink = sink.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {

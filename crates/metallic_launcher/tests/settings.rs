@@ -36,6 +36,7 @@ fn save_then_load_round_trips() {
         close_to_tray: false,
         developer_mode: true,
         dev_url: Some("http://localhost:3000".to_string()),
+        channel: metallic_update::Channel::Stable,
     };
     store.save(&settings).unwrap();
     assert_eq!(store.load(), settings);

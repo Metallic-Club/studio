@@ -13,13 +13,19 @@ use std::time::Duration;
 use metallic_launcher::deep_link::SitePath;
 use metallic_launcher::{
     AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction,
-    DeepLink, EventSink, HandoffListener, HandoffMessage, LauncherConfig, LauncherError,
-    LauncherInfo, LauncherSettings, LocalPage, NavDecision, OfflineReason, PageOrigin, PlaceId,
-    SettingsPatch, SettingsStore, SiteOrigin, SiteStatus, StartPage, TrayAction, UrlPolicy,
-    check_site, local_url, on_close_requested, product_paths, serve, start_page, start_player,
-    start_studio, tray_menu, user_agent,
+    DeepLink, EventSink, GithubAssets, HandoffListener, HandoffMessage, InstallStatus, Installer,
+    LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage, NavDecision,
+    OfflineReason, PageOrigin, PlaceId, ProcessTracker, RestartError, SelfUpdater, SettingsPatch,
+    SettingsStore, SiteOrigin, SiteStatus, StartPage, StartedPlayers, TrayAction, UrlPolicy,
+    check_site, downloads_dir_for, github_sign_in, is_installed_copy, local_url,
+    on_close_requested, player_status, product_paths, serve, start_page, start_player,
+    start_studio, studio_root_for, tray_menu, user_agent,
 };
-use metallic_update::{HttpClient, UreqClient};
+use metallic_update::github_auth::{StoredTokenProvider, embedded_client_id};
+use metallic_update::{
+    GithubAuth, HttpClient, KeyringSecretStore, LAUNCHER_FEED, Token, TokenProvider, UpdateChecker,
+    UreqClient,
+};
 use serde_json::{Value, json};
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
@@ -70,8 +76,18 @@ struct Shared {
     shown: AtomicBool,
 }
 
-/// What the bridge can do in this build. Playing and opening Studio start the installed programs;
-/// installing, updating and sign-in arrive in later steps and answer `notAvailable` until then.
+/// The GitHub token for the private team feed: none until the user signs in.
+struct NoToken;
+
+impl TokenProvider for NoToken {
+    fn token(&self) -> Option<Token> {
+        None
+    }
+}
+
+/// What the bridge can do in this build. Playing and opening Studio start the installed
+/// programs; installing Studio and updating the Launcher are in `install` and `self_update`;
+/// the Metallic sign-in arrives in a later step and answers `notAvailable` until then.
 struct ShellHost {
     dev_mode: bool,
     settings: Mutex<LauncherSettings>,
@@ -79,6 +95,11 @@ struct ShellHost {
     http: Arc<dyn HttpClient>,
     check_origin: Option<SiteOrigin>,
     sink: Arc<dyn EventSink>,
+    installer: Arc<Installer>,
+    updater: Arc<SelfUpdater>,
+    players: Arc<StartedPlayers>,
+    /// GitHub sign-in for team builds; `None` until the client id is configured.
+    github: Option<Arc<GithubAuth>>,
 }
 
 impl BridgeHost for ShellHost {
@@ -87,24 +108,35 @@ impl BridgeHost for ShellHost {
             launcher_version: env!("CARGO_PKG_VERSION").to_string(),
             bridge_version: BRIDGE_VERSION,
             platform: "windows",
-            channel: "stable".to_string(),
+            channel: self.settings().channel.as_str().to_string(),
             dev_mode: self.dev_mode,
         }
     }
 
     fn play(&self, link: DeepLink) -> Result<(), BridgeErrorCode> {
-        start_the_player(&link).map_err(|error| match error {
+        start_the_player(&link, &self.updater, &self.players).map_err(|error| match error {
             LauncherError::NotInstalled(_) => BridgeErrorCode::NotInstalled,
+            LauncherError::UpdateRequired => BridgeErrorCode::UpdateRequired,
             _ => BridgeErrorCode::Failed,
         })
     }
 
     fn install_status(&self) -> Value {
-        json!({ "player": "notInstalled", "studio": "notInstalled", "launcher": "upToDate" })
+        let status = InstallStatus {
+            player: player_status(&product_paths()),
+            studio: self.installer.studio_status(),
+            launcher: self.updater.state(),
+        };
+        serde_json::to_value(status).unwrap_or_else(|_| json!({}))
     }
 
     fn install_studio(&self) -> Result<(), BridgeErrorCode> {
-        Err(BridgeErrorCode::NotAvailable)
+        self.installer
+            .start_install_studio(self.sink.clone())
+            .map_err(|error| match error {
+                LauncherError::Busy(_) => BridgeErrorCode::Busy,
+                _ => BridgeErrorCode::Failed,
+            })
     }
 
     fn open_studio(&self, place: Option<PlaceId>) -> Result<(), BridgeErrorCode> {
@@ -144,7 +176,26 @@ impl BridgeHost for ShellHost {
     }
 
     fn github_sign_in(&self) -> Result<Value, BridgeErrorCode> {
-        Err(BridgeErrorCode::NotAvailable)
+        let Some(auth) = self.github.clone() else {
+            return Err(BridgeErrorCode::NotAvailable);
+        };
+        let updater = self.updater.clone();
+        github_sign_in(
+            auth,
+            self.sink.clone(),
+            Arc::new(|address| {
+                if let Err(error) = metallic_update::github_auth::open_in_browser(address) {
+                    log::warn!("could not open the GitHub page: {error}");
+                }
+            }),
+            move |signed_in| {
+                if signed_in {
+                    updater.check_soon();
+                }
+            },
+        )
+        .map_err(|_| BridgeErrorCode::Failed)?;
+        Ok(json!({ "started": true }))
     }
 
     fn retry_site(&self) {
@@ -155,15 +206,26 @@ impl BridgeHost for ShellHost {
     }
 
     fn restart_to_update(&self) -> Result<(), BridgeErrorCode> {
-        log::info!("a restart to update was asked for; updates arrive in a later step");
-        Err(BridgeErrorCode::Failed)
+        self.updater
+            .restart_to_update(self.players.running_players())
+            .map_err(|error| match error {
+                RestartError::Busy => BridgeErrorCode::Busy,
+                RestartError::NotReady | RestartError::Failed => BridgeErrorCode::Failed,
+            })
     }
 }
 
 /// Starts the Player for a Play link and logs the outcome (never the link: it holds a ticket).
-fn start_the_player(link: &DeepLink) -> Result<(), LauncherError> {
+/// Refused while a required Launcher update waits; the Player is remembered for the update rule.
+fn start_the_player(
+    link: &DeepLink,
+    updater: &SelfUpdater,
+    players: &StartedPlayers,
+) -> Result<(), LauncherError> {
+    updater.allow_play()?;
     match start_player(&SystemSpawner, &product_paths(), link) {
         Ok(pid) => {
+            players.record(pid);
             log::info!("started the Player (process {pid})");
             Ok(())
         }
@@ -288,6 +350,8 @@ fn handle_deep_link(
     site: Option<&SiteOrigin>,
     offline: bool,
     sink: &dyn EventSink,
+    updater: &SelfUpdater,
+    players: &StartedPlayers,
 ) {
     // The Install flow: show the window and the downloads page, or the local page when offline.
     let show_downloads = || {
@@ -302,8 +366,11 @@ fn handle_deep_link(
     };
     match &link {
         DeepLink::Play { .. } => {
-            if let Err(LauncherError::NotInstalled(_)) = start_the_player(&link) {
-                show_downloads();
+            match start_the_player(&link, updater, players) {
+                Err(LauncherError::NotInstalled(_)) => show_downloads(),
+                // The site shows the update state; bring the window up so the user sees it.
+                Err(LauncherError::UpdateRequired) => sink.send(AppEvent::Focus),
+                _ => {}
             }
         }
         DeepLink::StudioOpen { place } => {
@@ -482,13 +549,60 @@ pub fn run(
     }
 
     let bridge = Bridge::new(UrlPolicy::new(&config));
+    let settings = SettingsStore::open_default().load();
+    let channel = settings.channel;
+    // The GitHub session for the private team feed lives in the Windows credential store; sign-in
+    // needs the app's client id, and without it team builds are simply not offered.
+    let github = match embedded_client_id() {
+        Ok(client_id) => Some(Arc::new(GithubAuth::new(
+            client_id,
+            Arc::new(UreqClient::default()),
+            Arc::new(KeyringSecretStore::new("MetallicLauncher", "github")),
+        ))),
+        Err(error) => {
+            log::info!("GitHub sign-in is not available: {error}");
+            None
+        }
+    };
+    let tokens: Arc<dyn TokenProvider> = match &github {
+        Some(auth) => Arc::new(StoredTokenProvider(auth.clone())),
+        None => Arc::new(NoToken),
+    };
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    let (studio_root, downloads) = match &local_app_data {
+        Some(base) => (studio_root_for(base), downloads_dir_for(base)),
+        None => Default::default(),
+    };
+    let installer = Arc::new(Installer::new(
+        Arc::new(GithubAssets::new(
+            tokens.clone(),
+            Arc::new(UreqClient::default()),
+        )),
+        Arc::new(SystemSpawner),
+        channel,
+        studio_root,
+        downloads,
+    ));
+    let installed_copy = std::env::current_exe()
+        .map(|exe| is_installed_copy(&exe))
+        .unwrap_or(false);
+    let updater = Arc::new(SelfUpdater::new(
+        Arc::new(UpdateChecker::new(LAUNCHER_FEED, channel, tokens)),
+        sink.clone(),
+        installed_copy,
+    ));
+    let players = Arc::new(StartedPlayers::new(platform::process_alive));
     let host = ShellHost {
         dev_mode: config.dev_mode,
-        settings: Mutex::new(SettingsStore::open_default().load()),
+        settings: Mutex::new(settings),
         store: SettingsStore::open_default(),
         http: http.clone(),
         check_origin: check_origin.clone(),
         sink: sink.clone(),
+        installer,
+        updater: updater.clone(),
+        players: players.clone(),
+        github,
     };
 
     let mut context = WebContext::new(platform::webview_data_dir());
@@ -581,7 +695,7 @@ pub fn run(
     let studio_installed = product_paths().studio_exe.is_some();
     let (icon, icon_width, icon_height) = icon_rgba().unwrap_or_default();
     let tray = match platform::create_tray(
-        &tray_menu(studio_installed),
+        &tray_menu(studio_installed, false),
         icon,
         icon_width,
         icon_height,
@@ -610,6 +724,8 @@ pub fn run(
     if let Some(origin) = check_origin.clone() {
         spawn_recheck_loop(http.clone(), origin, sink.clone(), shared.clone());
     }
+    // Look for Launcher updates in the background (an installed copy only).
+    updater.start();
     // Hand-overs from later starts, and the link this start was given.
     if let Some(listener) = handoffs {
         spawn_handoff_listener(listener, sink.clone());
@@ -643,6 +759,10 @@ pub fn run(
                     *control_flow = ControlFlow::Exit;
                 }
             }
+            Event::LoopDestroyed => {
+                // The window is closing: apply a downloaded update, unless a Player runs.
+                host.updater.on_quit(host.players.running_players());
+            }
             Event::UserEvent(app_event) => match app_event {
                 AppEvent::Quit => *control_flow = ControlFlow::Exit,
                 AppEvent::Focus => {
@@ -657,8 +777,11 @@ pub fn run(
                     TrayAction::OpenStudio => {
                         let _ = start_the_studio(None);
                     }
-                    TrayAction::CheckUpdates => {
-                        log::info!("a check for updates was asked for; it arrives in a later step");
+                    TrayAction::CheckUpdates => host.updater.check_soon(),
+                    TrayAction::RestartToUpdate => {
+                        if let Err(error) = host.restart_to_update() {
+                            log::info!("the update did not restart: {error:?}");
+                        }
                     }
                     TrayAction::Quit => *control_flow = ControlFlow::Exit,
                 },
@@ -704,11 +827,21 @@ pub fn run(
                     check_origin.as_ref(),
                     shared.offline.load(Ordering::SeqCst),
                     sink.as_ref(),
+                    &host.updater,
+                    &host.players,
                 ),
                 AppEvent::BridgeMessage { page_url, body } => {
                     handle_bridge_message(&view, &bridge, &host, &page_url, &body);
                 }
-                AppEvent::Bridge(event) => send_bridge_event(&view, &bridge, &event),
+                AppEvent::Bridge(event) => {
+                    // A downloaded update puts "Restart to update" into the tray menu.
+                    if matches!(event, BridgeEvent::UpdateReady { .. })
+                        && let Some(tray) = &tray
+                    {
+                        tray.set_items(&tray_menu(studio_installed, true));
+                    }
+                    send_bridge_event(&view, &bridge, &event);
+                }
             },
             _ => {}
         }

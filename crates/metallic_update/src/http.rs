@@ -2,6 +2,7 @@
 //! tests can inject answers), its `ureq` implementation, and the redacting [`Token`] wrapper.
 
 use std::fmt;
+use std::io::Read;
 use std::time::Duration;
 
 /// A GitHub access token. `Debug` and `Display` print a placeholder, never the value.
@@ -96,11 +97,67 @@ pub trait HttpClient: Send + Sync {
         headers: &[(&str, &str)],
         form: &[(&str, &str)],
     ) -> Result<HttpResponse, HttpError>;
+
+    /// GET `url` with extra `headers` and write the body to `out` as it arrives, calling
+    /// `progress` with the number of bytes written so far. Returns the total. A status outside
+    /// 200 to 299 is an error. Redirects are followed, but an `Authorization` header is sent
+    /// only to the host the request started at. If `out` fails, the download stops and the
+    /// error is returned.
+    ///
+    /// The default answers "streaming not supported"; [`UreqClient`] implements it.
+    fn get_to_writer(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        out: &mut dyn std::io::Write,
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<u64, HttpError> {
+        let _ = (url, headers, out, progress);
+        Err(HttpError::new("streaming not supported"))
+    }
+}
+
+/// How many redirects a streamed download follows.
+const MAX_DOWNLOAD_REDIRECTS: usize = 5;
+
+/// `scheme://authority` of an address, lower-cased, or `None` for an address without one or
+/// with user information in it.
+fn origin_of(url: &str) -> Option<(String, String)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    Some((scheme.to_ascii_lowercase(), authority.to_ascii_lowercase()))
+}
+
+/// True for `https`, and for plain `http` only to this PC (tests).
+fn scheme_allowed(scheme: &str, authority: &str) -> bool {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    scheme == "https" || (scheme == "http" && matches!(host, "127.0.0.1" | "localhost" | "::1"))
+}
+
+/// The address a redirect `location` points to, given the address it came from.
+fn resolve_redirect(from: &str, location: &str) -> Option<String> {
+    if location.contains("://") {
+        return Some(location.to_string());
+    }
+    let (scheme, authority) = origin_of(from)?;
+    location
+        .starts_with('/')
+        .then(|| format!("{scheme}://{authority}{location}"))
 }
 
 /// [`HttpClient`] backed by `ureq`.
 pub struct UreqClient {
     agent: ureq::Agent,
+    /// For streamed downloads: no overall time limit (a big file takes a while), redirects are
+    /// handled here so the `Authorization` header can be dropped when the host changes.
+    download_agent: ureq::Agent,
 }
 
 impl UreqClient {
@@ -111,7 +168,18 @@ impl UreqClient {
             .http_status_as_error(false)
             .build()
             .into();
-        Self { agent }
+        let download_agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(None)
+            .timeout_connect(Some(timeout))
+            .timeout_recv_response(Some(timeout))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .into();
+        Self {
+            agent,
+            download_agent,
+        }
     }
 }
 
@@ -175,5 +243,64 @@ impl HttpClient for UreqClient {
             request = request.header(*name, *value);
         }
         read_response(request.send(body))
+    }
+
+    fn get_to_writer(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        out: &mut dyn std::io::Write,
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<u64, HttpError> {
+        let first = origin_of(url).ok_or_else(|| HttpError::new("bad download address"))?;
+        let mut current = url.to_string();
+        // Once the request has left the first host, the credentials stay dropped.
+        let mut send_credentials = true;
+        for _ in 0..=MAX_DOWNLOAD_REDIRECTS {
+            let here = origin_of(&current).ok_or_else(|| HttpError::new("bad redirect address"))?;
+            if !scheme_allowed(&here.0, &here.1) {
+                return Err(HttpError::new("refused a download over plain http"));
+            }
+            if here != first {
+                send_credentials = false;
+            }
+            let mut request = self.download_agent.get(&current);
+            for (name, value) in headers {
+                if send_credentials || !name.eq_ignore_ascii_case("authorization") {
+                    request = request.header(*name, *value);
+                }
+            }
+            let mut response = request.call().map_err(|e| HttpError::new(e.to_string()))?;
+            let status = response.status().as_u16();
+            if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                let location = response
+                    .headers()
+                    .get("location")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| resolve_redirect(&current, value))
+                    .ok_or_else(|| HttpError::new("bad redirect"))?;
+                current = location;
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                return Err(HttpError::new(format!("HTTP status {status}")));
+            }
+            let mut reader = response.body_mut().as_reader();
+            let mut buffer = vec![0u8; 64 * 1024];
+            let mut total: u64 = 0;
+            loop {
+                let read = reader
+                    .read(&mut buffer)
+                    .map_err(|e| HttpError::new(e.to_string()))?;
+                if read == 0 {
+                    return Ok(total);
+                }
+                out.write_all(&buffer[..read])
+                    .map_err(|e| HttpError::new(e.to_string()))?;
+                total += read as u64;
+                progress(total);
+            }
+        }
+        Err(HttpError::new("too many redirects"))
     }
 }
