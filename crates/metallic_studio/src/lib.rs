@@ -13,6 +13,7 @@
 
 pub mod app;
 pub mod colour;
+pub mod data_dirs;
 pub mod error;
 pub mod github_auth;
 pub mod png_image;
