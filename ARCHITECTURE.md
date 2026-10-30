@@ -33,6 +33,14 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  `change_cursor` feeds independent readers: `changes_since` deduplicates coarse instance invalidations;
+  `changes_since_detailed` returns ordered `Change { id, kind }` notices for creation, destruction, direct
+  reparent operations and properties. Property tokens are canonical static registry names, with no journal-owned
+  strings or values. Both readers share the same bounded retention/overflow boundary, including coarse-only
+  descendant invalidations after reparent. Clones record creations in deterministic parent-before-child order.
+  The detailed feed retains current-state invalidations, not historic values or a durable editing operation log.
+  This A1 foundation leaves the existing half-drop history algorithm unchanged; full-capacity ring PR #186
+  remains a separate integration, as do A2 wire property indices/filtering and the M2 transport/operation log.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
