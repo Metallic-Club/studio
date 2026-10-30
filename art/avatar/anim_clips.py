@@ -679,7 +679,7 @@ def p2_clips(rig):
     def climb_sample(f):
         ph0 = f / N
         two = 2 * math.pi
-        rot = {"hips": (-6, 3 * math.cos(two * ph0), 2 * math.cos(two * ph0)), "spine": (2, 0, 0),
+        rot = {"hips": (2, 3 * math.cos(two * ph0), 2 * math.cos(two * ph0)), "spine": (2, 0, 0),
                "chest": (4, -4 * math.cos(two * ph0), 0), "neck": (-8, 0, 0), "head": (-14, 0, 0)}
         vals = {}
         for side in ("left", "right"):
@@ -694,7 +694,7 @@ def p2_clips(rig):
             rot.update(side_rot({"leftShoulder": (6 * reach, 0, -4)}, side))
         vals.update(flat_rot(rot))
         vals[("hips", 0)] = 0.012 * math.cos(two * ph0)
-        vals[("hips", 1)] = 0.02
+        vals[("hips", 1)] = 0.08          # hips back so the knees stay behind the rungs
         vals[("hips", 2)] = -0.04 + 0.015 * math.cos(2 * two * ph0)
         vals[("pole", "elbow", 0)], vals[("pole", "elbow", 1)], vals[("pole", "elbow", 2)] = 1.0, 0.4, -0.6
         return build_pose(rig, vals)
@@ -800,12 +800,14 @@ def emote_clips(rig):
         return k
 
     # Wave (right hand), 2 s: raise, three waves of the forearm, lower.
-    up = {"leftShoulder": (8, 0, 0), "leftUpperArm": (20, 10, 102), "leftLowerArm": (82, 0, 0), "leftHand": (-6, 0, 0)}
+    # The upper arm is raised to the side and turned out (Y -80) so the elbow bends upward; the wave
+    # is the elbow opening and closing, which swings the forearm side to side, the hand trailing.
+    up = {"leftShoulder": (8, 0, 0), "leftUpperArm": (15, -80, 104), "leftLowerArm": (48, 0, 0), "leftHand": (0, 0, 0)}
     keys = [(0, start), (10, with_arm(start, "right", up, "open", {"head": (0, -6, -4)}))]
     for i, f in enumerate(range(14, 46, 8)):
         w = dict(up)
-        w["leftUpperArm"] = (20, 10 + (26 if i % 2 == 0 else -18), 102)
-        w["leftHand"] = (-6, 0, 12 if i % 2 == 0 else -12)
+        w["leftLowerArm"] = (30 if i % 2 == 0 else 60, 0, 0)
+        w["leftHand"] = (0, 0, -14 if i % 2 == 0 else 14)
         keys.append((f, with_arm(start, "right", w, "open", {"head": (0, -6, -4), "hips": (0, 2, 0)})))
     keys += [(50, with_arm(start, "right", up, "open")), (60, start)]
     out.append(Keyed(rig, "wave", 60, False, keys, base=IDLE_BASE, lag=lag, priority=3))
@@ -879,14 +881,15 @@ def concept_poses(rig):
     rot.update(hand("loose", "left"))
     rot.update(hand("fist", "right"))
     rot.update({"rightShoulder": (4, 0, 0)})
-    still("pose_hand_on_hip", {"rot": rot, "hips": (0.03, 0, -0.03),
-                               "feet": {"left": (0.27, ANKLE_L.y - 0.01, ANKLE_L.z, 0, 22),
-                                        "right": (0.26, ANKLE_L.y + 0.02, ANKLE_L.z, 0, 26)},
+    still("pose_hand_on_hip", {"rot": rot, "hips": (0.03, 0, -0.06),
+                               "feet": {"left": (0.34, ANKLE_L.y - 0.01, ANKLE_L.z, 0, 22),
+                                        "right": (0.33, ANKLE_L.y + 0.02, ANKLE_L.z, 0, 26)},
                                "hands": {"right": (0.150, 0.03, 0.80, 0.25, -0.45, -0.85, -0.85, 0.2, 0.0)},
                                "pole": {"elbow": (1.0, 0.25, 0.0)}})
 
-    # Run: the sheet's running figure, mid-stride: left knee driven up and forward, right leg
-    # pushing off behind on the ball of the foot, right fist forward at chin height, left arm back.
+    # Run: the sheet's running figure in its "passing" pose: the left leg under the body carries the
+    # weight, the right leg is folded up behind (heel toward the seat), right fist forward at chin
+    # height, left arm back (arms swing against the legs).
     rot = {"hips": (16, -10, 2), "spine": (6, 4, 0), "chest": (6, 6, 0), "upperChest": (2, 4, 0),
            "neck": (-10, 2, 0), "head": (-12, 4, 0)}
     rot.update(side_rot({"leftUpperArm": (-58, 0, -6), "leftLowerArm": (30, 0, 0), "leftHand": (6, 0, 0),
@@ -894,21 +897,20 @@ def concept_poses(rig):
     rot.update(side_rot({"leftUpperArm": (62, 0, -14), "leftLowerArm": (100, 0, 0), "leftHand": (-6, 0, 0),
                          "leftShoulder": (2, 0, -8)}, "right"))
     rot.update(hands("fist"))
-    rot["leftToes"] = (0, 0, 0)
-    rot["rightToes"] = (34, 0, 0)
-    still("pose_run", {"rot": rot, "hips": (0, 0, -0.03),
-                       "feet": {"left": (0.10, -0.30, 0.42, -30, 4), "right": (0.09, 0.42, 0.13, -48, 2)}})
+    still("pose_run", {"rot": rot, "hips": (0, 0, -0.04),
+                       "feet": {"left": (0.10, ANKLE_L.y - 0.06, ANKLE_L.z + 0.02, 6, 4),
+                                "right": (0.10, 0.36, 0.40, -70, 2)}})
 
     # Sitting back on the hands: on the ground, leaning back on straight arms, left knee up, right
     # leg stretched out, head turned to the viewer.
-    rot = {"hips": (-62, 8, 0), "spine": (8, 2, 0), "chest": (6, 2, 0), "upperChest": (4, 0, 0),
+    rot = {"hips": (-36, 8, 0), "spine": (4, 2, 0), "chest": (4, 2, 0), "upperChest": (2, 0, 0),
            "neck": (6, 8, 2), "head": (8, 12, 10)}
     rot.update(hands("flat"))
-    hl = (0.22, 0.30, 0.05, 0.05, -0.85, -0.5, 0.0, 0.0, -1.0)
-    hr = (0.24, 0.28, 0.05, 0.05, -0.85, -0.5, 0.0, 0.0, -1.0)
+    hl = (0.23, 0.42, 0.04, 0.05, -0.85, -0.5, 0.0, 0.0, -1.0)
+    hr = (0.25, 0.40, 0.04, 0.05, -0.85, -0.5, 0.0, 0.0, -1.0)
     still("pose_sit_back", {"rot": rot, "hips": (0, 0.10, -0.62),
                             "feet": {"left": (0.17, -0.28, ANKLE_L.z, 0, 14),
-                                     "right": (0.17, -0.52, 0.10, 18, 20, 10)},
+                                     "right": (0.17, -0.60, 0.10, 18, 20, 10)},
                             "hands": {"left": hl, "right": hr}, "pole": {"elbow": (0.6, 1.0, 0.0)}})
     return out
 
@@ -932,8 +934,8 @@ def test_clips(rig):
     rot = merge(arms_down(), hands("open"), {"leftShoulder": (24, 0, 0), "leftUpperArm": (0, 0, 150),
                                               "leftLowerArm": (10, 0, 0)})
     still("test_arm_overhead", {"rot": rot, "feet": {"left": F, "right": F}})
-    rot = merge(arms_down(), hands("relaxed"), {"leftShoulder": (0, 0, -14), "leftUpperArm": (82, 30, -64),
-                                                "leftLowerArm": (70, 0, 0)})
+    rot = merge(arms_down(), hands("relaxed"), {"leftShoulder": (0, 0, -10), "leftUpperArm": (108, 0, 40),
+                                                "leftLowerArm": (22, 0, 0)})
     still("test_arm_across", {"rot": rot, "feet": {"left": F, "right": F}})
     rot = merge(arms_down(), hands("open"), {"leftUpperArm": (60, 0, 0), "leftLowerArm": (40, 0, 0),
                                               "leftHand": (50, 85, 0), "rightUpperArm": (60, 0, 0),
