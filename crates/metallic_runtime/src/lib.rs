@@ -17,6 +17,10 @@
 //! Simulation runs at a fixed [`TICK_RATE`] (60 Hz) whatever the display rate, so a headless run
 //! of N frames of 1/60 s always does the same thing. See [`Game::frame`] for the order of work
 //! inside a tick.
+//!
+//! The runtime caches physical part signatures and Humanoid-to-Model membership dependencies.
+//! Journaled topology changes update affected cache entries; ordinary Humanoid properties and
+//! part poses do not trigger physics synchronization. Lost history rebuilds the runtime cache.
 #![warn(missing_docs)]
 
 mod avatar;
@@ -25,6 +29,7 @@ mod game;
 pub mod gui;
 pub mod input;
 mod locomotion;
+mod physics_sync;
 mod project;
 
 pub use camera_controller::CameraController;

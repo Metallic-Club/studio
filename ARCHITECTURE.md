@@ -79,6 +79,10 @@ apps.
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
+  Private `PhysicsSyncCache` tracks part signatures and direct Humanoid-to-Model dependencies, including deleted
+  IDs and inherited character membership. It updates affected entries from the journal, avoids full workspace
+  snapshots for ordinary property/pose ticks, and falls back to cache reconciliation on lost history or a new world.
+  The physics wrapper retains its own synchronization/reset contract; no physics API is added by this cache.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
   [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F]`; winit window, wgpu surface, egui-wgpu for the GUI pass,
   gilrs for gamepads, headless mode for smoke tests (no window, no GPU). `devices.rs` holds the winit key and mouse
