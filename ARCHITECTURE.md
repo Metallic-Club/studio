@@ -183,6 +183,9 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
   guarded build/test invocation; [build lanes](docs/build-lanes.md) documents the
   metadata-derived package clean, process lock and recovery command.
 - Every public item has a `///` doc comment; every crate has a `//!` crate doc.
+- `World::set` rejects NaN and infinities in Number, Vector3, Color3, and UDim2 before changing
+  state, signals, or the journal. Instance/property/type errors retain precedence; finite ranges
+  remain governed by the existing class registry.
 - Tests sit next to behaviour (write the failing test first).
 - No `unwrap()` or `expect()` outside tests; return typed errors (`CoreError`, `ScriptError`, `RuntimeError`, `StudioError`).
 - Scripts can never freeze or crash the game: budgets and caps are enforced in `metallic_script`.
