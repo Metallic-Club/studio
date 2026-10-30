@@ -108,3 +108,30 @@ metric after publication, not a substitute wall-time pass; no new workflow is ne
 Next: commit this evidence, refresh the unpublished branch only across a verified plan/release-only main
 advance, then obtain the next released slot for full mandatory gates. No full-workspace build or further timing
 is active in lane114. No server action, M1/Epic15 acceptance change, own merge or force push.
+
+## Refreshed publication gates
+
+The evidence commit was followed by one clean unpublished rebase onto main
+`e20f0828454d21ae2325b671add29f9bf5c3a7c3`, producing source checkpoint
+`ccc42c1862fc12f1f12f5c1f208290e6905c73e3`. The intervening changes are the M2a plan and release/template
+packaging, including workspace package versions 0.1.1; no Rust source or third-party dependency versions changed.
+A direct diff verifies core source/tests and the existing world benchmark remain identical to reviewed compact
+checkpoint `dffc435`. Earlier benchmark observations remain tied to their original commits and are not retimed
+or relabelled for this refreshed base.
+
+At `ccc42c`: guarded forced-clean workspace prebuild passed in 7m52s (`--locked --no-run -j 4`), removing
+121.2 MiB of local package outputs; compile paths identify this worktree and 0.1.1 packages. Strict workspace
+all-target Clippy passed in 3m09s with `--locked -j 4 -- -D warnings`. Licenses (`licenses ok`), format and diff
+checks passed. Logs are `workspace-prebuild-final.log`, `clippy-final.log`, `licenses-final.log`, `fmt-final.log`
+in the local integration evidence. All three benchmark executables remain separately retained.
+
+After the conductor's C2 timing window released, the actual guarded serial workspace suite passed on `ccc42c`:
+1,006 tests, zero failures, seven manual/UI probes ignored. Both Parkour routes and every default Luau suite
+passed. The seven ignores are six existing window/manual probes plus this branch's layout observation,
+explicitly executed before and after compaction. Actual command: `test --workspace --locked -j 4 --
+--test-threads=1`; log `workspace-tests-final.log` in the retained integration evidence. No failure was retried
+or excluded. The timing window and lane114 were released immediately after verified exit and parsed totals.
+
+All required local gates are green. Commit this final documentation record, publish for review and verify the
+existing CI against the final pushed head; no further Rust build is needed for the documentation-only record.
+The 5% wall-time target remains unresolved even if instruction CI passes. No own merge or acceptance claim.
