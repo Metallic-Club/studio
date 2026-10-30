@@ -20,6 +20,12 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(2);
 /// QUIC application protocol; the protocol major version is part of it.
 pub const ALPN: &[u8] = b"metallic/1";
 
+/// Bytes charged per frame waiting to be sent, on top of its length, so many tiny frames also count.
+pub const FRAME_COST: usize = 64;
+/// Most bytes (frame lengths plus [`FRAME_COST`] each) that may wait to be sent on one QUIC connection. A send past
+/// it means the peer is not reading: the connection closes with `TransportError("peer not reading")`.
+pub const SEND_BUDGET: usize = 2 * (MAX_SERVER_FRAME + FRAME_COST);
+
 /// A side sends a keep-alive when it has sent nothing for this long, so quiet connections stay open.
 pub(crate) const KEEP_ALIVE: Duration = Duration::from_secs(2);
 

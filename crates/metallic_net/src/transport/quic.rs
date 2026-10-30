@@ -8,10 +8,13 @@
 //! server allows a client [`CLIENT_MAX_STREAMS`] open streams (one bidirectional), so QUIC flow control refuses more;
 //! a second Remote stream, a Control stream that ends, or a wrong tag closes the connection with a protocol error.
 //!
-//! Sending is bounded: frames waiting to be written (plus [`FRAME_COST`] each) may not exceed [`SEND_BUDGET`]. A
-//! send past it means the peer is not reading, so the connection closes with
-//! `CloseReason::TransportError("peer not reading")` and the send returns [`NetError::Closed`]. Control, World or
-//! Remote, and Bulk have separate writers, so a stalled World stream does not hold up Control.
+//! Sending is bounded: frames waiting to be written (plus [`FRAME_COST`] each) may not exceed [`SEND_BUDGET`]
+//! (room for two maximum-size frames; `LinkStats::queued_bytes` shows the current amount). A send past it means the
+//! peer is not reading, so the connection closes with `CloseReason::TransportError("peer not reading")` and the send
+//! returns [`NetError::Closed`]. Control, World or Remote, and Bulk have separate writers, so a stalled World stream
+//! does not hold up Control; a peer that stops one of our streams (STOP_SENDING) gets a protocol error.
+//!
+//! Handshakes in progress are capped (256); attempts over the cap are refused before any crypto work.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -29,8 +32,8 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use super::cert::{self, CERT_NAME, PinnedVerifier, ServerIdentity};
 use super::conditioner::ConditionedSocket;
 use super::limits::{
-    ALPN, CLIENT_MAX_STREAMS, DatagramLimiter, HELLO_TIMEOUT, IDLE_TIMEOUT, KEEP_ALIVE,
-    MAX_CLIENT_FRAME, MAX_DATAGRAM, MAX_SERVER_FRAME,
+    ALPN, CLIENT_MAX_STREAMS, DatagramLimiter, FRAME_COST, HELLO_TIMEOUT, IDLE_TIMEOUT, KEEP_ALIVE,
+    MAX_CLIENT_FRAME, MAX_DATAGRAM, MAX_SERVER_FRAME, SEND_BUDGET,
 };
 use super::{
     Channel, CloseReason, Connection, Incoming, LinkConditioner, LinkStats, Listener, Side,
@@ -45,15 +48,12 @@ const CLIENT_INCOMING_UNI: u32 = 32;
 const INITIAL_MTU: u16 = 1280;
 /// Close reasons are cut to this many bytes.
 const MAX_REASON: usize = 200;
-/// Most bytes of frames queued for sending on one connection; past it the peer counts as not reading.
-pub(crate) const SEND_BUDGET: usize = 2 * MAX_SERVER_FRAME;
-/// Bytes charged per queued frame on top of its length, so many tiny frames also hit the budget.
-pub(crate) const FRAME_COST: usize = 64;
 /// Bulk payloads being written at once; the rest wait in the queue (and count against the budget).
 const BULK_IN_FLIGHT: usize = 8;
 /// A client must finish the handshake this soon after its first packet.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Connection attempts a server keeps before the handshake finishes.
+/// Handshakes a server runs at once; further connection attempts are refused until one finishes. Also quinn's
+/// cap on attempts waiting for `accept`.
 const MAX_INCOMING: usize = 256;
 /// Server receive windows: per stream, per connection, and for datagrams.
 const SERVER_STREAM_WINDOW: u32 = 2 * MAX_CLIENT_FRAME as u32;
@@ -74,6 +74,15 @@ impl QuicServer {
     pub fn bind(
         addr: SocketAddr,
         conditioner: Option<LinkConditioner>,
+    ) -> Result<QuicServer, NetError> {
+        Self::bind_with(addr, conditioner, MAX_INCOMING)
+    }
+
+    /// [`QuicServer::bind`] with a different cap on handshakes in progress.
+    fn bind_with(
+        addr: SocketAddr,
+        conditioner: Option<LinkConditioner>,
+        max_handshakes: usize,
     ) -> Result<QuicServer, NetError> {
         let identity = cert::self_signed()?;
         let cert_sha256 = identity.sha256;
@@ -99,7 +108,7 @@ impl QuicServer {
         };
         let local_addr = endpoint.local_addr()?;
         let (ready_tx, ready) = mpsc::unbounded_channel();
-        handle.spawn(accept_loop(endpoint.clone(), ready_tx));
+        handle.spawn(accept_loop(endpoint.clone(), ready_tx, max_handshakes));
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         std::thread::Builder::new()
             .name("metallic-net-server".into())
@@ -315,14 +324,25 @@ async fn connect_task(
     ))
 }
 
-async fn accept_loop(endpoint: Endpoint, ready: mpsc::UnboundedSender<QuicConnection>) {
+async fn accept_loop(
+    endpoint: Endpoint,
+    ready: mpsc::UnboundedSender<QuicConnection>,
+    max_handshakes: usize,
+) {
+    let handshakes = Arc::new(Semaphore::new(max_handshakes));
     while let Some(incoming) = endpoint.accept().await {
+        let Ok(slot) = handshakes.clone().try_acquire_owned() else {
+            incoming.refuse();
+            continue;
+        };
         let ready = ready.clone();
         tokio::spawn(async move {
             let Ok(connecting) = incoming.accept() else {
                 return;
             };
-            let Ok(Ok(conn)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, connecting).await else {
+            let handshake = tokio::time::timeout(HANDSHAKE_TIMEOUT, connecting).await;
+            drop(slot);
+            let Ok(Ok(conn)) = handshake else {
                 return;
             };
             let hello_deadline = tokio::time::Instant::now() + HELLO_TIMEOUT;
@@ -406,7 +426,7 @@ struct Streams {
     long: SendStream,
 }
 
-/// A frame for a writer: its budget charge and its encoded bytes.
+/// A frame for a writer: its budget charge and its bytes (the writer adds the length).
 type Queued = (usize, Vec<u8>);
 
 /// The game-side handle of a QUIC connection.
@@ -451,8 +471,14 @@ impl QuicConnection {
             shared.clone(),
             events_tx.clone(),
         ));
-        tokio::spawn(write_stream(streams.control, control_rx, shared.clone()));
         tokio::spawn(write_stream(
+            conn.clone(),
+            streams.control,
+            control_rx,
+            shared.clone(),
+        ));
+        tokio::spawn(write_stream(
+            conn.clone(),
             StreamSlot::Ready(streams.long),
             long_rx,
             shared.clone(),
@@ -510,9 +536,10 @@ impl Connection for QuicConnection {
             Channel::World | Channel::Remote => &self.long_tx,
             Channel::Bulk => &self.bulk_tx,
         };
-        writer
-            .send((cost, encode_frame(&frame)))
-            .map_err(|_| NetError::Closed)
+        writer.send((cost, frame)).map_err(|_| {
+            self.shared.queued.fetch_sub(cost, Ordering::AcqRel);
+            NetError::Closed
+        })
     }
 
     fn send_datagram(&mut self, bytes: Vec<u8>) -> Result<(), NetError> {
@@ -557,6 +584,7 @@ impl Connection for QuicConnection {
             bytes_received: s.udp_rx.bytes,
             datagrams_dropped: self.shared.datagrams_dropped.load(Ordering::Relaxed),
             datagrams_received: self.shared.datagrams_received.load(Ordering::Relaxed),
+            queued_bytes: self.shared.queued.load(Ordering::Acquire) as u64,
         }
     }
 
@@ -775,21 +803,22 @@ async fn read_length(recv: &mut RecvStream) -> Result<Option<usize>, Option<&'st
     Err(Some("frame length too long"))
 }
 
-fn encode_frame(frame: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(frame.len() + 5);
-    let mut len = frame.len();
+/// The LEB128 length that goes before a frame of `len` bytes.
+fn frame_header(len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5);
+    let mut len = len;
     while len >= 0x80 {
         out.push((len as u8 & 0x7f) | 0x80);
         len >>= 7;
     }
     out.push(len as u8);
-    out.extend_from_slice(frame);
     out
 }
 
 /// Writes one stream's frames in order, releasing each frame's budget charge once quinn has taken it. Ends when
 /// the stream or connection does.
 async fn write_stream(
+    conn: quinn::Connection,
     slot: StreamSlot,
     mut frames: mpsc::UnboundedReceiver<Queued>,
     shared: Arc<Shared>,
@@ -801,11 +830,19 @@ async fn write_stream(
             Err(_) => return,
         },
     };
-    while let Some((cost, bytes)) = frames.recv().await {
-        let written = stream.write_all(&bytes).await;
+    while let Some((cost, frame)) = frames.recv().await {
+        let written = match stream.write_all(&frame_header(frame.len())).await {
+            Ok(()) => stream.write_all(&frame).await,
+            Err(e) => Err(e),
+        };
         shared.queued.fetch_sub(cost, Ordering::AcqRel);
         if written.is_err() {
-            return; // The connection is going away; `watch_close` reports why.
+            // The peer stopped the stream while the connection is up (STOP_SENDING); otherwise the connection is
+            // going away and `watch_close` reports why.
+            if conn.close_reason().is_none() {
+                protocol_error(&conn, &shared, "stream stopped");
+            }
+            return;
         }
     }
 }
@@ -817,7 +854,7 @@ async fn write_bulk(
     shared: Arc<Shared>,
 ) {
     let permits = Arc::new(Semaphore::new(BULK_IN_FLIGHT));
-    while let Some((cost, bytes)) = frames.recv().await {
+    while let Some((cost, frame)) = frames.recv().await {
         let Ok(permit) = permits.clone().acquire_owned().await else {
             return;
         };
@@ -825,7 +862,8 @@ async fn write_bulk(
         tokio::spawn(async move {
             if let Ok(mut stream) = conn.open_uni().await
                 && stream.write_all(&[Channel::Bulk.tag()]).await.is_ok()
-                && stream.write_all(&bytes).await.is_ok()
+                && stream.write_all(&frame_header(frame.len())).await.is_ok()
+                && stream.write_all(&frame).await.is_ok()
             {
                 let _ = stream.finish();
             }
@@ -842,13 +880,11 @@ mod tests {
 
     #[test]
     fn frame_lengths_are_leb128() {
-        assert_eq!(encode_frame(&[]), [0]);
-        assert_eq!(&encode_frame(&[7; 127])[..1], [127]);
-        assert_eq!(&encode_frame(&[7; 128])[..2], [0x80, 1]);
-        assert_eq!(
-            &encode_frame(&vec![0; MAX_SERVER_FRAME])[..4],
-            [0x80, 0x80, 0x80, 2]
-        );
+        assert_eq!(frame_header(0), [0]);
+        assert_eq!(frame_header(127), [127]);
+        assert_eq!(frame_header(128), [0x80, 1]);
+        assert_eq!(frame_header(70 * 1024), [0x80, 0xB0, 0x04]);
+        assert_eq!(frame_header(MAX_SERVER_FRAME), [0x80, 0x80, 0x80, 2]);
     }
 
     #[test]
@@ -888,5 +924,39 @@ mod tests {
         assert_eq!(connect_with_alpn(vec![ALPN.to_vec()]), Ok(()));
         assert!(connect_with_alpn(vec![b"metallic/2".to_vec()]).is_err());
         assert!(connect_with_alpn(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn handshakes_over_the_cap_are_refused() {
+        // Half a second each way makes every handshake take about a second on the server.
+        let slow = LinkConditioner {
+            latency: Duration::from_millis(500),
+            ..LinkConditioner::default()
+        };
+        let server = QuicServer::bind_with("127.0.0.1:0".parse().unwrap(), Some(slow), 1).unwrap();
+        let (addr, pin) = (server.local_addr(), server.cert_sha256());
+        // Two clients at once: one handshake runs, the other attempt is refused.
+        let clients: Vec<_> = (0..2)
+            .map(|_| {
+                std::thread::spawn(move || QuicClient::connect(addr, pin, Duration::from_secs(10)))
+            })
+            .collect();
+        let results: Vec<_> = clients.into_iter().map(|c| c.join().unwrap()).collect();
+        let refused = results
+            .iter()
+            .filter(|r| matches!(r, Err(NetError::Connect(e)) if e.contains("refused")))
+            .count();
+        assert_eq!(
+            refused,
+            1,
+            "{:?}",
+            results.iter().map(|r| r.as_ref().err()).collect::<Vec<_>>()
+        );
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        // Once that handshake is done on the server (its last flight arrives half a second after the client is
+        // through) the slot is free again.
+        std::thread::sleep(Duration::from_millis(1000));
+        let third = QuicClient::connect(addr, pin, Duration::from_secs(10));
+        assert!(third.is_ok(), "{:?}", third.err());
     }
 }

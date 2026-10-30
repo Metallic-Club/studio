@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use metallic_net::NetError;
 use metallic_net::transport::limits::{
-    IDLE_TIMEOUT, MAX_CLIENT_FRAME, MAX_DATAGRAM, MAX_SERVER_FRAME,
+    FRAME_COST, IDLE_TIMEOUT, MAX_CLIENT_FRAME, MAX_DATAGRAM, SEND_BUDGET,
 };
 use metallic_net::transport::{
     Channel, CloseReason, Connection, Incoming, LinkConditioner, Listener, MemoryNet, QuicClient,
@@ -203,12 +203,19 @@ fn datagram_rate_limited_to_120_per_second() {
 }
 
 #[test]
-fn oversize_reliable_frame_closes() {
+fn client_frame_over_64_kib_refused_locally() {
     let net = MemoryNet::new(2);
     let (mut client, mut server) = memory_pair(&net, lossy(20, 0, 0.0, 2));
     client
         .send_reliable(Channel::Control, vec![0; MAX_CLIENT_FRAME])
         .unwrap();
+    assert_eq!(
+        client.send_reliable(Channel::Control, vec![0; 70 * 1024]),
+        Err(NetError::FrameTooLarge {
+            size: 70 * 1024,
+            max: MAX_CLIENT_FRAME
+        })
+    );
     net.advance(Duration::from_millis(50));
     let events = drain(&mut server);
     assert_eq!(
@@ -216,26 +223,7 @@ fn oversize_reliable_frame_closes() {
         2,
         "hello and the frame at exactly the limit: {events:?}"
     );
-    client
-        .send_reliable(Channel::Control, vec![0; 70 * 1024])
-        .unwrap();
-    net.advance(Duration::from_millis(100));
-    assert!(matches!(
-        closed_reason(&drain(&mut server)),
-        Some(CloseReason::ProtocolError(_))
-    ));
-    assert!(matches!(
-        closed_reason(&drain(&mut client)),
-        Some(CloseReason::ProtocolError(_))
-    ));
-    assert_eq!(
-        client.send_reliable(Channel::Control, vec![1]),
-        Err(NetError::Closed)
-    );
-    assert_eq!(
-        server.send_reliable(Channel::Control, vec![1]),
-        Err(NetError::Closed)
-    );
+    assert!(closed_reason(&events).is_none());
 }
 
 #[test]
@@ -572,15 +560,16 @@ fn quic_fifth_client_stream_refused() {
 
 #[test]
 fn quic_oversize_reliable_frame_closes() {
-    let (_server, mut client, mut conn) = quic_pair(None);
-    client
-        .send_reliable(Channel::Control, vec![0; 70 * 1024])
-        .unwrap();
-    let down = poll_until(&mut client, WAIT, |e| closed_reason(e).is_some());
-    assert!(
-        matches!(closed_reason(&down), Some(CloseReason::ProtocolError(_))),
-        "{down:?}"
-    );
+    let (_server, mut client, _conn) = quic_pair(None);
+    assert!(matches!(
+        client.send_reliable(Channel::Remote, vec![0; 70 * 1024]),
+        Err(NetError::FrameTooLarge { .. })
+    ));
+    // A raw client announces 70 KiB on its Remote stream: the server closes before reading the body.
+    let mut server = QuicServer::bind(localhost(), None).unwrap();
+    // 70 * 1024 = 71,680 as LEB128: 0x80, 0xB0, 0x04.
+    let code = raw_client(&server, uni_stream(&[2, 0x80, 0xB0, 0x04, 1, 2, 3], false));
+    let mut conn = accept_within(&mut server, WAIT);
     let up = poll_until(&mut conn, WAIT, |e| closed_reason(e).is_some());
     assert!(matches!(
         closed_reason(&up),
@@ -590,6 +579,10 @@ fn quic_oversize_reliable_frame_closes() {
         !up.iter().any(
             |e| matches!(e, Incoming::Reliable { frame, .. } if frame.len() > MAX_CLIENT_FRAME)
         )
+    );
+    assert_eq!(
+        code.recv_timeout(Duration::from_secs(25)).unwrap(),
+        Ok(PROTOCOL_ERROR)
     );
 }
 
@@ -880,23 +873,25 @@ fn quic_stalled_reader_is_closed() {
     let mut conn = accept_within(&mut server, WAIT);
     poll_until(&mut conn, WAIT, |e| !e.is_empty());
     let frame = vec![5u8; 1 << 20];
-    let mut refused_after = None;
-    for i in 0..64 {
+    let cost = (frame.len() + FRAME_COST) as u64;
+    let mut queued_before_refusal = None;
+    for _ in 0..64 {
+        let queued = conn.stats().queued_bytes;
         if conn.send_reliable(Channel::World, frame.clone()).is_err() {
-            refused_after = Some(i);
+            queued_before_refusal = Some(queued);
             break;
         }
         sleep(Duration::from_millis(5));
     }
-    let refused_after = refused_after.expect("sends past the budget must fail");
+    let queued = queued_before_refusal.expect("sends past the budget must fail");
     assert!(
-        refused_after * (1 << 20) <= 2 * MAX_SERVER_FRAME,
-        "{refused_after}"
+        queued + cost > SEND_BUDGET as u64,
+        "refused at {queued} queued bytes"
     );
     let events = poll_until(&mut conn, WAIT, |e| closed_reason(e).is_some());
-    assert!(
-        matches!(closed_reason(&events), Some(CloseReason::TransportError(_))),
-        "{events:?}"
+    assert_eq!(
+        closed_reason(&events),
+        Some(CloseReason::TransportError("peer not reading".into()))
     );
     // The close usually arrives; if the client's socket dropped it under the flood, the client gets a stateless
     // reset once the server has forgotten the connection.
@@ -904,6 +899,90 @@ fn quic_stalled_reader_is_closed() {
     assert!(
         end == Ok(TRANSPORT_ERROR) || end == Err("Reset".into()),
         "{end:?}"
+    );
+}
+
+/// Counts the 1 MiB World frames that arrived; anything else fails the test.
+fn megabyte_frames(client: &mut Box<dyn Connection>) -> usize {
+    let mut count = 0;
+    for event in drain(client) {
+        match event {
+            Incoming::Reliable { frame, .. } if frame.len() == 1 << 20 => count += 1,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    count
+}
+
+#[test]
+fn quic_reading_client_gets_more_than_the_budget() {
+    let (_server, mut client, mut conn) = quic_pair(None);
+    let frame = vec![6u8; 1 << 20];
+    let cost = (frame.len() + FRAME_COST) as u64;
+    let mut received = 0;
+    let start = Instant::now();
+    // 24 MiB in total, three times the budget: sending waits until queued bytes are released.
+    for _ in 0..24 {
+        while conn.stats().queued_bytes + cost > SEND_BUDGET as u64 {
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "queued bytes never released"
+            );
+            received += megabyte_frames(&mut client);
+            sleep(Duration::from_millis(2));
+        }
+        conn.send_reliable(Channel::World, frame.clone()).unwrap();
+        received += megabyte_frames(&mut client);
+    }
+    while received < 24 {
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "got {received} of 24"
+        );
+        received += megabyte_frames(&mut client);
+        sleep(Duration::from_millis(2));
+    }
+    let mut events = Vec::new();
+    conn.poll(&mut events);
+    assert!(closed_reason(&events).is_none(), "{events:?}");
+    assert!(conn.stats().bytes_sent > 24 << 20);
+}
+
+#[test]
+fn quic_stopped_world_stream_closes() {
+    let mut server = QuicServer::bind(localhost(), None).unwrap();
+    // The client takes the World stream, reads its tag and stops it (STOP_SENDING).
+    let script: Script = Box::new(|conn, control, recv| {
+        Box::pin(async move {
+            let mut keep: Keep = vec![Box::new(control), Box::new(recv)];
+            if let Ok(Ok(mut world)) =
+                tokio::time::timeout(Duration::from_secs(5), conn.accept_uni()).await
+            {
+                let mut tag = [0u8];
+                let _ = world.read_exact(&mut tag).await;
+                let _ = world.stop(quinn::VarInt::from_u32(0));
+                keep.push(Box::new(world));
+            }
+            keep
+        })
+    });
+    let code = raw_client(&server, script);
+    let mut conn = accept_within(&mut server, WAIT);
+    let start = Instant::now();
+    let mut events = Vec::new();
+    while closed_reason(&events).is_none() {
+        assert!(start.elapsed() < WAIT, "no close; got {events:?}");
+        let _ = conn.send_reliable(Channel::World, vec![1; 100]);
+        sleep(Duration::from_millis(20));
+        conn.poll(&mut events);
+    }
+    assert_eq!(
+        closed_reason(&events),
+        Some(CloseReason::ProtocolError("stream stopped".into()))
+    );
+    assert_eq!(
+        code.recv_timeout(Duration::from_secs(25)).unwrap(),
+        Ok(PROTOCOL_ERROR)
     );
 }
 

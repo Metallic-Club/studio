@@ -118,7 +118,8 @@ impl CloseReason {
 /// abrupt: QUIC sends a bare close, the in-memory network models a crashed peer (the other side times out).
 pub trait Connection: Send {
     /// Queues a reliable frame. Fails if the connection is closed, the channel goes the other way or the frame is
-    /// over [`MAX_SERVER_FRAME`](limits::MAX_SERVER_FRAME). The receiver closes on frames over its own limit.
+    /// over what the peer accepts ([`MAX_CLIENT_FRAME`](limits::MAX_CLIENT_FRAME) from a client,
+    /// [`MAX_SERVER_FRAME`](limits::MAX_SERVER_FRAME) from a server).
     fn send_reliable(&mut self, channel: Channel, frame: Vec<u8>) -> Result<(), NetError>;
     /// Sends an unreliable datagram of at most [`MAX_DATAGRAM`](limits::MAX_DATAGRAM) bytes.
     fn send_datagram(&mut self, bytes: Vec<u8>) -> Result<(), NetError>;
@@ -151,6 +152,9 @@ pub struct LinkStats {
     pub datagrams_dropped: u64,
     /// Incoming datagrams handed to `poll`.
     pub datagrams_received: u64,
+    /// Bytes waiting to be sent, charged like [`SEND_BUDGET`](limits::SEND_BUDGET) (QUIC only; memory reports 0).
+    /// Pace large sends by it.
+    pub queued_bytes: u64,
 }
 
 /// Accepts only sequence numbers newer than the newest seen so far, across the `u16` wrap: `seq` is newer when
@@ -197,16 +201,17 @@ impl Side {
         }
     }
 
-    /// The checks every `send_reliable` runs before queueing.
+    /// The checks every `send_reliable` runs before queueing: direction, and the peer's frame limit.
     pub(crate) fn check_send(self, channel: Channel, len: usize) -> Result<(), NetError> {
         if !self.may_send(channel) {
             return Err(NetError::WrongDirection(channel));
         }
-        if len > MAX_SERVER_FRAME {
-            return Err(NetError::FrameTooLarge {
-                size: len,
-                max: MAX_SERVER_FRAME,
-            });
+        let max = match self {
+            Side::Client => MAX_CLIENT_FRAME,
+            Side::Server => MAX_SERVER_FRAME,
+        };
+        if len > max {
+            return Err(NetError::FrameTooLarge { size: len, max });
         }
         Ok(())
     }
