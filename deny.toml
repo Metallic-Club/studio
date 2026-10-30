@@ -23,4 +23,5 @@ ignore = true
 
 [advisories]
 # ttf-parser comes in through winit's Linux title-bar text (sctk-adwaita); no fix released yet.
+# Revisit when winit / sctk-adwaita update.
 ignore = ["RUSTSEC-2026-0192"]

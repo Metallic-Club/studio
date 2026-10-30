@@ -151,3 +151,56 @@ fn creates_metallic_toml_when_template_has_none() {
         .expect("toml");
     assert_eq!(table["name"].as_str(), Some("Fresh"));
 }
+
+#[test]
+fn rejects_bad_project_names() {
+    let root = tempfile::tempdir().expect("tmp");
+    make_template(root.path(), "t", "parkour", 1);
+    let info = list_templates(root.path()).remove(0);
+    for (i, bad) in [
+        "..\\x",
+        "a\"b",
+        "CON",
+        "nul",
+        "trailing.",
+        "",
+        "  ",
+        "com1",
+        "LPT9",
+        "Aux.txt",
+        "prn.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let target = root.path().join(format!("out{i}"));
+        let err = create_from_template(&info, &target, bad).expect_err(bad);
+        assert!(matches!(err, StudioError::InvalidName(_)), "{bad:?}: {err}");
+        assert!(!target.exists(), "{bad:?} must write nothing");
+    }
+    for ok in ["CONSOLE", "Com10", "My Game", "a.b"] {
+        metallic_studio::templates::validate_project_name(ok).expect(ok);
+    }
+    let msg = metallic_studio::templates::validate_project_name("CON")
+        .expect_err("CON")
+        .to_string();
+    assert!(msg.contains("reserved"), "{msg}");
+}
+
+#[test]
+fn failed_copy_leaves_no_target() {
+    let root = tempfile::tempdir().expect("tmp");
+    let dir = make_template(root.path(), "t", "parkour", 1);
+    // A broken metallic.toml makes the copy succeed but the name step fail.
+    write(&dir.join("metallic.toml"), "this is = = not toml");
+    let info = list_templates(root.path()).remove(0);
+    let target = root.path().join("out");
+    create_from_template(&info, &target, "Game").expect_err("must fail");
+    assert!(!target.exists(), "folder this call created must be gone");
+
+    // An existing empty folder is kept, but emptied.
+    fs::create_dir_all(&target).expect("mkdir");
+    create_from_template(&info, &target, "Game").expect_err("must fail");
+    assert!(target.is_dir());
+    assert_eq!(fs::read_dir(&target).expect("read").count(), 0);
+}

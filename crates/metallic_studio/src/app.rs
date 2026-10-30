@@ -1,6 +1,6 @@
 //! The Studio application: splash, start screen, and the placeholder for the opened game.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, FontId, RichText, TextureHandle, Vec2};
@@ -18,6 +18,9 @@ const ICON_PNG: &[u8] = include_bytes!("../../../branding/placeholder-icon.png")
 pub const WINDOW_TITLE: &str = "Metallic Studio";
 /// How long the splash shows at least.
 const SPLASH_TIME: Duration = Duration::from_millis(1200);
+
+/// The folder shown in screenshots (never touched).
+const DEMO_LOCATION: &str = r"C:\Games";
 
 /// Which screen a capture should show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -101,9 +104,12 @@ impl StudioApp {
         });
         let mut start = StartScreen::new(
             list_templates(&templates_dir()),
-            RecentProjects::load_default(),
+            recent_projects(options.screenshot.is_some()),
         );
-        if let Some(location) = &options.location {
+        if options.screenshot.is_some() {
+            // Display only: nothing is written, and no real path or user name can end up in a picture.
+            start.set_location(Path::new(DEMO_LOCATION));
+        } else if let Some(location) = &options.location {
             start.set_location(location);
         }
         let phase = match (options.screenshot.is_some(), options.scene) {
@@ -163,7 +169,8 @@ impl eframe::App for StudioApp {
             Phase::Start => {
                 if self.pending_error_scene {
                     self.pending_error_scene = false;
-                    let _ = self.start.create();
+                    self.start
+                        .set_error(&StudioError::FolderNotEmpty(PathBuf::new()).to_string());
                 }
                 if let Some(StartAction::OpenProject { name, path }) = self.start.show(ui) {
                     self.phase = Phase::Opened { name, path };
@@ -187,5 +194,24 @@ impl eframe::App for StudioApp {
         if let Some(job) = &mut self.screenshot {
             job.tick(&ctx);
         }
+    }
+}
+
+/// Screenshot mode keeps the list in memory so it never reads or writes the real config folder.
+fn recent_projects(screenshot: bool) -> RecentProjects {
+    if screenshot {
+        RecentProjects::load(None)
+    } else {
+        RecentProjects::load_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screenshot_mode_never_uses_the_real_config_dir() {
+        assert!(!recent_projects(true).is_persistent());
     }
 }

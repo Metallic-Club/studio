@@ -75,6 +75,11 @@ impl RecentProjects {
         Self { file, items }
     }
 
+    /// True when changes are saved to a file (false for an in-memory list).
+    pub fn is_persistent(&self) -> bool {
+        self.file.is_some()
+    }
+
     /// The remembered games, newest first.
     pub fn items(&self) -> &[RecentProject] {
         &self.items

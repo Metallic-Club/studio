@@ -8,8 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, RichText, Sense, Stroke, StrokeKind,
-    TextureHandle, Vec2,
+    self, Align2, CornerRadius, FontId, RichText, Sense, Stroke, StrokeKind, TextureHandle, Vec2,
 };
 
 use crate::png_image::decode_png;
@@ -76,6 +75,11 @@ impl StartScreen {
         self.location = location.to_string_lossy().into_owned();
     }
 
+    /// Shows `message` as the error line (used by the error screenshot scene).
+    pub fn set_error(&mut self, message: &str) {
+        self.error = Some(message.to_owned());
+    }
+
     /// Sets the game name as if typed by the creator.
     pub fn set_name(&mut self, name: &str) {
         self.name = name.to_owned();
@@ -96,6 +100,10 @@ impl StartScreen {
     /// message is kept in [`Self::error`].
     pub fn create(&mut self) -> Option<StartAction> {
         let template = self.templates.get(self.selected)?;
+        if self.location.trim().is_empty() {
+            self.error = Some("Choose where to create the game.".to_owned());
+            return None;
+        }
         let target = self.target();
         let result = validate_project_name(&self.name)
             .and_then(|()| create_from_template(template, &target, &self.name));
@@ -343,9 +351,52 @@ impl StartScreen {
     /// Name, folder and Create button; drawn bottom-up so the button sits at the bottom.
     fn form(&mut self, ui: &mut egui::Ui) -> Option<StartAction> {
         let mut action = None;
-        let create = egui::Button::new(RichText::new("Create game").strong().color(theme::DEEP))
-            .fill(theme::ACCENT);
-        let create_clicked = ui.add(create).clicked();
+        // One top-down group, so the bottom-up parent places it as a single block.
+        let (name_resp, create_clicked) = ui.vertical(|ui| self.form_rows(ui)).inner;
+        if name_resp.changed() {
+            self.name_touched = true;
+            self.error = None;
+        }
+        let enter = name_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if create_clicked || enter {
+            action = self.create();
+        }
+        action
+    }
+
+    /// The form rows, top to bottom. Returns the name field's response and whether Create was clicked.
+    fn form_rows(&mut self, ui: &mut egui::Ui) -> (egui::Response, bool) {
+        let label_w = 80.0;
+        let input_w = (ui.available_width() - label_w - 8.0).max(60.0);
+        let mut name_resp = None;
+        egui::Grid::new("create-form")
+            .num_columns(2)
+            .spacing([8.0, 8.0])
+            .min_col_width(label_w)
+            .show(ui, |ui| {
+                ui.label(RichText::new("Game name").color(theme::TEXT_DIM));
+                name_resp =
+                    Some(ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(input_w)));
+                ui.end_row();
+                ui.label(RichText::new("Folder").color(theme::TEXT_DIM));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let edit = egui::TextEdit::singleline(&mut self.location)
+                        .desired_width((input_w - 90.0).max(40.0));
+                    if ui.add(edit).changed() {
+                        self.error = None;
+                    }
+                    if ui.button("Browse").clicked()
+                        && let Some(dir) = rfd::FileDialog::new()
+                            .set_title("Choose where to create the game")
+                            .pick_folder()
+                    {
+                        self.location = dir.to_string_lossy().into_owned();
+                        self.error = None;
+                    }
+                });
+                ui.end_row();
+            });
         if let Some(error) = &self.error {
             ui.label(RichText::new(error).color(theme::ERROR));
         } else {
@@ -358,36 +409,10 @@ impl StartScreen {
                 .color(theme::TEXT_DIM),
             );
         }
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Folder").color(theme::TEXT_DIM));
-            if ui.button("Browse").clicked()
-                && let Some(dir) = rfd::FileDialog::new()
-                    .set_title("Choose where to create the game")
-                    .pick_folder()
-            {
-                self.location = dir.to_string_lossy().into_owned();
-                self.error = None;
-            }
-            let edit = egui::TextEdit::singleline(&mut self.location).desired_width(f32::INFINITY);
-            if ui.add(edit).changed() {
-                self.error = None;
-            }
-        });
-        let name_resp = ui
-            .horizontal(|ui| {
-                ui.label(RichText::new("Game name").color(theme::TEXT_DIM));
-                ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(f32::INFINITY))
-            })
-            .inner;
-        if name_resp.changed() {
-            self.name_touched = true;
-            self.error = None;
-        }
-        let enter = name_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if create_clicked || enter {
-            action = self.create();
-        }
-        action
+        let create = egui::Button::new(RichText::new("Create game").strong().color(theme::DEEP))
+            .fill(theme::ACCENT);
+        let create_clicked = ui.add(create).clicked();
+        (name_resp.expect("grid ran"), create_clicked)
     }
 
     fn tiles(&mut self, ui: &mut egui::Ui) {
@@ -431,10 +456,16 @@ impl StartScreen {
                     FontId::proportional(14.0),
                     theme::TEXT,
                 );
+                let desc_font = FontId::proportional(12.0);
+                let description = fit_words(&t.description, tile.x - 24.0, |s| {
+                    p.layout_no_wrap(s.to_owned(), desc_font.clone(), theme::TEXT_DIM)
+                        .size()
+                        .x
+                });
                 p.text(
                     egui::pos2(rect.left() + 10.0, image_rect.bottom() + 28.0),
                     Align2::LEFT_TOP,
-                    &t.description,
+                    &description,
                     FontId::proportional(12.0),
                     theme::TEXT_DIM,
                 );
@@ -454,6 +485,30 @@ impl StartScreen {
             self.select(i);
         }
     }
+}
+
+/// Shortens `text` at a word boundary and adds "…" so it is at most `max_w` wide (as measured by
+/// `measure`). Text that already fits is returned unchanged.
+fn fit_words(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= max_w {
+        return text.to_owned();
+    }
+    let mut words: Vec<&str> = text.split_whitespace().collect();
+    while words.len() > 1 {
+        words.pop();
+        let candidate = format!("{}…", words.join(" "));
+        if measure(&candidate) <= max_w {
+            return candidate;
+        }
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    while chars.pop().is_some() {
+        let candidate = format!("{}…", chars.iter().collect::<String>().trim_end());
+        if measure(&candidate) <= max_w {
+            return candidate;
+        }
+    }
+    "…".to_owned()
 }
 
 /// Paints a preview image in `rect` (cropped to fill), or a calm placeholder when there is none.
@@ -486,7 +541,6 @@ fn paint_preview(
             );
         }
     }
-    let _ = Color32::TRANSPARENT;
 }
 
 /// The default game name offered for a template.
@@ -562,5 +616,43 @@ mod tests {
         let mut screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
         assert!(screen.open(dir.path()).is_none());
         assert!(screen.error().is_some());
+    }
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn fit_words_cuts_at_a_word_boundary() {
+        let width = |s: &str| s.chars().count() as f32;
+        assert_eq!(fit_words("short text", 20.0, width), "short text");
+        assert_eq!(
+            fit_words(
+                "A ready-to-play Parkour starter you can change.",
+                30.0,
+                width
+            ),
+            "A ready-to-play Parkour…"
+        );
+        assert_eq!(fit_words("Supercalifragilistic", 8.0, width), "Superca…");
+    }
+
+    #[test]
+    fn create_with_empty_location_gives_a_clear_message() {
+        let tpl = tempfile::tempdir().expect("tmp");
+        std::fs::write(tpl.path().join("metallic.toml"), "name = \"T\"\n").expect("write");
+        let info = TemplateInfo {
+            id: "t".into(),
+            name: "Parkour".into(),
+            description: "d".into(),
+            preview_path: tpl.path().join("p.png"),
+            dir: tpl.path().to_path_buf(),
+            order: 1,
+        };
+        let mut screen = StartScreen::new(vec![info], RecentProjects::load(None));
+        screen.set_location(Path::new(""));
+        assert!(screen.create().is_none());
+        assert_eq!(screen.error(), Some("Choose where to create the game."));
     }
 }

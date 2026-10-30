@@ -109,7 +109,25 @@ pub fn validate_project_name(name: &str) -> Result<(), StudioError> {
             "Names can't contain \\ / : * ? \" < > | or end with a dot.".into(),
         ));
     }
+    let stem = trimmed.split('.').next().unwrap_or("").trim_end();
+    if is_reserved_windows_name(stem) {
+        return Err(StudioError::InvalidName(format!(
+            "\"{stem}\" is a reserved name on Windows. Pick a different name."
+        )));
+    }
     Ok(())
+}
+
+/// Windows device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9), which cannot be folder names,
+/// with or without an extension.
+fn is_reserved_windows_name(stem: &str) -> bool {
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            upper
+                .strip_prefix(prefix)
+                .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
+        })
 }
 
 /// True when `dir` does not exist or has no entries.
@@ -130,8 +148,16 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<(), StudioError> {
         if top && entry.file_name() == TEMPLATE_FILE {
             continue;
         }
+        let kind = entry.file_type().map_err(|e| StudioError::io(&src, e))?;
+        if kind.is_symlink() {
+            log::warn!(
+                "skipping symlink {} while copying a template",
+                src.display()
+            );
+            continue;
+        }
         let dst = to.join(entry.file_name());
-        if src.is_dir() {
+        if kind.is_dir() {
             copy_tree(&src, &dst, false)?;
         } else {
             fs::copy(&src, &dst).map_err(|e| StudioError::io(&src, e))?;
