@@ -22,7 +22,10 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). Also `deep_clone()` used by Play.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
+  `step(&mut World, dt)` (1/240 s elapsed-time quanta, batching up to 1/60 s Rapier calls with four internal solver
+  substeps), `last_step_pipeline_steps`, `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Gameplay sensors,
+  non-character kinematic movers, and fast/small awake bodies retain 1/240 s collision sampling. `MAX_PIPELINE_STEP`
+  caps each batched pipeline call; small/high-refresh frames keep the original accumulator latency. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
