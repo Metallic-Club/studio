@@ -144,7 +144,7 @@ fn clone_subtree_copies_and_remaps_refs() {
     let pl = w.create("Player", Some(m)).unwrap();
     let sp = w.create("SpawnLocation", Some(m)).unwrap();
     w.set(pl, "RespawnLocation", Value::Ref(Some(sp))).unwrap();
-    let c = w.clone_subtree(m);
+    let c = w.clone_subtree(m).unwrap();
     assert_ne!(c, m);
     assert_eq!(w.parent(c), None);
     let kids = w.children(c).to_vec();
@@ -157,26 +157,25 @@ fn clone_subtree_copies_and_remaps_refs() {
 
 #[test]
 fn signals_fire() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
     let mut w = world();
-    let added = Rc::new(RefCell::new(Vec::new()));
+    let added = Arc::new(Mutex::new(Vec::new()));
     let a2 = added.clone();
     let conn = w
         .child_added
-        .connect(move |&(parent, child)| a2.borrow_mut().push((parent, child)));
+        .connect(move |&(parent, child)| a2.lock().unwrap().push((parent, child)));
     let p = w.create("Part", Some(ws(&w))).unwrap();
-    assert_eq!(added.borrow().as_slice(), &[(ws(&w), p)]);
-    let changed = Rc::new(RefCell::new(Vec::new()));
+    assert_eq!(added.lock().unwrap().as_slice(), &[(ws(&w), p)]);
+    let changed = Arc::new(Mutex::new(Vec::new()));
     let c2 = changed.clone();
     w.property_changed(p, "Anchored")
-        .connect(move |v| c2.borrow_mut().push(v.clone()));
+        .connect(move |v| c2.lock().unwrap().push(v.clone()));
     w.set(p, "Anchored", Value::Bool(true)).unwrap();
     w.set(p, "CanCollide", Value::Bool(false)).unwrap();
-    assert_eq!(changed.borrow().as_slice(), &[Value::Bool(true)]);
+    assert_eq!(changed.lock().unwrap().as_slice(), &[Value::Bool(true)]);
     w.child_added.disconnect(conn);
     w.create("Part", Some(ws(&w))).unwrap();
-    assert_eq!(added.borrow().len(), 1);
+    assert_eq!(added.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -188,4 +187,18 @@ fn vec3_math() {
     assert_eq!(a - a, Vec3::new(0.0, 0.0, 0.0));
     assert_eq!(a * 2.0, Vec3::new(6.0, 0.0, 8.0));
     assert_eq!(Vec3::new(0.0, 0.0, 0.0).unit(), Vec3::new(0.0, 0.0, 0.0));
+}
+
+#[test]
+fn clone_subtree_of_destroyed_id_errors() {
+    let mut w = world();
+    let p = w.create("Part", Some(ws(&w))).unwrap();
+    w.destroy(p);
+    assert_eq!(w.clone_subtree(p), Err(CoreError::InvalidInstance));
+}
+
+#[test]
+fn world_is_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<World>();
 }

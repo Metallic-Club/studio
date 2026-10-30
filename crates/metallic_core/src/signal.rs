@@ -4,7 +4,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnectionId(u64);
 
-type Handler<Args> = Box<dyn FnMut(&Args)>;
+type Handler<Args> = Box<dyn FnMut(&Args) + Send>;
 
 /// An event that calls its connected handlers in connection order.
 pub struct Signal<Args> {
@@ -23,7 +23,7 @@ impl<Args> Default for Signal<Args> {
 
 impl<Args> Signal<Args> {
     /// Adds a handler and returns the id to disconnect it with.
-    pub fn connect(&mut self, handler: impl FnMut(&Args) + 'static) -> ConnectionId {
+    pub fn connect(&mut self, handler: impl FnMut(&Args) + Send + 'static) -> ConnectionId {
         let id = ConnectionId(self.next);
         self.next += 1;
         self.handlers.push((id, Box::new(handler)));

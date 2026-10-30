@@ -370,10 +370,11 @@ impl World {
     /// Copies an instance and its descendants into a new parentless subtree and returns its root.
     /// Refs that point inside the copied subtree point to the copies. The copy is never built-in.
     ///
-    /// # Panics
-    /// If `id` does not exist (there is no sensible id to return).
-    pub fn clone_subtree(&mut self, id: InstanceId) -> InstanceId {
-        assert!(self.is_alive(id), "clone_subtree: instance does not exist");
+    /// Errors: [`CoreError::InvalidInstance`] if `id` is destroyed or unknown.
+    pub fn clone_subtree(&mut self, id: InstanceId) -> Result<InstanceId, CoreError> {
+        if !self.is_alive(id) {
+            return Err(CoreError::InvalidInstance);
+        }
         let mut map = HashMap::new();
         let root = self.clone_rec(id, None, &mut map);
         self.roots.push(root);
@@ -388,7 +389,7 @@ impl World {
                 }
             }
         }
-        root
+        Ok(root)
     }
 
     fn clone_rec(
