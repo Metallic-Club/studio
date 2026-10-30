@@ -86,6 +86,15 @@ fn touched_fires_once_per_contact() {
     assert!(first[0] == (p, base) || first[0] == (base, p));
     run(&mut phys, &mut world, 1.0);
     assert!(phys.drain_touched().is_empty());
+    // lift the part off the baseplate, let it separate, then drop it again
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(0.0, 8.0, 0.0)))
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    assert!(phys.drain_touched().is_empty());
+    run(&mut phys, &mut world, 2.0);
+    let second = phys.drain_touched();
+    assert_eq!(second.len(), 1, "{second:?}");
 }
 
 #[test]
@@ -206,4 +215,101 @@ fn moving_anchored_platform_carries_rider() {
         "rider moved {}",
         pos(&world, rider).x - x0
     );
+}
+
+#[test]
+fn parts_outside_workspace_are_ignored() {
+    let mut world = World::new_with_services();
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 10.0, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.5);
+    assert!(pos(&world, p).y < 10.0);
+    let storage = world.root("ReplicatedStorage").unwrap();
+    world.set_parent(p, Some(storage)).unwrap();
+    phys.sync_from(&world);
+    let y = pos(&world, p).y;
+    run(&mut phys, &mut world, 0.5);
+    assert_eq!(pos(&world, p).y, y);
+    assert!(phys.velocity(p).is_none());
+}
+
+#[test]
+fn anchored_flip_without_sync_does_not_freeze_body() {
+    let mut world = World::new_with_services();
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 100.0, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.25);
+    world.set(p, "Anchored", Value::Bool(true)).unwrap();
+    let y = pos(&world, p).y;
+    run(&mut phys, &mut world, 0.25);
+    assert!(
+        pos(&world, p).y < y - 1.0,
+        "body froze at {}",
+        pos(&world, p).y
+    );
+    phys.sync_from(&world);
+    let y = pos(&world, p).y;
+    run(&mut phys, &mut world, 0.25);
+    assert_eq!(pos(&world, p).y, y);
+}
+
+#[test]
+fn kinematic_body_touching_anchored_sensor_fires_touched() {
+    let mut world = World::new_with_services();
+    let zone = part(
+        &mut world,
+        Vec3::new(10.0, 0.0, 0.0),
+        Vec3::new(4.0, 4.0, 4.0),
+        true,
+    );
+    world.set(zone, "CanCollide", Value::Bool(false)).unwrap();
+    let mover = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        true,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    for i in 1..=120 {
+        world
+            .set(
+                mover,
+                "Position",
+                Value::Vector3(Vec3::new(i as f64 * 0.1, 0.0, 0.0)),
+            )
+            .unwrap();
+        phys.step(&mut world, 1.0 / 60.0);
+    }
+    let touched = phys.drain_touched();
+    assert_eq!(touched.len(), 1, "{touched:?}");
+    assert!(touched[0] == (mover, zone) || touched[0] == (zone, mover));
+}
+
+#[test]
+fn step_clamps_huge_dt() {
+    let mut world = World::new_with_services();
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 1000.0, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    phys.step(&mut world, 100.0);
+    // 0.25 s of free fall is about 6.1 studs
+    assert!(pos(&world, p).y > 990.0, "y = {}", pos(&world, p).y);
 }

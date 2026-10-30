@@ -20,8 +20,8 @@ pub use sync::{MaterialProps, material_props};
 
 use metallic_core::{InstanceId, Value, Vec3, World};
 use rapier3d::prelude::{
-    ActiveEvents, ColliderHandle, PhysicsWorld as RapierWorld, Pose, QueryFilter, Ray,
-    RigidBodyBuilder, RigidBodyHandle, RigidBodyType, Rotation, Vector,
+    ActiveCollisionTypes, ActiveEvents, ColliderHandle, PhysicsWorld as RapierWorld, Pose,
+    QueryFilter, Ray, RigidBodyBuilder, RigidBodyHandle, RigidBodyType, Rotation, Vector,
 };
 use std::collections::{HashMap, HashSet};
 use sync::{PartState, Signature};
@@ -29,6 +29,8 @@ use touched::{EventCollector, TouchTracker};
 
 /// Gravity in studs per second squared (downward).
 pub const GRAVITY: f64 = 196.2;
+/// Longest `dt` one [`PhysicsWorld::step`] call simulates, in seconds; larger values are clamped.
+pub const MAX_STEP: f64 = 0.25;
 /// Length of one fixed simulation substep in seconds.
 pub const SUBSTEP: f64 = 1.0 / 240.0;
 
@@ -152,7 +154,7 @@ impl PhysicsWorld {
         let builder = if s.anchored {
             RigidBodyBuilder::fixed()
         } else {
-            RigidBodyBuilder::dynamic().ccd_enabled(true)
+            RigidBodyBuilder::dynamic()
         }
         .pose(pose);
         let collider = sync::build_collider(&s.shape, s.size)
@@ -160,7 +162,14 @@ impl PhysicsWorld {
             .friction(mat.friction)
             .restitution(mat.restitution)
             .sensor(!s.can_collide)
-            .active_events(ActiveEvents::COLLISION_EVENTS);
+            .active_events(ActiveEvents::COLLISION_EVENTS)
+            .active_collision_types(
+                ActiveCollisionTypes::DYNAMIC_DYNAMIC
+                    | ActiveCollisionTypes::DYNAMIC_KINEMATIC
+                    | ActiveCollisionTypes::DYNAMIC_FIXED
+                    | ActiveCollisionTypes::KINEMATIC_KINEMATIC
+                    | ActiveCollisionTypes::KINEMATIC_FIXED,
+            );
         let (body, collider) = self.rapier.insert(builder, collider);
         self.owners.insert(collider, id);
         self.entries.insert(
@@ -195,10 +204,14 @@ impl PhysicsWorld {
     ///
     /// Before simulating, a changed `Position`/`Orientation` is applied: an anchored part is moved
     /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`]); an
-    /// unanchored part is teleported and its velocity cleared. Parts not yet seen by
-    /// [`Self::sync_from`] are ignored.
+    /// unanchored part is teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`]
+    /// (0.25 s) so a long frame cannot spiral.
+    ///
+    /// Callers must call [`Self::sync_from`] after adding, removing or reconfiguring parts
+    /// (Size, Shape, Material, Anchored, CanCollide, reparenting); until then `step` keeps using
+    /// the Anchored value the body was last synced with. Parts not yet synced are ignored.
     pub fn step(&mut self, world: &mut World, dt: f64) {
-        self.accumulator += dt.max(0.0);
+        self.accumulator += dt.clamp(0.0, MAX_STEP);
         let substeps = ((self.accumulator / SUBSTEP) + 1e-6).floor() as usize;
         if substeps == 0 {
             return;
@@ -221,7 +234,7 @@ impl PhysicsWorld {
             let Some(body) = self.rapier.bodies.get_mut(e.body) else {
                 continue;
             };
-            if state.anchored {
+            if e.signature.anchored {
                 e.derived_velocity = Vec3::default();
                 if moved {
                     let v = (state.position - e.last_position) * (1.0 / sim_time);

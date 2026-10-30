@@ -111,10 +111,10 @@ pub(crate) fn read_part(world: &World, id: InstanceId) -> Option<PartState> {
     })
 }
 
-/// All BasePart instances in the world, depth first.
+/// All BasePart instances under Workspace, depth first (parts elsewhere are not simulated).
 pub(crate) fn collect_parts(world: &World) -> Vec<InstanceId> {
     let mut out = Vec::new();
-    let mut stack: Vec<InstanceId> = world.roots().iter().rev().copied().collect();
+    let mut stack: Vec<InstanceId> = world.root("Workspace").into_iter().collect();
     while let Some(id) = stack.pop() {
         if world.is_a(id, "BasePart") {
             out.push(id);
