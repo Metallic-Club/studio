@@ -96,6 +96,10 @@ remote:FireServer(5)
 ```
 
 ## Limits
+- Pattern matching: the 10 million charged-step complexity allowance applies separately to each starting-position
+  attempt. Deadline polling continues across attempts and substitutions; the script's 0.1 s execution budget still
+  applies to the complete call. A larger linear operation can therefore time out even when it passes the complexity
+  check. The separate 200-level matcher depth, 32-capture and 64 MB gsub-result limits are unchanged.
 - Remote: at most 32 arguments, 10,000 values (tables and leaves, shared tables counted per reference) and 1 MB of string bytes per
   call (`remote payload too large`); at most 1,000 messages and 16 MB queued per VM per step (`remote queue full`).
 - Signals: at most 10,000 connections per signal (`too many connections`). All handlers of a step share a 0.25 s budget per VM;
