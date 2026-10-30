@@ -58,4 +58,6 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - No `unwrap()` or `expect()` outside tests; return typed errors (`CoreError`, `ScriptError`, `RuntimeError`, `StudioError`).
 - Scripts can never freeze or crash the game: budgets and caps are enforced in `metallic_script`.
 - Permissive dependency licences only; `cargo deny check licenses` stays green.
-- Benchmarks for hot paths (render sync, physics step, script step) come after M1; record numbers in `docs/agents/`.
+- Benchmarks: criterion benches live in `crates/<crate>/benches/` (`cargo bench -p metallic_core --bench world` exists;
+  render sync, physics step and script step follow). Budgets, bench names and the perf-CI plan are in
+  `docs/research/2026-10-30-performance-and-scale.md`; record numbers in `docs/agents/`.
