@@ -7,3 +7,4 @@ publish.workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+rapier3d.workspace = true
