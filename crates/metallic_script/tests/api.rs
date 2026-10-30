@@ -402,6 +402,7 @@ fn wait_for_child_resumes_times_out_and_warns() {
 #[test]
 fn runaway_handler_times_out_and_engine_continues() {
     let mut rig = Rig::new();
+    rig.host.set_resume_budget(metallic_script::RESUME_BUDGET);
     let ws = rig.root("Workspace");
     let pad = rig.add("Part", "Pad", ws);
     let ball = rig.add("Part", "Ball", ws);
