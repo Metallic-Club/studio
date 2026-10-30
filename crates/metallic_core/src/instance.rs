@@ -18,6 +18,16 @@ pub struct ChangeCursor {
     revision: u64,
 }
 
+impl ChangeCursor {
+    /// Whether both cursors belong to the same world, regardless of their revisions.
+    ///
+    /// A deep clone has its own identity. Consumers can distinguish dropped journal history
+    /// from switching worlds without exposing the world's process-local identifier.
+    pub fn same_world(self, other: Self) -> bool {
+        self.world == other.world
+    }
+}
+
 /// What happened to a world since a [`ChangeCursor`] was taken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Changes {
