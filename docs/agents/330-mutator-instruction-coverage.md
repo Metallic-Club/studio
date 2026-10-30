@@ -63,3 +63,28 @@ A separately retained release example is now building in the owned `lane114/330-
 with release debug level 1 and empty RUSTFLAGS, matching instruction CI's build settings. No compiler artifact
 is copied or linked between lanes. Actual native modes/collector/symbol evidence remain pending. Broad required
 gates are still held until the conductor grants a slot.
+
+
+Focused checkpoint `521115517b3610e00f6dd4f5619f02873c3b8df5` passed the remaining native checks. The separate
+release+debug1 build completed in 1m02s. All five modes returned successful completion JSON; an unknown mode
+returned exit 1. A local-only, single-threaded Windows DbgHelp check resolved all five exact collection names
+from this binary's matching PDB; no symbol server, external process or host address was used. It follows
+Microsoft's [SymFromNameW](https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symfromnamew)
+and [SYMBOL_INFOW](https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/ns-dbghelp-symbol_infow) APIs.
+
+Source SHA256: `5139f102cb1359040af83d4e282361674e73215543896b0daedc9a3c2ed25d14`.
+Release binary SHA256: `6b429a1936bc831ca43c0bdef5b5b7400d180d97957815ee43666e13baf86052`.
+PDB SHA256: `b568e70b9b2476b81db307272749135cafa6d701fabe00909fb99f2d47107950`.
+The local-only helper and `native-artifact-validation.json` retain names, module-relative addresses and artifact
+provenance under `integration-evidence/330-mutator-instructions`. Public symbol sizes are zero in this debug
+format; no function-size claim is inferred. Windows symbol resolution is not Linux Callgrind collection.
+
+The real native collector retained three samples for each of the five workloads in `native-collector/report.json`.
+These unpaired nanoseconds are harness-completion observations, not a performance baseline or threshold pass.
+Passing that native wall-time report to the instruction comparator correctly returned exit 2 and no comparison
+summary (`walltime-comparison-refusal.log`). Existing mocked policy tests still supply no real instructions;
+real base/head Callgrind evidence is pending PR CI. Since this task changes no engine implementation, its own
+base/head gate calibrates the expanded harness rather than measuring PR #318's unmerged implementation.
+
+Both focused commands have exited and the slot was released to the conductor. Broad required gates remain
+queued; no local Cargo is active. No whole-workspace or instruction acceptance claim at this checkpoint.
