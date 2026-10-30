@@ -4,10 +4,10 @@ use crate::classes::{self, class_def, default_value, find_property};
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Most journal entries kept before the oldest half is dropped.
+/// Number of most recent mutation entries retained in the ring.
 const JOURNAL_LIMIT: usize = 16384;
 static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
 
@@ -82,7 +82,7 @@ pub struct World {
     prop_signals: HashMap<(InstanceId, String), Signal<Value>>,
     uid: u64,
     revision: u64,
-    journal: Vec<(u64, InstanceId)>,
+    journal: VecDeque<(u64, InstanceId)>,
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
 }
@@ -98,19 +98,19 @@ impl World {
             prop_signals: HashMap::new(),
             uid: NEXT_WORLD_UID.fetch_add(1, Ordering::Relaxed),
             revision: 0,
-            journal: Vec::new(),
+            journal: VecDeque::new(),
             journal_floor: 0,
         }
     }
 
     fn record(&mut self, id: InstanceId) {
         self.revision += 1;
-        self.journal.push((self.revision, id));
-        if self.journal.len() > JOURNAL_LIMIT {
-            let cut = self.journal.len() / 2;
-            self.journal_floor = self.journal[cut - 1].0;
-            self.journal.drain(..cut);
+        if self.journal.len() == JOURNAL_LIMIT
+            && let Some((revision, _)) = self.journal.pop_front()
+        {
+            self.journal_floor = revision;
         }
+        self.journal.push_back((self.revision, id));
     }
 
     fn record_subtree(&mut self, id: InstanceId) {
@@ -131,8 +131,9 @@ impl World {
 
     /// Instances changed since `cursor` plus a new cursor to continue from. Every mutation
     /// (`create`, `destroy`, `set_parent`, `set` with a new value, `clone_subtree`) is recorded; this
-    /// needs only `&World`. The journal is bounded: when it no longer reaches back to `cursor`,
-    /// or `cursor` came from a different world, the result is [`Changes::Overflow`].
+    /// needs only `&World`. The journal retains the most recent 16,384 mutations (before
+    /// deduplication), dropping one oldest entry at a time. When it no longer reaches back to
+    /// `cursor`, or `cursor` came from a different world, the result is [`Changes::Overflow`].
     pub fn changes_since(&self, cursor: ChangeCursor) -> (Changes, ChangeCursor) {
         let now = self.change_cursor();
         if cursor.world != self.uid || cursor.revision < self.journal_floor {
@@ -140,8 +141,10 @@ impl World {
         }
         let start = self.journal.partition_point(|&(r, _)| r <= cursor.revision);
         let mut seen = HashSet::new();
-        let ids = self.journal[start..]
+        let ids = self
+            .journal
             .iter()
+            .skip(start)
             .filter(|(_, id)| seen.insert(*id))
             .map(|&(_, id)| id)
             .collect();
@@ -529,7 +532,7 @@ impl World {
             prop_signals: HashMap::new(),
             uid: NEXT_WORLD_UID.fetch_add(1, Ordering::Relaxed),
             revision: 0,
-            journal: Vec::new(),
+            journal: VecDeque::new(),
             journal_floor: 0,
         }
     }
