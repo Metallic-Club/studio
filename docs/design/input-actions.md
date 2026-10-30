@@ -657,7 +657,11 @@ Local first, cloud later.
   Local file stays the working copy so offline play works. Not in the first phases.
 - Writes happen when the page closes or the game exits, never per frame, atomically (write a temp file, rename).
 - Implemented (#254): the folder is `%APPDATA%\MetallicPlayer` on Windows (`METALLIC_PLAYER_DATA_DIR` overrides it), so
-  the file is `%APPDATA%\MetallicPlayer\input\<game id>\local.json`. Stick and mouse settings are stored per stick under
+  the file is `%APPDATA%\MetallicPlayer\input\<game id>\local.json`; `<game id>` is the name as a slug plus 8 hex
+  digits of an FNV-1a hash of the exact name (names that differ only in case or punctuation get separate folders, and no id is a reserved Windows
+  name). Files
+  over 256 KB are set aside, at most 4 slots per device are read, and a Menu with no binding on a device gets the
+  creator's binding back. Stick and mouse settings are stored per stick under
   `"sticks"` (`Thumbstick1`, `Thumbstick2`, `MouseDelta`: `sensitivity`, `invertX`, `invertY`, `deadzone`) rather than
   per action, so a stick swap keeps them; assist options under `"assist"` (`toggleAll`, `replaceHolds`,
   `holdTimeScale`). An empty slot is stored as `"key": "None"`. A file that cannot be read is renamed to

@@ -584,8 +584,11 @@ impl ControlsPage {
                 {
                     swappable.push((row.path.clone(), row.name.clone()));
                 }
-                let (_, action) = self.base.action(&row.path).expect("row of a known action");
-                let toggle = self.overrides.toggles(&row.path, action);
+                // Rows come from `base`, so the action is there; a missing one shows as Hold.
+                let toggle = self
+                    .base
+                    .action(&row.path)
+                    .is_some_and(|(_, action)| self.overrides.toggles(&row.path, action));
                 if row.can_toggle {
                     cells.push(Cell {
                         item: Item::Hold(row.path.clone()),
@@ -764,8 +767,11 @@ impl ControlsPage {
                     );
                     first = false;
                 }
-                let (_, action) = self.base.action(&row.path).expect("row of a known action");
-                let toggle = self.overrides.toggles(&row.path, action);
+                // Rows come from `base`, so the action is there; a missing one shows as Hold.
+                let toggle = self
+                    .base
+                    .action(&row.path)
+                    .is_some_and(|(_, action)| self.overrides.toggles(&row.path, action));
                 let top = *y;
                 let cells = vec![Cell {
                     item: Item::Hold(row.path.clone()),

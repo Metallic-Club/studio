@@ -191,7 +191,11 @@ fn a_missing_file_gives_the_creators_controls() {
 #[test]
 fn the_store_round_trips_atomically() {
     let (dir, store) = temp_store();
-    assert!(store.path().ends_with("input/parkour/local.json"));
+    assert!(
+        store
+            .path()
+            .ends_with(format!("input/{}/local.json", game_id("Parkour")))
+    );
     let o = sample();
     store.save(&o).unwrap();
     let (back, status) = store.load();
@@ -237,11 +241,96 @@ fn a_corrupt_file_is_moved_aside_and_defaults_apply() {
 
 #[test]
 fn game_ids_are_safe_folder_names() {
-    assert_eq!(game_id("Parkour"), "parkour");
-    assert_eq!(game_id("Tower Defense: 2!"), "tower-defense-2");
-    assert_eq!(game_id("../.."), "game");
-    assert_eq!(game_id(""), "game");
-    assert!(game_id(&"x".repeat(200)).len() <= 64);
+    let id = game_id("Parkour");
+    assert!(
+        id.starts_with("parkour-") && id.len() == "parkour-".len() + 8,
+        "{id}"
+    );
+    assert_eq!(game_id("Parkour"), id, "stable");
+    assert!(game_id("Tower Defense: 2!").starts_with("tower-defense-2-"));
+    assert!(game_id("../..").starts_with("game-"));
+    assert!(game_id("").starts_with("game-"));
+    assert!(game_id(&"x".repeat(200)).len() <= 48 + 9);
+    // Names that slug alike still get their own folder.
+    assert_ne!(game_id("Tower Defense"), game_id("tower-defense"));
+    assert_ne!(game_id("Obby"), game_id("OBBY"));
+    // Never a Windows reserved device name, with or without an extension.
+    const RESERVED: [&str; 6] = ["con", "nul", "prn", "aux", "com1", "lpt1"];
+    for name in ["CON", "nul", "Com1", "LPT1", "aux", "PRN.txt"] {
+        let id = game_id(name);
+        let stem = id.split('.').next().unwrap();
+        assert!(!RESERVED.contains(&stem), "{name} -> {id}");
+        assert!(
+            id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn a_file_without_any_menu_binding_gets_menu_back() {
+    let text = r#"{ "overrides": { "Metallic.System/Menu": { "bindings": [
+        { "device": "Keyboard", "key": "None" },
+        { "device": "Gamepad", "key": "None" } ] } } }"#;
+    let o = PlayerOverrides::from_json(text).unwrap();
+    assert!(o.action(MENU_ACTION).is_none(), "{o:?}");
+    let mut r = Rig::new(o);
+    let menu = r.id(MENU_ACTION);
+    let before = r.rt.presses(menu);
+    r.tap(KB, Control::Escape);
+    r.tap(PAD, Control::ButtonStart);
+    assert_eq!(r.rt.presses(menu), before + 2);
+    // Only the empty device comes back; a real rebind and the toggle are kept.
+    let text = r#"{ "overrides": { "Metallic.System/Menu": { "bindings": [
+        { "device": "Keyboard", "key": "M" },
+        { "device": "Gamepad", "key": "None" } ] } } }"#;
+    let o = PlayerOverrides::from_json(text).unwrap();
+    let cfg = o.apply(&defaults());
+    let (_, menu) = cfg.action(MENU_ACTION).unwrap();
+    let keys: Vec<_> = menu.bindings.iter().filter_map(|b| b.key).collect();
+    assert_eq!(keys, [Control::M, Control::ButtonStart]);
+}
+
+#[test]
+fn a_file_keeps_at_most_four_slots_per_device() {
+    let keys: Vec<String> = ["E", "F", "G", "H", "J", "K", "L"]
+        .iter()
+        .map(|k| format!(r#"{{ "device": "Keyboard", "key": "{k}" }}"#))
+        .collect();
+    let text = format!(
+        r#"{{ "overrides": {{ "{JUMP}": {{ "bindings": [ {} ] }} }} }}"#,
+        keys.join(", ")
+    );
+    let o = PlayerOverrides::from_json(&text).unwrap();
+    let cfg = o.apply(&defaults());
+    let (_, jump) = cfg.action(JUMP).unwrap();
+    let kb: Vec<_> = jump
+        .bindings
+        .iter()
+        .filter_map(|b| b.key)
+        .filter(|c| !c.is_gamepad())
+        .collect();
+    assert_eq!(kb, [Control::E, Control::F, Control::G, Control::H]);
+}
+
+#[test]
+fn an_oversized_file_is_ignored_and_set_aside() {
+    let (_dir, store) = temp_store();
+    std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+    // Valid JSON, but padded past the cap.
+    let mut text = jump_on_e().to_json("t");
+    text.insert_str(1, &" ".repeat(super::overrides::MAX_FILE_BYTES as usize));
+    std::fs::write(store.path(), &text).unwrap();
+    let (o, status) = store.load();
+    assert!(o.is_empty());
+    let LoadStatus::Corrupt { moved_to, .. } = status else {
+        panic!("{status:?}");
+    };
+    assert!(moved_to.is_some());
+    // Just under the cap still loads.
+    let text = jump_on_e().to_json("t");
+    std::fs::write(store.path(), &text).unwrap();
+    assert_eq!(store.load().1, LoadStatus::Loaded);
 }
 
 #[test]

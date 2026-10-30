@@ -28,8 +28,8 @@
 //!   aside, not deleted) and writes atomically: a temporary file, then a rename. An empty set of
 //!   overrides removes the file, so deleting the file and resetting everything are the same.
 use super::config::{
-    ActionDef, ActionType, BindingDef, InputConfig, MOUSE_ORBIT_SPEED, PAD_ZOOM_SPEED, Role,
-    STICK_ORBIT_SPEED, Trigger, ZOOM_PER_NOTCH,
+    ActionDef, ActionType, BindingDef, InputConfig, MENU_ACTION, MOUSE_ORBIT_SPEED, PAD_ZOOM_SPEED,
+    Role, STICK_ORBIT_SPEED, Trigger, ZOOM_PER_NOTCH,
 };
 use super::control::{Control, ControlKind, DeviceKind};
 use serde_json::{Map, Value};
@@ -40,6 +40,10 @@ use std::path::{Path, PathBuf};
 pub const OVERRIDES_VERSION: u64 = 1;
 /// The local profile's file name until sign-in exists (spec 8.4).
 pub const LOCAL_PROFILE: &str = "local";
+/// The largest override file that is read (a real one is a few kilobytes).
+pub const MAX_FILE_BYTES: u64 = 256 * 1024;
+/// The most slots one action keeps per device when a file is read.
+pub const MAX_SLOTS_PER_DEVICE: usize = super::rebind::MAX_SLOTS;
 /// Stick and mouse sensitivity range (spec 8.1: 25% to 200%).
 pub const SENSITIVITY_RANGE: (f32, f32) = (0.25, 2.0);
 /// Stick dead zone range (spec 8.1).
@@ -389,6 +393,24 @@ impl PlayerOverrides {
     /// Reads the file's text. A field of the wrong type is skipped; text that is not a JSON
     /// object is an error.
     pub fn from_json(text: &str) -> Result<Self, String> {
+        let mut o = Self::read_json(text)?;
+        o.restore_menu();
+        Ok(o)
+    }
+
+    /// The Menu rule on files edited by hand (spec 8.3): a device whose Menu slots are all
+    /// empty gets the creator's Menu bindings back, so the player can always open the page.
+    fn restore_menu(&mut self) {
+        if let Some(a) = self.actions.get_mut(MENU_ACTION) {
+            a.devices
+                .retain(|(_, slots)| slots.iter().any(|s| !s.is_empty()));
+            if a.is_empty() {
+                self.actions.remove(MENU_ACTION);
+            }
+        }
+    }
+
+    fn read_json(text: &str) -> Result<Self, String> {
         let root: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
         let Value::Object(mut root) = root else {
             return Err("the file is not a JSON object".into());
@@ -734,6 +756,8 @@ fn read_action(mut entry: Map<String, Value>) -> ActionOverride {
         for item in list {
             match read_binding(item) {
                 Some((device, slot)) => match devices.iter_mut().find(|(d, _)| *d == device) {
+                    // At most MAX_SLOTS_PER_DEVICE; extra slots in a hand-edited file are dropped.
+                    Some((_, slots)) if slots.len() >= MAX_SLOTS_PER_DEVICE => {}
                     Some((_, slots)) => slots.push(slot),
                     None => devices.push((device, vec![slot])),
                 },
@@ -895,8 +919,20 @@ impl OverrideStore {
     /// to `<profile>.json.corrupt` so the next save does not destroy what the player may want to
     /// recover.
     pub fn load(&self) -> (PlayerOverrides, LoadStatus) {
-        let bytes = match std::fs::read(&self.path) {
-            Ok(b) => b,
+        let bytes = match read_capped(&self.path) {
+            Ok(Some(b)) => b,
+            Ok(None) => {
+                // Too large to be ours: set aside like a damaged file, defaults apply.
+                let aside = self.path.with_extension("json.corrupt");
+                let moved_to = std::fs::rename(&self.path, &aside).ok().map(|()| aside);
+                return (
+                    PlayerOverrides::default(),
+                    LoadStatus::Corrupt {
+                        reason: format!("larger than {MAX_FILE_BYTES} bytes"),
+                        moved_to,
+                    },
+                );
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return (PlayerOverrides::default(), LoadStatus::Missing);
             }
@@ -946,12 +982,37 @@ impl OverrideStore {
     }
 }
 
+/// Reads at most [`MAX_FILE_BYTES`]; `None` when the file is larger.
+fn read_capped(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= MAX_FILE_BYTES).then_some(bytes))
+}
+
 /// A folder name for a game: its name in lower case, letters and digits kept, anything else as
-/// `-` (at most 64 characters). An empty result is `game`.
+/// `-` (at most 48 characters, `game` when empty), then `-` and 8 hex digits of a hash of the
+/// exact name. The hash keeps games whose names differ only in case or punctuation apart, and
+/// no id can be a Windows reserved name (`CON`, `NUL`, `COM1` ...).
 pub fn game_id(name: &str) -> String {
+    let mut id = slug(name);
+    id.push('-');
+    id.push_str(&format!("{:08x}", fnv1a(name)));
+    id
+}
+
+/// FNV-1a over the UTF-8 bytes: stable across builds and platforms (unlike `DefaultHasher`).
+fn fnv1a(s: &str) -> u32 {
+    s.bytes().fold(0x811c_9dc5u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    })
+}
+
+fn slug(name: &str) -> String {
     let mut id = String::with_capacity(name.len().min(64));
     for ch in name.chars() {
-        if id.len() >= 64 {
+        if id.len() >= 48 {
             break;
         }
         if ch.is_ascii_alphanumeric() {

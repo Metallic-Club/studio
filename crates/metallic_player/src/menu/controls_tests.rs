@@ -240,3 +240,18 @@ fn sliders_step_and_clamp() {
     assert_eq!(v, hi);
     assert!(!p.nav(Nav::Right).changed, "at the top");
 }
+
+#[test]
+fn overrides_for_unknown_actions_never_break_the_rows() {
+    // A file from another game version: toggles for actions this game does not have.
+    let mut o = PlayerOverrides::default();
+    o.action_mut("Gone/Action").toggle = Some(true);
+    o.assist.toggle_all = true;
+    let mut p = ControlsPage::new(InputConfig::player_defaults(), o, GamepadStyle::Letters);
+    for tab in [Tab::Keyboard, Tab::Gamepad, Tab::Assist] {
+        p.set_tab(tab);
+        assert!(!p.rows().is_empty());
+    }
+    assert!(p.toggles(RUN), "toggle every hold applies to Run");
+    assert!(!p.toggles("Gone/Action") || p.base().action("Gone/Action").is_none());
+}
