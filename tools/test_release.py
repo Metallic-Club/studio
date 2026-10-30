@@ -82,7 +82,7 @@ class PackCommandTests(unittest.TestCase):
         self.assertIn("--tag launcher-v", out)
         self.assertNotIn("MetallicStudio", out)
 
-    def test_dry_run_studio_is_unchanged(self):
+    def test_dry_run_studio(self):
         import subprocess
         import sys
         version = release.workspace_version(release.CARGO_TOML.read_text(encoding="utf-8"))
@@ -92,7 +92,7 @@ class PackCommandTests(unittest.TestCase):
         self.assertIn("+ stage metallic_studio.exe as Metallic Studio.exe in ", out)
         self.assertIn(f"--tag v{version}-dev --releaseName \"Metallic Studio {version} (dev)\" --publish --token <token> --pre", out)
         self.assertNotIn("--framework", out)
-        self.assertNotIn("--runtime", out)
+        self.assertIn("--runtime win-x64", out)
         self.assertNotIn("MetallicLauncher", out)
 
 
