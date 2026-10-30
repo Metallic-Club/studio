@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mlua::{
     Error, FromLuaMulti, Function, IntoLuaMulti, Lua, LuaOptions, MultiValue, StdLib, Table,
@@ -129,7 +129,8 @@ impl Budget {
 
     /// Calls `f(args)` with a 0.1 s budget (or the enclosing budget's remainder when
     /// called from inside a running script, whichever ends first). Errors, including
-    /// timeouts, are returned as [`ScriptError`] with the `<chunk>:<line>:` prefix.
+    /// timeouts, are returned as [`ScriptError`]. A script position, when available, is
+    /// retained as the `<chunk>:<line>:` prefix; a host-only boundary has no invented location.
     pub fn call<R: FromLuaMulti>(
         &self,
         f: &Function,
@@ -185,7 +186,10 @@ impl Budget {
     }
 }
 
-/// One sandboxed Luau VM with its own thread scheduler.
+/// One sandboxed Luau VM with its own script scheduler and passive deadline worker.
+///
+/// Dropping the VM cancels pending work and joins its worker, including when a trusted raw
+/// Lua handle keeps the underlying Lua state alive. Budget handles then reject further work.
 pub struct ScriptVm {
     lua: Lua,
     sched: Rc<Scheduler>,
@@ -200,7 +204,7 @@ impl ScriptVm {
     /// Creates a VM that prints to stdout/stderr.
     ///
     /// # Errors
-    /// Returns an error if the Lua state or its sandbox cannot be set up.
+    /// Returns an error if the Lua state, sandbox or passive deadline worker cannot be set up.
     pub fn new(context: Context) -> Result<ScriptVm, ScriptError> {
         Self::with_output(context, Rc::new(StdioSink))
     }
@@ -208,13 +212,14 @@ impl ScriptVm {
     /// Creates a VM whose `print`/`warn` and thread errors go to `output`.
     ///
     /// # Errors
-    /// Returns an error if the Lua state or its sandbox cannot be set up.
+    /// Returns an error if the Lua state, sandbox or passive deadline worker cannot be set up.
     pub fn with_output(
         context: Context,
         output: Rc<dyn OutputSink>,
     ) -> Result<ScriptVm, ScriptError> {
         let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).map_err(setup_failed)?;
-        let sched = Rc::new(Scheduler::new(output));
+        let sched =
+            Rc::new(Scheduler::new(output).map_err(|error| setup_failed(Error::external(error)))?);
         let lib = Self::setup(&lua, &sched).map_err(setup_failed)?;
         let shared_g = lua.create_table().map_err(setup_failed)?;
         Ok(ScriptVm {
@@ -296,15 +301,16 @@ impl ScriptVm {
         // Execution budget: abort the running thread once its deadline has passed. The
         // position is remembered so the timeout error can carry `<chunk>:<line>:`.
         let s = sched.clone();
-        lua.set_interrupt(move |lua| match s.deadline.get() {
-            Some(d) if Instant::now() >= d => {
-                if s.timeout_loc.borrow().is_none() {
+        lua.set_interrupt(move |lua| {
+            if s.interrupt_expired() {
+                if s.timeout_loc.borrow().as_ref().is_none_or(String::is_empty) {
                     let loc = script_location(lua, 0);
                     *s.timeout_loc.borrow_mut() = Some(loc);
                 }
                 Err(Error::runtime(TIMEOUT_MSG))
+            } else {
+                Ok(VmState::Continue)
             }
-            _ => Ok(VmState::Continue),
         });
 
         lua.set_memory_limit(MEMORY_LIMIT_BYTES)?;
@@ -437,6 +443,13 @@ impl ScriptVm {
 
     /// Drops the VM together with every pending `task.wait`/`task.delay`.
     pub fn shutdown(self) {
+        drop(self);
+    }
+}
+
+impl Drop for ScriptVm {
+    fn drop(&mut self) {
+        self.sched.watchdog.stop();
         self.sched.clear();
     }
 }

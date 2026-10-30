@@ -10,6 +10,11 @@ use std::time::Instant;
 use mlua::{Error, Function, IntoLuaMulti, LightUserData, Lua, MultiValue, Result, Thread, Value};
 
 use crate::vm::{OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, format_error, lossy};
+use crate::watchdog::Watchdog;
+
+// The watchdog detects expiration independently of instruction count. This sparse clock
+// check is a fallback if its worker is delayed by host scheduling, not the primary deadline.
+const INTERRUPT_CLOCK_INTERVAL: u16 = 1_024;
 
 /// Text of the error raised when a thread runs out of budget.
 pub(crate) const TIMEOUT_MSG: &str = "Script timeout: exhausted allowed execution time";
@@ -49,6 +54,10 @@ struct Pending {
 pub(crate) struct Scheduler {
     pub(crate) now: Cell<f64>,
     pub(crate) deadline: Cell<Option<Instant>>,
+    pub(crate) watchdog: Watchdog,
+    interrupts_until_clock: Cell<u16>,
+    #[cfg(test)]
+    interrupt_clock_checks: Cell<u64>,
     /// Set by the interrupt hook when the budget ran out: `"<chunk>:<line>: "` of the
     /// running code (possibly empty).
     pub(crate) timeout_loc: RefCell<Option<String>>,
@@ -64,11 +73,29 @@ pub(crate) struct Scheduler {
     guard: RefCell<Option<Function>>,
 }
 
+struct DeadlineScope<'a> {
+    scheduler: &'a Scheduler,
+    previous: Option<Instant>,
+}
+
+impl Drop for DeadlineScope<'_> {
+    fn drop(&mut self) {
+        self.scheduler.deadline.set(self.previous);
+        if self.previous.is_none() {
+            self.scheduler.watchdog.disarm();
+        }
+    }
+}
+
 impl Scheduler {
-    pub(crate) fn new(sink: Rc<dyn OutputSink>) -> Self {
-        Scheduler {
+    pub(crate) fn new(sink: Rc<dyn OutputSink>) -> std::io::Result<Self> {
+        Ok(Scheduler {
             now: Cell::new(0.0),
             deadline: Cell::new(None),
+            watchdog: Watchdog::new()?,
+            interrupts_until_clock: Cell::new(0),
+            #[cfg(test)]
+            interrupt_clock_checks: Cell::new(0),
             timeout_loc: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
             owners: RefCell::new(HashMap::new()),
@@ -76,7 +103,32 @@ impl Scheduler {
             seq: Cell::new(0),
             sink,
             guard: RefCell::new(None),
+        })
+    }
+
+    #[inline]
+    pub(crate) fn interrupt_expired(&self) -> bool {
+        let Some(deadline) = self.deadline.get() else {
+            return false;
+        };
+        if self.watchdog.expired() {
+            return true;
         }
+        let remaining = self.interrupts_until_clock.get();
+        if remaining != 0 {
+            self.interrupts_until_clock.set(remaining - 1);
+            return false;
+        }
+        self.interrupts_until_clock
+            .set(INTERRUPT_CLOCK_INTERVAL - 1);
+        #[cfg(test)]
+        self.interrupt_clock_checks
+            .set(self.interrupt_clock_checks.get() + 1);
+        if Instant::now() >= deadline {
+            self.watchdog.expire();
+            return true;
+        }
+        false
     }
 
     /// Forgets every sleeping thread.
@@ -200,21 +252,40 @@ impl Scheduler {
 
     /// Runs `run` with a time budget. A nested call keeps the outer deadline if it is
     /// earlier. Returns the timeout error text if the budget ran out.
-    pub(crate) fn budgeted<T>(&self, run: impl FnOnce() -> T) -> (T, Option<String>) {
+    pub(crate) fn budgeted<T>(
+        &self,
+        run: impl FnOnce() -> T,
+    ) -> std::result::Result<(T, Option<String>), String> {
         let prev = self.deadline.get();
+        // Enclosing scopes use this same budget and started earlier, so their active
+        // deadline is already the earlier one; nesting must not refresh the watchdog.
+        let deadline = prev.unwrap_or_else(|| Instant::now() + RESUME_BUDGET);
         if prev.is_none() {
+            if !self.watchdog.arm(deadline) {
+                return Err("script VM is shut down".to_owned());
+            }
             *self.timeout_loc.borrow_mut() = None;
+            self.interrupts_until_clock.set(0);
         }
-        let mine = Instant::now() + RESUME_BUDGET;
-        self.deadline.set(Some(prev.map_or(mine, |p| p.min(mine))));
+        self.deadline.set(Some(deadline));
+        let scope = DeadlineScope {
+            scheduler: self,
+            previous: prev,
+        };
         let out = run();
-        self.deadline.set(prev);
+        // Native work can return without another interrupt. Do not accept an over-budget
+        // result merely because it completed between polls or before the worker woke.
+        if Instant::now() >= deadline && self.timeout_loc.borrow().is_none() {
+            self.watchdog.expire();
+            *self.timeout_loc.borrow_mut() = Some(String::new());
+        }
+        drop(scope);
         let loc = if prev.is_none() {
             self.timeout_loc.borrow_mut().take()
         } else {
             self.timeout_loc.borrow().clone()
         };
-        (out, loc.map(|l| format!("{l}{TIMEOUT_MSG}")))
+        Ok((out, loc.map(|l| format!("{l}{TIMEOUT_MSG}"))))
     }
 
     /// Resumes `thread` under a fresh (or the enclosing, if earlier) budget.
@@ -226,7 +297,7 @@ impl Scheduler {
         let owner = self.owner_of(thread).unwrap_or(0);
         let (raw, timeout) = self.as_owner(owner, || {
             self.budgeted(|| thread.resume::<MultiValue>(MultiValue::from_vec(args)))
-        });
+        })?;
         if let Some(msg) = timeout {
             self.owners
                 .borrow_mut()
@@ -258,7 +329,7 @@ impl Scheduler {
         all.extend(args.into_lua_multi(lua).map_err(|e| format_error(&e))?);
         let (raw, timeout) = self.as_owner(owner, || {
             self.budgeted(|| guard.call::<MultiValue>(MultiValue::from_vec(all)))
-        });
+        })?;
         if let Some(msg) = timeout {
             return Err(msg);
         }
@@ -420,4 +491,69 @@ fn bad_target(v: &Value) -> Error {
         "invalid argument (function or thread expected, got {})",
         v.type_name()
     ))
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use std::time::Duration;
+
+    struct Silent;
+
+    impl OutputSink for Silent {
+        fn print(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    #[test]
+    fn budget_boundary_rejects_native_work_without_any_lua_interrupt() {
+        let scheduler = Scheduler::new(Rc::new(Silent)).unwrap();
+        let (_, timeout) = scheduler
+            .budgeted(|| {
+                std::thread::sleep(RESUME_BUDGET + Duration::from_millis(20));
+            })
+            .unwrap();
+        assert_eq!(timeout.as_deref(), Some(TIMEOUT_MSG));
+        assert!(scheduler.deadline.get().is_none());
+        let (value, timeout) = scheduler.budgeted(|| 7).unwrap();
+        assert_eq!(value, 7);
+        assert!(timeout.is_none());
+    }
+
+    #[test]
+    fn a_panicking_host_scope_restores_deadline_and_disarms_the_timer() {
+        let scheduler = Scheduler::new(Rc::new(Silent)).unwrap();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = scheduler.budgeted(|| panic!("simulated host panic"));
+        }));
+        assert!(panic.is_err());
+        assert!(scheduler.deadline.get().is_none());
+        assert!(!scheduler.watchdog.expired());
+        assert_eq!(scheduler.budgeted(|| 42).unwrap(), (42, None));
+    }
+
+    #[test]
+    fn normal_interrupts_read_the_clock_only_sparsely_but_expiration_is_immediate() {
+        let scheduler = Scheduler::new(Rc::new(Silent)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        scheduler.deadline.set(Some(deadline));
+        assert!(scheduler.watchdog.arm(deadline));
+        for _ in 0..10_000 {
+            assert!(!scheduler.interrupt_expired());
+        }
+        assert_eq!(scheduler.interrupt_clock_checks.get(), 10);
+        scheduler.watchdog.expire();
+        assert!(scheduler.interrupt_expired());
+        assert_eq!(scheduler.interrupt_clock_checks.get(), 10);
+    }
+
+    #[test]
+    fn a_closed_watchdog_rejects_work_before_execution() {
+        let scheduler = Scheduler::new(Rc::new(Silent)).unwrap();
+        scheduler.watchdog.stop();
+        let ran = Cell::new(false);
+        assert!(scheduler.budgeted(|| ran.set(true)).is_err());
+        assert!(!ran.get());
+    }
 }
