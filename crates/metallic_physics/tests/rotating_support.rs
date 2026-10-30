@@ -382,3 +382,45 @@ fn script_repositioning_does_not_reuse_the_old_off_center_jump_contact() {
     );
     assert!(sim.velocity().x.abs() < 0.05 && sim.velocity().z.abs() < 0.05);
 }
+
+#[test]
+fn falling_dynamic_support_keeps_its_rider_when_stopped_by_a_floor() {
+    let mut sim = Sim::new();
+    let floor = sim
+        .world
+        .create("Part", sim.world.root("Workspace"))
+        .unwrap();
+    for (name, value) in [
+        ("Anchored", Value::Bool(true)),
+        ("Position", Value::Vector3(Vec3::new(0.0, -9.0, 0.0))),
+        ("Size", Value::Vector3(Vec3::new(100.0, 2.0, 100.0))),
+    ] {
+        sim.world.set(floor, name, value).unwrap();
+    }
+    sim.world
+        .set(sim.platform, "Anchored", Value::Bool(false))
+        .unwrap();
+    sim.physics.sync_from(&sim.world);
+    // Establish the replacement body's contact before it begins falling.
+    let character = sim.character();
+    sim.controller.step(
+        &mut sim.world,
+        &sim.physics,
+        character,
+        MoveInput::default(),
+        DT,
+    );
+    for frame in 1..=90 {
+        // The controller consumes the *previous* completed physics step.
+        let Value::Vector3(position) = sim.world.get(sim.platform, "Position").unwrap() else {
+            panic!("platform position");
+        };
+        sim.frame(MoveInput::default());
+        assert!(
+            (sim.position().y - position.y - 1.0 - ROOT_HEIGHT).abs() < 0.1,
+            "frame {frame}: rider {:?}, platform {position:?}",
+            sim.position()
+        );
+        sim.assert_standing();
+    }
+}

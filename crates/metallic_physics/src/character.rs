@@ -28,10 +28,10 @@
 //! than accumulating tangent-integration drift. Collision sweeps can shorten the carry; the
 //! character is not rigidly parented to the support. The capsule/avatar stay upright on tilted
 //! supports, and support pitch/roll never tilt the camera. Removed/rebuilt bodies or a root
-//! position changed by a script discard the old contact. Grounded depenetration restores the
+//! position changed by a script discard the old contact. Rotating support restores the
 //! skin clearance under the same push cap, preventing numerical floor interference from
-//! clipping a carry step. Anchored support rates come from PhysicsWorld's cache, because Rapier's mover
-//! velocity is reset after landing at its target pose. Teleport classification belongs to
+//! clipping a carry step. Anchored support rates come from PhysicsWorld's cache, because
+//! Rapier's mover velocity is reset after landing at its target pose. Teleport classification belongs to
 //! PhysicsWorld; this controller does not introduce another cutoff.
 //!
 //! Touches: after moving, the controller overlaps the whole avatar (the capsule and every avatar
@@ -583,17 +583,30 @@ fn move_capsule(
     let queries = physics.queries(filter);
     let shape = capsule();
 
-    // 1. Parts that moved into the character push it out. A grounded capsule also restores
+    // 1. Parts that moved into the character push it out. A rotating support also restores
     // its skin gap; otherwise tiny numerical drift lets a floor clip horizontal carry.
     let sampled_root = root;
     let grounded = m.state == HumanoidState::Running;
-    let root = root
-        + push_out(
-            &queries,
-            &shape,
-            root,
-            grounded && m.ground.is_some() && dt > 0.0,
-        );
+    let support = m.ground.filter(|s| grounded && s.root == sampled_root);
+    let push = push_out(&queries, &shape, root);
+    let mut root = root + push;
+    if dt > 0.0
+        && let Some(support) = support
+        && physics
+            .angular_velocity(support.part)
+            .is_some_and(|angular| angular.magnitude() > 0.0)
+        && let Some((handle, normal, point)) = probe_ground(&queries, &shape, root)
+        && physics.owner_of(handle) == Some(support.part)
+        && normal.y >= t.max_slope.to_radians().cos()
+    {
+        let sole = to_vector(root - Vec3::new(0.0, CAPSULE_DROP + HALF_SEGMENT, 0.0))
+            - to_vector(normal) * RADIUS as f32;
+        let gap = f64::from((sole - to_vector(point)).dot(to_vector(normal)));
+        if gap >= -1e-4 {
+            let correction = (SKIN - gap).clamp(0.0, (MAX_PUSH - push.magnitude()).max(0.0));
+            root = root + normal * correction;
+        }
+    }
 
     // 2. Velocity for this frame.
     let mut wish = Vec3::new(input.dir.x, 0.0, input.dir.z);
@@ -602,8 +615,7 @@ fn move_capsule(
     }
     let walk = wish * t.walk_speed;
     let (support_step, carry, yaw_rate) = if grounded && dt > 0.0 {
-        m.ground
-            .filter(|support| support.root == sampled_root)
+        support
             .map(|support| support.motion(physics))
             .unwrap_or_default()
     } else {
@@ -698,14 +710,8 @@ fn move_capsule(
 }
 
 /// Translation that moves the capsule at `root` out of every solid it overlaps.
-fn push_out(
-    queries: &rapier3d::prelude::QueryPipeline,
-    shape: &Capsule,
-    root: Vec3,
-    restore_skin: bool,
-) -> Vec3 {
+fn push_out(queries: &rapier3d::prelude::QueryPipeline, shape: &Capsule, root: Vec3) -> Vec3 {
     let mut total = Vec3::default();
-    let prediction = if restore_skin { SKIN as f32 } else { 0.0 };
     for _ in 0..4 {
         let pose = capsule_pose(root + total);
         let aabb = shape.compute_aabb(&pose);
@@ -715,11 +721,11 @@ fn push_out(
             let Ok(Some(contact)) =
                 queries
                     .dispatcher
-                    .contact(&pos12, shape, collider.shape(), prediction)
+                    .contact(&pos12, shape, collider.shape(), 0.0)
             else {
                 continue;
             };
-            if contact.dist < if restore_skin { prediction } else { -1e-4 } {
+            if contact.dist < -1e-4 {
                 // normal1 points from the character towards the obstacle.
                 let depth = f64::from(SKIN as f32 - contact.dist);
                 let dir = from_vector(pose.rotation * contact.normal1);
