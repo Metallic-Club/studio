@@ -196,8 +196,8 @@ The C: drive filled up (the page file grew under parallel builds), and the coord
 Commands to run after the reboot (only with at least 4 GB free on C:), in this order:
 ```
 export PATH="$HOME/.cargo/bin:$PATH"
-export CARGO_TARGET_DIR=/c/Users/alexi/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
-cd /c/Users/alexi/Documents/metallic-studio-worktrees/126-physics2d
+export CARGO_TARGET_DIR=<home>/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
+cd <home>/Documents/metallic-studio-worktrees/126-physics2d
 git fetch origin && git rebase origin/main
 cargo test -j 2 -p metallic_physics2d
 cargo clippy -j 2 -p metallic_physics2d --all-targets -- -D warnings
@@ -225,7 +225,7 @@ Likely fix-ups:
 ## Commands
 ```
 export PATH="$HOME/.cargo/bin:$PATH"
-export CARGO_TARGET_DIR=/c/Users/alexi/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
+export CARGO_TARGET_DIR=<home>/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
 cargo test -p metallic_physics2d -j 4
 cargo bench -p metallic_physics2d --bench step -j 4
 cargo run -p metallic_physics2d --example physics2d_demo -j 4 -- --screenshot shot.png

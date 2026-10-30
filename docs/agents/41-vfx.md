@@ -31,8 +31,8 @@ Workspace gate (fmt, clippy, test, deny): see the PR body. The older status sect
 Only when C: has at least 4 GB free. Use `-j 2` and the shared target. Run in this order, in a background shell:
 ```
 export PATH="$HOME/.cargo/bin:$PATH"
-export CARGO_TARGET_DIR=C:/Users/alexi/Documents/metallic-studio-worktrees/_target-lead-shared
-cd C:/Users/alexi/Documents/metallic-studio-worktrees/41-vfx
+export CARGO_TARGET_DIR=<home>/Documents/metallic-studio-worktrees/_target-lead-shared
+cd <home>/Documents/metallic-studio-worktrees/41-vfx
 cargo test -j 2 -p metallic_vfx -p metallic_vfx_editor
 cargo run -j 2 -p metallic_vfx_editor --example vfx_screenshots -- docs/agents/41-vfx
 cargo test -j 2 --workspace

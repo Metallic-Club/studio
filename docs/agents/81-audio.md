@@ -67,7 +67,7 @@ NOT run yet on `6017177`, in this order (stop at the first failure):
 After the reboot, with at least 4 GB free on C:, in Git Bash from this worktree:
 ```
 export PATH="$HOME/.cargo/bin:$PATH"
-export CARGO_TARGET_DIR=/c/Users/alexi/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
+export CARGO_TARGET_DIR=<home>/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
 cargo test -p metallic_audio -j 2
 cargo clippy -p metallic_audio --all-targets -j 2 -- -D warnings
 cargo clippy -p metallic_audio --all-targets --no-default-features -j 2 -- -D warnings
