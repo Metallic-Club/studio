@@ -1,19 +1,24 @@
-//! GitHub sign-in for Metallic Studio using the OAuth device flow.
+//! GitHub sign-in for Metallic Studio using the device flow of a GitHub App.
 //!
 //! Studio shows a short code, opens `https://github.com/login/device` in the browser, and the
-//! user approves there. Studio never sees a password. The resulting token (scope `repo`, needed
-//! to read releases of the private repo) is kept in the Windows Credential Manager under
-//! `MetallicStudio/github`, behind the [`SecretStore`] trait so tests use memory instead.
+//! user approves there. Studio never sees a password. Studio uses a GitHub App (not an OAuth App):
+//! the app has only "Contents: read" on `Metallic-Club/studio`, so its user tokens cannot touch any
+//! other repository. No `scope` is sent, because GitHub Apps ignore it.
 //!
-//! The OAuth app's client ID is not secret. It is committed in `config/github_oauth_client_id.txt`
-//! and compiled in; until the owner registers the app, the file holds a placeholder and
+//! The session (access token, plus refresh token and expiry when the app has user-token expiration
+//! on) is kept as one JSON value in the Windows Credential Manager under `MetallicStudio/github`,
+//! behind the [`SecretStore`] trait so tests use memory instead. [`GithubAuth::valid_token`]
+//! refreshes an expiring access token on its own.
+//!
+//! The app's client ID is not secret. It is committed in `config/github_app_client_id.txt` and
+//! compiled in; until the owner registers the app, the file holds a placeholder and
 //! [`embedded_client_id`] reports a clear error.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::updater::{HttpClient, Token, TokenProvider};
 
@@ -23,16 +28,20 @@ pub const CLIENT_ID_PLACEHOLDER: &str = "REPLACE_WITH_CLIENT_ID";
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
-const SCOPE: &str = "repo";
+const REFRESH_GRANT: &str = "refresh_token";
 const KEYRING_SERVICE: &str = "MetallicStudio";
 const KEYRING_ACCOUNT: &str = "github";
 const SLOW_DOWN_STEP_SECONDS: u64 = 5;
 const MIN_POLL_SECONDS: u64 = 1;
+/// Retries for a transient failure (network error or HTTP 5xx).
+const MAX_RETRIES: u32 = 3;
+/// An access token that expires within this many seconds is refreshed first.
+const REFRESH_MARGIN_SECONDS: u64 = 300;
 
-/// Why signing in or storing the token failed. No message contains the token.
+/// Why signing in or storing the token failed. No message contains a token.
 #[derive(Debug)]
 pub enum AuthError {
-    /// `config/github_oauth_client_id.txt` still holds the placeholder (or is empty).
+    /// `config/github_app_client_id.txt` still holds the placeholder (or is empty).
     ClientIdNotConfigured,
     /// GitHub could not be reached.
     Network(String),
@@ -52,8 +61,8 @@ impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AuthError::ClientIdNotConfigured => f.write_str(
-                "GitHub sign-in is not set up yet: put the OAuth app's client ID into \
-                 config/github_oauth_client_id.txt (see docs/releasing.md) and rebuild",
+                "GitHub sign-in is not set up yet: put the GitHub App's client ID into \
+                 config/github_app_client_id.txt (see docs/releasing.md) and rebuild",
             ),
             AuthError::Network(m) => write!(f, "could not reach GitHub: {m}"),
             AuthError::BadResponse(m) => write!(f, "unexpected answer from GitHub: {m}"),
@@ -67,7 +76,7 @@ impl fmt::Display for AuthError {
 
 impl std::error::Error for AuthError {}
 
-/// Reads the client ID from the text of `config/github_oauth_client_id.txt`.
+/// Reads the client ID from the text of `config/github_app_client_id.txt`.
 pub fn parse_client_id(text: &str) -> Result<String, AuthError> {
     let id = text.trim();
     if id.is_empty() || id == CLIENT_ID_PLACEHOLDER {
@@ -76,18 +85,18 @@ pub fn parse_client_id(text: &str) -> Result<String, AuthError> {
     Ok(id.to_string())
 }
 
-/// The client ID compiled in from `config/github_oauth_client_id.txt`.
+/// The client ID compiled in from `config/github_app_client_id.txt`.
 pub fn embedded_client_id() -> Result<String, AuthError> {
-    parse_client_id(include_str!("../../../config/github_oauth_client_id.txt"))
+    parse_client_id(include_str!("../../../config/github_app_client_id.txt"))
 }
 
-/// Where the GitHub token is kept between runs.
+/// Where the GitHub session is kept between runs.
 pub trait SecretStore: Send + Sync {
-    /// The stored token text, or `None` when nothing is stored.
+    /// The stored text, or `None` when nothing is stored.
     fn get(&self) -> Result<Option<String>, AuthError>;
-    /// Stores (or replaces) the token text.
+    /// Stores (or replaces) the text.
     fn set(&self, value: &str) -> Result<(), AuthError>;
-    /// Removes the stored token; removing nothing is fine.
+    /// Removes the stored text; removing nothing is fine.
     fn delete(&self) -> Result<(), AuthError>;
 }
 
@@ -156,15 +165,16 @@ impl SecretStore for KeyringStore {
     }
 }
 
-/// A [`TokenProvider`] that reads the token from a [`SecretStore`] each time.
-pub struct StoredTokenProvider(pub Arc<dyn SecretStore>);
+/// A [`TokenProvider`] that gets the signed-in user's token from [`GithubAuth::valid_token`],
+/// refreshing it when needed.
+pub struct StoredTokenProvider(pub Arc<GithubAuth>);
 
 impl TokenProvider for StoredTokenProvider {
     fn token(&self) -> Option<Token> {
-        match self.0.get() {
-            Ok(value) => value.map(Token::new),
+        match self.0.valid_token() {
+            Ok(value) => value,
             Err(error) => {
-                log::warn!("could not read the stored GitHub token: {error}");
+                log::warn!("could not get the stored GitHub token: {error}");
                 None
             }
         }
@@ -230,13 +240,63 @@ struct DeviceCodeAnswer {
     interval: u64,
 }
 
+/// GitHub's answer to a poll or a refresh. Not `Debug` on purpose: it carries tokens.
 #[derive(Deserialize)]
-struct PollAnswer {
+struct TokenAnswer {
     access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<u64>,
+    refresh_token_expires_in: Option<u64>,
     error: Option<String>,
 }
 
-/// Runs the GitHub device flow and keeps the token in a [`SecretStore`].
+/// What is stored in the credential store. Not `Debug` on purpose.
+#[derive(Serialize, Deserialize)]
+struct Session {
+    access_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
+    /// Unix seconds; `None` when user-token expiration is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refresh_expires_at: Option<u64>,
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+impl Session {
+    /// Reads a stored value; a bare token string (not JSON) counts as a session without expiry.
+    fn parse(raw: &str) -> Session {
+        serde_json::from_str(raw).unwrap_or_else(|_| Session {
+            access_token: raw.to_string(),
+            refresh_token: None,
+            expires_at: None,
+            refresh_expires_at: None,
+        })
+    }
+
+    fn from_answer(access_token: String, answer: &TokenAnswer, now: u64) -> Session {
+        Session {
+            access_token,
+            refresh_token: answer.refresh_token.clone(),
+            expires_at: answer.expires_in.map(|s| now + s),
+            refresh_expires_at: answer.refresh_token_expires_in.map(|s| now + s),
+        }
+    }
+
+    fn needs_refresh(&self, now: u64) -> bool {
+        self.expires_at
+            .is_some_and(|at| at <= now + REFRESH_MARGIN_SECONDS)
+    }
+}
+
+/// Runs the GitHub device flow and keeps the session in a [`SecretStore`].
 pub struct GithubAuth {
     client_id: String,
     http: Arc<dyn HttpClient>,
@@ -245,7 +305,7 @@ pub struct GithubAuth {
 }
 
 impl GithubAuth {
-    /// Creates the sign-in helper for the OAuth app `client_id`.
+    /// Creates the sign-in helper for the GitHub App `client_id`.
     pub fn new(client_id: String, http: Arc<dyn HttpClient>, store: Arc<dyn SecretStore>) -> Self {
         Self {
             client_id,
@@ -255,20 +315,69 @@ impl GithubAuth {
         }
     }
 
-    /// Makes polling skip its waits (tests).
+    /// Makes polling and retrying skip their waits (tests).
     pub fn without_sleeping(mut self) -> Self {
         self.sleeping = false;
         self
     }
 
-    /// The stored token, if the user signed in before.
+    /// The stored access token as it is, without refreshing. See [`valid_token`](Self::valid_token).
     pub fn stored_token(&self) -> Result<Option<Token>, AuthError> {
-        Ok(self.store.get()?.map(Token::new))
+        Ok(self
+            .store
+            .get()?
+            .map(|raw| Token::new(Session::parse(&raw).access_token)))
     }
 
-    /// Forgets the stored token.
+    /// Forgets the stored session.
     pub fn sign_out(&self) -> Result<(), AuthError> {
         self.store.delete()
+    }
+
+    fn save(&self, session: &Session) -> Result<(), AuthError> {
+        let raw = serde_json::to_string(session).map_err(|e| AuthError::Store(e.to_string()))?;
+        self.store.set(&raw)
+    }
+
+    /// The stored access token, refreshed first when it is about to expire. `Ok(None)` means
+    /// "sign in (again)": nothing is stored, or it expired and cannot be refreshed.
+    pub fn valid_token(&self) -> Result<Option<Token>, AuthError> {
+        let Some(raw) = self.store.get()? else {
+            return Ok(None);
+        };
+        let session = Session::parse(&raw);
+        let now = unix_now();
+        if !session.needs_refresh(now) {
+            return Ok(Some(Token::new(session.access_token)));
+        }
+        let refresh_usable = session.refresh_expires_at.is_none_or(|at| at > now);
+        let Some(refresh_token) = session.refresh_token.filter(|_| refresh_usable) else {
+            log::info!("stored GitHub token expired and cannot be refreshed; sign in again");
+            return Ok(None);
+        };
+        let body = self.post_retrying(
+            ACCESS_TOKEN_URL,
+            &[
+                ("client_id", self.client_id.as_str()),
+                ("grant_type", REFRESH_GRANT),
+                ("refresh_token", refresh_token.as_str()),
+            ],
+        )?;
+        let answer: TokenAnswer =
+            serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
+        if let Some(code) = answer.error.as_deref() {
+            // The refresh token is no good any more (for example bad_refresh_token).
+            self.store.delete()?;
+            return Err(AuthError::Provider(code.to_string()));
+        }
+        let Some(access_token) = answer.access_token.clone() else {
+            return Err(AuthError::BadResponse(
+                "neither a token nor an error".to_string(),
+            ));
+        };
+        self.save(&Session::from_answer(access_token.clone(), &answer, now))?;
+        log::info!("GitHub token refreshed");
+        Ok(Some(Token::new(access_token)))
     }
 
     fn post(&self, url: &str, form: &[(&str, &str)]) -> Result<String, AuthError> {
@@ -276,39 +385,57 @@ impl GithubAuth {
             .http
             .post_form(url, &[("Accept", "application/json")], form)
             .map_err(|e| AuthError::Network(e.to_string()))?;
-        if !(200..300).contains(&response.status) {
-            return Err(AuthError::BadResponse(format!(
+        match response.status {
+            200..=299 => Ok(response.body),
+            // Transient server trouble: reported as a network error so it is retried.
+            500..=599 => Err(AuthError::Network(format!(
                 "HTTP status {}",
                 response.status
-            )));
+            ))),
+            other => Err(AuthError::BadResponse(format!("HTTP status {other}"))),
         }
-        Ok(response.body)
+    }
+
+    /// Like `post`, but retries up to `MAX_RETRIES` times on network errors and HTTP 5xx,
+    /// waiting 1, 2, then 4 seconds.
+    fn post_retrying(&self, url: &str, form: &[(&str, &str)]) -> Result<String, AuthError> {
+        let mut retries = 0;
+        loop {
+            match self.post(url, form) {
+                Err(AuthError::Network(message)) if retries < MAX_RETRIES => {
+                    log::warn!("GitHub request failed ({message}); retrying");
+                    if self.sleeping {
+                        std::thread::sleep(Duration::from_secs(1 << retries));
+                    }
+                    retries += 1;
+                }
+                other => return other,
+            }
+        }
     }
 
     /// Signs in with GitHub's device flow: asks for a code, hands it to `ui`, then polls until the
-    /// user approves. Blocks the calling thread, so run it off the UI thread. On success the token
-    /// is stored and returned.
+    /// user approves. Blocks the calling thread, so run it off the UI thread. On success the
+    /// session is stored and the access token returned.
     pub fn device_sign_in(&self, ui: &mut dyn DeviceFlowUi) -> Result<Token, AuthError> {
-        let body = self.post(
-            DEVICE_CODE_URL,
-            &[("client_id", self.client_id.as_str()), ("scope", SCOPE)],
-        )?;
+        let body =
+            self.post_retrying(DEVICE_CODE_URL, &[("client_id", self.client_id.as_str())])?;
         let code: DeviceCodeAnswer =
             serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
         log::info!("GitHub device sign-in started; waiting for approval");
         ui.show_code(&code.user_code, &code.verification_uri);
 
+        let started = Instant::now();
+        let lifetime = Duration::from_secs(code.expires_in);
         let mut interval = code.interval.max(MIN_POLL_SECONDS);
-        let mut waited = 0u64;
         loop {
-            if waited >= code.expires_in {
+            if started.elapsed() >= lifetime {
                 return Err(AuthError::Expired);
             }
             if self.sleeping {
                 std::thread::sleep(Duration::from_secs(interval));
             }
-            waited += interval;
-            let body = self.post(
+            let body = self.post_retrying(
                 ACCESS_TOKEN_URL,
                 &[
                     ("client_id", self.client_id.as_str()),
@@ -316,11 +443,11 @@ impl GithubAuth {
                     ("grant_type", DEVICE_GRANT),
                 ],
             )?;
-            let answer: PollAnswer =
+            let answer: TokenAnswer =
                 serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
-            if let Some(value) = answer.access_token {
-                self.store.set(&value)?;
-                log::info!("GitHub sign-in finished; token stored");
+            if let Some(value) = answer.access_token.clone() {
+                self.save(&Session::from_answer(value.clone(), &answer, unix_now()))?;
+                log::info!("GitHub sign-in finished; session stored");
                 return Ok(Token::new(value));
             }
             match answer.error.as_deref() {

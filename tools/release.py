@@ -9,7 +9,9 @@ Steps: cargo build --release, stage the files with the main exe renamed to "Meta
 
 The same script runs by hand and in .github/workflows/release.yml. The GitHub token is read from
 the environment variable GITHUB_TOKEN (the workflow's own token, or `gh auth token` by hand); it
-is never written to a file and never printed. `--dry-run` prints the commands and runs nothing.
+is never written to a file and never printed. The vpk CLI has no documented environment variable for
+its token, so it is passed as `--token` (masked in our own output; visible to other processes on the
+build machine while vpk runs). `--dry-run` prints the commands and runs nothing.
 
 The Velopack CLI version below must match the `velopack` crate version in
 crates/metallic_studio/Cargo.toml, because Studio's updater and the packages must agree.
@@ -33,7 +35,30 @@ ROOT = Path(__file__).resolve().parent.parent
 ICON_PNG = ROOT / "branding" / "placeholder-icon.png"
 ICON_ICO = ROOT / "branding" / "icon.ico"
 OUT_DIR = ROOT / "target" / "release-out"
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", re.ASCII)
+CARGO_TOML = ROOT / "Cargo.toml"
+
+
+def valid_version(version):
+    """True for X.Y.Z with plain ASCII digits and no leading zeros."""
+    return VERSION_RE.fullmatch(version) is not None
+
+
+def workspace_version(cargo_toml_text):
+    """The [workspace.package] version of the root Cargo.toml."""
+    import tomllib
+    version = tomllib.loads(cargo_toml_text).get("workspace", {}).get("package", {}).get("version")
+    if not isinstance(version, str):
+        sys.exit("Cargo.toml has no [workspace.package] version")
+    return version
+
+
+def check_version(version, cargo_toml_text):
+    """Stop unless the release version equals the workspace version the built Studio reports."""
+    found = workspace_version(cargo_toml_text)
+    if found != version:
+        sys.exit(f"--version {version} differs from the workspace version {found} in Cargo.toml. "
+                 "Bump [workspace.package] version, merge to main, then release.")
 
 
 def masked(command):
@@ -95,16 +120,25 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="print the commands, run nothing")
     parser.add_argument("--jobs", type=int, default=4, help="cargo -j value")
     parser.add_argument("--vpk", default="vpk", help="path of the vpk executable")
+    parser.add_argument("--check-version", action="store_true",
+                        help="only check that --version equals the workspace version, then exit")
     parser.add_argument("--print-vpk-version", action="store_true", help="print the pinned vpk version and exit")
     args = parser.parse_args()
 
     if args.print_vpk_version:
         print(VPK_VERSION)
         return
+    if args.check_version:
+        if not args.version or not valid_version(args.version):
+            parser.error("--check-version needs --version X.Y.Z")
+        check_version(args.version, CARGO_TOML.read_text(encoding="utf-8"))
+        print(f"Version {args.version} matches the workspace version.")
+        return
     if not args.channel or not args.version:
         parser.error("--channel and --version are required")
-    if not VERSION_RE.match(args.version):
+    if not valid_version(args.version):
         parser.error("--version must look like 0.1.1 (no leading v, no channel suffix)")
+    check_version(args.version, CARGO_TOML.read_text(encoding="utf-8"))
 
     tag = f"v{args.version}-{args.channel}"
     token = os.environ.get("GITHUB_TOKEN", "")
@@ -134,8 +168,11 @@ def main():
 
     if not args.no_upload:
         # Fetch earlier packages so vpk can build delta updates. The first release has none.
-        run([args.vpk, "download", "github", "--repoUrl", REPO_URL, "--channel", args.channel,
-             "--outputDir", str(OUT_DIR), "--token", token], args.dry_run, check=False)
+        code = run([args.vpk, "download", "github", "--repoUrl", REPO_URL, "--channel", args.channel,
+                    "--outputDir", str(OUT_DIR), "--token", token], args.dry_run, check=False)
+        if code != 0:
+            print(f"WARNING: 'vpk download github' failed with exit code {code}. Expected for the very first "
+                  "release of a channel; otherwise this release will have no delta package.", file=sys.stderr)
 
     run([args.vpk, "pack", "--packId", PACK_ID, "--packVersion", args.version,
          "--packDir", str(stage), "--mainExe", MAIN_EXE, "--packTitle", PACK_TITLE,

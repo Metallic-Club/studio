@@ -91,6 +91,7 @@ fn feed(releases: &[String]) -> String {
 }
 
 const SECRET: &str = "ghu_secret_token_value";
+const REFRESH_SECRET: &str = "ghr_secret_refresh_value";
 
 fn checker(channel: Channel, current: &str, http: Arc<MockHttp>) -> UpdateChecker {
     UpdateChecker::new(channel, Arc::new(Token::new(SECRET.to_string())))
@@ -115,7 +116,7 @@ fn newer_version_detected() {
     assert!(
         requests[0]
             .0
-            .ends_with("/repos/Metallic-Club/studio/releases?per_page=50")
+            .ends_with("/repos/Metallic-Club/studio/releases?per_page=50&page=1")
     );
     assert!(
         requests[0]
@@ -233,6 +234,7 @@ fn network_error_is_not_fatal() {
     };
     let c = UpdateChecker::new(Channel::Dev, Arc::new(Token::new("t".into())))
         .with_api_base(format!("http://127.0.0.1:{port}"))
+        .unwrap()
         .with_http(Arc::new(UreqClient::new(Duration::from_secs(2))));
     assert!(matches!(c.check(), Err(UpdateError::Network(_))));
 }
@@ -257,6 +259,7 @@ fn ureq_client_talks_to_a_local_server() {
     });
     let c = UpdateChecker::new(Channel::Dev, Arc::new(Token::new("tok123".into())))
         .with_api_base(format!("http://127.0.0.1:{port}"))
+        .unwrap()
         .with_http(Arc::new(UreqClient::new(Duration::from_secs(5))))
         .with_current_version(Version::new(0, 1, 0));
     assert_eq!(c.check().unwrap().unwrap().version, Version::new(9, 0, 0));
@@ -334,7 +337,7 @@ fn token_never_logged() {
     let auth = GithubAuth::new("client-id".into(), http, store.clone()).without_sleeping();
     let signed_in = auth.device_sign_in(&mut NoUi).unwrap();
     let _ = format!("{signed_in:?} {signed_in}");
-    assert_eq!(store.get().unwrap().as_deref(), Some(SECRET));
+    assert_eq!(auth.stored_token().unwrap().unwrap().expose(), SECRET);
 
     let lines = logs.0.lock().unwrap().clone();
     assert!(
@@ -343,6 +346,10 @@ fn token_never_logged() {
     );
     for line in &lines {
         assert!(!line.contains(SECRET), "token leaked into log: {line}");
+        assert!(
+            !line.contains(REFRESH_SECRET),
+            "refresh token leaked: {line}"
+        );
     }
 }
 
@@ -354,7 +361,7 @@ fn device_flow_polls_until_approved() {
         ),
         ok(r#"{"error":"authorization_pending"}"#),
         ok(r#"{"error":"slow_down"}"#),
-        ok(r#"{"access_token":"tok","token_type":"bearer","scope":"repo"}"#),
+        ok(r#"{"access_token":"tok","token_type":"bearer"}"#),
     ]);
     let store = Arc::new(MemorySecretStore::default());
     let auth = GithubAuth::new("abc".into(), http.clone(), store).without_sleeping();
@@ -374,17 +381,157 @@ fn device_flow_polls_until_approved() {
     let requests = http.requests.lock().unwrap();
     assert_eq!(requests.len(), 4);
     assert!(requests[0].2.as_deref().unwrap().contains("client_id=abc"));
-    assert!(requests[0].2.as_deref().unwrap().contains("scope=repo"));
+    assert!(!requests[0].2.as_deref().unwrap().contains("scope"));
     assert!(requests[1].2.as_deref().unwrap().contains("device_code=dc"));
 }
 
 #[test]
 fn placeholder_client_id_is_a_clear_error() {
     let err = parse_client_id("REPLACE_WITH_CLIENT_ID\n").unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("config/github_oauth_client_id.txt")
-    );
+    assert!(err.to_string().contains("config/github_app_client_id.txt"));
     assert!(parse_client_id("   \n").is_err());
     assert_eq!(parse_client_id(" Iv1.abc123 \n").unwrap(), "Iv1.abc123");
+}
+
+#[test]
+fn http_response_debug_hides_body() {
+    let response = HttpResponse {
+        status: 200,
+        body: format!(r#"{{"access_token":"{SECRET}"}}"#),
+    };
+    let shown = format!("{response:?}");
+    assert!(!shown.contains(SECRET));
+    assert!(!shown.contains("access_token"));
+    assert!(shown.contains("200"));
+}
+
+#[test]
+fn api_base_must_be_https_or_local() {
+    let new = || UpdateChecker::new(Channel::Dev, Arc::new(Token::new("t".into())));
+    assert!(new().with_api_base("https://api.github.com".into()).is_ok());
+    assert!(new().with_api_base("http://127.0.0.1:8080".into()).is_ok());
+    assert!(new().with_api_base("http://localhost:8080/".into()).is_ok());
+    assert!(new().with_api_base("http://api.github.com".into()).is_err());
+    assert!(
+        new()
+            .with_api_base("http://127.0.0.1.evil.example".into())
+            .is_err()
+    );
+    assert!(
+        new()
+            .with_api_base("http://localhost@evil.example".into())
+            .is_err()
+    );
+    assert!(new().with_api_base("ftp://x".into()).is_err());
+}
+
+#[test]
+fn reads_up_to_five_pages_until_a_match() {
+    let full_page_of_stable = || {
+        let all: Vec<String> = (0..50)
+            .map(|i| release(&format!("v1.0.{i}-stable"), ""))
+            .collect();
+        ok(&feed(&all))
+    };
+    // Match on page 2.
+    let http = MockHttp::with(vec![
+        full_page_of_stable(),
+        ok(&feed(&[release("v0.5.0-dev", "")])),
+    ]);
+    let update = checker(Channel::Dev, "0.1.0", http.clone())
+        .check()
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.version, Version::new(0, 5, 0));
+    assert!(http.requests.lock().unwrap()[1].0.ends_with("&page=2"));
+
+    // Never a match: stops after 5 pages.
+    let http = MockHttp::with((0..8).map(|_| full_page_of_stable()).collect());
+    assert!(
+        checker(Channel::Dev, "0.1.0", http.clone())
+            .check()
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(http.requests.lock().unwrap().len(), 5);
+}
+
+fn device_code_answer() -> Result<HttpResponse, HttpError> {
+    ok(
+        r#"{"device_code":"dc","user_code":"AAAA-0000","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}"#,
+    )
+}
+
+#[test]
+fn polling_retries_three_transient_errors() {
+    let token = r#"{"access_token":"tok","token_type":"bearer"}"#;
+    let five_hundred = || {
+        Ok(HttpResponse {
+            status: 502,
+            body: String::new(),
+        })
+    };
+    let store = Arc::new(MemorySecretStore::default());
+
+    let http = MockHttp::with(vec![
+        device_code_answer(),
+        Err(HttpError::new("reset")),
+        five_hundred(),
+        Err(HttpError::new("reset")),
+        ok(token),
+    ]);
+    let auth = GithubAuth::new("abc".into(), http, store.clone()).without_sleeping();
+    assert_eq!(auth.device_sign_in(&mut NoUi).unwrap().expose(), "tok");
+
+    let http = MockHttp::with(vec![
+        device_code_answer(),
+        Err(HttpError::new("reset")),
+        five_hundred(),
+        Err(HttpError::new("reset")),
+        Err(HttpError::new("reset")),
+        ok(token),
+    ]);
+    let auth = GithubAuth::new("abc".into(), http, store).without_sleeping();
+    assert!(auth.device_sign_in(&mut NoUi).is_err());
+}
+
+#[test]
+fn expired_access_token_is_refreshed() {
+    let store = Arc::new(MemorySecretStore::default());
+    store
+        .set(r#"{"access_token":"old","refresh_token":"r1","expires_at":1}"#)
+        .unwrap();
+    let http = MockHttp::with(vec![ok(
+        r#"{"access_token":"new","refresh_token":"r2","expires_in":28800,"refresh_token_expires_in":15897600}"#,
+    )]);
+    let auth = GithubAuth::new("abc".into(), http.clone(), store.clone()).without_sleeping();
+    assert_eq!(auth.valid_token().unwrap().unwrap().expose(), "new");
+    let body = http.requests.lock().unwrap()[0].2.clone().unwrap();
+    assert!(body.contains("grant_type=refresh_token"));
+    assert!(body.contains("refresh_token=r1"));
+    assert!(body.contains("client_id=abc"));
+    let saved = store.get().unwrap().unwrap();
+    assert!(saved.contains("r2") && !saved.contains("\"r1\""));
+
+    // A fresh token is returned without any request.
+    assert_eq!(auth.valid_token().unwrap().unwrap().expose(), "new");
+    assert_eq!(http.requests.lock().unwrap().len(), 1);
+
+    // Nothing stored: no token, no request.
+    let empty = GithubAuth::new(
+        "abc".into(),
+        MockHttp::with(vec![]),
+        Arc::new(MemorySecretStore::default()),
+    );
+    assert!(empty.valid_token().unwrap().is_none());
+}
+
+#[test]
+fn expired_without_refresh_token_asks_to_sign_in_again() {
+    let store = Arc::new(MemorySecretStore::default());
+    store
+        .set(r#"{"access_token":"old","expires_at":1}"#)
+        .unwrap();
+    let auth = GithubAuth::new("abc".into(), MockHttp::with(vec![]), store);
+    assert!(auth.valid_token().unwrap().is_none());
 }

@@ -7,17 +7,19 @@ end to end (the owner round trip is pending, see the last section).
 - `tools/release.py` builds `metallic_studio`, packs it with Velopack (`vpk pack`) and uploads it with
   `vpk upload github` to the private repo `Metallic-Club/studio` as a release tagged `vX.Y.Z-<channel>`.
 - `.github/workflows/release.yml` runs the same script when a tag `v*` is pushed. It uses the workflow's own
-  `GITHUB_TOKEN`; there are no other secrets.
+  `GITHUB_TOKEN`; there are no other secrets. It refuses tags whose commit is not on `main`, and every action in it is
+  pinned to a full commit SHA (update the SHA and the version comment together).
 - Studio (`crates/metallic_studio/src/updater.rs`) lists the releases of its channel, offers a newer one, downloads it
   and restarts. Because the repo is private, each person signs in once with GitHub's device sign-in
-  (`github_auth.rs`); the token lives in Windows Credential Manager under `MetallicStudio/github`.
+  (`github_auth.rs`); the session lives in Windows Credential Manager under `MetallicStudio/github`.
 - The Velopack CLI is pinned to `1.3.39-g8d2844f` in `tools/release.py` (`VPK_VERSION`). It is the same version as the
   `velopack` crate in `crates/metallic_studio/Cargo.toml`. Change both together.
 
 ## Cut a dev release (the team channel)
-1. Merge your work into `main`. Pick the next version `X.Y.Z` (bump the patch for every dev build). The version must
-   also be in `[workspace.package] version` of the root `Cargo.toml` so the running Studio knows its own version.
-2. Tag and push (the owner or lead does this; never from a feature branch):
+1. Pick the next version `X.Y.Z` (bump the patch for every dev build), set it in `[workspace.package] version` of the
+   root `Cargo.toml`, and merge to `main`. The release fails if `--version` (or the tag) differs from that value, so a
+   Studio always knows its own version.
+2. Tag the merged commit and push (the owner or lead does this; a tag on a commit that is not on `main` is refused):
    `git tag v0.1.1-dev && git push origin v0.1.1-dev`.
 3. Watch the "Release" workflow in GitHub Actions. When it is green, the release `v0.1.1-dev` has
    `MetallicStudio-dev-Setup.exe`, the full and delta packages and `releases.dev.json`.
@@ -26,7 +28,9 @@ end to end (the owner round trip is pending, see the last section).
 By hand instead of the workflow (needs .NET and the pinned `vpk`: `dotnet tool install --global vpk --version
 1.3.39-g8d2844f`): set `GITHUB_TOKEN` in your shell from `gh auth token`, then
 `python tools/release.py --channel dev --version 0.1.1`. Add `--dry-run` to see the commands, `--no-upload` to pack
-only.
+only, `--check-version` to only check the version. The vpk CLI has no documented environment variable for its token, so
+the script passes `--token` (masked in the script's own output, but visible to other processes on that PC while vpk
+runs). Prefer the workflow.
 
 ## Stable differs in these ways
 - Tag `vX.Y.Z-stable`, command `--channel stable`. It is published as a normal release; dev releases are marked
@@ -36,30 +40,51 @@ only.
 - A release can be marked required (Studio then insists on restarting): add `--required` to the script, or put the line
   `required: true` in the release notes. Use it only for breaking changes (file format, protocol).
 
-## Register the GitHub OAuth app (owner, one time)
-Studio needs a client ID to ask GitHub for a sign-in code. The client ID is public; there is no client secret in Studio.
-1. Open GitHub, switch to the organisation Metallic-Club: Settings, Developer settings, OAuth Apps, New OAuth App.
-   (Org owner rights are needed.)
-2. Application name: `Metallic Studio`. Homepage URL: the Metallic website or the repo URL.
-3. Authorization callback URL: GitHub insists on a value; enter `https://github.com/Metallic-Club`. It is never used
-   by the device flow.
-4. Tick **Enable Device Flow**. Register the application.
-5. Copy the **Client ID** (starts with `Iv1.` or `Ov23`). Do not generate or copy a client secret; Studio does not use it.
-6. Paste the client ID as the only line of `config/github_oauth_client_id.txt`, replacing `REPLACE_WITH_CLIENT_ID`,
-   and commit it (it is not secret). It is compiled into Studio, so a new build is needed.
-7. Each team member signs in the first time Studio asks: a code appears, the browser opens
-   `https://github.com/login/device`, they type the code and approve. The scope requested is `repo`, which GitHub
-   requires to read releases of a private repo. If the organisation restricts OAuth apps, the owner must approve the
-   app under Organisation settings, Third-party access.
+## Protect the release tags (owner, one time)
+Anyone who can push a tag `v*` can start a release. Add a tag ruleset: repo `Metallic-Club/studio`, Settings, Rules,
+Rulesets, New ruleset, New tag ruleset. Target tags matching `v*`; enable Restrict creations, Restrict updates and
+Restrict deletions, and put only the owner (and the lead account) on the bypass list. The workflow's `main` check is a
+second lock, not a replacement.
 
-Until step 6 is done, sign-in reports: "put the OAuth app's client ID into config/github_oauth_client_id.txt".
+## Register the GitHub App (owner, one time)
+Studio uses a GitHub App, not an OAuth App: an OAuth App with the `repo` scope would give each user's token read and
+write access to every private repo that person can see. The App below can only read file contents of one repo. Studio
+needs the App's client ID to ask GitHub for a sign-in code. The client ID is public; Studio never uses a client secret
+or a private key.
+1. Open GitHub, switch to the organisation Metallic-Club: Settings, Developer settings, GitHub Apps, New GitHub App.
+   (Org owner rights are needed.)
+2. GitHub App name: `Metallic Studio` (must be unique on GitHub; add a suffix if taken). Homepage URL: the Metallic
+   website or the repo URL.
+3. Identifying and authorizing users: leave the callback URL empty if GitHub allows it, otherwise enter
+   `https://github.com/Metallic-Club` (the device flow never uses it). Tick **Enable Device Flow**.
+   Leave "Expire user authorization tokens" ticked (the default): Studio refreshes them by itself, and the refresh
+   token is kept in Credential Manager next to the access token. Leave "Request user authorization (OAuth) during
+   installation" and "Redirect on update" off.
+4. Webhook: untick **Active** (no webhook).
+5. Permissions, Repository permissions: **Contents: Read-only**. Nothing else (metadata read is added automatically).
+   No organisation or account permissions.
+6. Where can this GitHub App be installed: **Only on this account** (Metallic-Club).
+7. Create the app. On its page copy the **Client ID** (starts with `Iv1.` or `Iv23`). Do not generate a client secret or
+   a private key.
+8. Install the app: app page, Install App, Metallic-Club, **Only select repositories**, choose `Metallic-Club/studio`
+   only.
+9. Paste the client ID as the only line of `config/github_app_client_id.txt`, replacing `REPLACE_WITH_CLIENT_ID`, and
+   commit it (it is not secret). It is compiled into Studio, so a new build is needed.
+10. Each team member signs in the first time Studio asks: a code appears, the browser opens
+    `https://github.com/login/device`, they type the code and approve. They also need read access to the repo
+    themselves; the App only limits what the token may do, it never adds access.
+
+If you turn off "Expire user authorization tokens" instead, tokens never expire and no refresh token exists; Studio
+handles both. Expiring tokens are the safer choice.
+
+Until step 9 is done, sign-in reports: "put the GitHub App's client ID into config/github_app_client_id.txt".
 
 ## Install on a teammate's PC
 Download `MetallicStudio-dev-Setup.exe` from the release page (needs repo access), run it. It installs per user (no
 admin prompt) with a Start-menu entry and uninstaller. Updates arrive inside Studio as "Restart to update".
 
 ## Not done yet (owner round trip)
-Nobody has published a real release yet. Still to do with the owner: register the OAuth app and paste the client ID;
-publish `0.1.0-dev`; install from the Setup.exe; publish `0.1.1-dev`; see Studio offer and apply it; take screenshots.
-Studio's `main` must also call `velopack::VelopackApp::build().run()` first thing (see the task 13 report), otherwise
-the installer hooks do not run.
+Nobody has published a real release yet. Still to do with the owner: register the GitHub App and paste the client ID;
+add the tag ruleset; publish `0.1.0-dev`; install from the Setup.exe; publish `0.1.1-dev`; see Studio offer and apply
+it; take screenshots. Studio's `main` must also call `velopack::VelopackApp::build().run()` first thing (see the task 13
+report), otherwise the installer hooks do not run.

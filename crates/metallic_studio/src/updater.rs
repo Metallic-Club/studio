@@ -28,6 +28,7 @@ pub const RELEASE_REPO: &str = "Metallic-Club/studio";
 const DEFAULT_API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = "metallic-studio-updater";
 const RELEASES_PER_PAGE: u32 = 50;
+const MAX_RELEASE_PAGES: u32 = 5;
 
 /// Update channel. Each release is tagged `vX.Y.Z-<channel>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,12 +90,23 @@ impl TokenProvider for Token {
 }
 
 /// A finished HTTP exchange. Any status code is a response; only transport problems are errors.
-#[derive(Clone, Debug)]
+///
+/// `Debug` omits the body, because the sign-in answers carry tokens.
+#[derive(Clone)]
 pub struct HttpResponse {
     /// HTTP status code.
     pub status: u16,
     /// Response body as text.
     pub body: String,
+}
+
+impl fmt::Debug for HttpResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpResponse")
+            .field("status", &self.status)
+            .field("body", &format_args!("<{} bytes, hidden>", self.body.len()))
+            .finish()
+    }
 }
 
 /// A transport-level HTTP failure (no connection, timeout, bad TLS). Holds a short description
@@ -234,6 +246,8 @@ pub enum UpdateError {
     NotInstalled(String),
     /// Downloading or applying the update failed.
     Install(String),
+    /// A setting is not allowed (for example a non-HTTPS API address).
+    BadConfig(String),
 }
 
 impl fmt::Display for UpdateError {
@@ -248,6 +262,7 @@ impl fmt::Display for UpdateError {
                 write!(f, "Studio is not installed with the installer: {m}")
             }
             UpdateError::Install(m) => write!(f, "update failed: {m}"),
+            UpdateError::BadConfig(m) => write!(f, "bad update setting: {m}"),
         }
     }
 }
@@ -308,10 +323,32 @@ impl UpdateChecker {
         self
     }
 
-    /// Replaces the GitHub API base URL, for example `http://127.0.0.1:PORT` (tests).
-    pub fn with_api_base(mut self, api_base: String) -> Self {
+    /// Replaces the GitHub API base URL. Only `https://` is accepted, or `http://` to `127.0.0.1`
+    /// or `localhost` (tests), so the token can never travel unencrypted to another host.
+    pub fn with_api_base(mut self, api_base: String) -> Result<Self, UpdateError> {
+        let (secure, rest) = if let Some(rest) = api_base.strip_prefix("https://") {
+            (true, rest)
+        } else if let Some(rest) = api_base.strip_prefix("http://") {
+            (false, rest)
+        } else {
+            return Err(UpdateError::BadConfig(
+                "API address must start with https://".into(),
+            ));
+        };
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        if authority.is_empty() || authority.contains('@') {
+            return Err(UpdateError::BadConfig(
+                "API address has no usable host".into(),
+            ));
+        }
+        let host = authority.split(':').next().unwrap_or("");
+        if !secure && host != "127.0.0.1" && host != "localhost" {
+            return Err(UpdateError::BadConfig(
+                "plain http is only allowed to 127.0.0.1 or localhost".into(),
+            ));
+        }
         self.api_base = api_base.trim_end_matches('/').to_string();
-        self
+        Ok(self)
     }
 
     /// Replaces the version that counts as "running" (tests).
@@ -323,11 +360,6 @@ impl UpdateChecker {
     /// Asks GitHub for the newest release of the channel. `Ok(None)` means "up to date".
     pub fn check(&self) -> Result<Option<UpdateInfo>, UpdateError> {
         let token = self.tokens.token().ok_or(UpdateError::Unauthorized)?;
-        let url = format!(
-            "{}/repos/{RELEASE_REPO}/releases?per_page={RELEASES_PER_PAGE}",
-            self.api_base
-        );
-        log::debug!("checking {url} for {} updates", self.channel.as_str());
         let authorization = format!("Bearer {}", token.expose());
         let headers = [
             ("Accept", "application/vnd.github+json"),
@@ -335,17 +367,33 @@ impl UpdateChecker {
             ("User-Agent", USER_AGENT),
             ("Authorization", authorization.as_str()),
         ];
-        let response = self
-            .http
-            .get(&url, &headers)
-            .map_err(|e| UpdateError::Network(e.to_string()))?;
-        match response.status {
-            200..=299 => {}
-            401 | 403 | 404 => return Err(UpdateError::Unauthorized),
-            other => return Err(UpdateError::BadResponse(format!("HTTP status {other}"))),
+        // Newest releases come first. Read pages until one holds a release of our channel
+        // (the newest of the channel is then on it), the list ends, or five pages are read.
+        let mut releases: Vec<GithubRelease> = Vec::new();
+        for page in 1..=MAX_RELEASE_PAGES {
+            let url = format!(
+                "{}/repos/{RELEASE_REPO}/releases?per_page={RELEASES_PER_PAGE}&page={page}",
+                self.api_base
+            );
+            log::debug!("checking {url} for {} updates", self.channel.as_str());
+            let response = self
+                .http
+                .get(&url, &headers)
+                .map_err(|e| UpdateError::Network(e.to_string()))?;
+            match response.status {
+                200..=299 => {}
+                401 | 403 | 404 => return Err(UpdateError::Unauthorized),
+                other => return Err(UpdateError::BadResponse(format!("HTTP status {other}"))),
+            }
+            releases = serde_json::from_str(&response.body)
+                .map_err(|e| UpdateError::BadResponse(e.to_string()))?;
+            let has_match = releases
+                .iter()
+                .any(|r| version_from_tag(&r.tag_name, self.channel).is_some());
+            if has_match || releases.len() < RELEASES_PER_PAGE as usize {
+                break;
+            }
         }
-        let releases: Vec<GithubRelease> = serde_json::from_str(&response.body)
-            .map_err(|e| UpdateError::BadResponse(e.to_string()))?;
         Ok(self.pick_update(&releases))
     }
 
