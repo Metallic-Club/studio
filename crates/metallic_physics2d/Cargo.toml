@@ -16,7 +16,7 @@ cross-platform-determinism = ["rapier2d/enhanced-determinism"]
 rapier2d.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.8.2", default-features = false }
+criterion.workspace = true
 eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 egui_kittest = { version = "0.37.0", features = ["wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

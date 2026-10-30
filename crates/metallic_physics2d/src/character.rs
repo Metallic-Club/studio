@@ -482,10 +482,16 @@ impl Character {
             && let Some(after) = ground.body.and_then(|b| ctx.rapier.bodies.get(b))
         {
             let p = v(self.position);
-            let moved = after.position().transform_point(before.inverse_transform_point(p));
+            let moved = after
+                .position()
+                .transform_point(before.inverse_transform_point(p));
             carry = from_v(moved - p);
         }
-        self.platform_velocity = if self.grounded { carry * (1.0 / dt) } else { Vec2::ZERO };
+        self.platform_velocity = if self.grounded {
+            carry * (1.0 / dt)
+        } else {
+            Vec2::ZERO
+        };
 
         // Timers.
         if std::mem::take(&mut self.jump_pressed) {
@@ -513,7 +519,8 @@ impl Character {
             && self.grounded
             && let Some(ground) = self.ground.filter(|g| g.one_way)
         {
-            self.drop_ignore.push((ground.collider, cfg.drop_through_time));
+            self.drop_ignore
+                .push((ground.collider, cfg.drop_through_time));
             self.grounded = false;
             self.ground = None;
             self.coyote = 0.0;
@@ -567,7 +574,11 @@ impl Character {
 
         // Horizontal: accelerate toward the target speed; input is ignored right after a wall jump.
         if self.wall_lock <= 0.0 {
-            let base = if self.grounded { 0.0 } else { self.air_base_speed };
+            let base = if self.grounded {
+                0.0
+            } else {
+                self.air_base_speed
+            };
             let target = base + self.input.move_x * cfg.run_speed;
             let speeding_up = target.abs() > self.velocity.x.abs() - 1e-9
                 && (self.velocity.x == 0.0 || target.signum() == self.velocity.x.signum());
@@ -620,6 +631,9 @@ impl Character {
         let walking = was_grounded && !jumped;
         let hits = self.slide(ctx, Vec2::new(self.velocity.x * dt, dy), None, walking);
 
+        // The push uses the speed the character carried into the hit, before the reaction
+        // below zeroes it (a wall stop would otherwise leave nothing to push with).
+        let incoming = self.velocity;
         // React to what was hit: stop at ceilings and walls.
         let max_slope_cos = cfg.max_slope_angle.cos();
         let mut touches: Vec<BodyId> = Vec::new();
@@ -637,14 +651,19 @@ impl Character {
                 touches.push(id);
             }
         }
-        self.push_bodies(ctx, &hits);
+        self.push_bodies(ctx, &hits, incoming);
 
         // Ground: snap down slopes and stair edges when walking, then look for walkable ground.
         if walking && self.velocity.y <= 0.0 {
             let reach = cfg.snap_to_ground + cfg.skin;
-            if let Some(hit) =
-                self.cast(ctx, self.position, Vec2::new(0.0, -1.0), reach, None, OneWay::Solid)
-                && hit.normal.y >= max_slope_cos
+            if let Some(hit) = self.cast(
+                ctx,
+                self.position,
+                Vec2::new(0.0, -1.0),
+                reach,
+                None,
+                OneWay::Solid,
+            ) && hit.normal.y >= max_slope_cos
             {
                 self.position.y -= (hit.toi - cfg.skin).max(0.0);
             }
@@ -673,7 +692,11 @@ impl Character {
         } else if self.velocity.y <= 0.0 && !self.input.jump {
             self.in_jump = false;
         }
-        self.wall = if self.grounded { None } else { self.find_wall(ctx) };
+        self.wall = if self.grounded {
+            None
+        } else {
+            self.find_wall(ctx)
+        };
         self.touches = touches;
 
         if let Some(b) = ctx.rapier.bodies.get_mut(self.body) {
@@ -814,8 +837,9 @@ impl Character {
     /// nearly touching collider.
     fn penetration_correction(&self, ctx: &TickContext<'_>) -> Vec2 {
         let skin = self.config.skin;
-        let predicate =
-            |h: ColliderHandle, c: &Collider| -> bool { self.blocks(ctx, h, c, None, OneWay::Solid) };
+        let predicate = |h: ColliderHandle, c: &Collider| -> bool {
+            self.blocks(ctx, h, c, None, OneWay::Solid)
+        };
         let filter = QueryFilter::default()
             .exclude_sensors()
             .exclude_collider(self.collider)
@@ -847,7 +871,7 @@ impl Character {
     }
 
     /// Gives dynamic bodies the character walked into a shove.
-    fn push_bodies(&self, ctx: &mut TickContext<'_>, hits: &[MoveHit]) {
+    fn push_bodies(&self, ctx: &mut TickContext<'_>, hits: &[MoveHit], incoming: Vec2) {
         for hit in hits {
             let Some(parent) = ctx
                 .rapier
@@ -857,7 +881,7 @@ impl Character {
             else {
                 continue;
             };
-            let into = -self.velocity.dot(hit.normal);
+            let into = -incoming.dot(hit.normal);
             if into <= 0.0 {
                 continue;
             }
@@ -875,11 +899,22 @@ impl Character {
 
     fn find_ground(&self, ctx: &TickContext<'_>) -> Option<Ground> {
         let reach = self.config.skin * 3.0 + 0.05;
-        let hit = self.cast(ctx, self.position, Vec2::new(0.0, -1.0), reach, None, OneWay::Solid)?;
+        let hit = self.cast(
+            ctx,
+            self.position,
+            Vec2::new(0.0, -1.0),
+            reach,
+            None,
+            OneWay::Solid,
+        )?;
         if hit.normal.y < self.config.max_slope_angle.cos() {
             return None;
         }
-        let body = ctx.rapier.colliders.get(hit.collider).and_then(|c| c.parent());
+        let body = ctx
+            .rapier
+            .colliders
+            .get(hit.collider)
+            .and_then(|c| c.parent());
         Some(Ground {
             collider: hit.collider,
             body,
@@ -939,7 +974,8 @@ mod tests {
         let j = cfg.jump_physics().expect("valid default config");
         let a = cfg.apex_hang_speed;
         let m = cfg.apex_gravity_multiplier;
-        let rise = (j.jump_velocity.powi(2) - a * a) / (2.0 * j.gravity) + a * a / (2.0 * j.gravity * m);
+        let rise =
+            (j.jump_velocity.powi(2) - a * a) / (2.0 * j.gravity) + a * a / (2.0 * j.gravity * m);
         assert!((rise - cfg.jump_height).abs() < 1e-9);
         let tap = j.jump_velocity.powi(2) / (2.0 * j.gravity * j.release_gravity_multiplier);
         assert!((tap - cfg.min_jump_height).abs() < 1e-9);

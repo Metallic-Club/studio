@@ -3,7 +3,9 @@ use crate::character::{
     Character, CharacterConfig, CharacterEvent, CharacterInput, CharacterState, TickContext,
     to_groups,
 };
-use crate::desc::{BodyDesc, BodyId, BodyKind, CollisionGroups, JointDesc, JointId, JointKind, Scene2d};
+use crate::desc::{
+    BodyDesc, BodyId, BodyKind, CollisionGroups, JointDesc, JointId, JointKind, Scene2d,
+};
 use crate::error::Physics2dError;
 use crate::events::{ContactTracker, EventCollector, OneWayHooks, SensorEvent};
 use crate::math::{Pose2, Vec2};
@@ -199,6 +201,14 @@ impl PhysicsWorld2d {
         rapier.integration_parameters.dt = config.tick as f32;
         rapier.integration_parameters.num_solver_iterations = config.solver_substeps;
         rapier.integration_parameters.length_unit = config.length_unit as f32;
+        // Rapier's contact springs are tuned for Earth gravity in metres. Gravity here is much
+        // stronger in solver units, so scale the stiffness with its square root; otherwise
+        // stacks sag by several percent of a body (the sag grows with g / frequency^2).
+        let g_solver = (config.gravity.length() / config.length_unit) as f32;
+        let scale = (g_solver / 9.81).sqrt().max(1.0);
+        let p = &mut rapier.integration_parameters;
+        p.contact_softness.natural_frequency *= scale;
+        p.static_contact_softness.natural_frequency *= scale;
         Ok(PhysicsWorld2d {
             config,
             rapier,
@@ -249,6 +259,7 @@ impl PhysicsWorld2d {
         for id in gone {
             self.remove_body(id);
         }
+        let mut added = Vec::new();
         for desc in &scene.bodies {
             let stale = self
                 .bodies
@@ -259,11 +270,21 @@ impl PhysicsWorld2d {
             }
             if !self.bodies.contains_key(&desc.id) {
                 self.add_body(desc)?;
+                added.push(desc.id);
             }
         }
         self.sync_joints(scene)?;
         // Refresh the broad phase so queries work before the first step.
         self.rapier.detect_collisions(&self.hooks, &self.collector);
+        // That collision-only pass consumes the list of new bodies without putting them in the
+        // island manager, so a dynamic body would never be simulated (and would trip rapier's
+        // island assertion on first contact). Mark them modified again so the next `step`
+        // registers them.
+        for id in added {
+            if let Some(e) = self.bodies.get(&id) {
+                let _ = self.rapier.bodies.get_mut(e.handle);
+            }
+        }
         self.collect_events();
         Ok(())
     }
@@ -401,8 +422,14 @@ impl PhysicsWorld2d {
                     reason: "joint names a body that is not in the scene",
                 });
             };
-            let angle_a = self.bodies.get(&j.body_a).map_or(0.0, |e| e.last_pose.angle);
-            let angle_b = self.bodies.get(&j.body_b).map_or(0.0, |e| e.last_pose.angle);
+            let angle_a = self
+                .bodies
+                .get(&j.body_a)
+                .map_or(0.0, |e| e.last_pose.angle);
+            let angle_b = self
+                .bodies
+                .get(&j.body_b)
+                .map_or(0.0, |e| e.last_pose.angle);
             let data = build_joint(j, angle_a - angle_b);
             let handle = self.rapier.insert_impulse_joint(bodies.0, bodies.1, data);
             self.joints.insert(
@@ -563,7 +590,8 @@ impl PhysicsWorld2d {
         for c in self.characters.values_mut() {
             let previous = std::mem::take(&mut c.touches);
             c.tick(&mut ctx, &mut self.character_events);
-            self.tracker.set_character_touches(c.id, &previous, &c.touches);
+            self.tracker
+                .set_character_touches(c.id, &previous, &c.touches);
         }
     }
 
@@ -624,7 +652,12 @@ impl PhysicsWorld2d {
     }
 
     /// Sets the velocity of a dynamic body and wakes it.
-    pub fn set_velocity(&mut self, id: BodyId, linear: Vec2, angular: f64) -> Result<(), Physics2dError> {
+    pub fn set_velocity(
+        &mut self,
+        id: BodyId,
+        linear: Vec2,
+        angular: f64,
+    ) -> Result<(), Physics2dError> {
         if !linear.is_finite() || !angular.is_finite() {
             return Err(Physics2dError::NonFinite {
                 body: id,
@@ -657,7 +690,10 @@ impl PhysicsWorld2d {
     }
 
     fn dynamic_handle(&self, id: BodyId) -> Result<RigidBodyHandle, Physics2dError> {
-        let e = self.bodies.get(&id).ok_or(Physics2dError::UnknownBody(id))?;
+        let e = self
+            .bodies
+            .get(&id)
+            .ok_or(Physics2dError::UnknownBody(id))?;
         if e.desc.kind != BodyKind::Dynamic {
             return Err(Physics2dError::NotDynamic(id));
         }
@@ -689,7 +725,9 @@ impl PhysicsWorld2d {
         if let Some(g) = filter.groups {
             q = q.groups(to_groups(g));
         }
-        let (handle, hit) = self.rapier.cast_ray_and_get_normal(&ray, max as f32, true, q)?;
+        let (handle, hit) = self
+            .rapier
+            .cast_ray_and_get_normal(&ray, max as f32, true, q)?;
         let body = *self.owners.get(&handle)?;
         let distance = f64::from(hit.time_of_impact);
         Some(RayHit2d {
@@ -719,7 +757,10 @@ impl PhysicsWorld2d {
         if let Some(e) = self.bodies.get(&id) {
             return e.colliders.clone();
         }
-        self.characters.get(&id).map(|c| vec![c.collider]).unwrap_or_default()
+        self.characters
+            .get(&id)
+            .map(|c| vec![c.collider])
+            .unwrap_or_default()
     }
 
     /// Body pairs that started touching since the last call (sensors included). Each contact
@@ -772,7 +813,11 @@ impl PhysicsWorld2d {
     }
 
     /// Sets what the player is pressing; call every frame before [`Self::step`].
-    pub fn set_character_input(&mut self, id: BodyId, input: CharacterInput) -> Result<(), Physics2dError> {
+    pub fn set_character_input(
+        &mut self,
+        id: BodyId,
+        input: CharacterInput,
+    ) -> Result<(), Physics2dError> {
         self.characters
             .get_mut(&id)
             .ok_or(Physics2dError::UnknownBody(id))?

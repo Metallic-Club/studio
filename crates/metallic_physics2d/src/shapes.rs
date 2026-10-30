@@ -120,7 +120,10 @@ fn polygon_area(points: &[Vec2]) -> f64 {
 }
 
 /// Builds the backend collider for a description (without material, flags or groups).
-pub(crate) fn build_shape(body: BodyId, c: &ColliderDesc) -> Result<ColliderBuilder, Physics2dError> {
+pub(crate) fn build_shape(
+    body: BodyId,
+    c: &ColliderDesc,
+) -> Result<ColliderBuilder, Physics2dError> {
     let bad = |reason| Physics2dError::InvalidShape { body, reason };
     let builder = match &c.shape {
         Shape2d::Box { half_extents } => {
@@ -218,12 +221,7 @@ pub enum DebugGeometry {
 }
 
 fn rect_points(min: Vec2, max: Vec2) -> [Vec2; 4] {
-    [
-        min,
-        Vec2::new(max.x, min.y),
-        max,
-        Vec2::new(min.x, max.y),
-    ]
+    [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)]
 }
 
 /// World-space outlines of a collider attached to a body at `body_pose`.

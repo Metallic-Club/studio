@@ -476,7 +476,9 @@ impl BodyDesc {
         finite(id, "linear_damping", self.linear_damping)?;
         finite(id, "angular_damping", self.angular_damping)?;
         if self.linear_damping < 0.0 || self.angular_damping < 0.0 {
-            return Err(Physics2dError::InvalidConfig("damping must not be negative"));
+            return Err(Physics2dError::InvalidConfig(
+                "damping must not be negative",
+            ));
         }
         for c in &self.colliders {
             finite2(id, "collider offset", c.offset)?;
@@ -571,7 +573,9 @@ impl JointDesc {
                 finite(b, "min_length", *min_length)?;
                 finite(b, "max_length", *max_length)?;
                 if *min_length < 0.0 || *max_length <= 0.0 || min_length > max_length {
-                    return Err(bad("distance joint needs 0 <= min_length <= max_length, max > 0"));
+                    return Err(bad(
+                        "distance joint needs 0 <= min_length <= max_length, max > 0",
+                    ));
                 }
                 if let Some(s) = spring {
                     finite(b, "spring rest_length", s.rest_length)?;
@@ -620,11 +624,17 @@ mod tests {
             .with_collider(ColliderDesc::rect(1.0, 1.0));
         assert!(matches!(
             b.validate(),
-            Err(Physics2dError::NonFinite { field: "position", .. })
+            Err(Physics2dError::NonFinite {
+                field: "position",
+                ..
+            })
         ));
         let b = BodyDesc::new(BodyId(1), BodyKind::Dynamic, Vec2::ZERO)
             .with_collider(ColliderDesc::rect(0.0, 1.0));
-        assert!(matches!(b.validate(), Err(Physics2dError::InvalidShape { .. })));
+        assert!(matches!(
+            b.validate(),
+            Err(Physics2dError::InvalidShape { .. })
+        ));
         let b = BodyDesc::new(BodyId(1), BodyKind::Static, Vec2::ZERO).with_collider(
             ColliderDesc::new(Shape2d::Tilemap {
                 tile_size: Vec2::new(1.0, 1.0),

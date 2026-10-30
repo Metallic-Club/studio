@@ -43,8 +43,7 @@ fn falling_body_hits_ground_at_expected_time() {
     let mut hit_time = None;
     for frame in 1..=120 {
         w.step(&mut scene, DT).expect("valid dt");
-        if w
-            .drain_touched()
+        if w.drain_touched()
             .iter()
             .any(|&(a, b)| (a, b) == (BodyId(1), BodyId(2)) || (a, b) == (BodyId(2), BodyId(1)))
         {
@@ -59,14 +58,22 @@ fn falling_body_hits_ground_at_expected_time() {
     );
     run(&mut w, &mut scene, 2.0);
     let rest = pos(&scene, 2);
-    assert!((rest.y - 1.0).abs() < 0.05, "box rests on the floor: {rest:?}");
+    assert!(
+        (rest.y - 1.0).abs() < 0.05,
+        "box rests on the floor: {rest:?}"
+    );
 }
 
 #[test]
 fn stacking_ten_boxes_stays_stable() {
     let mut bodies = vec![floor(1)];
     for i in 0..10 {
-        bodies.push(crate_box(10 + i, 0.0, 2.0 + 4.0 * i as f64 + 0.01 * i as f64, 4.0));
+        bodies.push(crate_box(
+            10 + i,
+            0.0,
+            2.0 + 4.0 * i as f64 + 0.01 * i as f64,
+            4.0,
+        ));
     }
     let mut scene = Scene2d {
         bodies,
@@ -79,9 +86,16 @@ fn stacking_ten_boxes_stays_stable() {
         let p = pos(&scene, 10 + i);
         let expected_y = 2.0 + 4.0 * i as f64;
         assert!(p.x.abs() < 0.05, "box {i} drifted sideways: {p:?}");
-        assert!((p.y - expected_y).abs() < 0.15, "box {i} sank or jumped: {p:?}");
+        assert!(
+            (p.y - expected_y).abs() < 0.15,
+            "box {i} sank or jumped: {p:?}"
+        );
         let s = w.body_state(BodyId(10 + i)).expect("body exists");
-        assert!(s.pose.angle.abs() < 0.01, "box {i} tilted: {}", s.pose.angle);
+        assert!(
+            s.pose.angle.abs() < 0.01,
+            "box {i} tilted: {}",
+            s.pose.angle
+        );
         assert!(
             s.sleeping || s.linear_velocity.length() < 0.05,
             "box {i} still moving: {:?}",
@@ -153,7 +167,10 @@ fn sensors_fire_enter_and_exit_and_never_block() {
             },
         ]
     );
-    assert!((pos(&scene, 3).y - 1.0).abs() < 0.05, "fell through the sensor");
+    assert!(
+        (pos(&scene, 3).y - 1.0).abs() < 0.05,
+        "fell through the sensor"
+    );
 }
 
 #[test]
@@ -193,7 +210,11 @@ fn raycast_hits_nearest_and_respects_filters() {
         .raycast(Vec2::new(0.0, 30.0), down, &RayFilter::default())
         .expect("hits the shelf");
     assert_eq!(hit.body, BodyId(6));
-    assert!((hit.distance - 19.0).abs() < 1e-3, "distance {}", hit.distance);
+    assert!(
+        (hit.distance - 19.0).abs() < 1e-3,
+        "distance {}",
+        hit.distance
+    );
     assert!((hit.normal.y - 1.0).abs() < 1e-4);
     assert!((hit.point.y - 11.0).abs() < 1e-3);
 
@@ -222,11 +243,25 @@ fn raycast_hits_nearest_and_respects_filters() {
     assert_eq!(hit.body, BodyId(5));
 
     // Too short, zero and NaN directions miss.
-    assert!(w.raycast(Vec2::new(0.0, 30.0), Vec2::new(0.0, -5.0), &RayFilter::default()).is_none());
-    assert!(w.raycast(Vec2::new(0.0, 30.0), Vec2::ZERO, &RayFilter::default()).is_none());
     assert!(
-        w.raycast(Vec2::new(0.0, 30.0), Vec2::new(f64::NAN, -1.0), &RayFilter::default())
+        w.raycast(
+            Vec2::new(0.0, 30.0),
+            Vec2::new(0.0, -5.0),
+            &RayFilter::default()
+        )
+        .is_none()
+    );
+    assert!(
+        w.raycast(Vec2::new(0.0, 30.0), Vec2::ZERO, &RayFilter::default())
             .is_none()
+    );
+    assert!(
+        w.raycast(
+            Vec2::new(0.0, 30.0),
+            Vec2::new(f64::NAN, -1.0),
+            &RayFilter::default()
+        )
+        .is_none()
     );
     assert_eq!(w.bodies_at_point(Vec2::new(0.0, 20.0)), vec![BodyId(5)]);
 }
@@ -251,7 +286,10 @@ fn moving_a_static_platform_carries_the_box_on_it() {
         w.step(&mut scene, DT).expect("valid dt");
         if frame == 60 {
             let v = w.body_state(BodyId(2)).expect("platform").linear_velocity;
-            assert!((v.x - 10.0).abs() < 1e-6, "mover velocity is derived: {v:?}");
+            assert!(
+                (v.x - 10.0).abs() < 1e-6,
+                "mover velocity is derived: {v:?}"
+            );
         }
     }
     let end = pos(&scene, 3);
@@ -260,7 +298,10 @@ fn moving_a_static_platform_carries_the_box_on_it() {
         "box was carried ~20 studs: {start:?} -> {end:?}"
     );
     assert!((end.y - 12.0).abs() < 0.1, "box stayed on top: {end:?}");
-    assert!((pos(&scene, 2).x - 20.0).abs() < 1e-9, "platform landed exactly");
+    assert!(
+        (pos(&scene, 2).x - 20.0).abs() < 1e-9,
+        "platform landed exactly"
+    );
 }
 
 #[test]
@@ -313,8 +354,12 @@ fn busy_scene() -> Scene2d {
     );
     for i in 0..5 {
         bodies.push(
-            BodyDesc::new(BodyId(200 + i), BodyKind::Dynamic, Vec2::new(-30.0 + i as f64, 20.0 + 3.0 * i as f64))
-                .with_collider(ColliderDesc::circle(0.8)),
+            BodyDesc::new(
+                BodyId(200 + i),
+                BodyKind::Dynamic,
+                Vec2::new(-30.0 + i as f64, 20.0 + 3.0 * i as f64),
+            )
+            .with_collider(ColliderDesc::circle(0.8)),
         );
     }
     Scene2d {
@@ -338,8 +383,12 @@ fn simulate(frames: usize) -> (Scene2d, Vec<(BodyId, BodyId)>, Vec<SensorEvent>,
     let mut scene = busy_scene();
     let mut w = world();
     w.sync_from(&scene).expect("valid scene");
-    w.add_character(BodyId(50), CharacterConfig::default(), Vec2::new(-20.0, 3.0))
-        .expect("character");
+    w.add_character(
+        BodyId(50),
+        CharacterConfig::default(),
+        Vec2::new(-20.0, 3.0),
+    )
+    .expect("character");
     let mut touched = Vec::new();
     let mut sensor = Vec::new();
     for f in 0..frames {
@@ -367,7 +416,10 @@ fn same_input_gives_bit_identical_results() {
     assert_eq!(a.1, b.1, "touch events differ");
     assert_eq!(a.2, b.2, "sensor events differ");
     assert_eq!(a.3, b.3, "character differs");
-    assert!(!a.1.is_empty() && !a.2.is_empty(), "the scene produced events");
+    assert!(
+        !a.1.is_empty() && !a.2.is_empty(),
+        "the scene produced events"
+    );
 }
 
 #[test]
@@ -380,14 +432,18 @@ fn non_finite_or_negative_dt_is_rejected_and_changes_nothing() {
     w.sync_from(&scene).expect("valid scene");
     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -DT] {
         assert_eq!(
-            w.step(&mut scene, bad).map_err(|e| matches!(e, Physics2dError::InvalidDt(_))),
+            w.step(&mut scene, bad)
+                .map_err(|e| matches!(e, Physics2dError::InvalidDt(_))),
             Err(true)
         );
     }
     assert_eq!(w.tick_count(), 0);
     assert_eq!(pos(&scene, 2).y, 100.0);
     run(&mut w, &mut scene, 1.0);
-    assert!(pos(&scene, 2).y < 100.0 - 50.0, "physics still runs after bad dt");
+    assert!(
+        pos(&scene, 2).y < 100.0 - 50.0,
+        "physics still runs after bad dt"
+    );
     // A huge frame is clamped to max_frame_time (0.25 s = 15 ticks).
     let ticks = w.step(&mut scene, 10.0).expect("valid dt");
     assert_eq!(ticks, 15);
@@ -405,15 +461,22 @@ fn invalid_scenes_are_rejected_without_changes() {
         bodies: vec![floor(1), floor(1)],
         joints: vec![],
     };
-    assert_eq!(w.sync_from(&dup), Err(Physics2dError::DuplicateBody(BodyId(1))));
+    assert_eq!(
+        w.sync_from(&dup),
+        Err(Physics2dError::DuplicateBody(BodyId(1)))
+    );
     let bad_poly = Scene2d {
         bodies: vec![
             floor(1),
-            BodyDesc::new(BodyId(2), BodyKind::Dynamic, Vec2::ZERO).with_collider(ColliderDesc::new(
-                Shape2d::ConvexPolygon {
-                    points: vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(2.0, 2.0)],
-                },
-            )),
+            BodyDesc::new(BodyId(2), BodyKind::Dynamic, Vec2::ZERO).with_collider(
+                ColliderDesc::new(Shape2d::ConvexPolygon {
+                    points: vec![
+                        Vec2::new(0.0, 0.0),
+                        Vec2::new(1.0, 1.0),
+                        Vec2::new(2.0, 2.0),
+                    ],
+                }),
+            ),
         ],
         joints: vec![],
     };
@@ -440,11 +503,13 @@ fn invalid_scenes_are_rejected_without_changes() {
     ));
     // The world still has exactly the floor.
     assert_eq!(w.debug_shapes().len(), 1);
-    assert!(PhysicsWorld2d::new(WorldConfig {
-        tick: 0.0,
-        ..WorldConfig::default()
-    })
-    .is_err());
+    assert!(
+        PhysicsWorld2d::new(WorldConfig {
+            tick: 0.0,
+            ..WorldConfig::default()
+        })
+        .is_err()
+    );
 }
 
 #[test]
@@ -453,12 +518,11 @@ fn collision_groups_filter_contacts() {
         memberships: 0b10,
         filter: 0b01, // only the floor's group
     };
-    let floor_body = BodyDesc::new(BodyId(1), BodyKind::Static, Vec2::new(0.0, -2.0)).with_collider(
-        ColliderDesc::rect(400.0, 4.0).with_groups(CollisionGroups {
+    let floor_body = BodyDesc::new(BodyId(1), BodyKind::Static, Vec2::new(0.0, -2.0))
+        .with_collider(ColliderDesc::rect(400.0, 4.0).with_groups(CollisionGroups {
             memberships: 0b01,
             filter: u32::MAX,
-        }),
-    );
+        }));
     let lower = BodyDesc::new(BodyId(2), BodyKind::Dynamic, Vec2::new(0.0, 1.0))
         .with_collider(ColliderDesc::rect(2.0, 2.0).with_groups(ghost_groups));
     let upper = BodyDesc::new(BodyId(3), BodyKind::Dynamic, Vec2::new(0.0, 6.0))
@@ -492,7 +556,16 @@ fn joints_hold_their_constraints() {
     let slider = BodyDesc::new(BodyId(7), BodyKind::Dynamic, Vec2::new(-40.0, 40.0))
         .with_collider(ColliderDesc::rect(1.0, 1.0));
     let mut scene = Scene2d {
-        bodies: vec![floor(100), anchor, bob, rope_end, weld_a, weld_b, rail, slider],
+        bodies: vec![
+            floor(100),
+            anchor,
+            bob,
+            rope_end,
+            weld_a,
+            weld_b,
+            rail,
+            slider,
+        ],
         joints: vec![
             JointDesc {
                 id: JointId(1),
@@ -562,8 +635,14 @@ fn joints_hold_their_constraints() {
     let sb = w.body_state(BodyId(5)).expect("body").pose.angle;
     assert!((sa - sb).abs() < 0.01, "weld kept relative angle");
     let s = pos(&scene, 7);
-    assert!((s.x + 40.0).abs() < 0.01, "slider stayed on its axis: {s:?}");
-    assert!((s.y - 30.0).abs() < 0.1, "slider stopped at its lower limit: {s:?}");
+    assert!(
+        (s.x + 40.0).abs() < 0.01,
+        "slider stayed on its axis: {s:?}"
+    );
+    assert!(
+        (s.y - 30.0).abs() < 0.1,
+        "slider stopped at its lower limit: {s:?}"
+    );
 }
 
 #[test]
@@ -594,7 +673,11 @@ fn revolute_motor_spins_a_wheel() {
     w.sync_from(&scene).expect("valid scene");
     run(&mut w, &mut scene, 2.0);
     let s = w.body_state(BodyId(2)).expect("wheel");
-    assert!((s.angular_velocity - 3.0).abs() < 0.2, "wheel spins at the motor speed: {}", s.angular_velocity);
+    assert!(
+        (s.angular_velocity - 3.0).abs() < 0.2,
+        "wheel spins at the motor speed: {}",
+        s.angular_velocity
+    );
 }
 
 #[test]
@@ -611,7 +694,13 @@ fn tilemap_and_edge_chain_terrain_hold_bodies() {
     );
     let ramp = BodyDesc::new(BodyId(2), BodyKind::Static, Vec2::new(60.0, 0.0)).with_collider(
         ColliderDesc::new(Shape2d::EdgeChain {
-            points: vec![Vec2::new(-20.0, 20.0), Vec2::new(0.0, 0.0), Vec2::new(30.0, 0.0)],
+            points: vec![
+                Vec2::new(-20.0, 20.0),
+                Vec2::new(0.0, 0.0),
+                Vec2::new(30.0, 0.0),
+                // A wall at the end: at this gravity the ball would otherwise roll off the edge.
+                Vec2::new(30.0, 20.0),
+            ],
             closed: false,
         }),
     );
@@ -627,12 +716,27 @@ fn tilemap_and_edge_chain_terrain_hold_bodies() {
     w.sync_from(&scene).expect("valid scene");
     run(&mut w, &mut scene, 3.0);
     // Tile top is at -8 + 8 = 0; the gap floor at -4.
-    assert!((pos(&scene, 3).y - 1.0).abs() < 0.05, "{:?}", pos(&scene, 3));
-    assert!((pos(&scene, 4).y + 3.0).abs() < 0.05, "{:?}", pos(&scene, 4));
+    assert!(
+        (pos(&scene, 3).y - 1.0).abs() < 0.05,
+        "{:?}",
+        pos(&scene, 3)
+    );
+    assert!(
+        (pos(&scene, 4).y + 3.0).abs() < 0.05,
+        "{:?}",
+        pos(&scene, 4)
+    );
     let b = pos(&scene, 5);
-    assert!(b.x > 60.0 && (b.y - 1.0).abs() < 0.1, "ball rolled down the ramp: {b:?}");
+    assert!(
+        b.x > 60.0 && (b.y - 1.0).abs() < 0.1,
+        "ball rolled down the ramp: {b:?}"
+    );
     // Merged: 10x2 tiles minus 2 = 3 rectangles in the debug view.
-    let tile_shapes = w.debug_shapes().iter().filter(|s| s.body == BodyId(1)).count();
+    let tile_shapes = w
+        .debug_shapes()
+        .iter()
+        .filter(|s| s.body == BodyId(1))
+        .count();
     assert_eq!(tile_shapes, 3);
 }
 
@@ -653,7 +757,11 @@ fn bullets_do_not_tunnel_through_thin_walls() {
     w.set_velocity(BodyId(2), Vec2::new(1500.0, 0.0), 0.0)
         .expect("dynamic body");
     run(&mut w, &mut scene, 0.5);
-    assert!(pos(&scene, 2).x < 20.0, "bullet stopped at the wall: {:?}", pos(&scene, 2));
+    assert!(
+        pos(&scene, 2).x < 20.0,
+        "bullet stopped at the wall: {:?}",
+        pos(&scene, 2)
+    );
 }
 
 #[test]
@@ -671,8 +779,14 @@ fn moving_a_dynamic_body_in_the_scene_teleports_it() {
     w.step(&mut scene, DT).expect("valid dt");
     let p = pos(&scene, 2);
     assert!((p.x - 50.0).abs() < 1e-3 && p.y > 29.0, "teleported: {p:?}");
-    assert!(w.apply_impulse(BodyId(1), Vec2::new(1.0, 0.0)).is_err(), "floor is static");
-    assert!(w.apply_impulse(BodyId(2), Vec2::new(f64::NAN, 0.0)).is_err());
+    assert!(
+        w.apply_impulse(BodyId(1), Vec2::new(1.0, 0.0)).is_err(),
+        "floor is static"
+    );
+    assert!(
+        w.apply_impulse(BodyId(2), Vec2::new(f64::NAN, 0.0))
+            .is_err()
+    );
 }
 
 #[test]
@@ -687,5 +801,8 @@ fn render_pose_interpolates_between_ticks() {
     assert!((w.interpolation_alpha() - 0.5).abs() < 1e-6);
     let current = w.body_state(BodyId(2)).expect("body").pose.position.y;
     let shown = w.render_pose(BodyId(2)).expect("body").position.y;
-    assert!(shown > current, "rendered pose lags half a tick behind the simulation");
+    assert!(
+        shown > current,
+        "rendered pose lags half a tick behind the simulation"
+    );
 }

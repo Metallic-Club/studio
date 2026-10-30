@@ -7,7 +7,9 @@
 //! Arrows (or A/D) run, Up/Space/Z jump (hold for a higher jump), Down drops through one-way
 //! platforms, R resets. `--screenshot <file.png>` plays a short scripted run headless and
 //! saves one frame without opening a window.
-use eframe::egui::{self, Color32, Key, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2 as EVec2};
+use eframe::egui::{
+    self, Color32, Key, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2 as EVec2,
+};
 use metallic_physics2d::*;
 use std::error::Error;
 
@@ -29,7 +31,8 @@ const HERO_FILL: Color32 = Color32::from_rgb(0xd7, 0xd5, 0xdc);
 const TEXT: Color32 = Color32::from_rgb(0xc9, 0xcb, 0xd0);
 
 fn solid(id: u64, x: f64, y: f64, w: f64, h: f64) -> BodyDesc {
-    BodyDesc::new(BodyId(id), BodyKind::Static, Vec2::new(x, y)).with_collider(ColliderDesc::rect(w, h))
+    BodyDesc::new(BodyId(id), BodyKind::Static, Vec2::new(x, y))
+        .with_collider(ColliderDesc::rect(w, h))
 }
 
 fn build_scene() -> Scene2d {
@@ -71,7 +74,10 @@ fn build_scene() -> Scene2d {
         ),
     );
     // One-way platforms.
-    for (i, (x, y)) in [(-20.0, 22.0), (-4.0, 30.0), (12.0, 22.0)].into_iter().enumerate() {
+    for (i, (x, y)) in [(-20.0, 22.0), (-4.0, 30.0), (12.0, 22.0)]
+        .into_iter()
+        .enumerate()
+    {
         bodies.push(
             BodyDesc::new(BodyId(10 + i as u64), BodyKind::Static, Vec2::new(x, y))
                 .with_collider(ColliderDesc::rect(12.0, 1.0).one_way_up()),
@@ -103,8 +109,12 @@ fn build_scene() -> Scene2d {
     // Crate stack and a bin of balls.
     for i in 0..5 {
         bodies.push(
-            BodyDesc::new(BodyId(100 + i), BodyKind::Dynamic, Vec2::new(52.0, 9.5 + 3.0 * i as f64))
-                .with_collider(ColliderDesc::rect(3.0, 3.0)),
+            BodyDesc::new(
+                BodyId(100 + i),
+                BodyKind::Dynamic,
+                Vec2::new(52.0, 9.5 + 3.0 * i as f64),
+            )
+            .with_collider(ColliderDesc::rect(3.0, 3.0)),
         );
     }
     bodies.push(solid(50, 104.0, 8.0, 1.0, 8.0));
@@ -125,7 +135,8 @@ fn build_scene() -> Scene2d {
     // Pendulum.
     bodies.push(solid(60, 30.0, 40.0, 1.0, 1.0));
     bodies.push(
-        BodyDesc::new(BodyId(61), BodyKind::Dynamic, Vec2::new(40.0, 40.0)).with_collider(ColliderDesc::circle(1.8)),
+        BodyDesc::new(BodyId(61), BodyKind::Dynamic, Vec2::new(40.0, 40.0))
+            .with_collider(ColliderDesc::circle(1.8)),
     );
     // Rope bridge over the pit: planks joined by pins between two posts.
     bodies.push(solid(70, -2.0, 1.0, 2.0, 2.0));
@@ -133,8 +144,12 @@ fn build_scene() -> Scene2d {
     let planks = 7;
     for i in 0..planks {
         bodies.push(
-            BodyDesc::new(BodyId(80 + i), BodyKind::Dynamic, Vec2::new(1.0 + 3.5 * i as f64 + 1.75, 1.5))
-                .with_collider(ColliderDesc::rect(3.3, 0.6)),
+            BodyDesc::new(
+                BodyId(80 + i),
+                BodyKind::Dynamic,
+                Vec2::new(1.0 + 3.5 * i as f64 + 1.75, 1.5),
+            )
+            .with_collider(ColliderDesc::rect(3.3, 0.6)),
         );
     }
     let mut joints = vec![JointDesc {
@@ -161,7 +176,13 @@ fn build_scene() -> Scene2d {
         },
         collide_connected: false,
     };
-    joints.push(pin(10, BodyId(70), BodyId(80), Vec2::new(1.0, 0.5), Vec2::new(-1.75, 0.0)));
+    joints.push(pin(
+        10,
+        BodyId(70),
+        BodyId(80),
+        Vec2::new(1.0, 0.5),
+        Vec2::new(-1.75, 0.0),
+    ));
     for i in 0..planks - 1 {
         joints.push(pin(
             11 + i,
@@ -278,7 +299,12 @@ impl Demo {
         for s in self.world.debug_shapes() {
             let (fill, line) = match s.kind {
                 _ if s.sensor => (
-                    Color32::from_rgba_unmultiplied(0x9b, 0x82, 0xd4, if self.in_goal { 90 } else { 30 }),
+                    Color32::from_rgba_unmultiplied(
+                        0x9b,
+                        0x82,
+                        0xd4,
+                        if self.in_goal { 90 } else { 30 },
+                    ),
                     VIOLET,
                 ),
                 DebugBodyKind::Character => (HERO_FILL, VIOLET),
@@ -311,7 +337,8 @@ impl Demo {
                 }
                 DebugGeometry::Capsule { a, b, radius } => {
                     let r = *radius as f32 * scale;
-                    painter.line_segment([to_screen(*a), to_screen(*b)], Stroke::new(2.0 * r, fill));
+                    painter
+                        .line_segment([to_screen(*a), to_screen(*b)], Stroke::new(2.0 * r, fill));
                     painter.circle(to_screen(*a), r, fill, stroke);
                     painter.circle(to_screen(*b), r, fill, stroke);
                 }
@@ -328,9 +355,15 @@ impl Demo {
         // Joints: a thin line between the two anchors.
         for j in &self.scene.joints {
             let anchors = match &j.kind {
-                JointKind::Revolute { anchor_a, anchor_b, .. }
-                | JointKind::Prismatic { anchor_a, anchor_b, .. }
-                | JointKind::Distance { anchor_a, anchor_b, .. }
+                JointKind::Revolute {
+                    anchor_a, anchor_b, ..
+                }
+                | JointKind::Prismatic {
+                    anchor_a, anchor_b, ..
+                }
+                | JointKind::Distance {
+                    anchor_a, anchor_b, ..
+                }
                 | JointKind::Weld { anchor_a, anchor_b } => (*anchor_a, *anchor_b),
             };
             let (Some(a), Some(b)) = (self.scene.body(j.body_a), self.scene.body(j.body_b)) else {
@@ -338,7 +371,10 @@ impl Demo {
             };
             let pa = Pose2::new(a.position, a.angle).transform_point(anchors.0);
             let pb = Pose2::new(b.position, b.angle).transform_point(anchors.1);
-            painter.line_segment([to_screen(pa), to_screen(b.position)], Stroke::new(1.0, VIOLET));
+            painter.line_segment(
+                [to_screen(pa), to_screen(b.position)],
+                Stroke::new(1.0, VIOLET),
+            );
             painter.circle_filled(to_screen(pa), 2.5, VIOLET);
             painter.circle_filled(to_screen(pb), 2.5, VIOLET);
         }
@@ -352,7 +388,8 @@ impl Demo {
     }
 
     fn hud(&self, painter: &egui::Painter, rect: Rect, c: &CharacterState) {
-        let panel = Rect::from_min_size(rect.min + EVec2::new(12.0, 12.0), EVec2::new(430.0, 128.0));
+        let panel =
+            Rect::from_min_size(rect.min + EVec2::new(12.0, 12.0), EVec2::new(430.0, 128.0));
         painter.rect(
             panel,
             6.0,
@@ -382,7 +419,8 @@ impl Demo {
             ),
             format!(
                 "last event {}  goal {}",
-                self.last_event.map_or("-".to_string(), |e| format!("{e:?}")),
+                self.last_event
+                    .map_or("-".to_string(), |e| format!("{e:?}")),
                 if self.in_goal { "reached" } else { "-" }
             ),
             format!(

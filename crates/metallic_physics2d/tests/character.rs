@@ -40,7 +40,9 @@ impl Sim {
     }
 
     fn frame(&mut self, input: CharacterInput) {
-        self.world.set_character_input(HERO, input).expect("character");
+        self.world
+            .set_character_input(HERO, input)
+            .expect("character");
         self.world.step(&mut self.scene, DT).expect("valid dt");
         self.events.extend(self.world.drain_character_events());
         self.touched.extend(self.world.drain_touched());
@@ -86,7 +88,10 @@ fn character_lands_and_stands_on_the_ground() {
     assert!((s.position.y - standing_y(&cfg, 0.0)).abs() < 0.05, "{s:?}");
     assert_eq!(s.ground_body, Some(BodyId(1)));
     assert!(sim.took(CharacterEventKind::Landed));
-    assert!(sim.touched.contains(&(HERO, BodyId(1))), "standing counts as touching");
+    assert!(
+        sim.touched.contains(&(HERO, BodyId(1))),
+        "standing counts as touching"
+    );
 }
 
 #[test]
@@ -171,8 +176,14 @@ fn coyote_time_allows_a_late_jump_after_leaving_a_ledge() {
     let cfg = CharacterConfig::default();
     let window = (cfg.coyote_time / DT).floor() as usize; // 6 frames
     assert!(jump_after_leaving_ledge(1), "jump right after the edge");
-    assert!(jump_after_leaving_ledge(window - 1), "jump inside coyote time");
-    assert!(!jump_after_leaving_ledge(window + 3), "no jump once coyote time is over");
+    assert!(
+        jump_after_leaving_ledge(window - 1),
+        "jump inside coyote time"
+    );
+    assert!(
+        !jump_after_leaving_ledge(window + 3),
+        "no jump once coyote time is over"
+    );
 }
 
 /// Drops the character from a height and presses jump `early` frames before the frame it
@@ -204,8 +215,14 @@ fn jump_buffer_remembers_an_early_press() {
     let cfg = CharacterConfig::default();
     let window = (cfg.jump_buffer_time / DT).floor() as usize; // 6 frames
     assert!(jump_pressed_before_landing(1));
-    assert!(jump_pressed_before_landing(window - 1), "press inside the buffer jumps on landing");
-    assert!(!jump_pressed_before_landing(window + 4), "press long before landing is dropped");
+    assert!(
+        jump_pressed_before_landing(window - 1),
+        "press inside the buffer jumps on landing"
+    );
+    assert!(
+        !jump_pressed_before_landing(window + 4),
+        "press long before landing is dropped"
+    );
 }
 
 #[test]
@@ -229,13 +246,20 @@ fn walkable_slopes_are_climbed_and_steep_ones_are_not() {
         sim.frame(hold(1.0, false));
         best = best.max(sim.state().position.y);
     }
-    assert!(best > rise + 2.0, "climbed the 30 degree slope: top {best:.2} of {rise:.2}");
+    assert!(
+        best > rise + 2.0,
+        "climbed the 30 degree slope: top {best:.2} of {rise:.2}"
+    );
     assert!(sim.state().grounded);
 
     let steep_rise = 20.0 * 70f64.to_radians().tan();
     let steep = BodyDesc::new(BodyId(2), BodyKind::Static, Vec2::new(0.0, 0.0)).with_collider(
         ColliderDesc::new(Shape2d::ConvexPolygon {
-            points: vec![Vec2::new(0.0, 0.0), Vec2::new(20.0, 0.0), Vec2::new(20.0, steep_rise)],
+            points: vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(20.0, 0.0),
+                Vec2::new(20.0, steep_rise),
+            ],
         }),
     );
     let mut sim = Sim::new(vec![floor(), steep], Vec2::new(-10.0, 3.0), cfg);
@@ -245,7 +269,10 @@ fn walkable_slopes_are_climbed_and_steep_ones_are_not() {
         sim.frame(hold(1.0, false));
         best = best.max(sim.state().position.y);
     }
-    assert!(best < standing_y(&cfg, 0.0) + 4.0, "did not climb the 70 degree slope: {best:.2}");
+    assert!(
+        best < standing_y(&cfg, 0.0) + 4.0,
+        "did not climb the 70 degree slope: {best:.2}"
+    );
 }
 
 #[test]
@@ -268,11 +295,20 @@ fn moving_platforms_carry_the_character() {
             p.position = Vec2::new(x, y);
         }
         sim.frame(idle());
-        assert!(sim.state().grounded, "stayed grounded on the platform at frame {f}");
+        assert!(
+            sim.state().grounded,
+            "stayed grounded on the platform at frame {f}"
+        );
     }
     let end = sim.state().position;
-    assert!((end.x - start.x - 10.0).abs() < 0.3, "carried right: {start:?} -> {end:?}");
-    assert!((end.y - start.y - 6.0).abs() < 0.3, "carried up: {start:?} -> {end:?}");
+    assert!(
+        (end.x - start.x - 10.0).abs() < 0.3,
+        "carried right: {start:?} -> {end:?}"
+    );
+    assert!(
+        (end.y - start.y - 6.0).abs() < 0.3,
+        "carried up: {start:?} -> {end:?}"
+    );
 
     // Jumping off a moving platform keeps its velocity.
     for f in 1..=10 {
@@ -282,7 +318,11 @@ fn moving_platforms_carry_the_character() {
         sim.frame(hold(0.0, f == 10));
     }
     assert!(sim.took(CharacterEventKind::Jumped));
-    assert!(sim.state().velocity.x > 8.0, "inherited platform speed: {:?}", sim.state());
+    assert!(
+        sim.state().velocity.x > 8.0,
+        "inherited platform speed: {:?}",
+        sim.state()
+    );
 }
 
 #[test]
@@ -326,13 +366,19 @@ fn wall_slide_caps_the_fall_and_wall_jump_pushes_away() {
     let s = sim.state();
     assert_eq!(s.wall, Some(WallSide::Right), "{s:?}");
     assert!(s.wall_sliding, "{s:?}");
-    assert!((s.velocity.y + cfg.wall_slide_speed).abs() < 1e-9, "fall capped: {s:?}");
+    assert!(
+        (s.velocity.y + cfg.wall_slide_speed).abs() < 1e-9,
+        "fall capped: {s:?}"
+    );
 
     sim.events.clear();
     sim.frame(hold(1.0, true));
     assert!(sim.took(CharacterEventKind::WallJumped));
     let s = sim.state();
-    assert!(s.velocity.x < -30.0 && s.velocity.y > 30.0, "launched away: {s:?}");
+    assert!(
+        s.velocity.x < -30.0 && s.velocity.y > 30.0,
+        "launched away: {s:?}"
+    );
     // Input toward the wall is ignored during the lock, so the jump carries away.
     sim.frames(5, hold(1.0, true));
     assert!(sim.state().velocity.x < -30.0);
@@ -348,8 +394,15 @@ fn wall_slide_and_wall_jump_can_be_turned_off() {
     let mut sim = Sim::new(vec![floor(), wall()], Vec2::new(5.0, 80.0), cfg);
     sim.frames(40, hold(1.0, false));
     let s = sim.state();
-    assert_eq!(s.wall, Some(WallSide::Right), "the wall is still reported: {s:?}");
-    assert!(!s.wall_sliding && s.velocity.y < -cfg.wall_slide_speed * 2.0, "{s:?}");
+    assert_eq!(
+        s.wall,
+        Some(WallSide::Right),
+        "the wall is still reported: {s:?}"
+    );
+    assert!(
+        !s.wall_sliding && s.velocity.y < -cfg.wall_slide_speed * 2.0,
+        "{s:?}"
+    );
     sim.events.clear();
     sim.frame(hold(1.0, true));
     assert!(!sim.took(CharacterEventKind::WallJumped));
@@ -364,8 +417,15 @@ fn character_touches_bricks_and_triggers_sensors() {
         .with_collider(ColliderDesc::rect(4.0, 6.0).sensor());
     let mut sim = Sim::new(vec![floor(), brick, zone], Vec2::new(0.0, 3.0), cfg);
     sim.frames(90, hold(1.0, false));
-    assert!(sim.touched.contains(&(HERO, BodyId(4))), "{:?}", sim.touched);
-    assert!(sim.state().position.x < 19.0 - cfg.half_extents.x + 0.1, "brick blocks");
+    assert!(
+        sim.touched.contains(&(HERO, BodyId(4))),
+        "{:?}",
+        sim.touched
+    );
+    assert!(
+        sim.state().position.x < 19.0 - cfg.half_extents.x + 0.1,
+        "brick blocks"
+    );
     let kinds: Vec<SensorEventKind> = sim
         .sensor
         .iter()
@@ -398,7 +458,9 @@ fn run_at(frame_dt: f64) -> (Vec2, Vec2) {
     let mut scene = scene;
     let mut world = PhysicsWorld2d::new(WorldConfig::default()).expect("valid config");
     world.sync_from(&scene).expect("valid scene");
-    world.add_character(HERO, cfg, Vec2::new(0.0, 3.0)).expect("character");
+    world
+        .add_character(HERO, cfg, Vec2::new(0.0, 3.0))
+        .expect("character");
     let frames = (3.0 / frame_dt).round() as usize;
     for f in 0..frames {
         // Input changes only on 1/30 s boundaries so every frame rate sees the same script.

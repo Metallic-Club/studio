@@ -22,7 +22,10 @@ fn pile() -> Result<(PhysicsWorld2d, Scene2d), Physics2dError> {
         } else {
             ColliderDesc::circle(1.0)
         };
-        bodies.push(BodyDesc::new(BodyId(100 + i), BodyKind::Dynamic, Vec2::new(x, y)).with_collider(collider));
+        bodies.push(
+            BodyDesc::new(BodyId(100 + i), BodyKind::Dynamic, Vec2::new(x, y))
+                .with_collider(collider),
+        );
     }
     let scene = Scene2d {
         bodies,
@@ -30,7 +33,11 @@ fn pile() -> Result<(PhysicsWorld2d, Scene2d), Physics2dError> {
     };
     let mut world = PhysicsWorld2d::new(WorldConfig::default())?;
     world.sync_from(&scene)?;
-    world.add_character(BodyId(50), CharacterConfig::default(), Vec2::new(0.0, 120.0))?;
+    world.add_character(
+        BodyId(50),
+        CharacterConfig::default(),
+        Vec2::new(0.0, 120.0),
+    )?;
     Ok((world, scene))
 }
 
