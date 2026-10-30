@@ -254,10 +254,20 @@ impl AsRef<str> for MemberName {
 
 fn member_name(key: &Value) -> mlua::Result<MemberName> {
     match key {
-        Value::String(s) => Ok(match s.to_str() {
-            Ok(value) => MemberName::Borrowed(value),
-            Err(_) => MemberName::Lossy(String::from_utf8_lossy(&s.as_bytes()).into_owned()),
-        }),
+        Value::String(s) => {
+            // Diagnostic-only switch lets one warmed VM alternate the exact old
+            // conversion and the proposal; no branch is present in production.
+            #[cfg(test)]
+            if read_probe::owned_baseline() {
+                return Ok(MemberName::Lossy(
+                    String::from_utf8_lossy(&s.as_bytes()).into_owned(),
+                ));
+            }
+            Ok(match s.to_str() {
+                Ok(value) => MemberName::Borrowed(value),
+                Err(_) => MemberName::Lossy(String::from_utf8_lossy(&s.as_bytes()).into_owned()),
+            })
+        }
         other => Err(lua_error(format!(
             "an Instance member name must be a string, got {}",
             other.type_name()

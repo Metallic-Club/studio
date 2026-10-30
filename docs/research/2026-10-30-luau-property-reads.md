@@ -19,8 +19,9 @@ key conversion change: Windows x86_64 MSVC, Rust/Cargo 1.99.1, mlua 0.12.2, Luau
 `crates/metallic_script/src/api/instance/read_probe.rs`.
 
 ```text
-cargo test --release -p metallic_script -j 4 valid_member_keys_do_not_allocate_owned_rust_strings -- --nocapture --test-threads=1
-cargo test --release -p metallic_script -j 4 property_getter_probe -- --ignored --nocapture --test-threads=1
+cargo test --release -p metallic_script -j 4 --lib valid_member_keys_do_not_allocate_owned_rust_strings -- --nocapture --test-threads=1
+cargo test --release -p metallic_script -j 4 --lib property_getter_probe -- --ignored --nocapture --test-threads=1
+cargo test --release -p metallic_script -j 4 --lib paired_property_getter_probe -- --ignored --nocapture --test-threads=1
 ```
 
 The ordinary allocation regression warms 64 conversions, then converts the same
@@ -54,8 +55,8 @@ One measured batch of 1,000 real reads after warm-up:
 Both Instance paths remove exactly one 8-byte key allocation per read. Remaining
 requests include binding and value-conversion work; this change does not claim
 allocation-free property reads. The probe's separate, initially unwarmed key loop
-recorded 10,001 / 80,016 before and 1 / 16 after, including one mlua borrow-slot
-growth. The warmed ordinary regression isolates the steady-state zero-allocation
+recorded 10,001 / 80,016 before and 1 / 16 after, including one initial 16-byte
+request. The warmed ordinary regression isolates the steady-state zero-allocation
 key conversion from that initial bookkeeping.
 
 Diagnostic wall time on the shared, busy development desktop:
@@ -67,12 +68,49 @@ Diagnostic wall time on the shared, busy development desktop:
 | Scalar Lua table reference | 58.4 / 69.3 | 65.1 / 85.0 |
 
 The after samples were slower, including the unchanged table reference. These
-unpaired runs have uncontrolled host load and no confidence interval; they
-establish an allocation reduction, not a timing improvement. The aspirational
+unpaired runs have uncontrolled host load and no confidence interval. Follow-up
+paired measurements below investigate the possible conversion/lifetime cost;
+the slower first samples remain part of the evidence. The aspirational
 150 ns target remains unmet in this probe. Reported Lua heap readings after the
 batches were 636,472 / 621,632 / 621,632 bytes before and 636,472 / 637,992 / 637,992
 after (scalar/vector/table order); GC timing and live userdata differ, so these are
 diagnostics, not retained-memory comparisons.
+
+## Same-process paired comparison
+
+A test-only thread-local switch in `member_name` selects either the exact old
+owned conversion or the proposed guard conversion. The switch is absent from
+production builds. Both diagnostic paths pay the same switch and allocator
+instrumentation overhead. The real Instance, VM, precompiled function and member
+lookup are shared, so the comparison includes the guard staying alive throughout
+world access and Lua value conversion.
+
+The paired probe warms both modes for 64 calls, then alternates AB/BA order over
+40 samples, with the same 1,000 reads per call and 10 calls per sample. It also
+alternates 20,000 direct key conversions to isolate their cost. Three full runs
+were performed. The later two compute a ratio for each adjacent pair before
+sorting; the first version only printed ratios of sorted distributions, so its
+ratio output is not used here. Core/script sources in the rebased main `ebb94f3`
+were unchanged from the baseline `88f5512`.
+
+| Run | Scalar owned / borrowed p50 ns | Vector owned / borrowed p50 ns | Key owned / borrowed p50 ns |
+| --- | ---: | ---: | ---: |
+| 1 | 1,802.8 / 1,693.8 | 3,071.2 / 3,008.4 | 129.1 / 50.7 |
+| 2 | 1,911.9 / 1,768.3 | 3,093.9 / 2,998.1 | 119.3 / 47.2 |
+| 3 | 1,823.4 / 1,615.5 | 2,697.3 / 2,493.5 | 118.8 / 47.6 |
+
+Run 2's median per-pair borrowed/owned ratios were 0.976 scalar and 0.923 vector;
+run 3's were 0.919 and 0.924. The key path was consistently faster in these runs,
+and no repeatable full-getter median regression appeared under this comparison.
+However, vector p95 in run 2 worsened from 4,820.4 to 5,213.5 ns, while run 3
+improved from 3,965.8 to 3,640.2 ns. These busy-host observations support the narrow
+conversion change, without promising a tail-latency or universal speedup.
+
+All paired runs repeated the same real-getter allocation counts in the earlier
+table. The 20,000-key conversion count was 20,000 requests / 160,000 requested bytes
+for owned conversion and zero for borrowed conversion. Full getter costs remain
+far above the 150 ns target and should be profiled independently before larger
+reflection or datatype changes.
 
 ## Primary sources and limits
 
@@ -88,4 +126,7 @@ diagnostics, not retained-memory comparisons.
 Compatibility regressions cover guard lifetime after the local Lua/key handles
 drop, Unicode names, lossy invalid UTF-8 child lookup and assignment errors,
 non-string rejection, unknown/read-only members, destroyed-instance errors and
-the existing f64 Position precision. Full workspace verification remains required.
+the existing f64 Position precision. After explicitly cleaning all seven local
+workspace packages in the verified owned target, all 217 workspace tests passed
+(two diagnostic probes ignored and manually run), including the Parkour route.
+Strict Clippy, license, formatting and whitespace checks passed.

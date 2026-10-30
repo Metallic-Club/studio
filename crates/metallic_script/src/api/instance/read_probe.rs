@@ -17,6 +17,24 @@ struct Counts {
 thread_local! {
     static RECORDING: Cell<bool> = const { Cell::new(false) };
     static COUNTS: Cell<Counts> = const { Cell::new(Counts { calls: 0, requested_bytes: 0 }) };
+    static OWNED_BASELINE: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(super) fn owned_baseline() -> bool {
+    OWNED_BASELINE.with(Cell::get)
+}
+
+fn with_baseline<T>(owned: bool, operation: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OWNED_BASELINE.set(self.0);
+        }
+    }
+    let restore = Restore(OWNED_BASELINE.replace(owned));
+    let result = operation();
+    drop(restore);
+    result
 }
 
 struct Counter;
@@ -306,5 +324,127 @@ fn property_getter_probe() {
     });
     eprintln!("key_conversion_only_10000: {keys:?}");
     black_box(&fixture.state);
+    fixture.finish();
+}
+
+#[test]
+#[ignore = "paired diagnostic release probe; no wall-time CI threshold"]
+fn paired_property_getter_probe() {
+    const READS: u32 = 1_000;
+    const CALLS: usize = 10;
+    const SAMPLES: usize = 40;
+    let fixture = Fixture::new();
+    let scalar =
+        fixture.function("return function(p,n) local v for i=1,n do v=p.Anchored end return v end");
+    let vector =
+        fixture.function("return function(p,n) local v for i=1,n do v=p.Position end return v end");
+    let key = Value::String(fixture.vm.lua().create_string("Anchored").unwrap());
+    eprintln!(
+        "paired probe: one VM; alternating AB/BA; samples={SAMPLES}; batch={READS}; calls_per_sample={CALLS}; same test-only mode switch and allocator instrumentation; host load uncontrolled"
+    );
+    for (name, function) in [("scalar_instance", &scalar), ("vector_instance", &vector)] {
+        for owned in [true, false] {
+            with_baseline(owned, || {
+                for _ in 0..64 {
+                    black_box(fixture.call(function, Value::UserData(fixture.part.clone()), READS));
+                }
+            });
+        }
+        let mut owned_samples = Vec::with_capacity(SAMPLES);
+        let mut borrowed_samples = Vec::with_capacity(SAMPLES);
+        for sample in 0..SAMPLES {
+            for owned in if sample % 2 == 0 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                let nanos = with_baseline(owned, || {
+                    let start = Instant::now();
+                    for _ in 0..CALLS {
+                        black_box(fixture.call(
+                            function,
+                            Value::UserData(fixture.part.clone()),
+                            READS,
+                        ));
+                    }
+                    start.elapsed().as_nanos() as f64 / (u128::from(READS) * CALLS as u128) as f64
+                });
+                if owned {
+                    owned_samples.push(nanos);
+                } else {
+                    borrowed_samples.push(nanos);
+                }
+            }
+        }
+        let mut ratios: Vec<f64> = owned_samples
+            .iter()
+            .zip(&borrowed_samples)
+            .map(|(a, b)| b / a)
+            .collect();
+        ratios.sort_by(f64::total_cmp);
+        for (mode, samples, owned) in [
+            ("owned", &mut owned_samples, true),
+            ("borrowed", &mut borrowed_samples, false),
+        ] {
+            samples.sort_by(f64::total_cmp);
+            let (_, allocations) = with_baseline(owned, || {
+                count(|| {
+                    black_box(fixture.call(function, Value::UserData(fixture.part.clone()), READS));
+                })
+            });
+            eprintln!(
+                "paired {name}/{mode}: p50_ns/read={:.1} p95_ns/read={:.1}; allocations={allocations:?}",
+                samples[SAMPLES / 2],
+                samples[SAMPLES * 95 / 100 - 1]
+            );
+        }
+        eprintln!(
+            "{name}: paired median borrowed/owned ratio={:.3}",
+            ratios[SAMPLES / 2]
+        );
+    }
+    let mut owned_samples = Vec::with_capacity(SAMPLES);
+    let mut borrowed_samples = Vec::with_capacity(SAMPLES);
+    const CONVERSIONS: usize = 20_000;
+    for sample in 0..SAMPLES {
+        for owned in if sample % 2 == 0 {
+            [true, false]
+        } else {
+            [false, true]
+        } {
+            let nanos = with_baseline(owned, || {
+                let start = Instant::now();
+                for _ in 0..CONVERSIONS {
+                    let member = member_name(&key).unwrap();
+                    black_box(member.as_ref());
+                }
+                start.elapsed().as_nanos() as f64 / CONVERSIONS as f64
+            });
+            if owned {
+                owned_samples.push(nanos);
+            } else {
+                borrowed_samples.push(nanos);
+            }
+        }
+    }
+    for (mode, samples, owned) in [
+        ("owned", &mut owned_samples, true),
+        ("borrowed", &mut borrowed_samples, false),
+    ] {
+        samples.sort_by(f64::total_cmp);
+        let (_, allocations) = with_baseline(owned, || {
+            count(|| {
+                for _ in 0..CONVERSIONS {
+                    let member = member_name(&key).unwrap();
+                    black_box(member.as_ref());
+                }
+            })
+        });
+        eprintln!(
+            "paired key_conversion/{mode}: p50_ns/key={:.1} p95_ns/key={:.1}; allocations={allocations:?}",
+            samples[SAMPLES / 2],
+            samples[SAMPLES * 95 / 100 - 1]
+        );
+    }
     fixture.finish();
 }
