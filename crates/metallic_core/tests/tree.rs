@@ -258,3 +258,125 @@ fn player_gui_is_a_registered_class_with_unique_bits() {
     let again = w.create("PlayerGui", Some(player)).unwrap();
     assert_ne!(again.to_bits(), gui.to_bits());
 }
+
+/// Every built-in: the root services plus `StarterPlayerScripts` under `StarterPlayer`.
+fn builtins(w: &World) -> Vec<InstanceId> {
+    let mut out = w.roots().to_vec();
+    let sp = w.root("StarterPlayer").unwrap();
+    out.extend_from_slice(w.children(sp));
+    assert!(out.iter().all(|&b| w.is_builtin(b)));
+    assert_eq!(out.len(), 9);
+    out
+}
+
+/// The whole tree as (parent, children) pairs, for "unchanged" checks.
+fn shape(w: &World) -> Vec<(Option<InstanceId>, Vec<InstanceId>)> {
+    let mut out = vec![(None, w.roots().to_vec())];
+    let mut stack = w.roots().to_vec();
+    while let Some(id) = stack.pop() {
+        out.push((Some(id), w.children(id).to_vec()));
+        stack.extend_from_slice(w.children(id));
+    }
+    out
+}
+
+#[test]
+fn builtin_services_cannot_be_reparented() {
+    let mut w = world();
+    let folder = w
+        .create("Folder", Some(w.root("Lighting").unwrap()))
+        .unwrap();
+    let before = shape(&w);
+    for b in builtins(&w) {
+        let class = w.class_name(b).unwrap().to_string();
+        let locked = Err(CoreError::Locked(class.clone()));
+        assert_eq!(w.set_parent(b, Some(folder)), locked, "{class}");
+        assert_eq!(w.set_parent(b, Some(ws(&w))), locked, "{class}");
+        assert_eq!(w.set_parent(b, None), locked, "{class}");
+        assert_eq!(shape(&w), before, "{class}");
+    }
+    assert!(w.root("Workspace").is_some());
+    assert_eq!(w.full_name(ws(&w)), "Workspace");
+}
+
+#[test]
+fn destroying_a_builtin_service_is_a_no_op() {
+    let mut w = world();
+    let p = w.create("Part", Some(ws(&w))).unwrap();
+    let before = shape(&w);
+    let cur = w.change_cursor();
+    for b in builtins(&w) {
+        w.destroy(b);
+        assert!(w.is_alive(b));
+    }
+    assert!(w.is_alive(p));
+    assert_eq!(shape(&w), before);
+    assert_eq!(w.changes_since(cur).0, Changes::Ids(Vec::new()));
+}
+
+#[test]
+fn builtin_services_cannot_be_cloned() {
+    let mut w = world();
+    let before = shape(&w);
+    for b in builtins(&w) {
+        let class = w.class_name(b).unwrap().to_string();
+        assert_eq!(w.clone_subtree(b), Err(CoreError::Locked(class)));
+    }
+    assert_eq!(shape(&w), before);
+}
+
+#[test]
+fn services_and_abstract_classes_are_not_creatable() {
+    let mut w = world();
+    let before = shape(&w);
+    for class in [
+        "Workspace",
+        "Instance",
+        "BasePart",
+        "Players",
+        "ReplicatedStorage",
+        "ServerScriptService",
+        "StarterPlayer",
+        "StarterPlayerScripts",
+        "StarterGui",
+        "Lighting",
+        "RunService",
+    ] {
+        let refused = Err(CoreError::NotCreatable(class.to_string()));
+        assert_eq!(w.create(class, None), refused, "{class}");
+        assert_eq!(w.create(class, Some(ws(&w))), refused, "{class}");
+        assert!(!classes::class_def(class).unwrap().creatable, "{class}");
+    }
+    assert_eq!(shape(&w), before);
+}
+
+#[test]
+fn concrete_classes_are_still_creatable() {
+    let mut w = world();
+    for class in ["Part", "Folder", "Model", "SpawnLocation", "Script"] {
+        let id = w.create(class, Some(ws(&w))).unwrap();
+        assert_eq!(w.class_name(id), Some(class));
+        assert!(!w.is_builtin(id));
+        assert!(classes::class_def(class).unwrap().creatable, "{class}");
+    }
+    // Plain instances can still move and be destroyed.
+    let f = w.find_first_child(ws(&w), "Folder").unwrap();
+    let p = w.find_first_child(ws(&w), "Part").unwrap();
+    w.set_parent(p, Some(f)).unwrap();
+    assert_eq!(w.parent(p), Some(f));
+    w.destroy(f);
+    assert!(!w.is_alive(p));
+}
+
+#[test]
+fn deep_clone_keeps_builtins_locked() {
+    let mut w = world().deep_clone();
+    let b = ws(&w);
+    assert!(w.is_builtin(b));
+    w.destroy(b);
+    assert_eq!(
+        w.set_parent(b, None),
+        Err(CoreError::Locked("Workspace".into()))
+    );
+    assert_eq!(w.root("Workspace"), Some(b));
+}

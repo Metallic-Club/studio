@@ -57,6 +57,14 @@ pub enum CoreError {
     /// Reparenting would make an instance its own ancestor.
     #[error("reparenting would create a cycle")]
     Cycle,
+    /// The instance is a built-in service (one made by [`World::new_with_services`]) whose place
+    /// in the tree is locked: it cannot be reparented or cloned. Holds the class name.
+    #[error("`{0}` is a built-in service and is locked in place")]
+    Locked(String),
+    /// The class exists but [`World::create`] refuses it: a service or an abstract class (see
+    /// [`classes::ClassDef::creatable`]). Holds the class name.
+    #[error("class `{0}` cannot be created")]
+    NotCreatable(String),
     /// A file could not be read or written.
     #[error("file error: {0}")]
     Io(String),

@@ -245,6 +245,8 @@ impl World {
     }
 
     /// True for instances created by [`World::new_with_services`]; scene files do not recreate them.
+    /// Built-ins are locked in place: [`World::set_parent`] and [`World::clone_subtree`] refuse them
+    /// with [`CoreError::Locked`] and [`World::destroy`] ignores them.
     pub fn is_builtin(&self, id: InstanceId) -> bool {
         self.node(id).is_some_and(|n| n.builtin)
     }
@@ -256,7 +258,9 @@ impl World {
 
     /// Creates an instance of `class` (appended as the last child of `parent`, if any).
     ///
-    /// Errors: [`CoreError::UnknownClass`], or [`CoreError::InvalidInstance`] if `parent` does not exist.
+    /// Errors: [`CoreError::UnknownClass`], [`CoreError::NotCreatable`] for services and abstract
+    /// classes such as `Workspace`, `Instance` or `BasePart` (see `ClassDef::creatable`), or
+    /// [`CoreError::InvalidInstance`] if `parent` does not exist.
     /// Fires `child_added` when a parent is given.
     pub fn create(
         &mut self,
@@ -264,6 +268,9 @@ impl World {
         parent: Option<InstanceId>,
     ) -> Result<InstanceId, CoreError> {
         let def = class_def(class).ok_or_else(|| CoreError::UnknownClass(class.to_string()))?;
+        if !def.creatable {
+            return Err(CoreError::NotCreatable(def.name.to_string()));
+        }
         if let Some(p) = parent
             && !self.is_alive(p)
         {
@@ -281,9 +288,10 @@ impl World {
         Ok(id)
     }
 
-    /// Destroys an instance and all its descendants; their ids become invalid. Unknown ids are ignored.
+    /// Destroys an instance and all its descendants; their ids become invalid. Unknown ids are ignored,
+    /// and so are built-in services (see [`World::is_builtin`]): destroying one is a silent no-op.
     pub fn destroy(&mut self, id: InstanceId) {
-        if !self.is_alive(id) {
+        if !self.is_alive(id) || self.is_builtin(id) {
             return;
         }
         self.detach(id);
@@ -327,7 +335,8 @@ impl World {
     /// Moves an instance under a new parent (or makes it a root with `None`), as the last child.
     ///
     /// Errors: [`CoreError::InvalidInstance`] if either id is destroyed, [`CoreError::Cycle`] if
-    /// `parent` is the instance itself or one of its descendants. Fires `child_added`.
+    /// `parent` is the instance itself or one of its descendants, [`CoreError::Locked`] if `id` is a
+    /// built-in service (even when `parent` is its current parent). Fires `child_added`.
     pub fn set_parent(
         &mut self,
         id: InstanceId,
@@ -335,6 +344,11 @@ impl World {
     ) -> Result<(), CoreError> {
         if !self.is_alive(id) {
             return Err(CoreError::InvalidInstance);
+        }
+        if let Some(n) = self.node(id)
+            && n.builtin
+        {
+            return Err(CoreError::Locked(n.class.to_string()));
         }
         if let Some(p) = parent {
             if !self.is_alive(p) {
@@ -474,10 +488,16 @@ impl World {
     /// Copies an instance and its descendants into a new parentless subtree and returns its root.
     /// Refs that point inside the copied subtree point to the copies. The copy is never built-in.
     ///
-    /// Errors: [`CoreError::InvalidInstance`] if `id` is destroyed or unknown.
+    /// Errors: [`CoreError::InvalidInstance`] if `id` is destroyed or unknown, [`CoreError::Locked`]
+    /// if `id` is a built-in service (like Roblox, services cannot be cloned).
     pub fn clone_subtree(&mut self, id: InstanceId) -> Result<InstanceId, CoreError> {
         if !self.is_alive(id) {
             return Err(CoreError::InvalidInstance);
+        }
+        if let Some(n) = self.node(id)
+            && n.builtin
+        {
+            return Err(CoreError::Locked(n.class.to_string()));
         }
         let mut map = HashMap::new();
         let root = self.clone_rec(id, None, &mut map);
