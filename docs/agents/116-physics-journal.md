@@ -1,6 +1,6 @@
 # Physics journal synchronization: issue 116
 
-Status: in progress.
+Status: implemented and tested; ready for review.
 
 ## Goal and scope
 
@@ -31,8 +31,24 @@ The journal identifies instances rather than properties. Part signatures still d
   (12 tests, including 10 journal regressions); core journal tests passed (4 tests).
 - The 5,000-part test records 5,000 examined parts on first sync, zero on an unchanged sync, and one examined/rebuilt
   part after two signature edits to one part. This is an operation-count check, not an elapsed-time benchmark.
-- Full workspace validation pending.
+- Rebased onto `origin/main` at `532c4f7` before final gates.
+- Final gates used an isolated lane target directory after the coordinator found artifact collisions between
+  concurrently built worktrees sharing one target directory. Earlier shared-cache runs are not final evidence.
+- `cargo test --workspace -j 4`: passed, 201 tests across all suites, including all 18 character tests, 16 existing
+  physics tests, 12 physics unit tests, and GPU headless tests; zero failures.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed, no warnings.
+- `cargo deny check licenses`: passed (`licenses ok`); existing unused MPL-2.0 allowance warning only.
+- `cargo fmt --all -- --check`: passed. No visual change or windowed manual test.
 
 ## Commands
 
-Use a command-scoped `CARGO_TARGET_DIR` pointing at the shared Metallic cargo target cache. Run Cargo with `-j 4` and use the installed cargo executable explicitly. Required final gates: workspace tests, workspace Clippy with warnings denied, and dependency license check.
+Use a command-scoped `CARGO_TARGET_DIR` pointing at the isolated `lane116` directory beneath the Metallic cargo
+cache. Run Cargo with `-j 4` and use the installed cargo executable explicitly. Do not reuse one target directory
+for concurrent builds of different worktrees of this package.
+
+## Limits
+
+`step` still polls transforms and performs the original fixed 1/240 s outer simulation substeps. This issue changes
+wrapper synchronization only; no wall-clock speedup or frame-rate claim is made. The bounded journal reports IDs,
+not property names, so an unrelated property change on one BasePart still reads that part's physics properties,
+but retains the existing body and momentum when its signature matches.
