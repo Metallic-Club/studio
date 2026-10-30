@@ -598,10 +598,7 @@ impl AudioEngine {
             }
             None => return Err(AudioError::Limit("max_sounds")),
         };
-        let length = match &source {
-            Source::Asset(a) => Some(a.duration_secs()),
-            Source::Stream(_) => None,
-        };
+        let length = source.length_secs();
         let shared = Arc::new(SoundShared::new(length));
         let mut voice = Voice::new(source, Arc::clone(&shared), group.0 as usize);
         voice.volume = props.volume;

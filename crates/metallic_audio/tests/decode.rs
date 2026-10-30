@@ -211,15 +211,18 @@ fn streamed_and_decoded_sounds_sound_the_same() {
         } else {
             e.load_asset(&bytes, Some("wav")).unwrap()
         };
-        e.create_sound(
-            asset,
-            SoundProperties {
-                playing: true,
-                volume: 1.0,
-                ..SoundProperties::default()
-            },
-        )
-        .unwrap();
+        let sound = e
+            .create_sound(
+                asset,
+                SoundProperties {
+                    playing: true,
+                    volume: 1.0,
+                    ..SoundProperties::default()
+                },
+            )
+            .unwrap();
+        // WAV states its length, so TimeLength is known before anything is decoded.
+        assert_eq!(e.time_length(sound).unwrap(), Some(6_000.0 / 32_000.0));
         e.render_seconds(0.3).unwrap()
     };
     let decoded = render(false);
