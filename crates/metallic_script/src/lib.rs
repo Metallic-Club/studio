@@ -9,6 +9,10 @@
 //! [`ScriptHost`] sits on top: it runs a world's `Script`s and `LocalScript`s in a server
 //! and a client VM and gives them the Roblox-named API (`game`, `Instance`, services,
 //! signals, `RemoteEvent`; see `docs/luau-api.md`).
+//!
+//! Implemented VM run/step entrypoints export static CPU scopes through `metallic_profiling` when
+//! its optional backend is enabled by the host. Tracy hosts must initialize the client before
+//! calling engine APIs. These scopes do not supply frame-budget integration on their own.
 
 #![warn(missing_docs)]
 
