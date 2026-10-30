@@ -4,7 +4,30 @@ use crate::classes::{self, class_def, default_value, find_property};
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Most journal entries kept before the oldest half is dropped.
+const JOURNAL_LIMIT: usize = 16384;
+static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
+
+/// A position in a world's change journal; see [`World::changes_since`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChangeCursor {
+    world: u64,
+    revision: u64,
+}
+
+/// What happened to a world since a [`ChangeCursor`] was taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Changes {
+    /// These instances were created, destroyed, reparented (with their descendants) or had a
+    /// property change. Deduplicated, in order of first change. Destroyed ids are included.
+    Ids(Vec<InstanceId>),
+    /// The journal no longer reaches back to the cursor (or the cursor is from another world):
+    /// the caller must re-read everything.
+    Overflow,
+}
 
 /// Stable handle to an instance. Generational: a destroyed instance's id never becomes valid again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -49,6 +72,11 @@ pub struct World {
     /// Fires `(parent, child)` whenever an instance gets a parent (create or reparent).
     pub child_added: Signal<(InstanceId, InstanceId)>,
     prop_signals: HashMap<(InstanceId, String), Signal<Value>>,
+    uid: u64,
+    revision: u64,
+    journal: Vec<(u64, InstanceId)>,
+    /// Journal entries with a revision up to this value were dropped.
+    journal_floor: u64,
 }
 
 impl World {
@@ -60,7 +88,56 @@ impl World {
             roots: Vec::new(),
             child_added: Signal::default(),
             prop_signals: HashMap::new(),
+            uid: NEXT_WORLD_UID.fetch_add(1, Ordering::Relaxed),
+            revision: 0,
+            journal: Vec::new(),
+            journal_floor: 0,
         }
+    }
+
+    fn record(&mut self, id: InstanceId) {
+        self.revision += 1;
+        self.journal.push((self.revision, id));
+        if self.journal.len() > JOURNAL_LIMIT {
+            let cut = self.journal.len() / 2;
+            self.journal_floor = self.journal[cut - 1].0;
+            self.journal.drain(..cut);
+        }
+    }
+
+    fn record_subtree(&mut self, id: InstanceId) {
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            self.record(cur);
+            stack.extend_from_slice(self.children(cur));
+        }
+    }
+
+    /// The current end of the change journal. Pass it to [`World::changes_since`] later.
+    pub fn change_cursor(&self) -> ChangeCursor {
+        ChangeCursor {
+            world: self.uid,
+            revision: self.revision,
+        }
+    }
+
+    /// Instances changed since `cursor` plus a new cursor to continue from. Every mutation
+    /// (`create`, `destroy`, `set_parent`, `set` with a new value, `clone_subtree`) is recorded; this
+    /// needs only `&World`. The journal is bounded: when it no longer reaches back to `cursor`,
+    /// or `cursor` came from a different world, the result is [`Changes::Overflow`].
+    pub fn changes_since(&self, cursor: ChangeCursor) -> (Changes, ChangeCursor) {
+        let now = self.change_cursor();
+        if cursor.world != self.uid || cursor.revision < self.journal_floor {
+            return (Changes::Overflow, now);
+        }
+        let start = self.journal.partition_point(|&(r, _)| r <= cursor.revision);
+        let mut seen = HashSet::new();
+        let ids = self.journal[start..]
+            .iter()
+            .filter(|(_, id)| seen.insert(*id))
+            .map(|&(_, id)| id)
+            .collect();
+        (Changes::Ids(ids), now)
     }
 
     /// A world with the standard services (`Workspace`, `Players`, `ReplicatedStorage`,
@@ -192,6 +269,7 @@ impl World {
             }
             None => self.roots.push(id),
         }
+        self.record(id);
         Ok(id)
     }
 
@@ -201,8 +279,10 @@ impl World {
             return;
         }
         self.detach(id);
+        let mut gone = Vec::new();
         let mut stack = vec![id];
         while let Some(cur) = stack.pop() {
+            gone.push(cur);
             let Some(slot) = self.slots.get_mut(cur.index as usize) else {
                 continue;
             };
@@ -214,6 +294,9 @@ impl World {
         }
         self.prop_signals
             .retain(|(k, _), _| self.slots[k.index as usize].generation == k.generation);
+        for g in gone {
+            self.record(g);
+        }
     }
 
     fn detach(&mut self, id: InstanceId) {
@@ -263,6 +346,7 @@ impl World {
             }
             None => self.roots.push(id),
         }
+        self.record_subtree(id);
         Ok(())
     }
 
@@ -348,10 +432,11 @@ impl World {
                 n.props.insert(prop.to_string(), value.clone());
             }
         }
-        if old != value
-            && let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string()))
-        {
-            sig.fire(&value);
+        if old != value {
+            self.record(id);
+            if let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string())) {
+                sig.fire(&value);
+            }
         }
         Ok(())
     }
@@ -378,6 +463,10 @@ impl World {
         let mut map = HashMap::new();
         let root = self.clone_rec(id, None, &mut map);
         self.roots.push(root);
+        let copies: Vec<InstanceId> = map.values().copied().collect();
+        for copy in copies {
+            self.record(copy);
+        }
         for &copy in map.values() {
             if let Some(n) = self.node_mut(copy) {
                 for v in n.props.values_mut() {
@@ -419,6 +508,10 @@ impl World {
             roots: self.roots.clone(),
             child_added: Signal::default(),
             prop_signals: HashMap::new(),
+            uid: NEXT_WORLD_UID.fetch_add(1, Ordering::Relaxed),
+            revision: 0,
+            journal: Vec::new(),
+            journal_floor: 0,
         }
     }
 }
