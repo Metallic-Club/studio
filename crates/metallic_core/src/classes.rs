@@ -2,6 +2,8 @@
 //!
 //! To add a class, add one [`ClassDef`] entry to `CLASSES` below.
 use crate::value::{Color3, UDim2, Value, ValueType, Vec3};
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 /// Materials a part may use.
 pub const MATERIALS: &[&str] = &[
@@ -26,7 +28,7 @@ pub struct PropDef {
     pub name: &'static str,
     /// Type that values must have.
     pub ty: ValueType,
-    /// Builds the default value (a function because strings allocate).
+    /// Builds an owned default; the borrowed-default registry calls this once during initialization.
     pub default: fn() -> Value,
     /// When set, a String value must be one of these.
     pub allowed: Option<&'static [&'static str]>,
@@ -244,7 +246,36 @@ pub fn find_property(class: &str, property: &str) -> Option<&'static PropDef> {
     None
 }
 
-/// The default value of a property; `Name` defaults to the class name.
+static DEFAULT_VALUES: LazyLock<HashMap<&'static str, HashMap<&'static str, Value>>> =
+    LazyLock::new(|| {
+        let mut values = HashMap::new();
+        for class in CLASSES {
+            let mut properties = HashMap::new();
+            for property in all_properties(class.name) {
+                let value = if property.name == "Name" {
+                    Value::String(class.name.to_owned())
+                } else {
+                    (property.default)()
+                };
+                properties.insert(property.name, value);
+            }
+            values.insert(class.name, properties);
+        }
+        values
+    });
+
+/// Borrows the shared default for a property; `Name` defaults to the concrete class name.
+///
+/// The immutable registry initializes once on the first call. Subsequent successful reads do
+/// not allocate or clone, and the returned values remain valid for the life of the process.
+/// Unknown classes or properties return `None`.
+pub fn default_value_ref(class: &str, property: &str) -> Option<&'static Value> {
+    DEFAULT_VALUES.get(class)?.get(property)
+}
+
+/// An owned default value; `Name` defaults to the concrete class name.
+///
+/// Use [`default_value_ref`] to inspect defaults without cloning string values.
 pub fn default_value(class: &str, property: &str) -> Option<Value> {
     if property == "Name" {
         return class_def(class).map(|c| Value::String(c.name.to_string()));
