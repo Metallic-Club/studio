@@ -72,7 +72,10 @@ pub fn triangulate_polygon(points: &[Vec3]) -> Vec<[usize; 3]> {
     }
     let normal = newell(points);
     let (u, v) = plane_basis(normal);
-    let p2: Vec<Vec2> = points.iter().map(|p| Vec2::new(p.dot(u), p.dot(v))).collect();
+    let p2: Vec<Vec2> = points
+        .iter()
+        .map(|p| Vec2::new(p.dot(u), p.dot(v)))
+        .collect();
     if n == 4 {
         // Split a quad along the diagonal that keeps both triangles counter-clockwise; prefer the shorter one.
         let ok = |a: usize, b: usize, c: usize| cross2(p2[a], p2[b], p2[c]) > 0.0;
@@ -96,9 +99,9 @@ pub fn triangulate_polygon(points: &[Vec3]) -> Vec<[usize; 3]> {
             if cross2(p2[a], p2[b], p2[c]) <= 1e-12 {
                 continue;
             }
-            let blocked = idx
-                .iter()
-                .any(|&k| k != a && k != b && k != c && point_in_triangle(p2[k], p2[a], p2[b], p2[c]));
+            let blocked = idx.iter().any(|&k| {
+                k != a && k != b && k != c && point_in_triangle(p2[k], p2[a], p2[b], p2[c])
+            });
             if blocked {
                 continue;
             }
@@ -132,7 +135,12 @@ mod tests {
 
     #[test]
     fn newell_of_unit_square_points_up() {
-        let pts = [Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 1.0), Vec3::X];
+        let pts = [
+            Vec3::ZERO,
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::X,
+        ];
         let n = polygon_normal(&pts);
         assert!((n - Vec3::Y).length() < 1e-6, "{n}");
         assert!((polygon_area(&pts) - 1.0).abs() < 1e-6);
@@ -140,7 +148,12 @@ mod tests {
 
     #[test]
     fn plane_basis_is_right_handed() {
-        for n in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(1.0, 2.0, -3.0).normalize()] {
+        for n in [
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            Vec3::new(1.0, 2.0, -3.0).normalize(),
+        ] {
             let (u, v) = plane_basis(n);
             assert!((u.cross(v) - n).length() < 1e-5, "{n}");
         }
@@ -148,13 +161,23 @@ mod tests {
 
     #[test]
     fn ear_clipping_handles_concave_l_shape() {
-        let pts: Vec<Vec3> = [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (0.0, 2.0)]
-            .iter()
-            .map(|&(x, y)| Vec3::new(x, y, 0.0))
-            .collect();
+        let pts: Vec<Vec3> = [
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 1.0),
+            (1.0, 1.0),
+            (1.0, 2.0),
+            (0.0, 2.0),
+        ]
+        .iter()
+        .map(|&(x, y)| Vec3::new(x, y, 0.0))
+        .collect();
         let tris = triangulate_polygon(&pts);
         assert_eq!(tris.len(), 4);
-        let area: f32 = tris.iter().map(|t| polygon_area(&[pts[t[0]], pts[t[1]], pts[t[2]]])).sum();
+        let area: f32 = tris
+            .iter()
+            .map(|t| polygon_area(&[pts[t[0]], pts[t[1]], pts[t[2]]]))
+            .sum();
         assert!((area - 3.0).abs() < 1e-5, "{area}");
         for t in &tris {
             let n = newell(&[pts[t[0]], pts[t[1]], pts[t[2]]]);

@@ -19,14 +19,21 @@ fn triangulate_cube_and_ngon() {
     assert_eq!(t.triangle_faces.len(), 12);
     assert_eq!(t.data.bounds.min, [-1.0; 3]);
     // Hexagon -> 4 triangles.
-    let pts: Vec<Vec3> = (0..6).map(|k| {
-        let a = std::f32::consts::TAU * k as f32 / 6.0;
-        Vec3::new(a.cos(), 0.0, -a.sin())
-    }).collect();
+    let pts: Vec<Vec3> = (0..6)
+        .map(|k| {
+            let a = std::f32::consts::TAU * k as f32 / 6.0;
+            Vec3::new(a.cos(), 0.0, -a.sin())
+        })
+        .collect();
     let hex = Mesh::from_polygons(&pts, &[(0..6).collect()]).expect("hex");
     let t = triangulate(&hex, NormalMode::Flat);
     assert_eq!(t.data.triangle_count(), 4);
-    assert!(t.data.normals.iter().all(|n| (Vec3::from_array(*n) - Vec3::Y).length() < 1e-5));
+    assert!(
+        t.data
+            .normals
+            .iter()
+            .all(|n| (Vec3::from_array(*n) - Vec3::Y).length() < 1e-5)
+    );
 }
 
 #[test]
@@ -57,11 +64,20 @@ fn normals_follow_smoothing_and_sharp_edges() {
         assert!(n.abs().max_element() > 0.999, "{n}");
     }
     // A sphere shades smoothly with auto smooth: one normal per vertex position away from the UV split.
-    let s = Primitive::UvSphere { segments: 16, rings: 8, radius: 1.0 }.build(Vec3::ZERO).expect("sphere");
+    let s = Primitive::UvSphere {
+        segments: 16,
+        rings: 8,
+        radius: 1.0,
+    }
+    .build(Vec3::ZERO)
+    .expect("sphere");
     let t = triangulate(&s, NormalMode::default());
     for (p, n) in t.data.positions.iter().zip(&t.data.normals) {
         let p = Vec3::from_array(*p);
-        assert!(p.normalize().dot(Vec3::from_array(*n)) > 0.97, "normal at {p} not radial");
+        assert!(
+            p.normalize().dot(Vec3::from_array(*n)) > 0.97,
+            "normal at {p} not radial"
+        );
     }
 }
 
@@ -90,15 +106,27 @@ fn assert_isometric(m: &Mesh) {
 fn assert_in_unit_square_and_front_facing(m: &Mesh) {
     for (_, face) in m.faces() {
         for uv in &face.uvs {
-            assert!(uv.x >= -1e-5 && uv.y >= -1e-5 && uv.x <= 1.0 + 1e-5 && uv.y <= 1.0 + 1e-5, "{uv}");
+            assert!(
+                uv.x >= -1e-5 && uv.y >= -1e-5 && uv.x <= 1.0 + 1e-5 && uv.y <= 1.0 + 1e-5,
+                "{uv}"
+            );
         }
-        assert!(metallic_modeling::geom::signed_area_2d(&face.uvs) > 0.0, "flipped UV face");
+        assert!(
+            metallic_modeling::geom::signed_area_2d(&face.uvs) > 0.0,
+            "flipped UV face"
+        );
     }
 }
 
 #[test]
 fn lscm_flattens_a_flat_grid_without_distortion() {
-    let mut m = Primitive::Grid { x: 4, z: 3, size: 2.0 }.build(Vec3::ZERO).expect("grid");
+    let mut m = Primitive::Grid {
+        x: 4,
+        z: 3,
+        size: 2.0,
+    }
+    .build(Vec3::ZERO)
+    .expect("grid");
     let faces: BTreeSet<_> = m.face_ids().into_iter().collect();
     let report = unwrap(&mut m, &faces, UnwrapOptions::default()).expect("unwrap");
     assert_eq!(report.charts, 1);
@@ -128,7 +156,10 @@ fn lscm_unfolds_a_cube_cut_along_a_cross_net() {
     assert_isometric(&m);
     assert_in_unit_square_and_front_facing(&m);
     // Total UV area equals 6 equal squares of side s.
-    let areas: Vec<f32> = m.faces().map(|(_, f)| metallic_modeling::geom::signed_area_2d(&f.uvs)).collect();
+    let areas: Vec<f32> = m
+        .faces()
+        .map(|(_, f)| metallic_modeling::geom::signed_area_2d(&f.uvs))
+        .collect();
     for a in &areas {
         assert!((a / areas[0] - 1.0).abs() < 1e-3);
     }
@@ -146,7 +177,13 @@ fn unwrap_closed_shell_without_seams_falls_back_to_box() {
 
 #[test]
 fn unwrap_two_charts_are_packed_apart() {
-    let mut m = Primitive::Grid { x: 2, z: 1, size: 2.0 }.build(Vec3::ZERO).expect("grid");
+    let mut m = Primitive::Grid {
+        x: 2,
+        z: 1,
+        size: 2.0,
+    }
+    .build(Vec3::ZERO)
+    .expect("grid");
     let mid = edge_near(&m, Vec3::ZERO);
     metallic_modeling::ops::normals::mark_seam(&mut m, &BTreeSet::from([mid]), true).expect("seam");
     let faces = all_faces(&m);
@@ -154,7 +191,13 @@ fn unwrap_two_charts_are_packed_apart() {
     assert_eq!(report.charts, 2);
     let boxes: Vec<(Vec2, Vec2)> = m
         .faces()
-        .map(|(_, f)| f.uvs.iter().fold((Vec2::splat(9.0), Vec2::splat(-9.0)), |(l, h), &p| (l.min(p), h.max(p))))
+        .map(|(_, f)| {
+            f.uvs
+                .iter()
+                .fold((Vec2::splat(9.0), Vec2::splat(-9.0)), |(l, h), &p| {
+                    (l.min(p), h.max(p))
+                })
+        })
         .collect();
     let overlap = boxes[0].0.x < boxes[1].1.x - 1e-4
         && boxes[1].0.x < boxes[0].1.x - 1e-4
@@ -174,7 +217,10 @@ fn box_projection_uses_dominant_axis() {
         let p = m.position_or_zero(*v);
         assert!((uv.x - p.x * 0.5).abs() < 1e-6 && (uv.y + p.z * 0.5).abs() < 1e-6);
     }
-    assert!(m.faces().all(|(_, f)| metallic_modeling::geom::signed_area_2d(&f.uvs) > 0.0));
+    assert!(
+        m.faces()
+            .all(|(_, f)| metallic_modeling::geom::signed_area_2d(&f.uvs) > 0.0)
+    );
 }
 
 #[test]
@@ -182,13 +228,26 @@ fn uv_ops_are_undoable_commands() {
     let m = cube();
     let sel = faces_sel(&m, m.face_ids());
     run_checked(m.clone(), sel.clone(), &Op::UvBox { scale: 2.0 });
-    run_checked(m.clone(), sel.clone(), &Op::UvPlanar { normal: Vec3::Z, scale: 1.0 });
+    run_checked(
+        m.clone(),
+        sel.clone(),
+        &Op::UvPlanar {
+            normal: Vec3::Z,
+            scale: 1.0,
+        },
+    );
     run_checked(m, sel, &Op::UvUnwrap(UnwrapOptions::default()));
 }
 
 #[test]
 fn glb_export_validates_with_the_gltf_crate() {
-    let m = Primitive::UvSphere { segments: 12, rings: 6, radius: 1.0 }.build(Vec3::ZERO).expect("sphere");
+    let m = Primitive::UvSphere {
+        segments: 12,
+        rings: 6,
+        radius: 1.0,
+    }
+    .build(Vec3::ZERO)
+    .expect("sphere");
     let t = triangulate(&m, NormalMode::default());
     let glb = to_glb(&t.data, "Sphere").expect("glb");
     assert_eq!(&glb[0..4], b"glTF");
@@ -200,9 +259,18 @@ fn glb_export_validates_with_the_gltf_crate() {
     let prim = mesh.primitives().next().expect("primitive");
     let pos = prim.get(&gltf::Semantic::Positions).expect("positions");
     assert_eq!(pos.count(), t.data.positions.len());
-    assert_eq!(prim.get(&gltf::Semantic::Normals).map(|a| a.count()), Some(t.data.normals.len()));
-    assert_eq!(prim.get(&gltf::Semantic::TexCoords(0)).map(|a| a.count()), Some(t.data.uv0.len()));
-    assert_eq!(prim.indices().map(|a| a.count()), Some(t.data.indices.len()));
+    assert_eq!(
+        prim.get(&gltf::Semantic::Normals).map(|a| a.count()),
+        Some(t.data.normals.len())
+    );
+    assert_eq!(
+        prim.get(&gltf::Semantic::TexCoords(0)).map(|a| a.count()),
+        Some(t.data.uv0.len())
+    );
+    assert_eq!(
+        prim.indices().map(|a| a.count()),
+        Some(t.data.indices.len())
+    );
     let views: usize = gltf.document.views().map(|v| v.length()).sum();
     assert!(blob.len() >= views);
     // Bounds recorded on POSITION.
@@ -228,11 +296,23 @@ fn export_rejects_empty_data() {
 
 #[test]
 fn obj_keeps_ngons() {
-    let m = Primitive::Cylinder { segments: 6, radius: 1.0, height: 1.0 }.build(Vec3::ZERO).expect("cyl");
+    let m = Primitive::Cylinder {
+        segments: 6,
+        radius: 1.0,
+        height: 1.0,
+    }
+    .build(Vec3::ZERO)
+    .expect("cyl");
     let obj = to_obj(&m, "Cyl");
     assert_eq!(obj.lines().filter(|l| l.starts_with("v ")).count(), 12);
     let faces: Vec<&str> = obj.lines().filter(|l| l.starts_with("f ")).collect();
     assert_eq!(faces.len(), 8);
-    assert_eq!(faces.iter().filter(|l| l.split_whitespace().count() == 7).count(), 2);
+    assert_eq!(
+        faces
+            .iter()
+            .filter(|l| l.split_whitespace().count() == 7)
+            .count(),
+        2
+    );
     let _ = Selection::default();
 }

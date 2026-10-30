@@ -26,9 +26,17 @@ pub fn box_project(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, scale: f32) -> Mod
         let a = n.abs();
         let uv = |p: Vec3| -> Vec2 {
             if a.x >= a.y && a.x >= a.z {
-                if n.x >= 0.0 { Vec2::new(-p.z, p.y) } else { Vec2::new(p.z, p.y) }
+                if n.x >= 0.0 {
+                    Vec2::new(-p.z, p.y)
+                } else {
+                    Vec2::new(p.z, p.y)
+                }
             } else if a.y >= a.z {
-                if n.y >= 0.0 { Vec2::new(p.x, -p.z) } else { Vec2::new(p.x, p.z) }
+                if n.y >= 0.0 {
+                    Vec2::new(p.x, -p.z)
+                } else {
+                    Vec2::new(p.x, p.z)
+                }
             } else if n.z >= 0.0 {
                 Vec2::new(p.x, p.y)
             } else {
@@ -45,10 +53,19 @@ pub fn box_project(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, scale: f32) -> Mod
 ///
 /// # Errors
 /// [`ModelError::MissingFace`].
-pub fn planar_project(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, normal: Vec3, scale: f32) -> ModelResult<()> {
+pub fn planar_project(
+    mesh: &mut Mesh,
+    faces: &BTreeSet<FaceId>,
+    normal: Vec3,
+    scale: f32,
+) -> ModelResult<()> {
     let (u, v) = geom::plane_basis(normal);
     for &f in faces {
-        let uvs: Vec<Vec2> = mesh.face_positions(f).iter().map(|&p| Vec2::new(p.dot(u), p.dot(v)) * scale).collect();
+        let uvs: Vec<Vec2> = mesh
+            .face_positions(f)
+            .iter()
+            .map(|&p| Vec2::new(p.dot(u), p.dot(v)) * scale)
+            .collect();
         mesh.set_face_uvs(f, &uvs)?;
     }
     Ok(())
@@ -65,7 +82,10 @@ pub struct UnwrapOptions {
 
 impl Default for UnwrapOptions {
     fn default() -> Self {
-        Self { margin: 0.02, max_iterations: 4000 }
+        Self {
+            margin: 0.02,
+            max_iterations: 4000,
+        }
     }
 }
 
@@ -94,7 +114,11 @@ struct Chart {
 ///
 /// # Errors
 /// [`ModelError::NothingSelected`] for an empty face set, [`ModelError::MissingFace`].
-pub fn unwrap(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, options: UnwrapOptions) -> ModelResult<UnwrapReport> {
+pub fn unwrap(
+    mesh: &mut Mesh,
+    faces: &BTreeSet<FaceId>,
+    options: UnwrapOptions,
+) -> ModelResult<UnwrapReport> {
     if faces.is_empty() {
         return Err(ModelError::NothingSelected("faces to unwrap"));
     }
@@ -135,17 +159,25 @@ pub fn unwrap(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, options: UnwrapOptions)
         let comp_set: BTreeSet<FaceId> = comp.iter().copied().collect();
         let mut wedge: HashMap<(VertId, FaceId), usize, FxBuild> = HashMap::default();
         let mut positions: Vec<DVec3> = Vec::new();
-        let chart_verts: BTreeSet<VertId> =
-            comp.iter().filter_map(|&f| mesh.face(f)).flat_map(|f| f.verts.iter().copied()).collect();
+        let chart_verts: BTreeSet<VertId> = comp
+            .iter()
+            .filter_map(|&f| mesh.face(f))
+            .flat_map(|f| f.verts.iter().copied())
+            .collect();
         for &v in &chart_verts {
-            let vf: Vec<FaceId> = mesh.vert_faces(v).into_iter().filter(|f| comp_set.contains(f)).collect();
+            let vf: Vec<FaceId> = mesh
+                .vert_faces(v)
+                .into_iter()
+                .filter(|f| comp_set.contains(f))
+                .collect();
             let mut parent: Vec<usize> = (0..vf.len()).collect();
             for &e in mesh.vert_edges(v) {
                 if !linked(e) {
                     continue;
                 }
                 let around = mesh.edge_faces(e);
-                if let (Ok(a), Ok(b)) = (vf.binary_search(&around[0]), vf.binary_search(&around[1])) {
+                if let (Ok(a), Ok(b)) = (vf.binary_search(&around[0]), vf.binary_search(&around[1]))
+                {
                     let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
                     parent[ra.max(rb)] = ra.min(rb);
                 }
@@ -162,7 +194,11 @@ pub fn unwrap(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, options: UnwrapOptions)
         }
         let corners: Vec<Vec<usize>> = comp
             .iter()
-            .map(|&f| mesh.face(f).map_or_else(Vec::new, |face| face.verts.iter().map(|&v| wedge[&(v, f)]).collect()))
+            .map(|&f| {
+                mesh.face(f).map_or_else(Vec::new, |face| {
+                    face.verts.iter().map(|&v| wedge[&(v, f)]).collect()
+                })
+            })
             .collect();
         // Triangles in chart indices.
         let mut tris: Vec<[usize; 3]> = Vec::new();
@@ -188,7 +224,12 @@ pub fn unwrap(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, options: UnwrapOptions)
         }
         let (uv, iters) = lscm(&positions, &tris, options.max_iterations);
         report.max_iterations_used = report.max_iterations_used.max(iters);
-        charts.push(Chart { faces: comp, corners, uv, area3d });
+        charts.push(Chart {
+            faces: comp,
+            corners,
+            uv,
+            area3d,
+        });
     }
     // Box-project the closed charts in place, then treat each of them as one chart for packing.
     if !fallback.is_empty() {
@@ -201,14 +242,22 @@ pub fn unwrap(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, options: UnwrapOptions)
             let face = mesh.face_ref(f)?;
             let uv: Vec<DVec2> = face.uvs.iter().map(|u| u.as_dvec2()).collect();
             let n = uv.len();
-            charts.push(Chart { faces: vec![f], corners: vec![(0..n).collect()], uv, area3d: f64::from(mesh.face_area(f)) });
+            charts.push(Chart {
+                faces: vec![f],
+                corners: vec![(0..n).collect()],
+                uv,
+                area3d: f64::from(mesh.face_area(f)),
+            });
         }
     }
     report.charts = charts.len();
     pack(&mut charts, f64::from(options.margin));
     for chart in &charts {
         for (k, &f) in chart.faces.iter().enumerate() {
-            let uvs: Vec<Vec2> = chart.corners[k].iter().map(|&i| chart.uv[i].as_vec2()).collect();
+            let uvs: Vec<Vec2> = chart.corners[k]
+                .iter()
+                .map(|&i| chart.uv[i].as_vec2())
+                .collect();
             mesh.set_face_uvs(f, &uvs)?;
         }
     }
@@ -227,12 +276,25 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
 fn lscm(pos: &[DVec3], tris: &[[usize; 3]], max_iterations: usize) -> (Vec<DVec2>, usize) {
     let n = pos.len();
     // Pins: the two vertices farthest apart along the longest bounding-box axis.
-    let (lo, hi) = pos.iter().fold((DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)), |(l, h), &p| (l.min(p), h.max(p)));
+    let (lo, hi) = pos.iter().fold(
+        (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)),
+        |(l, h), &p| (l.min(p), h.max(p)),
+    );
     let ext = hi - lo;
-    let axis = if ext.x >= ext.y && ext.x >= ext.z { 0 } else if ext.y >= ext.z { 1 } else { 2 };
+    let axis = if ext.x >= ext.y && ext.x >= ext.z {
+        0
+    } else if ext.y >= ext.z {
+        1
+    } else {
+        2
+    };
     let key = |i: usize| pos[i].to_array()[axis];
-    let p0 = (0..n).min_by(|&a, &b| key(a).total_cmp(&key(b))).unwrap_or(0);
-    let p1 = (0..n).max_by(|&a, &b| key(a).total_cmp(&key(b))).unwrap_or(n - 1);
+    let p0 = (0..n)
+        .min_by(|&a, &b| key(a).total_cmp(&key(b)))
+        .unwrap_or(0);
+    let p1 = (0..n)
+        .max_by(|&a, &b| key(a).total_cmp(&key(b)))
+        .unwrap_or(n - 1);
     let pin_len = pos[p0].distance(pos[p1]).max(1e-9);
     let pinned: [(usize, DVec2); 2] = [(p0, DVec2::ZERO), (p1, DVec2::new(pin_len, 0.0))];
     // Unknown numbering: u_i -> 2i, v_i -> 2i + 1; pinned ones are removed from the system.
@@ -248,7 +310,10 @@ fn lscm(pos: &[DVec3], tris: &[[usize; 3]], max_iterations: usize) -> (Vec<DVec2
     }
     let pinned_value = |var: usize| -> f64 {
         let i = var / 2;
-        pinned.iter().find(|p| p.0 == i).map_or(0.0, |p| if var % 2 == 0 { p.1.x } else { p.1.y })
+        pinned
+            .iter()
+            .find(|p| p.0 == i)
+            .map_or(0.0, |p| if var.is_multiple_of(2) { p.1.x } else { p.1.y })
     };
     // Accumulate the normal equations AᵀA x = Aᵀb row by row.
     let mut ata: Vec<BTreeMap<usize, f64>> = vec![BTreeMap::new(); free];
@@ -262,7 +327,11 @@ fn lscm(pos: &[DVec3], tris: &[[usize; 3]], max_iterations: usize) -> (Vec<DVec2
             continue;
         }
         let y = nrm.normalize().cross(x);
-        let z = [DVec2::ZERO, DVec2::new((b - a).length(), 0.0), DVec2::new((c - a).dot(x), (c - a).dot(y))];
+        let z = [
+            DVec2::ZERO,
+            DVec2::new((b - a).length(), 0.0),
+            DVec2::new((c - a).dot(x), (c - a).dot(y)),
+        ];
         let s = 1.0 / area.sqrt();
         // W_j = z_{j+2} - z_{j+1}.
         let w: [DVec2; 3] = [(z[2] - z[1]) * s, (z[0] - z[2]) * s, (z[1] - z[0]) * s];
@@ -320,7 +389,11 @@ fn lscm(pos: &[DVec3], tris: &[[usize; 3]], max_iterations: usize) -> (Vec<DVec2
 }
 
 /// Jacobi-preconditioned conjugate gradients for a symmetric positive (semi-)definite sparse matrix.
-fn conjugate_gradient(a: &[Vec<(usize, f64)>], b: &[f64], max_iterations: usize) -> (Vec<f64>, usize) {
+fn conjugate_gradient(
+    a: &[Vec<(usize, f64)>],
+    b: &[f64],
+    max_iterations: usize,
+) -> (Vec<f64>, usize) {
     let n = b.len();
     let mut x = vec![0.0; n];
     if n == 0 {
@@ -334,7 +407,11 @@ fn conjugate_gradient(a: &[Vec<(usize, f64)>], b: &[f64], max_iterations: usize)
     let diag: Vec<f64> = a
         .iter()
         .enumerate()
-        .map(|(i, row)| row.iter().find(|e| e.0 == i).map_or(1.0, |e| if e.1.abs() > 1e-30 { e.1 } else { 1.0 }))
+        .map(|(i, row)| {
+            row.iter()
+                .find(|e| e.0 == i)
+                .map_or(1.0, |e| if e.1.abs() > 1e-30 { e.1 } else { 1.0 })
+        })
         .collect();
     let mut r = b.to_vec();
     let mut z: Vec<f64> = r.iter().zip(&diag).map(|(r, d)| r / d).collect();
@@ -380,20 +457,33 @@ fn pack(charts: &mut [Chart], margin: f64) {
     // Normalise each chart: origin at its min corner, scaled so UV area matches 3D area.
     let mut sizes: Vec<DVec2> = Vec::with_capacity(charts.len());
     for chart in charts.iter_mut() {
-        let (lo, hi) = chart.uv.iter().fold((DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)), |(l, h), &p| (l.min(p), h.max(p)));
+        let (lo, hi) = chart.uv.iter().fold(
+            (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+            |(l, h), &p| (l.min(p), h.max(p)),
+        );
         let mut uv_area = 0.0;
         for c in &chart.corners {
             let poly: Vec<Vec2> = c.iter().map(|&i| chart.uv[i].as_vec2()).collect();
             uv_area += f64::from(geom::signed_area_2d(&poly).abs());
         }
-        let s = if uv_area > 1e-20 { (chart.area3d / uv_area).sqrt() } else { 1.0 };
+        let s = if uv_area > 1e-20 {
+            (chart.area3d / uv_area).sqrt()
+        } else {
+            1.0
+        };
         for p in &mut chart.uv {
             *p = (*p - lo) * s;
         }
         sizes.push((hi - lo) * s);
     }
     // The margin is a fraction of the final square; express it in chart units.
-    let margin = margin * sizes.iter().map(|s| s.x * s.y).sum::<f64>().sqrt().max(1e-9);
+    let margin = margin
+        * sizes
+            .iter()
+            .map(|s| s.x * s.y)
+            .sum::<f64>()
+            .sqrt()
+            .max(1e-9);
     let total: f64 = sizes.iter().map(|s| (s.x + margin) * (s.y + margin)).sum();
     let widest = sizes.iter().map(|s| s.x).fold(0.0, f64::max);
     let mut order: Vec<usize> = (0..charts.len()).collect();

@@ -15,7 +15,11 @@ use crate::selection::{SelectMode, Selection};
 /// # Errors
 /// [`ModelError::MissingVert`] for a dead id.
 pub fn weld(mesh: &mut Mesh, map: &BTreeMap<VertId, VertId>) -> ModelResult<()> {
-    let map: BTreeMap<VertId, VertId> = map.iter().filter(|(k, v)| k != v).map(|(&k, &v)| (k, v)).collect();
+    let map: BTreeMap<VertId, VertId> = map
+        .iter()
+        .filter(|(k, v)| k != v)
+        .map(|(&k, &v)| (k, v))
+        .collect();
     for (&k, &v) in &map {
         mesh.position(k)?;
         mesh.position(v)?;
@@ -96,7 +100,10 @@ pub fn merge_at_center(mesh: &mut Mesh, verts: &BTreeSet<VertId>) -> ModelResult
         sum += mesh.position(v)?;
     }
     let center = sum / verts.len() as f32;
-    let keep = *verts.iter().next().ok_or(ModelError::NothingSelected("vertices"))?;
+    let keep = *verts
+        .iter()
+        .next()
+        .ok_or(ModelError::NothingSelected("vertices"))?;
     mesh.set_position(keep, center)?;
     let map = verts.iter().map(|&v| (v, keep)).collect();
     weld(mesh, &map)?;
@@ -108,13 +115,29 @@ pub fn merge_at_center(mesh: &mut Mesh, verts: &BTreeSet<VertId>) -> ModelResult
 ///
 /// # Errors
 /// [`ModelError::InvalidParameter`] for a negative or non-finite distance.
-pub fn merge_by_distance(mesh: &mut Mesh, verts: &BTreeSet<VertId>, distance: f32) -> ModelResult<(Selection, usize)> {
+pub fn merge_by_distance(
+    mesh: &mut Mesh,
+    verts: &BTreeSet<VertId>,
+    distance: f32,
+) -> ModelResult<(Selection, usize)> {
     if !(distance.is_finite() && distance >= 0.0) {
-        return Err(ModelError::InvalidParameter(format!("merge distance {distance}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "merge distance {distance}"
+        )));
     }
-    let ids: Vec<VertId> = verts.iter().copied().filter(|&v| mesh.vert(v).is_some()).collect();
+    let ids: Vec<VertId> = verts
+        .iter()
+        .copied()
+        .filter(|&v| mesh.vert(v).is_some())
+        .collect();
     let cell = distance.max(1e-6);
-    let quant = |p: Vec3| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64, (p.z / cell).floor() as i64);
+    let quant = |p: Vec3| {
+        (
+            (p.x / cell).floor() as i64,
+            (p.y / cell).floor() as i64,
+            (p.z / cell).floor() as i64,
+        )
+    };
     let mut grid: BTreeMap<(i64, i64, i64), Vec<usize>> = BTreeMap::new();
     for (i, &v) in ids.iter().enumerate() {
         grid.entry(quant(mesh.position(v)?)).or_default().push(i);
@@ -133,7 +156,9 @@ pub fn merge_by_distance(mesh: &mut Mesh, verts: &BTreeSet<VertId>, distance: f3
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    let Some(list) = grid.get(&(cx + dx, cy + dy, cz + dz)) else { continue };
+                    let Some(list) = grid.get(&(cx + dx, cy + dy, cz + dz)) else {
+                        continue;
+                    };
                     for &j in list {
                         if j > i && mesh.position(ids[j])?.distance(p) <= distance {
                             let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));

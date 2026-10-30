@@ -52,7 +52,11 @@ impl Edge {
     /// The end that is not `v` (or `v`'s partner when `v` is not on this edge: the first vertex).
     #[must_use]
     pub fn other(&self, v: VertId) -> VertId {
-        if self.verts[0] == v { self.verts[1] } else { self.verts[0] }
+        if self.verts[0] == v {
+            self.verts[1]
+        } else {
+            self.verts[0]
+        }
     }
 
     /// Whether `v` is one of the ends.
@@ -90,7 +94,8 @@ impl Face {
     /// Whether the loop walks from `a` straight to `b`.
     #[must_use]
     pub fn has_directed_edge(&self, a: VertId, b: VertId) -> bool {
-        self.position_of(a).is_some_and(|i| self.verts[(i + 1) % self.verts.len()] == b)
+        self.position_of(a)
+            .is_some_and(|i| self.verts[(i + 1) % self.verts.len()] == b)
     }
 
     /// Consecutive vertex pairs `(v[i], v[i+1])`, wrapping around.
@@ -218,7 +223,11 @@ impl Mesh {
         for poly in polygons {
             let verts = poly
                 .iter()
-                .map(|&i| ids.get(i as usize).copied().ok_or_else(|| ModelError::InvalidFace(format!("index {i} out of range"))))
+                .map(|&i| {
+                    ids.get(i as usize)
+                        .copied()
+                        .ok_or_else(|| ModelError::InvalidFace(format!("index {i} out of range")))
+                })
                 .collect::<ModelResult<Vec<_>>>()?;
             mesh.add_face(&verts)?;
         }
@@ -250,7 +259,11 @@ impl Mesh {
     /// Slots in use including tombstones (vertices, edges, faces); [`Mesh::compacted`] drops the tombstones.
     #[must_use]
     pub fn slot_counts(&self) -> (usize, usize, usize) {
-        (self.verts.slot_count(), self.edges.slot_count(), self.faces.slot_count())
+        (
+            self.verts.slot_count(),
+            self.edges.slot_count(),
+            self.faces.slot_count(),
+        )
     }
 
     /// The vertex with this id, if live.
@@ -309,7 +322,9 @@ impl Mesh {
     /// # Errors
     /// [`ModelError::MissingVert`] when the id is not live.
     pub fn position(&self, id: VertId) -> ModelResult<Vec3> {
-        self.vert(id).map(|v| v.position).ok_or(ModelError::MissingVert(id))
+        self.vert(id)
+            .map(|v| v.position)
+            .ok_or(ModelError::MissingVert(id))
     }
 
     /// Position of a vertex, or the origin when it is missing (for drawing code that must not fail).
@@ -350,7 +365,11 @@ impl Mesh {
     /// Faces using a vertex, ascending and without duplicates.
     #[must_use]
     pub fn vert_faces(&self, v: VertId) -> Vec<FaceId> {
-        let mut out: Vec<FaceId> = self.vert_edges(v).iter().flat_map(|&e| self.edge_faces(e).iter().copied()).collect();
+        let mut out: Vec<FaceId> = self
+            .vert_edges(v)
+            .iter()
+            .flat_map(|&e| self.edge_faces(e).iter().copied())
+            .collect();
         out.sort_unstable();
         out.dedup();
         out
@@ -359,7 +378,11 @@ impl Mesh {
     /// Vertices joined to `v` by an edge, ascending.
     #[must_use]
     pub fn vert_neighbours(&self, v: VertId) -> Vec<VertId> {
-        let mut out: Vec<VertId> = self.vert_edges(v).iter().filter_map(|&e| self.edge(e).map(|e| e.other(v))).collect();
+        let mut out: Vec<VertId> = self
+            .vert_edges(v)
+            .iter()
+            .filter_map(|&e| self.edge(e).map(|e| e.other(v)))
+            .collect();
         out.sort_unstable();
         out
     }
@@ -367,13 +390,22 @@ impl Mesh {
     /// The edges of a face in winding order (`edges[i]` joins corner `i` and `i + 1`).
     #[must_use]
     pub fn face_edges(&self, f: FaceId) -> Vec<EdgeId> {
-        self.face(f).map_or_else(Vec::new, |face| face.directed_edges().filter_map(|(a, b)| self.find_edge(a, b)).collect())
+        self.face(f).map_or_else(Vec::new, |face| {
+            face.directed_edges()
+                .filter_map(|(a, b)| self.find_edge(a, b))
+                .collect()
+        })
     }
 
     /// Corner positions of a face.
     #[must_use]
     pub fn face_positions(&self, f: FaceId) -> Vec<Vec3> {
-        self.face(f).map_or_else(Vec::new, |face| face.verts.iter().map(|&v| self.position_or_zero(v)).collect())
+        self.face(f).map_or_else(Vec::new, |face| {
+            face.verts
+                .iter()
+                .map(|&v| self.position_or_zero(v))
+                .collect()
+        })
     }
 
     /// Unit normal of a face (Newell), zero when degenerate or missing.
@@ -407,7 +439,9 @@ impl Mesh {
     /// Midpoint of an edge.
     #[must_use]
     pub fn edge_midpoint(&self, e: EdgeId) -> Vec3 {
-        self.edge(e).map_or(Vec3::ZERO, |e| (self.position_or_zero(e.verts[0]) + self.position_or_zero(e.verts[1])) * 0.5)
+        self.edge(e).map_or(Vec3::ZERO, |e| {
+            (self.position_or_zero(e.verts[0]) + self.position_or_zero(e.verts[1])) * 0.5
+        })
     }
 
     /// Whether an edge has exactly one face.
@@ -445,14 +479,20 @@ impl Mesh {
             info.push((f, e_in, e_out));
         }
         let lookup = |f: FaceId| info.iter().find(|x| x.0 == f).copied();
-        let boundary_starts: Vec<&(FaceId, EdgeId, EdgeId)> =
-            info.iter().filter(|(_, e_in, _)| self.edge_faces(*e_in).len() == 1).collect();
+        let boundary_starts: Vec<&(FaceId, EdgeId, EdgeId)> = info
+            .iter()
+            .filter(|(_, e_in, _)| self.edge_faces(*e_in).len() == 1)
+            .collect();
         let start = match boundary_starts.len() {
             0 => info[0],
             1 => *boundary_starts[0],
             _ => return None,
         };
-        let mut fan = Fan { faces: Vec::new(), edges: Vec::new(), closed: false };
+        let mut fan = Fan {
+            faces: Vec::new(),
+            edges: Vec::new(),
+            closed: false,
+        };
         let mut cur = start;
         loop {
             fan.faces.push(cur.0);
@@ -464,7 +504,11 @@ impl Mesh {
                     break;
                 }
                 2 => {
-                    let next = if around[0] == cur.0 { around[1] } else { around[0] };
+                    let next = if around[0] == cur.0 {
+                        around[1]
+                    } else {
+                        around[0]
+                    };
                     if by_in.get(&cur.2) != Some(&next) {
                         return None;
                     }
@@ -495,25 +539,35 @@ impl Mesh {
     /// Edges with exactly one face.
     #[must_use]
     pub fn boundary_edges(&self) -> Vec<EdgeId> {
-        self.edges().map(|(id, _)| id).filter(|&e| self.is_boundary_edge(e)).collect()
+        self.edges()
+            .map(|(id, _)| id)
+            .filter(|&e| self.is_boundary_edge(e))
+            .collect()
     }
 
     /// Edges with no face.
     #[must_use]
     pub fn wire_edges(&self) -> Vec<EdgeId> {
-        self.edges().map(|(id, _)| id).filter(|&e| self.edge_faces(e).is_empty()).collect()
+        self.edges()
+            .map(|(id, _)| id)
+            .filter(|&e| self.edge_faces(e).is_empty())
+            .collect()
     }
 
     /// Vertices with no edge.
     #[must_use]
     pub fn loose_verts(&self) -> Vec<VertId> {
-        self.verts().map(|(id, _)| id).filter(|&v| self.vert_edges(v).is_empty()).collect()
+        self.verts()
+            .map(|(id, _)| id)
+            .filter(|&v| self.vert_edges(v).is_empty())
+            .collect()
     }
 
     /// Whether every edge has one or two faces and every vertex with faces has a single consistent fan.
     #[must_use]
     pub fn is_manifold(&self) -> bool {
-        self.edges().all(|(e, _)| matches!(self.edge_faces(e).len(), 1 | 2))
+        self.edges()
+            .all(|(e, _)| matches!(self.edge_faces(e).len(), 1 | 2))
             && self.verts().all(|(v, _)| self.vert_fan(v).is_some())
     }
 
@@ -532,7 +586,10 @@ impl Mesh {
                 return true;
             }
             let [a, b] = edge.verts;
-            let forward = faces.iter().filter(|&&f| self.face(f).is_some_and(|x| x.has_directed_edge(a, b))).count();
+            let forward = faces
+                .iter()
+                .filter(|&&f| self.face(f).is_some_and(|x| x.has_directed_edge(a, b)))
+                .count();
             forward == 1
         })
     }
@@ -563,7 +620,11 @@ impl Mesh {
                 return bad(format!("face {f:?} has {} corners", face.verts.len()));
             }
             if face.uvs.len() != face.verts.len() {
-                return bad(format!("face {f:?} has {} uvs for {} corners", face.uvs.len(), face.verts.len()));
+                return bad(format!(
+                    "face {f:?} has {} uvs for {} corners",
+                    face.uvs.len(),
+                    face.verts.len()
+                ));
             }
             let set: BTreeSet<VertId> = face.verts.iter().copied().collect();
             if set.len() != face.verts.len() {
@@ -600,7 +661,10 @@ impl Mesh {
             let mut want = expect_edge_faces.remove(&e).unwrap_or_default();
             want.sort_unstable();
             if self.edge_faces(e) != want.as_slice() {
-                return bad(format!("edge {e:?} radial list {:?} != {want:?}", self.edge_faces(e)));
+                return bad(format!(
+                    "edge {e:?} radial list {:?} != {want:?}",
+                    self.edge_faces(e)
+                ));
             }
         }
         if self.edge_lookup.len() != self.edge_count() {
@@ -660,10 +724,10 @@ impl Mesh {
             map.insert(id, out.add_vert(v.position));
         }
         for (_, e) in self.edges() {
-            if let (Some(&a), Some(&b)) = (map.get(&e.verts[0]), map.get(&e.verts[1])) {
-                if let Ok(new) = out.add_edge(a, b) {
-                    out.set_edge_flags(new, e.flags);
-                }
+            if let (Some(&a), Some(&b)) = (map.get(&e.verts[0]), map.get(&e.verts[1]))
+                && let Ok(new) = out.add_edge(a, b)
+            {
+                out.set_edge_flags(new, e.flags);
             }
         }
         for (_, f) in self.faces() {
@@ -685,7 +749,10 @@ impl Mesh {
     ///
     /// # Errors
     /// Whatever `op` returns.
-    pub fn record<R>(&mut self, op: impl FnOnce(&mut Mesh) -> ModelResult<R>) -> ModelResult<(R, ChangeSet)> {
+    pub fn record<R>(
+        &mut self,
+        op: impl FnOnce(&mut Mesh) -> ModelResult<R>,
+    ) -> ModelResult<(R, ChangeSet)> {
         let outer = self.journal.replace(ChangeSet::default());
         let result = op(self);
         let mut changes = self.journal.take().unwrap_or_default();
@@ -709,7 +776,9 @@ impl Mesh {
     }
 
     fn merge_into_journal(&mut self, changes: &ChangeSet) {
-        let Some(j) = self.journal.as_mut() else { return };
+        let Some(j) = self.journal.as_mut() else {
+            return;
+        };
         for (id, (before, after)) in &changes.verts {
             j.verts.entry(*id).or_insert((*before, None)).1 = *after;
         }
@@ -717,14 +786,23 @@ impl Mesh {
             j.edges.entry(*id).or_insert((*before, None)).1 = *after;
         }
         for (id, (before, after)) in &changes.faces {
-            j.faces.entry(*id).or_insert_with(|| (before.clone(), None)).1 = after.clone();
+            j.faces
+                .entry(*id)
+                .or_insert_with(|| (before.clone(), None))
+                .1 = after.clone();
         }
     }
 
     /// Applies a change set forwards (redo) or backwards (undo). Elements are written in an order that keeps the
     /// derived adjacency consistent: faces out, edges out, vertices, edges in, faces in.
     pub fn apply_changes(&mut self, changes: &ChangeSet, forward: bool) {
-        let pick = |pair: &(Option<Face>, Option<Face>)| if forward { pair.1.clone() } else { pair.0.clone() };
+        let pick = |pair: &(Option<Face>, Option<Face>)| {
+            if forward {
+                pair.1.clone()
+            } else {
+                pair.0.clone()
+            }
+        };
         for id in changes.faces.keys() {
             self.raw_face(*id, None);
         }
@@ -797,14 +875,17 @@ impl Mesh {
     }
 
     fn raw_face(&mut self, id: FaceId, value: Option<Face>) -> Option<Face> {
-        let sides: Vec<(VertId, VertId)> = value.as_ref().map(|f| f.directed_edges().collect()).unwrap_or_default();
+        let sides: Vec<(VertId, VertId)> = value
+            .as_ref()
+            .map(|f| f.directed_edges().collect())
+            .unwrap_or_default();
         let old = self.faces.set(id.0, value);
         if let Some(old) = &old {
             for (a, b) in old.directed_edges() {
-                if let Some(e) = self.find_edge(a, b) {
-                    if let Some(list) = self.edge_faces.get_mut(e.index()) {
-                        remove_sorted(list, id);
-                    }
+                if let Some(e) = self.find_edge(a, b)
+                    && let Some(list) = self.edge_faces.get_mut(e.index())
+                {
+                    remove_sorted(list, id);
                 }
             }
         }
@@ -860,7 +941,9 @@ impl Mesh {
             return Err(ModelError::MissingVert(v));
         }
         if !position.is_finite() {
-            return Err(ModelError::InvalidParameter(format!("non-finite position {position}")));
+            return Err(ModelError::InvalidParameter(format!(
+                "non-finite position {position}"
+            )));
         }
         self.rec_vert(v, Some(Vertex { position }));
         Ok(())
@@ -879,16 +962,22 @@ impl Mesh {
         }
         let id = EdgeId(self.edges.next_index());
         let (lo, hi) = key(a, b);
-        self.rec_edge(id, Some(Edge { verts: [lo, hi], flags: EdgeFlags::default() }));
+        self.rec_edge(
+            id,
+            Some(Edge {
+                verts: [lo, hi],
+                flags: EdgeFlags::default(),
+            }),
+        );
         Ok(id)
     }
 
     /// Sets the sharp and seam marks of an edge (ignored for a missing edge).
     pub fn set_edge_flags(&mut self, e: EdgeId, flags: EdgeFlags) {
-        if let Some(edge) = self.edge(e).copied() {
-            if edge.flags != flags {
-                self.rec_edge(e, Some(Edge { flags, ..edge }));
-            }
+        if let Some(edge) = self.edge(e).copied()
+            && edge.flags != flags
+        {
+            self.rec_edge(e, Some(Edge { flags, ..edge }));
         }
     }
 
@@ -923,13 +1012,23 @@ impl Mesh {
     pub fn add_face_with_uvs(&mut self, verts: &[VertId], uvs: &[Vec2]) -> ModelResult<FaceId> {
         self.check_loop(verts)?;
         if uvs.len() != verts.len() {
-            return Err(ModelError::InvalidFace(format!("{} uvs for {} corners", uvs.len(), verts.len())));
+            return Err(ModelError::InvalidFace(format!(
+                "{} uvs for {} corners",
+                uvs.len(),
+                verts.len()
+            )));
         }
         for i in 0..verts.len() {
             self.add_edge(verts[i], verts[(i + 1) % verts.len()])?;
         }
         let id = FaceId(self.faces.next_index());
-        self.rec_face(id, Some(Face { verts: verts.to_vec(), uvs: uvs.to_vec() }));
+        self.rec_face(
+            id,
+            Some(Face {
+                verts: verts.to_vec(),
+                uvs: uvs.to_vec(),
+            }),
+        );
         Ok(id)
     }
 
@@ -942,12 +1041,22 @@ impl Mesh {
         self.face_ref(f)?;
         self.check_loop(verts)?;
         if uvs.len() != verts.len() {
-            return Err(ModelError::InvalidFace(format!("{} uvs for {} corners", uvs.len(), verts.len())));
+            return Err(ModelError::InvalidFace(format!(
+                "{} uvs for {} corners",
+                uvs.len(),
+                verts.len()
+            )));
         }
         for i in 0..verts.len() {
             self.add_edge(verts[i], verts[(i + 1) % verts.len()])?;
         }
-        self.rec_face(f, Some(Face { verts: verts.to_vec(), uvs: uvs.to_vec() }));
+        self.rec_face(
+            f,
+            Some(Face {
+                verts: verts.to_vec(),
+                uvs: uvs.to_vec(),
+            }),
+        );
         Ok(())
     }
 
@@ -958,9 +1067,19 @@ impl Mesh {
     pub fn set_face_uvs(&mut self, f: FaceId, uvs: &[Vec2]) -> ModelResult<()> {
         let face = self.face_ref(f)?.clone();
         if uvs.len() != face.verts.len() {
-            return Err(ModelError::InvalidFace(format!("{} uvs for {} corners", uvs.len(), face.verts.len())));
+            return Err(ModelError::InvalidFace(format!(
+                "{} uvs for {} corners",
+                uvs.len(),
+                face.verts.len()
+            )));
         }
-        self.rec_face(f, Some(Face { verts: face.verts, uvs: uvs.to_vec() }));
+        self.rec_face(
+            f,
+            Some(Face {
+                verts: face.verts,
+                uvs: uvs.to_vec(),
+            }),
+        );
         Ok(())
     }
 
@@ -1016,15 +1135,19 @@ impl Mesh {
 
     /// Removes the given edges that have no faces left, then the given vertices (and the ends of removed edges) that
     /// have no edges left. Used by operations to clean up what they disconnected.
-    pub fn remove_loose(&mut self, edges: impl IntoIterator<Item = EdgeId>, verts: impl IntoIterator<Item = VertId>) {
+    pub fn remove_loose(
+        &mut self,
+        edges: impl IntoIterator<Item = EdgeId>,
+        verts: impl IntoIterator<Item = VertId>,
+    ) {
         let mut vs: BTreeSet<VertId> = verts.into_iter().collect();
         let es: BTreeSet<EdgeId> = edges.into_iter().collect();
         for e in es {
-            if let Some(edge) = self.edge(e).copied() {
-                if self.edge_faces(e).is_empty() {
-                    self.rec_edge(e, None);
-                    vs.extend(edge.verts);
-                }
+            if let Some(edge) = self.edge(e).copied()
+                && self.edge_faces(e).is_empty()
+            {
+                self.rec_edge(e, None);
+                vs.extend(edge.verts);
             }
         }
         for v in vs {

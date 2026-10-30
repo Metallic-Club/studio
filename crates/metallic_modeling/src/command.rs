@@ -30,7 +30,10 @@ impl EditMesh {
     /// Starts editing `mesh` with nothing selected (face mode).
     #[must_use]
     pub fn new(mesh: Mesh) -> Self {
-        Self { mesh, selection: Selection::default() }
+        Self {
+            mesh,
+            selection: Selection::default(),
+        }
     }
 }
 
@@ -162,7 +165,9 @@ impl Op {
         match self {
             Op::Select(_) => "Select",
             Op::Transform(_) => "Transform",
-            Op::ExtrudeFaces { individual: true, .. } => "Extrude faces (individual)",
+            Op::ExtrudeFaces {
+                individual: true, ..
+            } => "Extrude faces (individual)",
             Op::ExtrudeFaces { .. } => "Extrude",
             Op::ExtrudeEdges { .. } => "Extrude edges",
             Op::ExtrudeVerts { .. } => "Extrude vertices",
@@ -203,28 +208,57 @@ impl Op {
                 ops::transform::transform(mesh, &sel.verts, xf)?;
                 None
             }
-            Op::ExtrudeFaces { distance, individual } => {
-                Some(ops::extrude::extrude_faces(mesh, &sel.faces, *distance, *individual)?)
+            Op::ExtrudeFaces {
+                distance,
+                individual,
+            } => Some(ops::extrude::extrude_faces(
+                mesh,
+                &sel.faces,
+                *distance,
+                *individual,
+            )?),
+            Op::ExtrudeEdges { offset } => {
+                Some(ops::extrude::extrude_edges(mesh, &sel.edges, *offset)?)
             }
-            Op::ExtrudeEdges { offset } => Some(ops::extrude::extrude_edges(mesh, &sel.edges, *offset)?),
-            Op::ExtrudeVerts { offset } => Some(ops::extrude::extrude_verts(mesh, &sel.verts, *offset)?),
-            Op::Inset { thickness, depth, individual } => {
-                Some(ops::inset::inset(mesh, &sel.faces, *thickness, *depth, *individual)?)
+            Op::ExtrudeVerts { offset } => {
+                Some(ops::extrude::extrude_verts(mesh, &sel.verts, *offset)?)
             }
-            Op::Bevel { width, segments } => Some(ops::bevel::bevel_edges(mesh, &sel.edges, *width, *segments)?),
+            Op::Inset {
+                thickness,
+                depth,
+                individual,
+            } => Some(ops::inset::inset(
+                mesh,
+                &sel.faces,
+                *thickness,
+                *depth,
+                *individual,
+            )?),
+            Op::Bevel { width, segments } => Some(ops::bevel::bevel_edges(
+                mesh, &sel.edges, *width, *segments,
+            )?),
             Op::LoopCut { edge, cuts } => Some(ops::loops::loop_cut(mesh, *edge, *cuts)?),
             Op::BridgeEdgeLoops => Some(ops::loops::bridge_edge_loops(mesh, &sel.edges)?),
             Op::MergeAtCenter => Some(ops::merge::merge_at_center(mesh, &sel.verts)?),
-            Op::MergeByDistance { distance } => Some(ops::merge::merge_by_distance(mesh, &sel.verts, *distance)?.0),
+            Op::MergeByDistance { distance } => {
+                Some(ops::merge::merge_by_distance(mesh, &sel.verts, *distance)?.0)
+            }
             Op::DissolveVerts => Some(ops::dissolve::dissolve_verts(mesh, &sel.verts)?),
             Op::DissolveEdges => Some(ops::dissolve::dissolve_edges(mesh, &sel.edges)?),
             Op::DissolveFaces => Some(ops::dissolve::dissolve_faces(mesh, &sel.faces)?),
             Op::Delete(kind) => Some(ops::delete::delete(mesh, sel, *kind)?),
             Op::Fill => Some(ops::fill::fill(mesh, sel)?),
             Op::GridFill { span, offset } => Some(ops::fill::grid_fill(mesh, sel, *span, *offset)?),
-            Op::Mirror { axis, merge_distance } => {
-                Some(ops::mirror::mirror(mesh, &sel.faces, &sel.verts, *axis, *merge_distance)?)
-            }
+            Op::Mirror {
+                axis,
+                merge_distance,
+            } => Some(ops::mirror::mirror(
+                mesh,
+                &sel.faces,
+                &sel.verts,
+                *axis,
+                *merge_distance,
+            )?),
             Op::Subdivide { levels } => Some(ops::subdivide::subdivide(mesh, &sel.faces, *levels)?),
             Op::CatmullClark { levels } => Some(ops::subdivide::catmull_clark(mesh, *levels)?),
             Op::FlipNormals => {
@@ -232,7 +266,11 @@ impl Op {
                 None
             }
             Op::RecalculateOutside => {
-                let faces = if sel.faces.is_empty() { mesh.face_ids().into_iter().collect() } else { sel.faces.clone() };
+                let faces = if sel.faces.is_empty() {
+                    mesh.face_ids().into_iter().collect()
+                } else {
+                    sel.faces.clone()
+                };
                 ops::normals::recalculate_outside(mesh, &faces)?;
                 None
             }
@@ -299,7 +337,12 @@ impl MeshCommand {
         let mut after = new_sel.unwrap_or(flushed);
         after.prune(&edit.mesh);
         edit.selection = after.clone();
-        Ok(Self { label: label.to_owned(), changes, selection_before: before, selection_after: after })
+        Ok(Self {
+            label: label.to_owned(),
+            changes,
+            selection_before: before,
+            selection_after: after,
+        })
     }
 
     /// The name shown in the undo list.
@@ -414,7 +457,10 @@ impl History {
 /// [`ModelError::NothingSelected`] for an empty selection.
 pub fn contextual_extrude(sel: &Selection, distance: f32, offset: Vec3) -> ModelResult<Op> {
     if !sel.faces.is_empty() {
-        Ok(Op::ExtrudeFaces { distance, individual: false })
+        Ok(Op::ExtrudeFaces {
+            distance,
+            individual: false,
+        })
     } else if !sel.edges.is_empty() {
         Ok(Op::ExtrudeEdges { offset })
     } else if !sel.verts.is_empty() {

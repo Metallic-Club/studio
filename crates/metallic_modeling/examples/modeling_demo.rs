@@ -17,14 +17,15 @@
 use std::collections::BTreeSet;
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Key, Margin, Pos2,
-    Rect, Sense, Stroke, Vec2,
+    self, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Key,
+    Margin, Pos2, Rect, Sense, Stroke, Vec2,
 };
 use glam::{Mat4, Quat, Vec3, Vec4Swizzles};
 use metallic_modeling::ops::loops::{edge_loop, edge_ring};
 use metallic_modeling::{
-    DeleteKind, EdgeId, EditMesh, FaceId, History, MeshCommand, NormalMode, Op, Primitive, SelectMode, Selection,
-    Symmetry, Transform, Triangulated, VertId, contextual_extrude, triangulate,
+    DeleteKind, EdgeId, EditMesh, FaceId, History, MeshCommand, NormalMode, Op, Primitive,
+    SelectMode, Selection, Symmetry, Transform, Triangulated, VertId, contextual_extrude,
+    triangulate,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -100,14 +101,37 @@ fn apply_theme(ctx: &egui::Context) {
 /// `default_fonts` is off (its licence includes OFL/Ubuntu-font); load the platform UI font at run time.
 fn load_fonts(ctx: &egui::Context) {
     let candidates: &[(&str, &[&str])] = &[
-        ("ui", &["C:/Windows/Fonts/segoeui.ttf", "/System/Library/Fonts/SFNS.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]),
-        ("ui-semibold", &["C:/Windows/Fonts/seguisb.ttf", "C:/Windows/Fonts/segoeuib.ttf"]),
-        ("mono", &["C:/Windows/Fonts/consola.ttf", "/System/Library/Fonts/Menlo.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]),
+        (
+            "ui",
+            &[
+                "C:/Windows/Fonts/segoeui.ttf",
+                "/System/Library/Fonts/SFNS.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ],
+        ),
+        (
+            "ui-semibold",
+            &[
+                "C:/Windows/Fonts/seguisb.ttf",
+                "C:/Windows/Fonts/segoeuib.ttf",
+            ],
+        ),
+        (
+            "mono",
+            &[
+                "C:/Windows/Fonts/consola.ttf",
+                "/System/Library/Fonts/Menlo.ttc",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            ],
+        ),
     ];
     let mut fonts = FontDefinitions::empty();
     for (name, paths) in candidates {
         if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
-            fonts.font_data.insert((*name).to_owned(), std::sync::Arc::new(FontData::from_owned(bytes)));
+            fonts.font_data.insert(
+                (*name).to_owned(),
+                std::sync::Arc::new(FontData::from_owned(bytes)),
+            );
         }
     }
     let has = |n: &str| fonts.font_data.contains_key(n);
@@ -120,15 +144,26 @@ fn load_fonts(ctx: &egui::Context) {
         mono.push("mono".to_owned());
     }
     mono.extend(prop.iter().cloned());
-    prop.extend(mono.iter().filter(|m| !prop.contains(m)).cloned().collect::<Vec<_>>());
-    let mut bold = if has("ui-semibold") { vec!["ui-semibold".to_owned()] } else { Vec::new() };
+    prop.extend(
+        mono.iter()
+            .filter(|m| !prop.contains(m))
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+    let mut bold = if has("ui-semibold") {
+        vec!["ui-semibold".to_owned()]
+    } else {
+        Vec::new()
+    };
     bold.extend(prop.iter().cloned());
     if prop.is_empty() {
         eprintln!("modeling_demo: no system font found; text will not render");
     }
     fonts.families.insert(FontFamily::Proportional, prop);
     fonts.families.insert(FontFamily::Monospace, mono);
-    fonts.families.insert(FontFamily::Name("semibold".into()), bold);
+    fonts
+        .families
+        .insert(FontFamily::Name("semibold".into()), bold);
     ctx.set_fonts(fonts);
 }
 
@@ -150,7 +185,11 @@ struct Camera {
 
 impl Camera {
     fn eye(&self) -> Vec3 {
-        let dir = Vec3::new(self.pitch.cos() * self.yaw.sin(), self.pitch.sin(), self.pitch.cos() * self.yaw.cos());
+        let dir = Vec3::new(
+            self.pitch.cos() * self.yaw.sin(),
+            self.pitch.sin(),
+            self.pitch.cos() * self.yaw.cos(),
+        );
         self.target + dir * self.distance
     }
 
@@ -172,7 +211,12 @@ struct Projector {
 impl Projector {
     fn new(cam: &Camera, rect: Rect) -> Self {
         let vp = cam.view_proj(rect);
-        Self { vp, inv: vp.inverse(), rect, eye: cam.eye() }
+        Self {
+            vp,
+            inv: vp.inverse(),
+            rect,
+            eye: cam.eye(),
+        }
     }
 
     /// Screen position and depth (clip w), or `None` behind the camera.
@@ -198,7 +242,9 @@ impl Projector {
 
     /// World offset that moves a point at depth `at` by the screen delta `d`.
     fn screen_delta_to_world(&self, at: Vec3, d: Vec2) -> Vec3 {
-        let Some((s, _)) = self.project(at) else { return Vec3::ZERO };
+        let Some((s, _)) = self.project(at) else {
+            return Vec3::ZERO;
+        };
         let (o1, d1) = self.ray(s);
         let (o2, d2) = self.ray(s + d);
         let depth = (at - o1).dot(d1);
@@ -263,11 +309,18 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let mesh = Primitive::Cube { size: 2.0 }.build(Vec3::ZERO).unwrap_or_default();
+        let mesh = Primitive::Cube { size: 2.0 }
+            .build(Vec3::ZERO)
+            .unwrap_or_default();
         let mut app = Self {
             edit: EditMesh::new(mesh),
             history: History::new(),
-            camera: Camera { yaw: 0.65, pitch: 0.48, distance: 9.0, target: Vec3::new(0.0, 0.3, 0.0) },
+            camera: Camera {
+                yaw: 0.65,
+                pitch: 0.48,
+                distance: 9.0,
+                target: Vec3::new(0.0, 0.3, 0.0),
+            },
             tris: Triangulated::default(),
             tris_hash: 0,
             modal: None,
@@ -285,13 +338,27 @@ impl App {
     fn showcase(scene: &str) -> Self {
         let mut app = Self::new();
         let mesh = &app.edit.mesh;
-        let top = mesh.faces().map(|(f, _)| f).max_by(|&a, &b| mesh.face_normal(a).y.total_cmp(&mesh.face_normal(b).y));
+        let top = mesh
+            .faces()
+            .map(|(f, _)| f)
+            .max_by(|&a, &b| mesh.face_normal(a).y.total_cmp(&mesh.face_normal(b).y));
         if let Some(top) = top {
             let steps = [
                 Op::Select(Selection::from_faces(mesh, [top])),
-                Op::Inset { thickness: 0.35, depth: 0.0, individual: false },
-                Op::ExtrudeFaces { distance: 1.1, individual: false },
-                Op::Inset { thickness: 0.15, depth: -0.25, individual: false },
+                Op::Inset {
+                    thickness: 0.35,
+                    depth: 0.0,
+                    individual: false,
+                },
+                Op::ExtrudeFaces {
+                    distance: 1.1,
+                    individual: false,
+                },
+                Op::Inset {
+                    thickness: 0.15,
+                    depth: -0.25,
+                    individual: false,
+                },
             ];
             for op in steps {
                 let _ = app.history.apply(&mut app.edit, &op);
@@ -303,43 +370,72 @@ impl App {
             .mesh
             .edges()
             .filter(|(_, e)| {
-                let (a, b) = (app.edit.mesh.position_or_zero(e.verts[0]), app.edit.mesh.position_or_zero(e.verts[1]));
-                (a.x.abs() - 1.0).abs() < 1e-4 && (a.z.abs() - 1.0).abs() < 1e-4 && (a.x - b.x).abs() < 1e-4 && (a.z - b.z).abs() < 1e-4
+                let (a, b) = (
+                    app.edit.mesh.position_or_zero(e.verts[0]),
+                    app.edit.mesh.position_or_zero(e.verts[1]),
+                );
+                (a.x.abs() - 1.0).abs() < 1e-4
+                    && (a.z.abs() - 1.0).abs() < 1e-4
+                    && (a.x - b.x).abs() < 1e-4
+                    && (a.z - b.z).abs() < 1e-4
             })
             .map(|(id, _)| id)
             .collect();
         let select = Op::Select(Selection::from_edges(&app.edit.mesh, verticals));
         let _ = app.history.apply(&mut app.edit, &select);
-        let _ = app.history.apply(&mut app.edit, &Op::Bevel { width: 0.3, segments: 3 });
+        let _ = app.history.apply(
+            &mut app.edit,
+            &Op::Bevel {
+                width: 0.3,
+                segments: 3,
+            },
+        );
         match scene {
             "edges" => {
                 let mesh = &app.edit.mesh;
-                let ring_edge = mesh
-                    .edges()
-                    .map(|(id, _)| id)
-                    .find(|&e| {
-                        let m = mesh.edge_midpoint(e);
-                        (m.y - 0.0).abs() < 1e-3 && m.z > 0.99 && m.x.abs() < 0.5
-                    });
+                let ring_edge = mesh.edges().map(|(id, _)| id).find(|&e| {
+                    let m = mesh.edge_midpoint(e);
+                    (m.y - 0.0).abs() < 1e-3 && m.z > 0.99 && m.x.abs() < 0.5
+                });
                 if let Some(e) = ring_edge {
-                    let _ = app.history.apply(&mut app.edit, &Op::LoopCut { edge: e, cuts: 1 });
+                    let _ = app
+                        .history
+                        .apply(&mut app.edit, &Op::LoopCut { edge: e, cuts: 1 });
                 }
-                app.edit.selection.set_mode(SelectMode::Edge, &app.edit.mesh);
-                app.message = Some(("Loop cut: 1 cut. Alt+click an edge to select its loop.".into(), false));
+                app.edit
+                    .selection
+                    .set_mode(SelectMode::Edge, &app.edit.mesh);
+                app.message = Some((
+                    "Loop cut: 1 cut. Alt+click an edge to select its loop.".into(),
+                    false,
+                ));
             }
             "verts" => {
                 let mut sel = Selection::new(SelectMode::Vertex);
-                sel.verts = app.edit.mesh.verts().filter(|(_, v)| v.position.y > 2.0).map(|(id, _)| id).collect();
+                sel.verts = app
+                    .edit
+                    .mesh
+                    .verts()
+                    .filter(|(_, v)| v.position.y > 2.0)
+                    .map(|(id, _)| id)
+                    .collect();
                 sel.flush(&app.edit.mesh);
                 let _ = app.history.apply(&mut app.edit, &Op::Select(sel));
                 app.symmetry = true;
             }
             _ => {
                 let mesh = &app.edit.mesh;
-                let cap: Vec<FaceId> = mesh.faces().map(|(f, _)| f).filter(|&f| mesh.face_center(f).y > 1.7 && mesh.face_normal(f).y > 0.9).collect();
+                let cap: Vec<FaceId> = mesh
+                    .faces()
+                    .map(|(f, _)| f)
+                    .filter(|&f| mesh.face_center(f).y > 1.7 && mesh.face_normal(f).y > 0.9)
+                    .collect();
                 let select = Op::Select(Selection::from_faces(mesh, cap));
                 let _ = app.history.apply(&mut app.edit, &select);
-                app.message = Some(("Inset (I) then extruded (E). Ctrl+Z steps back through every edit.".into(), false));
+                app.message = Some((
+                    "Inset (I) then extruded (E). Ctrl+Z steps back through every edit.".into(),
+                    false,
+                ));
             }
         }
         app.refresh();
@@ -387,10 +483,17 @@ impl App {
 
     fn start_modal(&mut self, kind: ModalKind, mouse: Pos2) {
         if self.edit.selection.verts.is_empty() {
-            self.message = Some(("Select something first (click it, or press A for all).".into(), true));
+            self.message = Some((
+                "Select something first (click it, or press A for all).".into(),
+                true,
+            ));
             return;
         }
-        let pivot = self.edit.selection.center(&self.edit.mesh).unwrap_or(Vec3::ZERO);
+        let pivot = self
+            .edit
+            .selection
+            .center(&self.edit.mesh)
+            .unwrap_or(Vec3::ZERO);
         let mut extrude = None;
         if kind == ModalKind::Extrude {
             let op = match contextual_extrude(&self.edit.selection, 0.0, Vec3::ZERO) {
@@ -412,11 +515,17 @@ impl App {
             }
         }
         if kind == ModalKind::Bevel && self.edit.selection.edges.is_empty() {
-            self.message = Some(("Bevel works on edges: switch to edge mode (2) and select some.".into(), true));
+            self.message = Some((
+                "Bevel works on edges: switch to edge mode (2) and select some.".into(),
+                true,
+            ));
             return;
         }
         if kind == ModalKind::Inset && self.edit.selection.faces.is_empty() {
-            self.message = Some(("Inset works on faces: switch to face mode (3) and select some.".into(), true));
+            self.message = Some((
+                "Inset works on faces: switch to face mode (3) and select some.".into(),
+                true,
+            ));
             return;
         }
         self.modal = Some(Modal {
@@ -433,7 +542,9 @@ impl App {
     }
 
     fn update_modal(&mut self, mouse: Pos2, proj: &Projector, wheel: f32) {
-        let Some(mut m) = self.modal.take() else { return };
+        let Some(mut m) = self.modal.take() else {
+            return;
+        };
         if wheel != 0.0 && m.kind == ModalKind::Bevel {
             m.segments = (m.segments as i32 + wheel.signum() as i32).clamp(1, 12) as u32;
         }
@@ -452,13 +563,18 @@ impl App {
                 let axis = (proj.eye - m.pivot).normalize_or(Vec3::Y);
                 let angle = -(a1 - a0);
                 m.value_text = format!("Rotate {:.0}°", angle.to_degrees());
-                Some(Op::Transform(self.with_symmetry(Transform::rotate(Quat::from_axis_angle(axis, angle), m.pivot))))
+                Some(Op::Transform(self.with_symmetry(Transform::rotate(
+                    Quat::from_axis_angle(axis, angle),
+                    m.pivot,
+                ))))
             }
             ModalKind::Scale => {
                 let r0 = (m.start - pivot_screen).length().max(4.0);
                 let k = (mouse - pivot_screen).length() / r0;
                 m.value_text = format!("Scale {k:.2}");
-                Some(Op::Transform(self.with_symmetry(Transform::scale(Vec3::splat(k), m.pivot))))
+                Some(Op::Transform(
+                    self.with_symmetry(Transform::scale(Vec3::splat(k), m.pivot)),
+                ))
             }
             ModalKind::Extrude => {
                 if m.extrude.is_some() {
@@ -468,18 +584,41 @@ impl App {
                 } else {
                     let dist = -d.y * scale_px;
                     m.value_text = format!("Extrude {dist:.2}");
-                    Some(Op::ExtrudeFaces { distance: dist, individual: false })
+                    Some(Op::ExtrudeFaces {
+                        distance: dist,
+                        individual: false,
+                    })
                 }
             }
             ModalKind::Inset => {
-                let t = ((mouse - pivot_screen).length() - (m.start - pivot_screen).length()).abs() * scale_px * 0.5;
+                let t = ((mouse - pivot_screen).length() - (m.start - pivot_screen).length()).abs()
+                    * scale_px
+                    * 0.5;
                 m.value_text = format!("Inset {t:.2}");
-                Some(Op::Inset { thickness: t, depth: 0.0, individual: false })
+                Some(Op::Inset {
+                    thickness: t,
+                    depth: 0.0,
+                    individual: false,
+                })
             }
             ModalKind::Bevel => {
-                let w = ((mouse - pivot_screen).length() - (m.start - pivot_screen).length()).max(0.0) * scale_px * 0.5;
-                m.value_text = format!("Bevel {w:.2} · {} segment{}", m.segments, if m.segments == 1 { "" } else { "s" });
-                if w > 1e-3 { Some(Op::Bevel { width: w, segments: m.segments }) } else { None }
+                let w = ((mouse - pivot_screen).length() - (m.start - pivot_screen).length())
+                    .max(0.0)
+                    * scale_px
+                    * 0.5;
+                m.value_text = format!(
+                    "Bevel {w:.2} · {} segment{}",
+                    m.segments,
+                    if m.segments == 1 { "" } else { "s" }
+                );
+                if w > 1e-3 {
+                    Some(Op::Bevel {
+                        width: w,
+                        segments: m.segments,
+                    })
+                } else {
+                    None
+                }
             }
         };
         let key = ((d.x * 2.0) as i32, (d.y * 2.0) as i32, m.segments);
@@ -500,7 +639,11 @@ impl App {
     }
 
     fn with_symmetry(&self, xf: Transform) -> Transform {
-        if self.symmetry { xf.with_symmetry(Symmetry::default()) } else { xf }
+        if self.symmetry {
+            xf.with_symmetry(Symmetry::default())
+        } else {
+            xf
+        }
     }
 
     fn finish_modal(&mut self, confirm: bool) {
@@ -557,12 +700,13 @@ impl App {
         let (o, d) = proj.ray(s);
         let data = &self.tris.data;
         let mut best: Option<(f32, FaceId)> = None;
-        for (t, tri) in data.indices.chunks_exact(3).enumerate() {
-            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| Vec3::from_array(data.positions[i as usize]));
-            if let Some(dist) = ray_triangle(o, d, a, b, c) {
-                if best.is_none_or(|(bd, _)| dist < bd) {
-                    best = Some((dist, self.tris.triangle_faces[t]));
-                }
+        for (t, tri) in data.indices.as_chunks::<3>().0.iter().enumerate() {
+            let [a, b, c] =
+                [tri[0], tri[1], tri[2]].map(|i| Vec3::from_array(data.positions[i as usize]));
+            if let Some(dist) = ray_triangle(o, d, a, b, c)
+                && best.is_none_or(|(bd, _)| dist < bd)
+            {
+                best = Some((dist, self.tris.triangle_faces[t]));
             }
         }
         best.map(|b| b.1)
@@ -575,9 +719,14 @@ impl App {
             SelectMode::Vertex => {
                 let mut best: Option<(f32, VertId)> = None;
                 for (v, vert) in mesh.verts() {
-                    let Some((p, _)) = proj.project(vert.position) else { continue };
+                    let Some((p, _)) = proj.project(vert.position) else {
+                        continue;
+                    };
                     let dist = p.distance(s);
-                    if dist < 14.0 && best.is_none_or(|(bd, _)| dist < bd) && self.vert_visible(v, proj.eye) {
+                    if dist < 14.0
+                        && best.is_none_or(|(bd, _)| dist < bd)
+                        && self.vert_visible(v, proj.eye)
+                    {
                         best = Some((dist, v));
                     }
                 }
@@ -591,13 +740,15 @@ impl App {
         let mesh = &self.edit.mesh;
         let mut best: Option<(f32, EdgeId)> = None;
         for (e, edge) in mesh.edges() {
-            let (Some((a, _)), Some((b, _))) =
-                (proj.project(mesh.position_or_zero(edge.verts[0])), proj.project(mesh.position_or_zero(edge.verts[1])))
-            else {
+            let (Some((a, _)), Some((b, _))) = (
+                proj.project(mesh.position_or_zero(edge.verts[0])),
+                proj.project(mesh.position_or_zero(edge.verts[1])),
+            ) else {
                 continue;
             };
             let dist = segment_distance(s, a, b);
-            if dist < 10.0 && best.is_none_or(|(bd, _)| dist < bd) && self.edge_visible(e, proj.eye) {
+            if dist < 10.0 && best.is_none_or(|(bd, _)| dist < bd) && self.edge_visible(e, proj.eye)
+            {
                 best = Some((dist, e));
             }
         }
@@ -606,7 +757,11 @@ impl App {
 
     fn click(&mut self, hover: Hover, shift: bool, alt: bool, ctrl: bool) {
         let mesh = &self.edit.mesh;
-        let mut sel = if shift { self.edit.selection.clone() } else { Selection::new(self.mode()) };
+        let mut sel = if shift {
+            self.edit.selection.clone()
+        } else {
+            Selection::new(self.mode())
+        };
         sel.mode = self.mode();
         match hover {
             Hover::None => {
@@ -617,7 +772,11 @@ impl App {
             Hover::Vert(v) => sel.toggle_vert(mesh, v),
             Hover::Edge(e) => {
                 if alt {
-                    let edges: Vec<EdgeId> = if ctrl { edge_ring(mesh, e).edges } else { edge_loop(mesh, e) };
+                    let edges: Vec<EdgeId> = if ctrl {
+                        edge_ring(mesh, e).edges
+                    } else {
+                        edge_loop(mesh, e)
+                    };
                     for x in edges {
                         sel.edges.insert(x);
                     }
@@ -641,10 +800,33 @@ impl App {
     fn shortcuts(&mut self, ui: &egui::Ui, mouse: Option<Pos2>) {
         let (pressed, mods) = ui.input(|i| {
             let keys = [
-                Key::Num1, Key::Num2, Key::Num3, Key::A, Key::G, Key::R, Key::S, Key::E, Key::I, Key::B, Key::F,
-                Key::M, Key::X, Key::Delete, Key::Z, Key::Y, Key::Home, Key::Escape, Key::Enter,
+                Key::Num1,
+                Key::Num2,
+                Key::Num3,
+                Key::A,
+                Key::G,
+                Key::R,
+                Key::S,
+                Key::E,
+                Key::I,
+                Key::B,
+                Key::F,
+                Key::M,
+                Key::X,
+                Key::Delete,
+                Key::Z,
+                Key::Y,
+                Key::Home,
+                Key::Escape,
+                Key::Enter,
             ];
-            (keys.iter().copied().filter(|&k| i.key_pressed(k)).collect::<Vec<_>>(), i.modifiers)
+            (
+                keys.iter()
+                    .copied()
+                    .filter(|&k| i.key_pressed(k))
+                    .collect::<Vec<_>>(),
+                i.modifiers,
+            )
         });
         let mouse = mouse.unwrap_or_default();
         let ctrl = mods.command;
@@ -719,24 +901,39 @@ impl App {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let section = |ui: &mut egui::Ui, title: &str| {
             ui.add_space(10.0);
-            ui.label(egui::RichText::new(title.to_uppercase()).size(10.5).color(TEXT_3));
+            ui.label(
+                egui::RichText::new(title.to_uppercase())
+                    .size(10.5)
+                    .color(TEXT_3),
+            );
             ui.add_space(2.0);
         };
         let tool = |ui: &mut egui::Ui, label: &str, key: &str| -> bool {
             ui.add_sized(
                 [ui.available_width(), 26.0],
-                egui::Button::new(egui::RichText::new(label).color(TEXT)).shortcut_text(egui::RichText::new(key).color(TEXT_3).size(11.5)),
+                egui::Button::new(egui::RichText::new(label).color(TEXT))
+                    .shortcut_text(egui::RichText::new(key).color(TEXT_3).size(11.5)),
             )
             .clicked()
         };
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Modeller").font(semibold(15.0)).color(TEXT));
+        ui.label(
+            egui::RichText::new("Modeller")
+                .font(semibold(15.0))
+                .color(TEXT),
+        );
         section(ui, "Select");
         ui.horizontal(|ui| {
-            for (mode, label) in [(SelectMode::Vertex, "Vertex"), (SelectMode::Edge, "Edge"), (SelectMode::Face, "Face")] {
+            for (mode, label) in [
+                (SelectMode::Vertex, "Vertex"),
+                (SelectMode::Edge, "Edge"),
+                (SelectMode::Face, "Face"),
+            ] {
                 let on = self.mode() == mode;
                 let text = egui::RichText::new(label).color(if on { TEXT } else { TEXT_2 });
-                let b = egui::Button::new(text).selected(on).min_size(Vec2::new(58.0, 26.0));
+                let b = egui::Button::new(text)
+                    .selected(on)
+                    .min_size(Vec2::new(58.0, 26.0));
                 if ui.add(b).clicked() {
                     self.set_mode(mode);
                 }
@@ -777,7 +974,10 @@ impl App {
             ops.push(Op::CatmullClark { levels: 1 });
         }
         if tool(ui, "Mirror X", "") {
-            ops.push(Op::Mirror { axis: metallic_modeling::Axis::X, merge_distance: 1e-3 });
+            ops.push(Op::Mirror {
+                axis: metallic_modeling::Axis::X,
+                merge_distance: 1e-3,
+            });
         }
         if tool(ui, "Recalculate outside", "") {
             ops.push(Op::RecalculateOutside);
@@ -792,21 +992,47 @@ impl App {
             ops.push(Op::UvUnwrap(metallic_modeling::uv::UnwrapOptions::default()));
         }
         section(ui, "View");
-        ui.checkbox(&mut self.symmetry, egui::RichText::new("Mirror edits across X").color(TEXT_2));
-        ui.checkbox(&mut self.xray, egui::RichText::new("X-ray (Alt Z)").color(TEXT_2));
+        ui.checkbox(
+            &mut self.symmetry,
+            egui::RichText::new("Mirror edits across X").color(TEXT_2),
+        );
+        ui.checkbox(
+            &mut self.xray,
+            egui::RichText::new("X-ray (Alt Z)").color(TEXT_2),
+        );
         section(ui, "Start over");
         ui.horizontal(|ui| {
             for (label, p) in [
                 ("Cube", Primitive::Cube { size: 2.0 }),
-                ("Cylinder", Primitive::Cylinder { segments: 16, radius: 1.0, height: 2.0 }),
-                ("Sphere", Primitive::UvSphere { segments: 16, rings: 10, radius: 1.2 }),
+                (
+                    "Cylinder",
+                    Primitive::Cylinder {
+                        segments: 16,
+                        radius: 1.0,
+                        height: 2.0,
+                    },
+                ),
+                (
+                    "Sphere",
+                    Primitive::UvSphere {
+                        segments: 16,
+                        rings: 10,
+                        radius: 1.2,
+                    },
+                ),
             ] {
-                if ui.button(egui::RichText::new(label).color(TEXT_2)).clicked() {
+                if ui
+                    .button(egui::RichText::new(label).color(TEXT_2))
+                    .clicked()
+                {
                     let mut all = Selection::new(self.mode());
                     all.select_all(&self.edit.mesh);
                     ops.push(Op::Select(all));
                     ops.push(Op::Delete(DeleteKind::Verts));
-                    ops.push(Op::AddPrimitive { primitive: p, center: Vec3::ZERO });
+                    ops.push(Op::AddPrimitive {
+                        primitive: p,
+                        center: Vec3::ZERO,
+                    });
                 }
             }
         });
@@ -828,7 +1054,11 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(k).color(TEXT_2));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(v).family(FontFamily::Monospace).color(TEXT));
+                    ui.label(
+                        egui::RichText::new(v)
+                            .family(FontFamily::Monospace)
+                            .color(TEXT),
+                    );
                 });
             });
         };
@@ -837,23 +1067,42 @@ impl App {
         row(ui, "Faces", mesh.face_count().to_string());
         row(ui, "Triangles", self.tris.data.triangle_count().to_string());
         let closed = mesh.is_closed_manifold();
-        row(ui, "Watertight", if closed { "yes".into() } else { "no".into() });
+        row(
+            ui,
+            "Watertight",
+            if closed { "yes".into() } else { "no".into() },
+        );
         let s = &self.edit.selection;
-        row(ui, "Selected", format!("{} / {} / {}", s.verts.len(), s.edges.len(), s.faces.len()));
+        row(
+            ui,
+            "Selected",
+            format!("{} / {} / {}", s.verts.len(), s.edges.len(), s.faces.len()),
+        );
         ui.add_space(12.0);
-        ui.label(egui::RichText::new("History").font(semibold(15.0)).color(TEXT));
+        ui.label(
+            egui::RichText::new("History")
+                .font(semibold(15.0))
+                .color(TEXT),
+        );
         ui.add_space(4.0);
-        let labels: Vec<String> = self.history.labels().iter().map(|s| (*s).to_owned()).collect();
-        egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-            let n = labels.len();
-            for (i, l) in labels.iter().enumerate() {
-                let last = i + 1 == n;
-                ui.label(egui::RichText::new(l).color(if last { TEXT } else { TEXT_3 }));
-            }
-            if labels.is_empty() {
-                ui.label(egui::RichText::new("Your edits appear here.").color(TEXT_3));
-            }
-        });
+        let labels: Vec<String> = self
+            .history
+            .labels()
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                let n = labels.len();
+                for (i, l) in labels.iter().enumerate() {
+                    let last = i + 1 == n;
+                    ui.label(egui::RichText::new(l).color(if last { TEXT } else { TEXT_3 }));
+                }
+                if labels.is_empty() {
+                    ui.label(egui::RichText::new("Your edits appear here.").color(TEXT_3));
+                }
+            });
     }
 
     fn status_bar(&self, ui: &mut egui::Ui) {
@@ -868,7 +1117,10 @@ impl App {
             };
             format!("{what} · click or Enter to apply · Esc or right-click to cancel")
         } else if let Some(t) = &self.loop_cut {
-            format!("Loop cut: point at an edge · wheel changes cuts ({}) · click to cut · Esc to stop", t.cuts)
+            format!(
+                "Loop cut: point at an edge · wheel changes cuts ({}) · click to cut · Esc to stop",
+                t.cuts
+            )
         } else {
             match self.mode() {
                 SelectMode::Vertex => "Vertex mode · click to select, Shift+click to add · G move · E extrude · M merge · F fill",
@@ -882,7 +1134,11 @@ impl App {
             ui.label(egui::RichText::new(hint).color(TEXT_2).size(12.5));
             if let Some((msg, err)) = &self.message {
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new(msg).color(if *err { ERROR } else { TEXT_3 }).size(12.5));
+                ui.label(
+                    egui::RichText::new(msg)
+                        .color(if *err { ERROR } else { TEXT_3 })
+                        .size(12.5),
+                );
             }
         });
     }
@@ -901,7 +1157,8 @@ impl App {
         let in_view = mouse.is_some_and(|m| rect.contains(m));
         // Camera.
         let drag = response.drag_delta();
-        let orbit = (middle && !mods.shift) || (primary_down && mods.alt && self.modal.is_none() && response.dragged());
+        let orbit = (middle && !mods.shift)
+            || (primary_down && mods.alt && self.modal.is_none() && response.dragged());
         if orbit && in_view {
             self.camera.yaw -= drag.x * 0.008;
             self.camera.pitch = (self.camera.pitch + drag.y * 0.008).clamp(-1.5, 1.5);
@@ -918,7 +1175,8 @@ impl App {
         }
         let wheel_free = self.modal.is_none() && self.loop_cut.is_none();
         if in_view && wheel != 0.0 && wheel_free {
-            self.camera.distance = (self.camera.distance * (1.0 - wheel * 0.0015)).clamp(1.0, 300.0);
+            self.camera.distance =
+                (self.camera.distance * (1.0 - wheel * 0.0015)).clamp(1.0, 300.0);
         }
         let proj = Projector::new(&self.camera, rect);
         // Modal tools.
@@ -956,7 +1214,12 @@ impl App {
             } else if response.secondary_clicked() {
                 self.loop_cut = None;
             }
-        } else if self.modal.is_none() && response.clicked() && !mods.alt || (response.clicked() && mods.alt && matches!(self.hover, Hover::Edge(_)) && self.modal.is_none()) {
+        } else if self.modal.is_none() && response.clicked() && !mods.alt
+            || (response.clicked()
+                && mods.alt
+                && matches!(self.hover, Hover::Edge(_))
+                && self.modal.is_none())
+        {
             self.click(self.hover, mods.shift, mods.alt, mods.command);
         }
         self.paint(ui, rect, &proj);
@@ -969,7 +1232,10 @@ impl App {
         for i in -10..=10 {
             let f = i as f32;
             let col = if i == 0 { LINE_STRONG } else { LINE };
-            for (a, b) in [(Vec3::new(f, 0.0, -10.0), Vec3::new(f, 0.0, 10.0)), (Vec3::new(-10.0, 0.0, f), Vec3::new(10.0, 0.0, f))] {
+            for (a, b) in [
+                (Vec3::new(f, 0.0, -10.0), Vec3::new(f, 0.0, 10.0)),
+                (Vec3::new(-10.0, 0.0, f), Vec3::new(10.0, 0.0, f)),
+            ] {
                 if let (Some((pa, _)), Some((pb, _))) = (proj.project(a), proj.project(b)) {
                     painter.line_segment([pa, pb], Stroke::new(1.0, col));
                 }
@@ -977,13 +1243,18 @@ impl App {
         }
         let mesh = &self.edit.mesh;
         let sel = &self.edit.selection;
-        let light = (proj.eye - self.camera.target).normalize_or(Vec3::Y) + Vec3::new(0.3, 0.8, 0.2);
+        let light =
+            (proj.eye - self.camera.target).normalize_or(Vec3::Y) + Vec3::new(0.3, 0.8, 0.2);
         let light = light.normalize();
         // Faces, back to front.
         let data = &self.tris.data;
         let mut order: Vec<(f32, usize)> = Vec::with_capacity(self.tris.triangle_faces.len());
-        let mut screen: Vec<Option<(Pos2, f32)>> = data.positions.iter().map(|p| proj.project(Vec3::from_array(*p))).collect();
-        for (t, tri) in data.indices.chunks_exact(3).enumerate() {
+        let mut screen: Vec<Option<(Pos2, f32)>> = data
+            .positions
+            .iter()
+            .map(|p| proj.project(Vec3::from_array(*p)))
+            .collect();
+        for (t, tri) in data.indices.as_chunks::<3>().0.iter().enumerate() {
             let pts: Vec<_> = tri.iter().map(|&i| screen[i as usize]).collect();
             if pts.iter().all(Option::is_some) {
                 let depth = pts.iter().map(|p| p.map_or(0.0, |x| x.1)).sum::<f32>() / 3.0;
@@ -1012,7 +1283,12 @@ impl App {
                 rgb = rgb.map(|c| (c * 1.15).min(1.0));
             }
             let alpha = if self.xray { 150 } else { 255 };
-            let col = Color32::from_rgba_unmultiplied((rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8, alpha);
+            let col = Color32::from_rgba_unmultiplied(
+                (rgb[0] * 255.0) as u8,
+                (rgb[1] * 255.0) as u8,
+                (rgb[2] * 255.0) as u8,
+                alpha,
+            );
             let base = egui_mesh.vertices.len() as u32;
             for &i in ids {
                 if let Some((p, _)) = screen[i as usize] {
@@ -1032,9 +1308,10 @@ impl App {
             if !self.edge_visible(e, proj.eye) {
                 continue;
             }
-            let (Some((a, _)), Some((b, _))) =
-                (proj.project(mesh.position_or_zero(edge.verts[0])), proj.project(mesh.position_or_zero(edge.verts[1])))
-            else {
+            let (Some((a, _)), Some((b, _))) = (
+                proj.project(mesh.position_or_zero(edge.verts[0])),
+                proj.project(mesh.position_or_zero(edge.verts[1])),
+            ) else {
                 continue;
             };
             let (w, col) = if sel.edges.contains(&e) && self.mode() != SelectMode::Face {
@@ -1063,17 +1340,19 @@ impl App {
         // Loop-cut preview lines across the ring's quads.
         if let (Some(tool), Hover::Edge(e)) = (&self.loop_cut, self.hover) {
             let ring = edge_ring(mesh, e);
-            let mut pairs: Vec<(EdgeId, EdgeId)> = ring.edges.windows(2).map(|w| (w[0], w[1])).collect();
+            let mut pairs: Vec<(EdgeId, EdgeId)> =
+                ring.edges.windows(2).map(|w| (w[0], w[1])).collect();
             if ring.closed && ring.edges.len() > 1 {
                 pairs.push((ring.edges[ring.edges.len() - 1], ring.edges[0]));
             }
             for (e0, e1) in pairs {
                 for k in 1..=tool.cuts {
                     let t = k as f32 / (tool.cuts + 1) as f32;
-                    if let (Some(pa), Some(pb)) = (edge_point(mesh, e0, e1, t), edge_point(mesh, e1, e0, t)) {
-                        if let (Some((sa, _)), Some((sb, _))) = (proj.project(pa), proj.project(pb)) {
-                            painter.line_segment([sa, sb], Stroke::new(1.5, WARNING));
-                        }
+                    if let (Some(pa), Some(pb)) =
+                        (edge_point(mesh, e0, e1, t), edge_point(mesh, e1, e0, t))
+                        && let (Some((sa, _)), Some((sb, _))) = (proj.project(pa), proj.project(pb))
+                    {
+                        painter.line_segment([sa, sb], Stroke::new(1.5, WARNING));
                     }
                 }
             }
@@ -1084,7 +1363,9 @@ impl App {
                 if !self.vert_visible(v, proj.eye) {
                     continue;
                 }
-                let Some((p, _)) = proj.project(vert.position) else { continue };
+                let Some((p, _)) = proj.project(vert.position) else {
+                    continue;
+                };
                 if sel.verts.contains(&v) {
                     painter.circle_filled(p, 3.5, ACCENT);
                 } else if self.hover == Hover::Vert(v) {
@@ -1097,8 +1378,16 @@ impl App {
         // Axis gizmo.
         let origin = Pos2::new(rect.left() + 46.0, rect.bottom() - 46.0);
         let view = Mat4::look_at_rh(proj.eye, self.camera.target, Vec3::Y);
-        let mut axes = [(Vec3::X, AXIS_X, "X"), (Vec3::Y, AXIS_Y, "Y"), (Vec3::Z, AXIS_Z, "Z")];
-        axes.sort_by(|a, b| view.transform_vector3(a.0).z.total_cmp(&view.transform_vector3(b.0).z));
+        let mut axes = [
+            (Vec3::X, AXIS_X, "X"),
+            (Vec3::Y, AXIS_Y, "Y"),
+            (Vec3::Z, AXIS_Z, "Z"),
+        ];
+        axes.sort_by(|a, b| {
+            view.transform_vector3(a.0)
+                .z
+                .total_cmp(&view.transform_vector3(b.0).z)
+        });
         painter.circle_filled(origin, 30.0, BG_PANEL.gamma_multiply(0.9));
         for (axis, col, label) in axes {
             let d = view.transform_vector3(axis);
@@ -1116,13 +1405,30 @@ impl App {
         let galley_pos = Pos2::new(rect.left() + 14.0, rect.top() + 12.0);
         let r = painter.text(galley_pos, Align2::LEFT_TOP, badge, semibold(13.0), TEXT);
         if self.symmetry {
-            painter.text(Pos2::new(r.right() + 10.0, r.top()), Align2::LEFT_TOP, "Mirror X on", FontId::proportional(12.5), ACCENT_TEXT);
+            painter.text(
+                Pos2::new(r.right() + 10.0, r.top()),
+                Align2::LEFT_TOP,
+                "Mirror X on",
+                FontId::proportional(12.5),
+                ACCENT_TEXT,
+            );
         }
-        if let Some(m) = &self.modal {
-            if let Some(mp) = ui.input(|i| i.pointer.hover_pos()) {
-                let text_rect = painter.text(mp + Vec2::new(16.0, 14.0), Align2::LEFT_TOP, &m.value_text, FontId::monospace(12.5), TEXT);
-                painter.rect_stroke(text_rect.expand(4.0), CornerRadius::same(3), Stroke::new(1.0, LINE_STRONG), egui::StrokeKind::Outside);
-            }
+        if let Some(m) = &self.modal
+            && let Some(mp) = ui.input(|i| i.pointer.hover_pos())
+        {
+            let text_rect = painter.text(
+                mp + Vec2::new(16.0, 14.0),
+                Align2::LEFT_TOP,
+                &m.value_text,
+                FontId::monospace(12.5),
+                TEXT,
+            );
+            painter.rect_stroke(
+                text_rect.expand(4.0),
+                CornerRadius::same(3),
+                Stroke::new(1.0, LINE_STRONG),
+                egui::StrokeKind::Outside,
+            );
         }
     }
 }
@@ -1131,10 +1437,20 @@ impl App {
 fn edge_point(mesh: &metallic_modeling::Mesh, e: EdgeId, other: EdgeId, t: f32) -> Option<Vec3> {
     let edge = mesh.edge(e)?;
     let o = mesh.edge(other)?;
-    let (a, b) = (mesh.position_or_zero(edge.verts[0]), mesh.position_or_zero(edge.verts[1]));
-    let (oa, ob) = (mesh.position_or_zero(o.verts[0]), mesh.position_or_zero(o.verts[1]));
+    let (a, b) = (
+        mesh.position_or_zero(edge.verts[0]),
+        mesh.position_or_zero(edge.verts[1]),
+    );
+    let (oa, ob) = (
+        mesh.position_or_zero(o.verts[0]),
+        mesh.position_or_zero(o.verts[1]),
+    );
     // Orient both edges so their start points are on the same side of the quad.
-    let (a, b) = if a.distance(oa).min(a.distance(ob)) <= b.distance(oa).min(b.distance(ob)) { (a, b) } else { (b, a) };
+    let (a, b) = if a.distance(oa).min(a.distance(ob)) <= b.distance(oa).min(b.distance(ob)) {
+        (a, b)
+    } else {
+        (b, a)
+    };
     Some(a.lerp(b, t))
 }
 
@@ -1173,17 +1489,29 @@ impl eframe::App for App {
         self.shortcuts(ui, mouse);
         egui::Panel::bottom("status")
             .exact_size(28.0)
-            .frame(egui::Frame::NONE.fill(BG_DEEP).inner_margin(Margin::symmetric(6, 0)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(BG_DEEP)
+                    .inner_margin(Margin::symmetric(6, 0)),
+            )
             .show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("tools")
             .exact_size(206.0)
             .resizable(false)
-            .frame(egui::Frame::NONE.fill(BG_PANEL).inner_margin(Margin::symmetric(12, 8)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(BG_PANEL)
+                    .inner_margin(Margin::symmetric(12, 8)),
+            )
             .show(ui, |ui| self.toolbar(ui));
         egui::Panel::right("info")
             .exact_size(200.0)
             .resizable(false)
-            .frame(egui::Frame::NONE.fill(BG_PANEL).inner_margin(Margin::symmetric(12, 8)))
+            .frame(
+                egui::Frame::NONE
+                    .fill(BG_PANEL)
+                    .inner_margin(Margin::symmetric(12, 8)),
+            )
             .show(ui, |ui| self.side_panel(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui));
         if self.modal.is_some() || self.loop_cut.is_some() {
@@ -1219,12 +1547,17 @@ fn screenshot(path: &str, scene: &str) -> Result<(), String> {
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--screenshot") {
-        let path = args.get(i + 1).cloned().unwrap_or_else(|| "modeling_demo.png".into());
+        let path = args
+            .get(i + 1)
+            .cloned()
+            .unwrap_or_else(|| "modeling_demo.png".into());
         let scene = args.get(i + 2).cloned().unwrap_or_else(|| "faces".into());
         return screenshot(&path, &scene);
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Metallic modeller demo").with_inner_size([1440.0, 900.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Metallic modeller demo")
+            .with_inner_size([1440.0, 900.0]),
         ..Default::default()
     };
     eframe::run_native(

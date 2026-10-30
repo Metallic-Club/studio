@@ -60,7 +60,9 @@ pub enum NormalMode {
 
 impl Default for NormalMode {
     fn default() -> Self {
-        NormalMode::AutoSmooth { angle_degrees: 30.0 }
+        NormalMode::AutoSmooth {
+            angle_degrees: 30.0,
+        }
     }
 }
 
@@ -114,7 +116,10 @@ pub fn triangulate(mesh: &Mesh, mode: NormalMode) -> Triangulated {
                 if unit[around[0].index()].dot(unit[around[1].index()]) < cos_limit {
                     continue;
                 }
-                if let (Ok(a), Ok(b)) = (faces.binary_search(&around[0]), faces.binary_search(&around[1])) {
+                if let (Ok(a), Ok(b)) = (
+                    faces.binary_search(&around[0]),
+                    faces.binary_search(&around[1]),
+                ) {
                     let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
                     if ra != rb {
                         parent[ra.max(rb)] = ra.min(rb);
@@ -163,7 +168,10 @@ pub fn triangulate(mesh: &Mesh, mode: NormalMode) -> Triangulated {
         }
     }
     if !out.data.positions.is_empty() {
-        out.data.bounds = Bounds { min: lo.to_array(), max: hi.to_array() };
+        out.data.bounds = Bounds {
+            min: lo.to_array(),
+            max: hi.to_array(),
+        };
     }
     out
 }

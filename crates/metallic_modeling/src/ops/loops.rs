@@ -13,7 +13,9 @@ use crate::selection::Selection;
 /// boundary edge. Stops at poles (vertices with other valences), wire edges and non-manifold spots.
 #[must_use]
 pub fn edge_loop(mesh: &Mesh, e: EdgeId) -> Vec<EdgeId> {
-    let Some(edge) = mesh.edge(e) else { return Vec::new() };
+    let Some(edge) = mesh.edge(e) else {
+        return Vec::new();
+    };
     let boundary = mesh.is_boundary_edge(e);
     let mut out = vec![e];
     let mut seen = BTreeSet::from([e]);
@@ -21,7 +23,11 @@ pub fn edge_loop(mesh: &Mesh, e: EdgeId) -> Vec<EdgeId> {
         let mut cur = e;
         let mut v = start;
         loop {
-            let next = if boundary { next_boundary_edge(mesh, cur, v) } else { next_loop_edge(mesh, cur, v) };
+            let next = if boundary {
+                next_boundary_edge(mesh, cur, v)
+            } else {
+                next_loop_edge(mesh, cur, v)
+            };
             let Some(n) = next else { break };
             if !seen.insert(n) {
                 break;
@@ -45,8 +51,17 @@ fn next_loop_edge(mesh: &Mesh, cur: EdgeId, v: VertId) -> Option<EdgeId> {
 }
 
 fn next_boundary_edge(mesh: &Mesh, cur: EdgeId, v: VertId) -> Option<EdgeId> {
-    let candidates: Vec<EdgeId> = mesh.vert_edges(v).iter().copied().filter(|&x| x != cur && mesh.is_boundary_edge(x)).collect();
-    if candidates.len() == 1 { Some(candidates[0]) } else { None }
+    let candidates: Vec<EdgeId> = mesh
+        .vert_edges(v)
+        .iter()
+        .copied()
+        .filter(|&x| x != cur && mesh.is_boundary_edge(x))
+        .collect();
+    if candidates.len() == 1 {
+        Some(candidates[0])
+    } else {
+        None
+    }
 }
 
 /// The edge ring through `e`: edges facing each other across quads.
@@ -72,7 +87,11 @@ fn opposite_edge(mesh: &Mesh, quad: FaceId, e: EdgeId) -> Option<EdgeId> {
 /// Walks the ring through `e` in both directions.
 #[must_use]
 pub fn edge_ring(mesh: &Mesh, e: EdgeId) -> Ring {
-    let mut ring = Ring { edges: vec![e], faces: Vec::new(), closed: false };
+    let mut ring = Ring {
+        edges: vec![e],
+        faces: Vec::new(),
+        closed: false,
+    };
     if mesh.edge(e).is_none() {
         return ring;
     }
@@ -89,7 +108,9 @@ pub fn edge_ring(mesh: &Mesh, e: EdgeId) -> Ring {
             if guard > mesh.face_count() + 2 {
                 return false;
             }
-            let Some(o) = opposite_edge(mesh, cur_f, cur_e) else { return false };
+            let Some(o) = opposite_edge(mesh, cur_f, cur_e) else {
+                return false;
+            };
             faces.push(cur_f);
             if o == e {
                 return true;
@@ -102,7 +123,11 @@ pub fn edge_ring(mesh: &Mesh, e: EdgeId) -> Ring {
             if around.len() != 2 {
                 return false;
             }
-            let next = if around[0] == cur_f { around[1] } else { around[0] };
+            let next = if around[0] == cur_f {
+                around[1]
+            } else {
+                around[0]
+            };
             cur_e = o;
             cur_f = next;
         }
@@ -145,11 +170,15 @@ pub fn edge_ring(mesh: &Mesh, e: EdgeId) -> Ring {
 pub fn loop_cut(mesh: &mut Mesh, e: EdgeId, cuts: u32) -> ModelResult<Selection> {
     mesh.edge_ref(e)?;
     if cuts == 0 || cuts > 256 {
-        return Err(ModelError::InvalidParameter(format!("loop cut count {cuts}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "loop cut count {cuts}"
+        )));
     }
     let ring = edge_ring(mesh, e);
     if ring.faces.is_empty() {
-        return Err(ModelError::Unsupported("loop cut needs a quad next to the edge".into()));
+        return Err(ModelError::Unsupported(
+            "loop cut needs a quad next to the edge".into(),
+        ));
     }
     let ring_set: BTreeSet<EdgeId> = ring.edges.iter().copied().collect();
     let n = cuts as usize;
@@ -158,12 +187,18 @@ pub fn loop_cut(mesh: &mut Mesh, e: EdgeId, cuts: u32) -> ModelResult<Selection>
     for &r in &ring.edges {
         let edge = *mesh.edge_ref(r)?;
         let (p0, p1) = (mesh.position(edge.verts[0])?, mesh.position(edge.verts[1])?);
-        let pts = (1..=n).map(|k| mesh.add_vert(p0.lerp(p1, k as f32 / (n + 1) as f32))).collect();
+        let pts = (1..=n)
+            .map(|k| mesh.add_vert(p0.lerp(p1, k as f32 / (n + 1) as f32)))
+            .collect();
         splits.insert(r, pts);
     }
     let along = |mesh: &Mesh, a: VertId, b: VertId| -> ModelResult<Vec<VertId>> {
-        let r = mesh.find_edge(a, b).ok_or(ModelError::Invariant("ring edge missing".into()))?;
-        let pts = splits.get(&r).ok_or(ModelError::Invariant("split missing".into()))?;
+        let r = mesh
+            .find_edge(a, b)
+            .ok_or(ModelError::Invariant("ring edge missing".into()))?;
+        let pts = splits
+            .get(&r)
+            .ok_or(ModelError::Invariant("split missing".into()))?;
         let forward = mesh.edge_ref(r)?.verts[0] == a;
         let mut seq = vec![a];
         if forward {
@@ -179,23 +214,40 @@ pub fn loop_cut(mesh: &mut Mesh, e: EdgeId, cuts: u32) -> ModelResult<Selection>
     for &f in &ring.faces {
         let face = mesh.face_ref(f)?.clone();
         let vs = &face.verts;
-        let side_in_ring = |i: usize| mesh.find_edge(vs[i], vs[(i + 1) % 4]).is_some_and(|x| ring_set.contains(&x));
+        let side_in_ring = |i: usize| {
+            mesh.find_edge(vs[i], vs[(i + 1) % 4])
+                .is_some_and(|x| ring_set.contains(&x))
+        };
         let rot = (0..4)
             .find(|&i| side_in_ring(i) && side_in_ring((i + 2) % 4))
-            .ok_or(ModelError::Invariant("ring quad without opposite ring sides".into()))?;
+            .ok_or(ModelError::Invariant(
+                "ring quad without opposite ring sides".into(),
+            ))?;
         if side_in_ring((rot + 1) % 4) && side_in_ring((rot + 3) % 4) {
-            return Err(ModelError::Unsupported("the ring crosses the same quad twice".into()));
+            return Err(ModelError::Unsupported(
+                "the ring crosses the same quad twice".into(),
+            ));
         }
         let idx = |k: usize| (rot + k) % 4;
         let (a, b, c, d) = (vs[idx(0)], vs[idx(1)], vs[idx(2)], vs[idx(3)]);
-        let (ua, ub, uc, ud) = (face.uvs[idx(0)], face.uvs[idx(1)], face.uvs[idx(2)], face.uvs[idx(3)]);
+        let (ua, ub, uc, ud) = (
+            face.uvs[idx(0)],
+            face.uvs[idx(1)],
+            face.uvs[idx(2)],
+            face.uvs[idx(3)],
+        );
         let p = along(mesh, a, b)?;
         let q = along(mesh, d, c)?;
         for k in 0..=n {
             let t0 = k as f32 / (n + 1) as f32;
             let t1 = (k + 1) as f32 / (n + 1) as f32;
             let quad = [p[k], p[k + 1], q[k + 1], q[k]];
-            let uvs = [ua.lerp(ub, t0), ua.lerp(ub, t1), ud.lerp(uc, t1), ud.lerp(uc, t0)];
+            let uvs = [
+                ua.lerp(ub, t0),
+                ua.lerp(ub, t1),
+                ud.lerp(uc, t1),
+                ud.lerp(uc, t0),
+            ];
             if k == 0 {
                 mesh.set_face(f, &quad, &uvs)?;
             } else {
@@ -209,7 +261,12 @@ pub fn loop_cut(mesh: &mut Mesh, e: EdgeId, cuts: u32) -> ModelResult<Selection>
     // Faces outside the ring that use a ring edge get the split points inserted.
     let mut others: BTreeSet<FaceId> = BTreeSet::new();
     for &r in &ring.edges {
-        others.extend(mesh.edge_faces(r).iter().copied().filter(|f| !ring_faces.contains(f)));
+        others.extend(
+            mesh.edge_faces(r)
+                .iter()
+                .copied()
+                .filter(|f| !ring_faces.contains(f)),
+        );
     }
     for f in others {
         let face = mesh.face_ref(f)?.clone();
@@ -232,7 +289,11 @@ pub fn loop_cut(mesh: &mut Mesh, e: EdgeId, cuts: u32) -> ModelResult<Selection>
         mesh.set_face(f, &verts, &uvs)?;
     }
     mesh.remove_loose(ring.edges.iter().copied(), std::iter::empty());
-    let new_edges: Vec<EdgeId> = loops.iter().flatten().filter_map(|&(a, b)| mesh.find_edge(a, b)).collect();
+    let new_edges: Vec<EdgeId> = loops
+        .iter()
+        .flatten()
+        .filter_map(|&(a, b)| mesh.find_edge(a, b))
+        .collect();
     Ok(Selection::from_edges(mesh, new_edges))
 }
 
@@ -248,12 +309,19 @@ pub fn edge_chains(mesh: &Mesh, edges: &BTreeSet<EdgeId>) -> ModelResult<Vec<(Ve
         adj.entry(edge.verts[1]).or_default().push(edge.verts[0]);
     }
     if adj.values().any(|n| n.len() > 2) {
-        return Err(ModelError::Unsupported("selected edges branch; select simple loops".into()));
+        return Err(ModelError::Unsupported(
+            "selected edges branch; select simple loops".into(),
+        ));
     }
     let mut used: BTreeSet<VertId> = BTreeSet::new();
     let mut chains = Vec::new();
     // Open chains first (start at an end), then closed loops.
-    let starts: Vec<VertId> = adj.iter().filter(|(_, n)| n.len() == 1).map(|(&v, _)| v).chain(adj.keys().copied()).collect();
+    let starts: Vec<VertId> = adj
+        .iter()
+        .filter(|(_, n)| n.len() == 1)
+        .map(|(&v, _)| v)
+        .chain(adj.keys().copied())
+        .collect();
     for s in starts {
         if used.contains(&s) {
             continue;
@@ -264,7 +332,10 @@ pub fn edge_chains(mesh: &Mesh, edges: &BTreeSet<EdgeId>) -> ModelResult<Vec<(Ve
         let mut cur = s;
         let mut closed = false;
         loop {
-            let next = adj[&cur].iter().copied().find(|&n| Some(n) != prev && !used.contains(&n));
+            let next = adj[&cur]
+                .iter()
+                .copied()
+                .find(|&n| Some(n) != prev && !used.contains(&n));
             match next {
                 Some(n) => {
                     used.insert(n);
@@ -297,7 +368,10 @@ pub fn bridge_edge_loops(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>) -> ModelResu
     }
     let chains = edge_chains(mesh, edges)?;
     if chains.len() != 2 {
-        return Err(ModelError::Unsupported(format!("bridge needs exactly two edge loops, found {}", chains.len())));
+        return Err(ModelError::Unsupported(format!(
+            "bridge needs exactly two edge loops, found {}",
+            chains.len()
+        )));
     }
     let (l, l_closed) = chains[0].clone();
     let (m, m_closed) = chains[1].clone();
@@ -359,7 +433,12 @@ pub fn bridge_edge_loops(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>) -> ModelResu
         }
         quad.dedup();
         if quad.len() >= 3 {
-            let uvs = [Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0)];
+            let uvs = [
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(1.0, 1.0),
+                Vec2::new(0.0, 1.0),
+            ];
             faces.push(mesh.add_face_with_uvs(&quad, &uvs[..quad.len()])?);
         }
     }
@@ -370,7 +449,9 @@ pub fn bridge_edge_loops(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>) -> ModelResu
 /// disagrees, 0 when the edge has no face.
 fn consistency(mesh: &Mesh, a: VertId, b: VertId, flip: bool) -> i64 {
     let (a, b) = if flip { (b, a) } else { (a, b) };
-    let Some(e) = mesh.find_edge(a, b) else { return 0 };
+    let Some(e) = mesh.find_edge(a, b) else {
+        return 0;
+    };
     let mut s = 0;
     for &f in mesh.edge_faces(e) {
         if let Some(face) = mesh.face(f) {
@@ -387,5 +468,10 @@ fn consistency(mesh: &Mesh, a: VertId, b: VertId, flip: bool) -> i64 {
 /// Average position of a loop (used by callers for previews).
 #[must_use]
 pub fn loop_center(mesh: &Mesh, verts: &[VertId]) -> Vec3 {
-    crate::geom::centroid(&verts.iter().map(|&v| mesh.position_or_zero(v)).collect::<Vec<_>>())
+    crate::geom::centroid(
+        &verts
+            .iter()
+            .map(|&v| mesh.position_or_zero(v))
+            .collect::<Vec<_>>(),
+    )
 }

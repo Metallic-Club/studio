@@ -27,7 +27,9 @@ pub fn mirror(
         return Err(ModelError::NothingSelected("geometry to mirror"));
     }
     if !(merge_distance.is_finite() && merge_distance >= 0.0) {
-        return Err(ModelError::InvalidParameter(format!("mirror merge distance {merge_distance}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "mirror merge distance {merge_distance}"
+        )));
     }
     let mut all_verts: BTreeSet<VertId> = verts.clone();
     for &f in faces {
@@ -50,7 +52,9 @@ pub fn mirror(
     // Wire edges between selected vertices.
     let wires: Vec<(VertId, VertId)> = mesh
         .edges()
-        .filter(|(e, edge)| mesh.edge_faces(*e).is_empty() && edge.verts.iter().all(|v| all_verts.contains(v)))
+        .filter(|(e, edge)| {
+            mesh.edge_faces(*e).is_empty() && edge.verts.iter().all(|v| all_verts.contains(v))
+        })
         .map(|(_, edge)| (edge.verts[0], edge.verts[1]))
         .collect();
     for (a, b) in wires {

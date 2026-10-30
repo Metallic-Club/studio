@@ -62,7 +62,10 @@ pub struct Symmetry {
 
 impl Default for Symmetry {
     fn default() -> Self {
-        Self { axis: Axis::X, tolerance: 1e-4 }
+        Self {
+            axis: Axis::X,
+            tolerance: 1e-4,
+        }
     }
 }
 
@@ -83,7 +86,13 @@ pub struct Transform {
 
 impl Default for Transform {
     fn default() -> Self {
-        Self { translation: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE, pivot: Vec3::ZERO, symmetry: None }
+        Self {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+            pivot: Vec3::ZERO,
+            symmetry: None,
+        }
     }
 }
 
@@ -91,19 +100,30 @@ impl Transform {
     /// A pure move.
     #[must_use]
     pub fn translate(offset: Vec3) -> Self {
-        Self { translation: offset, ..Self::default() }
+        Self {
+            translation: offset,
+            ..Self::default()
+        }
     }
 
     /// A rotation about `pivot`.
     #[must_use]
     pub fn rotate(rotation: Quat, pivot: Vec3) -> Self {
-        Self { rotation, pivot, ..Self::default() }
+        Self {
+            rotation,
+            pivot,
+            ..Self::default()
+        }
     }
 
     /// A scale about `pivot`.
     #[must_use]
     pub fn scale(scale: Vec3, pivot: Vec3) -> Self {
-        Self { scale, pivot, ..Self::default() }
+        Self {
+            scale,
+            pivot,
+            ..Self::default()
+        }
     }
 
     /// Turns on symmetric editing.
@@ -129,8 +149,14 @@ pub fn transform(mesh: &mut Mesh, verts: &BTreeSet<VertId>, xf: &Transform) -> M
     if verts.is_empty() {
         return Err(ModelError::NothingSelected("vertices to transform"));
     }
-    if !(xf.translation.is_finite() && xf.rotation.is_finite() && xf.scale.is_finite() && xf.pivot.is_finite()) {
-        return Err(ModelError::InvalidParameter("transform has a non-finite component".into()));
+    if !(xf.translation.is_finite()
+        && xf.rotation.is_finite()
+        && xf.scale.is_finite()
+        && xf.pivot.is_finite())
+    {
+        return Err(ModelError::InvalidParameter(
+            "transform has a non-finite component".into(),
+        ));
     }
     let mut targets: BTreeMap<VertId, Vec3> = BTreeMap::new();
     for &v in verts {
@@ -150,11 +176,11 @@ pub fn transform(mesh: &mut Mesh, verts: &BTreeSet<VertId>, xf: &Transform) -> M
                 }
                 continue;
             }
-            if let Some(&m) = partners.get(&v) {
-                if !verts.contains(&m) {
-                    let moved = targets.get(&v).copied().unwrap_or(p);
-                    targets.insert(m, sym.axis.mirror(moved));
-                }
+            if let Some(&m) = partners.get(&v)
+                && !verts.contains(&m)
+            {
+                let moved = targets.get(&v).copied().unwrap_or(p);
+                targets.insert(m, sym.axis.mirror(moved));
             }
         }
     }
@@ -168,10 +194,18 @@ pub fn transform(mesh: &mut Mesh, verts: &BTreeSet<VertId>, xf: &Transform) -> M
 #[must_use]
 pub fn mirror_partners(mesh: &Mesh, sym: Symmetry) -> BTreeMap<VertId, VertId> {
     let cell = sym.tolerance.max(1e-6) * 4.0;
-    let quant = |p: Vec3| ((p.x / cell).round() as i64, (p.y / cell).round() as i64, (p.z / cell).round() as i64);
+    let quant = |p: Vec3| {
+        (
+            (p.x / cell).round() as i64,
+            (p.y / cell).round() as i64,
+            (p.z / cell).round() as i64,
+        )
+    };
     let mut grid: BTreeMap<(i64, i64, i64), Vec<(VertId, Vec3)>> = BTreeMap::new();
     for (id, v) in mesh.verts() {
-        grid.entry(quant(v.position)).or_default().push((id, v.position));
+        grid.entry(quant(v.position))
+            .or_default()
+            .push((id, v.position));
     }
     let mut out = BTreeMap::new();
     for (id, v) in mesh.verts() {
@@ -184,7 +218,10 @@ pub fn mirror_partners(mesh: &Mesh, sym: Symmetry) -> BTreeMap<VertId, VertId> {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    for &(other, q) in grid.get(&(cx + dx, cy + dy, cz + dz)).map_or(&[][..], Vec::as_slice) {
+                    for &(other, q) in grid
+                        .get(&(cx + dx, cy + dy, cz + dz))
+                        .map_or(&[][..], Vec::as_slice)
+                    {
                         let d = q.distance(target);
                         if other != id && d <= sym.tolerance && best.is_none_or(|(bd, _)| d < bd) {
                             best = Some((d, other));

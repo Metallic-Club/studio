@@ -20,7 +20,12 @@ use crate::selection::{SelectMode, Selection};
 ///
 /// # Errors
 /// [`ModelError::NothingSelected`] or [`ModelError::MissingFace`].
-pub fn extrude_faces(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, distance: f32, individual: bool) -> ModelResult<Selection> {
+pub fn extrude_faces(
+    mesh: &mut Mesh,
+    faces: &BTreeSet<FaceId>,
+    distance: f32,
+    individual: bool,
+) -> ModelResult<Selection> {
     if faces.is_empty() {
         return Err(ModelError::NothingSelected("faces to extrude"));
     }
@@ -51,9 +56,15 @@ fn extrude_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, distance: f32) -> 
         region_verts.extend(face.verts.iter().copied());
         region_normal += geom::newell(&mesh.face_positions(f));
         for (a, b) in face.directed_edges() {
-            let e = mesh.find_edge(a, b).ok_or(ModelError::Invariant("face side without edge".into()))?;
+            let e = mesh
+                .find_edge(a, b)
+                .ok_or(ModelError::Invariant("face side without edge".into()))?;
             region_edges.insert(e);
-            let inside = mesh.edge_faces(e).iter().filter(|g| region.contains(g)).count();
+            let inside = mesh
+                .edge_faces(e)
+                .iter()
+                .filter(|g| region.contains(g))
+                .count();
             if inside == 1 {
                 boundary.push((a, b, f));
             }
@@ -89,8 +100,11 @@ fn extrude_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, distance: f32) -> 
         }
         return Ok(());
     }
-    let old_flags: Vec<(VertId, VertId, crate::mesh::EdgeFlags)> =
-        region_edges.iter().filter_map(|&e| mesh.edge(e)).map(|e| (e.verts[0], e.verts[1], e.flags)).collect();
+    let old_flags: Vec<(VertId, VertId, crate::mesh::EdgeFlags)> = region_edges
+        .iter()
+        .filter_map(|&e| mesh.edge(e))
+        .map(|e| (e.verts[0], e.verts[1], e.flags))
+        .collect();
     for &f in region {
         let face = mesh.face_ref(f)?.clone();
         let verts: Vec<VertId> = face.verts.iter().map(mapped).collect();
@@ -98,7 +112,10 @@ fn extrude_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, distance: f32) -> 
     }
     for (a, b, f) in &boundary {
         let face = mesh.face_ref(*f)?;
-        let uv_of = |v: VertId| face.position_of(map.get(&v).copied().unwrap_or(v)).map_or(Vec2::ZERO, |i| face.uvs[i]);
+        let uv_of = |v: VertId| {
+            face.position_of(map.get(&v).copied().unwrap_or(v))
+                .map_or(Vec2::ZERO, |i| face.uvs[i])
+        };
         let (ua, ub) = (uv_of(*a), uv_of(*b));
         mesh.add_face_with_uvs(&[*a, *b, mapped(b), mapped(a)], &[ua, ub, ub, ua])?;
     }
@@ -118,7 +135,11 @@ fn extrude_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, distance: f32) -> 
 ///
 /// # Errors
 /// [`ModelError::NothingSelected`] or [`ModelError::MissingEdge`].
-pub fn extrude_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, offset: Vec3) -> ModelResult<Selection> {
+pub fn extrude_edges(
+    mesh: &mut Mesh,
+    edges: &BTreeSet<EdgeId>,
+    offset: Vec3,
+) -> ModelResult<Selection> {
     if edges.is_empty() {
         return Err(ModelError::NothingSelected("edges to extrude"));
     }
@@ -138,8 +159,15 @@ pub fn extrude_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, offset: Vec3) ->
         let [a, b] = edge.verts;
         let (na, nb) = (map[&a], map[&b]);
         let faces = mesh.edge_faces(e).to_vec();
-        let forward = faces.len() == 1 && mesh.face(faces[0]).is_some_and(|f| f.has_directed_edge(a, b));
-        let quad = if forward { [b, a, na, nb] } else { [a, b, nb, na] };
+        let forward = faces.len() == 1
+            && mesh
+                .face(faces[0])
+                .is_some_and(|f| f.has_directed_edge(a, b));
+        let quad = if forward {
+            [b, a, na, nb]
+        } else {
+            [a, b, nb, na]
+        };
         mesh.add_face(&quad)?;
         if let Some(ne) = mesh.find_edge(na, nb) {
             new_edges.push(ne);
@@ -152,7 +180,11 @@ pub fn extrude_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, offset: Vec3) ->
 ///
 /// # Errors
 /// [`ModelError::NothingSelected`] or [`ModelError::MissingVert`].
-pub fn extrude_verts(mesh: &mut Mesh, verts: &BTreeSet<VertId>, offset: Vec3) -> ModelResult<Selection> {
+pub fn extrude_verts(
+    mesh: &mut Mesh,
+    verts: &BTreeSet<VertId>,
+    offset: Vec3,
+) -> ModelResult<Selection> {
     if verts.is_empty() {
         return Err(ModelError::NothingSelected("vertices to extrude"));
     }

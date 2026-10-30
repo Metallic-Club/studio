@@ -17,7 +17,9 @@ fn loop_consistency(mesh: &Mesh, lp: &[VertId]) -> i64 {
     let mut s = 0;
     for i in 0..n {
         let (a, b) = (lp[i], lp[(i + 1) % n]);
-        let Some(e) = mesh.find_edge(a, b) else { continue };
+        let Some(e) = mesh.find_edge(a, b) else {
+            continue;
+        };
         for &f in mesh.edge_faces(e) {
             if let Some(face) = mesh.face(f) {
                 if face.has_directed_edge(b, a) {
@@ -33,7 +35,10 @@ fn loop_consistency(mesh: &Mesh, lp: &[VertId]) -> i64 {
 
 /// Orders loose vertices into a loop by angle around their centre in their best-fit plane.
 fn order_by_angle(mesh: &Mesh, verts: &BTreeSet<VertId>) -> Vec<VertId> {
-    let pts: Vec<(VertId, Vec3)> = verts.iter().map(|&v| (v, mesh.position_or_zero(v))).collect();
+    let pts: Vec<(VertId, Vec3)> = verts
+        .iter()
+        .map(|&v| (v, mesh.position_or_zero(v)))
+        .collect();
     let c = geom::centroid(&pts.iter().map(|x| x.1).collect::<Vec<_>>());
     // Best-fit normal: largest cross product of spokes.
     let mut n = Vec3::ZERO;
@@ -63,7 +68,10 @@ pub fn fill(mesh: &mut Mesh, sel: &Selection) -> ModelResult<Selection> {
     let mut lp: Vec<VertId> = if !sel.edges.is_empty() {
         let chains = edge_chains(mesh, &sel.edges)?;
         if chains.len() != 1 {
-            return Err(ModelError::Unsupported(format!("fill needs one edge loop, found {}", chains.len())));
+            return Err(ModelError::Unsupported(format!(
+                "fill needs one edge loop, found {}",
+                chains.len()
+            )));
         }
         chains[0].0.clone()
     } else if sel.verts.len() == 2 {
@@ -76,17 +84,29 @@ pub fn fill(mesh: &mut Mesh, sel: &Selection) -> ModelResult<Selection> {
     } else if sel.verts.len() >= 3 {
         order_by_angle(mesh, &sel.verts)
     } else {
-        return Err(ModelError::NothingSelected("an edge loop or three vertices to fill"));
+        return Err(ModelError::NothingSelected(
+            "an edge loop or three vertices to fill",
+        ));
     };
     if lp.len() < 3 {
-        return Err(ModelError::Unsupported("fill needs at least three vertices".into()));
+        return Err(ModelError::Unsupported(
+            "fill needs at least three vertices".into(),
+        ));
     }
     if loop_consistency(mesh, &lp) < 0 {
         lp.reverse();
     } else if loop_consistency(mesh, &lp) == 0 {
         // No neighbours: face the camera-agnostic default, normal pointing away from the mesh centre.
-        let n = geom::newell(&lp.iter().map(|&v| mesh.position_or_zero(v)).collect::<Vec<_>>());
-        let c = geom::centroid(&lp.iter().map(|&v| mesh.position_or_zero(v)).collect::<Vec<_>>());
+        let n = geom::newell(
+            &lp.iter()
+                .map(|&v| mesh.position_or_zero(v))
+                .collect::<Vec<_>>(),
+        );
+        let c = geom::centroid(
+            &lp.iter()
+                .map(|&v| mesh.position_or_zero(v))
+                .collect::<Vec<_>>(),
+        );
         let mesh_c = mesh.bounds().map_or(Vec3::ZERO, |(lo, hi)| (lo + hi) * 0.5);
         if n.dot(c - mesh_c) < 0.0 {
             lp.reverse();
@@ -102,15 +122,24 @@ pub fn fill(mesh: &mut Mesh, sel: &Selection) -> ModelResult<Selection> {
 ///
 /// # Errors
 /// [`ModelError::Unsupported`] for anything but one closed loop with an even vertex count, or a bad span.
-pub fn grid_fill(mesh: &mut Mesh, sel: &Selection, span: Option<u32>, offset: u32) -> ModelResult<Selection> {
+pub fn grid_fill(
+    mesh: &mut Mesh,
+    sel: &Selection,
+    span: Option<u32>,
+    offset: u32,
+) -> ModelResult<Selection> {
     let chains = edge_chains(mesh, &sel.edges)?;
     if chains.len() != 1 || !chains[0].1 {
-        return Err(ModelError::Unsupported("grid fill needs one closed edge loop".into()));
+        return Err(ModelError::Unsupported(
+            "grid fill needs one closed edge loop".into(),
+        ));
     }
     let mut lp = chains[0].0.clone();
     let l = lp.len();
     if l < 4 || l % 2 != 0 {
-        return Err(ModelError::Unsupported(format!("grid fill needs an even loop of 4+ vertices, found {l}")));
+        return Err(ModelError::Unsupported(format!(
+            "grid fill needs an even loop of 4+ vertices, found {l}"
+        )));
     }
     if loop_consistency(mesh, &lp) < 0 {
         lp.reverse();
@@ -119,7 +148,9 @@ pub fn grid_fill(mesh: &mut Mesh, sel: &Selection, span: Option<u32>, offset: u3
     let half = l / 2;
     let w = span.map_or((l / 4).max(1), |s| s as usize);
     if w == 0 || w >= half {
-        return Err(ModelError::InvalidParameter(format!("grid fill span {w} for a loop of {l}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "grid fill span {w} for a loop of {l}"
+        )));
     }
     let h = half - w;
     let lpos: Vec<Vec3> = lp.iter().map(|&v| mesh.position_or_zero(v)).collect();
@@ -149,7 +180,10 @@ pub fn grid_fill(mesh: &mut Mesh, sel: &Selection, span: Option<u32>, offset: u3
                 let (u, v) = (i as f32 / w as f32, j as f32 / h as f32);
                 let ruled_u = bpos(i, 0) * (1.0 - v) + bpos(i, h) * v;
                 let ruled_v = bpos(0, j) * (1.0 - u) + bpos(w, j) * u;
-                let bilinear = p00 * (1.0 - u) * (1.0 - v) + p10 * u * (1.0 - v) + p01 * (1.0 - u) * v + p11 * u * v;
+                let bilinear = p00 * (1.0 - u) * (1.0 - v)
+                    + p10 * u * (1.0 - v)
+                    + p01 * (1.0 - u) * v
+                    + p11 * u * v;
                 mesh.add_vert(ruled_u + ruled_v - bilinear)
             };
             col.push(id);
@@ -158,7 +192,12 @@ pub fn grid_fill(mesh: &mut Mesh, sel: &Selection, span: Option<u32>, offset: u3
     let mut faces = Vec::new();
     for i in 0..w {
         for j in 0..h {
-            let quad = [grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]];
+            let quad = [
+                grid[i][j],
+                grid[i + 1][j],
+                grid[i + 1][j + 1],
+                grid[i][j + 1],
+            ];
             let uvs = [
                 Vec2::new(i as f32 / w as f32, j as f32 / h as f32),
                 Vec2::new((i + 1) as f32 / w as f32, j as f32 / h as f32),

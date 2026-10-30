@@ -42,7 +42,10 @@ pub(crate) struct Arena<T> {
 
 impl<T> Default for Arena<T> {
     fn default() -> Self {
-        Self { slots: Vec::new(), live: 0 }
+        Self {
+            slots: Vec::new(),
+            live: 0,
+        }
     }
 }
 
@@ -86,6 +89,9 @@ impl<T> Arena<T> {
 
     /// Live elements in id order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &T)> + '_ {
-        self.slots.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|v| (i as u32, v)))
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.as_ref().map(|v| (i as u32, v)))
     }
 }

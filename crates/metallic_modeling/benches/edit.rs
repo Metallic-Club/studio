@@ -10,7 +10,13 @@ use metallic_modeling::{EditMesh, MeshCommand, NormalMode, Op, Primitive, Select
 
 /// 317 x 317 = 100 489 quads.
 fn big_grid() -> EditMesh {
-    let mesh = Primitive::Grid { x: 317, z: 317, size: 100.0 }.build(Vec3::ZERO).unwrap_or_default();
+    let mesh = Primitive::Grid {
+        x: 317,
+        z: 317,
+        size: 100.0,
+    }
+    .build(Vec3::ZERO)
+    .unwrap_or_default();
     EditMesh::new(mesh)
 }
 
@@ -24,8 +30,19 @@ fn bench(c: &mut Criterion) {
     let all = Selection::from_faces(&base.mesh, base.mesh.face_ids());
     group.bench_function("extrude_region", |b| {
         b.iter_batched(
-            || EditMesh { mesh: base.mesh.clone(), selection: all.clone() },
-            |mut edit| black_box(MeshCommand::run(&mut edit, &Op::ExtrudeFaces { distance: 1.0, individual: false })),
+            || EditMesh {
+                mesh: base.mesh.clone(),
+                selection: all.clone(),
+            },
+            |mut edit| {
+                black_box(MeshCommand::run(
+                    &mut edit,
+                    &Op::ExtrudeFaces {
+                        distance: 1.0,
+                        individual: false,
+                    },
+                ))
+            },
             criterion::BatchSize::LargeInput,
         );
     });
@@ -37,7 +54,13 @@ fn bench(c: &mut Criterion) {
             || base.clone(),
             |mut edit| {
                 edit.selection = Selection::from_faces(&edit.mesh, edit.mesh.face_ids());
-                let cmd = MeshCommand::run(&mut edit, &Op::ExtrudeFaces { distance: 1.0, individual: false });
+                let cmd = MeshCommand::run(
+                    &mut edit,
+                    &Op::ExtrudeFaces {
+                        distance: 1.0,
+                        individual: false,
+                    },
+                );
                 black_box((cmd.is_ok(), triangulate(&edit.mesh, NormalMode::default())))
             },
             criterion::BatchSize::LargeInput,

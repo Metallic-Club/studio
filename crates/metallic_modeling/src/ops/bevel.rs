@@ -40,7 +40,10 @@ impl Ctx {
         }
         let other = other_edge_at(mesh, f, v, e)?;
         if self.beveled.contains(&other) {
-            self.corner.get(&(v, f)).copied().ok_or_else(|| ModelError::Invariant("bevel corner point missing".into()))
+            self.corner
+                .get(&(v, f))
+                .copied()
+                .ok_or_else(|| ModelError::Invariant("bevel corner point missing".into()))
         } else {
             Ok(self.slide.get(&(v, other)).copied().unwrap_or(v))
         }
@@ -50,9 +53,15 @@ impl Ctx {
 /// The incoming and outgoing edges of face `f` at corner `v`.
 fn corner_edges(mesh: &Mesh, f: FaceId, v: VertId) -> ModelResult<(EdgeId, EdgeId)> {
     let face = mesh.face_ref(f)?;
-    let (prev, next) = face.neighbours(v).ok_or(ModelError::Invariant("vertex not in face".into()))?;
-    let e_in = mesh.find_edge(prev, v).ok_or(ModelError::Invariant("missing edge".into()))?;
-    let e_out = mesh.find_edge(v, next).ok_or(ModelError::Invariant("missing edge".into()))?;
+    let (prev, next) = face
+        .neighbours(v)
+        .ok_or(ModelError::Invariant("vertex not in face".into()))?;
+    let e_in = mesh
+        .find_edge(prev, v)
+        .ok_or(ModelError::Invariant("missing edge".into()))?;
+    let e_out = mesh
+        .find_edge(v, next)
+        .ok_or(ModelError::Invariant("missing edge".into()))?;
     Ok((e_in, e_out))
 }
 
@@ -74,12 +83,19 @@ fn edge_dir(mesh: &Mesh, e: EdgeId, from: VertId) -> ModelResult<Vec3> {
 /// # Errors
 /// [`ModelError::NothingSelected`], [`ModelError::InvalidParameter`], [`ModelError::NonManifold`], or
 /// [`ModelError::Unsupported`] when the width is so large that new points overlap.
-pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segments: u32) -> ModelResult<Selection> {
+pub fn bevel_edges(
+    mesh: &mut Mesh,
+    edges: &BTreeSet<EdgeId>,
+    width: f32,
+    segments: u32,
+) -> ModelResult<Selection> {
     if edges.is_empty() {
         return Err(ModelError::NothingSelected("edges to bevel"));
     }
     if !(width.is_finite() && width > 0.0) || segments == 0 || segments > MAX_BEVEL_SEGMENTS {
-        return Err(ModelError::InvalidParameter(format!("bevel width {width}, segments {segments}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "bevel width {width}, segments {segments}"
+        )));
     }
     // Validate and gather.
     let mut verts: BTreeSet<VertId> = BTreeSet::new();
@@ -88,23 +104,40 @@ pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segmen
         let edge = *mesh.edge_ref(e)?;
         let faces = mesh.edge_faces(e);
         if faces.len() != 2 {
-            return Err(ModelError::NonManifold(format!("bevel needs two faces on edge {e:?}, found {}", faces.len())));
+            return Err(ModelError::NonManifold(format!(
+                "bevel needs two faces on edge {e:?}, found {}",
+                faces.len()
+            )));
         }
         let [a, b] = edge.verts;
-        let f1 = faces.iter().copied().find(|&f| mesh.face(f).is_some_and(|x| x.has_directed_edge(a, b)));
-        let f2 = faces.iter().copied().find(|&f| mesh.face(f).is_some_and(|x| x.has_directed_edge(b, a)));
+        let f1 = faces
+            .iter()
+            .copied()
+            .find(|&f| mesh.face(f).is_some_and(|x| x.has_directed_edge(a, b)));
+        let f2 = faces
+            .iter()
+            .copied()
+            .find(|&f| mesh.face(f).is_some_and(|x| x.has_directed_edge(b, a)));
         let (Some(f1), Some(f2)) = (f1, f2) else {
-            return Err(ModelError::NonManifold(format!("faces around edge {e:?} disagree on winding")));
+            return Err(ModelError::NonManifold(format!(
+                "faces around edge {e:?} disagree on winding"
+            )));
         };
         sides.insert(e, (f1, f2));
         verts.extend(edge.verts);
     }
     let mut fans: BTreeMap<VertId, Fan> = BTreeMap::new();
     for &v in &verts {
-        let fan = mesh.vert_fan(v).ok_or_else(|| ModelError::NonManifold(format!("vertex {v:?} is not a manifold fan")))?;
+        let fan = mesh.vert_fan(v).ok_or_else(|| {
+            ModelError::NonManifold(format!("vertex {v:?} is not a manifold fan"))
+        })?;
         fans.insert(v, fan);
     }
-    let mut ctx = Ctx { beveled: edges.clone(), slide: BTreeMap::new(), corner: BTreeMap::new() };
+    let mut ctx = Ctx {
+        beveled: edges.clone(),
+        slide: BTreeMap::new(),
+        corner: BTreeMap::new(),
+    };
 
     // 1. Slide points on non-beveled edges, corner points between two beveled edges.
     for (&v, fan) in &fans {
@@ -131,7 +164,9 @@ pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segmen
             if !slides.is_empty() {
                 let s = slides.iter().sum::<f32>() / slides.len() as f32;
                 if s >= len * limit {
-                    return Err(ModelError::Unsupported(format!("bevel width {width} is wider than a neighbouring edge")));
+                    return Err(ModelError::Unsupported(format!(
+                        "bevel width {width} is wider than a neighbouring edge"
+                    )));
                 }
                 let id = mesh.add_vert(p + d * s);
                 ctx.slide.insert((v, e), id);
@@ -189,7 +224,8 @@ pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segmen
     for fan in fans.values() {
         touched_faces.extend(fan.faces.iter().copied());
     }
-    let mut new_loops: BTreeMap<FaceId, Vec<(VertId, glam::Vec2, Option<VertId>)>> = BTreeMap::new();
+    let mut new_loops: BTreeMap<FaceId, Vec<(VertId, glam::Vec2, Option<VertId>)>> =
+        BTreeMap::new();
     for &f in &touched_faces {
         let face = mesh.face_ref(f)?.clone();
         let mut out: Vec<(VertId, glam::Vec2, Option<VertId>)> = Vec::new();
@@ -225,7 +261,9 @@ pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segmen
             ring.push(q);
             if ctx.beveled.contains(&e_out) {
                 bevel_count += 1;
-                let pts = profiles.get(&(e_out, v)).ok_or(ModelError::Invariant("missing profile".into()))?;
+                let pts = profiles
+                    .get(&(e_out, v))
+                    .ok_or(ModelError::Invariant("missing profile".into()))?;
                 let (f1, _) = sides[&e_out];
                 let mids = &pts[1..pts.len() - 1];
                 if f == f1 {
@@ -253,19 +291,31 @@ pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segmen
                     at = Some((i, e_out));
                 }
             }
-            let (i, e) = at.ok_or(ModelError::Invariant("bevel: beveled edge not in fan".into()))?;
-            let pts = profiles.get(&(e, v)).ok_or(ModelError::Invariant("missing profile".into()))?;
+            let (i, e) = at.ok_or(ModelError::Invariant(
+                "bevel: beveled edge not in fan".into(),
+            ))?;
+            let pts = profiles
+                .get(&(e, v))
+                .ok_or(ModelError::Invariant("missing profile".into()))?;
             // From the rail in the face before the edge to the rail in the face after it.
-            let path: Vec<VertId> =
-                if fan.faces[i] == sides[&e].0 { pts.clone() } else { pts.iter().rev().copied().collect() };
+            let path: Vec<VertId> = if fan.faces[i] == sides[&e].0 {
+                pts.clone()
+            } else {
+                pts.iter().rev().copied().collect()
+            };
             let chain: Vec<FaceId> = (2..m).map(|k| fan.faces[(i + k) % m]).collect();
             let (n, last) = (chain.len(), path.len() - 1);
             // Chain position j (0 = after the edge, n = before it) to a profile index, walking the path backwards.
             let index = |j: usize| ((last as f32) * (1.0 - j as f32 / n as f32)).round() as usize;
             for (j, &f) in chain.iter().enumerate() {
                 let (hi, lo) = (index(j), index(j + 1));
-                let lp = new_loops.get_mut(&f).ok_or(ModelError::Invariant("bevel: chain face".into()))?;
-                let pos = lp.iter().position(|c| c.2 == Some(v)).ok_or(ModelError::Invariant("bevel: corner".into()))?;
+                let lp = new_loops
+                    .get_mut(&f)
+                    .ok_or(ModelError::Invariant("bevel: chain face".into()))?;
+                let pos = lp
+                    .iter()
+                    .position(|c| c.2 == Some(v))
+                    .ok_or(ModelError::Invariant("bevel: corner".into()))?;
                 let uv = lp[pos].1;
                 lp.splice(pos..pos + 2, (lo..=hi).rev().map(|k| (path[k], uv, None)));
                 if j + 1 < n {
@@ -293,22 +343,27 @@ pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segmen
             verts_out.pop();
             uvs_out.pop();
         }
-        mesh.set_face(f, &verts_out, &uvs_out)
-            .map_err(|_| ModelError::Unsupported("bevel width too large for this geometry".into()))?;
+        mesh.set_face(f, &verts_out, &uvs_out).map_err(|_| {
+            ModelError::Unsupported("bevel width too large for this geometry".into())
+        })?;
     }
     let mut strip_faces = Vec::new();
-    for (&e, _) in &sides {
+    for &e in sides.keys() {
         let edge = *mesh.edge_ref(e)?;
         let [a, b] = edge.verts;
         let (pa, pb) = (&profiles[&(e, a)], &profiles[&(e, b)]);
         for k in 0..segments as usize {
             let quad = [pb[k], pa[k], pa[k + 1], pb[k + 1]];
-            let f = mesh.add_face(&quad).map_err(|_| ModelError::Unsupported("bevel produced a degenerate strip".into()))?;
+            let f = mesh
+                .add_face(&quad)
+                .map_err(|_| ModelError::Unsupported("bevel produced a degenerate strip".into()))?;
             strip_faces.push(f);
         }
     }
     for poly in vertex_polys {
-        let f = mesh.add_face(&poly).map_err(|_| ModelError::Unsupported("bevel produced a degenerate corner".into()))?;
+        let f = mesh
+            .add_face(&poly)
+            .map_err(|_| ModelError::Unsupported("bevel produced a degenerate corner".into()))?;
         strip_faces.push(f);
     }
     // 6. Carry edge marks to the shortened edges, then drop what got disconnected.
@@ -320,7 +375,11 @@ pub fn bevel_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, width: f32, segmen
             mesh.set_edge_flags(ne, flags);
         }
     }
-    let old_edges: BTreeSet<EdgeId> = verts.iter().flat_map(|&v| mesh.vert_edges(v).to_vec()).chain(edges.iter().copied()).collect();
+    let old_edges: BTreeSet<EdgeId> = verts
+        .iter()
+        .flat_map(|&v| mesh.vert_edges(v).to_vec())
+        .chain(edges.iter().copied())
+        .collect();
     mesh.remove_loose(old_edges, verts);
     Ok(Selection::from_faces(mesh, strip_faces))
 }

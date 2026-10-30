@@ -15,12 +15,16 @@ const FLOAT: u32 = 5126;
 const UNSIGNED_INT: u32 = 5125;
 
 /// Packs the vertex streams and indices into one little-endian buffer and builds the glTF document for it.
-fn document(data: &MeshData, name: &str, uri: Option<String>) -> ModelResult<(serde_json::Value, Vec<u8>)> {
+fn document(
+    data: &MeshData,
+    name: &str,
+    uri: Option<String>,
+) -> ModelResult<(serde_json::Value, Vec<u8>)> {
     let n = data.positions.len();
     if data.normals.len() != n || data.uv0.len() != n {
         return Err(ModelError::Export("vertex streams differ in length".into()));
     }
-    if data.indices.is_empty() || data.indices.len() % 3 != 0 {
+    if data.indices.is_empty() || !data.indices.len().is_multiple_of(3) {
         return Err(ModelError::Export("no triangles to export".into()));
     }
     if data.indices.iter().any(|&i| i as usize >= n) {
@@ -32,9 +36,14 @@ fn document(data: &MeshData, name: &str, uri: Option<String>) -> ModelResult<(se
         let offset = bin.len();
         let len = bytes.len();
         bin.extend(bytes);
-        views.push(json!({ "buffer": 0, "byteOffset": offset, "byteLength": len, "target": target }));
+        views.push(
+            json!({ "buffer": 0, "byteOffset": offset, "byteLength": len, "target": target }),
+        );
     };
-    let floats = |v: &mut Vec<u8>, xs: &[f32]| xs.iter().for_each(|x| v.extend_from_slice(&x.to_le_bytes()));
+    let floats = |v: &mut Vec<u8>, xs: &[f32]| {
+        xs.iter()
+            .for_each(|x| v.extend_from_slice(&x.to_le_bytes()))
+    };
     let mut b = Vec::new();
     data.positions.iter().for_each(|p| floats(&mut b, &p[..]));
     push_view(&mut bin, b, ARRAY_BUFFER);
@@ -45,7 +54,9 @@ fn document(data: &MeshData, name: &str, uri: Option<String>) -> ModelResult<(se
     data.uv0.iter().for_each(|p| floats(&mut b, &p[..]));
     push_view(&mut bin, b, ARRAY_BUFFER);
     let mut b = Vec::new();
-    data.indices.iter().for_each(|i| b.extend_from_slice(&i.to_le_bytes()));
+    data.indices
+        .iter()
+        .for_each(|i| b.extend_from_slice(&i.to_le_bytes()));
     push_view(&mut bin, b, ELEMENT_ARRAY_BUFFER);
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for p in &data.positions {
@@ -97,7 +108,8 @@ pub fn to_glb(data: &MeshData, name: &str) -> ModelResult<Vec<u8>> {
         bin.push(0);
     }
     let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
-    let total = u32::try_from(total).map_err(|_| ModelError::Export("mesh too large for glb".into()))?;
+    let total =
+        u32::try_from(total).map_err(|_| ModelError::Export("mesh too large for glb".into()))?;
     let mut out = Vec::with_capacity(total as usize);
     out.extend_from_slice(b"glTF");
     out.extend_from_slice(&2u32.to_le_bytes());
@@ -143,7 +155,13 @@ pub fn to_obj(mesh: &Mesh, name: &str) -> String {
         for (v, uv) in face.verts.iter().zip(&face.uvs) {
             vt += 1;
             let _ = writeln!(s, "vt {} {}", uv.x, uv.y);
-            let _ = write!(line, " {}/{}/{}", index.get(v).copied().unwrap_or(1), vt, k + 1);
+            let _ = write!(
+                line,
+                " {}/{}/{}",
+                index.get(v).copied().unwrap_or(1),
+                vt,
+                k + 1
+            );
         }
         body.push_str(&line);
         body.push('\n');
@@ -157,12 +175,24 @@ fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
         let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         out.push(TABLE[(n >> 18) as usize & 63] as char);
         out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }

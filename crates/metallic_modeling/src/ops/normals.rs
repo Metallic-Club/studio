@@ -47,7 +47,9 @@ pub fn recalculate_outside(mesh: &mut Mesh, faces: &BTreeSet<FaceId>) -> ModelRe
             let f_flip = flip[&f];
             for (a, b) in face.directed_edges() {
                 let (a, b) = if f_flip { (b, a) } else { (a, b) };
-                let Some(e) = mesh.find_edge(a, b) else { continue };
+                let Some(e) = mesh.find_edge(a, b) else {
+                    continue;
+                };
                 let around = mesh.edge_faces(e);
                 if around.len() != 2 {
                     continue;
@@ -103,7 +105,11 @@ pub fn mark_seam(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, seam: bool) -> Model
     set_flag(mesh, edges, |f| f.seam = seam)
 }
 
-fn set_flag(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>, change: impl Fn(&mut EdgeFlags)) -> ModelResult<()> {
+fn set_flag(
+    mesh: &mut Mesh,
+    edges: &BTreeSet<EdgeId>,
+    change: impl Fn(&mut EdgeFlags),
+) -> ModelResult<()> {
     if edges.is_empty() {
         return Err(ModelError::NothingSelected("edges to mark"));
     }

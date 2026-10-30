@@ -94,7 +94,14 @@ impl Primitive {
                     })
                     .collect();
                 // Corner index bits: 1 = +X, 2 = +Y, 4 = +Z.
-                for q in [[4, 5, 7, 6], [1, 0, 2, 3], [5, 1, 3, 7], [0, 4, 6, 2], [6, 7, 3, 2], [0, 1, 5, 4]] {
+                for q in [
+                    [4, 5, 7, 6],
+                    [1, 0, 2, 3],
+                    [5, 1, 3, 7],
+                    [0, 4, 6, 2],
+                    [6, 7, 3, 2],
+                    [0, 1, 5, 4],
+                ] {
                     add(mesh, &q.map(|i| v[i]))?;
                 }
             }
@@ -119,11 +126,18 @@ impl Primitive {
                 }
                 for i in 0..nx {
                     for j in 0..nz {
-                        add(mesh, &[ids[i][j], ids[i][j + 1], ids[i + 1][j + 1], ids[i + 1][j]])?;
+                        add(
+                            mesh,
+                            &[ids[i][j], ids[i][j + 1], ids[i + 1][j + 1], ids[i + 1][j]],
+                        )?;
                     }
                 }
             }
-            Primitive::Cylinder { segments, radius, height } => {
+            Primitive::Cylinder {
+                segments,
+                radius,
+                height,
+            } => {
                 if !(3..=512).contains(&segments) || !(radius > 0.0 && height > 0.0) {
                     return bad("cylinder parameters");
                 }
@@ -146,7 +160,11 @@ impl Primitive {
                 let rev: Vec<VertId> = top.iter().rev().copied().collect();
                 add(mesh, &rev)?;
             }
-            Primitive::UvSphere { segments, rings, radius } => {
+            Primitive::UvSphere {
+                segments,
+                rings,
+                radius,
+            } => {
                 if !(3..=512).contains(&segments) || !(2..=512).contains(&rings) || radius <= 0.0 {
                     return bad("sphere parameters");
                 }
@@ -159,7 +177,8 @@ impl Primitive {
                     let row = (0..n)
                         .map(|k| {
                             let a = std::f32::consts::TAU * k as f32 / n as f32;
-                            let p = Vec3::new(phi.sin() * a.cos(), phi.cos(), phi.sin() * a.sin()) * radius;
+                            let p = Vec3::new(phi.sin() * a.cos(), phi.cos(), phi.sin() * a.sin())
+                                * radius;
                             mesh.add_vert(center + p)
                         })
                         .collect();
@@ -169,7 +188,10 @@ impl Primitive {
                     let k1 = (k + 1) % n;
                     add(mesh, &[north, lat[0][k1], lat[0][k]])?;
                     for i in 0..r - 2 {
-                        add(mesh, &[lat[i][k], lat[i][k1], lat[i + 1][k1], lat[i + 1][k]])?;
+                        add(
+                            mesh,
+                            &[lat[i][k], lat[i][k1], lat[i + 1][k1], lat[i + 1][k]],
+                        )?;
                     }
                     add(mesh, &[south, lat[r - 2][k], lat[r - 2][k1]])?;
                 }

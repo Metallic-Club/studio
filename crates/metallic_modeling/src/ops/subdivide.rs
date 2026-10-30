@@ -31,20 +31,37 @@ fn split_faces(
     // Marks of split edges, re-applied to both halves.
     let marks: Vec<(VertId, VertId, VertId, crate::mesh::EdgeFlags)> = split_edges
         .iter()
-        .filter_map(|&e| mesh.edge(e).map(|x| (x.verts[0], x.verts[1], ep[&e], x.flags)))
+        .filter_map(|&e| {
+            mesh.edge(e)
+                .map(|x| (x.verts[0], x.verts[1], ep[&e], x.flags))
+        })
         .collect();
     let mut neighbours: BTreeSet<FaceId> = BTreeSet::new();
     for &e in &split_edges {
-        neighbours.extend(mesh.edge_faces(e).iter().copied().filter(|f| !faces.contains(f)));
+        neighbours.extend(
+            mesh.edge_faces(e)
+                .iter()
+                .copied()
+                .filter(|f| !faces.contains(f)),
+        );
     }
     for &f in faces {
         let face = mesh.face_ref(f)?.clone();
         let n = face.verts.len();
-        let c = mesh.add_vert(face_point.get(&f).copied().unwrap_or_else(|| mesh.face_center(f)));
+        let c = mesh.add_vert(
+            face_point
+                .get(&f)
+                .copied()
+                .unwrap_or_else(|| mesh.face_center(f)),
+        );
         let uv_c = face.uvs.iter().copied().sum::<Vec2>() / n as f32;
         let mid = |mesh: &Mesh, a: VertId, b: VertId| -> ModelResult<VertId> {
-            let e = mesh.find_edge(a, b).ok_or(ModelError::Invariant("face side without edge".into()))?;
-            ep.get(&e).copied().ok_or(ModelError::Invariant("edge point missing".into()))
+            let e = mesh
+                .find_edge(a, b)
+                .ok_or(ModelError::Invariant("face side without edge".into()))?;
+            ep.get(&e)
+                .copied()
+                .ok_or(ModelError::Invariant("edge point missing".into()))
         };
         for i in 0..n {
             let prev = (i + n - 1) % n;
@@ -102,13 +119,19 @@ pub fn subdivide(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, levels: u32) -> Mode
         return Err(ModelError::NothingSelected("faces to subdivide"));
     }
     if levels == 0 || levels > MAX_SMOOTH_LEVELS {
-        return Err(ModelError::InvalidParameter(format!("subdivide levels {levels}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "subdivide levels {levels}"
+        )));
     }
     let mut current: BTreeSet<FaceId> = faces.clone();
     for _ in 0..levels {
-        let fp: BTreeMap<FaceId, Vec3> = current.iter().map(|&f| (f, mesh.face_center(f))).collect();
-        let ep: BTreeMap<EdgeId, Vec3> =
-            current.iter().flat_map(|&f| mesh.face_edges(f)).map(|e| (e, mesh.edge_midpoint(e))).collect();
+        let fp: BTreeMap<FaceId, Vec3> =
+            current.iter().map(|&f| (f, mesh.face_center(f))).collect();
+        let ep: BTreeMap<EdgeId, Vec3> = current
+            .iter()
+            .flat_map(|&f| mesh.face_edges(f))
+            .map(|e| (e, mesh.edge_midpoint(e)))
+            .collect();
         current = split_faces(mesh, &current, &fp, &ep)?.into_iter().collect();
     }
     Ok(Selection::from_faces(mesh, current))
@@ -123,7 +146,9 @@ pub fn subdivide(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, levels: u32) -> Mode
 /// [`ModelError::InvalidParameter`] for zero or too many levels, [`ModelError::NothingSelected`] for an empty mesh.
 pub fn catmull_clark(mesh: &mut Mesh, levels: u32) -> ModelResult<Selection> {
     if levels == 0 || levels > MAX_SMOOTH_LEVELS {
-        return Err(ModelError::InvalidParameter(format!("smooth levels {levels}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "smooth levels {levels}"
+        )));
     }
     if mesh.face_count() == 0 {
         return Err(ModelError::NothingSelected("faces to smooth"));
@@ -137,18 +162,23 @@ pub fn catmull_clark(mesh: &mut Mesh, levels: u32) -> ModelResult<Selection> {
 fn catmull_clark_once(mesh: &mut Mesh) -> ModelResult<()> {
     let faces: BTreeSet<FaceId> = mesh.face_ids().into_iter().collect();
     let fp: BTreeMap<FaceId, Vec3> = faces.iter().map(|&f| (f, mesh.face_center(f))).collect();
-    let crease = |mesh: &Mesh, e: EdgeId| mesh.edge_faces(e).len() != 2 || mesh.edge(e).is_some_and(|x| x.flags.sharp);
+    let crease = |mesh: &Mesh, e: EdgeId| {
+        mesh.edge_faces(e).len() != 2 || mesh.edge(e).is_some_and(|x| x.flags.sharp)
+    };
     let mut ep: BTreeMap<EdgeId, Vec3> = BTreeMap::new();
     for (e, edge) in mesh.edges() {
         let around = mesh.edge_faces(e);
         if around.is_empty() {
             continue;
         }
-        let mid = (mesh.position_or_zero(edge.verts[0]) + mesh.position_or_zero(edge.verts[1])) * 0.5;
+        let mid =
+            (mesh.position_or_zero(edge.verts[0]) + mesh.position_or_zero(edge.verts[1])) * 0.5;
         let p = if crease(mesh, e) {
             mid
         } else {
-            let f_avg = (fp.get(&around[0]).copied().unwrap_or(mid) + fp.get(&around[1]).copied().unwrap_or(mid)) * 0.5;
+            let f_avg = (fp.get(&around[0]).copied().unwrap_or(mid)
+                + fp.get(&around[1]).copied().unwrap_or(mid))
+                * 0.5;
             (mid + f_avg) * 0.5
         };
         ep.insert(e, p);
@@ -169,8 +199,18 @@ fn catmull_clark_once(mesh: &mut Mesh) -> ModelResult<()> {
                     // Mixed wire edges or odd fans: keep the vertex where it is.
                     p
                 } else {
-                    let f = geom::centroid(&vfaces.iter().filter_map(|f| fp.get(f).copied()).collect::<Vec<_>>());
-                    let r = geom::centroid(&edges.iter().map(|&e| mesh.edge_midpoint(e)).collect::<Vec<_>>());
+                    let f = geom::centroid(
+                        &vfaces
+                            .iter()
+                            .filter_map(|f| fp.get(f).copied())
+                            .collect::<Vec<_>>(),
+                    );
+                    let r = geom::centroid(
+                        &edges
+                            .iter()
+                            .map(|&e| mesh.edge_midpoint(e))
+                            .collect::<Vec<_>>(),
+                    );
                     (f + r * 2.0 + p * (n - 3.0)) / n
                 }
             }

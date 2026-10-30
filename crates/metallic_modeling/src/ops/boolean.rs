@@ -92,24 +92,46 @@ pub fn to_trimesh(mesh: &Mesh, faces: &BTreeSet<FaceId>) -> TriMesh {
 /// # Errors
 /// [`ModelError::NothingSelected`] when either part is empty, [`ModelError::NonManifold`] when a part is not closed,
 /// [`ModelError::Boolean`] when the backend fails.
-pub fn boolean(mesh: &mut Mesh, selected: &BTreeSet<FaceId>, op: BooleanOp, backend: &dyn BooleanBackend) -> ModelResult<Selection> {
-    let b_faces: BTreeSet<FaceId> = selected.iter().copied().filter(|&f| mesh.face(f).is_some()).collect();
-    let a_faces: BTreeSet<FaceId> = mesh.face_ids().into_iter().filter(|f| !b_faces.contains(f)).collect();
+pub fn boolean(
+    mesh: &mut Mesh,
+    selected: &BTreeSet<FaceId>,
+    op: BooleanOp,
+    backend: &dyn BooleanBackend,
+) -> ModelResult<Selection> {
+    let b_faces: BTreeSet<FaceId> = selected
+        .iter()
+        .copied()
+        .filter(|&f| mesh.face(f).is_some())
+        .collect();
+    let a_faces: BTreeSet<FaceId> = mesh
+        .face_ids()
+        .into_iter()
+        .filter(|f| !b_faces.contains(f))
+        .collect();
     if a_faces.is_empty() || b_faces.is_empty() {
-        return Err(ModelError::NothingSelected("a selected part and an unselected part"));
+        return Err(ModelError::NothingSelected(
+            "a selected part and an unselected part",
+        ));
     }
     for part in [&a_faces, &b_faces] {
-        let closed = part
-            .iter()
-            .flat_map(|&f| mesh.face_edges(f))
-            .all(|e| mesh.edge_faces(e).iter().filter(|g| part.contains(g)).count() == 2);
+        let closed = part.iter().flat_map(|&f| mesh.face_edges(f)).all(|e| {
+            mesh.edge_faces(e)
+                .iter()
+                .filter(|g| part.contains(g))
+                .count()
+                == 2
+        });
         if !closed {
-            return Err(ModelError::NonManifold("both parts must be closed for a boolean".into()));
+            return Err(ModelError::NonManifold(
+                "both parts must be closed for a boolean".into(),
+            ));
         }
     }
     let a = to_trimesh(mesh, &a_faces);
     let b = to_trimesh(mesh, &b_faces);
-    let result = backend.apply(&a, &b, op).map_err(|e| ModelError::Boolean(format!("{}: {e}", backend.name())))?;
+    let result = backend
+        .apply(&a, &b, op)
+        .map_err(|e| ModelError::Boolean(format!("{}: {e}", backend.name())))?;
     let all: Vec<FaceId> = mesh.face_ids();
     let verts: Vec<VertId> = mesh.vert_ids();
     for f in all {
@@ -123,7 +145,9 @@ pub fn boolean(mesh: &mut Mesh, selected: &BTreeSet<FaceId>, op: BooleanOp, back
     for t in &result.triangles {
         let tri = t.map(|i| ids.get(i as usize).copied());
         let [Some(x), Some(y), Some(z)] = tri else {
-            return Err(ModelError::Boolean("backend returned an index out of range".into()));
+            return Err(ModelError::Boolean(
+                "backend returned an index out of range".into(),
+            ));
         };
         faces.push(mesh.add_face(&[x, y, z])?);
     }

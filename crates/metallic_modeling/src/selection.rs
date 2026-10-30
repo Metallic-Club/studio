@@ -41,14 +41,20 @@ impl Selection {
     /// An empty selection in `mode`.
     #[must_use]
     pub fn new(mode: SelectMode) -> Self {
-        Self { mode, ..Self::default() }
+        Self {
+            mode,
+            ..Self::default()
+        }
     }
 
     /// A face-mode selection of `faces`, flushed.
     #[must_use]
     pub fn from_faces(mesh: &Mesh, faces: impl IntoIterator<Item = FaceId>) -> Self {
         let mut s = Self::new(SelectMode::Face);
-        s.faces = faces.into_iter().filter(|&f| mesh.face(f).is_some()).collect();
+        s.faces = faces
+            .into_iter()
+            .filter(|&f| mesh.face(f).is_some())
+            .collect();
         s.flush(mesh);
         s
     }
@@ -57,7 +63,10 @@ impl Selection {
     #[must_use]
     pub fn from_edges(mesh: &Mesh, edges: impl IntoIterator<Item = EdgeId>) -> Self {
         let mut s = Self::new(SelectMode::Edge);
-        s.edges = edges.into_iter().filter(|&e| mesh.edge(e).is_some()).collect();
+        s.edges = edges
+            .into_iter()
+            .filter(|&e| mesh.edge(e).is_some())
+            .collect();
         s.flush(mesh);
         s
     }
@@ -66,7 +75,10 @@ impl Selection {
     #[must_use]
     pub fn from_verts(mesh: &Mesh, verts: impl IntoIterator<Item = VertId>) -> Self {
         let mut s = Self::new(SelectMode::Vertex);
-        s.verts = verts.into_iter().filter(|&v| mesh.vert(v).is_some()).collect();
+        s.verts = verts
+            .into_iter()
+            .filter(|&v| mesh.vert(v).is_some())
+            .collect();
         s.flush(mesh);
         s
     }
@@ -100,17 +112,28 @@ impl Selection {
                     .verts
                     .iter()
                     .flat_map(|&v| mesh.vert_edges(v).iter().copied())
-                    .filter(|&e| mesh.edge(e).is_some_and(|e| e.verts.iter().all(|v| self.verts.contains(v))))
+                    .filter(|&e| {
+                        mesh.edge(e)
+                            .is_some_and(|e| e.verts.iter().all(|v| self.verts.contains(v)))
+                    })
                     .collect();
                 self.faces = self
                     .edges
                     .iter()
                     .flat_map(|&e| mesh.edge_faces(e).iter().copied())
-                    .filter(|&f| mesh.face(f).is_some_and(|f| f.verts.iter().all(|v| self.verts.contains(v))))
+                    .filter(|&f| {
+                        mesh.face(f)
+                            .is_some_and(|f| f.verts.iter().all(|v| self.verts.contains(v)))
+                    })
                     .collect();
             }
             SelectMode::Edge => {
-                self.verts = self.edges.iter().filter_map(|&e| mesh.edge(e)).flat_map(|e| e.verts).collect();
+                self.verts = self
+                    .edges
+                    .iter()
+                    .filter_map(|&e| mesh.edge(e))
+                    .flat_map(|e| e.verts)
+                    .collect();
                 self.faces = self
                     .edges
                     .iter()
@@ -119,9 +142,17 @@ impl Selection {
                     .collect();
             }
             SelectMode::Face => {
-                self.edges = self.faces.iter().flat_map(|&f| mesh.face_edges(f)).collect();
-                self.verts =
-                    self.faces.iter().filter_map(|&f| mesh.face(f)).flat_map(|f| f.verts.iter().copied()).collect();
+                self.edges = self
+                    .faces
+                    .iter()
+                    .flat_map(|&f| mesh.face_edges(f))
+                    .collect();
+                self.verts = self
+                    .faces
+                    .iter()
+                    .filter_map(|&f| mesh.face(f))
+                    .flat_map(|f| f.verts.iter().copied())
+                    .collect();
             }
         }
     }
@@ -143,9 +174,27 @@ impl Selection {
     /// Inverts the primary set, then flushes.
     pub fn invert(&mut self, mesh: &Mesh) {
         match self.mode {
-            SelectMode::Vertex => self.verts = mesh.verts().map(|(id, _)| id).filter(|v| !self.verts.contains(v)).collect(),
-            SelectMode::Edge => self.edges = mesh.edges().map(|(id, _)| id).filter(|e| !self.edges.contains(e)).collect(),
-            SelectMode::Face => self.faces = mesh.faces().map(|(id, _)| id).filter(|f| !self.faces.contains(f)).collect(),
+            SelectMode::Vertex => {
+                self.verts = mesh
+                    .verts()
+                    .map(|(id, _)| id)
+                    .filter(|v| !self.verts.contains(v))
+                    .collect()
+            }
+            SelectMode::Edge => {
+                self.edges = mesh
+                    .edges()
+                    .map(|(id, _)| id)
+                    .filter(|e| !self.edges.contains(e))
+                    .collect()
+            }
+            SelectMode::Face => {
+                self.faces = mesh
+                    .faces()
+                    .map(|(id, _)| id)
+                    .filter(|f| !self.faces.contains(f))
+                    .collect()
+            }
         }
         self.flush(mesh);
     }

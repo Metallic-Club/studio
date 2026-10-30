@@ -23,12 +23,16 @@ pub fn region_boundary(
     for &f in region {
         let face = mesh.face_ref(f)?;
         for (i, (a, b)) in face.directed_edges().enumerate() {
-            let e = mesh.find_edge(a, b).ok_or(ModelError::Invariant("face side without edge".into()))?;
+            let e = mesh
+                .find_edge(a, b)
+                .ok_or(ModelError::Invariant("face side without edge".into()))?;
             if interior(e) {
                 continue;
             }
             if next.insert(a, (b, face.uvs[i])).is_some() {
-                return Err(ModelError::Unsupported("the region boundary touches itself at a vertex".into()));
+                return Err(ModelError::Unsupported(
+                    "the region boundary touches itself at a vertex".into(),
+                ));
             }
         }
     }
@@ -45,13 +49,17 @@ pub fn region_boundary(
                 break;
             }
             let Some(&(n, uv)) = next.get(&cur) else {
-                return Err(ModelError::Unsupported("the region boundary is not closed".into()));
+                return Err(ModelError::Unsupported(
+                    "the region boundary is not closed".into(),
+                ));
             };
             lp.push((cur, uv));
             cur = n;
         }
         if cur != start {
-            return Err(ModelError::Unsupported("the region boundary is not a simple loop".into()));
+            return Err(ModelError::Unsupported(
+                "the region boundary is not a simple loop".into(),
+            ));
         }
         loops.push(lp);
     }
@@ -59,13 +67,23 @@ pub fn region_boundary(
 }
 
 /// Replaces a connected group of faces by one n-gon along its single boundary loop. The lowest face id survives.
-fn merge_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, interior: &dyn Fn(EdgeId) -> bool) -> ModelResult<FaceId> {
+fn merge_region(
+    mesh: &mut Mesh,
+    region: &BTreeSet<FaceId>,
+    interior: &dyn Fn(EdgeId) -> bool,
+) -> ModelResult<FaceId> {
     let loops = region_boundary(mesh, region, interior)?;
     if loops.len() != 1 {
-        return Err(ModelError::Unsupported(format!("the region has {} boundary loops (holes are not dissolved)", loops.len())));
+        return Err(ModelError::Unsupported(format!(
+            "the region has {} boundary loops (holes are not dissolved)",
+            loops.len()
+        )));
     }
     let lp = &loops[0];
-    let keep = *region.iter().next().ok_or(ModelError::NothingSelected("faces"))?;
+    let keep = *region
+        .iter()
+        .next()
+        .ok_or(ModelError::NothingSelected("faces"))?;
     let mut inner_edges: BTreeSet<EdgeId> = BTreeSet::new();
     let mut inner_verts: BTreeSet<VertId> = BTreeSet::new();
     for &f in region {
@@ -83,7 +101,11 @@ fn merge_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, interior: &dyn Fn(Ed
 }
 
 /// Groups faces into components connected through edges for which `link` is true.
-fn components(mesh: &Mesh, faces: &BTreeSet<FaceId>, link: &dyn Fn(EdgeId) -> bool) -> Vec<BTreeSet<FaceId>> {
+fn components(
+    mesh: &Mesh,
+    faces: &BTreeSet<FaceId>,
+    link: &dyn Fn(EdgeId) -> bool,
+) -> Vec<BTreeSet<FaceId>> {
     let mut seen: BTreeSet<FaceId> = BTreeSet::new();
     let mut out = Vec::new();
     for &f in faces {
@@ -148,8 +170,11 @@ pub fn dissolve_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>) -> ModelResult<
     }
     let snapshot = mesh.clone();
     let dissolvable = |e: EdgeId| edges.contains(&e) && snapshot.edge_faces(e).len() == 2;
-    let faces: BTreeSet<FaceId> =
-        edges.iter().filter(|&&e| dissolvable(e)).flat_map(|&e| snapshot.edge_faces(e).iter().copied()).collect();
+    let faces: BTreeSet<FaceId> = edges
+        .iter()
+        .filter(|&&e| dissolvable(e))
+        .flat_map(|&e| snapshot.edge_faces(e).iter().copied())
+        .collect();
     let mut kept = Vec::new();
     for comp in components(&snapshot, &faces, &dissolvable) {
         if comp.len() < 2 {
@@ -157,7 +182,11 @@ pub fn dissolve_edges(mesh: &mut Mesh, edges: &BTreeSet<EdgeId>) -> ModelResult<
         }
         kept.push(merge_region(mesh, &comp, &dissolvable)?);
     }
-    let wires: Vec<EdgeId> = edges.iter().copied().filter(|&e| mesh.edge(e).is_some() && mesh.edge_faces(e).is_empty()).collect();
+    let wires: Vec<EdgeId> = edges
+        .iter()
+        .copied()
+        .filter(|&e| mesh.edge(e).is_some() && mesh.edge_faces(e).is_empty())
+        .collect();
     mesh.remove_loose(wires, std::iter::empty());
     Ok(Selection::from_faces(mesh, kept))
 }
@@ -197,9 +226,13 @@ pub fn dissolve_verts(mesh: &mut Mesh, verts: &BTreeSet<VertId>) -> ModelResult<
             for f in faces {
                 let face = mesh.face_ref(f)?.clone();
                 if face.verts.len() <= 3 {
-                    return Err(ModelError::Unsupported("dissolving this vertex would collapse a triangle".into()));
+                    return Err(ModelError::Unsupported(
+                        "dissolving this vertex would collapse a triangle".into(),
+                    ));
                 }
-                let i = face.position_of(v).ok_or(ModelError::Invariant("vertex not in face".into()))?;
+                let i = face
+                    .position_of(v)
+                    .ok_or(ModelError::Invariant("vertex not in face".into()))?;
                 let mut vs = face.verts.clone();
                 let mut uvs = face.uvs.clone();
                 vs.remove(i);
@@ -210,7 +243,9 @@ pub fn dissolve_verts(mesh: &mut Mesh, verts: &BTreeSet<VertId>) -> ModelResult<
             mesh.remove_vert(v)?;
             continue;
         }
-        let fan = mesh.vert_fan(v).ok_or_else(|| ModelError::NonManifold(format!("vertex {v:?} is not a manifold fan")))?;
+        let fan = mesh.vert_fan(v).ok_or_else(|| {
+            ModelError::NonManifold(format!("vertex {v:?} is not a manifold fan"))
+        })?;
         let region: BTreeSet<FaceId> = fan.faces.iter().copied().collect();
         let around: BTreeSet<EdgeId> = fan.edges.iter().copied().collect();
         let open = !fan.closed;
@@ -225,9 +260,16 @@ pub fn dissolve_verts(mesh: &mut Mesh, verts: &BTreeSet<VertId>) -> ModelResult<
             lp.retain(|x| x.0 != v);
         }
         if lp.len() < 3 {
-            return Err(ModelError::Unsupported("dissolving this vertex leaves fewer than three corners".into()));
+            return Err(ModelError::Unsupported(
+                "dissolving this vertex leaves fewer than three corners".into(),
+            ));
         }
-        let keep = fan.faces.iter().copied().min().ok_or(ModelError::Invariant("empty fan".into()))?;
+        let keep = fan
+            .faces
+            .iter()
+            .copied()
+            .min()
+            .ok_or(ModelError::Invariant("empty fan".into()))?;
         for &f in &region {
             if f != keep {
                 mesh.remove_face(f)?;

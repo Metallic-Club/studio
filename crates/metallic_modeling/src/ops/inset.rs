@@ -23,12 +23,20 @@ const MAX_MITER: f32 = 4.0;
 ///
 /// # Errors
 /// [`ModelError::NothingSelected`], [`ModelError::MissingFace`] or a negative/non-finite thickness.
-pub fn inset(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, thickness: f32, depth: f32, individual: bool) -> ModelResult<Selection> {
+pub fn inset(
+    mesh: &mut Mesh,
+    faces: &BTreeSet<FaceId>,
+    thickness: f32,
+    depth: f32,
+    individual: bool,
+) -> ModelResult<Selection> {
     if faces.is_empty() {
         return Err(ModelError::NothingSelected("faces to inset"));
     }
     if !(thickness.is_finite() && thickness >= 0.0 && depth.is_finite()) {
-        return Err(ModelError::InvalidParameter(format!("inset thickness {thickness}, depth {depth}")));
+        return Err(ModelError::InvalidParameter(format!(
+            "inset thickness {thickness}, depth {depth}"
+        )));
     }
     for &f in faces {
         mesh.face_ref(f)?;
@@ -43,7 +51,12 @@ pub fn inset(mesh: &mut Mesh, faces: &BTreeSet<FaceId>, thickness: f32, depth: f
     Ok(Selection::from_faces(mesh, faces.iter().copied()))
 }
 
-fn inset_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, thickness: f32, depth: f32) -> ModelResult<()> {
+fn inset_region(
+    mesh: &mut Mesh,
+    region: &BTreeSet<FaceId>,
+    thickness: f32,
+    depth: f32,
+) -> ModelResult<()> {
     let mut boundary: Vec<(VertId, VertId, FaceId)> = Vec::new();
     let mut region_edges: BTreeSet<EdgeId> = BTreeSet::new();
     let mut region_verts: BTreeSet<VertId> = BTreeSet::new();
@@ -51,15 +64,25 @@ fn inset_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, thickness: f32, dept
         let face = mesh.face_ref(f)?.clone();
         region_verts.extend(face.verts.iter().copied());
         for (a, b) in face.directed_edges() {
-            let e = mesh.find_edge(a, b).ok_or(ModelError::Invariant("face side without edge".into()))?;
+            let e = mesh
+                .find_edge(a, b)
+                .ok_or(ModelError::Invariant("face side without edge".into()))?;
             region_edges.insert(e);
-            if mesh.edge_faces(e).iter().filter(|g| region.contains(g)).count() == 1 {
+            if mesh
+                .edge_faces(e)
+                .iter()
+                .filter(|g| region.contains(g))
+                .count()
+                == 1
+            {
                 boundary.push((a, b, f));
             }
         }
     }
     if boundary.is_empty() {
-        return Err(ModelError::Unsupported("inset needs a region with a boundary (not a closed shell)".into()));
+        return Err(ModelError::Unsupported(
+            "inset needs a region with a boundary (not a closed shell)".into(),
+        ));
     }
     let region_normal_at = |mesh: &Mesh, v: VertId| -> Vec3 {
         mesh.vert_faces(v)
@@ -83,7 +106,10 @@ fn inset_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, thickness: f32, dept
         let perps: Vec<Vec3> = ins
             .iter()
             .map(|&u| n.cross((p - mesh.position_or_zero(u)).normalize_or_zero()))
-            .chain(outs.iter().map(|&w| n.cross((mesh.position_or_zero(w) - p).normalize_or_zero())))
+            .chain(
+                outs.iter()
+                    .map(|&w| n.cross((mesh.position_or_zero(w) - p).normalize_or_zero())),
+            )
             .collect();
         let dir = if ins.len() == 1 && outs.len() == 1 {
             let m = (perps[0] + perps[1]).normalize_or_zero();
@@ -109,7 +135,10 @@ fn inset_region(mesh: &mut Mesh, region: &BTreeSet<FaceId>, thickness: f32, dept
     }
     for &(a, b, f) in &boundary {
         let face = mesh.face_ref(f)?;
-        let uv = |v: VertId| face.position_of(mapped(&v)).map_or(glam::Vec2::ZERO, |i| face.uvs[i]);
+        let uv = |v: VertId| {
+            face.position_of(mapped(&v))
+                .map_or(glam::Vec2::ZERO, |i| face.uvs[i])
+        };
         let (ua, ub) = (uv(a), uv(b));
         mesh.add_face_with_uvs(&[a, b, mapped(&b), mapped(&a)], &[ua, ub, ub, ua])?;
     }
