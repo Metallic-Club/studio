@@ -83,6 +83,12 @@ apps.
   egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
+  `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
+  `from_components` sanitizes non-finite local components, saturates axes and wraps yaw; `is_canonical` rejects
+  the reserved -128 axis. `to_move_input` defensively produces finite, unit-bounded horizontal wishes while
+  retaining analog magnitude below full tilt. The shared `move_direction` preserves CameraController's existing
+  transform. This changes no Game input wiring and supplies no packet encoding, admission or prediction.
+  The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
   physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
