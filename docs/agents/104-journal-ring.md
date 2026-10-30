@@ -1,6 +1,6 @@
 # #104 Full-capacity world change journal
 
-Status: implemented and tested; current-main integration gates passed; updated PR CI pending.
+Status: implemented and tested on main `9d0dc8e`; refreshed PR ready for review, not accepted or released.
 Branch: `studio/104-journal-ring`.
 
 ## Goal
@@ -33,3 +33,20 @@ passed again. The source merge changed no journal behavior; the original red/gre
 
 Inspect updated PR #186 CI after the normal integration push. The ring is still bounded;
 a reader more than 16,384 mutations behind must rescan.
+
+## Latest-source refresh completed
+
+Normal-merged `749316a` and then `9d0dc8e`, preserving published branch history. The latter includes avatar animation
+and locomotion production changes. The diff against `9d0dc8e` contains only this issue's journal source, tests and
+documentation. Earlier test totals above remain pinned to their named bases.
+
+The reviewed Cargo lane guard scoped-cleaned local workspace packages on ownership change and verified this
+worktree's compile paths. The expanded workspace prebuild passed, then the actual serial workspace suite passed
+**643 tests, 0 failed, 3 existing manual probes ignored**. All six journal cases passed, including full capacity,
+exact oldest-valid cursor, deduplication and repeated 9,000-mutation frames. Strict workspace/all-targets Clippy
+passed in 53.07s; license, formatting and whitespace checks passed. Independent source review found no actionable
+concern in logical ordering across ring wraps, monotonic partitioning or cursor boundaries.
+
+Raw local logs: `<TEMP>/metallic-186-current-prebuild.log`, `metallic-186-current-tests.log`,
+`metallic-186-current-clippy.log`, and `metallic-186-current-licenses.log`. No new timing or renderer-throughput
+claim. Inspect new PR CI after the normal push; previous-head results stay historical. Only the lead/owner may merge.
