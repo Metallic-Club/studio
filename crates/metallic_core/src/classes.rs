@@ -193,6 +193,7 @@ static CLASSES: &[ClassDef] = &[
         &[
             p("UserId", ValueType::Number, || Value::Number(0.0)),
             p("RespawnLocation", ValueType::Ref, || Value::Ref(None)),
+            p("Character", ValueType::Ref, || Value::Ref(None)),
         ],
     ),
 ];
