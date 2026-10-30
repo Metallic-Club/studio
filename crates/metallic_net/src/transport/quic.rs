@@ -5,10 +5,16 @@
 //!
 //! Streams: the client opens Control (bidirectional) and Remote; the server opens World and one stream per Bulk
 //! payload. The opener writes the channel's tag byte first; then each frame is a LEB128 length and the bytes. The
-//! server allows a client [`CLIENT_MAX_STREAMS`] open streams (one bidirectional), so QUIC flow control refuses more.
+//! server allows a client [`CLIENT_MAX_STREAMS`] open streams (one bidirectional), so QUIC flow control refuses more;
+//! a second Remote stream, a Control stream that ends, or a wrong tag closes the connection with a protocol error.
+//!
+//! Sending is bounded: frames waiting to be written (plus [`FRAME_COST`] each) may not exceed [`SEND_BUDGET`]. A
+//! send past it means the peer is not reading, so the connection closes with
+//! `CloseReason::TransportError("peer not reading")` and the send returns [`NetError::Closed`]. Control, World or
+//! Remote, and Bulk have separate writers, so a stalled World stream does not hold up Control.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -18,13 +24,13 @@ use quinn::{
     RecvStream, Runtime, SendDatagramError, SendStream, TokioRuntime, TransportConfig, VarInt,
 };
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use super::cert::{self, CERT_NAME, PinnedVerifier, ServerIdentity};
 use super::conditioner::ConditionedSocket;
 use super::limits::{
     ALPN, CLIENT_MAX_STREAMS, DatagramLimiter, HELLO_TIMEOUT, IDLE_TIMEOUT, KEEP_ALIVE,
-    MAX_DATAGRAM,
+    MAX_CLIENT_FRAME, MAX_DATAGRAM, MAX_SERVER_FRAME,
 };
 use super::{
     Channel, CloseReason, Connection, Incoming, LinkConditioner, LinkStats, Listener, Side,
@@ -39,6 +45,20 @@ const CLIENT_INCOMING_UNI: u32 = 32;
 const INITIAL_MTU: u16 = 1280;
 /// Close reasons are cut to this many bytes.
 const MAX_REASON: usize = 200;
+/// Most bytes of frames queued for sending on one connection; past it the peer counts as not reading.
+pub(crate) const SEND_BUDGET: usize = 2 * MAX_SERVER_FRAME;
+/// Bytes charged per queued frame on top of its length, so many tiny frames also hit the budget.
+pub(crate) const FRAME_COST: usize = 64;
+/// Bulk payloads being written at once; the rest wait in the queue (and count against the budget).
+const BULK_IN_FLIGHT: usize = 8;
+/// A client must finish the handshake this soon after its first packet.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Connection attempts a server keeps before the handshake finishes.
+const MAX_INCOMING: usize = 256;
+/// Server receive windows: per stream, per connection, and for datagrams.
+const SERVER_STREAM_WINDOW: u32 = 2 * MAX_CLIENT_FRAME as u32;
+const SERVER_CONNECTION_WINDOW: u32 = 4 * SERVER_STREAM_WINDOW;
+const SERVER_DATAGRAM_BUFFER: usize = 128 * 1024;
 
 /// A QUIC server: binds a UDP socket, makes a fresh certificate and accepts clients.
 pub struct QuicServer {
@@ -150,19 +170,23 @@ impl QuicClient {
     /// The quinn client configuration [`QuicClient::connect`] uses (pinned verifier, ALPN, limits), for tools and
     /// tests that drive QUIC directly. The server name to connect with is `"metallic"`.
     pub fn quinn_config(pin: [u8; 32]) -> Result<quinn::ClientConfig, NetError> {
-        let provider = cert::provider();
-        let mut tls = rustls::ClientConfig::builder_with_provider(provider.clone())
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|e| NetError::Tls(e.to_string()))?
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PinnedVerifier::new(pin, provider)))
-            .with_no_client_auth();
-        tls.alpn_protocols = vec![ALPN.to_vec()];
-        let crypto = QuicClientConfig::try_from(tls).map_err(|e| NetError::Tls(e.to_string()))?;
-        let mut config = quinn::ClientConfig::new(Arc::new(crypto));
-        config.transport_config(Arc::new(transport_config(Side::Client)?));
-        Ok(config)
+        client_config(pin, vec![ALPN.to_vec()])
     }
+}
+
+fn client_config(pin: [u8; 32], alpn: Vec<Vec<u8>>) -> Result<quinn::ClientConfig, NetError> {
+    let provider = cert::provider();
+    let mut tls = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|e| NetError::Tls(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedVerifier::new(pin, provider)))
+        .with_no_client_auth();
+    tls.alpn_protocols = alpn;
+    let crypto = QuicClientConfig::try_from(tls).map_err(|e| NetError::Tls(e.to_string()))?;
+    let mut config = quinn::ClientConfig::new(Arc::new(crypto));
+    config.transport_config(Arc::new(transport_config(Side::Client)?));
+    Ok(config)
 }
 
 fn server_config(identity: ServerIdentity) -> Result<quinn::ServerConfig, NetError> {
@@ -177,6 +201,7 @@ fn server_config(identity: ServerIdentity) -> Result<quinn::ServerConfig, NetErr
     let mut config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
     config.transport_config(Arc::new(transport_config(Side::Server)?));
     config.migration(true);
+    config.max_incoming(MAX_INCOMING);
     Ok(config)
 }
 
@@ -192,6 +217,10 @@ fn transport_config(side: Side) -> Result<TransportConfig, NetError> {
         Side::Server => {
             t.max_concurrent_bidi_streams(VarInt::from_u32(1));
             t.max_concurrent_uni_streams(VarInt::from_u32(CLIENT_MAX_STREAMS - 1));
+            t.stream_receive_window(VarInt::from_u32(SERVER_STREAM_WINDOW));
+            t.receive_window(VarInt::from_u32(SERVER_CONNECTION_WINDOW));
+            t.datagram_receive_buffer_size(Some(SERVER_DATAGRAM_BUFFER));
+            t.send_window(MAX_SERVER_FRAME as u64);
         }
         Side::Client => {
             t.max_concurrent_bidi_streams(VarInt::from_u32(0));
@@ -273,15 +302,16 @@ async fn connect_task(
         .await
         .map_err(|e| failed(&e))?;
     let streams = Streams {
-        control: ControlSlot::Ready(control),
+        control: StreamSlot::Ready(control),
         control_recv: Some(control_recv),
-        long: Some(remote),
+        long: remote,
     };
     Ok(QuicConnection::start(
         conn,
         Side::Client,
         streams,
         Some(endpoint),
+        None,
     ))
 }
 
@@ -292,9 +322,10 @@ async fn accept_loop(endpoint: Endpoint, ready: mpsc::UnboundedSender<QuicConnec
             let Ok(connecting) = incoming.accept() else {
                 return;
             };
-            let Ok(Ok(conn)) = tokio::time::timeout(IDLE_TIMEOUT, connecting).await else {
+            let Ok(Ok(conn)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, connecting).await else {
                 return;
             };
+            let hello_deadline = tokio::time::Instant::now() + HELLO_TIMEOUT;
             let world = async {
                 let mut world = conn.open_uni().await.ok()?;
                 world.write_all(&[Channel::World.tag()]).await.ok()?;
@@ -306,11 +337,17 @@ async fn accept_loop(endpoint: Endpoint, ready: mpsc::UnboundedSender<QuicConnec
             };
             let (control_tx, control_rx) = oneshot::channel();
             let streams = Streams {
-                control: ControlSlot::Waiting(control_rx),
+                control: StreamSlot::Waiting(control_rx),
                 control_recv: None,
-                long: Some(world),
+                long: world,
             };
-            let qc = QuicConnection::start(conn.clone(), Side::Server, streams, None);
+            let qc = QuicConnection::start(
+                conn.clone(),
+                Side::Server,
+                streams,
+                None,
+                Some(hello_deadline),
+            );
             tokio::spawn(accept_control(
                 conn.clone(),
                 qc.shared.clone(),
@@ -330,6 +367,10 @@ struct Shared {
     datagrams_received: AtomicU64,
     datagrams_dropped: AtomicU64,
     hello_seen: AtomicBool,
+    /// Server: the client opened its Remote stream.
+    remote_seen: AtomicBool,
+    /// Bytes charged for frames not yet written (see [`SEND_BUDGET`]).
+    queued: AtomicUsize,
 }
 
 /// Closes the connection, remembering why for this side's own `Closed` event.
@@ -352,18 +393,21 @@ fn protocol_error(conn: &quinn::Connection, shared: &Shared, message: impl Into<
     close_with(conn, shared, CloseReason::ProtocolError(message.into()));
 }
 
-enum ControlSlot {
+/// A send stream, or the promise of one (the server's Control half arrives when the client opens it).
+enum StreamSlot {
     Ready(SendStream),
     Waiting(oneshot::Receiver<SendStream>),
-    Gone,
 }
 
 struct Streams {
-    control: ControlSlot,
+    control: StreamSlot,
     control_recv: Option<RecvStream>,
     /// World (server) or Remote (client).
-    long: Option<SendStream>,
+    long: SendStream,
 }
+
+/// A frame for a writer: its budget charge and its encoded bytes.
+type Queued = (usize, Vec<u8>);
 
 /// The game-side handle of a QUIC connection.
 struct QuicConnection {
@@ -371,7 +415,9 @@ struct QuicConnection {
     side: Side,
     events: mpsc::Receiver<Incoming>,
     events_tx: mpsc::Sender<Incoming>,
-    sends: mpsc::UnboundedSender<(Channel, Vec<u8>)>,
+    control_tx: mpsc::UnboundedSender<Queued>,
+    long_tx: mpsc::UnboundedSender<Queued>,
+    bulk_tx: mpsc::UnboundedSender<Queued>,
     shared: Arc<Shared>,
     closed: bool,
     _endpoint: Option<Endpoint>,
@@ -385,9 +431,12 @@ impl QuicConnection {
         side: Side,
         streams: Streams,
         endpoint: Option<Endpoint>,
+        hello_deadline: Option<tokio::time::Instant>,
     ) -> QuicConnection {
         let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
-        let (sends, sends_rx) = mpsc::unbounded_channel();
+        let (control_tx, control_rx) = mpsc::unbounded_channel();
+        let (long_tx, long_rx) = mpsc::unbounded_channel();
+        let (bulk_tx, bulk_rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared::default());
         tokio::spawn(watch_close(conn.clone(), shared.clone(), events_tx.clone()));
         tokio::spawn(read_datagrams(
@@ -402,12 +451,13 @@ impl QuicConnection {
             shared.clone(),
             events_tx.clone(),
         ));
-        tokio::spawn(write_frames(
-            conn.clone(),
-            sends_rx,
-            streams.control,
-            streams.long,
+        tokio::spawn(write_stream(streams.control, control_rx, shared.clone()));
+        tokio::spawn(write_stream(
+            StreamSlot::Ready(streams.long),
+            long_rx,
+            shared.clone(),
         ));
+        tokio::spawn(write_bulk(conn.clone(), bulk_rx, shared.clone()));
         if let Some(recv) = streams.control_recv {
             let reader = FrameReader {
                 conn: conn.clone(),
@@ -417,10 +467,10 @@ impl QuicConnection {
             };
             tokio::spawn(reader.run(recv, Channel::Control));
         }
-        if side == Side::Server {
+        if let Some(deadline) = hello_deadline {
             let (conn, shared) = (conn.clone(), shared.clone());
             tokio::spawn(async move {
-                tokio::time::sleep(HELLO_TIMEOUT).await;
+                tokio::time::sleep_until(deadline).await;
                 if !shared.hello_seen.load(Ordering::Acquire) {
                     close_with(&conn, &shared, CloseReason::Timeout);
                 }
@@ -431,7 +481,9 @@ impl QuicConnection {
             side,
             events,
             events_tx,
-            sends,
+            control_tx,
+            long_tx,
+            bulk_tx,
             shared,
             closed: false,
             _endpoint: endpoint,
@@ -446,8 +498,20 @@ impl Connection for QuicConnection {
             return Err(NetError::Closed);
         }
         self.side.check_send(channel, frame.len())?;
-        self.sends
-            .send((channel, frame))
+        let cost = frame.len() + FRAME_COST;
+        if self.shared.queued.fetch_add(cost, Ordering::AcqRel) + cost > SEND_BUDGET {
+            self.shared.queued.fetch_sub(cost, Ordering::AcqRel);
+            let reason = CloseReason::TransportError("peer not reading".into());
+            close_with(&self.conn, &self.shared, reason);
+            return Err(NetError::Closed);
+        }
+        let writer = match channel {
+            Channel::Control => &self.control_tx,
+            Channel::World | Channel::Remote => &self.long_tx,
+            Channel::Bulk => &self.bulk_tx,
+        };
+        writer
+            .send((cost, encode_frame(&frame)))
             .map_err(|_| NetError::Closed)
     }
 
@@ -605,6 +669,12 @@ async fn accept_uni(
                 Side::Client => matches!(c, Channel::World | Channel::Bulk),
             };
             match read_tag(&mut recv).await {
+                Ok(Some(Channel::Remote))
+                    if side == Side::Server
+                        && reader.shared.remote_seen.swap(true, Ordering::AcqRel) =>
+                {
+                    protocol_error(&reader.conn, &reader.shared, "second remote stream")
+                }
                 Ok(Some(channel)) if allowed(channel) => reader.run(recv, channel).await,
                 Ok(None) => {}
                 Ok(Some(_)) | Err(BadStream) => {
@@ -640,9 +710,8 @@ impl FrameReader {
         loop {
             let len = match read_length(&mut recv).await {
                 Ok(Some(len)) => len,
-                Ok(None) => return,
+                Ok(None) | Err(None) => return self.ended(channel),
                 Err(Some(message)) => return protocol_error(&self.conn, &self.shared, message),
-                Err(None) => return,
             };
             if len > max {
                 let message = format!("frame of {len} bytes is over the {max}-byte limit");
@@ -654,7 +723,7 @@ impl FrameReader {
                 Err(ReadExactError::FinishedEarly(_)) => {
                     return protocol_error(&self.conn, &self.shared, "stream ended inside a frame");
                 }
-                Err(ReadExactError::ReadError(_)) => return,
+                Err(ReadExactError::ReadError(_)) => return self.ended(channel),
             }
             if channel == Channel::Control {
                 self.shared.hello_seen.store(true, Ordering::Release);
@@ -667,6 +736,17 @@ impl FrameReader {
             {
                 return;
             }
+        }
+    }
+
+    /// A stream ended or was reset. The client's Control stream lives as long as the connection, so on a server
+    /// its end (while the connection is open) is a protocol error.
+    fn ended(&self, channel: Channel) {
+        if channel == Channel::Control
+            && self.side == Side::Server
+            && self.conn.close_reason().is_none()
+        {
+            protocol_error(&self.conn, &self.shared, "control stream ended");
         }
     }
 }
@@ -707,50 +787,51 @@ fn encode_frame(frame: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Writes queued frames in order per stream. Ends when the connection does.
-async fn write_frames(
-    conn: quinn::Connection,
-    mut sends: mpsc::UnboundedReceiver<(Channel, Vec<u8>)>,
-    mut control: ControlSlot,
-    mut long: Option<SendStream>,
+/// Writes one stream's frames in order, releasing each frame's budget charge once quinn has taken it. Ends when
+/// the stream or connection does.
+async fn write_stream(
+    slot: StreamSlot,
+    mut frames: mpsc::UnboundedReceiver<Queued>,
+    shared: Arc<Shared>,
 ) {
-    while let Some((channel, frame)) = sends.recv().await {
-        let bytes = encode_frame(&frame);
-        let written = match channel {
-            Channel::Bulk => {
-                let conn = conn.clone();
-                tokio::spawn(async move {
-                    let Ok(mut stream) = conn.open_uni().await else {
-                        return;
-                    };
-                    if stream.write_all(&[Channel::Bulk.tag()]).await.is_ok()
-                        && stream.write_all(&bytes).await.is_ok()
-                    {
-                        let _ = stream.finish();
-                    }
-                });
-                Ok(())
-            }
-            Channel::Control => {
-                if let ControlSlot::Waiting(rx) = &mut control {
-                    control = match rx.await {
-                        Ok(stream) => ControlSlot::Ready(stream),
-                        Err(_) => ControlSlot::Gone,
-                    };
-                }
-                match &mut control {
-                    ControlSlot::Ready(stream) => stream.write_all(&bytes).await.map_err(|_| ()),
-                    _ => Err(()),
-                }
-            }
-            Channel::World | Channel::Remote => match long.as_mut() {
-                Some(stream) => stream.write_all(&bytes).await.map_err(|_| ()),
-                None => Err(()),
-            },
-        };
+    let mut stream = match slot {
+        StreamSlot::Ready(stream) => stream,
+        StreamSlot::Waiting(rx) => match rx.await {
+            Ok(stream) => stream,
+            Err(_) => return,
+        },
+    };
+    while let Some((cost, bytes)) = frames.recv().await {
+        let written = stream.write_all(&bytes).await;
+        shared.queued.fetch_sub(cost, Ordering::AcqRel);
         if written.is_err() {
             return; // The connection is going away; `watch_close` reports why.
         }
+    }
+}
+
+/// Writes each Bulk payload on its own stream, at most [`BULK_IN_FLIGHT`] at a time.
+async fn write_bulk(
+    conn: quinn::Connection,
+    mut frames: mpsc::UnboundedReceiver<Queued>,
+    shared: Arc<Shared>,
+) {
+    let permits = Arc::new(Semaphore::new(BULK_IN_FLIGHT));
+    while let Some((cost, bytes)) = frames.recv().await {
+        let Ok(permit) = permits.clone().acquire_owned().await else {
+            return;
+        };
+        let (conn, shared) = (conn.clone(), shared.clone());
+        tokio::spawn(async move {
+            if let Ok(mut stream) = conn.open_uni().await
+                && stream.write_all(&[Channel::Bulk.tag()]).await.is_ok()
+                && stream.write_all(&bytes).await.is_ok()
+            {
+                let _ = stream.finish();
+            }
+            shared.queued.fetch_sub(cost, Ordering::AcqRel);
+            drop(permit);
+        });
     }
 }
 
@@ -768,5 +849,44 @@ mod tests {
             &encode_frame(&vec![0; MAX_SERVER_FRAME])[..4],
             [0x80, 0x80, 0x80, 2]
         );
+    }
+
+    #[test]
+    fn server_receive_windows_are_small() {
+        let t = format!("{:?}", transport_config(Side::Server).unwrap());
+        assert!(t.contains("stream_receive_window: 131072"), "{t}");
+        assert!(t.contains("receive_window: 524288"), "{t}");
+        assert!(
+            t.contains("datagram_receive_buffer_size: Some(131072)"),
+            "{t}"
+        );
+    }
+
+    /// Connects with the given ALPN list; `Ok` if the handshake finished.
+    fn connect_with_alpn(alpn: Vec<Vec<u8>>) -> Result<(), String> {
+        let server = QuicServer::bind("127.0.0.1:0".parse().unwrap(), None).unwrap();
+        let config = client_config(server.cert_sha256(), alpn).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+            let connecting = endpoint
+                .connect_with(config, server.local_addr(), CERT_NAME)
+                .unwrap();
+            match tokio::time::timeout(Duration::from_secs(5), connecting).await {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err("timed out".into()),
+            }
+        })
+    }
+
+    #[test]
+    fn quic_wrong_alpn_is_refused() {
+        assert_eq!(connect_with_alpn(vec![ALPN.to_vec()]), Ok(()));
+        assert!(connect_with_alpn(vec![b"metallic/2".to_vec()]).is_err());
+        assert!(connect_with_alpn(Vec::new()).is_err());
     }
 }

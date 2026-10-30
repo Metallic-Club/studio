@@ -182,12 +182,9 @@ impl NetState {
     /// Schedules a reliable packet from `from`: re-sent after one round trip each time it is lost.
     fn send_reliable_packet(&mut self, from: usize, ordered: Option<usize>, packet: Packet) {
         let link = &mut self.links[from / 2];
-        if link.cond.loss_chance() >= 1.0 {
-            return; // A link that loses everything never delivers.
-        }
         let mut at = self.now;
         while link.cond.lose(&mut link.rng) {
-            at += link.cond.latency * 2;
+            at += link.cond.round_trip();
         }
         at += link.cond.sample_delay(&mut link.rng);
         if let Some(slot) = ordered {
@@ -387,7 +384,7 @@ impl Connection for MemoryConnection {
     }
 
     fn rtt(&self) -> Duration {
-        lock(&self.state).links[self.end / 2].cond.latency * 2
+        lock(&self.state).links[self.end / 2].cond.round_trip()
     }
 
     fn stats(&self) -> LinkStats {

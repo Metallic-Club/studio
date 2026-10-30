@@ -2,12 +2,18 @@
 //!
 //! Every wait has a deadline, so a broken transport fails a test instead of stalling the build.
 
+use std::any::Any;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use metallic_net::NetError;
-use metallic_net::transport::limits::{IDLE_TIMEOUT, MAX_CLIENT_FRAME, MAX_DATAGRAM};
+use metallic_net::transport::limits::{
+    IDLE_TIMEOUT, MAX_CLIENT_FRAME, MAX_DATAGRAM, MAX_SERVER_FRAME,
+};
 use metallic_net::transport::{
     Channel, CloseReason, Connection, Incoming, LinkConditioner, Listener, MemoryNet, QuicClient,
     QuicServer, Sequencer,
@@ -538,11 +544,12 @@ fn quic_fifth_client_stream_refused() {
         control.write_all(&[0, 5]).await.unwrap();
         control.write_all(b"hello").await.unwrap();
         let mut open = vec![control];
-        // Three more client streams (Remote, tag 2): four open in total.
-        for _ in 0..3 {
-            let mut s = conn.open_uni().await.unwrap();
-            s.write_all(&[2, 1, 42]).await.unwrap();
-            open.push(s);
+        // One Remote stream (tag 2, one frame) and two streams opened but never written: four open in total.
+        let mut remote = conn.open_uni().await.unwrap();
+        remote.write_all(&[2, 1, 42]).await.unwrap();
+        open.push(remote);
+        for _ in 0..2 {
+            open.push(conn.open_uni().await.unwrap());
         }
         let fifth_uni = tokio::time::timeout(Duration::from_millis(500), conn.open_uni()).await;
         let second_bi = tokio::time::timeout(Duration::from_millis(200), conn.open_bi()).await;
@@ -551,14 +558,13 @@ fn quic_fifth_client_stream_refused() {
     assert!(streams.0, "a fifth stream must wait for QUIC stream credit");
     assert!(streams.1, "a second bidirectional stream must wait too");
     let mut conn = accept_within(&mut server, WAIT);
-    let events = poll_until(&mut conn, WAIT, |e| e.len() >= 4);
-    assert!(closed_reason(&events).is_none(), "{events:?}");
+    let events = poll_until(&mut conn, WAIT, |e| e.len() >= 2);
     assert_eq!(
-        events
-            .iter()
-            .filter(|e| **e == reliable(Channel::Remote, &[42]))
-            .count(),
-        3
+        events,
+        [
+            reliable(Channel::Control, b"hello"),
+            reliable(Channel::Remote, &[42])
+        ]
     );
     drop(streams);
     drop(rt);
@@ -697,5 +703,235 @@ fn quic_idle_timeout_closes_a_vanished_client() {
         start.elapsed() >= IDLE_TIMEOUT - Duration::from_secs(1),
         "{:?}",
         start.elapsed()
+    );
+}
+
+// ---------------------------------------------------------------- raw QUIC clients (hostile or stalled peers)
+
+/// Things a raw-client script keeps open until the connection closes.
+type Keep = Vec<Box<dyn Any + Send>>;
+type ScriptFuture = Pin<Box<dyn Future<Output = Keep> + Send>>;
+type Script =
+    Box<dyn FnOnce(quinn::Connection, quinn::SendStream, quinn::RecvStream) -> ScriptFuture + Send>;
+
+/// Runs a raw quinn client on its own thread: connects, sends a Hello on Control, runs `script` with the connection
+/// and the Control stream halves, then keeps the connection driven until it closes (at most 20 s). Sends back the
+/// application close code the server used, or how else the connection ended.
+fn raw_client(server: &QuicServer, script: Script) -> mpsc::Receiver<Result<u64, String>> {
+    let config = QuicClient::quinn_config(server.cert_sha256()).unwrap();
+    let addr = server.local_addr();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let endpoint = quinn::Endpoint::client(localhost()).unwrap();
+            let conn = endpoint
+                .connect_with(config, addr, "metallic")
+                .unwrap()
+                .await
+                .unwrap();
+            let (mut control, recv) = conn.open_bi().await.unwrap();
+            control.write_all(&[0, 5]).await.unwrap();
+            control.write_all(b"hello").await.unwrap();
+            let _keep = script(conn.clone(), control, recv).await;
+            let code = match tokio::time::timeout(Duration::from_secs(20), conn.closed()).await {
+                Ok(quinn::ConnectionError::ApplicationClosed(close)) => {
+                    Ok(close.error_code.into_inner())
+                }
+                Ok(other) => Err(format!("{other:?}")),
+                Err(_) => Err("still open".into()),
+            };
+            let _ = tx.send(code);
+        });
+    });
+    rx
+}
+
+fn keep_control() -> Script {
+    Box::new(|_, control, recv| {
+        Box::pin(async move { vec![Box::new(control) as Box<dyn Any + Send>, Box::new(recv)] })
+    })
+}
+
+/// A script that also opens one unidirectional stream and writes `bytes` to it (finishing it if `finish`).
+fn uni_stream(bytes: &'static [u8], finish: bool) -> Script {
+    Box::new(move |conn, control, recv| {
+        Box::pin(async move {
+            let mut s = conn.open_uni().await.unwrap();
+            s.write_all(bytes).await.unwrap();
+            if finish {
+                s.finish().unwrap();
+            }
+            vec![
+                Box::new(control) as Box<dyn Any + Send>,
+                Box::new(recv),
+                Box::new(s),
+            ]
+        })
+    })
+}
+
+const PROTOCOL_ERROR: u64 = 2;
+const TRANSPORT_ERROR: u64 = 4;
+
+/// Accepts the raw client and waits for the server side to close; returns the reason.
+fn server_close_reason(server: &mut QuicServer) -> CloseReason {
+    let mut conn = accept_within(server, WAIT);
+    let events = poll_until(&mut conn, WAIT, |e| closed_reason(e).is_some());
+    closed_reason(&events).unwrap()
+}
+
+#[test]
+fn quic_second_remote_stream_closes() {
+    let mut server = QuicServer::bind(localhost(), None).unwrap();
+    let script: Script = Box::new(|conn, control, recv| {
+        Box::pin(async move {
+            let mut keep: Keep = vec![Box::new(control), Box::new(recv)];
+            for _ in 0..2 {
+                let mut s = conn.open_uni().await.unwrap();
+                s.write_all(&[2, 1, 42]).await.unwrap();
+                keep.push(Box::new(s));
+            }
+            keep
+        })
+    });
+    let code = raw_client(&server, script);
+    assert!(matches!(
+        server_close_reason(&mut server),
+        CloseReason::ProtocolError(_)
+    ));
+    assert_eq!(
+        code.recv_timeout(Duration::from_secs(25)).unwrap(),
+        Ok(PROTOCOL_ERROR)
+    );
+}
+
+#[test]
+fn quic_second_control_stream_closes() {
+    let mut server = QuicServer::bind(localhost(), None).unwrap();
+    // Finish and stop the first Control stream so QUIC gives the credit back, then open another one.
+    let script: Script = Box::new(|conn, mut control, mut recv| {
+        Box::pin(async move {
+            control.finish().unwrap();
+            recv.stop(quinn::VarInt::from_u32(0)).unwrap();
+            let second = tokio::time::timeout(Duration::from_secs(5), conn.open_bi()).await;
+            let mut keep: Keep = vec![Box::new(control), Box::new(recv)];
+            if let Ok(Ok((mut send, recv2))) = second {
+                send.write_all(&[0, 1, 7]).await.unwrap();
+                keep.push(Box::new(send));
+                keep.push(Box::new(recv2));
+            }
+            keep
+        })
+    });
+    let code = raw_client(&server, script);
+    assert!(matches!(
+        server_close_reason(&mut server),
+        CloseReason::ProtocolError(_)
+    ));
+    assert_eq!(
+        code.recv_timeout(Duration::from_secs(25)).unwrap(),
+        Ok(PROTOCOL_ERROR)
+    );
+}
+
+#[test]
+fn quic_bad_stream_tag_closes() {
+    // A client may only open Remote (2): World (1), Bulk (3) and unknown tags close the connection.
+    for bytes in [&[1u8, 1, 0][..], &[3, 1, 0], &[9, 1, 0]] {
+        let mut server = QuicServer::bind(localhost(), None).unwrap();
+        let code = raw_client(&server, uni_stream(bytes, false));
+        assert!(matches!(
+            server_close_reason(&mut server),
+            CloseReason::ProtocolError(_)
+        ));
+        assert_eq!(
+            code.recv_timeout(Duration::from_secs(25)).unwrap(),
+            Ok(PROTOCOL_ERROR)
+        );
+    }
+}
+
+#[test]
+fn quic_stream_ending_mid_frame_closes() {
+    // Ends inside a frame body (10 bytes announced, 3 sent) and inside a length (continuation bit set).
+    for bytes in [&[2u8, 10, 1, 2, 3][..], &[2, 0x80]] {
+        let mut server = QuicServer::bind(localhost(), None).unwrap();
+        let code = raw_client(&server, uni_stream(bytes, true));
+        assert!(matches!(
+            server_close_reason(&mut server),
+            CloseReason::ProtocolError(_)
+        ));
+        assert_eq!(
+            code.recv_timeout(Duration::from_secs(25)).unwrap(),
+            Ok(PROTOCOL_ERROR)
+        );
+    }
+}
+
+#[test]
+fn quic_stalled_reader_is_closed() {
+    let mut server = QuicServer::bind(localhost(), None).unwrap();
+    // The client acks and keeps the connection alive but never reads World.
+    let code = raw_client(&server, keep_control());
+    let mut conn = accept_within(&mut server, WAIT);
+    poll_until(&mut conn, WAIT, |e| !e.is_empty());
+    let frame = vec![5u8; 1 << 20];
+    let mut refused_after = None;
+    for i in 0..64 {
+        if conn.send_reliable(Channel::World, frame.clone()).is_err() {
+            refused_after = Some(i);
+            break;
+        }
+        sleep(Duration::from_millis(5));
+    }
+    let refused_after = refused_after.expect("sends past the budget must fail");
+    assert!(
+        refused_after * (1 << 20) <= 2 * MAX_SERVER_FRAME,
+        "{refused_after}"
+    );
+    let events = poll_until(&mut conn, WAIT, |e| closed_reason(e).is_some());
+    assert!(
+        matches!(closed_reason(&events), Some(CloseReason::TransportError(_))),
+        "{events:?}"
+    );
+    // The close usually arrives; if the client's socket dropped it under the flood, the client gets a stateless
+    // reset once the server has forgotten the connection.
+    let end = code.recv_timeout(Duration::from_secs(25)).unwrap();
+    assert!(
+        end == Ok(TRANSPORT_ERROR) || end == Err("Reset".into()),
+        "{end:?}"
+    );
+}
+
+#[test]
+fn quic_stalled_world_does_not_block_control() {
+    let mut server = QuicServer::bind(localhost(), None).unwrap();
+    let (got_tx, got_rx) = mpsc::channel();
+    // The client reads Control but never World.
+    let script: Script = Box::new(move |_, control, mut recv| {
+        Box::pin(async move {
+            let mut buf = [0u8; 2];
+            let read =
+                tokio::time::timeout(Duration::from_secs(10), recv.read_exact(&mut buf)).await;
+            let _ = got_tx.send(matches!(read, Ok(Ok(()))) && buf == [1, 7]);
+            vec![Box::new(control) as Box<dyn Any + Send>, Box::new(recv)]
+        })
+    });
+    let _code = raw_client(&server, script);
+    let mut conn = accept_within(&mut server, WAIT);
+    poll_until(&mut conn, WAIT, |e| !e.is_empty());
+    for _ in 0..3 {
+        conn.send_reliable(Channel::World, vec![5u8; 1 << 20])
+            .unwrap();
+    }
+    sleep(Duration::from_millis(200));
+    conn.send_reliable(Channel::Control, vec![7]).unwrap();
+    assert!(
+        got_rx.recv_timeout(Duration::from_secs(15)).unwrap(),
+        "Control frame arrived"
     );
 }

@@ -20,34 +20,46 @@ use tokio::time::{Instant, Sleep};
 /// How to degrade a link. The default is a perfect link.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LinkConditioner {
-    /// One-way delay added to every packet.
+    /// One-way delay added to every packet (at most 10 s is applied).
     pub latency: Duration,
-    /// Each packet's delay varies by up to this much either way (never below zero), which reorders packets.
+    /// Each packet's delay varies by up to this much either way (never below zero), which reorders packets
+    /// (at most 10 s is applied).
     pub jitter: Duration,
-    /// Chance that a packet is lost, `0..=1`.
+    /// Chance that a packet is lost, `0..=1` (at most 0.99 is applied, so reliable frames still arrive).
     pub loss: f32,
     /// Seed of the random choices, so a run can be repeated.
     pub seed: u64,
 }
 
+/// Largest latency or jitter the conditioner applies.
+pub(crate) const MAX_DELAY: Duration = Duration::from_secs(10);
+/// Largest loss chance the conditioner applies, so reliable frames always get through eventually.
+pub(crate) const MAX_LOSS: f64 = 0.99;
+
 impl LinkConditioner {
-    /// Loss chance clamped to `0..=1`; NaN counts as no loss.
+    /// Round trip the link adds (twice the latency).
+    pub(crate) fn round_trip(&self) -> Duration {
+        self.latency.min(MAX_DELAY) * 2
+    }
+
+    /// Loss chance clamped to `0..=MAX_LOSS`; NaN counts as no loss.
     pub(crate) fn loss_chance(&self) -> f64 {
         if self.loss.is_nan() {
             0.0
         } else {
-            f64::from(self.loss).clamp(0.0, 1.0)
+            f64::from(self.loss).clamp(0.0, MAX_LOSS)
         }
     }
 
     /// One packet's delay: latency plus a uniform jitter offset, at least zero.
     pub(crate) fn sample_delay(&self, rng: &mut Rng) -> Duration {
-        if self.jitter.is_zero() {
-            return self.latency;
+        let latency = self.latency.min(MAX_DELAY);
+        let jitter = self.jitter.min(MAX_DELAY);
+        if jitter.is_zero() {
+            return latency;
         }
-        let offset = (rng.next_f64() * 2.0 - 1.0) * self.jitter.as_secs_f64();
-        Duration::try_from_secs_f64((self.latency.as_secs_f64() + offset).max(0.0))
-            .unwrap_or(self.latency)
+        let offset = (rng.next_f64() * 2.0 - 1.0) * jitter.as_secs_f64();
+        Duration::try_from_secs_f64((latency.as_secs_f64() + offset).max(0.0)).unwrap_or(latency)
     }
 
     /// Whether the next packet is lost.
@@ -308,5 +320,21 @@ mod tests {
             ..cond
         };
         assert!(!nan.lose(&mut a));
+    }
+
+    #[test]
+    fn absurd_values_are_clamped() {
+        let cond = LinkConditioner {
+            latency: Duration::MAX,
+            jitter: Duration::MAX,
+            loss: 1.0,
+            seed: 1,
+        };
+        let mut rng = Rng::new(1);
+        for _ in 0..100 {
+            assert!(cond.sample_delay(&mut rng) <= 2 * MAX_DELAY);
+        }
+        assert_eq!(cond.loss_chance(), MAX_LOSS);
+        assert_eq!(cond.round_trip(), 2 * MAX_DELAY);
     }
 }
