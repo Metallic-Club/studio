@@ -1,19 +1,19 @@
 //! The windowed player: winit window, wgpu surface, input, frame loop and statistics.
 use crate::args::Args;
 use crate::capture::CaptureTarget;
+use crate::devices::{GamepadSource, key_control, mouse_control};
 use crate::overlay::Overlay;
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
-use metallic_runtime::{Action, FrameInput, Game, InputState};
+use metallic_runtime::input::{Control, Device, RawEvent, ScriptedSource};
+use metallic_runtime::{FrameInput, Game, InputRuntime, TICK};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{
-    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
-};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
@@ -28,7 +28,7 @@ const AUTOPILOT_TURN: f32 = 4.8;
 const AUTOPILOT_JUMP_EVERY: f64 = 1.5;
 
 /// Plays `game` in a window until it is closed (or `--frames` / `--fps` ends it).
-pub fn run(game: Game, args: &Args) -> ExitCode {
+pub fn run(game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitCode {
     let event_loop = match EventLoop::new() {
         Ok(l) => l,
         Err(e) => {
@@ -37,13 +37,21 @@ pub fn run(game: Game, args: &Args) -> ExitCode {
         }
     };
     event_loop.set_control_flow(ControlFlow::Poll);
+    let epoch = Instant::now();
+    let input = InputRuntime::from_world(&game.world().borrow());
+    for warning in input.warnings() {
+        eprintln!("warning: input: {warning}");
+    }
     let mut app = App {
         game,
         args: args.clone(),
         gfx: None,
-        input: InputState::new(),
-        gamepads: gilrs::Gilrs::new().ok(),
-        dragging: false,
+        input,
+        gamepads: GamepadSource::new(epoch),
+        script,
+        epoch,
+        events: Vec::new(),
+        captured: false,
         last: Instant::now(),
         frame: 0,
         frame_times: Vec::new(),
@@ -76,26 +84,21 @@ struct App {
     game: Game,
     args: Args,
     gfx: Option<Gfx>,
-    input: InputState,
-    gamepads: Option<gilrs::Gilrs>,
-    dragging: bool,
+    input: InputRuntime,
+    gamepads: GamepadSource,
+    /// `--input-script`: when set, the input clock counts frames, see `App::input_clock`.
+    script: Option<ScriptedSource>,
+    /// When the player started: the zero of the input clock.
+    epoch: Instant,
+    /// Scratch for the script's events.
+    events: Vec<RawEvent>,
+    /// The cursor is locked and mouse movement is sent as `MouseDelta`.
+    captured: bool,
     last: Instant,
     frame: u64,
     frame_times: Vec<f64>,
     started: Option<Instant>,
     failed: bool,
-}
-
-fn action_for(key: KeyCode) -> Option<Action> {
-    Some(match key {
-        KeyCode::KeyW | KeyCode::ArrowUp => Action::Forward,
-        KeyCode::KeyS | KeyCode::ArrowDown => Action::Back,
-        KeyCode::KeyA | KeyCode::ArrowLeft => Action::Left,
-        KeyCode::KeyD | KeyCode::ArrowRight => Action::Right,
-        KeyCode::Space => Action::Jump,
-        KeyCode::ShiftLeft | KeyCode::ShiftRight => Action::Run,
-        _ => return None,
-    })
 }
 
 impl App {
@@ -151,31 +154,34 @@ impl App {
         })
     }
 
-    fn poll_gamepad(&mut self) {
-        let Some(gilrs) = self.gamepads.as_mut() else {
-            return;
-        };
-        while gilrs.next_event().is_some() {}
-        let pad = gilrs
-            .gamepads()
-            .find(|(_, g)| g.is_connected())
-            .map(|(_, g)| {
-                let axis = |a| g.value(a);
-                (
-                    [axis(gilrs::Axis::LeftStickX), axis(gilrs::Axis::LeftStickY)],
-                    [
-                        axis(gilrs::Axis::RightStickX),
-                        axis(gilrs::Axis::RightStickY),
-                    ],
-                    g.is_pressed(gilrs::Button::South),
-                )
-            });
-        let (left, right, jump) = pad.unwrap_or(([0.0; 2], [0.0; 2], false));
-        self.input.gamepad(left, right, jump);
+    /// Seconds on the input clock: real time, or the frame count in ticks when an input script
+    /// drives the run, so the script plays the same way every time.
+    fn input_clock(&self) -> f64 {
+        if self.script.is_some() {
+            self.frame as f64 * TICK
+        } else {
+            self.epoch.elapsed().as_secs_f64()
+        }
     }
 
-    fn set_dragging(&mut self, on: bool) {
-        self.dragging = on;
+    /// Collects the gamepad and script events of this frame.
+    fn poll_devices(&mut self, clock: f64) {
+        self.input.poll_source(&mut self.gamepads);
+        if let Some(script) = self.script.as_mut() {
+            self.events.clear();
+            script.poll_frame(self.frame, clock, &mut self.events);
+            for e in self.events.drain(..) {
+                self.input.push(e);
+            }
+        }
+    }
+
+    /// Locks the cursor while a `MouseDelta` binding is in use (by default: right mouse held).
+    fn set_captured(&mut self, on: bool) {
+        if on == self.captured {
+            return;
+        }
+        self.captured = on;
         let Some(gfx) = self.gfx.as_ref() else {
             return;
         };
@@ -194,8 +200,16 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
-        self.poll_gamepad();
-        let mut frame_input = self.input.take_frame(dt as f32);
+        let clock = self.input_clock();
+        self.poll_devices(clock);
+        if let Ok(world) = self.game.world().try_borrow() {
+            self.input.sync(&world);
+        }
+        let mut frame_input = self.input.frame(clock, dt as f32);
+        // Nothing consumes action events until the Luau API (#251); do not let them pile up.
+        self.input.drain_events().for_each(drop);
+        let want_capture = self.input.wants_mouse_delta();
+        self.set_captured(want_capture);
         if self.args.autopilot {
             autopilot(&mut frame_input, self.game.time(), dt);
         }
@@ -346,29 +360,58 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => {
-                self.input.release_all();
-                self.set_dragging(false);
+                let now = self.input_clock();
+                self.input.release_all(now);
+                self.set_captured(false);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
+                    let down = event.state == ElementState::Pressed;
+                    // Escape quits for now; it becomes the `Menu` action with the Player menu.
+                    if code == KeyCode::Escape && down {
                         event_loop.exit();
-                    } else if let Some(action) = action_for(code) {
-                        self.input.set(action, event.state == ElementState::Pressed);
+                    } else if let Some(control) = key_control(code) {
+                        let time = self.input_clock();
+                        let value = f32::from(u8::from(down));
+                        self.input.push(RawEvent::button(
+                            Device::KeyboardMouse,
+                            control,
+                            value,
+                            time,
+                        ));
                     }
                 }
             }
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Right,
-                ..
-            } => self.set_dragging(state == ElementState::Pressed),
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let Some(control) = mouse_control(button) {
+                    let time = self.input_clock();
+                    let value = f32::from(u8::from(state == ElementState::Pressed));
+                    self.input.push(RawEvent::button(
+                        Device::KeyboardMouse,
+                        control,
+                        value,
+                        time,
+                    ));
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let time = self.input_clock();
+                let pos = [position.x as f32, position.y as f32];
+                self.input.push(RawEvent::vector(
+                    Device::KeyboardMouse,
+                    Control::MousePosition,
+                    pos,
+                    time,
+                ));
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let notches = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => (p.y / 60.0) as f32,
                 };
-                self.input.wheel(notches);
+                let time = self.input_clock();
+                self.input
+                    .push(RawEvent::wheel(Device::KeyboardMouse, notches, time));
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             _ => {}
@@ -377,9 +420,16 @@ impl ApplicationHandler for App {
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event
-            && self.dragging
+            && self.captured
         {
-            self.input.mouse_orbit(delta.0 as f32, delta.1 as f32);
+            let pos = [delta.0 as f32, delta.1 as f32];
+            let time = self.input_clock();
+            self.input.push(RawEvent::vector(
+                Device::KeyboardMouse,
+                Control::MouseDelta,
+                pos,
+                time,
+            ));
         }
     }
 
