@@ -1,0 +1,37 @@
+// 2D Pixel: pixel-perfect 2D layers. Sprite colours reach the screen exactly; no smoothing.
+(
+    format: "metallic.look",
+    version: 1,
+    id: "pixel-2d",
+    name: "2D Pixel",
+    base: None,
+    dimension: TwoD,
+    shading: (
+        default: Unlit,
+        classes: {
+            Sprite: LitSprite(filter: Nearest, alpha_cutoff: 0.5, normal_maps: true, billboard: Fixed, casts_shadows: false),
+        },
+        materials: {},
+    ),
+    lighting: (
+        preset: "Clear Day",
+        also_good: ["Golden Hour", "Moonlit", "Night City", "Pixel Dusk"],
+        style: Realistic,
+        shadows: Off,
+        softness_min: 0.0,
+        ambient_scale: 1.0,
+        ao: Off,
+        volumetrics: Off,
+    ),
+    exposure: (mode: Display, compensation: 0.0),
+    tonemap: Clamp,
+    outlines: (hull: Off, edges: Off),
+    hdr: [],
+    grade: (contrast: 0.0, saturation: 0.0, brightness: 0.0, tint: Rgb(255, 255, 255), lut: None, lut_strength: 0.0, vignette: 0.0),
+    ldr: [],
+    palette: Off,
+    render: (scale: PixelHeight(216), upscale: Sharp, snap: Texel, subpixel: true, aa: Off, detail_texels_per_stud: 0),
+    output: [],
+    fog: (mode: Off, density_scale: 0.0, color: Sky),
+    tiers: {},
+)

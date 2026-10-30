@@ -36,6 +36,9 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - **metallic_player** (Task 8): `metallic-player <project dir>`; window, input, headless mode for smoke tests.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
+  an injectable `HttpClient`, Velopack for download and apply) and `github_auth.rs` (device sign-in, token in Credential
+  Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
 
 ## Frame loop
 `Game::frame(input, dt)`: input -> scripts (`ScriptHost::step`: Heartbeat, Touched, queued remotes, resumed threads)
@@ -60,4 +63,6 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - No `unwrap()` or `expect()` outside tests; return typed errors (`CoreError`, `ScriptError`, `RuntimeError`, `StudioError`).
 - Scripts can never freeze or crash the game: budgets and caps are enforced in `metallic_script`.
 - Permissive dependency licences only; `cargo deny check licenses` stays green.
-- Benchmarks for hot paths (render sync, physics step, script step) come after M1; record numbers in `docs/agents/`.
+- Benchmarks: criterion benches live in `crates/<crate>/benches/` (`cargo bench -p metallic_core --bench world` exists;
+  render sync, physics step and script step follow). Budgets, bench names and the perf-CI plan are in
+  `docs/research/2026-10-30-performance-and-scale.md`; record numbers in `docs/agents/`.

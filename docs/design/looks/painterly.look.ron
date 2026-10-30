@@ -1,0 +1,48 @@
+// Painterly: soft toon ramp, warm grade, Kuwahara brush filter on High, canvas grain.
+(
+    format: "metallic.look",
+    version: 1,
+    id: "painterly",
+    name: "Painterly",
+    base: None,
+    dimension: ThreeD,
+    shading: (
+        default: Toon(bands: 3, softness: 0.12, shadow_tint: Rgb(205, 195, 255), flatten: 0.7, spec_size: 0.0, spec_strength: 0.0, rim_width: 0.0, rim_color: Rgb(255, 255, 255), light_step_ev: 0.0),
+        classes: {},
+        materials: {
+            "Glass": Lit(wrap: 0.3, roughness_floor: 0.0),
+        },
+    ),
+    lighting: (
+        preset: "Golden Hour",
+        also_good: ["Clear Day", "Overcast", "Moonlit", "Alien Dusk"],
+        style: Soft,
+        shadows: Tent,
+        softness_min: 0.4,
+        ambient_scale: 1.1,
+        ao: Darken(intensity: 0.5),
+        volumetrics: Off,
+    ),
+    exposure: (mode: Auto, compensation: 0.0),
+    tonemap: Neutral,
+    outlines: (
+        hull: Off,
+        edges: On(mode: All, width_px: 1.0, color: Rgb(60, 48, 52), strength: 0.4, depth_threshold: 0.06, normal_threshold: 0.4, highlight: 0.0, wobble_px: 0.4),
+    ),
+    hdr: [
+        Kuwahara(radius_px: 6.0, sharpness: 8.0, hardness: 8.0, half_res: true),
+        Bloom(intensity: 0.05, size: 32.0, threshold: 0.0),
+    ],
+    grade: (contrast: -0.05, saturation: 0.15, brightness: 0.0, tint: Rgb(255, 244, 230), lut: None, lut_strength: 0.0, vignette: 0.1),
+    ldr: [
+        Paper(texture: Canvas, strength: 0.2, tint: Rgb(250, 244, 232)),
+    ],
+    palette: Off,
+    render: (scale: Relative(1.0), upscale: Bilinear, snap: Off, subpixel: false, aa: Msaa4, detail_texels_per_stud: 0),
+    output: [],
+    fog: (mode: Height, density_scale: 1.2, color: Sky),
+    tiers: {
+        Low: (aa: Some(Fxaa), drop: [Kuwahara], replace: [Paper(texture: Canvas, strength: 0.3, tint: Rgb(250, 244, 232))]),
+        Medium: (drop: [Kuwahara], replace: [Paper(texture: Canvas, strength: 0.3, tint: Rgb(250, 244, 232))]),
+    },
+)
