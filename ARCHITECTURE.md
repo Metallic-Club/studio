@@ -22,8 +22,9 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). Also `deep_clone()` used by Play.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `raycast`, `drain_touched`. Anchored parts that are moved become kinematic
-  movers. `CharacterController`, `spawn_character` and the Humanoid rules (death, respawn, checkpoints) live here.
+  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
+  are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
+  and the Humanoid rules (death, respawn, checkpoints) live here.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
@@ -58,4 +59,6 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 - No `unwrap()` or `expect()` outside tests; return typed errors (`CoreError`, `ScriptError`, `RuntimeError`, `StudioError`).
 - Scripts can never freeze or crash the game: budgets and caps are enforced in `metallic_script`.
 - Permissive dependency licences only; `cargo deny check licenses` stays green.
-- Benchmarks for hot paths (render sync, physics step, script step) come after M1; record numbers in `docs/agents/`.
+- Benchmarks: criterion benches live in `crates/<crate>/benches/` (`cargo bench -p metallic_core --bench world` exists;
+  render sync, physics step and script step follow). Budgets, bench names and the perf-CI plan are in
+  `docs/research/2026-10-30-performance-and-scale.md`; record numbers in `docs/agents/`.

@@ -7,3 +7,12 @@ publish.workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+wgpu = "30.0.1"
+glam = { version = "0.30.10", features = ["bytemuck"] }
+bytemuck = { version = "1.25.2", features = ["derive"] }
+pollster = "1.0.1"
+log = "0.4"
+
+[dev-dependencies]
+winit = "0.30"
+png = "0.18.1"
