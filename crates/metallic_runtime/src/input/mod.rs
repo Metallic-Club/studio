@@ -21,7 +21,10 @@
 //!   zone, response curve, scale; composites; Bool OR and largest-magnitude combine; the triggers
 //!   Press, Release, Hold, Tap, DoubleTap and Repeat measured in event time; context priority
 //!   and sink; the last-used device with its hysteresis rule.
-//! - [`ScriptedSource`]: `--input-script` files and tests.
+//! - [`touch`]: the automatic touch controls (spec 7): which actions get a stick, a look pad or
+//!   a button, the layout rule, finger routing and the overlay's drawing. Fingers become
+//!   `Device::Touch` events on `TouchStick`, `TouchLook` and `TouchButton1` to `TouchButton7`.
+//! - [`ScriptedSource`]: `--input-script` files and tests (also finger lines for touch).
 
 mod config;
 mod control;
@@ -29,18 +32,19 @@ mod runtime;
 mod script;
 #[cfg(test)]
 mod tests;
+pub mod touch;
 
 pub use config::{
     ActionDef, ActionType, BindingDef, CHARACTER_CONTROLS, ContextDef, InputConfig,
-    MOUSE_ORBIT_SPEED, PAD_ZOOM_SPEED, Role, STICK_ORBIT_SPEED, Trigger, ZOOM_PER_NOTCH,
-    default_character_controls,
+    MOUSE_ORBIT_SPEED, PAD_ZOOM_SPEED, Role, STICK_ORBIT_SPEED, TouchPlacement, TouchSlot, Trigger,
+    ZOOM_PER_NOTCH, default_character_controls,
 };
 pub use control::{
     CONTROL_COUNT, Control, ControlKind, Device, DeviceKind, InputQueue, MAX_GAMEPADS,
-    QUEUE_CAPACITY, RawEvent, RawSource,
+    QUEUE_CAPACITY, RawEvent, RawSource, TOUCH_BUTTON_SLOTS,
 };
 pub use runtime::{ActionEvent, ActionEventKind, ActionId, ActionValue, InputRuntime};
-pub use script::ScriptedSource;
+pub use script::{FingerEvent, ScriptedSource};
 
 /// Stick tilt below this counts as centred (the default dead zone of `Thumbstick1` and
 /// `Thumbstick2`, radial and rescaled so the output starts from 0).

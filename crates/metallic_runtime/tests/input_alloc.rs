@@ -146,3 +146,52 @@ fn input_frame_makes_no_heap_allocation_once_warm() {
     ON.with(|on| on.set(false));
     assert_eq!(COUNT.with(Cell::get), 0, "input_frame allocated");
 }
+
+/// The touch path allocates nothing per frame either: fingers on the stick, the look pad and a
+/// button go through `TouchControls` into the runtime (spec 13).
+#[test]
+fn touch_controls_make_no_heap_allocation() {
+    use metallic_runtime::input::touch::{DeviceProfile, TouchControls, TouchPhase};
+    let mut rt = InputRuntime::default();
+    let mut tc = TouchControls::new(DeviceProfile::phone());
+    tc.sync(&mut rt, 0.0);
+    let jump = tc.layout().buttons[0].center;
+    let stick = tc.layout().stick.expect("stick").center;
+    let dt = 1.0 / 60.0;
+    let frame = |rt: &mut InputRuntime, tc: &mut TouchControls, f: u64| {
+        let t = 10.0 + f as f64 * dt;
+        tc.sync(rt, t);
+        let phase = |down: bool| {
+            if down {
+                TouchPhase::Down
+            } else {
+                TouchPhase::Up
+            }
+        };
+        let k = (f % 60) as f32;
+        if f.is_multiple_of(60) {
+            tc.touch(rt, 0, TouchPhase::Down, stick, t);
+        }
+        tc.touch(rt, 0, TouchPhase::Move, [stick[0] + k, stick[1] - k], t);
+        if f % 60 == 59 {
+            tc.touch(rt, 0, TouchPhase::Up, stick, t);
+        }
+        tc.touch(rt, 1, phase(f.is_multiple_of(2)), jump, t);
+        tc.touch(rt, 2, TouchPhase::Down, [600.0, 100.0], t);
+        tc.touch(rt, 2, TouchPhase::Move, [600.0 + k, 100.0], t);
+        rt.evaluate(t, dt as f32);
+        rt.drain_events().count()
+    };
+    for f in 0..120u64 {
+        frame(&mut rt, &mut tc, f);
+    }
+    COUNT.with(|c| c.set(0));
+    ON.with(|on| on.set(true));
+    let mut events = 0;
+    for f in 120..720u64 {
+        events += frame(&mut rt, &mut tc, f);
+    }
+    ON.with(|on| on.set(false));
+    assert!(events > 600, "the fingers did something: {events} events");
+    assert_eq!(COUNT.with(Cell::get), 0, "the touch path allocated");
+}

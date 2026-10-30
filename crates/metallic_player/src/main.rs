@@ -4,6 +4,7 @@
 //! metallic-player <project dir> [--scene <file relative to project>] [--headless --frames N]
 //!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
 //!                 [--capture FRAME:PNG]... [--input-script <file>]
+//!                 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]
 //! ```
 //! Windowed by default. Input is read as actions (`metallic_runtime::input`); the default
 //! `CharacterControls`: WASD/arrows or the d-pad move, Space or A jumps, Shift or L3 runs,
@@ -14,6 +15,12 @@
 //! vsync and prints frame-rate statistics; with `--autopilot` the character runs in a circle and
 //! jumps meanwhile, so the measurement includes the animated avatar. `--frames N` also ends a windowed run after N frames,
 //! and `--capture FRAME:PNG` saves that frame (3D view and GUI) as a PNG.
+//! `--emulate phone` plays as a touch device (docs/design/input-actions.md section 10.2): the
+//! window takes the device's shape, the automatic touch controls show, the left mouse button is a
+//! finger and a right click pins or lifts a second finger. On a real touch screen the overlay
+//! fades in at the first touch. Input scripts drive fingers with lines like
+//! `90 touch0 Down pos 140 300` (dp); headless runs with `--emulate` route them the same way.
+//! `--reduce-motion` shows and hides the overlay without its 140 ms fade.
 //! Exit code: 0 on a clean exit, 1 when the project cannot be loaded or started, 2 for bad
 //! arguments.
 #![warn(missing_docs)]
@@ -22,9 +29,11 @@ mod args;
 mod capture;
 mod devices;
 mod overlay;
+mod touch_overlay;
 mod window;
 
-use metallic_runtime::input::ScriptedSource;
+use metallic_runtime::input::touch::{DeviceProfile, TouchControls};
+use metallic_runtime::input::{DeviceKind, ScriptedSource};
 use metallic_runtime::{Game, InputRuntime, StdoutSink, TICK};
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -57,7 +66,7 @@ fn main() -> ExitCode {
         None => None,
     };
     if args.headless {
-        run_headless(&mut game, args.frames.unwrap_or(600), script);
+        run_headless(&mut game, args.frames.unwrap_or(600), script, args.emulate);
         ExitCode::SUCCESS
     } else {
         window::run(game, &args, script)
@@ -72,19 +81,41 @@ fn load_script(path: &std::path::Path) -> Result<ScriptedSource, String> {
 }
 
 /// Runs `frames` frames of exactly one tick each, with the events of `script` (none: no input).
-fn run_headless(game: &mut Game, frames: u64, mut script: Option<ScriptedSource>) {
+/// With `emulate`, the script's finger lines go through the touch controls of that device.
+fn run_headless(
+    game: &mut Game,
+    frames: u64,
+    mut script: Option<ScriptedSource>,
+    emulate: Option<DeviceProfile>,
+) {
     let mut input = InputRuntime::from_world(&game.world().borrow());
+    let mut touch = emulate.map(TouchControls::new);
+    if touch.is_some() {
+        input.set_forced_device(Some(DeviceKind::Touch));
+        game.set_input_devices(true, false, false);
+    } else if script.as_ref().is_some_and(ScriptedSource::has_fingers) {
+        eprintln!("warning: the input script has finger lines; they need --emulate");
+    }
+    let (mut events, mut fingers) = (Vec::new(), Vec::new());
     for frame in 0..frames {
         let now = frame as f64 * TICK;
-        if let Some(script) = script.as_mut() {
-            let mut events = Vec::new();
-            script.poll_frame(frame, now, &mut events);
-            for e in events {
-                input.push(e);
-            }
-        }
         if let Ok(world) = game.world().try_borrow() {
             input.sync(&world);
+        }
+        if let Some(touch) = touch.as_mut() {
+            touch.sync(&mut input, now);
+        }
+        if let Some(script) = script.as_mut() {
+            script.poll_frame(frame, now, &mut events);
+            for e in events.drain(..) {
+                input.push(e);
+            }
+            script.poll_fingers(frame, &mut fingers);
+            for f in fingers.drain(..) {
+                if let Some(touch) = touch.as_mut() {
+                    touch.touch(&mut input, f.finger, f.phase, f.pos, now);
+                }
+            }
         }
         let frame_input = input.frame(now, TICK as f32);
         input.drain_events().for_each(drop);

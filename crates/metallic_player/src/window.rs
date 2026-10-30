@@ -3,9 +3,10 @@ use crate::args::Args;
 use crate::capture::CaptureTarget;
 use crate::devices::{GamepadSource, key_control, mouse_control};
 use crate::overlay::Overlay;
+use crate::touch_overlay::{TouchOverlay, emulation_window};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
-use metallic_runtime::input::{Control, Device, RawEvent, ScriptedSource};
+use metallic_runtime::input::{Control, Device, DeviceKind, FingerEvent, RawEvent, ScriptedSource};
 use metallic_runtime::{FrameInput, Game, InputRuntime, TICK};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -28,7 +29,7 @@ const AUTOPILOT_TURN: f32 = 4.8;
 const AUTOPILOT_JUMP_EVERY: f64 = 1.5;
 
 /// Plays `game` in a window until it is closed (or `--frames` / `--fps` ends it).
-pub fn run(game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitCode {
+pub fn run(mut game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitCode {
     let event_loop = match EventLoop::new() {
         Ok(l) => l,
         Err(e) => {
@@ -38,19 +39,27 @@ pub fn run(game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitCode 
     };
     event_loop.set_control_flow(ControlFlow::Poll);
     let epoch = Instant::now();
-    let input = InputRuntime::from_world(&game.world().borrow());
+    let mut input = InputRuntime::from_world(&game.world().borrow());
     for warning in input.warnings() {
         eprintln!("warning: input: {warning}");
     }
+    if args.emulate.is_some() {
+        // Device emulation: the game sees a touch device only (spec 10.2).
+        input.set_forced_device(Some(DeviceKind::Touch));
+        game.set_input_devices(true, false, false);
+    }
+    let touch = TouchOverlay::new(&args.project, args.emulate, args.reduce_motion);
     let mut app = App {
         game,
         args: args.clone(),
         gfx: None,
         input,
+        touch,
         gamepads: GamepadSource::new(epoch),
         script,
         epoch,
         events: Vec::new(),
+        fingers: Vec::new(),
         captured: false,
         last: Instant::now(),
         frame: 0,
@@ -63,6 +72,9 @@ pub fn run(game: Game, args: &Args, script: Option<ScriptedSource>) -> ExitCode 
         return ExitCode::from(1);
     }
     app.game.stop();
+    if let Some(report) = app.touch.timing_report() {
+        println!("{report}");
+    }
     if app.failed {
         ExitCode::from(1)
     } else {
@@ -85,6 +97,8 @@ struct App {
     args: Args,
     gfx: Option<Gfx>,
     input: InputRuntime,
+    /// The automatic touch controls and device emulation.
+    touch: TouchOverlay,
     gamepads: GamepadSource,
     /// `--input-script`: when set, the input clock counts frames, see `App::input_clock`.
     script: Option<ScriptedSource>,
@@ -92,6 +106,8 @@ struct App {
     epoch: Instant,
     /// Scratch for the script's events.
     events: Vec<RawEvent>,
+    /// Scratch for the script's finger events.
+    fingers: Vec<FingerEvent>,
     /// The cursor is locked and mouse movement is sent as `MouseDelta`.
     captured: bool,
     last: Instant,
@@ -103,10 +119,15 @@ struct App {
 
 impl App {
     fn create_gfx(&mut self, event_loop: &ActiveEventLoop) -> Result<Gfx, String> {
-        // `--fps` measures at exactly 1920x1080, so that window cannot be resized.
+        // `--fps` measures at exactly 1920x1080, so that window cannot be resized. An emulated
+        // device gets a window of its shape.
+        let (w, h) = match (&self.args.emulate, self.args.fps) {
+            (Some(device), false) => emulation_window(device),
+            _ => (1920, 1080),
+        };
         let attrs = Window::default_attributes()
             .with_title(format!("{} - Metallic player", self.game.name()))
-            .with_inner_size(PhysicalSize::new(1920, 1080))
+            .with_inner_size(PhysicalSize::new(w, h))
             .with_resizable(!self.args.fps);
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
         let (ctx, surface) =
@@ -173,6 +194,10 @@ impl App {
             for e in self.events.drain(..) {
                 self.input.push(e);
             }
+            script.poll_fingers(self.frame, &mut self.fingers);
+            for f in self.fingers.drain(..) {
+                self.touch.finger(&mut self.input, f, clock);
+            }
         }
     }
 
@@ -201,6 +226,20 @@ impl App {
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
         let clock = self.input_clock();
+        let (window, scale) = self.gfx.as_ref().map_or(((1, 1), 1.0), |g| {
+            (
+                (g.config.width, g.config.height),
+                g.window.scale_factor() as f32,
+            )
+        });
+        self.touch.update(
+            &mut self.input,
+            &mut self.game,
+            window,
+            scale,
+            clock,
+            dt as f32,
+        );
         self.poll_devices(clock);
         let mut frame_input = self.game.input_frame(&mut self.input, clock, dt as f32);
         let want_capture = self.input.wants_mouse_delta();
@@ -238,6 +277,7 @@ impl App {
                 size,
                 scale,
                 &self.game,
+                Some(&mut self.touch),
             );
             match target.save_png(&gfx.ctx.device, &gfx.ctx.queue, &path) {
                 Ok(()) => println!(
@@ -262,6 +302,7 @@ impl App {
                     size,
                     scale,
                     &self.game,
+                    Some(&mut self.touch),
                 );
                 gfx.window.pre_present_notify();
                 gfx.ctx.queue.present(frame);
@@ -356,6 +397,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Focused(false) => {
                 let now = self.input_clock();
+                self.touch.release_all(&mut self.input, now);
                 self.input.release_all(now);
                 self.set_captured(false);
             }
@@ -378,8 +420,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(control) = mouse_control(button) {
-                    let time = self.input_clock();
+                let time = self.input_clock();
+                let down = state == ElementState::Pressed;
+                // In device emulation the mouse is a finger.
+                if !self.touch.mouse_button(&mut self.input, button, down, time)
+                    && let Some(control) = mouse_control(button)
+                {
                     let value = f32::from(u8::from(state == ElementState::Pressed));
                     self.input.push(RawEvent::button(
                         Device::KeyboardMouse,
@@ -392,12 +438,19 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let time = self.input_clock();
                 let pos = [position.x as f32, position.y as f32];
-                self.input.push(RawEvent::vector(
-                    Device::KeyboardMouse,
-                    Control::MousePosition,
-                    pos,
-                    time,
-                ));
+                if !self.touch.cursor_moved(&mut self.input, pos, time) {
+                    self.input.push(RawEvent::vector(
+                        Device::KeyboardMouse,
+                        Control::MousePosition,
+                        pos,
+                        time,
+                    ));
+                }
+            }
+            WindowEvent::Touch(t) => {
+                let time = self.input_clock();
+                let px = [t.location.x as f32, t.location.y as f32];
+                self.touch.touch(&mut self.input, t.id, t.phase, px, time);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let notches = match delta {
