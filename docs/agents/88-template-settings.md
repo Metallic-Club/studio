@@ -38,8 +38,8 @@ the M1 plan and the template authoring proposal. No settings panel or runtime at
 
 ## Next
 
-Implementation and all local gates are complete. Push the issue branch, open a PR, mark issue 88 for review and
-await independent review/CI. Do not merge it.
+Implementation and all local gates are complete. [PR 231](https://github.com/Metallic-Club/studio/pull/231) is open,
+issue 88 is marked for review, and CI/independent review are pending. Do not merge it.
 
 ## Limits / open questions
 
