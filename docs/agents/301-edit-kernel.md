@@ -8,6 +8,8 @@ script leases, optimistic editing, undo, presence or saving. M1/Epic 15 acceptan
 
 Branch: `studio/301-edit-kernel`. Initial base: `16ce1d7634690c90f2903d1d5aff1c2bb178eb19`.
 The preceding `fbaa17d` core source is identical; the base advance adds the M2a plan.
+The unpublished checkpoint rebased cleanly to `ebf359aa437d429023f4ef263a214ab1cba51c7e` before full gates;
+that base advance contains only release Python changes. Its 13 release tests passed.
 
 ## Implementation
 
@@ -67,10 +69,18 @@ lib.rs re-export overlap; this module otherwise has its own files and adds no de
 - Guarded lane116 `cargo test -p metallic_core -j 4 -- --test-threads=1`: 52 passed, zero failures/ignored.
   Includes seven new integration tests, 5,000 seeded two-editor requests with both accepted/rejected conflicts,
   full semantic equality plus a test-build hash across differently allocated replicas, and terminal poison testing.
-- Three additional boundary regressions are written after that checkpoint; not executed yet.
-- Full workspace tests, strict all-target Clippy and license gate: pending coordinated build slot.
+- Full workspace `cargo test --workspace --no-run -j 4`: passed at checkpoint `0454839` before the private helper fix.
+- All 10 edit-kernel integration cases passed, including the additional service Name/cursor, stable-reference/replica
+  sequence, numeric request bits, Source UTF-8 byte and revoked-duplicate boundary cases.
+- Initial strict Clippy found the private property helper exceeded seven arguments. Stable/local target handles
+  now travel together as a tuple; no public API/validation change or lint suppression. Afterward the complete core
+  suite passed all 55 cases, and `cargo clippy --workspace --all-targets -j 4 -- -D warnings` passed (3m45s).
+- `cargo fmt --all --check`, diff whitespace check and `cargo deny check licenses`: passed.
+- Independent C2 and A1 compatibility source reviews found no additional actionable issue. Root's separate private
+  four-foundation composition has its own pinned evidence; it is not this branch's full-workspace gate.
+- Refreshed full test binaries and the actual full serial workspace suite after the helper fix: pending.
 
 ## Next
 
-Run the added boundary tests, obtain independent source review, and run all mandatory workspace gates in an isolated
-guarded lane. Update this note with exact results before publishing a PR. No own merge or acceptance claim.
+Refresh test binaries and run the actual full serial workspace suite in the coordinated quiet window. Update this
+note with exact results before publishing a PR. No own merge or acceptance claim.

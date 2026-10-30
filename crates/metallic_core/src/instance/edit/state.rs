@@ -216,13 +216,13 @@ impl Document {
     fn property(
         &mut self,
         editor: EditorId,
-        id: EditId,
-        local: InstanceId,
+        target: (EditId, InstanceId),
         name: &str,
         value: &EditValue,
         index: usize,
         check_owner: bool,
     ) -> Result<(), EditError> {
+        let (id, local) = target;
         if name == "Name" && self.world.is_builtin(local) {
             return Err(EditError::ProtectedBuiltin);
         }
@@ -301,13 +301,13 @@ impl Document {
                     }
                     self.order_after(local, parent, after)?;
                     for (name, value) in properties {
-                        self.property(editor, *id, local, name, value, index, check_owner)?;
+                        self.property(editor, (*id, local), name, value, index, check_owner)?;
                     }
                 }
                 EditOp::Set { id, properties } => {
                     let local = self.resolve(*id)?;
                     for (name, value) in properties {
-                        self.property(editor, *id, local, name, value, index, check_owner)?;
+                        self.property(editor, (*id, local), name, value, index, check_owner)?;
                     }
                 }
                 EditOp::Move { id, parent, after } => {
@@ -345,8 +345,7 @@ impl Document {
                     }
                     self.property(
                         editor,
-                        *id,
-                        local,
+                        (*id, local),
                         "Source",
                         &EditValue::String(text.clone()),
                         index,
