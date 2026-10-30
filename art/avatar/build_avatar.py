@@ -265,7 +265,7 @@ ANKLE = Vector((0.186, 0.026, 0.112))   # v3 (0.175, ...): feet a little further
 THIGH_DIR = (KNEE - HIP).normalized()
 SHIN_DIR = (ANKLE - KNEE).normalized()
 
-HAND_SCALE = 1.00   # v2: 1.24, a clump; the concept's hand is about 1.35 forearm-end widths across
+HAND_SCALE = 1.12   # v2: 1.24, a clump; the concept's hand is about 1.35 forearm-end widths across
 HAND_TWIST = 40.0   # degrees: the back of the hand turns out and forward (the concept's front view)
 
 # Boot frame: the boot is built around (cx, cy) with lx outward and ly forward.
@@ -361,13 +361,14 @@ def skeleton():
 # - Front view: the sides angle in over the lower third into the jaw and a flat chin underside.
 # - Side view: the underside runs at an angle from the chin back up to the neck.
 HEAD_ROWS = [
-    (1.5400, 0.074, -0.078, 0.030, 0.028, 0.030),   # top plane
-    (1.5360, 0.112, -0.110, 0.072, 0.034, 0.050),
-    (1.5270, 0.141, -0.136, 0.102, 0.038, 0.070),
-    (1.5120, 0.161, -0.151, 0.123, 0.042, 0.086),
-    (1.4900, 0.175, -0.159, 0.137, 0.045, 0.097),
-    (1.4600, 0.183, -0.162, 0.145, 0.047, 0.103),
-    (1.4000, 0.186, -0.163, 0.150, 0.047, 0.106),   # fullest part of the skull
+    (1.5400, 0.036, -0.045, 0.000, 0.018, 0.018),   # crown: a dome (radius about 0.15 m)
+    (1.5350, 0.074, -0.085, 0.045, 0.030, 0.040),   # over the top and the back of the skull
+    (1.5250, 0.104, -0.115, 0.075, 0.036, 0.060),
+    (1.5100, 0.126, -0.138, 0.100, 0.041, 0.080),
+    (1.4900, 0.148, -0.152, 0.120, 0.044, 0.094),
+    (1.4650, 0.166, -0.160, 0.135, 0.046, 0.102),
+    (1.4350, 0.179, -0.163, 0.145, 0.047, 0.106),   # the flat face plane starts here
+    (1.4000, 0.186, -0.163, 0.150, 0.047, 0.108),   # fullest part of the skull
     (1.3500, 0.186, -0.163, 0.148, 0.047, 0.104),
     (1.3000, 0.181, -0.163, 0.140, 0.046, 0.098),   # the jaw starts to angle in
     (1.2650, 0.171, -0.163, 0.124, 0.045, 0.088),
@@ -385,9 +386,9 @@ def build_head():
     sh = Shell("Head", "Head")
     rows = HEAD_ROWS
     if LOD == 1:
-        rows = [rows[i] for i in (0, 1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 14)]
+        rows = [rows[i] for i in (0, 1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13, 15)]
     if LOD == 2:
-        rows = [rows[i] for i in (0, 3, 6, 10, 13, 14)]
+        rows = [rows[i] for i in (0, 3, 6, 10, 14, 15)]
     seg = {0: 3, 1: 2, 2: 1}[LOD]
     loft(sh, [station((0, 0, z), X, Y, rrect(hw, f, b, (rf, rb), seg)) for z, hw, f, b, rf, rb in rows])
     return sh
@@ -398,9 +399,9 @@ def build_neck():
     head's underside, its foot in the trapezius rings of the torso."""
     sh = Shell("Neck", "Head")
     rows = [
-        (1.080, 0.066, -0.054, 0.068, 0.024),
-        (1.125, 0.060, -0.048, 0.061, 0.022),
-        (1.245, 0.055, -0.043, 0.056, 0.020),
+        (1.080, 0.058, -0.048, 0.060, 0.022),
+        (1.125, 0.054, -0.044, 0.055, 0.020),
+        (1.245, 0.049, -0.040, 0.050, 0.018),
     ]
     rows = keep(rows, lod2=[0, 2])
     loft(sh, vertical_stations(rows, seg=1), facet=True)
@@ -422,9 +423,9 @@ def build_torso():
         (1.025, 0.125, -0.109, 0.098, 0.031, 0.005, 0.004),
         (1.055, 0.128, -0.090, 0.096, 0.031, 0.004, 0.004),
         (1.080, 0.126, -0.066, 0.089, 0.030, 0.002, 0.003),   # top of the shoulder
-        (1.096, 0.104, -0.054, 0.080, 0.028, 0.001, 0.002),
-        (1.109, 0.078, -0.048, 0.071, 0.025, 0.000, 0.000),   # trapezius
-        (1.120, 0.053, -0.040, 0.057, 0.019, 0.000, 0.000),   # inside the neck
+        (1.096, 0.098, -0.054, 0.078, 0.028, 0.001, 0.002),
+        (1.109, 0.068, -0.046, 0.066, 0.024, 0.000, 0.000),   # trapezius
+        (1.120, 0.045, -0.036, 0.049, 0.017, 0.000, 0.000),   # inside the neck
     ]
     sharp = (4,)
     if LOD == 1:

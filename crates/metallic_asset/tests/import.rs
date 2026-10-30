@@ -58,9 +58,9 @@ fn default_avatar_has_three_lods_and_six_slots() {
         ]
     );
     let tris: Vec<usize> = m.lods.iter().map(|l| l.indices.len() / 3).collect();
-    assert_eq!(tris, [4360, 2756, 896]);
+    assert_eq!(tris, [4392, 2780, 896]);
     let verts: Vec<usize> = m.lods.iter().map(|l| l.vertices.len()).collect();
-    assert_eq!(verts, [4422, 3096, 1222]);
+    assert_eq!(verts, [4601, 3158, 1218]);
     let slots: Vec<&str> = m.materials.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(
         slots,
@@ -87,21 +87,22 @@ fn default_avatar_has_every_clip_at_30_fps() {
     let m = avatar();
     let want = [
         ("idle", 90),
-        ("idle_b", 120),
+        ("idle_b", 90),
         ("walk_slow", 20),
         ("walk", 16),
         ("run", 16),
-        ("jump", 18),
-        ("fall", 24),
+        ("jump", 16),
+        ("fall", 75),
         ("land", 16),
+        ("land_hard", 28),
         ("climb", 24),
-        ("swim", 36),
-        ("swim_idle", 48),
+        ("swim", 40),
+        ("swim_idle", 100),
         ("sit", 60),
         ("wave", 60),
         ("point", 45),
         ("cheer", 48),
-        ("dance", 60),
+        ("dance", 30),
     ];
     for (name, last) in want {
         let c = m
@@ -119,7 +120,7 @@ fn default_avatar_has_every_clip_at_30_fps() {
     for pose in ["pose_hand_on_hip", "pose_run", "pose_sit_back"] {
         assert!(m.clip(pose).is_some(), "missing {pose}");
     }
-    assert_eq!(m.clips.len(), 19);
+    assert_eq!(m.clips.len(), 20);
 }
 
 #[test]

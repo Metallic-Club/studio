@@ -126,3 +126,40 @@ Triangles: **LOD0 4360, LOD1 2756, LOD2 896** (budget 5744 / 2840 / 876). LOD2 i
   does not match the concept's pose.
 - The Blender toon renders (`render_phaseB.py`) were not redone for v4. The stills that count are
   the in-engine ones.
+
+## After the owner's approval: fixes and integration
+
+The owner approved v4 with four fixes:
+
+1. **Head crown.** The top and back of the skull are now a dome with a radius of about 0.15 m (the
+   first eight rows of `HEAD_ROWS`). The flat face plane starts at z 1.435, and the sides and jaw
+   are unchanged.
+2. **Neck.** It is slimmer: half widths go from 0.058 to 0.049 m, about a third of the head's
+   width. The trapezius rows are narrower too (half widths 0.098 and 0.068 m), and the torso's
+   top ring sits well inside the neck.
+   - The "dashed line" at the neck base was not ink. It was the stair-stepped edge of the head's
+     cast shadow on the chest.
+   - The toon shader now uses the filtered shadow term directly, without a hard step on it.
+   - The outline hull is also pushed 0.02 studs back along the view ray, so it never ties with
+     the surface where parts meet.
+3. **Fists.** `HAND_SCALE` is 1.12. On the concept's front view, the fist is about 0.37 of the
+   head's width; v4 was about 0.33.
+4. **Toon shading.**
+   - The shade and core tones are warmer and darker (×0.66/0.54/0.46 and ×0.50/0.39/0.33).
+   - The lit band starts at N·L 0.12–0.20, so planes turned partly away read as shade.
+   - A 7% darker terminator line runs just inside the lit band.
+   - A faint warm rim on the shade side separates the form from the ink.
+
+Then I merged `studio/avatar-v3-anim`, which brings the CC0 Quaternius UAL clips (see
+`art/avatar/ANIMATION_SOURCES.md` and `CREDITS.md`).
+- Every clip was re-baked on v4 with `METALLIC_UAL=<packs> rig_avatar.py`. The floor check
+  passes: no sole point is more than 5 mm below the floor.
+- The standing-clip slip numbers in `out/default_avatar_clips.json` are essentially the same as on
+  the animation branch.
+- The in-engine strips in the toon look are in `art/avatar/renders/v4-anim/`, from
+  `cargo run --release -p metallic_render --example avatar_clips -- art/avatar/renders/v4-anim
+  idle walk run jump fall land sit wave cheer dance`.
+- The animation branch's v3 strips (`renders/v3-anim/`) were removed. `render_anim_review.py` now
+  writes to the gitignored `out/anim-review/`.
+- `v2_vs_v4.png` and `v3_vs_v4.png` in `renders/v4/owner-review/` compare the concept, the old
+  version (standard shading) and v4 (toon).

@@ -3,8 +3,8 @@
  "bones": 53,
  "meshes": {
   "DefaultAvatar_LOD0": {
-   "triangles": 4360,
-   "vertices": 4422,
+   "triangles": 4392,
+   "vertices": 4601,
    "max_influences": 3,
    "unweighted": 0,
    "materials": [
@@ -17,8 +17,8 @@
    ]
   },
   "DefaultAvatar_LOD1": {
-   "triangles": 2756,
-   "vertices": 3096,
+   "triangles": 2780,
+   "vertices": 3158,
    "max_influences": 3,
    "unweighted": 0,
    "materials": [
@@ -32,7 +32,7 @@
   },
   "DefaultAvatar_LOD2": {
    "triangles": 896,
-   "vertices": 1222,
+   "vertices": 1218,
    "max_influences": 3,
    "unweighted": 0,
    "materials": [
@@ -56,11 +56,11 @@
   ],
   "dance": [
    0,
-   60
+   30
   ],
   "fall": [
    0,
-   24
+   75
   ],
   "idle": [
    0,
@@ -68,15 +68,19 @@
   ],
   "idle_b": [
    0,
-   120
+   90
   ],
   "jump": [
    0,
-   18
+   16
   ],
   "land": [
    0,
    16
+  ],
+  "land_hard": [
+   0,
+   28
   ],
   "point": [
    0,
@@ -104,11 +108,11 @@
   ],
   "swim": [
    0,
-   36
+   40
   ],
   "swim_idle": [
    0,
-   48
+   100
   ],
   "walk": [
    0,
@@ -125,5 +129,5 @@
  },
  "missing": [],
  "wrong_length": [],
- "bytes": 1394140
+ "bytes": 1596644
 }

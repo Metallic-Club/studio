@@ -22,9 +22,9 @@ fn vs_skinned(v: SkinIn) -> VOut {
 
 // Display-linear tones relative to the slot colour: lit is the colour itself, the shade is warmer
 // and darker, the core (facing away from the sun) a little darker again. Picked against the
-// concept sheet (lit #e9d8b6, shade about #d0ba98, core about #b8a082).
-const TOON_SHADE: vec3<f32> = vec3<f32>(0.62, 0.60, 0.66);
-const TOON_CORE: vec3<f32> = vec3<f32>(0.45, 0.42, 0.49);
+// concept sheet (lit #e9d8b6, shade about #c1a380, core about #a78b6d).
+const TOON_SHADE: vec3<f32> = vec3<f32>(0.66, 0.54, 0.46);
+const TOON_CORE: vec3<f32> = vec3<f32>(0.50, 0.39, 0.33);
 // Ink colour, display-linear (sRGB #5b3b33).
 const TOON_INK: vec3<f32> = vec3<f32>(0.1046, 0.0437, 0.0331);
 
@@ -50,14 +50,24 @@ fn toon_fog(c: vec3<f32>, wp: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_toon(in: VOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_n);
+    let v = normalize(g.camera_pos.xyz - in.world_pos);
     let ndl = dot(n, g.sun_dir.xyz);
     let sh = shadow_factor(in.world_pos, n, 1.0 / in.clip.w);
-    // Soft band edges: a few hundredths of the light range, about a pixel or two wide.
-    let lit = smoothstep(0.02, 0.10, ndl) * smoothstep(0.3, 0.7, sh);
-    let front = smoothstep(-0.50, -0.40, ndl);
+    // Soft band edges: a few hundredths of the light range, about a pixel or two wide. The
+    // band sits a little past the true terminator so planes turned partly away read as shade.
+    // The cast-shadow term stays as soft as the filtered shadow map: a hard step on it shows the
+    // shadow map's texels as a serrated edge (the head's shadow on the chest).
+    let lit = smoothstep(0.12, 0.20, ndl) * sh;
+    let front = smoothstep(-0.45, -0.35, ndl);
     let base = in.color.rgb;
     var tone = mix(base * TOON_CORE, base * TOON_SHADE, front);
     tone = mix(tone, base, lit);
+    // A thin, slightly darker warm line just inside the lit band (the terminator).
+    let term = smoothstep(0.12, 0.20, ndl) * (1.0 - smoothstep(0.20, 0.30, ndl));
+    tone = tone * (1.0 - 0.07 * term);
+    // A faint rim of reflected light on the shade side, so the form separates from the ink.
+    let rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * (1.0 - lit);
+    tone = mix(tone, base * TOON_SHADE * 1.18, 0.5 * rim);
     let c = unfinish(tone * toon_light());
     return vec4<f32>(finish(toon_fog(c, in.world_pos), in.clip.xy), 1.0);
 }
@@ -75,7 +85,10 @@ fn vs_outline(v: SkinIn) -> OutlineOut {
     let m = skin_matrix(v.joints, v.weights);
     let wp = m * vec4<f32>(v.pos, 1.0);
     let wn = normalize((m * vec4<f32>(v.smooth_n, 0.0)).xyz);
-    var clip = g.view_proj * wp;
+    // 0.02 studs further from the camera than the surface, so where parts meet (the neck into the
+    // shoulders) the hull loses depth ties to the surface instead of showing through as dashes.
+    let away = normalize(wp.xyz - g.camera_pos.xyz) * 0.02;
+    var clip = g.view_proj * vec4<f32>(wp.xyz + away, 1.0);
     let cn = (g.view_proj * vec4<f32>(wn, 0.0)).xy;
     let len = length(cn);
     if (len > 1e-6) {

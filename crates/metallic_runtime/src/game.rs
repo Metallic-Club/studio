@@ -484,7 +484,11 @@ impl Game {
             .relative_velocity(character)
             .unwrap_or_default();
         let speed = (v.x * v.x + v.z * v.z).sqrt() as f32;
-        avatar.update(root, yaw, LocomotionInput { speed, support }, dt);
+        let input = LocomotionInput {
+            vertical: v.y as f32,
+            ..LocomotionInput::new(speed, support)
+        };
+        avatar.update(root, yaw, input, dt);
     }
 
     /// The character's `HumanoidRootPart` position and facing (`Orientation.Y`, degrees).
