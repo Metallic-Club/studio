@@ -8,6 +8,7 @@ graph LR
   core[metallic_core] --> physics[metallic_physics]
   core --> script[metallic_script]
   core --> render[metallic_render]
+  asset[metallic_asset] --> render
   physics --> runtime[metallic_runtime]
   script --> runtime
   render --> runtime
@@ -26,7 +27,15 @@ apps.
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>`; `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). Also `deep_clone()` used by Play.
-- **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
+- **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
+  skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
+  per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
+  material slots and animation clips (`Clip`, `Track`: translation/rotation/scale with STEP, LINEAR and CUBICSPLINE).
+  Hostile files return `AssetError`, never panic: every accessor is bounds-checked, counts are capped (`MAX_JOINTS`,
+  `MAX_VERTICES`, `MAX_KEYFRAMES`, ...), and the gltf crate's own validation runs only after our reference checks.
+  Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
+  (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
+: `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here.
@@ -46,6 +55,10 @@ apps.
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
+  Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
+  the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
+  and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
+  parts. The level of detail is picked from the projected height in pixels (LOD1 below 220 px, LOD2 below 80 px).
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
@@ -53,8 +66,14 @@ apps.
   egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
   `InputState` turns keys, mouse and gamepad into `FrameInput`s without depending on a window library. Shared by
   player and Studio.
+  The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
+  into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
+  physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
+  (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
+  0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
+  &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
-  [--fps] [--capture FRAME:PNG]`; winit window, wgpu surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless
+  [--fps] [--autopilot] [--capture FRAME:PNG]`; winit window, wgpu surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless
   mode for smoke tests (no window, no GPU).
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
@@ -106,7 +125,8 @@ apps.
 5. **physics re-sync** when the change journal shows a BasePart under Workspace was created, destroyed, reparented or
    reshaped (Size, Shape, Material, Anchored, CanCollide); plain moves need no sync.
 
-Then the camera follows the character (frozen where it died while dead; a ray pulls it in front of walls). The app then
+Then the avatar follows the character (pose, smoothed facing, animation from the humanoid state and the speed
+relative to what it stands on) and the camera follows too (frozen where it died while dead; a ray pulls it in front of walls). The app then
 calls `Game::render` (`Renderer::sync` from the change journal, then `render`) and paints the GUI over the 3D view. The
 game never holds a `World` borrow while scripts run. `Game::start` runs the scripts (which creates `Player1`), copies
 `StarterGui` into the `PlayerGui` once, spawns the character and fires `CharacterAdded`.

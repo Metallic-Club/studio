@@ -147,6 +147,7 @@ fn too_many_connections_on_one_signal() {
 #[test]
 fn many_spinning_handlers_do_not_stall_a_step() {
     let mut rig = Rig::new();
+    rig.host.set_resume_budget(metallic_script::RESUME_BUDGET);
     let ws = rig.root("Workspace");
     let pad = rig.add("Part", "Pad", ws);
     let ball = rig.add("Part", "Ball", ws);
@@ -180,6 +181,7 @@ fn many_spinning_handlers_do_not_stall_a_step() {
 #[test]
 fn repeat_timeouts_disconnect_script() {
     let mut rig = Rig::new();
+    rig.host.set_resume_budget(metallic_script::RESUME_BUDGET);
     rig.server_script(
         "Spinner",
         r#"

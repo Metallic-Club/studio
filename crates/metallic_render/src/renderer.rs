@@ -6,10 +6,15 @@ use crate::scene::{InstanceRaw, Scene};
 use crate::shadows::{
     Cascade, MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
 };
+use crate::skinned::{
+    GpuSkinnedModel, SkinSlot, SkinnedDraw, SkinnedInstance, projected_height, select_lod,
+    skinned_layout,
+};
 use crate::sky::Sky;
 use bytemuck::{Pod, Zeroable};
 use metallic_core::World;
 use std::borrow::Cow;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -17,6 +22,8 @@ const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
 const SCENE_WGSL: &str = include_str!("../shaders/scene.wgsl");
 const SKY_WGSL: &str = include_str!("../shaders/sky.wgsl");
 const SHADOW_WGSL: &str = include_str!("../shaders/shadow.wgsl");
+const SKIN_COMMON_WGSL: &str = include_str!("../shaders/skin_common.wgsl");
+const SKINNED_WGSL: &str = include_str!("../shaders/skinned.wgsl");
 
 /// Overall quality preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -139,6 +146,8 @@ struct Pipelines {
     opaque: wgpu::RenderPipeline,
     blended: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
+    skinned: wgpu::RenderPipeline,
+    skinned_shadow: wgpu::RenderPipeline,
 }
 
 struct Attachments {
@@ -173,11 +182,19 @@ pub struct Renderer {
     globals: wgpu::Buffer,
     global_layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
+    skin_layout: wgpu::BindGroupLayout,
     global_group: wgpu::BindGroup,
     shadow_map: ShadowMap,
     cascade_slots: Vec<CascadeSlot>,
     pipelines: Pipelines,
     attachments: Option<Attachments>,
+    /// Skinned models uploaded so far, kept for the renderer's lifetime.
+    skinned_models: Vec<GpuSkinnedModel>,
+    /// Per-instance joint buffers, reused from frame to frame.
+    skin_slots: Vec<SkinSlot>,
+    /// The skinned instances given to the last [`Renderer::set_skinned`].
+    skinned_draws: Vec<SkinnedDraw>,
+    skin_scratch: Vec<u8>,
 }
 
 impl Renderer {
@@ -267,6 +284,19 @@ impl Renderer {
                 count: None,
             }],
         });
+        let skin_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("metallic skin layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         let shadow_map = ShadowMap::new(&device, settings.shadow_resolution(), settings.cascades());
         let global_group = make_global_group(&device, &global_layout, &globals, &shadow_map);
         let cascade_slots = make_cascade_slots(&device, &shadow_layout, settings.cascades());
@@ -276,6 +306,7 @@ impl Renderer {
             settings.samples(),
             &global_layout,
             &shadow_layout,
+            &skin_layout,
         );
         let blended = InstanceBuffer::new(&device, 256);
         Renderer {
@@ -296,11 +327,16 @@ impl Renderer {
             globals,
             global_layout,
             shadow_layout,
+            skin_layout,
             global_group,
             shadow_map,
             cascade_slots,
             pipelines,
             attachments: None,
+            skinned_models: Vec::new(),
+            skin_slots: Vec::new(),
+            skinned_draws: Vec::new(),
+            skin_scratch: Vec::new(),
         }
     }
 
@@ -334,6 +370,7 @@ impl Renderer {
             settings.samples(),
             &self.global_layout,
             &self.shadow_layout,
+            &self.skin_layout,
         );
         self.attachments = None;
     }
@@ -349,6 +386,57 @@ impl Renderer {
     /// property and no GPU work.
     pub fn sync(&mut self, world: &World) {
         self.scene.sync(world);
+    }
+
+    /// Sets the skinned instances (characters) to draw from the next [`Renderer::render`] on.
+    /// They stay until the next call; pass an empty slice to draw none. Joint matrices are
+    /// copied to the GPU here. A model is uploaded the first time it appears and then kept.
+    pub fn set_skinned(&mut self, instances: &[SkinnedInstance<'_>]) {
+        self.skinned_draws.clear();
+        for (slot, inst) in instances.iter().enumerate() {
+            let model = match self
+                .skinned_models
+                .iter()
+                .position(|m| Arc::ptr_eq(&m.model, inst.model))
+            {
+                Some(i) => i,
+                None => {
+                    self.skinned_models
+                        .push(GpuSkinnedModel::upload(&self.device, inst.model));
+                    self.skinned_models.len() - 1
+                }
+            };
+            SkinSlot::write(
+                &mut self.skin_slots,
+                slot,
+                &self.device,
+                &self.queue,
+                &self.skin_layout,
+                inst,
+                &mut self.skin_scratch,
+            );
+            self.skinned_draws.push(SkinnedDraw {
+                model,
+                slot,
+                center: inst.center,
+                height: inst.height,
+                lod: 0,
+            });
+        }
+    }
+
+    /// Picks each skinned instance's level of detail for this view.
+    fn select_skinned_lods(&mut self, camera: &Camera, viewport_height: u32) {
+        for d in &mut self.skinned_draws {
+            let px = projected_height(camera, viewport_height, d.center, d.height);
+            d.lod = select_lod(px, self.skinned_models[d.model].lods.len());
+        }
+    }
+
+    /// The level of detail each skinned instance was drawn with in the last frame (for tests
+    /// and diagnostics).
+    pub fn skinned_lods(&self) -> Vec<usize> {
+        self.skinned_draws.iter().map(|d| d.lod).collect()
     }
 
     fn upload_scene(&mut self) {
@@ -463,6 +551,7 @@ impl Renderer {
         }
         self.ensure_attachments(size);
         self.upload_scene();
+        self.select_skinned_lods(camera, size.1);
 
         // Blended parts are re-sorted every frame because the order depends on the camera.
         // The scratch vectors keep their capacity from frame to frame.
@@ -541,6 +630,8 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.shadow);
             pass.set_bind_group(0, &slot.bind_group, &[]);
             self.draw_opaque(&mut pass);
+            pass.set_pipeline(&self.pipelines.skinned_shadow);
+            self.draw_skinned(&mut pass);
         }
 
         {
@@ -580,6 +671,8 @@ impl Renderer {
             pass.draw(0..3, 0..1);
             pass.set_pipeline(&self.pipelines.opaque);
             self.draw_opaque(&mut pass);
+            pass.set_pipeline(&self.pipelines.skinned);
+            self.draw_skinned(&mut pass);
             self.draw_blended(&mut pass);
         }
         self.queue.submit(Some(encoder.finish()));
@@ -596,6 +689,19 @@ impl Renderer {
             pass.set_vertex_buffer(1, inst.buffer.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..mesh.index_count, 0, 0..inst.count as u32);
+        }
+    }
+
+    /// Draws every skinned instance with the pipeline already set (main or shadow).
+    fn draw_skinned(&self, pass: &mut wgpu::RenderPass<'_>) {
+        for d in &self.skinned_draws {
+            let Some(lod) = self.skinned_models[d.model].lods.get(d.lod) else {
+                continue;
+            };
+            pass.set_bind_group(1, &self.skin_slots[d.slot].bind_group, &[]);
+            pass.set_vertex_buffer(0, lod.vertices.slice(..));
+            pass.set_index_buffer(lod.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..lod.index_count, 0, 0..1);
         }
     }
 
@@ -803,10 +909,15 @@ fn make_pipelines(
     samples: u32,
     global_layout: &wgpu::BindGroupLayout,
     shadow_layout: &wgpu::BindGroupLayout,
+    skin_layout: &wgpu::BindGroupLayout,
 ) -> Pipelines {
-    let scene_module = shader(device, "metallic scene", &[COMMON_WGSL, SCENE_WGSL]);
+    let scene_module = shader(
+        device,
+        "metallic scene",
+        &[COMMON_WGSL, SKIN_COMMON_WGSL, SCENE_WGSL, SKINNED_WGSL],
+    );
     let sky_module = shader(device, "metallic sky", &[COMMON_WGSL, SKY_WGSL]);
-    let shadow_module = shader(device, "metallic shadow", &[SHADOW_WGSL]);
+    let shadow_module = shader(device, "metallic shadow", &[SKIN_COMMON_WGSL, SHADOW_WGSL]);
 
     let main_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("metallic main layout"),
@@ -816,6 +927,16 @@ fn make_pipelines(
     let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("metallic shadow pipeline layout"),
         bind_group_layouts: &[Some(shadow_layout)],
+        immediate_size: 0,
+    });
+    let skinned_layout_main = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("metallic skinned layout"),
+        bind_group_layouts: &[Some(global_layout), Some(skin_layout)],
+        immediate_size: 0,
+    });
+    let skinned_layout_shadow = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("metallic skinned shadow layout"),
+        bind_group_layouts: &[Some(shadow_layout), Some(skin_layout)],
         immediate_size: 0,
     });
     let multisample = wgpu::MultisampleState {
@@ -885,32 +1006,78 @@ fn make_pipelines(
         multiview_mask: None,
         cache: None,
     });
-    let shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("metallic shadow"),
-        layout: Some(&shadow_pipeline_layout),
+    let shadow_pipeline =
+        |label: &str,
+         layout: &wgpu::PipelineLayout,
+         entry: &str,
+         buffers: &[Option<wgpu::VertexBufferLayout<'_>>]| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: &shadow_module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: Some(wgpu::Face::Front),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: SHADOW_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 2,
+                        slope_scale: 2.0,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                fragment: None,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+    let shadow = shadow_pipeline(
+        "metallic shadow",
+        &shadow_pipeline_layout,
+        "vs_main",
+        &vertex_layouts().map(Some),
+    );
+    let skinned_shadow = shadow_pipeline(
+        "metallic skinned shadow",
+        &skinned_layout_shadow,
+        "vs_skinned",
+        &[Some(skinned_layout())],
+    );
+    let skinned = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("metallic skinned"),
+        layout: Some(&skinned_layout_main),
         vertex: wgpu::VertexState {
-            module: &shadow_module,
-            entry_point: Some("vs_main"),
+            module: &scene_module,
+            entry_point: Some("vs_skinned"),
             compilation_options: Default::default(),
-            buffers: &vertex_layouts().map(Some),
+            buffers: &[Some(skinned_layout())],
         },
         primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Front),
+            cull_mode: Some(wgpu::Face::Back),
             ..Default::default()
         },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: SHADOW_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState {
-                constant: 2,
-                slope_scale: 2.0,
-                clamp: 0.0,
-            },
+        depth_stencil: Some(depth(true, wgpu::CompareFunction::Less)),
+        multisample,
+        fragment: Some(wgpu::FragmentState {
+            module: &scene_module,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: None,
         multiview_mask: None,
         cache: None,
     });
@@ -923,5 +1090,7 @@ fn make_pipelines(
             false,
         ),
         shadow,
+        skinned,
+        skinned_shadow,
     }
 }

@@ -2635,6 +2635,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "metallic_asset"
+version = "0.1.0"
+dependencies = [
+ "glam 0.30.10",
+ "gltf",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "metallic_audio"
 version = "0.1.0"
 dependencies = [
@@ -2725,6 +2735,7 @@ dependencies = [
  "bytemuck",
  "glam 0.30.10",
  "log",
+ "metallic_asset",
  "metallic_core",
  "png",
  "pollster 1.0.1",
@@ -2741,6 +2752,7 @@ dependencies = [
  "metallic_physics",
  "metallic_render",
  "metallic_script",
+ "png",
  "serde",
  "thiserror 2.0.21",
  "toml",
