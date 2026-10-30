@@ -10,7 +10,7 @@ camera and GUI; `metallic_player` is the window/headless app; `templates/parkour
 ## Where things are
 - `crates/metallic_runtime/src/`: `game.rs` (Game, frame loop, physics re-sync from the change journal, run boost),
   `input.rs` (FrameInput, InputState), `camera_controller.rs` (orbit, zoom, wall pull-in), `gui.rs` (PlayerGui layout
-  and egui painting, system font), `project.rs` (`metallic.toml`).
+  and egui painting), `project.rs` (`metallic.toml`).
 - `crates/metallic_runtime/examples/build_parkour/`: the level as code (`level.rs`), its Luau scripts (`scripts.rs`);
   writes `templates/parkour/main.mscene` and `tests/smoke.mscene`. Re-run after changing the level:
   `cargo run -p metallic_runtime --example build_parkour`.
@@ -22,11 +22,15 @@ camera and GUI; `metallic_player` is the window/headless app; `templates/parkour
 
 ## Decisions
 - Frame order and fixed 60 Hz tick: see ARCHITECTURE.md "Frame loop".
-- Run (Shift) = WalkSpeed x1.5 for the controller step only; restored before scripts run (physics crate untouched).
+- Run (Shift) = `MoveInput::run` in metallic_physics: 1.5 x WalkSpeed inside the controller; `WalkSpeed` itself never changes.
 - StarterGui is copied into PlayerGui once at start (no ResetOnSpawn in M1).
-- egui without bundled fonts (OFL/Ubuntu licences are not on the allow list); GUI text uses a system font found at run
-  time (Segoe UI Semibold on Windows). Studio (Task 9, eframe) will meet the same licence question.
+- GUI text uses egui's bundled fonts (Ruling R11; licence texts in `LICENSES/THIRD-PARTY-FONTS.md`, shared with Studio).
 - Character touches reach scripts as `part.Touched(HumanoidRootPart)`.
+- Lava and checkpoint scripts re-scan their folder every Heartbeat for new parts (the script API has no `ChildAdded`
+  yet).
+- The level is built per section: sections 2-4 use their own coordinates moved by `SLATE_AT`/`MOSS_AT`/`ICE_AT`
+  (`level.rs`); the route test repeats those offsets and the tower numbers.
+- Overview screenshots: `metallic-player <project> --frames N --capture N:shot.png --capture-view X,Y,Z,LX,LY,LZ`.
 
 ## Commands
 ```

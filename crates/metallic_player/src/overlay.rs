@@ -9,12 +9,9 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    /// Creates the overlay for targets of `format` and installs a system font.
+    /// Creates the overlay for targets of `format` (text uses egui's bundled fonts).
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Overlay {
         let ctx = egui::Context::default();
-        if metallic_runtime::gui::install_system_font(&ctx).is_none() {
-            eprintln!("warning: no system font found; GUI text shows as boxes");
-        }
         let renderer =
             egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default());
         Overlay { ctx, renderer }

@@ -210,6 +210,37 @@ fn touching_lava_knocks_the_character_out_and_it_respawns() {
 }
 
 #[test]
+fn a_lava_part_added_while_running_knocks_the_character_out() {
+    let mut game = start(Rc::new(Captured::default()));
+    run(&mut game, FrameInput::default(), 0.2);
+    let world = game.world();
+    let spot = Vec3::new(10.0, 0.25, -6.0);
+    {
+        let mut w = world.borrow_mut();
+        let ws = w.root("Workspace").unwrap();
+        let folder = w.find_first_child(ws, "Lava").unwrap();
+        let lava = w.create("Part", Some(folder)).unwrap();
+        w.set(lava, "Anchored", Value::Bool(true)).unwrap();
+        w.set(lava, "Size", Value::Vector3(Vec3::new(4.0, 0.5, 4.0)))
+            .unwrap();
+        w.set(lava, "Position", Value::Vector3(spot)).unwrap();
+    }
+    run(&mut game, FrameInput::default(), 0.2);
+    let root = root_of(&game);
+    world
+        .borrow_mut()
+        .set(
+            root,
+            "Position",
+            Value::Vector3(spot + Vec3::new(0.0, 3.3, 0.0)),
+        )
+        .unwrap();
+    run(&mut game, FrameInput::default(), 0.3);
+    let out = game.frame(&FrameInput::default(), TICK);
+    assert_eq!(out.state, Some(HumanoidState::Dead));
+}
+
+#[test]
 fn parts_created_by_scripts_while_running_get_physics() {
     let mut w = World::new_with_services();
     let ws = w.root("Workspace").unwrap();

@@ -3,6 +3,8 @@
 
 /// Lava folder: knocks out anyone who touches a lava part.
 pub const LAVA: &str = r#"-- Lava: any player who touches a lava part in this folder is knocked out.
+local RunService = game:GetService("RunService")
+
 local lavaFolder = script.Parent
 
 local function onTouched(hit)
@@ -13,11 +15,19 @@ local function onTouched(hit)
     end
 end
 
-for _, lava in ipairs(lavaFolder:GetChildren()) do
-    if lava:IsA("BasePart") then
-        lava.Touched:Connect(onTouched)
+-- Listens to every lava part in the folder, also parts added while the game runs.
+local listening = {}
+local function listenToNewLava()
+    for _, lava in ipairs(lavaFolder:GetChildren()) do
+        if lava:IsA("BasePart") and not listening[lava] then
+            listening[lava] = true
+            lava.Touched:Connect(onTouched)
+        end
     end
 end
+
+listenToNewLava()
+RunService.Heartbeat:Connect(listenToNewLava)  -- looks again every frame for new lava
 "#;
 
 /// The moving platform between the lava walk and Checkpoint 2.
@@ -55,27 +65,46 @@ end)
 pub const CHECKPOINTS: &str = r#"-- Tells a player's screen when they reach a new checkpoint.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local checkpointFolder = script.Parent
 local checkpointReached = ReplicatedStorage:WaitForChild("CheckpointReached")
 local bestOrder = {}  -- the highest checkpoint each player has reached
 
-local checkpoints = {}
-for _, child in ipairs(checkpointFolder:GetChildren()) do
-    if child:IsA("Checkpoint") then
-        table.insert(checkpoints, child)
+local function countCheckpoints()
+    local count = 0
+    for _, child in ipairs(checkpointFolder:GetChildren()) do
+        if child:IsA("Checkpoint") then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function onCheckpointTouched(checkpoint, hit)
+    local player = Players:GetPlayerFromCharacter(hit.Parent)
+    -- Only a checkpoint further along than the player's best counts; going back says nothing.
+    if player and checkpoint.Order > (bestOrder[player] or 0) then
+        bestOrder[player] = checkpoint.Order
+        checkpointReached:FireClient(player, checkpoint.Order, countCheckpoints())
     end
 end
 
-for _, checkpoint in ipairs(checkpoints) do
-    checkpoint.Touched:Connect(function(hit)
-        local player = Players:GetPlayerFromCharacter(hit.Parent)
-        if player and checkpoint.Order > (bestOrder[player] or 0) then
-            bestOrder[player] = checkpoint.Order
-            checkpointReached:FireClient(player, checkpoint.Order, #checkpoints)
+-- Listens to every checkpoint in the folder, also checkpoints added while the game runs.
+local listening = {}
+local function listenToNewCheckpoints()
+    for _, checkpoint in ipairs(checkpointFolder:GetChildren()) do
+        if checkpoint:IsA("Checkpoint") and not listening[checkpoint] then
+            listening[checkpoint] = true
+            checkpoint.Touched:Connect(function(hit)
+                onCheckpointTouched(checkpoint, hit)
+            end)
         end
-    end)
+    end
 end
+
+listenToNewCheckpoints()
+RunService.Heartbeat:Connect(listenToNewCheckpoints)  -- looks again every frame for new ones
 "#;
 
 /// The Finish pad.
@@ -86,7 +115,7 @@ local RunService = game:GetService("RunService")
 
 local finishPad = script.Parent
 local finished = ReplicatedStorage:WaitForChild("Finished")
-local secondsPlayed = 0
+local secondsPlayed = 0  -- counts from when the server starts (in M1 that is when you press Play)
 local someoneFinished = false  -- only the first finish counts while this server runs
 
 RunService.Heartbeat:Connect(function(dt)

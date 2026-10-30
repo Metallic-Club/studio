@@ -12,6 +12,9 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "MPL-2.0",
+    # Fonts bundled by egui (epaint_default_fonts).
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 confidence-threshold = 0.8
 

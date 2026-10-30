@@ -8,11 +8,9 @@
 //! rectangle in `TextColor3` at `TextSize` points.
 //!
 //! [`layout`] does the maths without egui (and is unit tested); [`paint`] draws its result.
-use egui::{Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Painter, Rect};
+use egui::{Align2, Color32, FontId, Painter, Rect};
 use metallic_core::{Color3, InstanceId, UDim2, Value, World};
 use metallic_script::LOCAL_PLAYER_NAME;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 /// One element to draw, in screen points.
 #[derive(Debug, Clone, PartialEq)]
@@ -146,47 +144,6 @@ pub fn paint(world: &World, painter: &Painter) {
             );
         }
     }
-}
-
-/// Font files tried in order; the first that exists is used for GUI text.
-fn system_font_candidates() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Some(windir) = std::env::var_os("WINDIR") {
-        let fonts = PathBuf::from(windir).join("Fonts");
-        out.push(fonts.join("seguisb.ttf"));
-        out.push(fonts.join("segoeui.ttf"));
-        out.push(fonts.join("arial.ttf"));
-    }
-    for p in [
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    ] {
-        out.push(PathBuf::from(p));
-    }
-    out
-}
-
-/// Makes `ctx` draw text with a font installed on this computer (Segoe UI Semibold on Windows).
-///
-/// The engine bundles no font yet: egui's own fonts carry licences (OFL, Ubuntu Font Licence) that
-/// are not on our allow list. Returns the font file used, or `None` when none was found (text
-/// then shows as boxes).
-pub fn install_system_font(ctx: &egui::Context) -> Option<PathBuf> {
-    let (path, bytes) = system_font_candidates()
-        .into_iter()
-        .find_map(|p| std::fs::read(&p).ok().map(|b| (p, b)))?;
-    let mut fonts = FontDefinitions::empty();
-    fonts
-        .font_data
-        .insert("system".to_owned(), Arc::new(FontData::from_owned(bytes)));
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        fonts.families.insert(family, vec!["system".to_owned()]);
-    }
-    ctx.set_fonts(fonts);
-    Some(path)
 }
 
 #[cfg(test)]

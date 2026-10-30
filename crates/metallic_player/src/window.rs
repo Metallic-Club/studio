@@ -2,7 +2,8 @@
 use crate::args::Args;
 use crate::capture::CaptureTarget;
 use crate::overlay::Overlay;
-use metallic_render::{RenderContext, RenderSettings, Renderer};
+use metallic_render::glam::Vec3;
+use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
 use metallic_runtime::{Action, Game, InputState};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -202,7 +203,16 @@ impl App {
         let scale = gfx.window.scale_factor() as f32;
         if let Some(path) = capture_path(&self.args, self.frame) {
             let target = CaptureTarget::new(&gfx.ctx.device, gfx.config.format, size);
-            self.game.render(&mut gfx.renderer, &target.view, size);
+            let camera = match self.args.capture_view {
+                Some([x, y, z, lx, ly, lz]) => Camera {
+                    position: Vec3::new(x, y, z),
+                    look_at: Vec3::new(lx, ly, lz),
+                    ..self.game.camera()
+                },
+                None => self.game.camera(),
+            };
+            self.game
+                .render_from(&mut gfx.renderer, &target.view, size, &camera);
             gfx.overlay.draw(
                 &gfx.ctx.device,
                 &gfx.ctx.queue,

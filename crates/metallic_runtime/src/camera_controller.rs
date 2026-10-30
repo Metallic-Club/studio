@@ -14,7 +14,7 @@ pub const MAX_DISTANCE: f32 = 40.0;
 /// Starting pitch in radians (looking slightly down).
 pub const DEFAULT_PITCH: f32 = 0.25;
 /// The camera looks at this point above the `HumanoidRootPart` centre (studs).
-pub const FOCUS_HEIGHT: f64 = 2.0;
+pub const FOCUS_HEIGHT: f64 = 2.5;
 /// Gap kept between the camera and a wall it was pulled in front of (studs).
 const WALL_GAP: f32 = 0.6;
 /// How fast the camera moves back out once a wall is gone (studs per second).

@@ -34,7 +34,7 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
   scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
-  egui painter; a system font is loaded at run time because egui's bundled fonts are not on our licence allow list).
+  egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
   `InputState` turns keys, mouse and gamepad into `FrameInput`s without depending on a window library. Shared by
   player and Studio.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
@@ -47,8 +47,8 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
 `dt` is clamped to 0.25 s), so a headless run of N frames of 1/60 s is deterministic. Each tick:
 
-1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift raises
-   `Humanoid.WalkSpeed` x1.5 for this step only and restores it before scripts run); death, respawn, checkpoints and
+1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift sets
+   `MoveInput::run`: 1.5 x `Humanoid.WalkSpeed`, which scripts still read unchanged); death, respawn, checkpoints and
    character touches happen here.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character

@@ -17,68 +17,158 @@ enum Step {
     Go(f64, f64, f64),
     /// After a death, continue from the step after the last `Resume` passed.
     Resume,
-    /// Stand still until the moving platform's Z is at least this.
-    MoverAtLeast(f64),
-    /// Walk onto the moving platform's centre.
-    Mover,
-    /// Ride the moving platform until its Z is at most this.
-    MoverAtMost(f64),
+    /// Stand still until the named moving platform's Z is at least this.
+    MoverAtLeast(&'static str, f64),
+    /// Walk onto the centre of the named moving platform, whose top is at this height.
+    Mover(&'static str, f64),
+    /// Ride the named moving platform until its Z is at most this.
+    MoverAtMost(&'static str, f64),
     /// Keep jumping (true) or stop (false) during the following `Go` steps.
     Hop(bool),
 }
 
 use Step::*;
 
-const ROUTE: &[Step] = &[
-    Resume,
-    Go(0.0, 0.0, -12.0),
-    Go(0.0, 0.0, -22.0),
-    Go(3.0, 0.0, -34.0),
-    Go(-2.0, 1.5, -46.0),
-    Go(2.0, 3.0, -58.0),
-    Go(0.0, 4.5, -70.0),
-    Go(0.0, 6.0, -80.0),
-    Go(0.0, 7.5, -89.0),
-    Go(0.0, 9.0, -98.0),
-    Go(0.0, 10.5, -107.0),
-    Go(0.0, 12.0, -121.0),
-    Resume,
-    // The lava walk: through each safe lane, turning only on the floor tiles between strips.
-    Go(5.0, 12.0, -134.0),
-    Go(5.0, 12.0, -143.0),
-    Go(-5.0, 12.0, -147.0),
-    Go(-5.0, 12.0, -155.0),
-    Go(0.0, 12.0, -159.0),
-    Go(0.0, 12.0, -167.0),
-    Go(5.25, 12.0, -171.0),
-    Go(5.25, 12.0, -180.5),
-    Go(0.0, 12.0, -181.5),
-    MoverAtLeast(-188.0),
-    Mover,
-    MoverAtMost(-201.0),
-    Go(0.0, 12.0, -214.0),
-    Resume,
-    Go(4.0, 12.0, -220.0),
-    Hop(true),
-    Go(4.0, 12.0, -252.0),
-    Hop(false),
-    Go(4.0, 13.5, -262.0),
-    Go(-3.0, 15.0, -273.0),
-    Go(-3.0, 16.5, -283.0),
-    Go(-3.0, 16.5, -299.0),
-    Go(-3.0, 16.5, -309.0),
-    Go(-3.0, 18.5, -319.0),
-    Go(2.0, 18.5, -325.0),
-    Go(-2.0, 18.5, -331.0),
-    Go(3.0, 18.5, -337.0),
-    Go(0.0, 18.5, -350.0),
-    Resume,
-    Go(4.0, 20.0, -366.0),
-    Go(-2.0, 21.5, -378.0),
-    Go(3.0, 23.0, -391.0),
-    Go(-1.0, 24.0, -404.0),
-    Go(0.0, 25.0, -424.0),
-];
+/// Where `examples/build_parkour/level.rs` places sections 2, 3 and 4: (Y, Z) added to the
+/// section coordinates used below.
+const SLATE_AT: (f64, f64) = (0.0, -61.0);
+const MOSS_AT: (f64, f64) = (0.0, -115.0);
+const ICE_AT: (f64, f64) = (10.0, -115.0);
+
+/// The tower climb as built by the level (section 3 coordinates): centre (x, z), radius, first
+/// angle and step (degrees, 0 = +Z), first top, rise, pad count.
+const TOWER: ((f64, f64), f64, f64, f64, f64, f64, usize) =
+    ((0.0, -450.0), 8.0, 250.0, 50.0, 22.0, 2.5, 14);
+
+/// Moves a section's steps from section coordinates into the world.
+fn placed(at: (f64, f64), steps: Vec<Step>) -> Vec<Step> {
+    let (dy, dz) = at;
+    steps
+        .into_iter()
+        .map(|s| match s {
+            Go(x, y, z) => Go(x, y + dy, z + dz),
+            MoverAtLeast(n, z) => MoverAtLeast(n, z + dz),
+            Mover(n, top) => Mover(n, top + dy),
+            MoverAtMost(n, z) => MoverAtMost(n, z + dz),
+            other => other,
+        })
+        .collect()
+}
+
+/// A lava walk starting at `z0`: through each safe lane, turning only on the floor tiles between
+/// strips. `side` is 1 for the first walk and -1 for the mirrored second one.
+fn lava_walk(z0: f64, side: f64) -> Vec<Step> {
+    [
+        (5.0, 5.0),
+        (5.0, 14.0),
+        (-5.0, 18.0),
+        (-5.0, 26.0),
+        (0.0, 30.0),
+        (0.0, 38.0),
+        (5.25, 42.0),
+        (5.25, 51.5),
+        (0.0, 52.5),
+    ]
+    .into_iter()
+    .map(|(x, d)| Go(x * side, 13.5, z0 - d))
+    .collect()
+}
+
+fn route() -> Vec<Step> {
+    let mut r = vec![
+        Resume,
+        Go(0.0, 0.0, -12.0),
+        Go(0.0, 0.0, -22.0),
+        Go(3.0, 0.0, -34.0),
+        Go(-2.0, 1.5, -46.0),
+        Go(2.0, 3.0, -58.0),
+        Go(0.0, 4.5, -70.0),
+        Go(0.0, 6.0, -80.0),
+        Go(0.0, 7.5, -89.0),
+        Go(0.0, 9.0, -98.0),
+        Go(0.0, 10.5, -107.0),
+        Go(-5.0, 10.5, -118.0),
+        Go(3.0, 12.0, -129.0),
+        Go(-3.0, 12.0, -141.0),
+        Go(2.0, 13.5, -152.0),
+        Go(0.0, 13.5, -158.0),
+        Go(0.0, 13.5, -182.0),
+        Go(-4.0, 15.0, -190.0),
+        Go(3.0, 15.0, -201.0),
+        Go(-2.0, 13.5, -212.0),
+        Go(0.0, 13.5, -228.0),
+        Resume,
+    ];
+
+    let mut slate = lava_walk(-175.0, 1.0);
+    slate.extend([
+        MoverAtLeast("MovingPlatform", -234.0),
+        Mover("MovingPlatform", 13.5),
+        MoverAtMost("MovingPlatform", -247.0),
+        Go(0.0, 13.5, -258.0),
+        // The beams over the lava river.
+        Go(-2.0, 13.5, -265.0),
+        Go(-2.0, 13.5, -278.0),
+        Go(0.0, 13.5, -281.0),
+        Go(2.0, 13.5, -285.0),
+        Go(2.0, 13.5, -299.0),
+    ]);
+    slate.extend(lava_walk(-300.0, -1.0));
+    slate.extend([Go(0.0, 13.5, -362.0), Resume]);
+    r.extend(placed(SLATE_AT, slate));
+
+    let mut moss = vec![
+        Go(4.0, 13.5, -314.0),
+        Hop(true),
+        Go(4.0, 13.5, -346.0),
+        Hop(false),
+        Go(4.0, 15.0, -356.0),
+        Go(-3.0, 16.5, -367.0),
+        Go(-3.0, 18.0, -377.0),
+        Go(-3.0, 18.0, -393.0),
+        Go(-3.0, 18.0, -403.0),
+        Go(-3.0, 20.0, -413.0),
+        Go(2.0, 20.0, -419.0),
+        Go(-2.0, 20.0, -425.0),
+        Go(3.0, 20.0, -431.0),
+        Go(-8.0, 20.0, -441.0),
+        Hop(true),
+    ];
+    let ((cx, cz), radius, first, step, top, rise, pads) = TOWER;
+    for i in 0..pads {
+        let a = (first + step * i as f64).to_radians();
+        moss.push(Go(
+            cx + radius * a.sin(),
+            top + rise * i as f64,
+            cz + radius * a.cos(),
+        ));
+    }
+    moss.extend([Hop(false), Go(0.0, 54.5, -474.0), Resume]);
+    r.extend(placed(MOSS_AT, moss));
+
+    r.extend(placed(
+        ICE_AT,
+        vec![
+            Go(4.0, 46.0, -490.0),
+            Go(-2.0, 47.5, -502.0),
+            Go(3.0, 49.0, -515.0),
+            Go(-1.0, 50.0, -528.0),
+            Go(0.0, 50.0, -540.0),
+            Go(0.0, 50.0, -543.5),
+            MoverAtLeast("MovingPlatform2", -550.0),
+            Mover("MovingPlatform2", 50.0),
+            MoverAtMost("MovingPlatform2", -563.0),
+            Go(0.0, 50.0, -573.0),
+            Go(4.0, 51.0, -585.0),
+            Go(-4.0, 52.0, -594.0),
+            Go(4.0, 53.0, -603.0),
+            Go(-4.0, 54.0, -612.0),
+            Go(0.0, 55.0, -621.0),
+            Go(0.0, 56.0, -638.0),
+        ],
+    ));
+    r
+}
 
 /// The bot gives up when one step takes longer than this (seconds of game time).
 const STEP_LIMIT: f64 = 20.0;
@@ -131,6 +221,7 @@ fn hud_text(w: &World) -> String {
 
 struct Bot {
     game: Game,
+    route: Vec<Step>,
     /// Static copy of the level for "is there ground ahead" rays.
     probe: PhysicsWorld,
     step: usize,
@@ -156,11 +247,11 @@ impl Bot {
         (vec3(&w, root, "Position"), parts_of(&w, model))
     }
 
-    fn mover_z(&self) -> f64 {
+    fn mover_z(&self, name: &str) -> f64 {
         let world = self.world();
         let w = world.borrow();
         let ws = w.root("Workspace").expect("workspace");
-        let mover = w.find_first_child(ws, "MovingPlatform").expect("mover");
+        let mover = w.find_first_child(ws, name).expect("mover");
         vec3(&w, mover, "Position").z
     }
 
@@ -179,6 +270,7 @@ impl Bot {
         self.step_time += TICK;
         let text = hud_text(&self.world().borrow());
         if self.seen.last() != Some(&text) {
+            println!("{:6.1} s  HUD: {text}", self.game.time());
             self.seen.push(text);
         }
         out.state
@@ -208,7 +300,7 @@ impl Bot {
     fn run(&mut self) -> f64 {
         let mut state = self.tick(FrameInput::default());
         let mut last_character = self.game.character();
-        while self.step < ROUTE.len() {
+        while self.step < self.route.len() {
             assert!(
                 self.game.time() < TIME_LIMIT,
                 "out of time at step {}",
@@ -218,7 +310,7 @@ impl Bot {
                 self.step_time < STEP_LIMIT,
                 "stuck at step {} {:?}, root {:?}",
                 self.step,
-                ROUTE[self.step],
+                self.route[self.step],
                 self.root().0
             );
             if state == Some(HumanoidState::Dead) {
@@ -226,7 +318,7 @@ impl Bot {
                     "death {} at step {} {:?}, root {:?}, t = {:.1}",
                     self.deaths + 1,
                     self.step,
-                    ROUTE[self.step],
+                    self.route[self.step],
                     self.root().0,
                     self.game.time()
                 );
@@ -243,7 +335,7 @@ impl Bot {
                 state = self.tick(FrameInput::default());
                 continue;
             }
-            let input = match ROUTE[self.step] {
+            let input = match self.route[self.step] {
                 Go(x, y, z) => self.steer(Vec3::new(x, y, z), state),
                 Resume => {
                     self.resume = self.step + 1;
@@ -253,20 +345,20 @@ impl Bot {
                     self.hop = on;
                     None
                 }
-                MoverAtLeast(z) => (self.mover_z() < z).then(FrameInput::default),
-                Mover => {
-                    let target = Vec3::new(0.0, 12.0, self.mover_z());
+                MoverAtLeast(name, z) => (self.mover_z(name) < z).then(FrameInput::default),
+                Mover(name, top) => {
+                    let target = Vec3::new(0.0, top, self.mover_z(name));
                     let (root, _) = self.root();
                     let on = flat(target - root).magnitude() < 2.5
                         && state == Some(HumanoidState::Running)
-                        && (root.y - 15.0).abs() < 0.6;
+                        && (root.y - 3.0 - top).abs() < 0.6;
                     if on {
                         None
                     } else {
                         self.steer(target, state).or(Some(FrameInput::default()))
                     }
                 }
-                MoverAtMost(z) => (self.mover_z() > z).then(FrameInput::default),
+                MoverAtMost(name, z) => (self.mover_z(name) > z).then(FrameInput::default),
             };
             match input {
                 Some(i) => state = self.tick(i),
@@ -293,6 +385,7 @@ fn a_bot_using_only_player_input_finishes_the_course() {
     probe.sync_from(&game.world().borrow());
     let mut bot = Bot {
         game,
+        route: route(),
         probe,
         step: 0,
         resume: 0,

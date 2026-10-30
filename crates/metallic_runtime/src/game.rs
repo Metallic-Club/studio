@@ -4,6 +4,7 @@ use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
 use crate::input::FrameInput;
 use crate::project::ProjectConfig;
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value, Vec3, World, load_scene};
+pub use metallic_physics::RUN_MULTIPLIER;
 use metallic_physics::{
     CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, spawn_character,
 };
@@ -21,8 +22,6 @@ pub const TICK: f64 = 1.0 / TICK_RATE;
 /// Longest frame time [`Game::frame`] simulates; a longer stall (a dragged window, a breakpoint)
 /// is dropped instead of being caught up in a burst.
 pub const MAX_FRAME_DT: f64 = 0.25;
-/// Running multiplies `Humanoid.WalkSpeed` by this (a Metallic addition; Roblox has no run key).
-pub const RUN_MULTIPLIER: f64 = 1.5;
 /// Name of the character part passed as `hit` when a character touches a part.
 const ROOT_PART: &str = "HumanoidRootPart";
 
@@ -52,7 +51,9 @@ pub struct FrameOutput {
     pub state: Option<HumanoidState>,
 }
 
-/// The physics-relevant shape of a part; when it changes the physics must re-sync.
+/// The physics-relevant shape of a part; when it changes the physics must re-sync. These are the
+/// properties `PhysicsWorld::sync_from` reads besides the pose (it does not read `CanTouch` or
+/// `CanQuery` in M1).
 #[derive(Debug, Clone, PartialEq)]
 struct PartShape {
     size: Value,
@@ -226,19 +227,12 @@ impl Game {
         self.scripts
             .start()
             .map_err(|e| RuntimeError::Start(e.message))?;
-        let (player, model) = {
-            let mut world = self
-                .world
-                .try_borrow_mut()
-                .map_err(|_| RuntimeError::Start("the world is busy".into()))?;
-            let player = world
-                .root("Players")
-                .and_then(|p| world.find_first_child(p, LOCAL_PLAYER_NAME))
-                .ok_or_else(|| RuntimeError::Start("no local player".into()))?;
-            copy_starter_gui(&mut world, player);
-            let model = spawn_character(&mut world, player)
-                .map_err(|e| RuntimeError::Start(format!("cannot spawn the character: {e}")))?;
-            (player, model)
+        let (player, model) = match self.spawn_local_player() {
+            Ok(spawned) => spawned,
+            Err(e) => {
+                self.scripts.stop();
+                return Err(e);
+            }
         };
         self.player = Some(player);
         self.character = Some(model);
@@ -249,6 +243,22 @@ impl Game {
         self.accumulator = 0.0;
         self.running = true;
         Ok(())
+    }
+
+    /// Finds `Player1` (created by the script host), gives it the StarterGui and a character.
+    fn spawn_local_player(&mut self) -> Result<(InstanceId, InstanceId), RuntimeError> {
+        let mut world = self
+            .world
+            .try_borrow_mut()
+            .map_err(|_| RuntimeError::Start("the world is busy".into()))?;
+        let player = world
+            .root("Players")
+            .and_then(|p| world.find_first_child(p, LOCAL_PLAYER_NAME))
+            .ok_or_else(|| RuntimeError::Start("no local player".into()))?;
+        copy_starter_gui(&mut world, player);
+        let model = spawn_character(&mut world, player)
+            .map_err(|e| RuntimeError::Start(format!("cannot spawn the character: {e}")))?;
+        Ok((player, model))
     }
 
     /// Stops the scripts. The world keeps its last state; the game can be dropped afterwards.
@@ -280,10 +290,15 @@ impl Game {
         self.camera.apply_input(input);
         let mut ticks = 0;
         if self.running {
-            self.accumulator += dt;
+            // Capped so time kept by skipped ticks (see below) never piles up into a burst.
+            self.accumulator = (self.accumulator + dt).min(MAX_FRAME_DT + TICK);
             while self.accumulator + 1e-9 >= TICK {
+                if !self.tick(input) {
+                    // Someone holds a World borrow across frames (a bug in the caller): keep the
+                    // time and try again next frame instead of dropping the tick.
+                    break;
+                }
                 self.accumulator -= TICK;
-                self.tick(input);
                 ticks += 1;
             }
         }
@@ -307,10 +322,21 @@ impl Game {
     /// Brings `renderer` up to date with the world and draws the frame into `target` (`size` in
     /// pixels) with the camera of the last [`Game::frame`].
     pub fn render(&self, renderer: &mut Renderer, target: &wgpu::TextureView, size: (u32, u32)) {
+        self.render_from(renderer, target, size, &self.last_camera);
+    }
+
+    /// Like [`Game::render`] but from `camera` (overview shots, Studio's editor camera).
+    pub fn render_from(
+        &self,
+        renderer: &mut Renderer,
+        target: &wgpu::TextureView,
+        size: (u32, u32),
+        camera: &Camera,
+    ) {
         if let Ok(world) = self.world.try_borrow() {
             renderer.sync(&world);
         }
-        renderer.render(target, &self.last_camera, size);
+        renderer.render(target, camera, size);
     }
 
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
@@ -320,28 +346,20 @@ impl Game {
         }
     }
 
-    /// One fixed simulation tick.
-    fn tick(&mut self, input: &FrameInput) {
+    /// One fixed simulation tick. Returns false, having done nothing, when the world is borrowed.
+    fn tick(&mut self, input: &FrameInput) -> bool {
         let move_input = MoveInput {
             dir: self.camera.move_direction(input.movement),
             jump: input.jump,
+            run: input.run,
         };
         {
             let Ok(mut world) = self.world.try_borrow_mut() else {
-                return;
+                return false;
             };
             if let Some(character) = self.character {
-                let boosted = if input.run {
-                    boost_walk_speed(&mut world, character)
-                } else {
-                    None
-                };
                 self.characters
                     .step(&mut world, &self.physics, character, move_input, TICK);
-                if let Some((humanoid, base)) = boosted {
-                    // Fails only if the character respawned during the step; nothing to undo then.
-                    let _ = world.set(humanoid, "WalkSpeed", Value::Number(base));
-                }
             }
             self.physics.step(&mut world, TICK);
         }
@@ -349,6 +367,7 @@ impl Game {
         self.time += TICK;
         self.scripts.step(self.time, TICK);
         self.sync_physics_if_changed();
+        true
     }
 
     /// Hands this tick's character and physics events to the script host.
@@ -469,17 +488,4 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
             world.destroy(copy);
         }
     }
-}
-
-/// Raises the character's WalkSpeed for one controller step; returns the Humanoid and the value
-/// to restore. Scripts never see the raised value: it is restored before they run.
-fn boost_walk_speed(world: &mut World, character: InstanceId) -> Option<(InstanceId, f64)> {
-    let humanoid = world.find_first_child(character, "Humanoid")?;
-    let Ok(Value::Number(base)) = world.get(humanoid, "WalkSpeed") else {
-        return None;
-    };
-    world
-        .set(humanoid, "WalkSpeed", Value::Number(base * RUN_MULTIPLIER))
-        .ok()?;
-    Some((humanoid, base))
 }
