@@ -158,3 +158,41 @@ fn site_path_rejects_invisible_format_characters() {
         );
     }
 }
+
+#[test]
+fn open_links_cannot_reach_the_auth_pages() {
+    // The sign-in handoff page sets a session from its URL: a link must never load it.
+    for p in [
+        "/auth/launcher-handoff?code=wsc_x",
+        "/AUTH/launcher-handoff?code=wsc_x",
+        "/auth",
+        "%2Fauth%2Flauncher-handoff%3Fcode%3Dwsc_x",
+        "%2fAUTH%2flauncher-handoff",
+        "/%61uth/launcher-handoff",
+        "/x/../auth/launcher-handoff",
+        "/x/%2e%2e/auth/launcher-handoff",
+        "/x/%2E%2E%2Fauth%2Flauncher-handoff",
+        "/./auth/launcher-handoff",
+        "%252Fauth%252Flauncher-handoff",
+        "/%2561uth/launcher-handoff",
+        "/x%253F/../auth/launcher-handoff",
+        "/../auth/launcher-handoff",
+        "/a/../../auth/x",
+    ] {
+        assert!(
+            DeepLink::parse(&format!("metallic://open?path={p}")).is_err(),
+            "{p}"
+        );
+    }
+    for p in [
+        "/games/123",
+        "/games/1?next=/auth/x",
+        "/authors",
+        "/x/../games/1",
+    ] {
+        assert!(
+            DeepLink::parse(&format!("metallic://open?path={p}")).is_ok(),
+            "{p}"
+        );
+    }
+}

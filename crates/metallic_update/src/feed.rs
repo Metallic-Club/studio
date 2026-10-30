@@ -147,6 +147,7 @@ pub struct ReleaseAsset {
 #[derive(Deserialize)]
 struct GithubAsset {
     name: String,
+    #[serde(default)]
     url: String,
     #[serde(default)]
     size: u64,

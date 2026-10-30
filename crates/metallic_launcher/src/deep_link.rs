@@ -104,6 +104,60 @@ impl fmt::Debug for JoinTicket {
     }
 }
 
+/// Percent-decodes `text` once. Bytes that do not form valid UTF-8 become U+FFFD.
+fn percent_decode_once(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(h), Some(l)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// True when `text` (a path with an optional query) names the site's `/auth/` pages once it is
+/// percent-decoded (repeatedly) and its `.` and `..` segments are resolved, or cannot be
+/// resolved safely. The sign-in handoff page lives there and a link must never load it.
+fn reaches_auth_pages(text: &str) -> bool {
+    let path = text.split(['?', '#']).next().unwrap_or("");
+    let mut decoded = path.to_string();
+    for _ in 0..8 {
+        let next = percent_decode_once(&decoded);
+        if next == decoded {
+            let mut stack: Vec<String> = Vec::new();
+            for segment in decoded.split('/').skip(1) {
+                match segment.to_lowercase().as_str() {
+                    "." | "" => {}
+                    ".." => {
+                        if stack.pop().is_none() {
+                            return true;
+                        }
+                    }
+                    other => stack.push(other.to_string()),
+                }
+            }
+            return decoded.contains('\\')
+                || decoded.chars().any(char::is_control)
+                || stack.first().is_some_and(|first| first == "auth");
+        }
+        decoded = next;
+    }
+    // Still changing after 8 rounds: refuse.
+    true
+}
+
 /// A path on the Metallic site: starts with `/`, not `//`, no `\`, no control characters,
 /// at most 512 bytes. It can never name another host.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,7 +180,7 @@ impl SitePath {
                             | '\u{FEFF}'
                     )
             });
-        if ok {
+        if ok && !reaches_auth_pages(text) {
             Ok(SitePath(text.to_string()))
         } else {
             Err(DeepLinkError::BadParam("path"))

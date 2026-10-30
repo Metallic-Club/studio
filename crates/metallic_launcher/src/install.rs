@@ -450,8 +450,9 @@ impl Installer {
             }
         }
         // Only now, with a verified file, does the installer run. It is deleted whatever happens.
-        // TODO(Task 9): `--silent` for Velopack's Setup.exe is from memory; check with a real run
-        // (no dialog, exit code 0, Studio not started afterwards, `sq.version` written).
+        // `--silent` for Velopack's Setup.exe was run for the Launcher's own Setup (no dialog, exit 0).
+        // Still to check for Studio's Setup: Studio not started afterwards, `sq.version` written
+        // (see docs/agents/197-launcher-release.md).
         let outcome =
             self.spawner
                 .spawn_and_wait(&setup, &[OsString::from("--silent")], self.time_limit);

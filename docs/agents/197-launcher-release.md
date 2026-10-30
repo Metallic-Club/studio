@@ -33,6 +33,9 @@ Findings: the old data-folder collision (fixed in 1f6e444f); Velopack's shortcut
 
 Not done yet: close to tray and tray Quit; update applied on quit (needs a published dev release); Windows 10 without WebView2.
 
+## Notes
+- `--required` in a Launcher release is honoured: the Launcher's updater reads `required: true` from the release notes, and Play is refused until the update is applied.
+
 ## Acceptance checklist (Step 3): pending: lead/owner round trip
 Needs a release build, a pushed tag and a Windows 11 test PC. Record each with a screenshot under `docs/agents/launcher-l1/`.
 - [ ] Install `MetallicLauncher-launcher-dev-Setup.exe` on Windows 11 without admin.

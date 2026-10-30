@@ -12,12 +12,22 @@ use crate::error::LauncherError;
 pub const MAX_HANDOFF_BYTES: usize = 4096;
 
 /// What a second Launcher asks the first one to do.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum HandoffMessage {
     /// Show the window.
     Focus,
     /// Handle this `metallic://` link (not yet checked).
     Link(String),
+}
+
+impl std::fmt::Debug for HandoffMessage {
+    // A link can carry a join ticket, so its text is never printed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HandoffMessage::Focus => f.write_str("Focus"),
+            HandoffMessage::Link(_) => f.write_str("Link(..)"),
+        }
+    }
 }
 
 /// Turns a message into its bytes: length, tag, text.

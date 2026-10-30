@@ -764,7 +764,11 @@ pub fn run(
             if policy.origin_of(&url) == PageOrigin::Site {
                 shared.site_loaded.store(true, Ordering::SeqCst);
             }
-            sink.send(AppEvent::Focus);
+            // Show the window for the first page only; later loads must not pull a tray-hidden
+            // window back up.
+            if !shared.shown.load(Ordering::SeqCst) {
+                sink.send(AppEvent::Focus);
+            }
             if exit_after_load && !exit_started.swap(true, Ordering::SeqCst) {
                 let sink = sink.clone();
                 std::thread::spawn(move || {
