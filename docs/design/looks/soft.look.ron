@@ -1,0 +1,43 @@
+// Soft: Roblox "Soft" feel. Wrapped diffuse, rough surfaces, soft shadows, PBR Neutral.
+(
+    format: "metallic.look",
+    version: 1,
+    id: "soft",
+    name: "Soft",
+    base: None,
+    dimension: ThreeD,
+    shading: (
+        default: Lit(wrap: 0.3, roughness_floor: 0.5),
+        classes: {},
+        materials: {
+            "Metal": Lit(wrap: 0.3, roughness_floor: 0.35),
+            "Glass": Lit(wrap: 0.0, roughness_floor: 0.0),
+            "Ice": Lit(wrap: 0.3, roughness_floor: 0.2),
+        },
+    ),
+    lighting: (
+        preset: "Clear Day",
+        also_good: ["Cartoon Bright", "Golden Hour", "Overcast", "Moonlit", "Desert Noon"],
+        style: Soft,
+        shadows: Tent,
+        softness_min: 0.5,
+        ambient_scale: 1.25,
+        ao: Darken(intensity: 0.6),
+        volumetrics: Off,
+    ),
+    exposure: (mode: Auto, compensation: 0.0),
+    tonemap: Neutral,
+    outlines: (hull: Off, edges: Off),
+    hdr: [
+        Bloom(intensity: 0.05, size: 32.0, threshold: 0.0),
+    ],
+    grade: (contrast: -0.05, saturation: 0.1, brightness: 0.0, tint: Rgb(255, 255, 255), lut: None, lut_strength: 0.0, vignette: 0.1),
+    ldr: [],
+    palette: Off,
+    render: (scale: Relative(1.0), upscale: Bilinear, snap: Off, subpixel: false, aa: Auto, detail_texels_per_stud: 0),
+    output: [],
+    fog: (mode: Height, density_scale: 1.0, color: Sky),
+    tiers: {
+        Low: (ao: Some(Off)),
+    },
+)

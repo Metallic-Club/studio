@@ -1,0 +1,41 @@
+// 2D Smooth: hand-drawn or vector 2D at full resolution, filtered sprites, light bloom.
+(
+    format: "metallic.look",
+    version: 1,
+    id: "smooth-2d",
+    name: "2D Smooth",
+    base: None,
+    dimension: TwoD,
+    shading: (
+        default: Unlit,
+        classes: {
+            Sprite: LitSprite(filter: Linear, alpha_cutoff: 0.0, normal_maps: true, billboard: Fixed, casts_shadows: false),
+        },
+        materials: {},
+    ),
+    lighting: (
+        preset: "Clear Day",
+        also_good: ["Golden Hour", "Moonlit", "Night City", "Cartoon Bright"],
+        style: Realistic,
+        shadows: Off,
+        softness_min: 0.0,
+        ambient_scale: 1.0,
+        ao: Off,
+        volumetrics: Off,
+    ),
+    exposure: (mode: Display, compensation: 0.0),
+    tonemap: Neutral,
+    outlines: (hull: Off, edges: Off),
+    hdr: [
+        Bloom(intensity: 0.03, size: 24.0, threshold: 0.0),
+    ],
+    grade: (contrast: 0.0, saturation: 0.0, brightness: 0.0, tint: Rgb(255, 255, 255), lut: None, lut_strength: 0.0, vignette: 0.0),
+    ldr: [],
+    palette: Off,
+    render: (scale: Fixed(1.0), upscale: Bilinear, snap: Off, subpixel: false, aa: Msaa4, detail_texels_per_stud: 0),
+    output: [],
+    fog: (mode: Off, density_scale: 0.0, color: Sky),
+    tiers: {
+        Low: (aa: Some(Off)),
+    },
+)
