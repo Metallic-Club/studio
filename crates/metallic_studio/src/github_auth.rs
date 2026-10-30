@@ -9,6 +9,9 @@
 //! on) is kept as one JSON value in the Windows Credential Manager under `MetallicStudio/github`,
 //! behind the [`SecretStore`] trait so tests use memory instead. [`GithubAuth::valid_token`]
 //! refreshes an expiring access token on its own.
+//! A stale refresh failure reuses a newer unexpired session when visible. Automatic
+//! cleanup requires atomic conditional deletion; native keyring storage declines
+//! that optional operation rather than risk deleting another process's session.
 //!
 //! The app's client ID is not secret. It is committed in `config/github_app_client_id.txt` and
 //! compiled in; until the owner registers the app, the file holds a placeholder and
@@ -98,6 +101,15 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, value: &str) -> Result<(), AuthError>;
     /// Removes the stored text; removing nothing is fine.
     fn delete(&self) -> Result<(), AuthError>;
+    /// Atomically removes the value only if it still equals `expected` exactly.
+    ///
+    /// Returns `true` only when that value was removed. `false` means no mutation:
+    /// the value changed, is absent, or the backend cannot provide this operation.
+    /// The default declines cleanup. Implementations must not emulate atomicity
+    /// with a separate `get` followed by `delete` while another writer can intervene.
+    fn delete_if_unchanged(&self, _expected: &str) -> Result<bool, AuthError> {
+        Ok(false)
+    }
 }
 
 /// In-memory [`SecretStore`] for tests.
@@ -128,10 +140,24 @@ impl SecretStore for MemorySecretStore {
         *self.lock()? = None;
         Ok(())
     }
+
+    fn delete_if_unchanged(&self, expected: &str) -> Result<bool, AuthError> {
+        let mut value = self.lock()?;
+        if value.as_deref() == Some(expected) {
+            *value = None;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 /// [`SecretStore`] in the operating system's credential store (Windows Credential Manager),
 /// entry `MetallicStudio/github`.
+///
+/// Native keyring get/delete do not offer atomic expected-value deletion. This
+/// backend inherits the non-mutating conditional-delete default; invalid refresh
+/// entries remain until sign-in replaces them or explicit sign-out removes them.
 #[derive(Default)]
 pub struct KeyringStore;
 
@@ -309,8 +335,8 @@ pub struct GithubAuth {
     http: Arc<dyn HttpClient>,
     store: Arc<dyn SecretStore>,
     sleeping: bool,
-    /// Held for the whole of `valid_token`: refresh tokens rotate, so two refreshes at once
-    /// would make the second fail and wipe the session the first saved.
+    /// Serializes callers of this instance only. Independent instances/processes
+    /// can still overlap; failed-refresh cleanup must preserve their newer values.
     refresh_lock: Mutex<()>,
 }
 
@@ -353,13 +379,20 @@ impl GithubAuth {
 
     /// The stored access token, refreshed first when it is about to expire. `Ok(None)` means
     /// "sign in (again)": nothing is stored, or it expired and cannot be refreshed.
+    /// On a provider refresh error, an observed newer session with a changed refresh
+    /// token is reused if its access token has not expired. Stale cleanup is conditional
+    /// on backend atomicity; it never uses a get/delete pair. This does not serialize
+    /// whole refresh exchanges across processes or wait for an in-flight writer.
     pub fn valid_token(&self) -> Result<Option<Token>, AuthError> {
         let _guard = self
             .refresh_lock
             .lock()
             .map_err(|_| AuthError::Store("refresh lock was poisoned".to_string()))?;
         // Read the store only after taking the lock: another caller may have just refreshed.
-        let Some(session) = self.store.get()?.and_then(|raw| Session::parse(&raw)) else {
+        let Some(stored) = self.store.get()? else {
+            return Ok(None);
+        };
+        let Some(session) = Session::parse(&stored) else {
             return Ok(None);
         };
         let now = unix_now();
@@ -382,9 +415,7 @@ impl GithubAuth {
         let answer: TokenAnswer =
             serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
         if let Some(code) = answer.error.as_deref() {
-            // The refresh token is no good any more (for example bad_refresh_token).
-            self.store.delete()?;
-            return Err(AuthError::Provider(code.to_string()));
+            return self.recover_refresh_failure(&stored, &refresh_token, code);
         }
         let Some(access_token) = answer.access_token.clone() else {
             return Err(AuthError::BadResponse(
@@ -394,6 +425,31 @@ impl GithubAuth {
         self.save(&Session::from_answer(access_token.clone(), &answer, now))?;
         log::info!("GitHub token refreshed");
         Ok(Some(Token::new(access_token)))
+    }
+
+    fn recover_refresh_failure(
+        &self,
+        attempted_session: &str,
+        attempted_refresh: &str,
+        code: &str,
+    ) -> Result<Option<Token>, AuthError> {
+        let mut current = self.store.get()?;
+        if current.as_deref() == Some(attempted_session) {
+            // A newer write can arrive after this read. Only an atomic backend
+            // operation may remove the old value; native keyrings decline it.
+            self.store.delete_if_unchanged(attempted_session)?;
+            current = self.store.get()?;
+        }
+        if let Some(raw) = current
+            && raw != attempted_session
+            && let Some(session) = Session::parse(&raw)
+            && session.refresh_token.as_deref() != Some(attempted_refresh)
+            && !session.access_token.is_empty()
+            && session.expires_at.is_none_or(|at| at > unix_now())
+        {
+            return Ok(Some(Token::new(session.access_token)));
+        }
+        Err(AuthError::Provider(code.to_string()))
     }
 
     fn post(&self, url: &str, form: &[(&str, &str)]) -> Result<String, AuthError> {
