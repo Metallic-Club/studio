@@ -15,6 +15,14 @@ metallic_render = { path = "crates/metallic_render" }
 metallic_physics = { path = "crates/metallic_physics" }
 metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+# Debug builds keep file:line backtraces for our crates and drop debug info for dependencies.
+# Full debug info made each lane's target dir 2-4 GB, and the build PC is short on disk.
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+debug = false
 
 # Debug builds keep file:line backtraces for our crates and drop debug info for dependencies.
 # Full debug info made each lane's target dir 2-4 GB, and the build PC is short on disk.
