@@ -7,7 +7,7 @@
 //! collects what to call, releases the borrow and only then calls into Lua.
 
 mod datatypes;
-mod errors;
+pub(crate) mod errors;
 mod instance;
 mod remote;
 mod services;
@@ -98,7 +98,6 @@ fn build(
     sink: Rc<dyn OutputSink>,
 ) -> mlua::Result<Rc<ApiState>> {
     let lua = vm.lua();
-    errors::install(lua)?;
     let cache = lua.create_table()?;
     let weak_values = lua.create_table()?;
     weak_values.set("__mode", "v")?;

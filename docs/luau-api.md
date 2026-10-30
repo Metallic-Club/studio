@@ -104,6 +104,11 @@ remote:FireServer(5)
   threads are removed. Ownership is tracked by the script's instance id, so clones with the same full name stop independently.
 - Userdata metatables are protected (`getmetatable` returns false, `setmetatable` errors).
 - Errors raised by API calls and operators are plain strings with `<script>:<line>:` so `pcall` shows them cleanly.
+  The sandbox's Rust `task.spawn`/`task.delay`, collector, output and pattern bindings (including returned
+  `gmatch` iterators) use the same wrappers. Structured Rust callback tracebacks are omitted; argument labels,
+  context and deliberate user multiline messages remain. Native `pcall` and `xpcall` are unchanged, including
+  yielding and non-string user error values. Raw callbacks installed by an embedding host through `ScriptVm::lua`
+  or `set_global` retain mlua's error userdata under `pcall`; uncaught errors still use the engine display formatter.
 
 ## Milestone 1 limits
 The client VM writes to the same World as the server VM (single process). Nothing stops a LocalScript from changing server-owned

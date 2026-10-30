@@ -5,27 +5,21 @@
 //! userdata. Each API function is therefore wrapped in a small Luau function that turns
 //! such an error into a plain string `<script name>:<line>: <message>` and raises it again.
 
-use mlua::{FromLuaMulti, Function, IntoLuaMulti, Lua, Table};
+use mlua::{FromLuaMulti, Function, IntoLuaMulti, Lua, Value};
 
-use crate::vm::script_location;
+use crate::vm::{callback_message, script_location};
 
 /// The Luau `wrap(f)` helper, kept in the Lua state's app data.
 struct ErrorWrapper(Function);
 
 /// Luau source of the wrapper factory (see the module docs).
 const WRAPPER: &str = r#"
-local pcall, error, type, tostring, find, sub, location = ...
-local function clean(e)
-    local s = tostring(e)
-    if sub(s, 1, 15) == "runtime error: " then s = sub(s, 16) end
-    local cut = find(s, "\nstack traceback", 1, true)
-    if cut then s = sub(s, 1, cut - 1) end
-    return s
-end
+local pcall, error, callback, location = ...
 local function finish(ok, ...)
     if ok then return ... end
     local e = ...
-    if type(e) == "userdata" then error(location() .. clean(e), 0) end
+    local message = callback(e)
+    if message ~= nil then error(location() .. message, 0) end
     error(e, 0)
 end
 return function(f)
@@ -36,15 +30,12 @@ end
 /// Creates the wrapper helper. Call once per VM, before any other API setup.
 pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
-    let string: Table = globals.get("string")?;
     let location = lua.create_function(|lua, ()| Ok(script_location(lua, 0)))?;
+    let callback = lua.create_function(|_, error: Value| Ok(callback_message(&error)))?;
     let wrap: Function = lua.load(WRAPPER).set_name("=[engine]").call((
         globals.get::<Function>("pcall")?,
         globals.get::<Function>("error")?,
-        globals.get::<Function>("type")?,
-        globals.get::<Function>("tostring")?,
-        string.get::<Function>("find")?,
-        string.get::<Function>("sub")?,
+        callback,
         location,
     ))?;
     lua.set_app_data(ErrorWrapper(wrap));
@@ -67,4 +58,13 @@ where
     F: Fn(&Lua, A) -> mlua::Result<R> + 'static,
 {
     guarded(lua, lua.create_function(f)?)
+}
+
+/// Guards a native iterator factory and each returned iterator, without retaining a strong Lua handle.
+pub(crate) fn guarded_iterator_factory(lua: &Lua, factory: Function) -> mlua::Result<Function> {
+    let factory = guarded(lua, factory)?;
+    let wrap = lua.create_function(|lua, iterator: Function| guarded(lua, iterator))?;
+    lua.load("local factory, wrap = ... return function(...) return wrap(factory(...)) end")
+        .set_name("=[engine]")
+        .call((factory, wrap))
 }
