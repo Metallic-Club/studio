@@ -1,17 +1,30 @@
 # Luau API (Metallic Engine, milestone 1)
 
 Scripts are sandboxed Luau with Roblox-style names. `Script`s run in the **server VM**, `LocalScript`s in the **client VM**
-(one local player, `Player1`). Errors read `<Instance full name>:<line>: <message>` and go to the output sink; one failing
+(one local player, `Player1`, in the default combined host). Errors read `<Instance full name>:<line>: <message>` and go to the output sink; one failing
 script or handler never stops the others. Every call into a script (start, handler, Heartbeat, remote) has a 0.1 s budget.
 
 Code: `crates/metallic_script/src/api/`. Tests: `crates/metallic_script/tests/{api,remote}.rs`.
 
 ## Where scripts run
-`ScriptHost::start` runs, in tree order: every enabled `Script` under Workspace or ServerScriptService (server VM) and every
+In combined mode, `ScriptHost::start` runs in tree order: every enabled `Script` under Workspace or ServerScriptService (server VM) and every
 enabled `LocalScript` under StarterPlayerScripts or a `PlayerGui` (client VM). Scripts added later to those places (for example
 StarterGui contents cloned into the `PlayerGui`) start on the next `step`. `script` is the script's own Instance.
 The runtime (`Game::start`) copies the children of `StarterGui` into `Player1.PlayerGui` once when the game starts (M1 has
 no `ResetOnSpawn`: the GUI survives respawns).
+
+`ScriptHost::new_server(world, output)` selects a fixed server-only host. It starts only the server VM and eligible
+`Script`s; `LocalScript`s stay inactive, including those created, enabled or reparented while running. It creates no
+synthetic local Player, PlayerGui or PlayerAdded event, and preserves existing world instances. `Players.LocalPlayer`
+is nil; no player is admitted by this constructor. Server events, Heartbeat, waits and script-owner cleanup use the
+existing host paths. Client-targeted RemoteEvents have no receiver and are discarded at the next delivery step.
+Host-injected client action events likewise have no receiver and are discarded on the next step; InputAction state
+access keeps its existing client-only restriction.
+The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
+
+This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,
+ModuleScript/require loader or playable multiplayer. The separate scheduler correctness work in #173 and the later
+process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
 
 ## Globals
 `game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Vector2`, `Color3`, `UDim2`, `Enum`.
@@ -58,7 +71,7 @@ part.Size = Vector3.new(4, 1, 2) * 2
 | `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is its `HumanoidRootPart` (so `hit.Parent` is the character Model) |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
-| `Players.PlayerAdded` | `player` | first `step` after `start`, for `Player1` |
+| `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |
 | `RunService.Heartbeat` | `dt` | every `step` |
 
 ```lua
@@ -74,7 +87,8 @@ StarterGui, Lighting, RunService, UserInputService, ContextActionService. Others
 
 - `Players.LocalPlayer` (client VM; nil on the server), `Players:GetPlayers()` (players whose `PlayerAdded` was delivered),
   `Players:GetPlayerFromCharacter(model)`.
-- Player: `UserId`, `Character`, `CharacterAdded`. Each Player has a `PlayerGui` child.
+- Player: `UserId`, `Character`, `CharacterAdded`. Combined startup creates a `PlayerGui` for its local player;
+  server-only startup adds no player or GUI.
 - `Humanoid:TakeDamage(n)` only lowers `Health` (not below 0). Death is detected by the character controller.
 - `RunService:IsServer()`, `RunService:IsClient()`, `RunService.Heartbeat`.
 
@@ -131,7 +145,7 @@ remote:FireServer(5)
 - Errors raised by API calls and operators are plain strings with `<script>:<line>:` so `pcall` shows them cleanly.
 
 ## Milestone 1 limits
-The client VM writes to the same World as the server VM (single process). Nothing stops a LocalScript from changing server-owned
+In combined mode the client VM writes to the same World as the server VM (single process). Nothing stops a LocalScript from changing server-owned
 state; M2 replication will separate them. Accepted for M1.
 
 ## Input (client only)

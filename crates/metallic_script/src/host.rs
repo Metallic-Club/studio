@@ -1,5 +1,6 @@
-//! [`ScriptHost`]: runs the game's scripts in a server VM and a client VM over one shared
-//! `World`, and feeds events (Touched, deaths, new characters, remotes) to them.
+//! [`ScriptHost`]: runs the game's scripts and feeds events (Touched, deaths, new characters,
+//! remotes) to them. The default host has server/client VMs over one shared `World`;
+//! [`ScriptHost::new_server`] starts only the server side without a synthetic local player.
 //!
 //! The runtime (task 8) owns the host and calls [`ScriptHost::step`] every frame. Inputs
 //! that come from other systems (physics, character controller) are queued with
@@ -20,7 +21,7 @@ use crate::api::{
 };
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
-/// Name of the one local player created by [`ScriptHost::start`].
+/// Name of the one local player created by the default combined [`ScriptHost::start`].
 pub const LOCAL_PLAYER_NAME: &str = "Player1";
 
 /// One VM together with the API state that drives it.
@@ -57,13 +58,15 @@ enum HostEvent {
     },
 }
 
-/// Runs the scripts of a world: `Script`s in the server VM, `LocalScript`s in the client VM.
+/// Runs a world's scripts: server `Script`s and, in the default combined mode, `LocalScript`s.
 pub struct ScriptHost {
     world: Rc<RefCell<World>>,
     output: Rc<dyn OutputSink>,
     shared: Rc<HostShared>,
     server: Option<Side>,
     client: Option<Side>,
+    /// Fixed by construction: combined hosts also create the client VM and local player.
+    run_client: bool,
     inputs: Vec<HostEvent>,
     /// Scripts that were started and not stopped since (each runs once per `start`).
     running: HashMap<InstanceId, RunningScript>,
@@ -76,7 +79,8 @@ pub struct ScriptHost {
 }
 
 impl ScriptHost {
-    /// Creates a host that is not running yet. Output of all scripts goes to `output`.
+    /// Creates a combined server/client host that is not running yet.
+    /// Output of all scripts goes to `output`; [`Self::start`] creates the local player.
     pub fn new(world: Rc<RefCell<World>>, output: Rc<dyn OutputSink>) -> ScriptHost {
         ScriptHost {
             world,
@@ -84,6 +88,7 @@ impl ScriptHost {
             shared: Rc::new(HostShared::default()),
             server: None,
             client: None,
+            run_client: true,
             inputs: Vec::new(),
             running: HashMap::new(),
             cursor: None,
@@ -92,7 +97,22 @@ impl ScriptHost {
         }
     }
 
-    /// Sets the resume budget of both VMs, now and after the next `start`
+    /// Creates a fixed server-only host that is not running yet.
+    ///
+    /// [`Self::start`] creates only the server VM and runs eligible `Script`s. It creates no
+    /// local player, PlayerGui or synthetic PlayerAdded event; existing world instances remain.
+    /// `LocalScript`s do not run, including those created or moved while the host is running.
+    /// Events, waits, budgets and stop/restart use the same host lifecycle as [`Self::new`].
+    ///
+    /// This constructor adds no networking, player admission or dedicated-server process.
+    /// Client-targeted remotes have no receiver and are discarded on the next delivery step.
+    pub fn new_server(world: Rc<RefCell<World>>, output: Rc<dyn OutputSink>) -> ScriptHost {
+        let mut host = Self::new(world, output);
+        host.run_client = false;
+        host
+    }
+
+    /// Sets the resume budget of active VMs, now and after the next `start`
     /// ([`RESUME_BUDGET`] by default).
     pub fn set_resume_budget(&mut self, budget: Duration) {
         self.resume_budget = budget;
@@ -106,34 +126,45 @@ impl ScriptHost {
         self.server.is_some()
     }
 
-    /// Creates the local player `Player1` (UserId 0, with a `PlayerGui`), starts both VMs
-    /// and runs every enabled script in tree order: `Script`s under Workspace and
-    /// ServerScriptService in the server VM, `LocalScript`s under StarterPlayerScripts and
+    /// In the default combined host, creates local player `Player1` (UserId 0, with a
+    /// `PlayerGui`), starts both VMs and runs every enabled script in tree order: `Script`s
+    /// under Workspace and ServerScriptService in the server VM, `LocalScript`s under StarterPlayerScripts and
     /// a `PlayerGui` in the client VM. A script that errors is reported to the output sink
     /// and the others still run. `PlayerAdded` fires for `Player1` on the first `step`.
+    /// A [`Self::new_server`] host starts only the server side, without a synthetic player or
+    /// PlayerAdded, and excludes client scripts before recording them as running.
     ///
     /// Scripts cloned into those places later (for example StarterGui contents copied
     /// into the `PlayerGui` when the character spawns) start on the next `step`.
     /// Calling `start` while running does nothing.
     ///
     /// # Errors
-    /// Returns an error if the world has no `Players` service or a VM cannot be set up.
+    /// Returns an error if a combined host has no `Players` service or a VM cannot be set up.
     pub fn start(&mut self) -> Result<(), ScriptError> {
         if self.is_running() {
             return Ok(());
         }
-        let player = self.ensure_local_player()?;
-        self.shared.local_player.set(Some(player));
+        let player = self
+            .run_client
+            .then(|| self.ensure_local_player())
+            .transpose()?;
+        self.shared.local_player.set(player);
         self.shared.joined.borrow_mut().clear();
         self.shared.remotes.borrow_mut().clear();
         self.shared.queued.set([(0, 0); 2]);
         self.shared.input.clear();
-        self.inputs = vec![HostEvent::PlayerAdded { player }];
+        self.inputs = player
+            .map(|player| HostEvent::PlayerAdded { player })
+            .into_iter()
+            .collect();
         self.running.clear();
         self.cursor = None;
 
         self.server = Some(self.make_side(Context::Server)?);
-        self.client = Some(self.make_side(Context::Client)?);
+        self.client = self
+            .run_client
+            .then(|| self.make_side(Context::Client))
+            .transpose()?;
         self.sync_scripts();
         Ok(())
     }
@@ -181,7 +212,7 @@ impl ScriptHost {
         }
     }
 
-    /// Shuts both VMs down, dropping every connection and sleeping thread. `start` may be
+    /// Shuts active VMs down, dropping every connection and sleeping thread. `start` may be
     /// called again afterwards; scripts then run again from the beginning.
     pub fn stop(&mut self) {
         for side in [self.server.take(), self.client.take()]
@@ -203,6 +234,7 @@ impl ScriptHost {
     /// delivers `Pressed`, `Released`, `Triggered` or `StateChanged` and the handlers of
     /// `ContextActionService`, oldest event time first, at most
     /// [`MAX_ACTION_EVENTS_PER_STEP`](crate::MAX_ACTION_EVENTS_PER_STEP) per step.
+    /// Server-only hosts have no receiver and discard these events at the next step.
     pub fn input_action_event(&mut self, event: InputActionEvent) {
         self.shared.input.push_event(event);
     }
@@ -311,6 +343,10 @@ impl ScriptHost {
         }
     }
 
+    fn runnable_context(&self, world: &World, id: InstanceId) -> Option<Context> {
+        script_context(world, id).filter(|context| self.run_client || *context == Context::Server)
+    }
+
     /// Finds or creates `Players.Player1` and its `PlayerGui`.
     fn ensure_local_player(&self) -> Result<InstanceId, ScriptError> {
         let failed = |what: &str| ScriptError {
@@ -383,14 +419,14 @@ impl ScriptHost {
             };
             let stops: Vec<InstanceId> = stop_candidates
                 .into_iter()
-                .filter(|&id| script_context(&world, id).is_none())
+                .filter(|&id| self.runnable_context(&world, id).is_none())
                 .collect();
             let mut starts = Vec::new();
             for id in candidates {
                 if self.running.contains_key(&id) {
                     continue;
                 }
-                if let Some(context) = script_context(&world, id) {
+                if let Some(context) = self.runnable_context(&world, id) {
                     starts.push((id, context, world.full_name(id), source_of(&world, id)));
                 }
             }
@@ -459,7 +495,7 @@ impl ScriptHost {
         }
     }
 
-    /// Fires `event` of `source` with an optional instance argument in both VMs. Dropped
+    /// Fires `event` of `source` with an optional instance argument in active VMs. Dropped
     /// when either instance no longer exists.
     fn fire_instance_event(&self, source: InstanceId, event: EventKind, arg: Option<InstanceId>) {
         let alive = self
@@ -479,6 +515,9 @@ impl ScriptHost {
     }
 
     fn deliver_input_actions(&mut self) {
+        if !self.run_client {
+            self.shared.input.events.borrow_mut().clear();
+        }
         let changes = std::mem::take(&mut *self.shared.input.type_changes.borrow_mut());
         if !changes.is_empty() {
             for side in self.sides() {
@@ -584,5 +623,90 @@ fn script_context(world: &World, id: InstanceId) -> Option<Context> {
             None
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    struct Quiet;
+    impl OutputSink for Quiet {
+        fn print(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    #[test]
+    fn server_role_has_one_vm_and_never_records_client_scripts_as_running() {
+        let mut world = World::new_with_services();
+        let starter = world
+            .find_first_child(world.root("StarterPlayer").unwrap(), "StarterPlayerScripts")
+            .unwrap();
+        let local = world.create("LocalScript", Some(starter)).unwrap();
+        let replicated = world.root("ReplicatedStorage").unwrap();
+        let action = world.create("InputAction", Some(replicated)).unwrap();
+        let remote = world.create("RemoteEvent", Some(replicated)).unwrap();
+        world
+            .set(remote, "Name", CoreValue::String("Notify".into()))
+            .unwrap();
+        let server = world
+            .create("Script", world.root("ServerScriptService"))
+            .unwrap();
+        world
+            .set(
+                server,
+                "Source",
+                CoreValue::String(
+                    "game:GetService('ReplicatedStorage').Notify:FireAllClients('ignored')".into(),
+                ),
+            )
+            .unwrap();
+        let world = Rc::new(RefCell::new(world));
+        let mut host = ScriptHost::new_server(world.clone(), Rc::new(Quiet));
+        host.start().unwrap();
+        assert!(host.server.is_some() && host.client.is_none());
+        assert!(host.shared.local_player.get().is_none());
+        assert!(host.inputs.is_empty());
+        assert_eq!(host.running.len(), 1);
+        assert!(host.running.contains_key(&server));
+        assert!(!host.running.contains_key(&local));
+        assert_eq!(host.shared.remotes.borrow().len(), 1);
+        host.input_action_event(InputActionEvent {
+            action,
+            kind: crate::InputEventKind::Pressed,
+            value: InputValue::Bool(true),
+            time: 0.0,
+        });
+        assert_eq!(host.shared.input.events.borrow().len(), 1);
+        host.dispatch_input_now(0.0);
+        host.step(0.1, 0.1);
+        assert!(host.shared.remotes.borrow().is_empty());
+        assert_eq!(host.shared.queued.get(), [(0, 0); 2]);
+        assert!(host.shared.input.events.borrow().is_empty());
+
+        let late = world
+            .borrow_mut()
+            .create("LocalScript", Some(starter))
+            .unwrap();
+        host.step(0.2, 0.1);
+        world
+            .borrow_mut()
+            .set(late, "Enabled", CoreValue::Bool(false))
+            .unwrap();
+        host.step(0.3, 0.1);
+        world
+            .borrow_mut()
+            .set(late, "Enabled", CoreValue::Bool(true))
+            .unwrap();
+        host.step(0.4, 0.1);
+        assert_eq!(host.running.len(), 1);
+        assert!(!host.running.contains_key(&late));
+        assert!(host.server.is_some() && host.client.is_none());
+
+        host.stop();
+        assert!(host.server.is_none() && host.client.is_none());
+        assert!(host.running.is_empty());
+        assert!(host.shared.remotes.borrow().is_empty());
     }
 }
