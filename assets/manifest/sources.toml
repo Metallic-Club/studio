@@ -1,0 +1,46 @@
+# Asset sources: licence proof, bundling/CDN terms, allowed download hosts and politeness delays.
+# Checked 2026-10-30 by the #36 session. Re-check with `python -I tools/assets/curate.py audit`.
+#
+# Policy (see assets/README.md): CC0 first. CC-BY only when clearly marked, with attribution recorded.
+# Never CC-BY-SA, NC, ND, GPL, "personal use only", unclear licences, or AI-generated/scraped packs.
+
+[source.polyhaven]
+name = "Poly Haven"
+homepage = "https://polyhaven.com"
+licence_proof_url = "https://polyhaven.com/license"
+licence = "CC0-1.0"
+evidence = "Licence page: 'Our assets are all licensed as CC0' and 'You can redistribute them ... or even in a product you sell.'"
+bundling = "CC0: bundling in the engine/installer and serving from our CDN are allowed, no credit required. The live API (api.polyhaven.com, free incl. commercial) needs a named User-Agent and a visible 'Poly Haven' credit wherever our software shows content fetched live from it; self-hosted copies need none. Website ToS forbids scraping pages (use the API) and its renders/thumbnails are not CC0, so we never reuse them."
+api_terms_url = "https://github.com/Poly-Haven/Public-API/blob/master/ToS.md"
+hosts = ["dl.polyhaven.org"]
+min_interval_s = 0.0
+
+[source.ambientcg]
+name = "ambientCG"
+homepage = "https://ambientcg.com"
+licence_proof_url = "https://docs.ambientcg.com/license/"
+licence = "CC0-1.0"
+evidence = "Licence page: 'All ambientCG assets are provided under the Creative Commons CC0 1.0 Universal License. This applies to the downloadable asset files and the material preview renders' and 'You can include the raw files in your project, for example a video game.'"
+bundling = "CC0: bundling and CDN mirroring allowed, credit appreciated not required. Preview renders are CC0 too. One-person site: the API is not 'enterprise' grade, so mirror files instead of hot-linking."
+hosts = ["ambientcg.com"]
+min_interval_s = 1.0
+
+[source.polypizza]
+name = "Poly Pizza"
+homepage = "https://poly.pizza"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence = "per model (we take CC0 1.0 only)"
+evidence = "Each model page carries its licence in the page data (\"Licence\":\"CC0 1.0\") and shows 'Public Domain (CC0)'. Quaternius models are uploaded by the Quaternius account itself."
+bundling = "Per model. CC0 models may be bundled and mirrored on our CDN. No site terms page exists (poly.pizza/terms is 404). robots.txt: crawl-delay 10, /api/ disallowed (the API is a paid product), so we read public model pages slowly and take the .glb link they show. Preview renders have no stated licence: not reused."
+hosts = ["static.poly.pizza"]
+min_interval_s = 1.0
+
+[source.opengameart]
+name = "OpenGameArt.org"
+homepage = "https://opengameart.org"
+licence_proof_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+licence = "per submission (we take CC0 only)"
+evidence = "Each art page's 'License(s)' block; we accept the asset only when it lists CC0."
+bundling = "Per submission. CC0 files may be bundled and mirrored on our CDN. robots.txt crawl-delay 10 s is honoured for pages and file downloads. The submitter is recorded as author; check the page text when a pack credits others."
+hosts = ["opengameart.org"]
+min_interval_s = 10.0

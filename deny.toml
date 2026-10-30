@@ -17,6 +17,16 @@ allow = [
     "Ubuntu-font-1.0",
 ]
 confidence-threshold = 0.8
+# Needs a lead/owner decision (task 13): the Velopack updater pulls in ureq with the Mozilla CA bundle,
+# whose licence is the permissive data licence CDLA-Permissive-2.0. Allowed for this one crate only.
+exceptions = [
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [licenses.private]
 ignore = true
+
+[advisories]
+# ttf-parser comes in through winit's Linux title-bar text (sctk-adwaita); no fix released yet.
+# Revisit when winit / sctk-adwaita update.
+ignore = ["RUSTSEC-2026-0192"]

@@ -1,0 +1,642 @@
+# HDRI skies and interiors (equirectangular .hdr). 4k for the sky, 1k for previews/irradiance.
+# Generated with tools/assets/curate.py; see assets/README.md.
+
+[[asset]]
+id = "hdri-kloofendal-48d-partly-cloudy-puresky"
+kind = "hdri"
+name = "Kloofendal 48d Partly Cloudy (Pure Sky)"
+source = "polyhaven"
+source_id = "kloofendal_48d_partly_cloudy_puresky"
+page_url = "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/kloofendal_48d_partly_cloudy_puresky (type 0, 'Kloofendal 48d Partly Cloudy (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal, Jarod Guest"
+attribution = "Kloofendal 48d Partly Cloudy (Pure Sky) by Greg Zaal, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 22109976
+look = "realistic"
+tags = ["day", "high-contrast", "midday", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr"
+sha256 = "fd94c84997b8a3c353b62c2125a9b44e19509956986a126e472684432a02d798"
+size = 1435119
+map = "hdri"
+path = "kloofendal_48d_partly_cloudy_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloofendal_48d_partly_cloudy_puresky_4k.hdr"
+sha256 = "3061c00a16ecae748e84fd6c44c04804f539c118bb66325db858bad87b11bf88"
+size = 20674857
+map = "hdri"
+path = "kloofendal_48d_partly_cloudy_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-kloofendal-43d-clear-puresky"
+kind = "hdri"
+name = "Kloofendal 43d Clear (Pure Sky)"
+source = "polyhaven"
+source_id = "kloofendal_43d_clear_puresky"
+page_url = "https://polyhaven.com/a/kloofendal_43d_clear_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_43d_clear_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/kloofendal_43d_clear_puresky (type 0, 'Kloofendal 43d Clear (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal"
+attribution = "Kloofendal 43d Clear (Pure Sky) by Greg Zaal, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 19613752
+look = "realistic"
+tags = ["clear", "day", "high-contrast", "midday", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_43d_clear_puresky_1k.hdr"
+sha256 = "de7ba9d0b070470dbb70d0144294c8708068df353537b26ab59c394707e84377"
+size = 1184531
+map = "hdri"
+path = "kloofendal_43d_clear_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloofendal_43d_clear_puresky_4k.hdr"
+sha256 = "1f92cbf17e46659ff37c9770d065280da226896b0f56091c4c1fca071da7fbeb"
+size = 18429221
+map = "hdri"
+path = "kloofendal_43d_clear_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-sunflowers-puresky"
+kind = "hdri"
+name = "Sunflowers (Pure Sky)"
+source = "polyhaven"
+source_id = "sunflowers_puresky"
+page_url = "https://polyhaven.com/a/sunflowers_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/sunflowers_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/sunflowers_puresky (type 0, 'Sunflowers (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Jarod Guest, Sergej Majboroda"
+attribution = "Sunflowers (Pure Sky) by Jarod Guest, Sergej Majboroda, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 22731594
+look = "realistic"
+tags = ["clear", "day", "high-contrast", "midday", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/sunflowers_puresky_1k.hdr"
+sha256 = "39a18be788fda30e1b1929d4ebd78b5da14433a6e2271eff1928a35e481c5111"
+size = 1482923
+map = "hdri"
+path = "sunflowers_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/sunflowers_puresky_4k.hdr"
+sha256 = "d5bd90316896c6f9619f19752590f1ccac7b7190032aea28b808ccdbbc3b590e"
+size = 21248671
+map = "hdri"
+path = "sunflowers_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-citrus-orchard-road-puresky"
+kind = "hdri"
+name = "Citrus Orchard Road (Pure Sky)"
+source = "polyhaven"
+source_id = "citrus_orchard_road_puresky"
+page_url = "https://polyhaven.com/a/citrus_orchard_road_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/citrus_orchard_road_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/citrus_orchard_road_puresky (type 0, 'Citrus Orchard Road (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Dimitrios Savva, Jarod Guest"
+attribution = "Citrus Orchard Road (Pure Sky) by Dimitrios Savva, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 20021679
+look = "realistic"
+tags = ["day", "low-contrast", "morning", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies", "sunrise-sunset"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/citrus_orchard_road_puresky_1k.hdr"
+sha256 = "1dd1cc7c2d9c8efb63b86bd196039b69445411d4a5543426418a03a34133ab4c"
+size = 1317344
+map = "hdri"
+path = "citrus_orchard_road_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/citrus_orchard_road_puresky_4k.hdr"
+sha256 = "89c6067c9961fb70cd7a529ce4ded64610ab29c916bdc75e0d9e9bd59720a3da"
+size = 18704335
+map = "hdri"
+path = "citrus_orchard_road_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-kloppenheim-06-puresky"
+kind = "hdri"
+name = "Kloppenheim 06 (Pure Sky)"
+source = "polyhaven"
+source_id = "kloppenheim_06_puresky"
+page_url = "https://polyhaven.com/a/kloppenheim_06_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_06_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/kloppenheim_06_puresky (type 0, 'Kloppenheim 06 (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal, Jarod Guest"
+attribution = "Kloppenheim 06 (Pure Sky) by Greg Zaal, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 18558815
+look = "realistic"
+tags = ["low-contrast", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies", "sunrise-sunset", "sunset"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_06_puresky_1k.hdr"
+sha256 = "206c67e3a1b992282821cf06662bdd69bbb4915c1c4444a66338a40d6a7d4e34"
+size = 1173154
+map = "hdri"
+path = "kloppenheim_06_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_06_puresky_4k.hdr"
+sha256 = "1bebd7cbbfb5c48a642f03d93bffbabb2c42d0b109061f37a72259d1cbdb3053"
+size = 17385661
+map = "hdri"
+path = "kloppenheim_06_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-belfast-sunset-puresky"
+kind = "hdri"
+name = "Belfast Sunset (Pure Sky)"
+source = "polyhaven"
+source_id = "belfast_sunset_puresky"
+page_url = "https://polyhaven.com/a/belfast_sunset_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/belfast_sunset_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/belfast_sunset_puresky (type 0, 'Belfast Sunset (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Dimitrios Savva, Greg Zaal, Jarod Guest"
+attribution = "Belfast Sunset (Pure Sky) by Dimitrios Savva, Greg Zaal, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 18610361
+look = "realistic"
+tags = ["low-contrast", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies", "sunrise-sunset", "sunset"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/belfast_sunset_puresky_1k.hdr"
+sha256 = "cec532d8dd382bcdca98d7010fa951a782f3295f98e8bd72ee453be8d0a64e98"
+size = 1190247
+map = "hdri"
+path = "belfast_sunset_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/belfast_sunset_puresky_4k.hdr"
+sha256 = "cafc52b99ce15d84bd039826a0333f5ab0259d8c1f4feb2f7faf5fafa039108a"
+size = 17420114
+map = "hdri"
+path = "belfast_sunset_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-industrial-sunset-puresky"
+kind = "hdri"
+name = "Industrial Sunset (Pure Sky)"
+source = "polyhaven"
+source_id = "industrial_sunset_puresky"
+page_url = "https://polyhaven.com/a/industrial_sunset_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/industrial_sunset_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/industrial_sunset_puresky (type 0, 'Industrial Sunset (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Jarod Guest, Sergej Majboroda"
+attribution = "Industrial Sunset (Pure Sky) by Jarod Guest, Sergej Majboroda, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 17568104
+look = "realistic"
+tags = ["low-contrast", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies", "sunrise-sunset", "sunset"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/industrial_sunset_puresky_1k.hdr"
+sha256 = "ce8235e4b1b10b620120ceeb32eb3e80af15ea29b09a8625a4bdae647dff328d"
+size = 1158432
+map = "hdri"
+path = "industrial_sunset_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/industrial_sunset_puresky_4k.hdr"
+sha256 = "c9fdbde395195c112bffeef8e89842677ed3f9f798477ec01baf170608051cd6"
+size = 16409672
+map = "hdri"
+path = "industrial_sunset_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-qwantani-dusk-2-puresky"
+kind = "hdri"
+name = "Qwantani Dusk 2 (Pure Sky)"
+source = "polyhaven"
+source_id = "qwantani_dusk_2_puresky"
+page_url = "https://polyhaven.com/a/qwantani_dusk_2_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_dusk_2_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/qwantani_dusk_2_puresky (type 0, 'Qwantani Dusk 2 (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal, Jarod Guest"
+attribution = "Qwantani Dusk 2 (Pure Sky) by Greg Zaal, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 19142532
+look = "realistic"
+tags = ["clear", "dusk", "low-contrast", "natural-light", "nature", "outdoor", "partly-cloudy", "pure-skies", "realistic", "skies", "sunrise-sunset", "sunset"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_dusk_2_puresky_1k.hdr"
+sha256 = "56dc9cb681f2641c08377e20e83fa5e4865fd900bcce26a15a1883580139b5e2"
+size = 1166018
+map = "hdri"
+path = "qwantani_dusk_2_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/qwantani_dusk_2_puresky_4k.hdr"
+sha256 = "dbe5f750e4753f51ef8d178553318ad8550035cac0ce5cfab058e76cf8f021d2"
+size = 17976514
+map = "hdri"
+path = "qwantani_dusk_2_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-overcast-soil-puresky"
+kind = "hdri"
+name = "Overcast Soil (Pure Sky)"
+source = "polyhaven"
+source_id = "overcast_soil_puresky"
+page_url = "https://polyhaven.com/a/overcast_soil_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/overcast_soil_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/overcast_soil_puresky (type 0, 'Overcast Soil (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Jarod Guest, Sergej Majboroda"
+attribution = "Overcast Soil (Pure Sky) by Jarod Guest, Sergej Majboroda, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 18144939
+look = "realistic"
+tags = ["low-contrast", "morning-afternoon", "natural-light", "nature", "outdoor", "overcast", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/overcast_soil_puresky_1k.hdr"
+sha256 = "2dbbbbb1323a8e8989db2e8306bd13099b215539e5adba41b85738a250a7904e"
+size = 1195816
+map = "hdri"
+path = "overcast_soil_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/overcast_soil_puresky_4k.hdr"
+sha256 = "717958e9dfd092fcead82ff4691f3d615088803dd1888bb638ba948669021140"
+size = 16949123
+map = "hdri"
+path = "overcast_soil_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-kloofendal-overcast-puresky"
+kind = "hdri"
+name = "Kloofendal Overcast (Pure Sky)"
+source = "polyhaven"
+source_id = "kloofendal_overcast_puresky"
+page_url = "https://polyhaven.com/a/kloofendal_overcast_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_overcast_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/kloofendal_overcast_puresky (type 0, 'Kloofendal Overcast (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal"
+attribution = "Kloofendal Overcast (Pure Sky) by Greg Zaal, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 18127587
+look = "realistic"
+tags = ["low-contrast", "morning-afternoon", "natural-light", "nature", "outdoor", "overcast", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_overcast_puresky_1k.hdr"
+sha256 = "5f98aa01d43a49cd899299751a978b3e5559a76300198b5dd2d9c68ecc4ad130"
+size = 1174053
+map = "hdri"
+path = "kloofendal_overcast_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloofendal_overcast_puresky_4k.hdr"
+sha256 = "77ade807bd208195073a51b970dea574fa70cd80cf666aeedf5cd416ab5c8abd"
+size = 16953534
+map = "hdri"
+path = "kloofendal_overcast_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-kloofendal-misty-morning-puresky"
+kind = "hdri"
+name = "Kloofendal Misty Morning (Pure Sky)"
+source = "polyhaven"
+source_id = "kloofendal_misty_morning_puresky"
+page_url = "https://polyhaven.com/a/kloofendal_misty_morning_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_misty_morning_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/kloofendal_misty_morning_puresky (type 0, 'Kloofendal Misty Morning (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal"
+attribution = "Kloofendal Misty Morning (Pure Sky) by Greg Zaal, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 13362276
+look = "realistic"
+tags = ["fog", "horror", "low-contrast", "morning-afternoon", "natural-light", "nature", "outdoor", "overcast", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_misty_morning_puresky_1k.hdr"
+sha256 = "3d5b95033feb1fbbe3881ecbbda5e3732dc0476201b0f16c3d430ad69659cc08"
+size = 702293
+map = "hdri"
+path = "kloofendal_misty_morning_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloofendal_misty_morning_puresky_4k.hdr"
+sha256 = "604aa1d0db357a0a786b85047f0e29f73e262afc9da13b79262d9ab5e71e7307"
+size = 12659983
+map = "hdri"
+path = "kloofendal_misty_morning_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-qwantani-night-puresky"
+kind = "hdri"
+name = "Qwantani Night (Pure Sky)"
+source = "polyhaven"
+source_id = "qwantani_night_puresky"
+page_url = "https://polyhaven.com/a/qwantani_night_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_night_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/qwantani_night_puresky (type 0, 'Qwantani Night (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal, Jarod Guest"
+attribution = "Qwantani Night (Pure Sky) by Greg Zaal, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 22610740
+look = "realistic"
+tags = ["clear", "low-contrast", "natural-light", "nature", "night", "outdoor", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_night_puresky_1k.hdr"
+sha256 = "480d67a67c8d7f8b69fe2334461b2004d7b420a61db1f68fa9043d91ee702b98"
+size = 1389258
+map = "hdri"
+path = "qwantani_night_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/qwantani_night_puresky_4k.hdr"
+sha256 = "7f064792a1b9108f4aacd004e8ee86364e98faf2e0a0ee5dfb33a9593da28db3"
+size = 21221482
+map = "hdri"
+path = "qwantani_night_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-qwantani-moonrise-puresky"
+kind = "hdri"
+name = "Qwantani Moonrise (Pure Sky)"
+source = "polyhaven"
+source_id = "qwantani_moonrise_puresky"
+page_url = "https://polyhaven.com/a/qwantani_moonrise_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_moonrise_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/qwantani_moonrise_puresky (type 0, 'Qwantani Moonrise (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal, Jarod Guest"
+attribution = "Qwantani Moonrise (Pure Sky) by Greg Zaal, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 20535120
+look = "realistic"
+tags = ["clear", "high-contrast", "moon", "natural-light", "nature", "night", "outdoor", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_moonrise_puresky_1k.hdr"
+sha256 = "6505b4c9869ed519772d90cc88e1fe9aa8e0fdfa86c7d7826c55f94a253fce6d"
+size = 1272812
+map = "hdri"
+path = "qwantani_moonrise_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/qwantani_moonrise_puresky_4k.hdr"
+sha256 = "12d520d2c9bb0a804f2684c2151536c5221dad118fce80915cd280830428d774"
+size = 19262308
+map = "hdri"
+path = "qwantani_moonrise_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-kloppenheim-07-puresky"
+kind = "hdri"
+name = "Kloppenheim 07 (Pure Sky)"
+source = "polyhaven"
+source_id = "kloppenheim_07_puresky"
+page_url = "https://polyhaven.com/a/kloppenheim_07_puresky"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_07_puresky_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/kloppenheim_07_puresky (type 0, 'Kloppenheim 07 (Pure Sky)'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Greg Zaal, Jarod Guest"
+attribution = "Kloppenheim 07 (Pure Sky) by Greg Zaal, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 20639727
+look = "realistic"
+tags = ["artificial-light", "horror", "low-contrast", "natural-light", "nature", "night", "outdoor", "overcast", "pure-skies", "realistic", "skies"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_07_puresky_1k.hdr"
+sha256 = "c18aa40364d1b5aa788f309f1c64d891c386e6f8e7d958c329f7470489e04f8a"
+size = 1282823
+map = "hdri"
+path = "kloppenheim_07_puresky_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/kloppenheim_07_puresky_4k.hdr"
+sha256 = "98a94dc8c290a89de0147642750beb9dae4c791ee33c1689bebbf58126e97f22"
+size = 19356904
+map = "hdri"
+path = "kloppenheim_07_puresky_4k.hdr"
+
+[[asset]]
+id = "hdri-brown-photostudio-02"
+kind = "hdri"
+name = "Brown Photostudio 02"
+source = "polyhaven"
+source_id = "brown_photostudio_02"
+page_url = "https://polyhaven.com/a/brown_photostudio_02"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/brown_photostudio_02_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/brown_photostudio_02 (type 0, 'Brown Photostudio 02'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Sergej Majboroda"
+attribution = "Brown Photostudio 02 by Sergej Majboroda, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 27081947
+look = "realistic"
+tags = ["artificial-light", "backplates", "bed", "chair", "couch", "fluorescent", "fridge", "indoor", "interior", "kitchen", "medium-contrast", "natural-light", "photo", "realistic", "studio", "table", "urban", "window"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/brown_photostudio_02_1k.hdr"
+sha256 = "469abc5e6035b6c450bae8adbb448f8d1fa7c51d9e384e501516c28352c91b58"
+size = 1648130
+map = "hdri"
+path = "brown_photostudio_02_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/brown_photostudio_02_4k.hdr"
+sha256 = "368251c254a47dc7aaf532a515c0bd9ad3708ce5a3c5bb520b1628bcb9a37bc0"
+size = 25433817
+map = "hdri"
+path = "brown_photostudio_02_4k.hdr"
+
+[[asset]]
+id = "hdri-studio-small-09"
+kind = "hdri"
+name = "Studio Small 09"
+source = "polyhaven"
+source_id = "studio_small_09"
+page_url = "https://polyhaven.com/a/studio_small_09"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/studio_small_09 (type 0, 'Studio Small 09'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Sergej Majboroda"
+attribution = "Studio Small 09 by Sergej Majboroda, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 26286148
+look = "realistic"
+tags = ["artificial-light", "indoor", "infinity", "interior", "lamp", "medium-contrast", "photo", "realistic", "softbox", "studio", "umbrella", "urban"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr"
+sha256 = "e7cfda5f4e98e623db12b8bfd0184e048488e4855d9c83e2751fb44a32e80c45"
+size = 1615248
+map = "hdri"
+path = "studio_small_09_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/studio_small_09_4k.hdr"
+sha256 = "71a876b4315e691cc095e7340228dc9bc48417c26a681b4fc30938161fc85e39"
+size = 24670900
+map = "hdri"
+path = "studio_small_09_4k.hdr"
+
+[[asset]]
+id = "hdri-hangar-interior"
+kind = "hdri"
+name = "Hangar Interior"
+source = "polyhaven"
+source_id = "hangar_interior"
+page_url = "https://polyhaven.com/a/hangar_interior"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/hangar_interior_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/hangar_interior (type 0, 'Hangar Interior'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Dimitrios Savva, Jarod Guest"
+attribution = "Hangar Interior by Dimitrios Savva, Jarod Guest, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 28783030
+look = "realistic"
+tags = ["airport", "aviation", "concrete", "hangar", "indoor", "industrial", "interior", "medium-contrast", "midday", "natural-light", "plane", "realistic", "urban", "warehouse"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/hangar_interior_1k.hdr"
+sha256 = "9c403bd7b45735e9d83efbc5917a56c83218e1254dc5004c5e73777aa4e45e00"
+size = 1755683
+map = "hdri"
+path = "hangar_interior_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/hangar_interior_4k.hdr"
+sha256 = "c38384624e7d305e95c483315abb11139b170fb5e9fdff1be39645a9198c86f3"
+size = 27027347
+map = "hdri"
+path = "hangar_interior_4k.hdr"
+
+[[asset]]
+id = "hdri-artist-workshop"
+kind = "hdri"
+name = "Artist Workshop"
+source = "polyhaven"
+source_id = "artist_workshop"
+page_url = "https://polyhaven.com/a/artist_workshop"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/artist_workshop_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/artist_workshop (type 0, 'Artist Workshop'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Oliksiy Yakovlyev"
+attribution = "Artist Workshop by Oliksiy Yakovlyev, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 28253600
+look = "realistic"
+tags = ["art", "atelier", "canvas", "indoor", "interior", "low-contrast", "midday", "natural-light", "painting", "realistic", "urban", "window"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/artist_workshop_1k.hdr"
+sha256 = "f6da9025acadb1149c973fe2bef53d55f4e7144285a87ec1a357520fbcad4767"
+size = 1719663
+map = "hdri"
+path = "artist_workshop_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/artist_workshop_4k.hdr"
+sha256 = "a2f3e171d5817eca264688e051f98056a83595ebf3907f9c71685b6b16a0bb13"
+size = 26533937
+map = "hdri"
+path = "artist_workshop_4k.hdr"
+
+[[asset]]
+id = "hdri-abandoned-games-room-01"
+kind = "hdri"
+name = "Abandoned Games Room 01"
+source = "polyhaven"
+source_id = "abandoned_games_room_01"
+page_url = "https://polyhaven.com/a/abandoned_games_room_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/abandoned_games_room_01_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/abandoned_games_room_01 (type 0, 'Abandoned Games Room 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Octavian Tudose"
+attribution = "Abandoned Games Room 01 by Octavian Tudose, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 27596129
+look = "realistic"
+tags = ["abandoned", "horror", "indoor", "interior", "low-contrast", "midday", "natural-light", "realistic", "room", "rubble", "tile", "urban", "window"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/abandoned_games_room_01_1k.hdr"
+sha256 = "a94c3bc4540e6ee4590a0480a6947ee9258572fc41e1f317f921618775998f24"
+size = 1650845
+map = "hdri"
+path = "abandoned_games_room_01_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/abandoned_games_room_01_4k.hdr"
+sha256 = "591703e6206795428ebb1f80f0ab4e0eb76cc7824026948beb6a54116220e669"
+size = 25945284
+map = "hdri"
+path = "abandoned_games_room_01_4k.hdr"
+
+[[asset]]
+id = "hdri-empty-warehouse-01"
+kind = "hdri"
+name = "Empty Warehouse 01"
+source = "polyhaven"
+source_id = "empty_warehouse_01"
+page_url = "https://polyhaven.com/a/empty_warehouse_01"
+download_url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/empty_warehouse_01_1k.hdr"
+licence = "CC0-1.0"
+licence_proof_url = "https://polyhaven.com/license"
+licence_evidence = "api.polyhaven.com/info/empty_warehouse_01 (type 0, 'Empty Warehouse 01'); polyhaven.com/license: 'Our assets are all licensed as CC0'"
+licence_checked = "2026-10-30"
+author = "Sergej Majboroda"
+attribution = "Empty Warehouse 01 by Sergej Majboroda, Poly Haven (CC0 1.0)"
+format = "hdr"
+resolution = "4k"
+size = 27385164
+look = "realistic"
+tags = ["artificial-light", "backplates", "concrete", "derelict", "fluorescent", "indoor", "industrial", "interior", "medium-contrast", "morning-afternoon", "realistic", "urban", "warehouse"]
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/empty_warehouse_01_1k.hdr"
+sha256 = "9b3d611cadc32c3a0c7e084ce5611c0650293881c4a041e7fa13748fe0dc6451"
+size = 1672140
+map = "hdri"
+path = "empty_warehouse_01_1k.hdr"
+[[asset.files]]
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/empty_warehouse_01_4k.hdr"
+sha256 = "8b5f158ecfde7239bec31ff3855b55e390b3fd81f9172bde8c04ba535ae31d3d"
+size = 25713024
+map = "hdri"
+path = "empty_warehouse_01_4k.hdr"

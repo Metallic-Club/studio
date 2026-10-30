@@ -72,6 +72,11 @@ Rules:
 
 ## 3. Look presets: restyle the whole game in one click
 
+> **Superseded naming (#144).** `docs/design/look-presets.md` renames these presets **Themes**
+> (`themes/<id>.theme.ron`, tags `Theme:<Role>` and `Theme:UI`, `template.toml` field `theme`), because `Lighting.Look`
+> now names the render style. Each Theme picks a Look and a lighting preset; section 5.3 of that spec maps the nine
+> below. The rest of this section stays as written until #83 updates it.
+
 A look preset is a file in the Studio install, `looks/<id>.toml`. Applying one is a single undoable command. It sets:
 - `Lighting`: `ClockTime`, `Brightness`, `Ambient`, `OutdoorAmbient`, `FogColor`, `FogStart`, `FogEnd`, plus sky
   gradient colours (needs API group A13).
