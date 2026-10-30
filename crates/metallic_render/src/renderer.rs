@@ -1,0 +1,883 @@
+//! The GPU renderer: buffers, pipelines and the three passes (shadows, sky + opaque, blended).
+use crate::camera::{Camera, FAR, NEAR};
+use crate::context::{RenderContext, RenderError};
+use crate::meshes::{MeshKind, Vertex};
+use crate::scene::{InstanceRaw, Scene};
+use crate::shadows::{
+    MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
+};
+use crate::sky::Sky;
+use bytemuck::{Pod, Zeroable};
+use glam::Mat4;
+use metallic_core::World;
+use std::borrow::Cow;
+use wgpu::util::DeviceExt;
+
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
+const SCENE_WGSL: &str = include_str!("../shaders/scene.wgsl");
+const SKY_WGSL: &str = include_str!("../shaders/sky.wgsl");
+const SHADOW_WGSL: &str = include_str!("../shaders/shadow.wgsl");
+
+/// Overall quality preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Quality {
+    /// One 1024 px shadow cascade, no multisampling.
+    Low,
+    /// Three 2048 px shadow cascades and 4x MSAA.
+    #[default]
+    High,
+}
+
+/// Settings that can change at run time with [`Renderer::set_settings`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RenderSettings {
+    /// Quality preset.
+    pub quality: Quality,
+}
+
+impl RenderSettings {
+    fn cascades(self) -> usize {
+        match self.quality {
+            Quality::Low => 1,
+            Quality::High => 3,
+        }
+    }
+    fn shadow_resolution(self) -> u32 {
+        match self.quality {
+            Quality::Low => 1024,
+            Quality::High => 2048,
+        }
+    }
+    fn samples(self) -> u32 {
+        match self.quality {
+            Quality::Low => 1,
+            Quality::High => 4,
+        }
+    }
+}
+
+/// Uniform block shared by all shaders; mirrors `Globals` in `common.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Globals {
+    view_proj: [[f32; 4]; 4],
+    inv_view_proj: [[f32; 4]; 4],
+    cascade_vp: [[[f32; 4]; 4]; MAX_CASCADES],
+    cascade_splits: [f32; 4],
+    cascade_texel: [f32; 4],
+    camera_pos: [f32; 4],
+    sun_dir: [f32; 4],
+    sun_color: [f32; 4],
+    sky_zenith: [f32; 4],
+    sky_horizon: [f32; 4],
+    sky_ground: [f32; 4],
+    params: [f32; 4],
+}
+
+const MESH_ATTRS: [wgpu::VertexAttribute; 2] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+const INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4
+];
+
+fn vertex_layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
+    [
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &MESH_ATTRS,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<InstanceRaw>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &INSTANCE_ATTRS,
+        },
+    ]
+}
+
+struct GpuMesh {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    index_count: u32,
+}
+
+/// A growable GPU buffer of instances.
+struct InstanceBuffer {
+    buffer: wgpu::Buffer,
+    capacity: usize,
+    count: usize,
+}
+
+impl InstanceBuffer {
+    fn new(device: &wgpu::Device, capacity: usize) -> InstanceBuffer {
+        let capacity = capacity.max(16);
+        InstanceBuffer {
+            buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("metallic instances"),
+                size: (capacity * std::mem::size_of::<InstanceRaw>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            capacity,
+            count: 0,
+        }
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[InstanceRaw]) {
+        if data.len() > self.capacity {
+            *self = InstanceBuffer::new(device, data.len().next_power_of_two());
+        }
+        if !data.is_empty() {
+            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(data));
+        }
+        self.count = data.len();
+    }
+}
+
+struct Pipelines {
+    sky: wgpu::RenderPipeline,
+    opaque: wgpu::RenderPipeline,
+    blended: wgpu::RenderPipeline,
+    shadow: wgpu::RenderPipeline,
+}
+
+struct Attachments {
+    size: (u32, u32),
+    msaa_color: Option<wgpu::TextureView>,
+    depth: wgpu::TextureView,
+}
+
+struct CascadeSlot {
+    buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+/// Draws the Parts of a world. Create with [`Renderer::new`], call [`Renderer::sync`] when the
+/// world changed and [`Renderer::render`] once per frame.
+pub struct Renderer {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
+    settings: RenderSettings,
+    /// Environment colours and sun; change fields at any time.
+    pub sky: Sky,
+    scene: Scene,
+    uploaded_version: Option<u64>,
+    meshes: Vec<GpuMesh>,
+    opaque: Vec<InstanceBuffer>,
+    blended: InstanceBuffer,
+    blended_kinds: Vec<MeshKind>,
+    globals: wgpu::Buffer,
+    global_layout: wgpu::BindGroupLayout,
+    shadow_layout: wgpu::BindGroupLayout,
+    global_group: wgpu::BindGroup,
+    shadow_map: ShadowMap,
+    cascade_slots: Vec<CascadeSlot>,
+    pipelines: Pipelines,
+    attachments: Option<Attachments>,
+}
+
+impl Renderer {
+    /// Creates a renderer at [`Quality::High`] that draws into targets of `surface_format`.
+    pub fn new(ctx: &RenderContext, surface_format: wgpu::TextureFormat) -> Renderer {
+        Renderer::with_settings(ctx, surface_format, RenderSettings::default())
+    }
+
+    /// Creates a renderer with explicit settings.
+    pub fn with_settings(
+        ctx: &RenderContext,
+        surface_format: wgpu::TextureFormat,
+        settings: RenderSettings,
+    ) -> Renderer {
+        let device = ctx.device.clone();
+        let queue = ctx.queue.clone();
+        let meshes = MeshKind::ALL
+            .iter()
+            .map(|k| {
+                let data = k.build();
+                GpuMesh {
+                    vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("metallic mesh vertices"),
+                        contents: bytemuck::cast_slice(&data.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+                    indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("metallic mesh indices"),
+                        contents: bytemuck::cast_slice(&data.indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    }),
+                    index_count: data.indices.len() as u32,
+                }
+            })
+            .collect();
+        let opaque = MeshKind::ALL
+            .iter()
+            .map(|_| InstanceBuffer::new(&device, 1024))
+            .collect();
+        let globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("metallic globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let global_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("metallic global layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("metallic shadow layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let shadow_map = ShadowMap::new(&device, settings.shadow_resolution(), settings.cascades());
+        let global_group = make_global_group(&device, &global_layout, &globals, &shadow_map);
+        let cascade_slots = make_cascade_slots(&device, &shadow_layout, settings.cascades());
+        let pipelines = make_pipelines(
+            &device,
+            surface_format,
+            settings.samples(),
+            &global_layout,
+            &shadow_layout,
+        );
+        let blended = InstanceBuffer::new(&device, 256);
+        Renderer {
+            device,
+            queue,
+            format: surface_format,
+            settings,
+            sky: Sky::default(),
+            scene: Scene::new(),
+            uploaded_version: None,
+            meshes,
+            opaque,
+            blended,
+            blended_kinds: Vec::new(),
+            globals,
+            global_layout,
+            shadow_layout,
+            global_group,
+            shadow_map,
+            cascade_slots,
+            pipelines,
+            attachments: None,
+        }
+    }
+
+    /// The settings in use.
+    pub fn settings(&self) -> RenderSettings {
+        self.settings
+    }
+
+    /// Switches quality; rebuilds the shadow map, pipelines and render targets.
+    pub fn set_settings(&mut self, settings: RenderSettings) {
+        if settings == self.settings {
+            return;
+        }
+        self.settings = settings;
+        self.shadow_map = ShadowMap::new(
+            &self.device,
+            settings.shadow_resolution(),
+            settings.cascades(),
+        );
+        self.global_group = make_global_group(
+            &self.device,
+            &self.global_layout,
+            &self.globals,
+            &self.shadow_map,
+        );
+        self.cascade_slots =
+            make_cascade_slots(&self.device, &self.shadow_layout, settings.cascades());
+        self.pipelines = make_pipelines(
+            &self.device,
+            self.format,
+            settings.samples(),
+            &self.global_layout,
+            &self.shadow_layout,
+        );
+        self.attachments = None;
+    }
+
+    /// Number of parts currently known to the renderer (drawn or not).
+    pub fn part_count(&self) -> usize {
+        self.scene.instance_count()
+    }
+
+    /// Reads all BasePart transforms, sizes, colours, materials and transparency from `world`.
+    ///
+    /// Only parts whose data changed are re-uploaded; an unchanged world costs one read per
+    /// property and no GPU work.
+    pub fn sync(&mut self, world: &World) {
+        self.scene.sync(world);
+    }
+
+    fn upload_scene(&mut self) {
+        if self.uploaded_version == Some(self.scene.version()) {
+            return;
+        }
+        for kind in MeshKind::ALL {
+            let data: Vec<InstanceRaw> = self
+                .scene
+                .opaque(kind)
+                .filter(|p| !p.is_invisible())
+                .map(|p| p.instance)
+                .collect();
+            self.opaque[kind.index()].upload(&self.device, &self.queue, &data);
+        }
+        self.uploaded_version = Some(self.scene.version());
+    }
+
+    fn ensure_attachments(&mut self, size: (u32, u32)) {
+        if self.attachments.as_ref().is_some_and(|a| a.size == size) {
+            return;
+        }
+        let samples = self.settings.samples();
+        let extent = wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        };
+        let depth = self
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("metallic depth"),
+                size: extent,
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let msaa_color = (samples > 1).then(|| {
+            self.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("metallic msaa color"),
+                    size: extent,
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        });
+        self.attachments = Some(Attachments {
+            size,
+            msaa_color,
+            depth,
+        });
+    }
+
+    fn write_globals(&self, camera: &Camera, size: (u32, u32), cascades: &[Mat4]) -> Globals {
+        let aspect = size.0 as f32 / size.1 as f32;
+        let vp = camera.view_proj(aspect);
+        let count = self.settings.cascades();
+        let splits = cascade_splits(NEAR, SHADOW_DISTANCE.min(FAR), count);
+        let mut cascade_vp = [[[0.0; 4]; 4]; MAX_CASCADES];
+        let mut split_arr = [f32::MAX; 4];
+        let mut texel = [1.0; 4];
+        for i in 0..count {
+            cascade_vp[i] = cascades[i].to_cols_array_2d();
+            split_arr[i] = splits[i];
+        }
+        for (i, t) in texel.iter_mut().enumerate().take(count) {
+            let near = if i == 0 { NEAR } else { splits[i - 1] };
+            *t = fit_cascade(
+                camera,
+                aspect,
+                near,
+                splits[i],
+                self.sky.to_sun,
+                self.shadow_map.resolution,
+            )
+            .texel_world;
+        }
+        let p = |c: [f32; 3], w: f32| [c[0], c[1], c[2], w];
+        Globals {
+            view_proj: vp.to_cols_array_2d(),
+            inv_view_proj: vp.inverse().to_cols_array_2d(),
+            cascade_vp,
+            cascade_splits: split_arr,
+            cascade_texel: texel,
+            camera_pos: [
+                camera.position.x,
+                camera.position.y,
+                camera.position.z,
+                self.sky.fog_density,
+            ],
+            sun_dir: p(self.sky.to_sun.to_array(), 0.0),
+            sun_color: p(self.sky.sun_color, 0.0),
+            sky_zenith: p(self.sky.zenith, 0.0),
+            sky_horizon: p(self.sky.horizon, 0.0),
+            sky_ground: p(self.sky.ground, 0.0),
+            params: [
+                count as f32,
+                if self.format.is_srgb() { 1.0 } else { 0.0 },
+                self.sky.exposure,
+                self.shadow_map.resolution as f32,
+            ],
+        }
+    }
+
+    /// Draws the synced scene into `target` (a single-sample view of the surface format given to
+    /// [`Renderer::new`]) as seen by `camera`. `size` is the target size in pixels; a zero size
+    /// (a minimised window) draws nothing.
+    pub fn render(&mut self, target: &wgpu::TextureView, camera: &Camera, size: (u32, u32)) {
+        if size.0 == 0 || size.1 == 0 {
+            return;
+        }
+        self.ensure_attachments(size);
+        self.upload_scene();
+
+        // Blended parts are re-sorted every frame because the order depends on the camera.
+        let sorted = self.scene.transparent_sorted(camera.position);
+        let blended: Vec<InstanceRaw> = sorted.iter().map(|p| p.instance).collect();
+        self.blended_kinds = sorted.iter().map(|p| p.kind).collect();
+        self.blended.upload(&self.device, &self.queue, &blended);
+
+        let aspect = size.0 as f32 / size.1 as f32;
+        let count = self.settings.cascades();
+        let splits = cascade_splits(NEAR, SHADOW_DISTANCE.min(FAR), count);
+        let cascades: Vec<Mat4> = (0..count)
+            .map(|i| {
+                let near = if i == 0 { NEAR } else { splits[i - 1] };
+                fit_cascade(
+                    camera,
+                    aspect,
+                    near,
+                    splits[i],
+                    self.sky.to_sun,
+                    self.shadow_map.resolution,
+                )
+                .view_proj
+            })
+            .collect();
+        let globals = self.write_globals(camera, size, &cascades);
+        self.queue
+            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        for (slot, vp) in self.cascade_slots.iter().zip(&cascades) {
+            self.queue
+                .write_buffer(&slot.buffer, 0, bytemuck::bytes_of(&vp.to_cols_array_2d()));
+        }
+
+        let Some(att) = self.attachments.as_ref() else {
+            return;
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("metallic frame"),
+            });
+
+        for (i, slot) in self.cascade_slots.iter().enumerate() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("metallic shadow pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_map.layer_views[i],
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipelines.shadow);
+            pass.set_bind_group(0, &slot.bind_group, &[]);
+            self.draw_opaque(&mut pass);
+        }
+
+        {
+            let (view, resolve) = match &att.msaa_color {
+                Some(msaa) => (msaa, Some(target)),
+                None => (target, None),
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("metallic main pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: if resolve.is_some() {
+                            wgpu::StoreOp::Discard
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &att.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.global_group, &[]);
+            pass.set_pipeline(&self.pipelines.sky);
+            pass.draw(0..3, 0..1);
+            pass.set_pipeline(&self.pipelines.opaque);
+            self.draw_opaque(&mut pass);
+            self.draw_blended(&mut pass);
+        }
+        self.queue.submit(Some(encoder.finish()));
+    }
+
+    fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
+        for kind in MeshKind::ALL {
+            let inst = &self.opaque[kind.index()];
+            if inst.count == 0 {
+                continue;
+            }
+            let mesh = &self.meshes[kind.index()];
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_vertex_buffer(1, inst.buffer.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..inst.count as u32);
+        }
+    }
+
+    fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if self.blended.count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipelines.blended);
+        let stride = std::mem::size_of::<InstanceRaw>() as u64;
+        let mut bound: Option<MeshKind> = None;
+        for (i, kind) in self.blended_kinds.iter().enumerate() {
+            let mesh = &self.meshes[kind.index()];
+            if bound != Some(*kind) {
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+                bound = Some(*kind);
+            }
+            let offset = i as u64 * stride;
+            pass.set_vertex_buffer(1, self.blended.buffer.slice(offset..offset + stride));
+            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+        }
+    }
+
+    /// Renders one frame offscreen and returns it as tightly packed RGBA8 bytes
+    /// (`size.0 * size.1 * 4`), already encoded for display. Used for screenshots and tests.
+    pub fn capture(&mut self, camera: &Camera, size: (u32, u32)) -> Result<Vec<u8>, RenderError> {
+        let (w, h) = size;
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("metallic capture"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.render(&view, camera, size);
+
+        let row_bytes = w * 4;
+        let padded = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("metallic readback"),
+            size: u64::from(padded) * u64::from(h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("metallic readback"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| RenderError::Readback(e.to_string()))?;
+        rx.recv()
+            .map_err(|e| RenderError::Readback(e.to_string()))?
+            .map_err(|e| RenderError::Readback(e.to_string()))?;
+
+        let mapped = buffer
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|e| RenderError::Readback(e.to_string()))?;
+        let mut out = Vec::with_capacity((row_bytes * h) as usize);
+        for row in mapped.chunks_exact(padded as usize) {
+            out.extend_from_slice(&row[..row_bytes as usize]);
+        }
+        drop(mapped);
+        buffer.unmap();
+        if matches!(
+            self.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for px in out.as_chunks_mut::<4>().0 {
+                px.swap(0, 2);
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn make_global_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    shadow: &ShadowMap,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("metallic globals group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&shadow.array_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&shadow.sampler),
+            },
+        ],
+    })
+}
+
+fn make_cascade_slots(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    count: usize,
+) -> Vec<CascadeSlot> {
+    (0..count)
+        .map(|_| {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("metallic cascade matrix"),
+                size: 64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("metallic cascade group"),
+                layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            CascadeSlot { buffer, bind_group }
+        })
+        .collect()
+}
+
+fn shader(device: &wgpu::Device, label: &str, parts: &[&str]) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(Cow::Owned(parts.join("\n"))),
+    })
+}
+
+fn make_pipelines(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    samples: u32,
+    global_layout: &wgpu::BindGroupLayout,
+    shadow_layout: &wgpu::BindGroupLayout,
+) -> Pipelines {
+    let scene_module = shader(device, "metallic scene", &[COMMON_WGSL, SCENE_WGSL]);
+    let sky_module = shader(device, "metallic sky", &[COMMON_WGSL, SKY_WGSL]);
+    let shadow_module = shader(device, "metallic shadow", &[SHADOW_WGSL]);
+
+    let main_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("metallic main layout"),
+        bind_group_layouts: &[Some(global_layout)],
+        immediate_size: 0,
+    });
+    let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("metallic shadow pipeline layout"),
+        bind_group_layouts: &[Some(shadow_layout)],
+        immediate_size: 0,
+    });
+    let multisample = wgpu::MultisampleState {
+        count: samples,
+        mask: !0,
+        alpha_to_coverage_enabled: false,
+    };
+    let depth = |write: bool, compare: wgpu::CompareFunction| wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(write),
+        depth_compare: Some(compare),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    };
+    let scene_pipeline = |label: &str, blend: Option<wgpu::BlendState>, write_depth: bool| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&main_layout),
+            vertex: wgpu::VertexState {
+                module: &scene_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &vertex_layouts().map(Some),
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(depth(write_depth, wgpu::CompareFunction::Less)),
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &scene_module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let sky = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("metallic sky"),
+        layout: Some(&main_layout),
+        vertex: wgpu::VertexState {
+            module: &sky_module,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(depth(false, wgpu::CompareFunction::Always)),
+        multisample,
+        fragment: Some(wgpu::FragmentState {
+            module: &sky_module,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("metallic shadow"),
+        layout: Some(&shadow_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shadow_module,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &vertex_layouts().map(Some),
+        },
+        primitive: wgpu::PrimitiveState {
+            cull_mode: Some(wgpu::Face::Front),
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: SHADOW_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState {
+                constant: 2,
+                slope_scale: 2.0,
+                clamp: 0.0,
+            },
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: None,
+        multiview_mask: None,
+        cache: None,
+    });
+    Pipelines {
+        sky,
+        opaque: scene_pipeline("metallic opaque", None, true),
+        blended: scene_pipeline(
+            "metallic blended",
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            false,
+        ),
+        shadow,
+    }
+}
