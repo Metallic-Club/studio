@@ -1,0 +1,18 @@
+# Research harness, not part of the engine workspace (the empty [workspace] keeps it standalone).
+# Builds every sample pipeline in ../ on a real GPU through wgpu, per backend.
+# Run: cargo run --release --manifest-path docs/research/style-shaders/check/Cargo.toml --bin style_shaders_check -- dx12
+#      cargo run --release --manifest-path docs/research/style-shaders/check/Cargo.toml --bin render_looks -- <out dir>
+[package]
+name = "style_shaders_check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "LicenseRef-Metallic-Proprietary"
+
+[workspace]
+
+[dependencies]
+wgpu = "30.0.1"
+pollster = "1.0.1"
+glam = "0.30.10"
+png = "0.18.1"
