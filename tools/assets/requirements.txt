@@ -1,0 +1,4 @@
+# Asset tools. fetch.py needs Pillow only to convert textures; previews.py also needs numpy.
+# Pillow: MIT-CMU (HPND) licence. numpy: BSD-3-Clause.
+Pillow>=10.0
+numpy>=1.26

@@ -1,0 +1,38 @@
+// 1-bit Dither: Obra Dinn style. Two colours, ordered dither, 1 px lines.
+(
+    format: "metallic.look",
+    version: 1,
+    id: "one-bit",
+    name: "1-bit Dither",
+    base: None,
+    dimension: ThreeD,
+    shading: (
+        default: Toon(bands: 3, softness: 0.02, shadow_tint: Rgb(255, 255, 255), flatten: 0.8, spec_size: 0.0, spec_strength: 0.0, rim_width: 0.0, rim_color: Rgb(255, 255, 255), light_step_ev: 0.0),
+        classes: {},
+        materials: {},
+    ),
+    lighting: (
+        preset: "Clear Day",
+        also_good: ["Overcast", "Moonlit", "Horror Fog"],
+        style: Soft,
+        shadows: Hard,
+        softness_min: 0.0,
+        ambient_scale: 1.0,
+        ao: Off,
+        volumetrics: Off,
+    ),
+    exposure: (mode: Fixed, compensation: 0.0),
+    tonemap: Clamp,
+    outlines: (
+        hull: Off,
+        edges: On(mode: All, width_px: 1.0, color: Rgb(27, 26, 32), strength: 1.0, depth_threshold: 0.05, normal_threshold: 0.3, highlight: 0.0, wobble_px: 0.0),
+    ),
+    hdr: [],
+    grade: (contrast: 0.15, saturation: 0.0, brightness: 0.0, tint: Rgb(255, 255, 255), lut: None, lut_strength: 0.0, vignette: 0.0),
+    ldr: [],
+    palette: Colors(colors: [Rgb(27, 26, 32), Rgb(232, 228, 216)], dither: Bayer8, strength: 1.0),
+    render: (scale: PixelHeight(360), upscale: Nearest, snap: Texel, subpixel: true, aa: Off, detail_texels_per_stud: 0),
+    output: [],
+    fog: (mode: Height, density_scale: 0.5, color: Sky),
+    tiers: {},
+)
