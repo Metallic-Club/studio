@@ -69,16 +69,19 @@ pub(crate) struct Signature {
     pub can_collide: bool,
     pub material: String,
     pub shape: String,
+    /// The part belongs to a character (see [`collect_parts`]).
+    pub character: bool,
 }
 
 impl PartState {
-    pub(crate) fn signature(&self) -> Signature {
+    pub(crate) fn signature(&self, character: bool) -> Signature {
         Signature {
             size: self.size,
             anchored: self.anchored,
             can_collide: self.can_collide,
             material: self.material.clone(),
             shape: self.shape.clone(),
+            character,
         }
     }
 }
@@ -111,21 +114,38 @@ pub(crate) fn read_part(world: &World, id: InstanceId) -> Option<PartState> {
     })
 }
 
-/// All BasePart instances under Workspace, depth first (parts elsewhere are not simulated).
-pub(crate) fn collect_parts(world: &World) -> Vec<InstanceId> {
+/// True for a Model with a `Humanoid` child: a character.
+fn is_character_model(world: &World, id: InstanceId) -> bool {
+    world.is_a(id, "Model")
+        && world
+            .children(id)
+            .iter()
+            .any(|&c| world.is_a(c, "Humanoid"))
+}
+
+/// All BasePart instances under Workspace, depth first (parts elsewhere are not simulated),
+/// each with a flag telling whether it is inside a character Model (a Model with a `Humanoid`
+/// child). Every instance is visited once and every Model's children scanned once, so this is
+/// linear in the tree size. Character parts never collide with or touch each other.
+pub(crate) fn collect_parts(world: &World) -> Vec<(InstanceId, bool)> {
     let mut out = Vec::new();
-    let mut stack: Vec<InstanceId> = world.root("Workspace").into_iter().collect();
-    while let Some(id) = stack.pop() {
+    let mut stack: Vec<(InstanceId, bool)> = world
+        .root("Workspace")
+        .into_iter()
+        .map(|w| (w, false))
+        .collect();
+    while let Some((id, in_char)) = stack.pop() {
         if world.is_a(id, "BasePart") {
-            out.push(id);
+            out.push((id, in_char));
         }
-        stack.extend(world.children(id).iter().rev().copied());
+        let child_flag = in_char || is_character_model(world, id);
+        stack.extend(world.children(id).iter().rev().map(|&c| (c, child_flag)));
     }
     out
 }
 
 /// Rotation matrix (row-major) for Roblox Euler angles in degrees: R = Ry * Rx * Rz.
-fn matrix_from_orientation(o: Vec3) -> [[f64; 3]; 3] {
+pub(crate) fn matrix_from_orientation(o: Vec3) -> [[f64; 3]; 3] {
     let (sx, cx) = o.x.to_radians().sin_cos();
     let (sy, cy) = o.y.to_radians().sin_cos();
     let (sz, cz) = o.z.to_radians().sin_cos();

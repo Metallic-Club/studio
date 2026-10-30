@@ -193,6 +193,7 @@ static CLASSES: &[ClassDef] = &[
         &[
             p("UserId", ValueType::Number, || Value::Number(0.0)),
             p("RespawnLocation", ValueType::Ref, || Value::Ref(None)),
+            p("Character", ValueType::Ref, || Value::Ref(None)),
         ],
     ),
 ];
@@ -260,7 +261,12 @@ mod tests {
             let mut unique = names.clone();
             unique.sort_unstable();
             unique.dedup();
-            assert_eq!(names.len(), unique.len(), "class {} repeats a property", c.name);
+            assert_eq!(
+                names.len(),
+                unique.len(),
+                "class {} repeats a property",
+                c.name
+            );
         }
     }
 }

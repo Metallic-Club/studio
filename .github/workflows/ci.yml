@@ -17,11 +17,13 @@ jobs:
         shell: bash
         run: |
           rustup toolchain install
-          rustup component add clippy
+          rustup component add clippy rustfmt
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
+      - name: Format
+        run: cargo fmt --check
       - name: Test
         run: cargo test --workspace
       - name: Clippy

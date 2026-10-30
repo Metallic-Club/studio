@@ -292,8 +292,13 @@ impl World {
                 self.free.push(cur.index);
             }
         }
-        self.prop_signals
-            .retain(|(k, _), _| self.slots[k.index as usize].generation == k.generation);
+        // Keep only signals of live instances. Ids that never belonged to this world (out of range,
+        // e.g. deserialized) or are stale are dropped here instead of indexing out of bounds.
+        self.prop_signals.retain(|(k, _), _| {
+            self.slots
+                .get(k.index as usize)
+                .is_some_and(|s| s.generation == k.generation && s.node.is_some())
+        });
         for g in gone {
             self.record(g);
         }
@@ -445,6 +450,9 @@ impl World {
     }
 
     /// The signal fired with the new value when `prop` of `id` changes (created on first use).
+    ///
+    /// `id` and `prop` are not validated: for a destroyed, stale or foreign id the signal never
+    /// fires and is discarded by the next [`World::destroy`].
     pub fn property_changed(&mut self, id: InstanceId, prop: &str) -> &mut Signal<Value> {
         self.prop_signals.entry((id, prop.to_string())).or_default()
     }
