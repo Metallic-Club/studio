@@ -1,5 +1,5 @@
 //! [`Game`]: one running game and its frame loop.
-use crate::{MAX_FRAME_DT, PlayerInput, RuntimeError, Simulation, StdoutSink, TICK, TICK_RATE};
+use crate::{MAX_FRAME_DT, PlayerInput, RuntimeError, Simulation, StdoutSink};
 const ROOT_PART: &str = "HumanoidRootPart";
 use crate::avatar::{Avatar, default_model};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
@@ -21,7 +21,7 @@ use std::rc::Rc;
 pub struct FrameOutput {
     /// The camera to render this frame with.
     pub camera: Camera,
-    /// Simulation ticks run during this frame (0 when the display is faster than [`TICK_RATE`]).
+    /// Simulation ticks run during this frame (0 when the display is faster than [`crate::TICK_RATE`]).
     pub ticks: u32,
     /// The local character's state, if it has one.
     pub state: Option<HumanoidState>,
@@ -228,7 +228,7 @@ impl Game {
 
     /// Advances the game by a frame of `dt` seconds and returns the camera to draw it with.
     ///
-    /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`TICK`]
+    /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`crate::TICK`]
     /// (an accumulator carries the remainder; `dt` is clamped to [`MAX_FRAME_DT`], a negative or
     /// non-finite `dt` counts as 0). Each tick, in order:
     /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches);
@@ -402,7 +402,7 @@ fn input_value(v: ActionValue) -> InputValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::locomotion::state;
+    use crate::{TICK, locomotion::state};
 
     struct Silent;
     impl OutputSink for Silent {

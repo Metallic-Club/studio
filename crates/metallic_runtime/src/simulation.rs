@@ -35,6 +35,8 @@ impl OutputSink for StdoutSink {
 /// One trusted, world-local Player's world-space movement wish for a simulation tick.
 /// This is not a backend user ID, admission token or network message. Repeated samples
 /// for a player use the last value; missing samples mean idle.
+/// The caller supplies finite direction components with horizontal length at most one;
+/// this API does not validate hostile commands.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlayerInput {
     /// A Player InstanceId belonging to this simulation's World.
@@ -46,6 +48,8 @@ pub struct PlayerInput {
 /// World, physics, characters and scripts without camera, avatar, GUI or rendering.
 /// Public constructors select server-only scripts and never create a synthetic player.
 /// The default presentation Game uses a private Combined constructor over this same kernel.
+/// The trusted World must give each Player a distinct live Character reference: sharing
+/// one character between Players would step that character more than once per tick.
 pub struct Simulation {
     pub(crate) name: String,
     pub(crate) world: Rc<RefCell<World>>,

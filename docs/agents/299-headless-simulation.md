@@ -1,6 +1,6 @@
 # #299 Shared graphics-free Simulation foundation
 
-Status: CPU graph/prebuild passed; first CPU execution 17 passed, one fixture under investigation.
+Status: CPU graph and all 18 CPU cases passed; default-feature/full gates pending.
 
 Branch `studio/299-headless-simulation`, initial base
 `fbaa17d03d4321b300e6f3ce6d17dc38d5c36223`. User-prioritized narrow A3 foundation;
@@ -44,19 +44,39 @@ classes/hash and detailed journal files remain with the A2/A1 workers.
 - First actual serial CPU run: 17 passed, one failed, zero ignored. Physics/cache,
   server-only script/Heartbeat/wait, fixed rates, invalid/clamped/residual/borrowed
   time, real touch/membership controls, stop/restart, runner CLI/process cases passed.
-- The new two-player trajectory fixture failed its expected 16-stud assertion. Both
-  characters are currently spawned at the same point. No product cause/fix is claimed;
-  inspect actual coordinates and matched fixture controls before changing production.
+- The initial two-player fixture mixed overlapping spawns into its input contract.
+  Diagnostic positions were moved=(15.6441,2.9862,-1.3818) and
+  idle=(-1.2533,3.0,0.0006), so it included collision resolution. Distinct explicit
+  respawn points isolated the players; movement then passed, while idle at x=100
+  showed about 0.000088 studs of contact drift. The original 1e-8 exact-pose assertion
+  was not physically justified. A documented 1e-3 horizontal drift bound checks idle
+  behavior without demanding bit-exact floating-point collision correction.
+- With only fixture setup/assertion changes, the complete CPU rerun passed all 18
+  cases (zero failed/ignored), including the duplicate-input/default-idle/respawn
+  contract. No simulation defect or production fix is claimed from those initial
+  fixture failures. Original diagnostic output is retained separately.
 - The default-feature Game/Simulation trajectory comparison has not run yet.
+- The default-feature workspace prebuild passed in 7m45s on fbaa17d. It reported
+  unused TICK/TICK_RATE imports after the extraction; these are removed from the
+  production import and TICK remains imported only by the existing unit tests.
+- The graph checker now includes normal and build edges. Its actual 83-package
+  graph excludes the forbidden presentation crates; both Python policy cases pass.
+- Independent read-only review of issue 293 at 458e118 found no actionable issue
+  in canonical hash encoding, property-index ordering or ancestor/reference filtering.
+  No extra build or repository acceptance is claimed from that review.
 
-Saved local logs: `metallic-299-cpu-prebuild.log`, `metallic-299-cpu-tests.log`.
+Saved local logs: `metallic-299-cpu-prebuild.log`, `metallic-299-cpu-tests.log`,
+`metallic-299-trajectory-diagnostic.log`, `metallic-299-trajectory-control.log`,
+`metallic-299-trajectory-isolated.log`, `metallic-299-cpu-final.log`.
 No unchanged-main red claim is made for this new API extraction. Full required gates,
 no-default strict Clippy, default compatibility and new Linux CPU CI remain pending.
 
 ## Next
 
-Core A1 owns a compile-quiet paired benchmark window after the first CPU run. Hold
-Rust builds until it releases; source review/docs are independent. Diagnose the
-trajectory fixture, run focused CPU/default behavior, then complete the full workspace,
+Refresh once to main ebf359a: the exact diff from fbaa17d contains the M2a plan and
+release Python tooling/tests only, with no runtime/script/physics or manifest changes.
+Hold actual timing-sensitive tests until the root worker coordinator releases the window.
+Root independently inspected the Simulation/Game delegation and checker without a
+confirmed blocker; the default/Parkour gates remain essential. Run focused default behavior and complete the full workspace,
 Clippy/licenses and dependency checks on a reviewed pinned main base. Update this note,
 open/attach one PR and inspect CI. No own-PR merge or remote machine changes.

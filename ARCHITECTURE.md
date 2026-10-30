@@ -11,11 +11,11 @@ graph LR
   asset[metallic_asset] --> render
   physics --> runtime[metallic_runtime]
   script --> runtime
-  render --> runtime
+  render -- presentation --> runtime
   audio[metallic_audio] -.-> runtime
   runtime --> player[metallic_player]
   runtime --> studio[metallic_studio]
-  anim[metallic_anim] --> runtime
+  anim[metallic_anim] -- presentation --> runtime
   anim --> animed[metallic_anim_editor]
   animed --> studio
 ```

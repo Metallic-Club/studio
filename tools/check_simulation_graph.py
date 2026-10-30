@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail if the CPU-only runtime's normal dependency graph includes presentation crates."""
+"""Fail if the CPU-only runtime's normal/build graph includes presentation crates."""
 from pathlib import Path
 import re
 import subprocess
@@ -25,7 +25,7 @@ def inspect(output: str) -> set[str]:
 
 def main() -> int:
     result = subprocess.run(["cargo", "tree", "--locked", "-p", "metallic_runtime", "--no-default-features",
-        "--edges", "normal", "--prefix", "none", "--format", "{p}", "--color", "never"],
+        "--edges", "normal,build", "--prefix", "none", "--format", "{p}", "--color", "never"],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, encoding="utf-8", timeout=120)
     if result.returncode:
         print("simulation graph: cargo tree failed", file=sys.stderr)
@@ -35,7 +35,7 @@ def main() -> int:
     except ValueError as error:
         print(f"simulation graph: {error}", file=sys.stderr)
         return 1
-    print(f"simulation graph: {len(packages)} normal packages; no presentation dependencies")
+    print(f"simulation graph: {len(packages)} normal/build packages; no presentation dependencies")
     return 0
 
 if __name__ == "__main__":
