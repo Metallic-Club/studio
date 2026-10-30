@@ -472,10 +472,12 @@ fn find_aux(
 }
 
 fn gmatch(sched: &Rc<Scheduler>, lua: &Lua, (s, pat): (LuaString, LuaString)) -> Result<Function> {
-    let (src, pat) = (s.as_bytes().to_vec(), pat.as_bytes().to_vec());
     let pos = std::cell::Cell::new(0usize);
     let sched = sched.clone();
     lua.create_function(move |lua, ()| {
+        // Retain VM-counted, shared strings rather than untracked Rust copies.
+        // Borrow bytes only while this iterator invocation is running.
+        let (src, pat) = (s.as_bytes(), pat.as_bytes());
         let mut st = State::new(&src, &pat, sched.deadline.get());
         let mut s1 = pos.get();
         while s1 <= src.len() {
