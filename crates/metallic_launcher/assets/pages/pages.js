@@ -96,7 +96,7 @@
       save.disabled = false;
     }, function () {
       syncDevUrl();
-      say("Settings can only be changed in the Metallic app.", "error");
+      say("Settings can only be changed in the Metallic Play app.", "error");
     });
 
     form.addEventListener("submit", function (event) {

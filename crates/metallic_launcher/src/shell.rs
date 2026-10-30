@@ -591,7 +591,7 @@ pub fn run(
     };
 
     let window = WindowBuilder::new()
-        .with_title("Metallic")
+        .with_title("Metallic Play")
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(LogicalSize::new(960.0, 600.0))
         .with_window_icon(window_icon())

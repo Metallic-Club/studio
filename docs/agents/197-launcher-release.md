@@ -17,7 +17,7 @@ Branch `studio/launcher-l1-20261030`. Task 9 of the Launcher L1 plan.
 - The old `%LOCALAPPDATA%\Metallic\` belongs to another app called "Metallic". The Launcher now uses `MetallicLauncher\data` and
   `%APPDATA%\MetallicLauncher`, writes a `.metallic-launcher` marker when it creates them, and uninstall deletes only marked
   folders. Keyring service is `MetallicLauncher`. No migration (nothing shipped).
-- Shortcut and Apps-list name collides with any other app titled Metallic; the product name is an owner decision. (`--packTitle Metallic` kept for now.)
+- Shortcut and Apps-list name collided with another app titled Metallic. Owner chose Metallic Play (2026-10-30): `--packTitle "Metallic Play"`; window title, tray, offline and settings pages say Metallic Play. Pack id, folders, keyring service, `Metallic.exe`, `metallic://` and tag prefixes are unchanged.
 - `vpk pack` for the Launcher passes `--runtime win-x64` (otherwise vpk warns and uses x86 helpers). Follow-up: Studio's line likely needs the same; left unchanged to keep its output identical.
 
 ## Step 3 round trip (lead, Windows 11, release builds)
@@ -29,7 +29,7 @@ Done:
 - The 1f6e444f build creates `%LOCALAPPDATA%\MetallicLauncher\data\{WebView2, .metallic-launcher}`.
 - `Update.exe --uninstall --silent` exits 0 and removes the install folder, the protocol key and the Apps entry. A hash snapshot shows another app's `%LOCALAPPDATA%\Metallic` folder unchanged.
 
-Findings: the old data-folder collision (fixed in 1f6e444f); Velopack's shortcuts overwrote a same-named `Metallic.lnk` from another app (restored by hand); `--runtime` defaulted to x86.
+Findings: the old data-folder collision (fixed in 1f6e444f); Velopack's shortcuts overwrote a same-named `Metallic.lnk` from another app (restored by hand; fixed by the new product name); `--runtime` defaulted to x86.
 
 Not done yet: close to tray and tray Quit; update applied on quit (needs a published dev release); Windows 10 without WebView2.
 

@@ -47,7 +47,7 @@ CARGO_TOML = ROOT / "Cargo.toml"
 # The Launcher: one package holding the Launcher and the Player. Studio's own settings stay in the
 # constants above so its release output does not change.
 LAUNCHER_PACK_ID = "MetallicLauncher"
-LAUNCHER_PACK_TITLE = "Metallic"
+LAUNCHER_PACK_TITLE = "Metallic Play"
 LAUNCHER_MAIN_EXE = "Metallic.exe"
 LAUNCHER_CARGO_PACKAGES = ["metallic_launcher", "metallic_player"]
 # (file in target/release, name in the package)
@@ -204,7 +204,7 @@ def main():
             if not exe.exists():
                 sys.exit(f"{exe} not found; did the build use another target dir (CARGO_TARGET_DIR)?")
             shutil.copy2(exe, stage / name)
-        title = LAUNCHER_PACK_TITLE + " Launcher" if launcher else PACK_TITLE
+        title = LAUNCHER_PACK_TITLE if launcher else PACK_TITLE
         lines = [f"{title} {args.version} ({args.channel})"]
         if args.required:
             lines += ["", "required: true"]
@@ -226,7 +226,7 @@ def main():
         print("Packed; not uploading (--no-upload).")
         return
 
-    app_title = "Metallic Launcher" if launcher else "Metallic Studio"
+    app_title = LAUNCHER_PACK_TITLE if launcher else "Metallic Studio"
     release_name = f"{app_title} {args.version} ({args.channel})"
     upload = [args.vpk, "upload", "github", "--repoUrl", REPO_URL, "--channel", pack_channel,
               "--outputDir", str(OUT_DIR), "--tag", tag, "--releaseName", release_name,

@@ -64,7 +64,7 @@ use webview2_com::{NavigationCompletedEventHandler, NavigationStartingEventHandl
 use wry::{WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
 
 /// The text of the message box. The wording is fixed by the product text.
-const MISSING_TEXT: &str = "Metallic needs the Microsoft Edge WebView2 Runtime. Install it, then start Metallic again.\n\nOpen the download page now?";
+const MISSING_TEXT: &str = "Metallic Play needs the Microsoft Edge WebView2 Runtime. Install it, then start Metallic Play again.\n\nOpen the download page now?";
 
 pub fn open_in_browser(url: &Url) -> Result<(), LauncherError> {
     let address = HSTRING::from(url.as_str());
@@ -84,7 +84,14 @@ pub fn open_in_browser(url: &Url) -> Result<(), LauncherError> {
 pub fn show_webview_missing() -> bool {
     let text = HSTRING::from(MISSING_TEXT);
     // SAFETY: the strings are valid for the duration of the call; no owner window.
-    let answer = unsafe { MessageBoxW(None, &text, w!("Metallic"), MB_YESNO | MB_ICONINFORMATION) };
+    let answer = unsafe {
+        MessageBoxW(
+            None,
+            &text,
+            w!("Metallic Play"),
+            MB_YESNO | MB_ICONINFORMATION,
+        )
+    };
     answer == IDYES
 }
 
@@ -864,7 +871,7 @@ pub fn create_tray(
     TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("Metallic")
+        .with_tooltip("Metallic Play")
         .with_icon(icon)
         .build()
         .map(Tray)

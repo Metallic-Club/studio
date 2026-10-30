@@ -1,0 +1,135 @@
+(
+  format: 1,
+  name: "Toon smear",
+  description: "Anime sword slash: a hard-edged smear arc with sparkles.",
+  tags: [
+    "toon",
+    "combat",
+    "slash",
+  ],
+  style: Toon,
+  duration: 0.7,
+  emitters: [
+    (
+      name: "Smear",
+      capacity: 2,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 1,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 1.6, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.28, 0.28),
+        ),
+        Size(
+          size: (4.6, 4.6),
+        ),
+        Rotation(
+          angle: (-25.0, -25.0),
+          spin: (0.0, 0.0),
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.85),
+              (1.0, 1.05),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#FFFFFF"),
+              (0.35, "#A6E9FF"),
+              (0.7, "#3D8BFF"),
+            ],
+            space: Oklab,
+            interp: Step,
+          ),
+        ),
+        ErosionOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (0.45, 0.15),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Smear,
+        light_emission: 0.2,
+        alpha_steps: 1,
+      ),
+    ),
+    (
+      name: "Sparkles",
+      capacity: 16,
+      spawn: [
+        Burst(
+          time: 0.04,
+          count: 7,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Sphere(
+            radius: 1.2,
+            partial: 0.5,
+          ),
+          offset: (0.4, 1.6, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.3, 0.5),
+        ),
+        Velocity(
+          speed: (3.0, 5.0),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.35, 0.55),
+        ),
+        Color(
+          choices: [
+            "#FFFFFF",
+            "#BDF0FF",
+          ],
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 5.0,
+        ),
+        ErosionOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Twinkle,
+        light_emission: 0.5,
+        brightness: 1.2,
+        alpha_steps: 1,
+      ),
+    ),
+  ],
+)

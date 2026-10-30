@@ -1,0 +1,132 @@
+(
+  format: 1,
+  name: "Lightning",
+  description: "A crackling lightning beam with impact sparks.",
+  tags: [
+    "beam",
+    "electric",
+    "loop",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Impact sparks",
+      capacity: 64,
+      spawn: [
+        Rate(
+          per_second: 30.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (3.0, 0.2, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.2, 0.4),
+        ),
+        Velocity(
+          speed: (4.0, 8.0),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (160.0, 160.0),
+        ),
+        Size(
+          size: (0.08, 0.12),
+        ),
+        Color(
+          choices: [
+            "#D6E2FF",
+            "#9DB6FF",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.0, -14.0, 0.0),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Stretched(
+          speed_scale: 0.04,
+        ),
+        texture: Spark,
+        light_emission: 1.0,
+        brightness: 2.0,
+      ),
+    ),
+  ],
+  beams: [
+    (
+      name: "Glow",
+      attachment0: (-3.5, 4.5, 0.0),
+      attachment1: (3.0, 0.2, 0.0),
+      direction0: (1.0, -1.0, 0.0),
+      direction1: (1.0, -1.0, 0.0),
+      curve_size0: 1.2,
+      curve_size1: 1.0,
+      segments: 28,
+      width0: 1.6,
+      width1: 0.96000004,
+      color: (
+        keys: [
+          (0.0, "#E3EBFF"),
+          (1.0, "#6E7BFF"),
+        ],
+        space: Oklab,
+      ),
+      transparency: (
+        keys: [
+          (0.0, 0.0),
+        ],
+      ),
+      texture: Band,
+      texture_mode: Stretch,
+      texture_speed: 3.0,
+      light_emission: 1.0,
+      brightness: 0.9,
+      jitter: 0.5,
+      jitter_fps: 18.0,
+    ),
+    (
+      name: "Bolt",
+      attachment0: (-3.5, 4.5, 0.0),
+      attachment1: (3.0, 0.2, 0.0),
+      direction0: (1.0, -1.0, 0.0),
+      direction1: (1.0, -1.0, 0.0),
+      curve_size0: 1.0,
+      curve_size1: 1.0,
+      segments: 28,
+      width0: 0.45,
+      width1: 0.27,
+      color: (
+        keys: [
+          (0.0, "#E3EBFF"),
+          (1.0, "#A9B8FF"),
+        ],
+        space: Oklab,
+      ),
+      transparency: (
+        keys: [
+          (0.0, 0.0),
+        ],
+      ),
+      texture: Electric,
+      texture_mode: Stretch,
+      texture_speed: 3.0,
+      light_emission: 1.0,
+      brightness: 2.0,
+      jitter: 0.5,
+      jitter_fps: 18.0,
+    ),
+  ],
+)

@@ -1,0 +1,30 @@
+[package]
+name = "metallic_audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["device"]
+## Real output through the system audio device (cpal). Without it only the headless backend exists.
+device = ["dep:cpal"]
+
+[dependencies]
+glam = "0.30.10"
+thiserror = "2.0.21"
+symphonia = { version = "0.6.1", features = ["mp3"] }
+cpal = { version = "0.18.2", optional = true }
+
+[dev-dependencies]
+hound = "3.5.1"
+flacenc = "0.5.1"
+criterion.workspace = true
+
+[[bench]]
+name = "mix"
+harness = false
+
+[[example]]
+name = "spatial_demo"
+required-features = ["device"]

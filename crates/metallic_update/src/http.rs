@@ -230,7 +230,7 @@ fn read_response(
 }
 
 /// Percent-encodes one form field (RFC 3986 unreserved characters stay as they are).
-fn form_encode(text: &str) -> String {
+pub(crate) fn form_encode(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for byte in text.bytes() {
         match byte {

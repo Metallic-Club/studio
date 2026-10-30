@@ -158,13 +158,18 @@ fn tray_menu_order() {
         .collect();
     assert_eq!(
         with,
-        ["Open Metallic", "Open Studio", "Check for updates", "Quit"]
+        [
+            "Open Metallic Play",
+            "Open Studio",
+            "Check for updates",
+            "Quit"
+        ]
     );
     let without: Vec<&str> = tray_menu(false, false)
         .iter()
         .map(|(_, text)| *text)
         .collect();
-    assert_eq!(without, ["Open Metallic", "Check for updates", "Quit"]);
+    assert_eq!(without, ["Open Metallic Play", "Check for updates", "Quit"]);
     let ready: Vec<&str> = tray_menu(true, true)
         .iter()
         .map(|(_, text)| *text)
@@ -172,7 +177,7 @@ fn tray_menu_order() {
     assert_eq!(
         ready,
         [
-            "Open Metallic",
+            "Open Metallic Play",
             "Open Studio",
             "Restart to update",
             "Check for updates",

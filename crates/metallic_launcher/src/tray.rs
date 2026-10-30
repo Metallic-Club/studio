@@ -44,10 +44,10 @@ impl TrayAction {
     }
 }
 
-/// The tray menu, in order: `Open Metallic`, `Open Studio` (only when installed),
+/// The tray menu, in order: `Open Metallic Play`, `Open Studio` (only when installed),
 /// `Restart to update` (only when an update is downloaded), `Check for updates`, `Quit`.
 pub fn tray_menu(studio_installed: bool, update_ready: bool) -> Vec<(TrayAction, &'static str)> {
-    let mut items = vec![(TrayAction::Show, "Open Metallic")];
+    let mut items = vec![(TrayAction::Show, "Open Metallic Play")];
     if studio_installed {
         items.push((TrayAction::OpenStudio, "Open Studio"));
     }

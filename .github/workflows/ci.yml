@@ -9,6 +9,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-lane-portability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build lane guard tests (POSIX lock and symlinks)
+        run: python -I tools/test_cargo_lane.py
+
   check:
     runs-on: windows-latest
     steps:
@@ -24,6 +34,11 @@ jobs:
           tool: cargo-deny
       - name: Format
         run: cargo fmt --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build lane guard tests
+        run: python -I tools/test_cargo_lane.py
       - name: Test
         run: cargo test --workspace
       - name: Clippy

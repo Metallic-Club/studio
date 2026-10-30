@@ -4,7 +4,7 @@ use crate::capture::CaptureTarget;
 use crate::overlay::Overlay;
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
-use metallic_runtime::{Action, Game, InputState};
+use metallic_runtime::{Action, FrameInput, Game, InputState};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -20,6 +20,12 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// How long `--fps` measures.
 const FPS_SECONDS: f64 = 60.0;
+/// `--autopilot` turns the camera (and so the run direction) this fast, in radians per second:
+/// at the run speed of 24 studs/s that is a circle of 5 studs radius, which stays on the
+/// Parkour spawn island.
+const AUTOPILOT_TURN: f32 = 4.8;
+/// `--autopilot` jumps this often, in seconds.
+const AUTOPILOT_JUMP_EVERY: f64 = 1.5;
 
 /// Plays `game` in a window until it is closed (or `--frames` / `--fps` ends it).
 pub fn run(game: Game, args: &Args) -> ExitCode {
@@ -189,7 +195,10 @@ impl App {
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
         self.poll_gamepad();
-        let frame_input = self.input.take_frame(dt as f32);
+        let mut frame_input = self.input.take_frame(dt as f32);
+        if self.args.autopilot {
+            autopilot(&mut frame_input, self.game.time(), dt);
+        }
         self.game.frame(&frame_input, dt);
         self.frame += 1;
 
@@ -266,6 +275,15 @@ impl App {
             event_loop.exit();
         }
     }
+}
+
+/// Replaces the player's input: run forward while turning, and jump every
+/// [`AUTOPILOT_JUMP_EVERY`] seconds of game time.
+fn autopilot(input: &mut FrameInput, time: f64, dt: f64) {
+    input.movement = [0.0, 1.0];
+    input.run = true;
+    input.orbit[0] += AUTOPILOT_TURN * dt as f32;
+    input.jump = time % AUTOPILOT_JUMP_EVERY < 0.1;
 }
 
 fn capture_path(args: &Args, frame: u64) -> Option<PathBuf> {

@@ -54,7 +54,7 @@ class PackCommandTests(unittest.TestCase):
         self.assertEqual(pairs["--framework"], "webview2")
         self.assertEqual(pairs["--runtime"], "win-x64")
         self.assertEqual(pairs["--channel"], "launcher-dev")
-        self.assertEqual(pairs["--packTitle"], "Metallic")
+        self.assertEqual(pairs["--packTitle"], "Metallic Play")
 
     def test_dry_run_prints_the_launcher_commands(self):
         import subprocess
