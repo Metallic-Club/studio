@@ -1,6 +1,6 @@
 # #126 metallic_physics2d: 2D physics and platformer character
 
-Branch `studio/126-physics2d`. Status: implemented and tested (not yet wired into runtime; that comes after #8, under epic #16).
+Branch `studio/126-physics2d`. Status: implemented, partly tested (see "Verification status"); not wired into the runtime yet (after #8, epic #16).
 
 ## Goal
 A standalone `crates/metallic_physics2d` that matches the shape of `metallic_physics` (3D), keeps the backend behind our own types, and gives M3 a 2D character controller that feels good in a platformer.
@@ -167,8 +167,49 @@ This crate takes plain structs, so either option below works without changing it
 - The HUD shows grounded, wall, coyote and buffer state.
 - `-- --screenshot out.png` renders headless through egui_kittest and wgpu, with no window.
 
+## Verification status (honest; read before merging)
+The C: drive filled up (the page file grew under parallel builds), and the coordinator froze all builds until the owner reboots. So far:
+- **Ran and passed before the freeze** (debug, `-j 4`):
+  - All 13 unit tests.
+  - All 12 tests in `tests/character.rs` except `character_pushes_crates`.
+  - `tests/physics2d.rs` was built and run together with them.
+- **`character_pushes_crates` failed, then was fixed but not re-verified.** It hit a rapier debug assertion (`active_island_id != u32::MAX` in `IslandManager::interaction_changed`) as soon as the character touched a crate. The cause was the kinematic character body falling asleep.
+  - Fix: kinematic bodies are created with `can_sleep(false)`.
+  - Wakes now go through `PhysicsWorld::wake_up`.
+  - Static movers wake through the island manager.
+  - None of this has been compiled since.
+- **Also not compiled yet:**
+  - `examples/physics2d_demo.rs`.
+  - `benches/step.rs`.
+  - The last edit in `world.rs` (mover wake-up).
+- **Not run at all:**
+  - `cargo test --workspace`.
+  - `cargo clippy --workspace --all-targets -- -D warnings`.
+  - `cargo deny check licenses`. New dependencies: rapier2d/parry2d (Apache-2.0). Dev-only: eframe, egui_kittest, image and criterion (MIT/Apache).
+  - The benchmark.
+  - The demo screenshot.
+
+Commands to run after the reboot (only with at least 4 GB free on C:), in this order:
+```
+export PATH="$HOME/.cargo/bin:$PATH"
+export CARGO_TARGET_DIR=/c/Users/alexi/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
+cd /c/Users/alexi/Documents/metallic-studio-worktrees/126-physics2d
+git fetch origin && git rebase origin/main
+cargo test -j 2 -p metallic_physics2d
+cargo clippy -j 2 -p metallic_physics2d --all-targets -- -D warnings
+cargo run -j 2 -p metallic_physics2d --example physics2d_demo -- --screenshot physics2d_demo.png   # then look at it
+cargo bench -j 2 -p metallic_physics2d --bench step                                                 # record the time below
+cargo test --workspace -j 2
+cargo clippy --workspace --all-targets -j 2 -- -D warnings
+cargo deny check licenses
+```
+Likely fix-ups:
+- **Clippy style nits.**
+- **egui 0.37 API names in the demo:** `StrokeKind`, `App::ui`, `Harness::render`. These were checked against the cached sources but never compiled.
+- **The coyote and buffer frame windows in the tests.** These are 1/5/9 frames and 1/5/10 frames.
+
 ## Numbers
-(filled in below after the runs)
+- Benchmark: not run yet (see above).
 
 ## Next
 - Wiring into `metallic_runtime` (after #8).
