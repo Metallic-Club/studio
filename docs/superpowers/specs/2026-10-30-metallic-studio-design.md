@@ -160,6 +160,17 @@ Acceptance: the owner does steps 1-5 on this PC from a built zip. Performance: a
 settings on this PC (RTX 3060 Ti, Ryzen 5 5500, 32 GB) while playing Parkour; at least 30 fps at 1080p on low settings
 on integrated laptop graphics (Intel Iris Xe class), checked on such a machine or marked "not verified".
 
+**Debugger** (owner, 2026-10-30: "a very good debugger"; part of 1B, details are the assistant's calls). Better than
+Roblox Studio's:
+- Luau script debugger: breakpoints (click the gutter), conditional breakpoints, logpoints (print without stopping),
+  break on error, step over / into / out, continue, pause a running game; call stack across server and client
+  scripts; locals, upvalues and globals with expandable tables and Instances; watch expressions; hover a variable to
+  see its value; edit a variable's value while paused; the game world freezes while paused and can be inspected.
+- Engine debugging: frame profiler timeline (scripts, physics, character, render per frame, with per-script time),
+  physics debug view (colliders, contacts, velocities, sleeping bodies), render debug views (wireframe, normals,
+  overdraw, shadow cascades), memory per subsystem and per script VM.
+- Works in Play inside Studio first; attaching to a running `metallic-player` comes with multiplayer (milestone 2).
+
 **1C: install and update** (owner asked; details are the assistant's calls):
 - `Metallic Studio Setup.exe` installs per user (no admin prompt), with Start-menu entry, crow icon and uninstaller.
 - Releases are published as GitHub Releases on the private `Metallic-Club/studio` repo, built by one script that runs
