@@ -86,7 +86,20 @@ format and diff checks passed. The actual serial workspace suite passed 653 test
 existing manual probes ignored, including all new coroutine/cancellation/lifetime cases and the default-budget
 smoke. Independent second read-only review found no additional actionable findings.
 
-Main then advanced to `9d0dc8e` with production avatar animation changes (#279). The 653-test result above is
-preserved as pinned-base evidence, not a claim that this newer main has been validated here. Next: inspect and
-rebase that advance, coordinate the updated full gates with root/backend, and publish only after checks pass.
-No public task APIs added; do not merge.
+Main then advanced to `9d0dc8e` with production avatar animation changes (#279). Rebased cleanly onto that
+advance as `cae0665`; it changes animation/state-machine/runtime files and Cargo.lock, without direct script
+changes. The 653-test result above is preserved as pinned-base evidence, not a claim that this newer main has
+been validated here. After root #185's serial suite and backend Clippy released a build slot, started the
+guarded forced-clean workspace prebuild on this newer base. The reset removed 2.7 GiB of local package
+outputs and retained third-party dependencies; compile paths identify this worktree. Coordinate the new-base
+serial suite after the other release-profile allocation run completes, then finish required gates and publish
+only after checks pass. No public task APIs added; do not merge.
+
+On the `9d0dc8e` base, the guarded prebuild passed in 2m51s and the serial workspace suite passed 659 tests,
+zero failures, three existing manual probes ignored. This includes all 19 new tests. Strict workspace
+all-target Clippy passed in 28.66 s; licenses (`licenses ok`), format and diff checks passed. Logs are
+`metallic173-9d-{prebuild,workspace,clippy,licenses}.log` in the local temporary directory.
+
+The pre-PR fetch found main `48b20dd` (#278 input actions), with broad core/runtime/player changes and no
+direct script-source changes. The unpublished branch must be rebased onto that advance and validated again;
+the 659-test result remains exact-base evidence rather than a claim about that newer integration.
