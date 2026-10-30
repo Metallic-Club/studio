@@ -1,7 +1,7 @@
 # #118 Luau budget overhead
 
-Status: implemented; all 78 script tests passed, full workspace checks pending.
-Branch: `studio/118-budget-overhead`; base `532c4f7`.
+Status: implemented and tested locally; ready for review, not accepted or released.
+Branch: `studio/118-budget-overhead`; started on `532c4f7`, rebased onto `937dcd8` for final checks.
 
 ## Goal and decisions
 
@@ -69,11 +69,15 @@ watchdog. No FPS, quiet-machine speedup, or universal net win is asserted.
 ## Validation and next
 
 - `cargo test -p metallic_script -j 4`: passed 78 tests, including all 12 new tests.
-- Full workspace tests, strict Clippy, formatting and license gates: pending before the PR.
+- `cargo test --workspace -j 4 -- --test-threads=1`: passed all 224 tests after rebasing, including full Parkour
+  route/player smoke and all 78 script tests. Serial test execution limits contention in wall-time-budget tests.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed after rebasing.
+- `cargo deny check licenses`: passed (one existing unused MPL-2.0 allowance warning).
+- `cargo fmt --check` and `git diff --check`: passed.
 - No dependencies or root Cargo configuration changed. No UI changes.
 - The isolated worker target is `%LOCALAPPDATA%\Metallic\cargo-target-114`, reused sequentially after #114's
   local checks completed; no other worker uses it. Do not share compiled outputs with concurrent worktrees.
-- Fetch/rebase main, complete required gates, then open/attach the issue-scoped PR. Do not merge it here.
+- Open/attach the scoped PR and inspect remote CI independently. Do not merge it here.
 
 ## Primary-source rationale
 
@@ -85,3 +89,7 @@ watchdog. No FPS, quiet-machine speedup, or universal net win is asserted.
 - Installed `luau0-src-0.22.0+luau740/luau/VM/src/lvmexecute.cpp`: interrupt sites inspected in CALL, RETURN and
   loop-backedge handlers. Installed `mlua-0.12.2/src/state.rs`: checked interrupt dispatch and its recursion guard;
   no third-party engine source copied.
+- [Rust condition-variable waits](https://doc.rust-lang.org/std/sync/struct.Condvar.html#method.wait_timeout):
+  state is rechecked under the same mutex after wake-up; no inference from a stale timeout result.
+- [Rust thread stack requests](https://doc.rust-lang.org/std/thread/struct.Builder.html#method.stack_size) and
+  [join](https://doc.rust-lang.org/std/thread/struct.JoinHandle.html#method.join): request and lifetime semantics.
