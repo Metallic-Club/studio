@@ -6,12 +6,13 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ::windows::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_PATH_NOT_FOUND,
-    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_WRITE, GetLastError, HANDLE, HLOCAL, LocalFree,
-    WIN32_ERROR,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING,
+    ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_PATH_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
+    ERROR_PIPE_NOT_CONNECTED, ERROR_TIMEOUT, GENERIC_WRITE, GetLastError, HANDLE, HLOCAL,
+    LocalFree, WAIT_OBJECT_0, WIN32_ERROR,
 };
 use ::windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -21,9 +22,11 @@ use ::windows::Win32::Security::{
     TOKEN_USER, TokenUser,
 };
 use ::windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_SHARE_NONE, FlushFileBuffers, OPEN_EXISTING,
-    PIPE_ACCESS_INBOUND, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
+    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE,
+    FlushFileBuffers, OPEN_EXISTING, PIPE_ACCESS_INBOUND, ReadFile, SECURITY_IDENTIFICATION,
+    SECURITY_SQOS_PRESENT, WriteFile,
 };
+use ::windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use ::windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
     PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT, WaitNamedPipeW,
@@ -31,6 +34,9 @@ use ::windows::Win32::System::Pipes::{
 use ::windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ,
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW, RegSetValueExW,
+};
+use ::windows::Win32::System::Threading::{
+    CreateEventW, INFINITE, ResetEvent, WaitForSingleObject,
 };
 use ::windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -266,48 +272,122 @@ fn user_of_process(pid: u32) -> Result<UserSid, LauncherError> {
 
 // ---- Single instance: a named pipe --------------------------------------------------------
 
-/// The listening end. One pipe instance serves one client at a time.
-struct PipeListener(OwnedHandle);
+/// The listening end. One pipe instance serves one client at a time. The pipe is opened for
+/// overlapped I/O so that a client that connects and then says nothing cannot hold it.
+struct PipeListener {
+    pipe: OwnedHandle,
+    /// Signalled when an overlapped call on `pipe` finishes.
+    event: OwnedHandle,
+}
 
-// SAFETY: a pipe handle may be used from any thread; only the listener thread uses it.
+// SAFETY: a pipe or event handle may be used from any thread; only the listener thread uses them.
 unsafe impl Send for PipeListener {}
 
-fn read_exact(handle: HANDLE, buffer: &mut [u8]) -> Result<(), LauncherError> {
-    let mut done = 0;
-    while done < buffer.len() {
-        let mut read = 0u32;
-        // SAFETY: the slice is valid for writes; `read` receives the count.
-        unsafe { ReadFile(handle, Some(&mut buffer[done..]), Some(&mut read), None) }
-            .map_err(|e| platform_error("pipe read", e))?;
-        if read == 0 {
-            return Err(LauncherError::BadHandoff("the message ended early"));
+/// How long a client has, from connecting, to send its whole message.
+const HANDOFF_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Runs one overlapped call on `pipe` to its end. `start` begins the call with the
+/// `OVERLAPPED` it is given. Waits at most `timeout_ms`; on expiry the call is cancelled (and
+/// has ended before this returns) and the error is `ERROR_TIMEOUT`. Returns the byte count.
+fn run_overlapped(
+    pipe: HANDLE,
+    event: HANDLE,
+    timeout_ms: u32,
+    start: impl FnOnce(*mut OVERLAPPED) -> ::windows::core::Result<()>,
+) -> ::windows::core::Result<u32> {
+    let mut overlapped = OVERLAPPED {
+        hEvent: event,
+        ..Default::default()
+    };
+    // SAFETY: `overlapped` and the event live until the call has ended: every path below waits
+    // for the operation (or its cancellation) before returning.
+    unsafe {
+        ResetEvent(event)?;
+        match start(&mut overlapped) {
+            Ok(()) => {}
+            Err(error) if error.code() == ERROR_IO_PENDING.to_hresult() => {
+                if WaitForSingleObject(event, timeout_ms) != WAIT_OBJECT_0 {
+                    let _ = CancelIoEx(pipe, Some(&overlapped));
+                    let mut ignored = 0u32;
+                    let _ = GetOverlappedResult(pipe, &overlapped, &mut ignored, true);
+                    return Err(::windows::core::Error::from_hresult(
+                        ERROR_TIMEOUT.to_hresult(),
+                    ));
+                }
+            }
+            Err(error) => return Err(error),
         }
-        done += read as usize;
+        let mut transferred = 0u32;
+        GetOverlappedResult(pipe, &overlapped, &mut transferred, false)?;
+        Ok(transferred)
     }
-    Ok(())
+}
+
+impl PipeListener {
+    /// Reads exactly `buffer.len()` bytes before `deadline`. Every failure here is the
+    /// client's (it left, stalled or broke the pipe), so it is a `BadHandoff`.
+    fn read_exact(&self, buffer: &mut [u8], deadline: Instant) -> Result<(), LauncherError> {
+        let (pipe, event) = (self.pipe.0, self.event.0);
+        let mut done = 0;
+        while done < buffer.len() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let chunk = &mut buffer[done..];
+            let read = run_overlapped(pipe, event, left.as_millis() as u32, |overlapped| {
+                // SAFETY: the slice stays valid until `run_overlapped` returns.
+                unsafe { ReadFile(pipe, Some(chunk), None, Some(overlapped)) }
+            })
+            .map_err(|error| {
+                if error.code() == ERROR_TIMEOUT.to_hresult() {
+                    LauncherError::BadHandoff("the client sent nothing in time")
+                } else {
+                    LauncherError::BadHandoff("the client's pipe broke")
+                }
+            })?;
+            if read == 0 {
+                return Err(LauncherError::BadHandoff("the message ended early"));
+            }
+            done += read as usize;
+        }
+        Ok(())
+    }
+
+    /// Reads and checks one message from the connected client.
+    fn read_message(&self) -> Result<HandoffMessage, LauncherError> {
+        let deadline = Instant::now() + HANDOFF_TIMEOUT;
+        let mut header = [0u8; 4];
+        self.read_exact(&mut header, deadline)?;
+        // The length is checked before the body is read.
+        let length = body_length(header)?;
+        let mut frame = vec![0u8; 4 + length];
+        frame[..4].copy_from_slice(&header);
+        self.read_exact(&mut frame[4..], deadline)?;
+        decode(&frame)
+    }
 }
 
 impl HandoffListener for PipeListener {
+    /// Waits for a client and reads its message. A client that misbehaves (connects and
+    /// leaves, stays silent, sends garbage) gives a `BadHandoff` error and the pipe is always
+    /// reset, so the next call serves the next client. Other errors are the pipe's own.
     fn accept(&mut self) -> Result<HandoffMessage, LauncherError> {
-        let handle = self.0.0;
-        // SAFETY: a valid pipe handle; waits for a client.
-        if let Err(error) = unsafe { ConnectNamedPipe(handle, None) }
-            && error.code() != ERROR_PIPE_CONNECTED.to_hresult()
-        {
-            return Err(platform_error("pipe connect", error));
+        let (pipe, event) = (self.pipe.0, self.event.0);
+        let connected = run_overlapped(pipe, event, INFINITE, |overlapped| {
+            // SAFETY: a valid overlapped pipe handle; `overlapped` outlives the call.
+            unsafe { ConnectNamedPipe(pipe, Some(overlapped)) }
+        });
+        let result = match connected {
+            Ok(_) => Ok(()),
+            // The client connected before we began to listen.
+            Err(error) if error.code() == ERROR_PIPE_CONNECTED.to_hresult() => Ok(()),
+            // The client connected and closed again before we looked.
+            Err(error) if error.code() == ERROR_NO_DATA.to_hresult() => {
+                Err(LauncherError::BadHandoff("the client left at once"))
+            }
+            Err(error) => Err(platform_error("pipe connect", error)),
         }
-        let result = (|| {
-            let mut header = [0u8; 4];
-            read_exact(handle, &mut header)?;
-            // The length is checked before the body is read.
-            let length = body_length(header)?;
-            let mut frame = vec![0u8; 4 + length];
-            frame[..4].copy_from_slice(&header);
-            read_exact(handle, &mut frame[4..])?;
-            decode(&frame)
-        })();
-        // SAFETY: ends this client's connection so the next one can connect.
-        let _ = unsafe { DisconnectNamedPipe(handle) };
+        .and_then(|()| self.read_message());
+        // SAFETY: ends this client's connection (whatever happened) so the next can connect.
+        let _ = unsafe { DisconnectNamedPipe(pipe) };
         result
     }
 }
@@ -324,8 +404,19 @@ impl HandoffSender for PipeSender {
         unsafe {
             WriteFile(self.0.0, Some(&frame), None, None)
                 .map_err(|e| platform_error("pipe write", e))?;
-            // Returns once the first Launcher has read everything.
-            FlushFileBuffers(self.0.0).map_err(|e| platform_error("pipe flush", e))
+            // Returns once the first Launcher has read everything. If it has already read the
+            // message and reset the pipe, the flush reports that nobody is on the other end;
+            // the write itself succeeded, so that is a delivery.
+            match FlushFileBuffers(self.0.0) {
+                Err(e)
+                    if e.code() == ERROR_NO_DATA.to_hresult()
+                        || e.code() == ERROR_BROKEN_PIPE.to_hresult()
+                        || e.code() == ERROR_PIPE_NOT_CONNECTED.to_hresult() =>
+                {
+                    Ok(())
+                }
+                other => other.map_err(|e| platform_error("pipe flush", e)),
+            }
         }
     }
 }
@@ -362,7 +453,7 @@ fn acquire_named(name: &str, user: &UserSid) -> Result<Acquired, LauncherError> 
     let handle = unsafe {
         CreateNamedPipeW(
             &wide,
-            PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             1,
             8192,
@@ -381,9 +472,14 @@ fn acquire_named(name: &str, user: &UserSid) -> Result<Acquired, LauncherError> 
         }
         return Err(platform_error("could not create the pipe", error.0));
     }
-    Ok(Acquired::Primary(Box::new(PipeListener(OwnedHandle(
-        handle,
-    )))))
+    let pipe = OwnedHandle(handle);
+    // SAFETY: an unnamed auto-reset event, closed by OwnedHandle.
+    let event = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }
+        .map_err(|e| platform_error("could not create an event", e))?;
+    Ok(Acquired::Primary(Box::new(PipeListener {
+        pipe,
+        event: OwnedHandle(event),
+    })))
 }
 
 fn connect(name: &str, user: &UserSid) -> Result<PipeSender, LauncherError> {
@@ -727,35 +823,101 @@ mod tests {
         assert!(text.starts_with("S-1-"), "{text}");
     }
 
+    /// Deletes a test registry key when dropped, also when an assertion panics.
+    struct KeyGuard(String);
+
+    impl Drop for KeyGuard {
+        fn drop(&mut self) {
+            let _ = WinRegistry.delete_tree(&self.0);
+        }
+    }
+
     #[test]
     fn real_registry_round_trip_under_a_test_key() {
         let key = format!(r"Software\Classes\metallic-test-{}", std::process::id());
+        let _guard = KeyGuard(key.clone());
         let exe = PathBuf::from(r"C:\Users\A B\Metallic.exe");
         let reg = WinRegistry;
-        let result = (|| {
-            protocol::register_at(&reg, &key, &exe)?;
-            assert!(protocol::is_registered_to_at(&reg, &key, &exe));
-            assert_eq!(reg.get(&key, Some("URL Protocol"))?, Some(String::new()));
-            assert_eq!(
-                reg.get(&key, None)?,
-                Some("URL:Metallic Protocol".to_string())
-            );
-            protocol::unregister_at(&reg, &key, &exe)?;
-            assert_eq!(reg.get(&key, None)?, None);
-            Ok::<(), LauncherError>(())
-        })();
-        // Whatever happened, the test key is gone.
-        reg.delete_tree(&key).unwrap();
-        result.unwrap();
+        protocol::register_at(&reg, &key, &exe).unwrap();
+        assert!(protocol::is_registered_to_at(&reg, &key, &exe));
+        assert_eq!(
+            reg.get(&key, Some("URL Protocol")).unwrap(),
+            Some(String::new())
+        );
+        assert_eq!(
+            reg.get(&key, None).unwrap(),
+            Some("URL:Metallic Protocol".to_string())
+        );
+        protocol::unregister_at(&reg, &key, &exe).unwrap();
+        assert_eq!(reg.get(&key, None).unwrap(), None);
+    }
+
+    /// Opens the pipe as a raw client (no checks, no message), retrying while it is busy.
+    fn raw_client(name: &str) -> std::fs::File {
+        for _ in 0..100 {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(name) {
+                return file;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("could not open the pipe");
+    }
+
+    #[test]
+    fn misbehaving_clients_do_not_stop_the_listener() {
+        use std::io::Write;
+        use std::sync::mpsc;
+        let user = current_user().unwrap();
+        let name = test_pipe("misbehave");
+        let Acquired::Primary(mut listener) = acquire_named(&name, &user).unwrap() else {
+            panic!("the first start must be the primary");
+        };
+        let (results, received) = mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..30 {
+                if results.send(listener.accept()).is_err() {
+                    return;
+                }
+            }
+        });
+        let next = || received.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        // 1. Connects and closes at once, more times than the shell's give-up limit.
+        for _ in 0..22 {
+            drop(raw_client(&name));
+            assert!(matches!(next(), Err(LauncherError::BadHandoff(_))));
+        }
+        // 2. Connects and stays silent: refused after about two seconds, not never.
+        let silent = raw_client(&name);
+        let started = Instant::now();
+        assert!(matches!(next(), Err(LauncherError::BadHandoff(_))));
+        assert!(started.elapsed() >= Duration::from_millis(1500));
+        assert!(started.elapsed() < Duration::from_secs(6));
+        drop(silent);
+        // 3. A length above the limit is refused without reading a body.
+        let mut big = raw_client(&name);
+        big.write_all(&5000u32.to_le_bytes()).unwrap();
+        assert!(matches!(next(), Err(LauncherError::BadHandoff(_))));
+        drop(big);
+        // 4. A normal hand-over still works afterwards.
+        let Acquired::Secondary(mut sender) = acquire_named(&name, &user).unwrap() else {
+            panic!("a later start must be a secondary");
+        };
+        sender
+            .send(&HandoffMessage::Link("metallic://install".into()))
+            .expect("send");
+        assert_eq!(
+            next().unwrap(),
+            HandoffMessage::Link("metallic://install".into())
+        );
     }
 
     /// Starts the stand-in Player (built as an example) and checks it got exactly one argument.
     #[test]
     fn spawner_passes_exactly_one_argument() {
-        let Some(stand_in) = stand_in_player() else {
-            eprintln!("stand-in player not built; run `cargo test` to build examples");
-            return;
-        };
+        let stand_in = stand_in_player().expect(
+            "the stand-in player example is not built; run `cargo test -p metallic_launcher`",
+        );
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("metallic-player.exe");
         std::fs::copy(stand_in, &exe).unwrap();

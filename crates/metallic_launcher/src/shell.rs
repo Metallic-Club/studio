@@ -346,6 +346,11 @@ fn spawn_handoff_listener(mut listener: Box<dyn HandoffListener>, sink: Arc<dyn 
                         },
                     }
                 }
+                // A client that misbehaved (left, stayed silent, sent garbage) is not the pipe's
+                // fault: the pipe has been reset, so keep listening and do not count it.
+                Err(error @ LauncherError::BadHandoff(_)) => {
+                    log::warn!("a hand-over from another start was refused: {error}");
+                }
                 Err(error) => {
                     log::warn!("a hand-over from another start failed: {error}");
                     failures += 1;
