@@ -31,6 +31,8 @@ Issue number = task number (#1 is Task 1 ... #14 is Task 14).
 ## Where things are
 - Spec: `docs/superpowers/specs/2026-10-30-metallic-studio-design.md`
 - Plan (M1, Tasks 1-14): `docs/superpowers/plans/2026-10-30-engine-m1.md`
+- Templates and onboarding research (proposal): `docs/research/2026-10-30-templates-and-onboarding.md`; template
+  designs and the quality bar: `docs/templates/`
 - Brand files: `branding/` (placeholder icon only)
 - Per-issue progress notes: `docs/agents/<issue#>-<slug>.md`
 - Overview: `README.md`, `ARCHITECTURE.md`
