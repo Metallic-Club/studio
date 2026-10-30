@@ -394,6 +394,9 @@ volumes with blend distance (Unity/Unreal volumes; Hi-Fi Rush per-volume post [R
 
 ### 5.5 Look presets
 
+> Superseded for exact values: [`docs/design/look-presets.md`](../design/look-presets.md) (#144) is the source of truth
+> for every Look. It changes this section's tonemap choice (AgX Punchy, not ACES, for Realistic) and adds Voxel.
+
 A Look is a text asset: render scale and camera, default shading model, tonemap and grade, outline defaults, post
 list, palette/LUT, lighting feature switches (shadows, AO, GI, fog), and a tier table of what drops on Low.
 `Lighting.Look = "Toon"` applies one. Changing Look never edits materials; it applies material remaps and defaults

@@ -15,6 +15,7 @@ import tomllib
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("metallic_fetch", HERE / "fetch.py")
@@ -162,6 +163,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):  # noqa: N802
+        if self.path.startswith("/redirect-"):
+            self.send_response(302)
+            target = "/file.bin" if self.path == "/redirect-same" else "http://elsewhere.invalid/file.bin"
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         _Handler.hits.append(self.headers.get("Range"))
         data, status = self.payload, 200
         rng = self.headers.get("Range")
@@ -224,6 +232,16 @@ class DownloadTests(unittest.TestCase):
         with self.assertRaises(fetch.FetchError):
             fetch.download(self.f(size=100), self.cache, fetch.Throttle({}), log=lambda *_: None)
 
+    def test_follows_redirect_on_the_same_host(self):
+        url = self.url.replace("/file.bin", "/redirect-same")
+        p = fetch.download(self.f(url=url), self.cache, fetch.Throttle({}), log=lambda *_: None)
+        self.assertEqual(p.read_bytes(), _Handler.payload)
+
+    def test_refuses_redirect_to_another_host(self):
+        url = self.url.replace("/file.bin", "/redirect-off")
+        with self.assertRaisesRegex(fetch.FetchError, "not on the allow list"):
+            fetch.download(self.f(url=url), self.cache, fetch.Throttle({}), log=lambda *_: None)
+
 
 class UnpackTests(unittest.TestCase):
     def setUp(self):
@@ -256,6 +274,17 @@ class UnpackTests(unittest.TestCase):
         z = self.zip_with({"big.png": b"\0" * (8 << 20)})
         with self.assertRaises(fetch.FetchError):
             fetch.safe_extract_zip(z, self.tmp / "out", log=lambda *_: None)
+
+    def test_caps_bytes_written_at_the_declared_size(self):
+        z = self.zip_with({"a.png": b"x" * 100})
+
+        def lying_open(_zf, info, *_a, **_k):
+            return io.BytesIO(b"x" * (info.file_size + 1))
+
+        with mock.patch.object(zipfile.ZipFile, "open", lying_open):
+            with self.assertRaisesRegex(fetch.FetchError, "more than its declared size"):
+                fetch.safe_extract_zip(z, self.tmp / "out", log=lambda *_: None)
+        self.assertFalse((self.tmp / "out" / "a.png").exists())
 
     def test_role_detection(self):
         cases = {
