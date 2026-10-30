@@ -34,6 +34,8 @@ cargo deny check licenses
 ```
 Visual change: look at a screenshot yourself and attach it. Say exactly what you ran; "not run" is fine, a false "works" is not.
 
+Keep it easy to understand: update ARCHITECTURE.md and the crate's doc comments in the same PR when you change a public interface.
+
 ## 4. Progress note
 Keep `docs/agents/<issue#>-<slug>.md` current in your branch: goal, done, next, commands that matter, open questions.
 Another session must be able to resume from it alone.

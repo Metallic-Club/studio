@@ -33,4 +33,5 @@ Issue number = task number (#1 is Task 1 ... #14 is Task 14).
 - Plan (M1, Tasks 1-14): `docs/superpowers/plans/2026-10-30-engine-m1.md`
 - Brand files: `branding/` (placeholder icon only)
 - Per-issue progress notes: `docs/agents/<issue#>-<slug>.md`
+- Overview: `README.md`, `ARCHITECTURE.md`
 - Board: `gh issue list -R Metallic-Club/studio -l status:ready` (no GitHub Project board; the token lacks the `project` scope)
