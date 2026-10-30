@@ -3,3 +3,5 @@ __pycache__/
 out/rawB/
 *.blend
 *.blend1
+out/engine/
+out/turnaround/

@@ -40,7 +40,7 @@ GREY = (0.42, 0.42, 0.42, 1.0)  # linear; about sRGB #ABABAB
 SLOTS = ["Head", "Torso", "Arms", "Legs", "Hands", "Feet"]
 
 LOD = 0          # 0 = full, 1 = about half the triangles, 2 = about 15%
-HEAD_SEG = 3     # corner segments of the head rings; 3 matches the concept's soft corners (head_segments_v2.png)
+HEAD_SEG = 3     # unused since v3 (the head is an implicit surface, see HEAD_ROWS); kept so --head-seg still parses
 
 
 def sg(n):
@@ -227,16 +227,24 @@ def hull_shell(shell, points, bevel=0.005, segments=2):
         bmesh.ops.bevel(bm, geom=bm.edges[:] + bm.verts[:], offset=bevel, offset_type="OFFSET",
                         segments=segments, profile=0.5, affect="EDGES", clamp_overlap=True)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    if segments == 0:
+        # No chamfer to carry the turn: keep the corners crisp, or the big caps darken the sides.
+        for e in bm.edges:
+            if len(e.link_faces) == 2 and e.calc_face_angle(0.0) > math.radians(35):
+                e.smooth = False
 
 
 # ---------------------------------------------------------------- skeleton (left side = +X)
 
-SHOULDER = Vector((0.130, 0.004, 1.010))
-WRIST = Vector((0.262, -0.040, 0.642))
+# v3 joint positions, measured on the concept's front, side and back views (1 px = 2.47 mm at the
+# sheet's figure height). The v2 values are in docs/agents/avatar-v3-model.md.
+SHOULDER = Vector((0.122, 0.000, 1.046))
+WRIST = Vector((0.270, -0.046, 0.626))
 ARM_DIR = (WRIST - SHOULDER).normalized()
-# The elbow sits 1.2 cm behind the straight line, so the rest pose has a slight bend: the IK knows
-# which way the elbow goes, and the hinge axis is well defined.
-ELBOW = SHOULDER.lerp(WRIST, 0.51) + Vector((0.0, 0.012, 0.0))
+# The elbow sits 1.2 cm behind the straight line, so the rest pose has a visible soft bend (the
+# concept's arms are not locked straight): the IK knows which way the elbow goes, and the hinge
+# axis is well defined. The upper arm is the shorter segment, as on the sheet.
+ELBOW = SHOULDER.lerp(WRIST, 0.465) + Vector((0.0, 0.012, 0.0))
 UPPER_DIR = (ELBOW - SHOULDER).normalized()
 LOWER_DIR = (WRIST - ELBOW).normalized()
 
@@ -249,21 +257,21 @@ def lateral(d):
     return ax if ax.x > 0 else -ax
 
 
-HIP = Vector((0.064, 0.000, 0.730))
-KNEE = Vector((0.126, 0.002, 0.400))   # 1 cm ahead of the straight line: the knee's bend direction
-ANKLE = Vector((0.178, 0.030, 0.105))
+HIP = Vector((0.070, 0.000, 0.735))
+KNEE = Vector((0.122, -0.004, 0.412))  # 1.3 cm ahead of the straight line: the knee's bend direction
+ANKLE = Vector((0.175, 0.026, 0.112))
 THIGH_DIR = (KNEE - HIP).normalized()
 SHIN_DIR = (ANKLE - KNEE).normalized()
 
-HAND_SCALE = 1.24
+HAND_SCALE = 1.04   # v2: 1.24, a clump; the concept's hand is about 1.35 forearm-end widths across
 HAND_TWIST = 40.0   # degrees: the back of the hand turns out and forward (the concept's front view)
 
 # Boot frame: the boot is built around (cx, cy) with lx outward and ly forward.
 BOOT_CX = ANKLE.x + 0.012
 BOOT_CY = ANKLE.y
-BALL_LY = 0.110     # the loop across the ball of the foot (toes bone pivot)
-TOE_LY = 0.206
-HEEL_LY = -0.112
+BALL_LY = 0.102     # the loop across the ball of the foot (toes bone pivot)
+TOE_LY = 0.196
+HEEL_LY = -0.102
 
 
 def hand_frame():
@@ -287,17 +295,17 @@ def H(s, w, n):
 
 # Hand layout in unscaled hand units.
 PALM_N0 = 0.004          # palm centre offset toward the palm
-KNUCKLE_S = 0.093        # finger base joints (MCP)
+KNUCKLE_S = 0.101        # finger base joints (MCP)
 FINGER_N = -0.0028       # finger centre: the finger backs continue the back of the hand
-FINGER_HW = 0.0151       # half width; spacing 0.029 so the fingers touch: one fused block
+FINGER_HW = 0.0138       # half width; spacing 0.029 leaves a 2 mm groove, so each finger block reads
 FINGER_HD = 0.0198
 FINGERS = {              # name: (w offset, length scale, width scale)
-    "Index": (+0.0435, 0.94, 1.0),
-    "Middle": (+0.0145, 1.00, 1.0),
-    "Ring": (-0.0145, 0.95, 1.0),
-    "Little": (-0.0430, 0.80, 0.94),
+    "Index": (+0.0425, 0.94, 1.0),
+    "Middle": (+0.0142, 1.00, 1.0),
+    "Ring": (-0.0142, 0.95, 1.0),
+    "Little": (-0.0420, 0.80, 0.94),
 }
-FINGER_L = (0.046, 0.031, 0.027)   # proximal, intermediate, distal of the middle finger
+FINGER_L = (0.051, 0.035, 0.030)   # proximal, intermediate, distal of the middle finger
 THUMB_L = (0.040, 0.034, 0.029)    # metacarpal, proximal, distal
 
 
@@ -342,118 +350,252 @@ def skeleton():
 
 # ---------------------------------------------------------------- body parts
 
+# Head profile, read off the concept's front and side views (metres; front = -Y). Each row is one
+# horizontal section: z, half width, front, back, superellipse exponent. The face is a tall, nearly
+# flat plane down to the chin; the jaw narrows in the lower third (front view); under the chin the
+# head rises toward the neck, and the back of the skull turns under in a broad round chamfer.
+HEAD_ROWS = [
+    (1.5400, 0.000, -0.030, 0.020, 2.2),
+    (1.5370, 0.062, -0.062, 0.044, 2.2),
+    (1.5280, 0.097, -0.094, 0.068, 2.3),
+    (1.5130, 0.125, -0.126, 0.093, 2.4),
+    (1.4950, 0.146, -0.146, 0.112, 2.5),
+    (1.4750, 0.161, -0.155, 0.128, 2.6),
+    (1.4500, 0.173, -0.159, 0.140, 3.0),
+    (1.4200, 0.181, -0.161, 0.147, 3.3),
+    (1.3850, 0.185, -0.162, 0.149, 3.4),
+    (1.3400, 0.186, -0.163, 0.148, 3.4),
+    (1.3050, 0.185, -0.163, 0.143, 3.3),
+    (1.2800, 0.181, -0.162, 0.132, 3.1),
+    (1.2550, 0.174, -0.160, 0.112, 3.0),
+    (1.2300, 0.166, -0.158, 0.086, 2.9),
+    (1.2050, 0.150, -0.153, 0.068, 2.7),
+    (1.1880, 0.131, -0.146, 0.046, 2.6),
+    (1.1750, 0.108, -0.134, 0.020, 2.5),
+    (1.1665, 0.084, -0.116, -0.010, 2.4),
+    (1.1615, 0.056, -0.094, -0.046, 2.3),
+    (1.1595, 0.000, -0.077, -0.060, 2.2),
+]
+# Seen from behind, the bottom of the head stays broad (the jaw corners): the lower rows widen
+# toward the back by this factor (z, extra width at the back).
+HEAD_JAW = [(1.300, 0.0), (1.250, 0.015), (1.210, 0.035), (1.188, 0.055), (1.175, 0.075), (1.160, 0.10)]
+HEAD_CENTRE = Vector((0.0, -0.008, 1.350))
+HEAD_GRID = {0: 10, 1: 5, 2: 3}      # cube-sphere cuts per face edge for each LOD
+
+
+def _cubic(table, z, col):
+    """Catmull-Rom through table[*][col] against table[*][0] (z ascending is not required)."""
+    rows = sorted(table, key=lambda r: r[0])
+    zs = [r[0] for r in rows]
+    if z <= zs[0]:
+        return rows[0][col]
+    if z >= zs[-1]:
+        return rows[-1][col]
+    i = max(k for k in range(len(zs) - 1) if zs[k] <= z)
+    p = [rows[max(0, min(len(rows) - 1, j))][col] for j in (i - 1, i, i + 1, i + 2)]
+    q = [rows[max(0, min(len(rows) - 1, j))][0] for j in (i - 1, i, i + 1, i + 2)]
+    t = (z - q[1]) / (q[2] - q[1])
+    # non-uniform tangents (finite differences), then a Hermite segment
+    m1 = (p[2] - p[0]) / (q[2] - q[0]) * (q[2] - q[1]) if q[2] != q[0] else 0.0
+    m2 = (p[3] - p[1]) / (q[3] - q[1]) * (q[2] - q[1]) if q[3] != q[1] else 0.0
+    # clamp the tangents (Fritsch-Carlson) so the profile never overshoots between rows
+    d = p[2] - p[1]
+    m1 = 0.0 if m1 * d <= 0 else max(-3 * abs(d), min(3 * abs(d), m1))
+    m2 = 0.0 if m2 * d <= 0 else max(-3 * abs(d), min(3 * abs(d), m2))
+    h00, h10 = 2 * t ** 3 - 3 * t ** 2 + 1, t ** 3 - 2 * t ** 2 + t
+    h01, h11 = -2 * t ** 3 + 3 * t ** 2, t ** 3 - t ** 2
+    return h00 * p[1] + h10 * m1 + h01 * p[2] + h11 * m2
+
+
+def head_inside(p):
+    z0, z1 = HEAD_ROWS[-1][0], HEAD_ROWS[0][0]
+    if not (z0 < p.z < z1):
+        return False
+    hw = _cubic(HEAD_ROWS, p.z, 1)
+    f, b = _cubic(HEAD_ROWS, p.z, 2), _cubic(HEAD_ROWS, p.z, 3)
+    e = _cubic(HEAD_ROWS, p.z, 4)
+    if hw <= 1e-5 or b - f <= 1e-5:
+        return False
+    ym, hd = (f + b) / 2, (b - f) / 2
+    t = max(0.0, min(1.0, (p.y - f) / (b - f)))
+    hw *= 1.0 + _cubic(HEAD_JAW, p.z, 1) * t * t * (3 - 2 * t)
+    ey = e + 0.6 if p.y < ym else e - 0.3       # flatter face, rounder back of the skull
+    return (abs(p.x) / hw) ** e + (abs(p.y - ym) / hd) ** ey <= 1.0
+
+
+def head_surface(d):
+    """Where the ray from HEAD_CENTRE along d leaves the head."""
+    lo, step = 0.0, 0.004
+    hi = step
+    while head_inside(HEAD_CENTRE + d * hi):
+        lo, hi = hi, hi + step
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        if head_inside(HEAD_CENTRE + d * mid):
+            lo = mid
+        else:
+            hi = mid
+    return HEAD_CENTRE + d * lo
+
+
+def head_field(p):
+    """Signed-ish field of the head profile: < 0 inside, 0 on the surface (smooth in x, y and z)."""
+    z0, z1 = HEAD_ROWS[-1][0], HEAD_ROWS[0][0]
+    z = max(z0 + 1e-5, min(z1 - 1e-5, p.z))
+    hw = max(1e-4, _cubic(HEAD_ROWS, z, 1))
+    f, b = _cubic(HEAD_ROWS, z, 2), _cubic(HEAD_ROWS, z, 3)
+    e = _cubic(HEAD_ROWS, z, 4)
+    ym, hd = (f + b) / 2, max(1e-4, (b - f) / 2)
+    t = max(0.0, min(1.0, (p.y - f) / max(1e-4, b - f)))
+    hw *= 1.0 + _cubic(HEAD_JAW, z, 1) * t * t * (3 - 2 * t)
+    ey = e + 0.6 if p.y < ym else e - 0.3
+    return ((abs(p.x) / hw) ** e + (abs(p.y - ym) / hd) ** ey) ** (1.0 / min(e, ey)) - 1.0
+
+
+def head_normals(ob):
+    """Give the head the normals of its smooth profile surface (finite-difference gradient of
+    head_field) instead of averaged face normals: the cel bands then follow the form, not the grid.
+    The topmost and bottommost vertices, where the field degenerates, keep their face normals."""
+    me = ob.data
+    gi = ob.vertex_groups["Head"].index
+    head = {v.index for v in me.vertices if any(g.group == gi for g in v.groups)}
+    normals = [Vector(cn.vector) for cn in me.corner_normals]
+    z0, z1 = HEAD_ROWS[-1][0], HEAD_ROWS[0][0]
+    h = 2e-4
+    cache = {}
+    for li, loop in enumerate(me.loops):
+        vi = loop.vertex_index
+        if vi not in head:
+            continue
+        if vi not in cache:
+            p = me.vertices[vi].co.copy()
+            if p.z > z1 - 0.004 or p.z < z0 + 0.003:
+                cache[vi] = None
+            else:
+                g = Vector([(head_field(p + d * h) - head_field(p - d * h)) for d in (X, Y, Z)])
+                cache[vi] = g.normalized() if g.length > 0 else None
+        if cache[vi] is not None:
+            normals[li] = cache[vi]
+    me.normals_split_custom_set(normals)
+
+
 def build_head():
+    """A soft rounded block: a cube-sphere grid (quads only, no poles) pushed out to the profile
+    surface. Rays are spread by the head's own proportions so the quads stay even."""
     sh = Shell("Head", "Head")
-    # z, half width, front (-Y), back (+Y), corner radius. Widest in the upper half, the jaw narrows,
-    # and the back of the skull is cut away under a big chamfer toward the neck (concept side view).
-    rows = [
-        (1.168, 0.082, -0.118, 0.030, 0.036),
-        (1.175, 0.112, -0.132, 0.044, 0.046),
-        (1.188, 0.134, -0.142, 0.058, 0.056),
-        (1.207, 0.151, -0.148, 0.074, 0.062),
-        (1.233, 0.164, -0.152, 0.094, 0.068),
-        (1.266, 0.174, -0.154, 0.121, 0.072),
-        (1.305, 0.180, -0.155, 0.145, 0.075),
-        (1.355, 0.184, -0.155, 0.152, 0.078),
-        (1.410, 0.184, -0.153, 0.150, 0.078),
-        (1.448, 0.177, -0.148, 0.144, 0.076),
-        (1.475, 0.165, -0.138, 0.134, 0.072),
-        (1.498, 0.147, -0.122, 0.118, 0.064),
-        (1.516, 0.122, -0.101, 0.097, 0.054),
-        (1.530, 0.093, -0.076, 0.072, 0.040),
-        (1.540, 0.056, -0.044, 0.040, 0.024),
-    ]
-    rows = keep(rows, lod1=[0, 1, 3, 5, 6, 7, 8, 9, 10, 12, 14], lod2=[0, 3, 6, 9, 12, 14])
-    loft(sh, vertical_stations(rows, seg=sg(HEAD_SEG)))
+    bm = sh.bm
+    n = HEAD_GRID[LOD]
+    bmesh.ops.create_cube(bm, size=2.0)
+    bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=n - 1, use_grid_fill=True)
+    ext = Vector((0.186, 0.156, 0.193))
+    for v in bm.verts:
+        c = v.co
+        q = Vector([math.tan(math.pi / 4 * max(-1.0, min(1.0, c[i]))) * ext[i] for i in range(3)])
+        v.co = head_surface(q.normalized())
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     return sh
 
 
 def build_neck():
+    """A short, round neck about 0.29 head widths across. Its top is hidden in the head's underside,
+    its foot spreads into the trapezius rings of the torso."""
     sh = Shell("Neck", "Head")
     rows = [
-        (1.060, 0.050, -0.037, 0.060, 0.016),
-        (1.110, 0.047, -0.035, 0.057, 0.015),
-        (1.160, 0.044, -0.033, 0.055, 0.014),
-        (1.230, 0.043, -0.032, 0.054, 0.014),
+        (1.080, 0.066, -0.052, 0.072, 0.040),
+        (1.110, 0.058, -0.045, 0.064, 0.040),
+        (1.140, 0.054, -0.041, 0.060, 0.040),
+        (1.245, 0.051, -0.039, 0.057, 0.038),
     ]
     rows = keep(rows, lod2=[0, 3])
-    loft(sh, vertical_stations(rows, seg=sg(2)) if LOD < 2 else
+    loft(sh, vertical_stations(rows, seg=sg(3)) if LOD < 2 else
          [station((0, 0, z), X, Y, box_pts(hw, f, b)) for z, hw, f, b, _r in rows])
     return sh
 
 
 def build_torso():
+    """Rib cage: a clear chest (deepest at 0.99 m, with a plane break under it at 0.95 m), a narrow
+    waist, and a shoulder line that rises to the trapezius and turns over into the neck. A centre
+    line runs down the chest and the spine."""
     sh = Shell("Torso", "Torso")
-    # A tapered, faceted chest: a plane break under the chest, a centre line front and back, and a
-    # steep trapezius slope from the neck to the shoulders. The upper back sits a little behind the
-    # chest so the posture is upright.
     rows = [
-        (0.800, 0.078, -0.082, 0.060, 0.022, 0.000, 0.000),
-        (0.845, 0.080, -0.085, 0.062, 0.022, 0.002, 0.001),
-        (0.890, 0.089, -0.087, 0.071, 0.024, 0.003, 0.002),
-        (0.935, 0.106, -0.096, 0.083, 0.026, 0.005, 0.003),   # chest plane break
-        (0.990, 0.121, -0.097, 0.094, 0.028, 0.006, 0.004),
-        (1.035, 0.136, -0.087, 0.100, 0.030, 0.005, 0.004),
-        (1.062, 0.138, -0.072, 0.086, 0.030, 0.003, 0.003),
-        (1.086, 0.114, -0.056, 0.072, 0.026, 0.001, 0.001),
-        (1.102, 0.080, -0.044, 0.063, 0.022, 0.000, 0.000),
-        (1.114, 0.050, -0.040, 0.058, 0.018, 0.000, 0.000),   # meets the neck
+        (0.800, 0.080, -0.082, 0.054, 0.022, 0.000, 0.000),   # hidden in the pelvis
+        (0.850, 0.088, -0.089, 0.061, 0.024, 0.000, 0.000),
+        (0.885, 0.092, -0.095, 0.065, 0.025, 0.002, 0.002),
+        (0.918, 0.099, -0.104, 0.069, 0.026, 0.003, 0.003),
+        (0.952, 0.108, -0.112, 0.077, 0.028, 0.005, 0.003),   # under-chest plane break
+        (0.990, 0.118, -0.116, 0.091, 0.030, 0.006, 0.004),
+        (1.025, 0.125, -0.109, 0.098, 0.031, 0.005, 0.004),
+        (1.055, 0.128, -0.090, 0.096, 0.031, 0.004, 0.004),
+        (1.080, 0.126, -0.066, 0.089, 0.030, 0.002, 0.003),   # top of the shoulder
+        (1.096, 0.104, -0.054, 0.080, 0.028, 0.001, 0.002),
+        (1.109, 0.078, -0.048, 0.071, 0.025, 0.000, 0.000),   # trapezius
+        (1.126, 0.060, -0.043, 0.063, 0.021, 0.000, 0.000),   # meets the neck
     ]
-    sharp = (3,)
+    sharp = (4,)
+    if LOD == 1:
+        rows, sharp = [rows[i] for i in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10)], (3,)
     if LOD == 2:
-        rows, sharp = [rows[i] for i in (0, 3, 6, 9)], (1,)
+        rows, sharp = [rows[i] for i in (0, 4, 7, 10)], (1,)
     loft(sh, vertical_stations(rows, seg=sg(2), ridge=LOD < 2), sharp=sharp,
          sharp_cols=(6, 13) if LOD == 0 else ())
     return sh
 
 
 def build_pelvis():
+    """Pelvis block: belt line at 0.835 m, the hip line at 0.79 m, then the concept's brief: the
+    sides run in a straight V down to the crotch, so in front and behind the thighs come out from
+    under two diagonal creases. The hip joints are balls (the thigh domes) inside it."""
     sh = Shell("Pelvis", "Torso")
     rows = [
-        (0.634, 0.026, -0.036, 0.044, 0.010, 0.000, 0.000),
-        (0.648, 0.052, -0.056, 0.072, 0.016, 0.000, 0.000),   # brief wedge toward the crotch
-        (0.672, 0.080, -0.068, 0.086, 0.020, 0.002, 0.002),   # front tucked behind the thighs
-        (0.700, 0.106, -0.079, 0.094, 0.024, 0.003, 0.003),
-        (0.745, 0.120, -0.089, 0.088, 0.027, 0.003, 0.003),   # hip, widest
-        (0.795, 0.104, -0.089, 0.070, 0.026, 0.002, 0.002),
-        (0.845, 0.084, -0.087, 0.065, 0.022, 0.002, 0.001),   # waist line
-        (0.890, 0.076, -0.080, 0.060, 0.022, 0.000, 0.000),
+        (0.655, 0.022, -0.030, 0.034, 0.010, 0.000, 0.000),
+        (0.668, 0.034, -0.052, 0.060, 0.014, 0.000, 0.000),
+        (0.685, 0.046, -0.069, 0.078, 0.018, 0.001, 0.001),
+        (0.705, 0.059, -0.082, 0.090, 0.020, 0.002, 0.002),
+        (0.730, 0.074, -0.090, 0.097, 0.022, 0.003, 0.003),   # seat
+        (0.760, 0.090, -0.094, 0.095, 0.024, 0.003, 0.003),
+        (0.790, 0.102, -0.096, 0.085, 0.026, 0.003, 0.002),   # hip line
+        (0.812, 0.101, -0.097, 0.074, 0.025, 0.002, 0.002),
+        (0.835, 0.092, -0.095, 0.066, 0.024, 0.002, 0.001),   # belt line
+        (0.880, 0.087, -0.090, 0.060, 0.022, 0.000, 0.000),
     ]
-    sharp = (6,)
+    sharp = (8,)
+    if LOD == 1:
+        rows, sharp = [rows[i] for i in (0, 1, 3, 4, 5, 6, 8, 9)], (6,)
     if LOD == 2:
-        rows, sharp = [rows[i] for i in (0, 2, 4, 7)], ()
+        rows, sharp = [rows[i] for i in (0, 3, 6, 8)], ()
     loft(sh, vertical_stations(rows, seg=sg(2), ridge=LOD < 2), sharp=sharp,
          sharp_cols=(6, 13) if LOD == 0 else ())
     return sh
 
 
 def build_upper_arm():
-    """Shoulder dome (centred on the shoulder pivot) down to a half cylinder round the elbow hinge."""
+    """Shoulder dome (centred on the shoulder pivot: the deltoid cap) tapering down to a half
+    cylinder round the elbow hinge."""
     sh = Shell("UpperArm.L", "Arms", groups=("Arm.L",))
     ax = lateral(UPPER_DIR)
     L = (ELBOW - SHOULDER).length
-    rows = dome_rows(0.044, 0.046, 0.014, (78, 58, 34))
-    rows += [(0.0, 0.044, 0.046, 0.014), (0.45 * L, 0.041, 0.044, 0.013), (0.93 * L, 0.039, 0.042, 0.013)]
+    rows = dome_rows(0.048, 0.050, 0.017, (78, 58, 34))
+    rows += [(0.0, 0.048, 0.050, 0.017), (0.93 * L, 0.039, 0.041, 0.013)]
     rows += [(L + s, hw, hd, r) for s, hw, hd, r in hinge_rows(0.039, 0.041, 0.013, (0, 40, 68))]
-    rows = keep(rows, lod1=[0, 2, 3, 4, 5, 6, 7, 8], lod2=[1, 6, 8])
+    rows = keep(rows, lod2=[1, 5, 7])
     loft(sh, axis_stations(SHOULDER, UPPER_DIR, ax, rows, sg(2)))
     return sh
 
 
 def build_lower_arm():
-    """Forearm: a wider rim just outside the upper arm's elbow cylinder, then the forearm, which
-    turns toward the hand over its last third."""
+    """Forearm block: a rim just outside the upper arm's elbow cylinder, the widest section just
+    below the elbow, then a long taper that flattens toward the wrist and turns with the hand."""
     sh = Shell("LowerArm.L", "Arms", groups=("Arm.L",))
     ax = lateral(LOWER_DIR)
-    pts = [ELBOW - LOWER_DIR * 0.010, ELBOW, WRIST, WRIST + LOWER_DIR * 0.028]
+    pts = [ELBOW - LOWER_DIR * 0.010, ELBOW, WRIST, WRIST + LOWER_DIR * 0.026]
     specs = [
-        (0, 0.0, 0.046, 0.046, 0.012),     # bevelled rim
-        (0, 0.75, 0.050, 0.051, 0.015),    # forearm step (the concept's elbow line)
-        (1, 0.10, 0.053, 0.053, 0.016),
-        (1, 0.45, 0.055, 0.054, 0.016),
-        (1, 0.85, 0.050, 0.050, 0.015, 0.0, 0.0, 10),
-        (2, 0.0, 0.044, 0.044, 0.014, 0.0, 0.0, 22),    # wrist loop, turning toward the hand
-        (2, 1.0, 0.041, 0.041, 0.013, 0.0, 0.0, 30),
+        (0, 0.0, 0.044, 0.045, 0.012),     # bevelled rim
+        (0, 0.75, 0.050, 0.050, 0.015),    # forearm step (the concept's elbow line)
+        (1, 0.12, 0.053, 0.051, 0.016),
+        (1, 0.40, 0.051, 0.048, 0.016),
+        (1, 0.78, 0.045, 0.041, 0.014, 0.0, 0.0, 10),
+        (2, 0.0, 0.039, 0.035, 0.013, 0.0, 0.0, 22),    # wrist loop, turning toward the hand
+        (2, 1.0, 0.036, 0.032, 0.012, 0.0, 0.0, 30),
     ]
     specs = keep(specs, lod2=[0, 1, 5])
     loft(sh, path_stations(pts, specs, ax, seg=sg(2)), sharp=(1,) if LOD < 2 else ())
@@ -465,8 +607,8 @@ def build_palm():
     sh = Shell("Palm.L", "Hands", groups=("Hand.L",))
     a, b, c = hand_frame()
     # s along a, half breadth (b), half thickness (c), back ridge.
-    rows = [(0.004, 0.031, 0.021, 0.000), (0.016, 0.043, 0.027, 0.001), (0.034, 0.054, 0.031, 0.003),
-            (0.066, 0.059, 0.031, 0.003), (0.090, 0.059, 0.029, 0.002), (0.101, 0.055, 0.024, 0.000)]
+    rows = [(0.004, 0.034, 0.020, 0.000), (0.019, 0.042, 0.025, 0.001), (0.039, 0.050, 0.029, 0.003),
+            (0.071, 0.056, 0.030, 0.003), (0.097, 0.057, 0.028, 0.002), (0.109, 0.054, 0.023, 0.000)]
     rows = keep(rows, lod2=[0, 3, 5])
     sts = []
     for s, hb, hc, rg in rows:
@@ -489,8 +631,8 @@ def finger_rows(L, hw, hd):
     rows = [(-0.012, hw * 0.96, hd * 0.95), (0.0, hw, hd),
             (j1 - k, hw, hd * 0.98), (j1, hw * 0.99, hd * 0.97), (j1 + k, hw * 0.98, hd * 0.96),
             (j2 - k, hw * 0.97, hd * 0.93), (j2, hw * 0.96, hd * 0.92), (j2 + k, hw * 0.95, hd * 0.91),
-            (t - 0.006, hw * 0.93, hd * 0.88), (t, hw * 0.70, hd * 0.62)]
-    return keep(rows, lod1=[0, 1, 3, 6, 9], lod2=[0, 3, 6, 9])
+            (t, hw * 0.80, hd * 0.74)]
+    return keep(rows, lod1=[0, 3, 6, 8], lod2=[0, 3, 6, 8])
 
 
 def build_finger(name):
@@ -525,7 +667,6 @@ def build_thumb():
     specs = [
         (0, 0.0, 0.0165 * S, 0.0175 * S, 0.0045 * S),
         (1, 0.0, 0.0185 * S, 0.0195 * S, 0.0055 * S),    # CMC joint ring
-        (1, 0.55, 0.0185 * S, 0.0195 * S, 0.0055 * S),
         (1, 0.92, 0.0178 * S, 0.0188 * S, 0.0052 * S),
         (2, 0.0, 0.0175 * S, 0.0185 * S, 0.0052 * S),    # MCP joint ring
         (2, 0.09, 0.0172 * S, 0.0182 * S, 0.0050 * S),
@@ -535,7 +676,7 @@ def build_thumb():
         (3, 0.80, 0.0150 * S, 0.0152 * S, 0.0044 * S),
         (3, 1.0, 0.0105 * S, 0.0105 * S, 0.0030 * S),
     ]
-    specs = keep(specs, lod1=[0, 1, 4, 7, 10], lod2=[1, 4, 10])
+    specs = keep(specs, lod1=[0, 1, 3, 6, 9], lod2=[1, 3, 9])
     sts = path_stations(q, specs, c, seg=1)
     if LOD == 2:
         for st, sp in zip(sts, specs):
@@ -545,67 +686,64 @@ def build_thumb():
 
 
 def build_thigh():
-    """Thigh: its top rises up the hip side (the brief line), its end is a half cylinder round the
+    """Thigh: a ball-joint dome centred on the hip pivot (it turns inside itself and carries the
+    hip's outer line), full at the top, a steady taper to the knee, and a half cylinder round the
     knee hinge."""
     sh = Shell("Thigh.L", "Legs", groups=("Leg.L",))
     ax = lateral(THIGH_DIR)
     L = (KNEE - HIP).length
-    rows = [(0.0, 0.064, 0.074, 0.018), (0.12 * L, 0.068, 0.078, 0.019), (0.28 * L, 0.068, 0.077, 0.020),
-            (0.60 * L, 0.060, 0.068, 0.018), (0.93 * L, 0.055, 0.062, 0.017)]
-    rows += [(L + s, hw, hd, r) for s, hw, hd, r in hinge_rows(0.055, 0.060, 0.017, (0, 40, 68))]
-    rows = keep(rows, lod1=[0, 1, 2, 3, 4, 5, 7], lod2=[0, 5, 7])
-    sts = axis_stations(HIP, THIGH_DIR, ax, rows, sg(2))
-    # Tilt the top two rings so the thigh rises higher on the outside: the hip reads as one plane
-    # and the pelvis meets the thighs in the concept's V-shaped brief line.
-    for st, tilt, lift in ((sts[0], 40, 0.010), (sts[1], 18, 0.0)):
-        t = math.radians(tilt)
-        up = (Z - st["v"] * Z.dot(st["v"])).normalized()
-        st["u"] = (st["u"] * math.cos(t) + up * math.sin(t)).normalized()
-        st["o"] = st["o"] + Vector((0.006, 0.0, lift))
-    loft(sh, sts)
+    rows = [(-0.058 * math.sin(math.radians(a)), max(0.006, 0.070 * math.cos(math.radians(a))),
+             max(0.006, 0.082 * math.cos(math.radians(a))), 0.020 * max(0.35, math.cos(math.radians(a))))
+            for a in (80, 60, 35)]
+    rows += [(0.0, 0.070, 0.082, 0.020), (0.15 * L, 0.073, 0.083, 0.021),
+             (0.58 * L, 0.061, 0.067, 0.018), (0.93 * L, 0.051, 0.058, 0.017)]
+    rows += [(L + s, hw, hd, r) for s, hw, hd, r in hinge_rows(0.051, 0.057, 0.017, (0, 40, 68))]
+    rows = keep(rows, lod1=[0, 2, 3, 4, 5, 6, 7, 9], lod2=[0, 3, 9])
+    loft(sh, axis_stations(HIP, THIGH_DIR, ax, rows, sg(2)))
     return sh
 
 
 def build_shin():
-    """Lower leg: a rim just outside the thigh's knee cylinder (the knee step), then the calf."""
+    """Lower leg: a rim just outside the thigh's knee cylinder (the knee line), then a prism that
+    widens toward the boot and fills out a little at the back, as on the sheet."""
     sh = Shell("Shin.L", "Legs", groups=("Leg.L",))
     ax = lateral(SHIN_DIR)
     pts = [KNEE - SHIN_DIR * 0.010, KNEE, ANKLE]
-    # dv < 0 moves a ring toward the back (calf).
     specs = [
-        (0, 0.0, 0.060, 0.064, 0.016),
-        (0, 0.85, 0.066, 0.069, 0.019),                # the knee step
-        (1, 0.10, 0.068, 0.072, 0.019, 0.0, -0.003),
-        (1, 0.35, 0.071, 0.080, 0.020, 0.0, -0.010),   # calf
-        (1, 0.72, 0.067, 0.075, 0.019, 0.0, -0.008),
-        (1, 1.0, 0.063, 0.070, 0.018, 0.0, -0.006),
+        (0, 0.0, 0.052, 0.059, 0.015),
+        (0, 0.85, 0.054, 0.061, 0.016),                # the knee line, flush with the thigh's end
+        (1, 0.10, 0.055, 0.062, 0.017, 0.0, -0.002),
+        (1, 0.45, 0.061, 0.070, 0.019, 0.0, -0.007),   # dv < 0: toward the back
+        (1, 0.74, 0.067, 0.075, 0.020, 0.0, -0.007),
+        (1, 1.0, 0.070, 0.077, 0.020, 0.0, -0.005),
     ]
     specs = keep(specs, lod2=[0, 1, 5])
     loft(sh, path_stations(pts, specs, ax, seg=sg(2)), sharp=(1,) if LOD < 2 else ())
     return sh
 
 
-BOOT_W = 1.34  # width scale of the sole, pads and toe box (Phase A: 1.16; the concept's boots are wider)
+BOOT_W = 1.22  # width scale of the sole, pads and toe box (v2: 1.34, too heavy next to the new legs)
 
 
 def boot_footprint():
     """Sole outline in boot space (lx outward, ly forward), counter-clockwise from the heel."""
-    pts = [(-0.054, -0.112), (0.058, -0.112), (0.080, -0.094), (0.084, -0.010), (0.100, 0.104),
-           (0.092, 0.180), (0.066, 0.206), (-0.056, 0.206), (-0.080, 0.180), (-0.088, 0.104),
-           (-0.074, -0.010), (-0.076, -0.094)]
+    pts = [(-0.044, -0.106), (0.048, -0.106), (0.070, -0.090), (0.082, -0.009), (0.100, 0.097),
+           (0.092, 0.170), (0.066, 0.196), (-0.056, 0.196), (-0.080, 0.170), (-0.088, 0.097),
+           (-0.072, -0.009), (-0.066, -0.090)]
     return [(x * BOOT_W, y) for x, y in pts]
 
 
 # Tread pads under the sole: heel and forefoot, with the arch band between them.
-HEEL_PAD = [(-0.044, -0.100), (0.048, -0.100), (0.066, -0.084), (0.070, -0.026), (-0.062, -0.026),
-            (-0.066, -0.084)]
-FORE_PAD = [(-0.066, 0.034), (0.076, 0.034), (0.088, 0.104), (0.079, 0.168), (0.053, 0.192),
-            (-0.043, 0.192), (-0.067, 0.168), (-0.076, 0.104)]
+HEEL_PAD = [(-0.036, -0.095), (0.040, -0.095), (0.058, -0.080), (0.066, -0.024), (-0.060, -0.024),
+            (-0.058, -0.080)]
+FORE_PAD = [(-0.066, 0.032), (0.076, 0.032), (0.088, 0.097), (0.079, 0.156), (0.053, 0.179),
+            (-0.043, 0.179), (-0.067, 0.156), (-0.076, 0.097)]
 
 
 def build_boot():
-    """Heavy boot: tread pads, a thick sole slab with chamfered edges, and a wedge upper whose sides
-    taper from the sole to the ankle and whose instep runs down to a wide, bevelled toe box."""
+    """Boot: tread pads, a sole slab with chamfered edges, and a wedge upper. The cuff is a level
+    ring just outside the shin (the concept's ankle seam); the instep runs down at about 35 degrees
+    to a low, bevelled toe box."""
     sh = Shell("Boot.L", "Feet")
     cx, cy = BOOT_CX, BOOT_CY
 
@@ -614,30 +752,32 @@ def build_boot():
 
     if LOD == 0:
         for pad in ([(x * BOOT_W, y) for x, y in HEEL_PAD], [(x * BOOT_W, y) for x, y in FORE_PAD]):
-            rows = [(0.000, -0.003), (0.003, 0.0), (0.010, 0.0)] if LOD == 0 else [(0.000, -0.003), (0.010, 0.0)]
+            rows = [(0.000, -0.003), (0.003, 0.0), (0.010, 0.0)]
             loft(sh, [station((cx, cy, z), X, FRONT, offset_poly(pad, d)) for z, d in rows])
     fp = boot_footprint()
     if LOD == 2:
         fp = fp[::2]
-    rows = [(0.005, -0.005), (0.012, 0.0), (0.046, 0.0), (0.056, -0.008)]
+    rows = [(0.005, -0.005), (0.012, 0.0), (0.044, 0.0), (0.053, -0.007)]
     if LOD == 2:
-        rows = [(0.000, -0.004), (0.050, 0.0)]
-    loft(sh, [station((cx, cy, z), X, FRONT, offset_poly(fp, d)) for z, d in rows])
+        rows = [(0.000, -0.004), (0.048, 0.0)]
+    # The end rings are sharp: otherwise the big flat caps pull the chamfer normals toward
+    # straight down and the sole edge renders as a dark band in the engine.
+    loft(sh, [station((cx, cy, z), X, FRONT, offset_poly(fp, d)) for z, d in rows], sharp=(0, len(rows) - 1))
 
-    up = [w(lx, ly, 0.048) for lx, ly in fp]
-    # The cuff follows the leg, which leans in: its centre at the cuff is about 2.4 cm inside cx.
-    # The toe box widens with the sole (BOOT_W) so the boot reads heavy from the front.
-    lc = -0.024
-    k = BOOT_W / 1.16
-    up += [w(-0.066, -0.104, 0.125), w(0.066, -0.104, 0.125),
-           w(lc - 0.058, -0.068, 0.155), w(lc + 0.058, -0.068, 0.155),
-           w(lc - 0.059, 0.000, 0.184), w(lc + 0.059, 0.000, 0.184),
-           w(lc - 0.057, 0.056, 0.174), w(lc + 0.057, 0.056, 0.174),
-           w(-0.072 * k, 0.132, 0.110), w(0.084 * k, 0.132, 0.110),
-           w(-0.072 * k, 0.172, 0.094), w(0.084 * k, 0.172, 0.094),
-           w(-0.066 * k, 0.200, 0.076), w(0.076 * k, 0.200, 0.076)]
+    up = [w(lx, ly, 0.046) for lx, ly in fp]
+    # The cuff follows the leg, which leans in: its centre is about 2.4 cm inside cx and 0.8 cm
+    # ahead of the ankle. It is 5 mm outside the shin all round.
+    lc, lf = -0.024, 0.008
+    k = BOOT_W
+    up += [w(-0.048 * k, -0.097, 0.112), w(0.050 * k, -0.097, 0.112),
+           w(lc - 0.068, lf - 0.084, 0.180), w(lc + 0.068, lf - 0.084, 0.180),
+           w(lc - 0.075, lf, 0.184), w(lc + 0.075, lf, 0.184),
+           w(lc - 0.073, lf + 0.074, 0.176), w(lc + 0.073, lf + 0.074, 0.176),
+           w(-0.066 * k, 0.108, 0.148), w(0.076 * k, 0.108, 0.148),
+           w(-0.068 * k, 0.152, 0.110), w(0.080 * k, 0.152, 0.110),
+           w(-0.062 * k, 0.190, 0.076), w(0.072 * k, 0.190, 0.076)]
     up_shell = Shell("tmp", "Feet")
-    hull_shell(up_shell, up, bevel=0.007, segments=(2 if LOD == 0 else 0))
+    hull_shell(up_shell, up, bevel=0.007, segments=(1 if LOD == 0 else 0))
     # A loop across the ball of the foot for the toes bone.
     bm = up_shell.bm
     bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
@@ -740,6 +880,7 @@ def build(glb=None, blend=None, lod=0, head_seg=None, reset=True, name="DefaultA
     mod.weight = 80
     mod.keep_sharp = True
     bpy.ops.object.modifier_apply(modifier=mod.name)
+    head_normals(root)
 
     # One UV set, angle-based islands so each plane gets its own island for decals later.
     bpy.ops.object.mode_set(mode="EDIT")

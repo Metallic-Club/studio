@@ -55,16 +55,17 @@ def bone_table():
     a, b, c = BA.hand_frame()
     t = {
         "root": (Vector((0, 0, 0)), Vector((0, -0.25, 0)), UP, None),
-        "hips": (Vector((0, 0.0, 0.760)), Vector((0, 0.0, 0.845)), FRONT, "root"),
-        "spine": (Vector((0, 0.004, 0.845)), Vector((0, 0.004, 0.935)), FRONT, "hips"),
-        "chest": (Vector((0, 0.004, 0.935)), Vector((0, 0.006, 1.020)), FRONT, "spine"),
-        "upperChest": (Vector((0, 0.006, 1.020)), Vector((0, 0.010, 1.100)), FRONT, "chest"),
-        "neck": (Vector((0, 0.010, 1.100)), Vector((0, 0.010, 1.190)), FRONT, "upperChest"),
-        "head": (Vector((0, 0.010, 1.190)), Vector((0, 0.010, 1.420)), FRONT, "neck"),
+        # v3 proportions (see docs/agents/avatar-v3-model.md for the v2 values)
+        "hips": (Vector((0, 0.0, 0.760)), Vector((0, 0.0, 0.850)), FRONT, "root"),
+        "spine": (Vector((0, 0.004, 0.850)), Vector((0, 0.004, 0.950)), FRONT, "hips"),
+        "chest": (Vector((0, 0.004, 0.950)), Vector((0, 0.006, 1.035)), FRONT, "spine"),
+        "upperChest": (Vector((0, 0.006, 1.035)), Vector((0, 0.010, 1.115)), FRONT, "chest"),
+        "neck": (Vector((0, 0.010, 1.115)), Vector((0, 0.010, 1.185)), FRONT, "upperChest"),
+        "head": (Vector((0, 0.010, 1.185)), Vector((0, 0.010, 1.420)), FRONT, "neck"),
     }
     for side, s in SIDES:
         P = side
-        t[P + "Shoulder"] = (mx(Vector((0.022, 0.004, 1.072)), s), mx(sk["SHOULDER"], s), UP, "upperChest")
+        t[P + "Shoulder"] = (mx(Vector((0.024, 0.006, 1.088)), s), mx(sk["SHOULDER"], s), UP, "upperChest")
         t[P + "UpperArm"] = (mx(sk["SHOULDER"], s), mx(sk["ELBOW"], s), FRONT, P + "Shoulder")
         t[P + "LowerArm"] = (mx(sk["ELBOW"], s), mx(sk["WRIST"], s), FRONT, P + "UpperArm")
         t[P + "Hand"] = (mx(sk["WRIST"], s), mx(sk["HAND_END"], s), mx(c, s), P + "LowerArm")
@@ -203,9 +204,9 @@ def chain_weights(s, joints, bones, k):
     return {b: x for b, x in w.items() if x > 1e-4}
 
 
-TORSO_Z = [(0.800, {"hips": 1.0}), (0.845, {"hips": 0.5, "spine": 0.5}), (0.890, {"spine": 1.0}),
-           (0.935, {"spine": 0.5, "chest": 0.5}), (0.990, {"chest": 1.0}),
-           (1.035, {"chest": 0.3, "upperChest": 0.7}), (1.062, {"upperChest": 1.0})]
+TORSO_Z = [(0.815, {"hips": 1.0}), (0.850, {"hips": 0.5, "spine": 0.5}), (0.900, {"spine": 1.0}),
+           (0.950, {"spine": 0.5, "chest": 0.5}), (1.000, {"chest": 1.0}),
+           (1.048, {"chest": 0.3, "upperChest": 0.7}), (1.076, {"upperChest": 1.0})]
 
 
 def torso_weights(co):
@@ -223,7 +224,7 @@ def torso_weights(co):
                     w[b] = w0.get(b, 0) * (1 - t) + w1.get(b, 0) * t
                 break
     # The shoulder tops ride on the shoulder bones (shrug, arm raised).
-    sh = smooth01((abs(co.x) - 0.075) / 0.050) * smooth01((z - 0.985) / 0.045) * 0.9
+    sh = smooth01((abs(co.x) - 0.075) / 0.050) * smooth01((z - 1.000) / 0.045) * 0.9
     if sh > 0:
         w = {b: x * (1 - sh) for b, x in w.items()}
         w[("left" if co.x > 0 else "right") + "Shoulder"] = sh

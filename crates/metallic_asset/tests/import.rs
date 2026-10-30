@@ -58,9 +58,9 @@ fn default_avatar_has_three_lods_and_six_slots() {
         ]
     );
     let tris: Vec<usize> = m.lods.iter().map(|l| l.indices.len() / 3).collect();
-    assert_eq!(tris, [5744, 2840, 876]);
+    assert_eq!(tris, [5908, 2812, 888]);
     let verts: Vec<usize> = m.lods.iter().map(|l| l.vertices.len()).collect();
-    assert_eq!(verts, [4892, 2777, 1114]);
+    assert_eq!(verts, [4960, 2897, 1102]);
     let slots: Vec<&str> = m.materials.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(
         slots,
