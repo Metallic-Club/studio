@@ -1,13 +1,16 @@
 //! [`Game`]: one running game and its frame loop.
 use crate::RuntimeError;
+use crate::avatar::{Avatar, default_model};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
 use crate::input::FrameInput;
+use crate::locomotion::{LocomotionInput, Support};
 use crate::project::ProjectConfig;
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value, Vec3, World, load_scene};
 pub use metallic_physics::RUN_MULTIPLIER;
 use metallic_physics::{
     CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, spawn_character,
 };
+use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
 use metallic_script::{LOCAL_PLAYER_NAME, OutputSink, ScriptHost};
 use std::cell::RefCell;
@@ -123,6 +126,8 @@ pub struct Game {
     physics_cursor: Option<ChangeCursor>,
     /// Shapes of the parts the physics was last synced with.
     synced_parts: HashMap<InstanceId, PartShape>,
+    /// The local character's skinned avatar and the character Model it belongs to.
+    avatar: Option<(InstanceId, Avatar)>,
     running: bool,
 }
 
@@ -175,6 +180,7 @@ impl Game {
             accumulator: 0.0,
             physics_cursor: None,
             synced_parts: HashMap::new(),
+            avatar: None,
             running: false,
         }
     }
@@ -279,8 +285,8 @@ impl Game {
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
-    /// Then the camera follows the character. Draw with [`Game::render`] and
-    /// [`crate::gui::paint`].
+    /// Then the skinned avatar follows the character (pose, smoothed facing, animation over `dt`)
+    /// and the camera follows too. Draw with [`Game::render`] and [`crate::gui::paint`].
     pub fn frame(&mut self, input: &FrameInput, dt: f64) -> FrameOutput {
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_FRAME_DT)
@@ -303,6 +309,7 @@ impl Game {
             }
         }
         let state = self.character.and_then(|c| self.characters.state(c));
+        self.update_avatar(state, dt as f32);
         if state != Some(HumanoidState::Dead)
             && let Some(root) = self.root_position()
         {
@@ -333,10 +340,20 @@ impl Game {
         size: (u32, u32),
         camera: &Camera,
     ) {
+        self.sync_renderer(renderer);
+        renderer.render(target, camera, size);
+    }
+
+    /// Brings `renderer` up to date with the world and the avatar without drawing (for
+    /// [`Renderer::capture`]).
+    pub fn sync_renderer(&self, renderer: &mut Renderer) {
         if let Ok(world) = self.world.try_borrow() {
             renderer.sync(&world);
         }
-        renderer.render(target, camera, size);
+        match &self.avatar {
+            Some((_, avatar)) => renderer.set_skinned(&[avatar.instance()]),
+            None => renderer.set_skinned(&[]),
+        }
     }
 
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
@@ -441,8 +458,47 @@ impl Game {
         self.physics_cursor = Some(world.change_cursor());
     }
 
-    /// The character's `HumanoidRootPart` position.
-    fn root_position(&self) -> Option<Vec3> {
+    /// Moves and animates the local character's avatar; a new character (after a respawn) gets a
+    /// fresh one.
+    fn update_avatar(&mut self, state: Option<HumanoidState>, dt: f32) {
+        let (Some(character), Some((root, yaw))) = (self.character, self.root_pose()) else {
+            self.avatar = None;
+            return;
+        };
+        let root = GVec3::new(root.x as f32, root.y as f32, root.z as f32);
+        let yaw = (yaw as f32).to_radians();
+        if self.avatar.as_ref().map(|(c, _)| *c) != Some(character) {
+            self.avatar = default_model().map(|m| (character, Avatar::new(m, root, yaw)));
+        }
+        let Some((_, avatar)) = self.avatar.as_mut() else {
+            return;
+        };
+        let support = match state {
+            Some(HumanoidState::Running) | None => Support::Grounded,
+            Some(HumanoidState::Jumping) => Support::Rising,
+            Some(HumanoidState::Freefall) => Support::Falling,
+            Some(HumanoidState::Dead) => Support::Frozen,
+        };
+        let v = self
+            .characters
+            .relative_velocity(character)
+            .unwrap_or_default();
+        let speed = (v.x * v.x + v.z * v.z).sqrt() as f32;
+        avatar.update(root, yaw, LocomotionInput { speed, support }, dt);
+    }
+
+    /// The character's `HumanoidRootPart` position and facing (`Orientation.Y`, degrees).
+    fn root_pose(&self) -> Option<(Vec3, f64)> {
+        let world = self.world.try_borrow().ok()?;
+        let root = world.find_first_child(self.character?, ROOT_PART)?;
+        match (world.get(root, "Position"), world.get(root, "Orientation")) {
+            (Ok(Value::Vector3(p)), Ok(Value::Vector3(o))) => Some((p, o.y)),
+            _ => None,
+        }
+    }
+
+    /// The local character's `HumanoidRootPart` position, if it has one.
+    pub fn root_position(&self) -> Option<Vec3> {
         let world = self.world.try_borrow().ok()?;
         let root = world.find_first_child(self.character?, ROOT_PART)?;
         match world.get(root, "Position") {
@@ -487,5 +543,115 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
         {
             world.destroy(copy);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::locomotion::State;
+
+    struct Silent;
+    impl OutputSink for Silent {
+        fn print(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    /// A started game on a flat baseplate whose top is at y = 0.
+    fn game() -> Game {
+        let mut w = World::new_with_services();
+        let ws = w.root("Workspace").unwrap();
+        let floor = w.create("Part", Some(ws)).unwrap();
+        w.set(floor, "Size", Value::Vector3(Vec3::new(400.0, 1.0, 400.0)))
+            .unwrap();
+        w.set(floor, "Position", Value::Vector3(Vec3::new(0.0, -0.5, 0.0)))
+            .unwrap();
+        w.set(floor, "Anchored", Value::Bool(true)).unwrap();
+        let mut g = Game::from_world("test".into(), w, Rc::new(Silent));
+        g.start().unwrap();
+        g
+    }
+
+    fn run(g: &mut Game, input: FrameInput, seconds: f64) {
+        for _ in 0..(seconds / TICK).round() as usize {
+            g.frame(&input, TICK);
+        }
+    }
+
+    fn avatar(g: &Game) -> &Avatar {
+        &g.avatar.as_ref().expect("the character has an avatar").1
+    }
+
+    #[test]
+    fn the_avatar_stands_on_the_floor_and_follows_the_character() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.5);
+        let a = avatar(&g);
+        assert!(a.feet().y.abs() < 0.05, "feet at {}", a.feet().y);
+        assert_eq!(a.locomotion().state(), State::Ground);
+        // Walk forward (-Z): the avatar moves with the root.
+        let forward = FrameInput {
+            movement: [0.0, 1.0],
+            ..FrameInput::default()
+        };
+        run(&mut g, forward, 1.0);
+        let root = g.root_position().unwrap();
+        let feet = avatar(&g).feet();
+        assert!((f64::from(feet.z) - root.z).abs() < 1e-3);
+        assert!(root.z < -10.0, "walked {root:?}");
+    }
+
+    #[test]
+    fn the_avatar_turns_smoothly_toward_the_move_direction() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.2);
+        assert!(avatar(&g).yaw().abs() < 1e-4);
+        // Walk right (+X): the physics faces yaw -90 degrees at once; the avatar turns over a
+        // few frames.
+        let right = FrameInput {
+            movement: [1.0, 0.0],
+            ..FrameInput::default()
+        };
+        g.frame(&right, TICK);
+        let turned = |g: &Game| {
+            let y = avatar(g).yaw();
+            (y - std::f32::consts::TAU).abs().min(y.abs())
+        };
+        let first = turned(&g);
+        assert!(
+            first > 0.05 && first < 1.0,
+            "first frame turned {first} rad"
+        );
+        run(&mut g, right, 0.3);
+        assert!(
+            (turned(&g) - std::f32::consts::FRAC_PI_2).abs() < 0.02,
+            "turned {}",
+            turned(&g)
+        );
+    }
+
+    #[test]
+    fn jumping_plays_jump_then_lands() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.3);
+        let jump = FrameInput {
+            jump: true,
+            ..FrameInput::default()
+        };
+        g.frame(&jump, TICK);
+        assert_eq!(avatar(&g).locomotion().state(), State::Jump);
+        // Apex after 0.25 s, back down after about 0.5 s.
+        let mut seen = Vec::new();
+        for _ in 0..60 {
+            g.frame(&FrameInput::default(), TICK);
+            let s = avatar(&g).locomotion().state();
+            if seen.last() != Some(&s) {
+                seen.push(s);
+            }
+        }
+        assert_eq!(seen, [State::Jump, State::Fall, State::Land]);
+        run(&mut g, FrameInput::default(), 0.6);
+        assert_eq!(avatar(&g).locomotion().state(), State::Ground);
     }
 }

@@ -1,0 +1,16 @@
+[package]
+name = "metallic_vfx_editor"
+description = "Metallic VFX editor: module stack, node graph, curve and gradient widgets, live preview (egui)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+metallic_vfx = { path = "../metallic_vfx" }
+egui.workspace = true
+
+[dev-dependencies]
+eframe.workspace = true
+egui_kittest.workspace = true
+image.workspace = true

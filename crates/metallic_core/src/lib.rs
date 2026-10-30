@@ -7,6 +7,8 @@
 //! destroyed. [`World::get_ref`] borrows values and shared defaults without cloning;
 //! [`World::get`] retains the owned-value interface. Scenes are saved to and loaded from a diff-friendly text file
 //! ([`save_scene`], [`load_scene`]).
+//! [`World::set`] rejects non-finite numeric components before changing state, recording a
+//! journal entry, or dispatching a property-change signal.
 #![warn(missing_docs)]
 
 pub mod classes;
@@ -44,7 +46,8 @@ pub enum CoreError {
         /// Type name of the value given.
         found: String,
     },
-    /// The value has the right type but is not allowed (for example an unknown material).
+    /// The value has the right type but is not allowed (for example an unknown material or a
+    /// non-finite numeric component).
     #[error("invalid value for `{property}`: {reason}")]
     InvalidValue {
         /// Property name.

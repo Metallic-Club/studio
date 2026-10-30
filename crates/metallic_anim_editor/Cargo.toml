@@ -1,0 +1,18 @@
+[package]
+name = "metallic_anim_editor"
+description = "egui animation editor widgets for Metallic Studio: dope sheet, curve editor, transport, rig preview."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+egui = "0.37.0"
+metallic_anim = { path = "../metallic_anim" }
+
+[dev-dependencies]
+# No `default_fonts` / `system_fonts`: the bundled font crate's licence fails deny.toml, so the
+# demo loads installed fonts at runtime (see `theme::install_system_fonts`).
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "links", "wayland", "wgpu", "x11"] }
+egui_kittest = { version = "0.37.0", features = ["wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

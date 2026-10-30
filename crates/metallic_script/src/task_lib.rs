@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mlua::{Error, Function, IntoLuaMulti, LightUserData, Lua, MultiValue, Result, Thread, Value};
 
@@ -49,6 +49,8 @@ struct Pending {
 pub(crate) struct Scheduler {
     pub(crate) now: Cell<f64>,
     pub(crate) deadline: Cell<Option<Instant>>,
+    /// Time one resume may run ([`RESUME_BUDGET`] unless the host changed it).
+    pub(crate) resume_budget: Cell<Duration>,
     /// Set by the interrupt hook when the budget ran out: `"<chunk>:<line>: "` of the
     /// running code (possibly empty).
     pub(crate) timeout_loc: RefCell<Option<String>>,
@@ -69,6 +71,7 @@ impl Scheduler {
         Scheduler {
             now: Cell::new(0.0),
             deadline: Cell::new(None),
+            resume_budget: Cell::new(RESUME_BUDGET),
             timeout_loc: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
             owners: RefCell::new(HashMap::new()),
@@ -205,7 +208,7 @@ impl Scheduler {
         if prev.is_none() {
             *self.timeout_loc.borrow_mut() = None;
         }
-        let mine = Instant::now() + RESUME_BUDGET;
+        let mine = Instant::now() + self.resume_budget.get();
         self.deadline.set(Some(prev.map_or(mine, |p| p.min(mine))));
         let out = run();
         self.deadline.set(prev);

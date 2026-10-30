@@ -70,7 +70,9 @@ their emitter sets (#41).
 
 ### 1.3 Frame order
 
-The renderer runs a Look in this order. Each step reads the named Look field.
+The renderer runs a Look in this order. Each step reads the named Look field. The exact sample-count and
+attachment contract for EDGE is in [styles research section 4.3](../research/2026-10-30-rendering-styles-vfx-animation.md#43-depthnormal-inputs-for-post-edges-109):
+1x prepass under MSAA, stored opaque MRT without MSAA. This remains design work for #62/#65.
 
 ```
  1 shadows            lighting.shadows, tier cascades

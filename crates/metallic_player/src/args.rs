@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 /// Usage text printed for bad arguments.
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
-[--headless --frames N] [--quality low|high] [--fps] [--frames N] [--capture FRAME:PNG]... \
-[--capture-view X,Y,Z,LX,LY,LZ]";
+[--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
+[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ]";
 
 /// Parsed arguments.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,6 +22,9 @@ pub struct Args {
     pub quality: Quality,
     /// Measure frame rate for 60 s (fixed 1920x1080 window, no vsync).
     pub fps: bool,
+    /// Play without a person: run forward in a circle and jump every few seconds (to measure the
+    /// frame rate with the character animating).
+    pub autopilot: bool,
     /// Frames to save as PNG: (frame number, path).
     pub captures: Vec<(u64, PathBuf)>,
     /// Camera position and look-at point for captured frames instead of the game camera (for
@@ -40,6 +43,7 @@ impl Args {
             frames: None,
             quality: Quality::High,
             fps: false,
+            autopilot: false,
             captures: Vec::new(),
             capture_view: None,
         };
@@ -49,6 +53,7 @@ impl Args {
                 "--scene" => args.scene = Some(PathBuf::from(value("--scene")?)),
                 "--headless" => args.headless = true,
                 "--fps" => args.fps = true,
+                "--autopilot" => args.autopilot = true,
                 "--frames" => {
                     let v = value("--frames")?;
                     args.frames = Some(v.parse().map_err(|_| format!("bad frame count `{v}`"))?);
@@ -115,6 +120,13 @@ mod tests {
         let a = parse("p --capture 120:C:/shots/start.png --quality low").unwrap();
         assert_eq!(a.captures, vec![(120, PathBuf::from("C:/shots/start.png"))]);
         assert_eq!(a.quality, Quality::Low);
+    }
+
+    #[test]
+    fn parses_the_running_fps_command() {
+        let a = parse("templates/parkour --fps --autopilot").unwrap();
+        assert!(a.fps && a.autopilot);
+        assert!(!parse("p").unwrap().autopilot);
     }
 
     #[test]
