@@ -5,6 +5,9 @@ Status: **reproduced on both baselines; focused checks passed, wider gates pendi
 Branch: `studio/262-runtime-physics-membership`; base main
 `69a10d386bd1a662cc7e0f7b55bd6edb824b57e4`. Relevant runtime/core source is unchanged
 from `fd164c2`. Issue freshly checked, unclaimed, then claimed by this worker.
+Before wider gates, rebased onto new main `e3e5d7802e5238362f194651629696303c2c6843`,
+which includes the wave crates, default skinned avatar, quota isolation and pattern
+budget fixes. Earlier focused/baseline results below remain tied to their original base.
 
 ## Problem and evidence boundary
 
@@ -44,6 +47,17 @@ retain the proven observation controls. Production APIs/dependencies are unchang
 all seven private structural/lifecycle tests passed (0.13 s), and all six public
 runtime cases passed (0.55 s), including creation, removal and reparent-in/out while
 both ordinary/character controls remain valid.
+
+Rebase resolutions preserve main's Avatar/default_model and locomotion imports, avatar
+field/initializer, update_avatar/root_pose/root_position, skinned rendering, frame
+update and avatar tests. Both runtime module sets and architecture descriptions are
+retained; only the intended cache extraction/wiring differs from new main.
+
+Root-worker review requested removal of redundant ordinary-tick candidate hashing.
+The direct path now consumes World's already deduplicated journal IDs. Only a net
+Model-membership transition builds a subtree union set; cfg(test)-only counters verify
+zero unions on ordinary writes/pose ticks. After rebase and this change, all seven
+private cases passed again (0.20 s) and all six public cases passed again (0.67 s).
 
 The large-scene private test records no physics sync/full scan/part reads for ordinary
 Humanoid property updates. Part pose/color changes read only that part and do not

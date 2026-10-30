@@ -37,6 +37,7 @@ struct SyncWork {
     subtree_instances: usize,
     part_reads: usize,
     physics_syncs: usize,
+    candidate_unions: usize,
 }
 
 impl PhysicsSyncCache {
@@ -162,14 +163,30 @@ impl PhysicsSyncCache {
                 self.humanoids.insert(id, model);
             }
         }
+        let changed_models: Vec<_> = before
+            .into_iter()
+            .filter_map(|(model, was_character)| {
+                (was_character != self.model_humanoids.contains_key(&model)).then_some(model)
+            })
+            .collect();
+        if changed_models.is_empty() {
+            // World already deduplicates journal IDs. Ordinary pose/property ticks need no
+            // second hash set; only subtree expansion below requires a candidate union.
+            let mut changed = false;
+            for id in ids {
+                changed |= self.refresh_part(world, id);
+            }
+            return changed;
+        }
+        #[cfg(test)]
+        {
+            self.work.candidate_unions += 1;
+        }
         let mut candidates: HashSet<_> = ids
             .into_iter()
             .filter(|id| self.parts.contains_key(id) || world.is_a(*id, "BasePart"))
             .collect();
-        for (model, was_character) in before {
-            if was_character == self.model_humanoids.contains_key(&model) {
-                continue;
-            }
+        for model in changed_models {
             let mut stack = world.children(model).to_vec();
             while let Some(id) = stack.pop() {
                 #[cfg(test)]
@@ -184,20 +201,24 @@ impl PhysicsSyncCache {
         }
         let mut changed = false;
         for id in candidates {
-            let shape = self
-                .membership(world, id)
-                .map(|character| self.read_shape(world, id, character));
-            if self.parts.get(&id) == shape.as_ref() {
-                continue;
-            }
-            changed = true;
-            if let Some(shape) = shape {
-                self.parts.insert(id, shape);
-            } else {
-                self.parts.remove(&id);
-            }
+            changed |= self.refresh_part(world, id);
         }
         changed
+    }
+
+    fn refresh_part(&mut self, world: &World, id: InstanceId) -> bool {
+        let shape = self
+            .membership(world, id)
+            .map(|character| self.read_shape(world, id, character));
+        if self.parts.get(&id) == shape.as_ref() {
+            return false;
+        }
+        if let Some(shape) = shape {
+            self.parts.insert(id, shape);
+        } else {
+            self.parts.remove(&id);
+        }
+        true
     }
 
     fn membership(&self, world: &World, id: InstanceId) -> Option<bool> {

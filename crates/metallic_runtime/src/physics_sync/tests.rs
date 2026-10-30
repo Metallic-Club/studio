@@ -98,6 +98,7 @@ fn membership_transitions_only_inspect_the_affected_model_and_sync_once() {
     assert_eq!(cache.work.full_instances, 0);
     assert_eq!(cache.work.part_reads, 2);
     assert_eq!(cache.work.physics_syncs, 1);
+    assert_eq!(cache.work.candidate_unions, 1);
 
     world.destroy(humanoid);
     cache.synchronize(&mut physics, &world, false);
