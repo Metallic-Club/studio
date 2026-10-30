@@ -1,0 +1,31 @@
+name: Release helper checks
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release*.yml"
+      - "tools/release.py"
+      - "tools/test_release.py"
+      - "crates/metallic_studio/Cargo.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release*.yml"
+      - "tools/release.py"
+      - "tools/test_release.py"
+      - "crates/metallic_studio/Cargo.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Test release phase and workflow credential boundaries
+        run: python -I tools/test_release.py

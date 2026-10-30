@@ -45,6 +45,8 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   Updater (Task 13): `updater.rs` (`UpdateChecker::check/check_quietly/download/apply_and_restart`, GitHub Releases feed via
   an injectable `HttpClient`, Velopack for download and apply) and `github_auth.rs` (device sign-in, token in Credential
   Manager behind `SecretStore`). Release pipeline: `tools/release.py`, `.github/workflows/release.yml`, `docs/releasing.md`.
+  Release Cargo builds run on a read-only runner without publishing credentials or a release cache. A separate fresh
+  publisher checks out the same SHA and packs/uploads a single immutable binary artifact; it never invokes Cargo.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
