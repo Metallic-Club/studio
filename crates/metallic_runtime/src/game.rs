@@ -549,7 +549,7 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::locomotion::State;
+    use crate::locomotion::state;
 
     struct Silent;
     impl OutputSink for Silent {
@@ -589,7 +589,7 @@ mod tests {
         run(&mut g, FrameInput::default(), 0.5);
         let a = avatar(&g);
         assert!(a.feet().y.abs() < 0.05, "feet at {}", a.feet().y);
-        assert_eq!(a.locomotion().state(), State::Ground);
+        assert_eq!(a.locomotion().state(), state::GROUND);
         // Walk forward (-Z): the avatar moves with the root.
         let forward = FrameInput {
             movement: [0.0, 1.0],
@@ -640,18 +640,18 @@ mod tests {
             ..FrameInput::default()
         };
         g.frame(&jump, TICK);
-        assert_eq!(avatar(&g).locomotion().state(), State::Jump);
+        assert_eq!(avatar(&g).locomotion().state(), state::JUMP);
         // Apex after 0.25 s, back down after about 0.5 s.
-        let mut seen = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
         for _ in 0..60 {
             g.frame(&FrameInput::default(), TICK);
-            let s = avatar(&g).locomotion().state();
+            let s = avatar(&g).locomotion().state().to_owned();
             if seen.last() != Some(&s) {
                 seen.push(s);
             }
         }
-        assert_eq!(seen, [State::Jump, State::Fall, State::Land]);
+        assert_eq!(seen, [state::JUMP, state::FALL, state::LAND]);
         run(&mut g, FrameInput::default(), 0.6);
-        assert_eq!(avatar(&g).locomotion().state(), State::Ground);
+        assert_eq!(avatar(&g).locomotion().state(), state::GROUND);
     }
 }

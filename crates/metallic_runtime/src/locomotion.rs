@@ -1,32 +1,35 @@
-//! The built-in locomotion animation controller: picks and blends the default avatar's clips from
-//! the character's speed and whether it is on the ground.
+//! The default avatar's locomotion controller: a [`metallic_anim::StateMachine`] over the
+//! avatar's clips, driven by the character's speed and ground state.
 //!
-//! States and transitions:
-//! - **Ground**: idle, `walk_slow`, `walk` and `run` blended by horizontal speed. Each pair of
-//!   neighbours in [`GAITS`] is mixed linearly between their speeds (0, 6, 16 and 24 studs/s). The
-//!   three gait clips share one normalised phase (left heel strike at 0, right at 0.5), advanced
-//!   by speed divided by the blended stride, so at every speed the planted foot moves backward as
-//!   fast as the character moves forward: no foot sliding.
-//! - **Jump**: on take-off. The clip starts at its launch frame ([`JUMP_LAUNCH`]): the physics
-//!   jumps the moment the button is pressed, so the anticipation crouch before it is skipped.
-//! - **Fall**: when the jump clip has played out, or after [`FALL_DELAY`] in the air without a
-//!   jump (walking off a ledge; short drops down steps stay on the ground pose).
-//! - **Land**: on touchdown; back to Ground when the clip ends, or after [`LAND_HOLD_MOVING`] when
-//!   the character is already moving again.
+//! States and transitions (blend times in seconds, crossfaded by `metallic_anim`):
+//! - **Ground**: a 1D blend on `Speed` of idle, `walk_slow`, `walk` and `run` placed at 0, 6, 16
+//!   and 24 studs/s ([`GAITS`]). The clips share one normalised phase (left heel strike at 0,
+//!   right at 0.5) and each is authored for its own speed, so at those speeds the planted foot
+//!   moves backward as fast as the character moves forward: no foot sliding.
+//! - **Jump**: on take-off (the `Jump` trigger, 0.1). The clip starts at its launch frame
+//!   ([`JUMP_LAUNCH`]): the physics jumps the moment the button is pressed, so the anticipation
+//!   crouch before it is skipped.
+//! - **Fall**: when the jump clip has played out (0.2), or after [`FALL_DELAY`] in the air without
+//!   a jump (walking off a ledge; short drops down steps stay on the ground pose).
+//! - **Land**: on touchdown (0.1); back to Ground (0.2) when the clip ends, or after
+//!   [`LAND_HOLD_MOVING`] when the character is already moving again.
 //!
-//! Every state change crossfades from the last shown pose over 0.1 to 0.2 s (smoothstep), so
-//! nothing pops. A dead character's pose is held.
+//! A dead character's pose is held.
 //!
 //! Climb and swim clips exist in the asset, but the character controller has no climbing or
-//! swimming state yet (`HumanoidState` is Running, Jumping, Freefall or Dead). TODO: add Climb and
-//! Swim states here, or in #40's state machine, once the controller reports them.
+//! swimming state yet (`HumanoidState` is Running, Jumping, Freefall or Dead), so the machine has
+//! no such states. The jump has no take-off window either: that needs the physics impulse
+//! delayed, which is not an animation matter.
 //!
-//! Replacing this with `metallic_anim` (#40): the avatar only calls
-//! [`Locomotion::update`]`(model, input, dt, pose)` once per frame with a [`LocomotionInput`]
-//! (speed and ground state) and draws the [`Pose`] it gets back. A `metallic_anim` state machine
-//! that takes the same two parameters and writes a pose can take its place in
-//! `crate::avatar::Avatar` without touching the renderer or the game loop.
+//! The state machine only picks clips, times and weights. The clips themselves stay the asset's
+//! own ([`metallic_render::metallic_asset`]); the machine is built over name-and-length stand-ins
+//! for them and its [`MotionSample`]s are sampled from the asset clips and blended here.
+use metallic_anim::{
+    Clip, Condition, LoopMode, Motion, Parameter, ParameterValue, State, StateMachine,
+    StateMachinePlayer, Transition,
+};
 use metallic_render::metallic_asset::{Pose, SkinnedModel};
+use std::sync::Arc;
 
 /// Gait clips and the speed (studs/s) each is authored for, slowest first. Idle sits at 0.
 pub(crate) const GAITS: [(&str, f32); 3] = [("walk_slow", 6.0), ("walk", 16.0), ("run", 24.0)];
@@ -70,103 +73,217 @@ pub(crate) struct LocomotionInput {
     pub support: Support,
 }
 
-/// The controller's state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum State {
-    /// Idle and gaits blended by speed.
-    Ground,
-    /// The jump clip after take-off.
-    Jump,
-    /// The fall loop.
-    Fall,
-    /// The landing clip.
-    Land,
+/// State names of [`machine`].
+pub(crate) mod state {
+    pub const GROUND: &str = "Ground";
+    pub const JUMP: &str = "Jump";
+    pub const FALL: &str = "Fall";
+    pub const LAND: &str = "Land";
 }
 
-/// Clip indices into `SkinnedModel::clips`; `None` when the asset lacks the clip (the rest pose
-/// stands in).
-struct Clips {
-    idle: Option<usize>,
-    gaits: [Option<usize>; 3],
-    jump: Option<usize>,
-    fall: Option<usize>,
-    land: Option<usize>,
-    /// Distance in studs one cycle of each gait covers: its speed times its clip length.
-    strides: [f32; 3],
+/// The locomotion state machine. `land_length` is the land clip's length in seconds (the moving
+/// landing leaves after [`LAND_HOLD_MOVING`] of it).
+fn machine(land_length: f32) -> StateMachine {
+    let clip = |name: &str| State {
+        name: name.into(),
+        motion: Motion::Clip(name.to_lowercase()),
+        speed: 1.0,
+    };
+    let mut points = vec![(0.0, "idle".to_owned())];
+    points.extend(GAITS.map(|(name, speed)| (speed, name.to_owned())));
+    let tr = |from: Option<&str>, to: &str, conditions: Vec<Condition>, blend_time, exit_time| {
+        Transition {
+            from: from.map(Into::into),
+            to: to.into(),
+            conditions,
+            blend_time,
+            exit_time,
+        }
+    };
+    let grounded = || Condition::Is("Grounded".into(), true);
+    let in_air = || Condition::Greater("AirTime".into(), FALL_DELAY);
+    StateMachine {
+        parameters: vec![
+            Parameter {
+                name: "Speed".into(),
+                default: ParameterValue::Float(0.0),
+            },
+            Parameter {
+                name: "AirTime".into(),
+                default: ParameterValue::Float(0.0),
+            },
+            Parameter {
+                name: "Grounded".into(),
+                default: ParameterValue::Bool(true),
+            },
+            Parameter {
+                name: "Jump".into(),
+                default: ParameterValue::Trigger,
+            },
+        ],
+        states: vec![
+            State {
+                name: state::GROUND.into(),
+                motion: Motion::Blend1D {
+                    parameter: "Speed".into(),
+                    points,
+                },
+                speed: 1.0,
+            },
+            clip(state::JUMP),
+            clip(state::FALL),
+            clip(state::LAND),
+        ],
+        entry: state::GROUND.into(),
+        transitions: vec![
+            tr(
+                None,
+                state::JUMP,
+                vec![Condition::Triggered("Jump".into())],
+                FADE_TAKEOFF,
+                None,
+            ),
+            tr(
+                Some(state::JUMP),
+                state::LAND,
+                vec![grounded()],
+                FADE_LAND,
+                None,
+            ),
+            tr(
+                Some(state::FALL),
+                state::LAND,
+                vec![grounded()],
+                FADE_LAND,
+                None,
+            ),
+            tr(
+                Some(state::JUMP),
+                state::FALL,
+                vec![],
+                FADE_TO_FALL,
+                Some(1.0),
+            ),
+            tr(
+                Some(state::GROUND),
+                state::FALL,
+                vec![in_air()],
+                FADE_TO_FALL,
+                None,
+            ),
+            tr(
+                Some(state::LAND),
+                state::FALL,
+                vec![in_air()],
+                FADE_TO_FALL,
+                None,
+            ),
+            tr(
+                Some(state::LAND),
+                state::GROUND,
+                vec![grounded()],
+                FADE_LAND_OUT,
+                Some(1.0),
+            ),
+            tr(
+                Some(state::LAND),
+                state::GROUND,
+                vec![grounded(), Condition::Greater("Speed".into(), MOVING)],
+                FADE_LAND_OUT,
+                Some(LAND_HOLD_MOVING / land_length.max(1e-3)),
+            ),
+        ],
+    }
 }
 
-/// Picks, times and blends the locomotion clips of one character.
+/// Picks, times and blends the locomotion clips of one character. Without a player the asset
+/// lacks a clip the machine needs, and the rest pose stands in.
 pub(crate) struct Locomotion {
-    clips: Clips,
-    state: State,
-    /// Seconds in the current state.
-    state_time: f32,
-    /// Seconds in the air (0 on the ground).
-    air_time: f32,
-    /// Idle clip time.
-    idle_time: f32,
-    /// Shared gait phase, 0..1.
-    phase: f32,
-    /// The two ground clips blended last frame and the weight of the second.
-    ground_mix: (Option<usize>, Option<usize>, f32),
-    /// Pose shown when the current crossfade started, and the fade's progress and length.
-    fade_from: Pose,
-    fade: Option<(f32, f32)>,
+    player: Option<StateMachinePlayer>,
+    /// Per player clip: index into `SkinnedModel::clips` and seconds to add to the player's clip
+    /// time (the jump clip starts at its launch frame).
+    sources: Vec<(usize, f32)>,
     scratch: Pose,
+    air_time: f32,
     last_support: Support,
 }
 
 impl Locomotion {
     /// A controller for `model`, standing idle.
     pub fn new(model: &SkinnedModel) -> Locomotion {
-        let find = |name: &str| model.clips.iter().position(|c| c.name == name);
-        let rest = Pose::rest(&model.skeleton);
-        let gaits = GAITS.map(|(name, _)| find(name));
-        let mut strides = [0.0; 3];
-        for (i, (clip, (_, speed))) in gaits.iter().zip(GAITS).enumerate() {
-            strides[i] = speed
-                * clip
-                    .and_then(|c| model.clips.get(c))
-                    .map_or(0.0, |c| c.duration);
+        let mut sources = Vec::new();
+        let mut clips = Vec::new();
+        let mut land_length = 0.0;
+        let named = [
+            ("idle", true),
+            ("jump", false),
+            ("fall", true),
+            ("land", false),
+        ];
+        for (name, looped) in named.into_iter().chain(GAITS.map(|(n, _)| (n, true))) {
+            let Some(i) = model.clips.iter().position(|c| c.name == name) else {
+                eprintln!("warning: the avatar has no `{name}` clip; it stays in its rest pose");
+                return Locomotion::without_player(model);
+            };
+            let (offset, duration) = match name {
+                "jump" => (
+                    JUMP_LAUNCH,
+                    (model.clips[i].duration - JUMP_LAUNCH).max(0.0),
+                ),
+                _ => (0.0, model.clips[i].duration),
+            };
+            if name == "land" {
+                land_length = duration;
+            }
+            let mut clip = Clip::new(name, duration);
+            clip.loop_mode = if looped {
+                LoopMode::Loop
+            } else {
+                LoopMode::Once
+            };
+            clips.push(Arc::new(clip));
+            sources.push((i, offset));
         }
+        let player = StateMachinePlayer::new(&machine(land_length), clips)
+            .map_err(|e| eprintln!("warning: the avatar's animation machine is invalid ({e})"))
+            .ok();
         Locomotion {
-            clips: Clips {
-                idle: find("idle"),
-                gaits,
-                jump: find("jump"),
-                fall: find("fall"),
-                land: find("land"),
-                strides,
-            },
-            state: State::Ground,
-            state_time: 0.0,
+            player,
+            sources,
+            ..Locomotion::without_player(model)
+        }
+    }
+
+    fn without_player(model: &SkinnedModel) -> Locomotion {
+        Locomotion {
+            player: None,
+            sources: Vec::new(),
+            scratch: Pose::rest(&model.skeleton),
             air_time: 0.0,
-            idle_time: 0.0,
-            phase: 0.0,
-            ground_mix: (None, None, 0.0),
-            fade_from: rest.clone(),
-            fade: None,
-            scratch: rest,
             last_support: Support::Grounded,
         }
     }
 
-    /// The current state.
+    /// The current state's name (see [`state`]).
     #[cfg(test)]
-    pub fn state(&self) -> State {
-        self.state
+    pub fn state(&self) -> &str {
+        self.player.as_ref().map_or("", |p| p.current_state())
     }
 
-    /// The ground clips mixed in the last update (by clip index) and the second one's weight.
+    /// True while a crossfade is running.
     #[cfg(test)]
-    pub fn ground_mix(&self) -> (Option<usize>, Option<usize>, f32) {
-        self.ground_mix
+    pub fn is_blending(&self) -> bool {
+        self.player
+            .as_ref()
+            .is_some_and(StateMachinePlayer::is_blending)
     }
 
-    /// Progress of the running crossfade (0 just started, 1 or `None` done).
+    /// The clips mixed now.
     #[cfg(test)]
-    pub fn fade_progress(&self) -> Option<f32> {
-        self.fade.map(|(t, len)| (t / len).min(1.0))
+    pub fn motion_samples(&self) -> Vec<metallic_anim::MotionSample> {
+        self.player
+            .as_ref()
+            .map_or_else(Vec::new, StateMachinePlayer::motion_samples)
     }
 
     /// Advances by `dt` seconds and writes the pose to show into `pose` (which must belong to
@@ -182,8 +299,12 @@ impl Locomotion {
         if input.support == Support::Frozen {
             return;
         }
-        let speed = if input.speed.is_finite() {
-            input.speed.max(0.0)
+        let Some(player) = self.player.as_mut() else {
+            pose.locals.clone_from(&model.skeleton.rest);
+            return;
+        };
+        let speed = if input.speed.is_finite() && input.speed > STILL {
+            input.speed
         } else {
             0.0
         };
@@ -191,139 +312,29 @@ impl Locomotion {
             Support::Grounded => 0.0,
             _ => self.air_time + dt,
         };
-        let took_off = input.support == Support::Rising && self.last_support != Support::Rising;
+        // The names are the machine's own, checked when it was built.
+        if input.support == Support::Rising && self.last_support != Support::Rising {
+            let _ = player.fire("Jump");
+        }
         self.last_support = input.support;
-        self.state_time += dt;
-        self.idle_time += dt;
-        self.advance_phase(speed, dt);
+        let _ = player.set_float("Speed", speed);
+        let _ = player.set_float("AirTime", self.air_time);
+        let _ = player.set_bool("Grounded", input.support == Support::Grounded);
+        player.update(dt);
 
-        let next = match (self.state, input.support) {
-            (_, Support::Rising) if took_off => Some((State::Jump, FADE_TAKEOFF)),
-            (State::Jump | State::Fall, Support::Grounded) => Some((State::Land, FADE_LAND)),
-            (State::Jump, _) if self.state_time >= self.jump_length(model) => {
-                Some((State::Fall, FADE_TO_FALL))
-            }
-            (State::Ground | State::Land, Support::Falling) if self.air_time >= FALL_DELAY => {
-                Some((State::Fall, FADE_TO_FALL))
-            }
-            (State::Land, Support::Grounded)
-                if self.state_time >= self.clip_length(model, self.clips.land)
-                    || (speed > MOVING && self.state_time >= LAND_HOLD_MOVING) =>
-            {
-                Some((State::Ground, FADE_LAND_OUT))
-            }
-            _ => None,
-        };
-        if let Some((state, fade)) = next {
-            // Fade from what is on screen now.
-            self.fade_from.locals.clone_from(&pose.locals);
-            self.fade = Some((0.0, fade));
-            self.state = state;
-            self.state_time = 0.0;
-        }
-
-        self.sample_state(model, speed, pose);
-        if let Some((t, len)) = self.fade {
-            let t = t + dt;
-            let u = (t / len).clamp(0.0, 1.0);
-            let w = u * u * (3.0 - 2.0 * u);
-            self.scratch.locals.clone_from(&self.fade_from.locals);
-            self.scratch.blend(pose, w);
-            pose.locals.clone_from(&self.scratch.locals);
-            self.fade = (u < 1.0).then_some((t, len));
+        // Blend the asset clips by the machine's weights (a running weighted average).
+        pose.locals.clone_from(&model.skeleton.rest);
+        let mut accumulated = 0.0;
+        for s in player.motion_samples() {
+            let Some(&(clip, offset)) = self.sources.get(s.clip) else {
+                continue;
+            };
+            self.scratch.locals.clone_from(&model.skeleton.rest);
+            model.clips[clip].sample(s.time + offset, &mut self.scratch);
+            accumulated += s.weight;
+            pose.blend(&self.scratch, s.weight / accumulated);
         }
     }
-
-    fn clip_length(&self, model: &SkinnedModel, clip: Option<usize>) -> f32 {
-        clip.and_then(|c| model.clips.get(c))
-            .map_or(0.0, |c| c.duration)
-    }
-
-    /// Time the jump clip plays after the launch frame.
-    fn jump_length(&self, model: &SkinnedModel) -> f32 {
-        (self.clip_length(model, self.clips.jump) - JUMP_LAUNCH).max(0.0)
-    }
-
-    /// Advances the shared gait phase by the distance covered over the blended stride.
-    fn advance_phase(&mut self, speed: f32, dt: f32) {
-        let (a, b, w) = gait_segment(speed);
-        let stride_of = |g: Option<usize>| g.map(|i| self.clips.strides[i]);
-        let stride = match (stride_of(a), stride_of(b)) {
-            (Some(sa), Some(sb)) => sa + (sb - sa) * w,
-            // Between idle and the slowest gait the gait keeps its own stride.
-            (None, Some(s)) | (Some(s), None) => s,
-            (None, None) => return,
-        };
-        if stride > 1e-4 {
-            self.phase = (self.phase + speed * dt / stride).rem_euclid(1.0);
-        }
-    }
-
-    fn sample_state(&mut self, model: &SkinnedModel, speed: f32, pose: &mut Pose) {
-        match self.state {
-            State::Ground => {
-                let (a, b, w) = gait_segment(speed);
-                let clip_a = a.map_or(self.clips.idle, |i| self.clips.gaits[i]);
-                let clip_b = b.map_or(self.clips.idle, |i| self.clips.gaits[i]);
-                self.ground_mix = (clip_a, clip_b, w);
-                let ta = self.ground_time(model, a);
-                let tb = self.ground_time(model, b);
-                sample(model, clip_a, ta, true, pose);
-                if w > 0.0 {
-                    sample(model, clip_b, tb, true, &mut self.scratch);
-                    pose.blend(&self.scratch, w);
-                }
-            }
-            State::Jump => sample(
-                model,
-                self.clips.jump,
-                JUMP_LAUNCH + self.state_time,
-                false,
-                pose,
-            ),
-            State::Fall => sample(model, self.clips.fall, self.state_time, true, pose),
-            State::Land => sample(model, self.clips.land, self.state_time, false, pose),
-        }
-    }
-
-    /// Clip time for a ground clip: gaits follow the shared phase, idle its own clock.
-    fn ground_time(&self, model: &SkinnedModel, gait: Option<usize>) -> f32 {
-        match gait {
-            Some(i) => self.phase * self.clip_length(model, self.clips.gaits[i]),
-            None => self.idle_time,
-        }
-    }
-}
-
-/// The two neighbouring ground entries around `speed` and the weight of the second: `None` is
-/// idle, `Some(i)` is `GAITS[i]`.
-pub(crate) fn gait_segment(speed: f32) -> (Option<usize>, Option<usize>, f32) {
-    if speed <= STILL {
-        return (None, None, 0.0);
-    }
-    let mut lower: (Option<usize>, f32) = (None, 0.0);
-    for (i, &(_, v)) in GAITS.iter().enumerate() {
-        if speed < v {
-            let w = (speed - lower.1) / (v - lower.1);
-            return (lower.0, Some(i), w);
-        }
-        lower = (Some(i), v);
-    }
-    (lower.0, lower.0, 0.0)
-}
-
-/// Samples clip `clip` at `time` (wrapped when `looped`) over the rest pose.
-fn sample(model: &SkinnedModel, clip: Option<usize>, time: f32, looped: bool, pose: &mut Pose) {
-    pose.locals.clone_from(&model.skeleton.rest);
-    let Some(c) = clip.and_then(|c| model.clips.get(c)) else {
-        return;
-    };
-    let t = if looped && c.duration > 0.0 {
-        time.rem_euclid(c.duration)
-    } else {
-        time
-    };
-    c.sample(t, pose);
 }
 
 #[cfg(test)]
@@ -331,7 +342,6 @@ mod tests {
     use super::*;
     use crate::avatar::{STUD_METRES, default_model};
     use metallic_render::glam::{Mat4, Vec3};
-    use std::sync::Arc;
 
     const DT: f32 = 1.0 / 60.0;
 
@@ -349,33 +359,48 @@ mod tests {
         }
     }
 
-    fn clip_name(m: &SkinnedModel, c: Option<usize>) -> &str {
-        c.map_or("-", |i| m.clips[i].name.as_str())
+    /// Weights of the clips mixed now, by clip name.
+    fn mix(l: &Locomotion) -> Vec<(String, f32)> {
+        let player = l.player.as_ref().unwrap();
+        l.motion_samples()
+            .iter()
+            .map(|s| (player.clips()[s.clip].name.clone(), s.weight))
+            .collect()
+    }
+
+    fn weight_of(l: &Locomotion, clip: &str) -> f32 {
+        mix(l)
+            .iter()
+            .filter(|(n, _)| n == clip)
+            .map(|(_, w)| w)
+            .sum()
     }
 
     #[test]
     fn speed_picks_and_weights_the_ground_clips() {
-        assert_eq!(gait_segment(0.0), (None, None, 0.0));
-        assert_eq!(gait_segment(3.0), (None, Some(0), 0.5));
-        assert_eq!(gait_segment(11.0), (Some(0), Some(1), 0.5));
-        assert_eq!(gait_segment(20.0), (Some(1), Some(2), 0.5));
-        assert_eq!(gait_segment(40.0), (Some(2), Some(2), 0.0));
         let m = model();
         let mut l = Locomotion::new(&m);
         let mut pose = Pose::rest(&m.skeleton);
-        for (speed, a, b, w) in [
-            (0.0, "idle", "idle", 0.0),
-            (3.0, "idle", "walk_slow", 0.5),
-            (6.0, "walk_slow", "walk", 0.0),
-            (16.0, "walk", "run", 0.0),
-            (20.0, "walk", "run", 0.5),
-            (24.0, "run", "run", 0.0),
+        for (speed, expect) in [
+            (0.0, vec![("idle", 1.0)]),
+            (0.03, vec![("idle", 1.0)]),
+            (3.0, vec![("idle", 0.5), ("walk_slow", 0.5)]),
+            (6.0, vec![("walk_slow", 1.0)]),
+            (11.0, vec![("walk_slow", 0.5), ("walk", 0.5)]),
+            (16.0, vec![("walk", 1.0)]),
+            (20.0, vec![("walk", 0.5), ("run", 0.5)]),
+            (24.0, vec![("run", 1.0)]),
+            (40.0, vec![("run", 1.0)]),
         ] {
             l.update(&m, input(speed, Support::Grounded), DT, &mut pose);
-            assert_eq!(l.state(), State::Ground);
-            let (ca, cb, weight) = l.ground_mix();
-            assert_eq!((clip_name(&m, ca), clip_name(&m, cb)), (a, b), "at {speed}");
-            assert!((weight - w).abs() < 1e-5, "at {speed}: {weight}");
+            assert_eq!(l.state(), state::GROUND);
+            for (clip, w) in expect {
+                assert!(
+                    (weight_of(&l, clip) - w).abs() < 1e-5,
+                    "at {speed}: {clip} has {:?}",
+                    mix(&l)
+                );
+            }
         }
     }
 
@@ -385,25 +410,25 @@ mod tests {
         let mut l = Locomotion::new(&m);
         let mut pose = Pose::rest(&m.skeleton);
         run(&mut l, &m, &mut pose, input(0.0, Support::Grounded), 0.5);
-        assert_eq!(l.state(), State::Ground);
+        assert_eq!(l.state(), state::GROUND);
         // Take-off.
         l.update(&m, input(0.0, Support::Rising), DT, &mut pose);
-        assert_eq!(l.state(), State::Jump);
-        assert!(l.fade_progress().is_some_and(|p| p < 0.5));
+        assert_eq!(l.state(), state::JUMP);
+        assert!(l.is_blending());
         run(&mut l, &m, &mut pose, input(0.0, Support::Rising), 0.25);
-        assert_eq!(l.state(), State::Jump);
+        assert_eq!(l.state(), state::JUMP);
         // The jump clip plays 0.4 s after its launch frame, then the fall loop takes over.
         run(&mut l, &m, &mut pose, input(0.0, Support::Falling), 0.1);
-        assert_eq!(l.state(), State::Jump);
+        assert_eq!(l.state(), state::JUMP);
         run(&mut l, &m, &mut pose, input(0.0, Support::Falling), 0.1);
-        assert_eq!(l.state(), State::Fall);
+        assert_eq!(l.state(), state::FALL);
         // Touchdown, then back to idle when the landing clip ends.
         l.update(&m, input(0.0, Support::Grounded), DT, &mut pose);
-        assert_eq!(l.state(), State::Land);
+        assert_eq!(l.state(), state::LAND);
         run(&mut l, &m, &mut pose, input(0.0, Support::Grounded), 0.45);
-        assert_eq!(l.state(), State::Land);
+        assert_eq!(l.state(), state::LAND);
         run(&mut l, &m, &mut pose, input(0.0, Support::Grounded), 0.1);
-        assert_eq!(l.state(), State::Ground);
+        assert_eq!(l.state(), state::GROUND);
     }
 
     #[test]
@@ -414,44 +439,61 @@ mod tests {
         run(&mut l, &m, &mut pose, input(16.0, Support::Grounded), 0.3);
         // Stepping down a ledge: a few frames in the air keep the walk.
         run(&mut l, &m, &mut pose, input(16.0, Support::Falling), 0.1);
-        assert_eq!(l.state(), State::Ground);
+        assert_eq!(l.state(), state::GROUND);
         run(&mut l, &m, &mut pose, input(16.0, Support::Falling), 0.05);
-        assert_eq!(l.state(), State::Fall);
+        assert_eq!(l.state(), state::FALL);
         l.update(&m, input(16.0, Support::Grounded), DT, &mut pose);
-        assert_eq!(l.state(), State::Land);
+        assert_eq!(l.state(), state::LAND);
         run(
             &mut l,
             &m,
             &mut pose,
             input(16.0, Support::Grounded),
-            LAND_HOLD_MOVING + DT,
+            LAND_HOLD_MOVING + 2.0 * DT,
         );
-        assert_eq!(l.state(), State::Ground);
+        assert_eq!(l.state(), state::GROUND);
     }
 
     #[test]
-    fn crossfades_last_their_length_and_dead_characters_hold_the_pose() {
+    fn crossfade_weights_sum_to_one_and_hand_over_in_the_blend_time() {
         let m = model();
         let mut l = Locomotion::new(&m);
         let mut pose = Pose::rest(&m.skeleton);
         run(&mut l, &m, &mut pose, input(24.0, Support::Grounded), 0.3);
-        let running = pose.clone();
         l.update(&m, input(24.0, Support::Rising), DT, &mut pose);
-        // One frame into a 0.1 s fade the pose is still closer to the run than the jump is.
-        let hips = m.skeleton.joint("hips").unwrap();
-        let apart = |a: &Pose, b: &Pose| {
-            a.locals[hips]
-                .rotation
-                .angle_between(b.locals[hips].rotation)
-        };
-        let mut jump_pose = Pose::rest(&m.skeleton);
-        sample(&m, l.clips.jump, JUMP_LAUNCH + DT, false, &mut jump_pose);
-        assert!(apart(&pose, &running) < apart(&jump_pose, &running));
-        run(&mut l, &m, &mut pose, input(24.0, Support::Rising), 0.1);
-        assert_eq!(l.fade_progress(), None, "fade done after 0.1 s");
+        assert_eq!(l.state(), state::JUMP);
+        let mut frames = 0;
+        while l.is_blending() {
+            let total: f32 = mix(&l).iter().map(|(_, w)| w).sum();
+            assert!((total - 1.0).abs() < 1e-5, "weights {:?}", mix(&l));
+            // Run still carries weight until the fade ends.
+            assert!(weight_of(&l, "run") > 0.0);
+            l.update(&m, input(24.0, Support::Rising), DT, &mut pose);
+            frames += 1;
+            assert!(frames < 20, "fade never ended");
+        }
+        assert!((frames as f32 * DT - FADE_TAKEOFF).abs() < 2.0 * DT);
+        assert_eq!(mix(&l).len(), 1);
+        assert!((weight_of(&l, "jump") - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_jump_clip_starts_at_its_launch_frame_and_dead_characters_hold_the_pose() {
+        let m = model();
+        let mut l = Locomotion::new(&m);
+        let mut pose = Pose::rest(&m.skeleton);
+        run(&mut l, &m, &mut pose, input(0.0, Support::Grounded), 0.3);
+        // Past the 0.1 s fade the pose is the jump clip at its launch frame (+ elapsed time).
+        run(&mut l, &m, &mut pose, input(0.0, Support::Rising), 0.2);
+        let jump = m.clips.iter().find(|c| c.name == "jump").unwrap();
+        let s = &l.motion_samples()[0];
+        assert!(s.time > 0.0 && s.time < 0.3, "jump clip time {}", s.time);
+        let mut expect = Pose::rest(&m.skeleton);
+        jump.sample(s.time + JUMP_LAUNCH, &mut expect);
+        assert_eq!(pose, expect);
         // Dead: frozen.
         let held = pose.clone();
-        run(&mut l, &m, &mut pose, input(24.0, Support::Frozen), 1.0);
+        run(&mut l, &m, &mut pose, input(0.0, Support::Frozen), 1.0);
         assert_eq!(pose, held);
     }
 

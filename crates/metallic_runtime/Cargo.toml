@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+metallic_anim = { path = "../metallic_anim" }
 metallic_core.workspace = true
 metallic_physics.workspace = true
 metallic_script.workspace = true
