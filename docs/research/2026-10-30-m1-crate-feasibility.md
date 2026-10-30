@@ -43,7 +43,8 @@ Where this document disagrees with one of them, it says so.
   debug hook. The merged VM already fits that design: handlers run as threads, and unknown yields park the thread.
   For the profiler, `puffin_egui` is pinned to egui 0.33, so Studio needs its own timeline view.
 - **Task 13 is implemented**, with a GitHub App instead of the plan's OAuth app. Four issues remain:
-  - The download path still uses Velopack's `GithubSource`, which reads only the 10 newest releases.
+  - ~~The download path still uses Velopack's `GithubSource`, which reads only the 10 newest releases.~~ Fixed
+    by #237 (closes #202): the updater now passes an exact-tag source to Velopack.
   - Velopack is pinned to a prerelease.
   - The keyring entry roams and is not named as documented.
   - The plan and spec still describe an OAuth app with `repo` scope.
@@ -195,7 +196,8 @@ From the merged code, read 2026-10-30 [R12][R13][R14]:
 
 ### Findings against merged code
 
-1. **The 10-release window is still there, in the download path.** `check` pages through 250 releases, but
+1. **(Fixed by #237, which closed #202, after this was written; kept for the record.)**
+   **The 10-release window is still there, in the download path.** `check` pages through 250 releases, but
    `download` asks Velopack's `GithubSource`, which reads only the 10 newest [I35]. Once `stable` exists beside
    per-merge `dev` releases, a stable client will see "update available" from `check`. After 10 newer dev releases,
    its `download` then fails with "the release feed no longer offers an update".
@@ -543,9 +545,9 @@ These are in addition to the Task 13 findings in section 2.
 5. Render: request `TIMESTAMP_QUERY`/`POLYGON_MODE_LINE` when available; decide eframe device config vs own loop
 6. Workspace: move wgpu, winit and glam to `[workspace.dependencies]`; CI fails on two wgpu majors
 7. Profiler: own egui timeline over puffin frame data (correct the performance research's `puffin_egui` note)
-8. Updater: `download` reads only the 10 newest releases (`GithubSource`); fix in Launcher Task 1 before Launcher releases share the repo
+8. ~~Updater: `download` reads only the 10 newest releases (`GithubSource`)~~: filed as #202, fixed by #237
 9. Updater: pin velopack and vpk to the same exact version (stable 1.2.161 or exact 1.3.39)
-10. Updater: keyring target `github.MetallicStudio` and Enterprise roaming; fix docs or move to keyring 4 with Local
+10. Updater: keyring target `github.MetallicStudio` and Enterprise roaming; fix docs or move to keyring 4 with Local (docs part filed in #206)
 11. Docs: update plan Task 13 and spec 1C from OAuth app / `repo` scope to the GitHub App
 12. Licences: record the owner decision on OFL/Ubuntu and CDLA in CLAUDE.md and `deny.toml`
 13. Updater: use `wait_exit_then_apply_updates` and wire the 6 h background check off the UI thread
