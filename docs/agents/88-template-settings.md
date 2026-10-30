@@ -24,14 +24,22 @@ the M1 plan and the template authoring proposal. No settings panel or runtime at
   preview/test copying); eleven passed. After implementation all 15 then-existing tests passed.
 - The first full run found the existing start-screen direct-`TemplateInfo` fixture did not supply a catalog; adjusted
   the metadata read to tolerate a missing catalog while retaining errors for malformed/unreadable existing files.
-- Final workspace, Clippy, license and formatting results: pending.
+- Final `cargo test --workspace -j 4 -- --test-threads=1`: 220 passed, including 17 template integration tests and
+  the shipped Parkour create/load regression. Focused `cargo test -p metallic_studio -j 4 -- --test-threads=1`:
+  49 passed (14 library, 17 template, 18 updater).
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed.
+- `cargo deny check licenses`: passed; existing unused MPL-2.0 allowance warning only. No dependencies added.
+- `cargo fmt --all --check` and `git diff --check`: passed. No visual change or screenshot requirement.
+- Rebased/current with `origin/main` at `ebb94f3` before final gates. Logs are local temporary files
+  `metallic-88-workspace-final.log` and `metallic-88-clippy-final.log`.
 - Cargo uses the verified agent-owned `lane116` target. Before switching from issue 98, cleaned only the seven local
   workspace packages to avoid stale same-version artifacts; dependency artifacts were preserved. Initial test compile
   output confirmed source paths under `88-template-settings`.
 
 ## Next
 
-Run final gates, review the diff, push the issue branch and open a PR. Do not merge it.
+Implementation and all local gates are complete. Push the issue branch, open a PR, mark issue 88 for review and
+await independent review/CI. Do not merge it.
 
 ## Limits / open questions
 
