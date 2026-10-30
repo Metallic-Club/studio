@@ -1,6 +1,7 @@
 # #81 Audio system (`crates/metallic_audio`)
 
-Branch `studio/81-audio`. Status: **implemented, tested** (engine side only; not wired into the runtime or Luau yet).
+Branch `studio/81-audio`. Status: **implemented; last commit not yet compiled or tested** (builds frozen until the PC
+reboots, see "Checks pending"). Engine side only; not wired into the runtime or Luau yet.
 
 ## Goal
 Engine-side audio as a standalone crate, so Horror and the other templates (research PR #60) can have sound:
@@ -44,15 +45,43 @@ effects, voice limiting, streaming, and a headless backend for tests and servers
 - `spatial_demo -- 2 --mute` on the real device ("Speakers (G06-BT)", 48 kHz WASAPI): 96,576 frames rendered in about
   2 s, so the device path runs in real time. Not listened to (owner asleep), hence `--mute`.
 
-## Commands
+## Checks pending (builds frozen 2026-10-30 until the owner reboots; C: full, page file holding the space)
+The last commit (`6017177`, stream `TimeLength` reported up front + `AudioEngine: Send` assertion, touching
+`src/engine.rs`, `src/mixer.rs`, `tests/decode.rs`, `tests/engine.rs`) has **not been compiled**. The 64 tests
+listed under "Done" passed on the commit before it (`ac42581`).
+
+Passed on `6017177`: `cargo fmt --check` (workspace; no compilation).
+
+NOT run yet on `6017177`, in this order (stop at the first failure):
+1. `cargo test -p metallic_audio -j 2`
+2. `cargo clippy -p metallic_audio --all-targets -j 2 -- -D warnings`
+3. `cargo clippy -p metallic_audio --all-targets --no-default-features -j 2 -- -D warnings` (headless-only build)
+4. Workspace checks, once, as CI runs them: `cargo test --workspace -j 2`,
+   `cargo clippy --workspace --all-targets -j 2 -- -D warnings`, `cargo deny check licenses`.
+   These have never run on this branch.
+
+After the reboot, with at least 4 GB free on C:, in Git Bash from this worktree:
 ```
 export PATH="$HOME/.cargo/bin:$PATH"
-cargo test -p metallic_audio -j 4
-cargo clippy -p metallic_audio --all-targets -j 4 -- -D warnings
-cargo clippy -p metallic_audio --all-targets --no-default-features -j 4 -- -D warnings   # headless-only build
-cargo bench -p metallic_audio --bench mix -j 4
-cargo run -p metallic_audio --example spatial_demo -j 4 -- 12          # audible, headphones recommended
-cargo run -p metallic_audio --example spatial_demo -j 4 -- 2 --mute    # silent device smoke test
+export CARGO_TARGET_DIR=/c/Users/alexi/Documents/metallic-studio-worktrees/_target-lead-shared CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_BENCH_DEBUG=0 CARGO_INCREMENTAL=0
+cargo test -p metallic_audio -j 2
+cargo clippy -p metallic_audio --all-targets -j 2 -- -D warnings
+cargo clippy -p metallic_audio --all-targets --no-default-features -j 2 -- -D warnings
+cargo test --workspace -j 2
+cargo clippy --workspace --all-targets -j 2 -- -D warnings
+cargo deny check licenses
+```
+Then set Status above back to "implemented, tested" and delete this section.
+
+## Commands
+Same environment as above (shared target, debug info off, `-j 2`).
+```
+cargo test -p metallic_audio -j 2
+cargo clippy -p metallic_audio --all-targets -j 2 -- -D warnings
+cargo clippy -p metallic_audio --all-targets --no-default-features -j 2 -- -D warnings   # headless-only build
+cargo bench -p metallic_audio --bench mix -j 2
+cargo run -p metallic_audio --example spatial_demo -j 2 -- 12          # audible, headphones recommended
+cargo run -p metallic_audio --example spatial_demo -j 2 -- 2 --mute    # silent device smoke test
 ```
 
 ## Next
