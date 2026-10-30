@@ -3307,7 +3307,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_anim"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "glam 0.30.10",
@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_anim_editor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -3329,7 +3329,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_asset"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam 0.30.10",
  "gltf",
@@ -3339,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cpal",
  "criterion",
@@ -3352,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "ron",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_launcher"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "env_logger",
  "log",
@@ -3386,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_meshgen"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_modeling"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "eframe",
@@ -3413,7 +3413,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_physics"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "metallic_core",
  "rapier3d",
@@ -3421,7 +3421,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_physics2d"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "eframe",
@@ -3432,7 +3432,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_player"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -3447,7 +3447,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytemuck",
  "glam 0.30.10",
@@ -3462,7 +3462,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "egui",
@@ -3480,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_script"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "metallic_core",
  "mlua",
@@ -3488,7 +3488,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_studio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "env_logger",
@@ -3498,6 +3498,7 @@ dependencies = [
  "metallic_update",
  "png",
  "rfd",
+ "ron",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -3507,14 +3508,14 @@ dependencies = [
 
 [[package]]
 name = "metallic_tokens"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "metallic_update"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keyring",
  "log",
@@ -3529,7 +3530,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_vfx"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "naga",
@@ -3540,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "metallic_vfx_editor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
