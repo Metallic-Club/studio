@@ -38,6 +38,23 @@ pub fn projected_height(camera: &Camera, viewport_height: u32, center: Vec3, hei
     height * focal / distance
 }
 
+/// How a skinned instance is shaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SkinStyle {
+    /// Physically based, like parts: sun, sky, shadows and procedural surface detail.
+    Standard,
+    /// Cartoon: a warm lit tone and a warm shade tone with soft band edges (still following the
+    /// sun, shadows and sky brightness) and a dark brown ink outline a couple of pixels wide.
+    /// The default avatar's look.
+    #[default]
+    Toon,
+}
+
+/// Largest outline width in pixels (reached when the figure is about 350 px tall or more).
+pub const OUTLINE_MAX_PX: f32 = 2.2;
+/// Outline width in studs; below the pixel cap the line thins with distance.
+pub const OUTLINE_STUDS: f32 = 0.035;
+
 /// What to draw for one skinned instance this frame (see `Renderer::set_skinned`).
 #[derive(Debug, Clone, Copy)]
 pub struct SkinnedInstance<'a> {
@@ -56,9 +73,11 @@ pub struct SkinnedInstance<'a> {
     pub height: f32,
     /// Studs per model unit; scales the procedural surface detail so it matches parts.
     pub detail_scale: f32,
+    /// Shading style.
+    pub style: SkinStyle,
 }
 
-/// One vertex as the skinned pipeline reads it (52 bytes).
+/// One vertex as the skinned pipeline reads it (64 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(crate) struct GpuSkinnedVertex {
@@ -67,10 +86,12 @@ pub(crate) struct GpuSkinnedVertex {
     joints: [u16; 4],
     weights: [f32; 4],
     slot: u32,
+    /// Normal averaged over all vertices at this position (outline extrusion direction).
+    smooth_normal: [f32; 3],
 }
 
-pub(crate) const SKINNED_ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-    0 => Float32x3, 1 => Float32x3, 2 => Uint16x4, 3 => Float32x4, 4 => Uint32
+pub(crate) const SKINNED_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    0 => Float32x3, 1 => Float32x3, 2 => Uint16x4, 3 => Float32x4, 4 => Uint32, 5 => Float32x3
 ];
 
 pub(crate) fn skinned_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -86,7 +107,8 @@ pub(crate) fn skinned_layout() -> wgpu::VertexBufferLayout<'static> {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct SkinHeader {
-    /// x: studs per model unit (procedural detail scale).
+    /// x: studs per model unit (procedural detail scale), y: unused, z: outline cap in pixels,
+    /// w: outline width in studs.
     params: [f32; 4],
     /// Linear RGB and alpha per material slot.
     slot_color: [[f32; 4]; MAX_MATERIALS],
@@ -116,15 +138,18 @@ impl GpuSkinnedModel {
             .lods
             .iter()
             .map(|lod| {
+                let smooth = smooth_normals(&lod.vertices);
                 let vertices: Vec<GpuSkinnedVertex> = lod
                     .vertices
                     .iter()
-                    .map(|v| GpuSkinnedVertex {
+                    .zip(smooth)
+                    .map(|(v, n)| GpuSkinnedVertex {
                         position: v.position,
                         normal: v.normal,
                         joints: v.joints,
                         weights: v.weights,
                         slot: u32::from(v.material),
+                        smooth_normal: n.to_array(),
                     })
                     .collect();
                 GpuLod {
@@ -147,6 +172,28 @@ impl GpuSkinnedModel {
             lods,
         }
     }
+}
+
+/// Per vertex, the normalised sum of the normals of every vertex at the same position (to 0.1 mm),
+/// so hard edges and UV seams do not split the outline. Computed once when a model is uploaded.
+fn smooth_normals(vertices: &[metallic_asset::SkinnedVertex]) -> Vec<Vec3> {
+    use std::collections::HashMap;
+    let key = |p: [f32; 3]| p.map(|c| (c * 1e4).round() as i32);
+    let mut sums: HashMap<[i32; 3], Vec3> = HashMap::with_capacity(vertices.len());
+    for v in vertices {
+        *sums.entry(key(v.position)).or_insert(Vec3::ZERO) += Vec3::from_array(v.normal);
+    }
+    vertices
+        .iter()
+        .map(|v| {
+            let n = sums[&key(v.position)];
+            if n.length_squared() > 1e-12 {
+                n.normalize()
+            } else {
+                Vec3::from_array(v.normal)
+            }
+        })
+        .collect()
 }
 
 /// The storage buffer and bind group of one instance slot; grows to fit more joints.
@@ -197,7 +244,7 @@ impl SkinSlot {
             slots[index] = SkinSlot::new(device, layout, joints.next_power_of_two());
         }
         let mut header = SkinHeader::zeroed();
-        header.params[0] = inst.detail_scale;
+        header.params = [inst.detail_scale, 0.0, OUTLINE_MAX_PX, OUTLINE_STUDS];
         for (i, slot) in inst.model.materials.iter().enumerate().take(MAX_MATERIALS) {
             let rgb = inst.slot_colors.get(i).copied().unwrap_or([
                 slot.base_color[0],
@@ -222,6 +269,7 @@ pub(crate) struct SkinnedDraw {
     pub slot: usize,
     pub center: Vec3,
     pub height: f32,
+    pub style: SkinStyle,
     /// Level of detail picked for the current view.
     pub lod: usize,
 }
@@ -261,6 +309,6 @@ mod tests {
             std::mem::size_of::<SkinHeader>(),
             16 * (1 + 2 * MAX_MATERIALS)
         );
-        assert_eq!(std::mem::size_of::<GpuSkinnedVertex>(), 52);
+        assert_eq!(std::mem::size_of::<GpuSkinnedVertex>(), 64);
     }
 }

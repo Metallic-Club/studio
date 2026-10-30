@@ -1,0 +1,5 @@
+id = "baseplate"
+name = "Baseplate"
+description = "An empty grey floor and a spawn point. Build anything from scratch."
+preview = "preview.png"
+order = 0
