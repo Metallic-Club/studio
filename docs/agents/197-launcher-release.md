@@ -20,6 +20,19 @@ Branch `studio/launcher-l1-20261030`. Task 9 of the Launcher L1 plan.
 - Shortcut and Apps-list name collides with any other app titled Metallic; the product name is an owner decision. (`--packTitle Metallic` kept for now.)
 - `vpk pack` for the Launcher passes `--runtime win-x64` (otherwise vpk warns and uses x86 helpers). Follow-up: Studio's line likely needs the same; left unchanged to keep its output identical.
 
+## Step 3 round trip (lead, Windows 11, release builds)
+Done:
+- Release built at 5b152ff7, then again at 1f6e444f. `vpk 1.3.39 pack --runtime win-x64` gives `MetallicLauncher-launcher-dev-Setup.exe`.
+- `Setup.exe --silent` installs without admin into `%LOCALAPPDATA%\MetallicLauncher`; the install hook registered `HKCU\Software\Classes\metallic`.
+- A `metallic://play` link starts the Launcher, which shows the "isn't set up yet" page (no site address configured). No Player started: it does not accept URIs yet (M2).
+- A second link while the Launcher runs is handed over: still one process.
+- The 1f6e444f build creates `%LOCALAPPDATA%\MetallicLauncher\data\{WebView2, .metallic-launcher}`.
+- `Update.exe --uninstall --silent` exits 0 and removes the install folder, the protocol key and the Apps entry. A hash snapshot shows another app's `%LOCALAPPDATA%\Metallic` folder unchanged.
+
+Findings: the old data-folder collision (fixed in 1f6e444f); Velopack's shortcuts overwrote a same-named `Metallic.lnk` from another app (restored by hand); `--runtime` defaulted to x86.
+
+Not done yet: close to tray and tray Quit; update applied on quit (needs a published dev release); Windows 10 without WebView2.
+
 ## Acceptance checklist (Step 3): pending: lead/owner round trip
 Needs a release build, a pushed tag and a Windows 11 test PC. Record each with a screenshot under `docs/agents/launcher-l1/`.
 - [ ] Install `MetallicLauncher-launcher-dev-Setup.exe` on Windows 11 without admin.
