@@ -16,12 +16,12 @@ use metallic_launcher::{
     AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction,
     DeepLink, EventSink, GithubAssets, HandoffListener, HandoffMessage, InstallStatus, Installer,
     LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage, NavDecision,
-    OfflineReason, OneAtATime, PageOrigin, PlaceId, PlatformAuth, PlayerWatcher, ProcessTracker,
-    RestartError, SelfUpdater, SettingsPatch, SettingsStore, SiteOrigin, SiteStatus, StartPage,
-    TrayAction, UrlPolicy, check_site, downloads_dir_for, github_sign_in, is_installed_copy,
-    local_url, on_close_requested, platform_sign_in, player_status, product_paths, serve,
-    sign_out_in_background, start_page, start_player, start_studio, studio_root_for, tray_menu,
-    user_agent,
+    OfflineReason, OneAtATime, PageOrigin, PlaceId, PlatformAuth, PlayLimiter, PlayerWatcher,
+    ProcessTracker, RestartError, SelfUpdater, SettingsPatch, SettingsStore, SiteOrigin,
+    SiteStatus, StartPage, TrayAction, UrlPolicy, check_site, downloads_dir_for, github_sign_in,
+    is_installed_copy, local_url, on_close_requested, platform_sign_in, player_status,
+    product_paths, remote_content_allowed, serve, sign_out_in_background, start_page, start_player,
+    start_studio, studio_root_for, tray_menu, user_agent,
 };
 use metallic_update::github_auth::{StoredTokenProvider, embedded_client_id};
 use metallic_update::{
@@ -85,6 +85,8 @@ struct Shared {
     site_loaded: AtomicBool,
     /// The window has been shown.
     shown: AtomicBool,
+    /// Frame navigations are policed. When false, only bundled pages may load (fail closed).
+    frames_policed: AtomicBool,
 }
 
 /// The GitHub token for the private team feed: none until the user signs in.
@@ -398,6 +400,7 @@ fn handle_deep_link(
     offline: bool,
     sink: &dyn EventSink,
     updater: &SelfUpdater,
+    play_limit: &mut PlayLimiter,
 ) {
     // The Install flow: show the window and the downloads page, or the local page when offline.
     let show_downloads = || {
@@ -412,6 +415,11 @@ fn handle_deep_link(
     };
     match &link {
         DeepLink::Play { .. } => {
+            // Links from the pipe, the protocol handler and the page can come in floods.
+            if !play_limit.allow() {
+                log::info!("dropped a Play link: too many in a short time");
+                return;
+            }
             match start_the_player(&link, updater) {
                 Err(LauncherError::NotInstalled(_)) => show_downloads(),
                 // The site shows the update state; bring the window up so the user sees it.
@@ -566,6 +574,7 @@ pub fn run(
         offline: AtomicBool::new(false),
         site_loaded: AtomicBool::new(false),
         shown: AtomicBool::new(false),
+        frames_policed: AtomicBool::new(true),
     });
 
     // The origin to re-check: the development address in developer mode, else the site.
@@ -774,7 +783,13 @@ pub fn run(
         .build(&window)
         .map_err(|e| platform_error("could not start the web view", &e))?;
     platform::watch_navigation_failures(&view, sink.clone());
-    platform::watch_frame_navigations(&view, policy.clone());
+    if !platform::watch_frame_navigations(&view, policy.clone()) {
+        // Iframes would go unchecked: show the bundled offline page and load nothing remote.
+        shared.frames_policed.store(false, Ordering::SeqCst);
+        sink.send(AppEvent::ShowLocal(LocalPage::Offline(
+            OfflineReason::LoadFailed,
+        )));
+    }
 
     // Check the site in the background; a Down answer before the site has loaded shows the offline page.
     if let (StartPage::Site(_), Some(origin)) = (&start, &check_origin)
@@ -806,6 +821,7 @@ pub fn run(
         });
     }
 
+    let mut play_limit = PlayLimiter::standard();
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
@@ -898,6 +914,7 @@ pub fn run(
                     shared.offline.load(Ordering::SeqCst),
                     sink.as_ref(),
                     &host.updater,
+                    &mut play_limit,
                 ),
                 AppEvent::BridgeMessage { page_url, body } => {
                     handle_bridge_message(&view, &bridge, &host, &page_url, &body);
@@ -919,6 +936,14 @@ pub fn run(
 
 /// Loads `address` in the main view and updates the shared flags.
 fn load(view: &WebView, shared: &Shared, address: &str, offline: bool) {
+    let origin = match Url::parse(address) {
+        Ok(url) if metallic_launcher::site::is_local_page(&url) => PageOrigin::Local,
+        _ => PageOrigin::Other,
+    };
+    if !remote_content_allowed(shared.frames_policed.load(Ordering::SeqCst), origin) {
+        log::warn!("refused to load a remote page: frame navigations are not policed");
+        return;
+    }
     shared.offline.store(offline, Ordering::SeqCst);
     shared.site_loaded.store(false, Ordering::SeqCst);
     if let Err(error) = view.load_url(address) {

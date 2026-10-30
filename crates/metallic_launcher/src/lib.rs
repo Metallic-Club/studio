@@ -22,6 +22,7 @@ pub mod install;
 pub mod launch;
 pub mod local_pages;
 pub mod platform_auth;
+pub mod play_limit;
 pub mod protocol;
 pub mod self_update;
 pub mod settings;
@@ -52,6 +53,7 @@ pub use platform_auth::{
     HandoffUrl, OneAtATime, PlatformAuth, Revocation, SignInReply, SignInTicket, platform_sign_in,
     sign_out_in_background,
 };
+pub use play_limit::PlayLimiter;
 pub use protocol::{
     MemoryRegistry, PROTOCOL_KEY, UriRegistry, is_installed_copy, is_registered_to, register,
     unregister,
@@ -66,4 +68,4 @@ pub use single_instance::{
 pub use site::{LauncherConfig, SiteOrigin};
 pub use site_check::{SiteStatus, StartPage, check_site, start_page, user_agent};
 pub use tray::{CloseAction, TrayAction, on_close_requested, tray_menu};
-pub use url_policy::{NavDecision, PageOrigin, UrlPolicy};
+pub use url_policy::{NavDecision, PageOrigin, UrlPolicy, remote_content_allowed};

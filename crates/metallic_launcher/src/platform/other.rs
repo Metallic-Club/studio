@@ -32,7 +32,9 @@ pub fn configure_builder(builder: WebViewBuilder<'_>, _dev_mode: bool) -> WebVie
 
 pub fn watch_navigation_failures(_view: &WebView, _sink: Arc<dyn EventSink>) {}
 
-pub fn watch_frame_navigations(_view: &WebView, _policy: Arc<UrlPolicy>) {}
+pub fn watch_frame_navigations(_view: &WebView, _policy: Arc<UrlPolicy>) -> bool {
+    true
+}
 
 pub fn acquire_instance() -> Result<Acquired, LauncherError> {
     Err(LauncherError::Unsupported("single instance"))

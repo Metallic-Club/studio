@@ -17,6 +17,9 @@ sandboxed Luau with Roblox-style names. Website and backend live in `Metallic-Cl
 ## In progress
 - #1 Task 1 (workspace, toolchain, licence gate): lead session, branch `studio/m1-engine-20261030`.
 
+- #197 Launcher L1 Task 9 (packaging, release process, Linux compile check, acceptance): implemented and tested in code on branch
+  `studio/launcher-l1-20261030`; the install round trip is pending (lead/owner), see `docs/agents/197-launcher-release.md`.
+
 ## Ready now
 None until #1 is merged. Then #2 (core) is the only open path; after #2: #3 render, #4 physics, #6 Luau VM in parallel.
 

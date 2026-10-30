@@ -239,3 +239,15 @@ fn frame_navigation_blocks_file_and_other_hosts() {
         assert!(p.frame_navigation(u), "{u}");
     }
 }
+
+#[test]
+fn unpoliced_frames_fail_closed() {
+    use metallic_launcher::remote_content_allowed;
+    // With the frame handler registered, nothing changes.
+    assert!(remote_content_allowed(true, PageOrigin::Site));
+    assert!(remote_content_allowed(true, PageOrigin::Local));
+    // Without it, only bundled pages load; the site and everything else stay out.
+    assert!(remote_content_allowed(false, PageOrigin::Local));
+    assert!(!remote_content_allowed(false, PageOrigin::Site));
+    assert!(!remote_content_allowed(false, PageOrigin::Other));
+}

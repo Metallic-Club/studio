@@ -156,7 +156,9 @@ pub fn watch_navigation_failures(view: &WebView, sink: Arc<dyn EventSink>) {
 /// WebView2 reports a frame's navigation only through `FrameNavigationStarting`; wry's own
 /// navigation handler sees the top level alone. Anything the policy does not allow is cancelled.
 /// (Pop-ups from frames arrive through the same `NewWindowRequested` event wry already handles.)
-pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) {
+/// Returns false when the handler could not be registered: frames are then unpoliced and the
+/// caller must not load remote content.
+pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) -> bool {
     let webview = view.webview();
     let handler = NavigationStartingEventHandler::create(Box::new(move |_, args| {
         let Some(args) = args else {
@@ -177,8 +179,10 @@ pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) {
     let mut token = 0i64;
     // SAFETY: WebView2 keeps its own reference to the handler.
     if let Err(error) = unsafe { webview.add_FrameNavigationStarting(&handler, &mut token) } {
-        log::warn!("could not watch frame navigations: {error}");
+        log::error!("could not watch frame navigations: {error}");
+        return false;
     }
+    true
 }
 
 // ---- Handles and users -------------------------------------------------------------------

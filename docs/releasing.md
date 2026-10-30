@@ -89,6 +89,26 @@ add the tag ruleset; publish `0.1.0-dev`; install from the Setup.exe; publish `0
 it; take screenshots. Studio's `main` must also call `velopack::VelopackApp::build().run()` first thing (see the task 13
 report), otherwise the installer hooks do not run.
 
+## Releasing the Launcher
+The Launcher (`Metallic.exe`) and the Player (`metallic-player.exe`) ship as one Velopack package, `MetallicLauncher`, from the
+same repo as Studio. Studio's release path is unchanged.
+- **Tag:** `launcher-vX.Y.Z-<channel>` (channel `dev` or `stable`), for example `launcher-v0.1.1-dev`. A `v*` tag is still Studio;
+  a `launcher-v*` tag runs the Launcher release in `.github/workflows/release.yml` (same "commit must be on `main`" check, same
+  pinned actions, same version check against `[workspace.package] version`).
+- **Velopack channel:** `launcher-<channel>` (`launcher-dev`). The Launcher's own updater reads that channel
+  (`LAUNCHER_FEED` in `metallic_update`). Velopack names the installer `<packId>-<channel>-Setup.exe`, so the file is expected to be
+  `MetallicLauncher-launcher-dev-Setup.exe`; confirm the exact name on the first real release.
+- **By hand** (needs .NET and the pinned `vpk`, see above): `GITHUB_TOKEN` from `gh auth token`, then
+  `python tools/release.py --app launcher --channel dev --version 0.1.1`. `--dry-run` prints the commands (cargo build of
+  `metallic_launcher` and `metallic_player`, `vpk pack ... --framework webview2 --channel launcher-dev`, `vpk upload`).
+- **WebView2:** `--framework webview2` makes Setup install the WebView2 runtime when it is missing (Windows 11 has it). The
+  Launcher also shows a message box if it is still missing at start.
+- **Steps:** bump the version, merge to `main`, tag the merged commit (owner or lead), watch the "Release" workflow.
+- **Not covered:** code signing (Windows SmartScreen will warn), a public feed for players (the repo is private).
+- **CI:** the `launcher-linux-check` job runs `cargo check -p metallic_launcher -p metallic_update` on Ubuntu. It proves the
+  Windows/other `cfg` split compiles; it does not prove a Linux Launcher works.
+- **Acceptance:** the install round trip is recorded in `docs/agents/197-launcher-release.md`.
+
 ## Check before the Launcher ships (Task 9)
 The Launcher installs Studio by running `MetallicStudio-<channel>-Setup.exe --silent`. The `--silent` flag is from memory
 of Velopack's Setup command line and has never been run against a real Setup. With a real Setup, check: no dialog, exit

@@ -92,6 +92,12 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   **Player contract:** `metallic-player.exe <metallic://play?place=<id>&ticket=<ticket>>`: exactly one argument, the canonical link from
   `DeepLink::to_uri`, started without a shell; the Player sits beside `Metallic.exe`. Studio is started with no arguments (a place in
   `metallic://studio/open?place=..` is ignored for now).
+  Task 9 (release and hardening): `tools/release.py --app launcher` packs `Metallic.exe` + `metallic-player.exe` as Velopack
+  `MetallicLauncher` (`--framework webview2`, channel `launcher-<channel>`, tag `launcher-v<version>-<channel>`; see
+  `docs/releasing.md`). `play_limit.rs` (`PlayLimiter`, burst 3 then one per 2 s) drops floods of Play links that arrive through
+  the pipe, the protocol handler or the page (the bridge has its own one-per-2-s limit). `url_policy::remote_content_allowed`: if
+  the WebView2 `FrameNavigationStarting` handler cannot be registered, iframes would be unpoliced, so the Launcher shows the bundled
+  offline page and loads no remote page (fail closed). CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

@@ -69,9 +69,10 @@ pub fn watch_navigation_failures(view: &WebView, sink: Arc<dyn EventSink>) {
     imp::watch_navigation_failures(view, sink);
 }
 
-/// Asks `policy` about every navigation inside a frame and cancels the ones it refuses.
-pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) {
-    imp::watch_frame_navigations(view, policy);
+/// Asks `policy` about every navigation inside a frame and cancels the ones it refuses. False
+/// when that could not be set up (frames are then unpoliced; load no remote content).
+pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) -> bool {
+    imp::watch_frame_navigations(view, policy)
 }
 
 /// Starts programs (the Player, Studio) without a shell. See `metallic_launcher::Spawner`.

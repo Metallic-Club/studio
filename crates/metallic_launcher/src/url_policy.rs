@@ -10,6 +10,13 @@ use url::Url;
 use crate::deep_link::{DeepLink, SCHEME};
 use crate::site::{LauncherConfig, SiteOrigin, is_local_page};
 
+/// Whether a page of `origin` may load. The site and other remote pages load only while frame
+/// navigations are policed (`frames_policed`); if the frame handler could not be registered,
+/// iframes would go unchecked, so only bundled pages load.
+pub fn remote_content_allowed(frames_policed: bool, origin: PageOrigin) -> bool {
+    frames_policed || origin == PageOrigin::Local
+}
+
 /// Which kind of page an address belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageOrigin {
