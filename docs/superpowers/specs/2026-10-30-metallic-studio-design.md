@@ -208,3 +208,15 @@ Sign-in from Studio, when it comes, must not handle passwords inside the editor 
 - Which Rust bindings for Box2D (milestone 3), how WebAssembly languages are hosted (later).
 - Exact theme values within the brand rules; editor panel layout details.
 - Networking, voice codec and server design for milestone 2: designed when milestone 2 starts.
+
+## 10. Owner decisions on the platform architecture (2026-10-30)
+
+Following `docs/research/2026-10-30-platform-architecture.md` (parts: Platform, Engine, Client library + Player,
+Studio, Launcher, Game Server, Asset service + CDN, Matchmaker):
+- **The Launcher shows the same website, adapted per device** (owner: "same website but with edits depending on the
+  platform"). One web codebase; the Launcher loads it in a web view and the site adapts: desktop layout on PC, touch
+  layout on mobile, controller/TV layout on console; inside the Launcher, Play buttons start the Player directly
+  (no "download the app" prompts), and Launcher-only extras (install/update status, downloads, settings) appear.
+- Still open (assistant decides when the platform design starts, unless the owner says otherwise): quick play in a
+  separate fast-starting Player window (assistant's default) vs inside the Launcher window; backend language and
+  hosting.
