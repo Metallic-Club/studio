@@ -1,0 +1,47 @@
+name: Storage research contracts
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/storage-research.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/metallic_core/**
+      - tools/perf/storage_probe.py
+      - tools/perf/test_storage_probe.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/storage-research.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/metallic_core/**
+      - tools/perf/storage_probe.py
+      - tools/perf/test_storage_probe.py
+
+concurrency:
+  group: storage-research-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Override semantics and allocator accounting
+        run: cargo test --locked -p metallic_core --example compact_storage -j 4
+      - name: Reject incomplete or inconsistent evidence
+        run: python -m unittest discover -s tools/perf -p test_storage_probe.py -v
