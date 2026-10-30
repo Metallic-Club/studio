@@ -128,10 +128,15 @@ fn spawn_recheck_loop(
 }
 
 /// The answer of the `metallic-app` protocol: GET and HEAD are served, other methods get a 405.
-fn protocol_response(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+fn protocol_response(request: Request<Vec<u8>>, dev_mode: bool) -> Response<Cow<'static, [u8]>> {
     let method = request.method().clone();
     let (status, answer) = if matches!(method, Method::GET | Method::HEAD) {
-        let answer = serve(request.uri().path());
+        let path = request.uri().path();
+        let answer = serve(if path == "/demo.html" && !dev_mode {
+            ""
+        } else {
+            path
+        });
         (answer.status, answer)
     } else {
         (405, serve(""))
@@ -204,8 +209,10 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
         .with_devtools(config.dev_mode)
         .with_url(start_address);
 
+    // The demo page is for developer mode only; in a normal run it does not exist.
+    let dev_mode = config.dev_mode;
     builder = builder.with_custom_protocol("metallic-app".to_string(), move |_id, request| {
-        protocol_response(request)
+        protocol_response(request, dev_mode)
     });
 
     // Navigation: the policy decides; the system browser only ever gets an https address.
@@ -296,6 +303,7 @@ pub fn run(config: LauncherConfig, webview_version: &str) -> Result<(), Launcher
         .build(&window)
         .map_err(|e| platform_error("could not start the web view", &e))?;
     platform::watch_navigation_failures(&view, sink.clone());
+    platform::watch_frame_navigations(&view, policy.clone());
 
     // Check the site in the background; a Down answer before the site has loaded shows the offline page.
     if let (StartPage::Site(_), Some(origin)) = (&start, &check_origin)

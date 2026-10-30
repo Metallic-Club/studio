@@ -8,12 +8,12 @@ use ::windows::Win32::UI::WindowsAndMessaging::{
     IDYES, MB_ICONINFORMATION, MB_YESNO, MessageBoxW, SW_SHOWNORMAL,
 };
 use ::windows::core::{BOOL, HSTRING, PWSTR, w};
-use metallic_launcher::{AppEvent, EventSink, LauncherError, LocalPage, OfflineReason};
+use metallic_launcher::{AppEvent, EventSink, LauncherError, LocalPage, OfflineReason, UrlPolicy};
 use url::Url;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED,
 };
-use webview2_com::{NavigationCompletedEventHandler, take_pwstr};
+use webview2_com::{NavigationCompletedEventHandler, NavigationStartingEventHandler, take_pwstr};
 use wry::{WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
 
 /// The text of the message box. The wording is fixed by the product text.
@@ -103,5 +103,33 @@ pub fn watch_navigation_failures(view: &WebView, sink: Arc<dyn EventSink>) {
     // SAFETY: the handler outlives the registration (WebView2 keeps its own reference).
     if let Err(error) = unsafe { webview.add_NavigationCompleted(&handler, &mut token) } {
         log::warn!("could not watch for failed page loads: {error}");
+    }
+}
+
+/// WebView2 reports a frame's navigation only through `FrameNavigationStarting`; wry's own
+/// navigation handler sees the top level alone. Anything the policy does not allow is cancelled.
+/// (Pop-ups from frames arrive through the same `NewWindowRequested` event wry already handles.)
+pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) {
+    let webview = view.webview();
+    let handler = NavigationStartingEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        // SAFETY: plain getter and setter on a live event-args object, on the UI thread.
+        unsafe {
+            let mut uri = PWSTR::null();
+            args.Uri(&mut uri)?;
+            let uri = take_pwstr(uri);
+            if !policy.frame_navigation(&uri) {
+                log::info!("blocked a frame navigation");
+                args.SetCancel(true)?;
+            }
+        }
+        Ok(())
+    }));
+    let mut token = 0i64;
+    // SAFETY: WebView2 keeps its own reference to the handler.
+    if let Err(error) = unsafe { webview.add_FrameNavigationStarting(&handler, &mut token) } {
+        log::warn!("could not watch frame navigations: {error}");
     }
 }

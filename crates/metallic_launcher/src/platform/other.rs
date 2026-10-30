@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use metallic_launcher::{EventSink, LauncherError};
+use metallic_launcher::{EventSink, LauncherError, UrlPolicy};
 use url::Url;
 use wry::{WebView, WebViewBuilder};
 
@@ -30,3 +30,5 @@ pub fn configure_builder(builder: WebViewBuilder<'_>, _dev_mode: bool) -> WebVie
 }
 
 pub fn watch_navigation_failures(_view: &WebView, _sink: Arc<dyn EventSink>) {}
+
+pub fn watch_frame_navigations(_view: &WebView, _policy: Arc<UrlPolicy>) {}

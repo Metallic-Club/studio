@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use metallic_launcher::{EventSink, LauncherError};
+use metallic_launcher::{EventSink, LauncherError, UrlPolicy};
 use url::Url;
 use wry::{WebView, WebViewBuilder};
 
@@ -67,4 +67,9 @@ pub fn configure_builder(builder: WebViewBuilder<'_>, dev_mode: bool) -> WebView
 /// Reports a failed main-frame navigation to the sink as the "load failed" offline page.
 pub fn watch_navigation_failures(view: &WebView, sink: Arc<dyn EventSink>) {
     imp::watch_navigation_failures(view, sink);
+}
+
+/// Asks `policy` about every navigation inside a frame and cancels the ones it refuses.
+pub fn watch_frame_navigations(view: &WebView, policy: Arc<UrlPolicy>) {
+    imp::watch_frame_navigations(view, policy);
 }

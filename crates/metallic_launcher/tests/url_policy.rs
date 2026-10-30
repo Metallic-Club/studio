@@ -214,3 +214,28 @@ fn browser_links_lose_user_info() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn frame_navigation_blocks_file_and_other_hosts() {
+    let p = policy();
+    for u in [
+        "file:///C:/",
+        "http://evil.test/",
+        "https://evil.test/",
+        "https://metallic.example.evil.test/",
+        "http://metallic.example/",
+        "javascript:alert(1)",
+        "data:text/html,x",
+        "blob:https://metallic.example/1",
+        "metallic://open",
+    ] {
+        assert!(!p.frame_navigation(u), "{u}");
+    }
+    for u in [
+        "https://metallic.example/embed",
+        "about:blank",
+        "http://metallic-app.localhost/offline.html",
+    ] {
+        assert!(p.frame_navigation(u), "{u}");
+    }
+}

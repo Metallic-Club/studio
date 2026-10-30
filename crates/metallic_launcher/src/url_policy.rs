@@ -97,6 +97,13 @@ impl UrlPolicy {
         }
     }
 
+    /// Decides a navigation of a frame (an `iframe`) inside a page: true to let it load. Only
+    /// what [`navigation`](Self::navigation) allows loads; every other address is refused and is
+    /// never sent to the system browser, because a frame is not something the user clicked.
+    pub fn frame_navigation(&self, url: &str) -> bool {
+        self.navigation(url) == NavDecision::Allow
+    }
+
     /// Decides a request to open `url` in a new window. The site and bundled pages are
     /// `Allow`, meaning "load it in the main view"; `about:blank` is refused here, because a
     /// pop-up has no use for it; the rest is decided as in [`navigation`](Self::navigation).
