@@ -394,7 +394,8 @@ impl PhysicsWorld {
     }
 
     /// Current velocity of a part in studs per second: the body velocity for unanchored parts,
-    /// the velocity derived from the last move for anchored ones. `None` for unknown parts.
+    /// the velocity derived from the last move for anchored ones (in a replica world every part
+    /// reports the derived, kinematic velocity). `None` for unknown parts.
     pub fn velocity(&self, id: InstanceId) -> Option<Vec3> {
         let e = self.entries.get(&id)?;
         let body = self.rapier.bodies.get(e.body)?;
@@ -407,7 +408,7 @@ impl PhysicsWorld {
 
     /// Current angular velocity of a part in radians per second (world rotation axis scaled by
     /// the rate): the body's for unanchored parts, the one derived from the last orientation
-    /// change for anchored ones. A point `p` on the part moves at
+    /// change for anchored ones (in a replica world every part reports the derived value). A point `p` on the part moves at
     /// `velocity + angular_velocity × (p - Position)`. `None` for unknown parts.
     pub fn angular_velocity(&self, id: InstanceId) -> Option<Vec3> {
         let e = self.entries.get(&id)?;

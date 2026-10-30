@@ -1,7 +1,7 @@
 use metallic_core::{Color3, InstanceId, Value, Vec3, World};
 use metallic_physics::{
-    CharacterController, CharacterEvent, HumanoidState, MAX_PUSH, MoveInput, PhysicsWorld,
-    RESPAWN_DELAY, spawn_character,
+    CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MoveInput,
+    PhysicsWorld, RESPAWN_DELAY, spawn_character,
 };
 
 const DT: f64 = 1.0 / 60.0;
@@ -799,21 +799,39 @@ fn replay_600_inputs_from_saved_state_matches() {
     let inputs = seeded_inputs(600);
     let ch = sim.character();
     let saved = sim.ctl.save_state(&sim.world, ch).expect("saved");
-    let first = replay(&mut sim, &inputs);
-    sim.ctl.restore_state(&mut sim.world, ch, &saved);
-    let second = replay(&mut sim, &inputs);
+    // First pass; also save mid-run, airborne, once past 150 inputs.
+    let mut mid: Option<(usize, CharacterState)> = None;
+    let mut first = Vec::new();
+    for (i, &input) in inputs.iter().enumerate() {
+        sim.frame(input);
+        first.push((sim.root_pos(), sim.ctl.state(ch).unwrap()));
+        if mid.is_none() && i >= 150 {
+            let s = sim.ctl.save_state(&sim.world, ch).unwrap();
+            if s.vertical != 0.0 {
+                mid = Some((i + 1, s));
+            }
+        }
+    }
     let moved = first
         .iter()
         .any(|(p, _)| (*p - saved.position).magnitude() > 5.0);
     assert!(moved, "the inputs must actually move the character");
-    for (i, (a, b)) in first.iter().zip(&second).enumerate() {
-        assert!(
-            (a.0 - b.0).magnitude() < 1e-4,
-            "tick {i}: {:?} vs {:?}",
-            a.0,
-            b.0
-        );
-        assert_eq!(a.1, b.1, "tick {i}");
+    let (start, mid_state) = mid.expect("an airborne tick after 150 inputs");
+    assert_ne!(mid_state.vertical, 0.0);
+
+    for (from, state) in [(0, saved), (start, mid_state)] {
+        sim.ctl.restore_state(&mut sim.world, ch, &state);
+        let second = replay(&mut sim, &inputs[from..]);
+        for (i, (a, b)) in first[from..].iter().zip(&second).enumerate() {
+            let tick = from + i;
+            assert!(
+                (a.0 - b.0).magnitude() < 1e-4,
+                "tick {tick}: {:?} vs {:?}",
+                a.0,
+                b.0
+            );
+            assert_eq!(a.1, b.1, "tick {tick}");
+        }
     }
 }
 
@@ -821,8 +839,10 @@ fn replay_600_inputs_from_saved_state_matches() {
 fn save_then_restore_returns_the_same_state() {
     let mut sim = replay_level();
     let ch = sim.character();
+    // Settle on the ground, then jump and save a few frames into the air.
+    sim.run(0.5, MoveInput::default());
     sim.run(
-        1.0,
+        0.1,
         MoveInput {
             dir: Vec3::new(1.0, 0.0, 0.0),
             jump: true,
@@ -830,6 +850,7 @@ fn save_then_restore_returns_the_same_state() {
         },
     );
     let saved = sim.ctl.save_state(&sim.world, ch).unwrap();
+    assert_ne!(saved.vertical, 0.0, "saved while airborne");
     sim.run(
         1.0,
         MoveInput {
