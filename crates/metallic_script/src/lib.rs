@@ -9,6 +9,8 @@
 //! [`ScriptHost`] sits on top: it runs a world's `Script`s and `LocalScript`s in a server
 //! and a client VM and gives them the Roblox-named API (`game`, `Instance`, services,
 //! signals, `RemoteEvent`; see `docs/luau-api.md`).
+//! [`ScriptHost::new_server`] selects only the server VM, without synthetic local-player
+//! setup or client-script execution. This scripting role adds no network or server process.
 
 #![warn(missing_docs)]
 
