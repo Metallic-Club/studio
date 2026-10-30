@@ -202,3 +202,59 @@ fn world_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<World>();
 }
+
+/// Records every value `prop` of `id` fires with.
+fn record(
+    w: &mut World,
+    id: InstanceId,
+    prop: &str,
+) -> std::sync::Arc<std::sync::Mutex<Vec<Value>>> {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let s2 = seen.clone();
+    w.property_changed(id, prop)
+        .connect(move |v| s2.lock().unwrap().push(v.clone()));
+    seen
+}
+
+#[test]
+fn destroy_ignores_out_of_range_signal_id() {
+    let mut w = World::new_empty();
+    let part = w.create("Part", None).unwrap();
+    let survivor = w.create("Part", None).unwrap();
+    let seen = record(&mut w, survivor, "Anchored");
+    let forged: InstanceId = ron::from_str("(index: 4294967295, generation: 0)").unwrap();
+    w.property_changed(forged, "Name").connect(|_| {});
+    w.destroy(part);
+    assert!(!w.is_alive(part));
+    w.set(survivor, "Anchored", Value::Bool(true)).unwrap();
+    assert_eq!(seen.lock().unwrap().as_slice(), &[Value::Bool(true)]);
+}
+
+#[test]
+fn destroy_ignores_stale_generation_signal_id() {
+    let mut w = World::new_empty();
+    let old = w.create("Part", None).unwrap();
+    w.destroy(old);
+    let survivor = w.create("Part", None).unwrap();
+    let seen = record(&mut w, survivor, "Anchored");
+    w.property_changed(old, "Name").connect(|_| {});
+    let part = w.create("Part", None).unwrap();
+    w.destroy(part);
+    w.set(survivor, "Anchored", Value::Bool(true)).unwrap();
+    assert_eq!(seen.lock().unwrap().as_slice(), &[Value::Bool(true)]);
+}
+
+#[test]
+fn player_gui_is_a_registered_class_with_unique_bits() {
+    let mut w = world();
+    let player = w
+        .create("Player", Some(w.root("Players").unwrap()))
+        .unwrap();
+    let gui = w.create("PlayerGui", Some(player)).unwrap();
+    assert_eq!(w.class_name(gui), Some("PlayerGui"));
+    assert!(w.is_a(gui, "Instance"));
+    assert_ne!(gui.to_bits(), player.to_bits());
+    w.destroy(gui);
+    let again = w.create("PlayerGui", Some(player)).unwrap();
+    assert_ne!(again.to_bits(), gui.to_bits());
+}

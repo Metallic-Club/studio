@@ -1,0 +1,38 @@
+// Realistic: physically based lighting, AgX Punchy, tasteful bloom. The default Look of a new place.
+// Schema and rules: docs/design/look-presets.md section 3.
+(
+    format: "metallic.look",
+    version: 1,
+    id: "realistic",
+    name: "Realistic",
+    base: None,
+    dimension: ThreeD,
+    shading: (
+        default: Lit(wrap: 0.0, roughness_floor: 0.0),
+        classes: {},
+        materials: {},
+    ),
+    lighting: (
+        preset: "Clear Day",
+        also_good: ["Golden Hour", "Overcast", "Moonlit", "Night City", "Horror Fog", "Desert Noon", "Sci-fi Interior", "Underwater", "Alien Dusk"],
+        style: Realistic,
+        shadows: Auto,
+        softness_min: 0.0,
+        ambient_scale: 1.0,
+        ao: Darken(intensity: 1.0),
+        volumetrics: Auto,
+    ),
+    exposure: (mode: Auto, compensation: 0.0),
+    tonemap: AgXPunchy,
+    outlines: (hull: Off, edges: Off),
+    hdr: [
+        Bloom(intensity: 0.04, size: 24.0, threshold: 0.0),
+    ],
+    grade: (contrast: 0.0, saturation: 0.0, brightness: 0.0, tint: Rgb(255, 255, 255), lut: None, lut_strength: 0.0, vignette: 0.15),
+    ldr: [],
+    palette: Off,
+    render: (scale: Relative(1.0), upscale: Bilinear, snap: Off, subpixel: false, aa: Auto, detail_texels_per_stud: 0),
+    output: [],
+    fog: (mode: Height, density_scale: 1.0, color: Sky),
+    tiers: {},
+)

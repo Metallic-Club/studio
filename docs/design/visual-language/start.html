@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metallic Studio start</title>
+<link rel="stylesheet" href="assets/mockup-fonts.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--bg-base); color: var(--text-1); font-family: var(--font); -webkit-font-smoothing: antialiased; }
+  body { overflow: hidden; }
+  .app { display: grid; grid-template-rows: 40px 1fr; height: 100vh; }
+
+  /* Title bar */
+  .titlebar { background: var(--g-950); display: flex; align-items: center; padding-left: 12px; border-bottom: 1px solid var(--line); }
+  .titlebar .mark { width: 20px; height: 20px; border-radius: 5px; display: block; }
+  .titlebar .word { font: 640 13px/16px var(--font); font-stretch: 112.5%; color: var(--g-200); margin-left: 10px; letter-spacing: 0.01em; }
+  .titlebar .spacer { flex: 1; }
+  .titlebar .tb-btn { height: 28px; margin-right: 4px; font-weight: 500; }
+  .wc { width: 46px; height: 40px; border: 0; background: transparent; color: var(--icon); display: grid; place-items: center; cursor: pointer; }
+  .wc .ph { font-size: 14px; }
+  .wc:hover { background: var(--g-700); }
+  .wc.close:hover { background: #a3443e; color: var(--g-50); }
+
+  .body { display: grid; grid-template-columns: var(--rail) 1fr; min-height: 0; }
+  :root { --rail: 272px; --pad-x: 36px; --pad-y: 28px; --cols: 6; --gap: 12px; }
+  @media (min-width: 1600px) { :root { --rail: 320px; --pad-x: 48px; --pad-y: 40px; --cols: 6; --gap: 16px; } }
+
+  /* Left rail */
+  .rail { background: var(--bg-deep); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; padding: 20px 16px 16px; gap: 16px; }
+  .rail .open-btn { width: 100%; justify-content: flex-start; }
+  .rail .open-btn .key { margin-left: auto; }
+  .rail h2 { margin: 4px 4px 0; display: flex; align-items: baseline; gap: 8px; }
+  .rail h2 .count { font: 400 12px/16px var(--font); color: var(--text-3); }
+  .recents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+  .recent { display: grid; grid-template-columns: 72px 1fr; gap: 12px; align-items: center; padding: 6px; border-radius: var(--r-md); cursor: pointer; border: 0; background: transparent; color: inherit; text-align: left; width: 100%; font: inherit;
+    transition: background-color var(--t-fast) var(--ease-out); }
+  .recent:hover { background: var(--bg-hover); }
+  .recent:hover .meta { color: var(--text-2); } /* text.3 fails on hover fill (4.19:1); promote to text.2 */
+  .recent:active { background: var(--bg-active); }
+  .recent .thumb { width: 72px; height: 40px; border-radius: var(--r-xs); overflow: hidden; position: relative; }
+  .recent .name { font: 560 13px/18px var(--font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent .meta { font: 400 12px/16px var(--font); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent.missing .name { color: var(--text-2); }
+  .recent.missing .meta { color: var(--warning); display: flex; gap: 4px; align-items: center; }
+  .recent .thumb.gone { background: var(--g-800); display: grid; place-items: center; color: var(--text-3); font-size: 18px; }
+  .rail .empty { padding: 20px 16px; border-radius: var(--r-md); background: var(--bg-panel); box-shadow: inset 0 1px 0 var(--highlight); }
+  .rail .empty .ph { font-size: 22px; color: var(--icon); }
+  .rail .empty h3 { margin: 10px 0 4px; font: 600 13px/18px var(--font); }
+  .rail .empty p { margin: 0; font: 400 12px/17px var(--font); color: var(--text-2); }
+  .rail .foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 4px; }
+  .rail .foot .ver { font: 400 12px/16px var(--font); color: var(--text-3); }
+  .linkbtn { background: none; border: 0; padding: 2px 0; color: var(--text-2); font: 400 12px/16px var(--font); cursor: pointer; text-align: left; }
+  .linkbtn:hover { color: var(--text-1); text-decoration: underline; text-underline-offset: 3px; }
+  .foot .links { display: flex; gap: 14px; }
+
+  /* Main */
+  .main { overflow: auto; padding: var(--pad-y) var(--pad-x) 24px; min-width: 0; display: flex; flex-direction: column; }
+  .main > .stage { flex: 1 1 auto; min-height: 400px; max-height: 660px; }
+  @media (min-width: 1600px) {
+    .t-display { font-size: 38px; line-height: 44px; }
+    .t-title { font-size: 30px; line-height: 36px; }
+    .lede { font-size: 15px; line-height: 22px; }
+    .sheet { padding: 32px 36px 36px; }
+  }
+  .ask { margin: 0; }
+  .lede { margin: 6px 0 0; color: var(--text-2); }
+  .lede .key { margin: 0 1px; }
+
+  .stage { margin-top: 20px; display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(320px, 1fr); background: var(--bg-panel); border-radius: var(--r-lg); overflow: hidden; position: relative; box-shadow: inset 0 1px 0 var(--highlight); }
+  .stage .art { position: relative; min-height: 300px; overflow: hidden; }
+  .stage .art .shot { position: absolute; inset: 0; transition: opacity var(--t-slow) var(--ease-out); }
+  .stage .art .chips { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 6px; }
+  .chip { font: 520 12px/16px var(--font); padding: 4px 8px; border-radius: var(--r-xs); background: rgba(17,16,21,0.88); color: var(--text-1); display: inline-flex; gap: 6px; align-items: center; }
+  .chip .ph { font-size: 13px; color: var(--icon); }
+  .sheet { padding: 22px 24px 24px; display: flex; flex-direction: column; min-width: 0; }
+  .sheet .tname { margin: 0; }
+  .sheet .tmeta { margin-top: 4px; color: var(--text-2); font: 400 13px/18px var(--font); }
+  .sheet .tdesc { margin: 12px 0 0; font: 400 14px/20px var(--font); color: var(--text-1); }
+  .sheet .inside { margin: 8px 0 0; font: 400 12px/17px var(--font); color: var(--text-3); }
+  .sheet .inside b { font-weight: 560; color: var(--text-2); }
+  .inside-list { display: none; list-style: none; margin: 16px 0 0; padding: 0; grid-template-columns: 1fr 1fr; gap: 2px 16px; }
+  .inside-list li { display: flex; gap: 10px; align-items: center; font: 400 13px/18px var(--font); color: var(--text-2); padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .inside-list .ph { font-size: 16px; color: var(--icon); width: 16px; }
+  @media (min-width: 1600px) {
+    .stage { grid-template-columns: minmax(0, 2fr) minmax(400px, 1fr); }
+    .sheet { padding: 30px 32px 32px; }
+    .inside-list { display: grid; }
+    .sheet .inside { display: none; }
+  }
+  .form { margin-top: auto; padding-top: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .create-row { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+  .create-row .note { font: 400 12px/16px var(--font); color: var(--text-3); }
+
+  /* Starting points */
+  .sp-head { margin-top: 26px; display: flex; align-items: center; gap: 12px; }
+  .sp-head h2 { margin: 0; }
+  .seg { margin-left: auto; display: inline-flex; background: var(--bg-deep); border-radius: var(--r-sm); padding: 2px; gap: 2px; }
+  .seg button { font: 520 12px/16px var(--font); height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2); cursor: pointer; }
+  .seg button:hover { color: var(--text-1); background: var(--g-750); }
+  .seg button[aria-pressed="true"] { background: var(--g-650); color: var(--text-1); }
+  .cards { margin-top: 12px; display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: var(--gap); }
+  .card { position: relative; border: 0; padding: 0; background: var(--bg-panel); border-radius: var(--r-md); color: inherit; text-align: left; cursor: pointer; font: inherit; box-shadow: inset 0 1px 0 var(--highlight);
+    transition: background-color var(--t-fast) var(--ease-out); }
+  .card:hover { background: var(--bg-raised); }
+  .card:active .art { transform: translateY(1px); }
+  .card .art { aspect-ratio: 16 / 9; border-radius: var(--r-md) var(--r-md) 0 0; overflow: hidden; position: relative; }
+  .card .txt { padding: 8px 10px 10px; }
+  .card .name { font: 600 13px/18px var(--font); font-stretch: 106%; display: flex; gap: 6px; align-items: center; }
+  .card .meta { font: 400 12px/16px var(--font); color: var(--text-3); margin-top: 1px; }
+  .card:hover .meta { color: var(--text-2); }
+  /* Selected: the card takes the cut, and a 2 px accent ring follows the same outline 2 px outside it.
+     In the mockup the ring is two stacked cut shapes (accent, then base) behind the card. */
+  .card-wrap { position: relative; display: grid; }
+  .card-wrap[hidden] { display: none; }
+  .card-wrap.on::before, .card-wrap.on::after { content: ""; position: absolute; pointer-events: none; }
+  .card-wrap.on::before { inset: -4px; background: var(--accent); border-radius: 9px; clip-path: polygon(0 0, calc(100% - 15.2px) 0, 100% 15.2px, 100% 100%, 0 100%); }
+  .card-wrap.on::after  { inset: -2px; background: var(--bg-base); border-radius: 7px; clip-path: polygon(0 0, calc(100% - 12.4px) 0, 100% 12.4px, 100% 100%, 0 100%); }
+  /* Keyboard focus on the selected card: the ring turns violet-200 and grows to 3 px (focus differs from selection) */
+  .card-wrap.on:has(.card:focus-visible)::before { inset: -5px; background: var(--v-200); clip-path: polygon(0 0, calc(100% - 16.6px) 0, 100% 16.6px, 100% 100%, 0 100%); }
+  .card:focus-visible { outline: none; }
+  .card-wrap:not(.on):has(.card:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 8px; }
+  .card[aria-checked="true"] { background: var(--bg-raised); clip-path: polygon(0 0, calc(100% - var(--cut-md)) 0, 100% var(--cut-md), 100% 100%, 0 100%); z-index: 1; }
+  .card .sel { display: none; color: var(--accent-text); font-size: 14px; }
+  .card[aria-checked="true"] .sel { display: inline-block; }
+
+  /* Template art without a preview image: the template's Theme painted as sky, haze and ground, with its genre glyph */
+  .theme-art { position: absolute; inset: 0; background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-low) 62%, var(--sky-low) 63%, var(--ground) 63%, var(--ground-far) 100%); }
+  .theme-art .glyph { position: absolute; left: 50%; top: 63%; transform: translate(-50%, -78%); font-size: 40px; color: var(--ink); }
+  .theme-art.big .glyph { font-size: 104px; }
+  .recent .theme-art .glyph { font-size: 18px; }
+  @media (min-width: 1600px) { .card .theme-art .glyph { font-size: 52px; } .theme-art.big .glyph { font-size: 150px; } }
+  .t-titanium { --sky-top:#aeb1c2; --sky-low:#d9dae2; --ground:#7a7686; --ground-far:#5c5968; --ink:#2e2c37; }
+  .t-toybox   { --sky-top:#7fbcea; --sky-low:#cfe8f8; --ground:#69b866; --ground-far:#4f9a4d; --ink:#24467a; }
+  .t-dusk     { --sky-top:#463b66; --sky-low:#e09a66; --ground:#3a2f3d; --ground-far:#261f29; --ink:#17131c; }
+  .t-foundry  { --sky-top:#57514b; --sky-low:#8d8376; --ground:#433b35; --ground-far:#2e2925; --ink:#1c1916; }
+  .t-noir     { --sky-top:#151925; --sky-low:#353c52; --ground:#14161c; --ground-far:#0d0e12; --ink:#9aa3b8; }
+  .t-paper    { --sky-top:#f3eee2; --sky-low:#ece2cc; --ground:#d6c9ac; --ground-far:#c7b894; --ink:#4a4236; }
+  .shot-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* Toast */
+  .toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+  .toast { min-width: 280px; max-width: 380px; background: var(--g-750); border-radius: var(--r-md); box-shadow: var(--shadow-pop), inset 0 1px 0 var(--highlight); padding: 12px 12px 12px 14px; display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: start;
+    animation: toast-in var(--t-slow) var(--ease-out); }
+  .toast .phf { font-size: 18px; }
+  .toast .msg { font: 400 13px/18px var(--font); }
+  .toast .msg b { font-weight: 600; }
+  .toast .x { background: none; border: 0; color: var(--icon); cursor: pointer; padding: 2px; border-radius: var(--r-xs); }
+  .toast .x:hover { background: var(--g-650); }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="titlebar">
+    <img class="mark" src="../../../branding/placeholder-icon.png" alt="">
+    <span class="word">Metallic Studio</span>
+    <span class="spacer"></span>
+    <button class="btn btn-ghost tb-btn" data-toast="Settings opens here: shortcuts, interface size, contrast."><i class="ph" aria-hidden="true">&#xe272;</i>Settings</button>
+    <button class="btn btn-ghost tb-btn" data-toast="Help opens the guides and the shortcut list (Ctrl /)."><i class="ph" aria-hidden="true">&#xe3e8;</i>Help</button>
+    <button class="wc" aria-label="Minimise" data-toast="In Studio this minimises the window."><i class="ph">&#xe32a;</i></button>
+    <button class="wc" aria-label="Maximise" data-toast="In Studio this maximises the window."><i class="ph">&#xe45e;</i></button>
+    <button class="wc close" aria-label="Close" data-toast="In Studio this closes the window."><i class="ph">&#xe4f6;</i></button>
+  </header>
+
+  <div class="body">
+    <aside class="rail" aria-label="Your games">
+      <button class="btn btn-secondary open-btn" id="open-folder"><i class="ph" aria-hidden="true">&#xe256;</i>Open a game folder<span class="key">Ctrl O</span></button>
+      <h2 class="t-heading">Recent games <span class="count" id="recent-count"></span></h2>
+      <ul class="recents" id="recents"></ul>
+      <div class="foot">
+        <span class="ver">Metallic Studio 0.1.0, dev channel</span>
+        <div class="links">
+          <button class="linkbtn" data-toast="Opens the third-party licences screen.">Third-party licences</button>
+          <button class="linkbtn" data-toast="Checking for updates... You have the newest dev build.">Check for updates</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <h1 class="ask t-display">What do you want to make?</h1>
+      <p class="lede t-body-lg">Every template opens ready to play. Press <span class="key">F5</span> to try it, then change anything you like.</p>
+
+      <section class="stage cut-lg" aria-label="Selected template">
+        <div class="art" id="stage-art"></div>
+        <div class="sheet">
+          <h2 class="tname t-title" id="t-name"></h2>
+          <div class="tmeta" id="t-meta"></div>
+          <p class="tdesc" id="t-desc"></p>
+          <p class="inside" id="t-inside"></p>
+          <ul class="inside-list" id="t-list" aria-label="What's inside"></ul>
+          <form class="form" id="form" novalidate>
+            <div>
+              <label class="field-label" for="name">Game name</label>
+              <input class="field" id="name" autocomplete="off" spellcheck="false">
+              <div id="name-msg"></div>
+            </div>
+            <div>
+              <label class="field-label" for="folder">Folder</label>
+              <div class="row2">
+                <input class="field" id="folder" autocomplete="off" spellcheck="false" value="C:\Games">
+                <button type="button" class="btn btn-secondary" id="browse">Browse</button>
+              </div>
+              <div id="folder-msg"></div>
+            </div>
+            <div class="create-row">
+              <button type="submit" class="btn btn-primary cut-sm" id="create">Create game <span class="key">Enter</span></button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <div class="sp-head">
+        <h2 class="t-heading">Starting points</h2>
+        <div class="seg" role="group" aria-label="Filter starting points">
+          <button aria-pressed="true" data-f="all">All</button>
+          <button aria-pressed="false" data-f="3d">3D</button>
+          <button aria-pressed="false" data-f="2d">2D</button>
+          <button aria-pressed="false" data-f="empty">Empty</button>
+        </div>
+      </div>
+      <div class="cards" id="cards" role="radiogroup" aria-label="Starting points"></div>
+    </main>
+  </div>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script>
+// Template copy: Parkour's line is the real template.toml text; the others are proposed copy for their template.toml.
+const TEMPLATES = [
+  { id:'parkour', list:[['','Spawn point'],['','3 checkpoints'],['','Moving platform'],['','Lava'],['','Spinning bar'],['','Finish timer']], name:'Parkour', dim:'3d', meta:'3D, third-person', theme:'titanium', glyph:'\ue730', img:'assets/parkour-start-1280.jpg',
+    desc:'Run, jump and reach the finish. Checkpoints save your progress.', inside:'Spawn, three checkpoints, a moving platform, lava, a spinning bar and a finish timer.' },
+  { id:'obby', list:[['','Spawn point'],['','Stacked floors'],['','Kill bricks'],['','Spinners'],['','Checkpoint per floor'],['','Climb timer']], name:'Obby', dim:'3d', meta:'3D, third-person', theme:'toybox', glyph:'\ue9e4',
+    desc:'Climb floor by floor past kill bricks and spinners. Each floor is a checkpoint.', inside:'Stacked floors, kill bricks, spinners and a checkpoint on every floor.' },
+  { id:'fps', list:[['','Respawn points'],['','Starter weapon'],['','Health'],['','Arena walls']], name:'FPS arena', dim:'3d', meta:'3D, first-person', theme:'foundry', glyph:'\ue1d8',
+    desc:'Move, aim and shoot in a small arena. Health and respawning already work.', inside:'One arena, a starter weapon, health, respawn points.' },
+  { id:'racing', list:[['','One car'],['','A track'],['','Lap counter'],['','Finish line']], name:'Racing', dim:'3d', meta:'3D, chase camera', theme:'dusk', glyph:'\uea38',
+    desc:'Drive laps around a track. The lap timer and the finish line are wired up.', inside:'A track, one car, a lap counter and a finish line.' },
+  { id:'platformer', list:[['','Tile layers'],['','2D character'],['','Coins'],['','Goal flag']], name:'Platformer', dim:'2d', meta:'2D, side view', theme:'paper', glyph:'\ue244',
+    desc:'Jump across platforms to the flag. Tiles, coins and a 2D camera are set up.', inside:'Tile layers, coins, a goal flag and a side camera.' },
+  { id:'empty3d', list:[['','Baseplate'],['','Spawn point'],['','Titanium look']], name:'Empty 3D world', dim:'empty', meta:'Baseplate and a spawn', theme:'titanium', glyph:'\ue1da',
+    desc:'A flat baseplate, a spawn point and the default look. Build anything.', inside:'A 512 by 512 baseplate, a spawn point, the Titanium look.' },
+];
+const THEME_NAME = { titanium:'Titanium look', toybox:'Toybox look', foundry:'Foundry look', dusk:'Dusk look', paper:'Paper look', noir:'Noir look' };
+// The creator's own games (example names, no people). Thumbnails come from each game's last save.
+const RECENTS = [
+  { name:'Lava Run', tpl:'parkour', when:'12 minutes ago', img:'assets/parkour-checkpoint-1280.jpg' },
+  { name:'Sky Tower', tpl:'obby', when:'Yesterday' },
+  { name:'Kart Test 2', tpl:'racing', when:'Monday' },
+  { name:'Arena Prototype', tpl:'fps', when:'12 Oct', missing:true },
+  { name:'Paper Hop', tpl:'platformer', when:'3 Oct' },
+];
+const params = new URLSearchParams(location.search);
+const FIRST_RUN = params.get('state') === 'firstrun';
+let selected = 0, filter = 'all', nameTouched = false;
+
+const $ = (id) => document.getElementById(id);
+function themeArt(t, big) {
+  return `<div class="theme-art t-${t.theme}${big ? ' big' : ''}" aria-hidden="true"><i class="ph glyph" style="font-family:'Phosphor Bold'">${t.glyph}</i></div>`;
+}
+function artFor(t, big) {
+  return t.img ? `<img class="shot-img" src="${t.img}" alt="">` : themeArt(t, big);
+}
+function toast(kind, html, ms = 5000) {
+  const icons = { info:['\ue2ce','var(--info)'], ok:['\ue184','var(--success)'], error:['\ue4f8','var(--error)'], warn:['\ue4e0','var(--warning)'] };
+  const [glyph, color] = icons[kind];
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = `<i class="phf" style="color:${color}" aria-hidden="true">${glyph}</i><div class="msg">${html}</div><button class="x" aria-label="Dismiss"><i class="ph">\ue4f6</i></button>`;
+  el.querySelector('.x').onclick = () => el.remove();
+  $('toasts').appendChild(el);
+  if (kind !== 'error') setTimeout(() => el.remove(), ms);
+}
+
+function renderRecents() {
+  const ul = $('recents');
+  if (FIRST_RUN) {
+    $('recent-count').textContent = '';
+    ul.outerHTML = `<div class="empty"><i class="ph" aria-hidden="true">\ue24a</i><h3>No games yet</h3><p>Games you create or open show up here, newest first. Pick a starting point to make your first one.</p></div>`;
+    return;
+  }
+  $('recent-count').textContent = RECENTS.length;
+  ul.innerHTML = RECENTS.map((r, i) => {
+    const t = TEMPLATES.find(x => x.id === r.tpl);
+    const thumb = r.missing ? `<div class="thumb gone"><i class="ph">\ue24a</i></div>`
+      : `<div class="thumb">${r.img ? `<img class="shot-img" src="${r.img}" alt="">` : themeArt(t).replace('theme-art', 'theme-art mini')}</div>`;
+    const meta = r.missing ? `<span class="meta"><i class="phf" aria-hidden="true">\ue4e0</i>Folder moved or deleted</span>` : `<span class="meta">${t.name}, ${r.when}</span>`;
+    return `<li><button class="recent${r.missing ? ' missing' : ''}" data-i="${i}">${thumb}<span><span class="name">${r.name}</span><br>${meta}</span></button></li>`;
+  }).join('');
+  ul.querySelectorAll('.recent').forEach(b => b.onclick = () => {
+    const r = RECENTS[+b.dataset.i];
+    if (r.missing) toast('warn', `<b>${r.name}</b> is not in its folder any more. Find it with Open a game folder, or remove it from this list.`);
+    else toast('info', `Opening <b>${r.name}</b>...`);
+  });
+}
+
+function renderCards() {
+  $('cards').innerHTML = TEMPLATES.map((t, i) => `
+    <div class="card-wrap${i === selected ? ' on' : ''}" ${filter !== 'all' && t.dim !== filter ? 'hidden' : ''}>
+    <button class="card" role="radio" aria-checked="${i === selected}" tabindex="${i === selected ? 0 : -1}" data-i="${i}">
+      <div class="art">${artFor(t, false)}</div>
+      <div class="txt"><div class="name"><i class="phf sel" aria-hidden="true">\ue184</i>${t.name}</div><div class="meta">${t.meta}</div></div>
+    </button></div>`).join('');
+  $('cards').querySelectorAll('.card').forEach(c => {
+    c.onclick = () => select(+c.dataset.i, true);
+    c.onkeydown = (e) => {
+      const vis = [...$('cards').querySelectorAll('.card-wrap:not([hidden]) .card')].map(x => +x.dataset.i);
+      const pos = vis.indexOf(+c.dataset.i);
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); select(vis[(pos + 1) % vis.length], true); }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); select(vis[(pos - 1 + vis.length) % vis.length], true); }
+      if (e.key === 'Enter') { e.preventDefault(); $('form').requestSubmit(); }
+    };
+  });
+}
+
+function renderStage() {
+  const t = TEMPLATES[selected];
+  $('stage-art').innerHTML = `<div class="shot">${artFor(t, true)}</div>
+    <div class="chips"><span class="chip"><i class="ph" aria-hidden="true">${t.dim === '2d' ? '\ue464' : '\ue1da'}</i>${t.dim === '2d' ? '2D' : '3D'}</span><span class="chip"><i class="ph" aria-hidden="true">\ue472</i>${THEME_NAME[t.theme]}</span></div>`;
+  $('t-name').textContent = t.name;
+  $('t-meta').textContent = t.meta;
+  $('t-desc').textContent = t.desc;
+  $('t-inside').innerHTML = `<b>Inside:</b> ${t.inside}`;
+  $('t-list').innerHTML = (t.list || []).map(([g, s]) => `<li><i class="ph" aria-hidden="true">${g}</i>${s}</li>`).join('');
+  if (!nameTouched) $('name').value = 'My ' + t.name;
+  updateHelp();
+}
+
+function select(i, focus) {
+  selected = i; renderCards(); renderStage(); clearErrors();
+  if (focus) $('cards').querySelector(`[data-i="${i}"]`).focus();
+}
+
+function target() { return $('folder').value.replace(/\\+$/, '') + '\\' + $('name').value.trim(); }
+function updateHelp() {
+  if ($('folder-msg').dataset.err) return;
+  $('folder-msg').innerHTML = `<div class="field-help">Studio creates ${escapeHtml(target())}. It must be new or empty.</div>`;
+}
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c])); }
+function setError(field, msgEl, text) {
+  $(field).setAttribute('aria-invalid', 'true');
+  $(msgEl).dataset.err = '1';
+  $(msgEl).innerHTML = `<div class="field-error" id="${field}-err"><i class="phf" aria-hidden="true">\ue4e2</i><span>${text}</span></div>`;
+  $(field).setAttribute('aria-describedby', field + '-err');
+}
+function clearErrors() {
+  ['name', 'folder'].forEach(f => { $(f).removeAttribute('aria-invalid'); $(f).removeAttribute('aria-describedby'); });
+  $('name-msg').innerHTML = ''; delete $('folder-msg').dataset.err; updateHelp();
+}
+
+$('name').addEventListener('input', () => { nameTouched = true; clearErrors(); });
+$('folder').addEventListener('input', clearErrors);
+$('browse').onclick = () => toast('info', 'In Studio, Browse opens the Windows folder picker.');
+$('open-folder').onclick = () => toast('info', 'In Studio this opens the folder picker. Pick a folder that has a <b>metallic.toml</b>.');
+document.querySelectorAll('[data-toast]').forEach(b => b.onclick = () => toast('info', b.dataset.toast));
+document.querySelectorAll('.seg button').forEach(b => b.onclick = () => {
+  filter = b.dataset.f;
+  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', x === b));
+  const t = TEMPLATES[selected];
+  if (filter !== 'all' && t.dim !== filter) selected = TEMPLATES.findIndex(x => x.dim === filter);
+  renderCards(); renderStage();
+});
+$('form').addEventListener('submit', (e) => {
+  e.preventDefault(); clearErrors();
+  const name = $('name').value.trim();
+  if (!name) { setError('name', 'name-msg', 'Give your game a name.'); $('name').focus(); return; }
+  if (/[<>:"/\\|?*]/.test(name)) { setError('name', 'name-msg', 'Names cannot contain &lt; &gt; : " / \\ | ? or *.'); $('name').focus(); return; }
+  if (!$('folder').value.trim()) { setError('folder', 'folder-msg', 'Choose where to create the game.'); $('folder').focus(); return; }
+  if (RECENTS.some(r => r.name.toLowerCase() === name.toLowerCase()) || params.get('state') === 'firstrun') {
+    setError('folder', 'folder-msg', "This folder isn't empty. Choose an empty folder or a new one."); $('folder').focus(); return;
+  }
+  toast('ok', `Created <b>${escapeHtml(name)}</b>. Opening it in Build...`);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); $('open-folder').click(); }
+});
+
+renderRecents(); renderCards(); renderStage();
+if (FIRST_RUN) { $('form').requestSubmit(); }
+</script>
+</body>
+</html>
