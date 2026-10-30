@@ -89,3 +89,22 @@ Initial baseline/candidate artifacts are retained unchanged. Next: a separately 
 mutation workload with unchanged controls, and mandatory workspace/Clippy/license/fmt gates. The 5% acceptance
 target is still unproven and must not be silently waived. Root granted the diagnostic/candidate build slot;
 coordinate actual timing windows with the Simulation worker.
+
+The separate compact benchmark artifact built successfully at `dffc435`, tree
+`1bb5b5183a3c5d6073ad1720d789003a69268c65`: Cargo 1m56s, wrapper 122.99 s. Post-build checkout was clean,
+and SHA256 checks confirmed all three named executables remain separate/intact. Independent C2 peer review of
+this source found no additional actionable finding in static token lifetime, shared retention, clone order or
+coarse invalidation compatibility.
+
+After the root and Simulation suites released the managed timing window, the fixed narrow plan completed all
+40 selected runs: five workloads, one workload per process, four balanced adjacent pairs each, 30 samples,
+0.5-second warmup, 1.5-second measurement, 10,000 resamples. Median paired changes: stored read control -31.10%,
+is_a control -10.58%, set_position -6.63%, create +10.80%, destroy +9.11%. **The 5% wall-time target remains
+unresolved.** All runs/CIs are retained, including wide ranges; no speedup or noise-causality assertion. Host
+CPU snapshots were 95.59%/100%, with active unrelated compilation despite the managed team hold.
+See the research note and committed sanitized per-run JSON. Existing PR instruction CI supplies an independent
+metric after publication, not a substitute wall-time pass; no new workflow is needed.
+
+Next: commit this evidence, refresh the unpublished branch only across a verified plan/release-only main
+advance, then obtain the next released slot for full mandatory gates. No full-workspace build or further timing
+is active in lane114. No server action, M1/Epic15 acceptance change, own merge or force push.

@@ -57,3 +57,28 @@ they do not explain the earlier wide timing ratios or establish a timing improve
 After the representation change, all 56 default core tests passed. One manual layout probe was ignored by
 the default run but explicitly executed successfully before and after the change. The design's 5% wall-time
 acceptance remains unproven; a narrower mutation/control comparison is planned before claiming any pass.
+
+## Narrow compact mutation/control follow-up
+
+Exact base remains `fbaa17d`; the compact candidate is `dffc4356664ffa35b4fd491972ff9cefcc10e105`.
+Both earlier named artifacts remain intact. The fixed follow-up selected one workload per process, four balanced
+adjacent pairs per workload, 30 samples, 0.5-second warmup, 1.5-second measurement and 10,000 resamples. All 40
+selected runs succeeded and produced exactly their intended benchmark ID; no run was removed or retried.
+
+The **5% wall-time target remains unresolved**, not waived: create and destroy exceed it in these observations.
+The controls also vary substantially; their faster medians are not claimed as product speedups. The bounded
+activity snapshots measured 95.59% host CPU before and 100% after, including active rustc/cl CPU deltas outside
+the held managed team. These observations neither establish a cause nor justify dismissing a regression.
+
+| Workload | Median paired change | All four compact/base ratios |
+|---|---:|---|
+| property/get_ref_set_value | -31.10% | 0.708, 0.670, 1.727, 0.654 |
+| property/set_position | -6.63% | 1.530, 0.907, 0.797, 0.960 |
+| property/is_a_basepart | -10.58% | 0.964, 0.898, 0.891, 0.808 |
+| tree/create_1000_parts | +10.80% | 1.089, 1.045, 1.251, 1.127 |
+| tree/destroy_1000_siblings_one_by_one | +9.11% | 1.017, 1.203, 1.165, 0.944 |
+
+The complete per-run median estimates/confidence intervals are committed in
+`docs/research/data/2026-10-30-a1-journal-narrow.json`. Raw logs and the original full/narrow Criterion directories
+remain in the local integration evidence. Existing PR instruction-count CI is a separate, less contention-sensitive
+metric; even a passing instruction gate must not be relabelled as passing this wall-time acceptance target.
