@@ -48,6 +48,11 @@ runs). Prefer the workflow.
 - Only the owner decides when a stable release is cut. Dev builds come first; stable is a dev build that was tested.
 - A release can be marked required (Studio then insists on restarting): add `--required` to the script, or put the line
   `required: true` in the release notes. Use it only for breaking changes (file format, protocol).
+- The check accumulates skipped releases through a published same-channel version at/below the installed version
+  or the end of the list. A required flag on an older skipped page still applies to the newest offer. The existing
+  maximum of five pages of 50 remains; a scan truncated before that boundary reports an error rather than an
+  incomplete optional offer. This relies on the release process above publishing increasing versions, not on GitHub
+  sorting arbitrary version strings. Later-page failures also produce no partial offer.
 
 ## Protect the release tags (owner, one time)
 Anyone who can push a tag `v*` can start a release. Add a tag ruleset: repo `Metallic-Club/studio`, Settings, Rules,

@@ -5,9 +5,15 @@
 //! jumps when there is no ground just ahead of it, waits for the moving platform and hops across
 //! the spinning-bar arena. After a death it resumes from its last checkpoint. It must finish
 //! within the time and death limits below, and the HUD must show the checkpoints and the time.
+//!
+//! The bot never builds a `FrameInput`: it sends raw events (a gamepad stick, and either the
+//! keyboard or gamepad buttons) to an `InputRuntime` with the default `CharacterControls`, like the
+//! Player does, and records them as an `--input-script`. A second run replays that script through
+//! a `ScriptedSource` and must end the same way.
 use metallic_core::{InstanceId, Value, Vec3, World};
 use metallic_physics::{HumanoidState, PhysicsWorld};
-use metallic_runtime::{FrameInput, Game, StdoutSink, TICK};
+use metallic_runtime::input::{Control, Device, RawEvent, ScriptedSource};
+use metallic_runtime::{FrameInput, Game, InputRuntime, StdoutSink, TICK};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -219,7 +225,24 @@ fn hud_text(w: &World) -> String {
     }
 }
 
+/// Which buttons the bot presses; the stick always moves.
+#[derive(Clone, Copy, PartialEq)]
+enum Buttons {
+    /// Space and Shift on the keyboard.
+    Keyboard,
+    /// A and L3 on the gamepad.
+    Gamepad,
+}
+
 struct Bot {
+    input: InputRuntime,
+    buttons: Buttons,
+    /// Frames played so far; event times are `frame * TICK`.
+    frame: u64,
+    /// What the player holds now (to send only changes).
+    held: FrameInput,
+    /// The events sent so far, as an `--input-script`.
+    script: String,
     game: Game,
     route: Vec<Step>,
     /// Static copy of the level for "is there ground ahead" rays.
@@ -265,7 +288,63 @@ impl Bot {
             .is_some()
     }
 
-    fn tick(&mut self, input: FrameInput) -> Option<HumanoidState> {
+    /// Sends one event to the input runtime and records it in the script.
+    fn send(
+        &mut self,
+        device: Device,
+        control: Control,
+        state: &str,
+        nums: &[f32],
+        event: RawEvent,
+    ) {
+        let dev = match device {
+            Device::Gamepad(n) => format!("gamepad{n}"),
+            _ => "keyboard".to_string(),
+        };
+        let values: String = nums.iter().map(|n| format!(" {n}")).collect();
+        let name = control.name();
+        self.script.push_str(&format!(
+            "{} {dev} {name} {state}{values}
+",
+            self.frame
+        ));
+        self.input.push(event);
+    }
+
+    /// Turns what the bot wants into raw events, evaluates the actions and returns the result.
+    fn play_input(&mut self, want: FrameInput) -> FrameInput {
+        let time = self.frame as f64 * TICK;
+        let pad = Device::Gamepad(0);
+        if want.movement != self.held.movement {
+            let m = want.movement;
+            let e = RawEvent::vector(pad, Control::Thumbstick1, m, time);
+            self.send(pad, Control::Thumbstick1, "axis", &m, e);
+        }
+        let (jump_dev, jump_key, run_dev, run_key) = match self.buttons {
+            Buttons::Keyboard => (
+                Device::KeyboardMouse,
+                Control::Space,
+                Device::KeyboardMouse,
+                Control::LeftShift,
+            ),
+            Buttons::Gamepad => (pad, Control::ButtonA, pad, Control::ButtonL3),
+        };
+        for (now, before, device, control) in [
+            (want.jump, self.held.jump, jump_dev, jump_key),
+            (want.run, self.held.run, run_dev, run_key),
+        ] {
+            if now != before {
+                let e = RawEvent::button(device, control, f32::from(u8::from(now)), time);
+                self.send(device, control, if now { "down" } else { "up" }, &[], e);
+            }
+        }
+        self.held = want;
+        self.frame += 1;
+        self.input.frame(time, TICK as f32)
+    }
+
+    fn tick(&mut self, want: FrameInput) -> Option<HumanoidState> {
+        let input = self.play_input(want);
         let out = self.game.frame(&input, TICK);
         self.step_time += TICK;
         let text = hud_text(&self.world().borrow());
@@ -376,14 +455,25 @@ impl Bot {
     }
 }
 
-#[test]
-fn a_bot_using_only_player_input_finishes_the_course() {
+fn open_parkour() -> Game {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/parkour");
     let mut game = Game::open(&dir, None, Rc::new(StdoutSink)).expect("load Parkour");
     game.start().expect("start");
+    game
+}
+
+/// Plays the course with the bot and checks the HUD; returns the bot (with its script).
+fn finish_the_course(buttons: Buttons) -> Bot {
+    let game = open_parkour();
+    let input = InputRuntime::from_world(&game.world().borrow());
     let mut probe = PhysicsWorld::new();
     probe.sync_from(&game.world().borrow());
     let mut bot = Bot {
+        input,
+        buttons,
+        frame: 0,
+        held: FrameInput::default(),
+        script: String::new(),
         game,
         route: route(),
         probe,
@@ -415,4 +505,35 @@ fn a_bot_using_only_player_input_finishes_the_course() {
         "one decimal: {last}"
     );
     assert!(seconds > 20.0 && seconds <= time, "{seconds} vs {time}");
+    bot
+}
+
+#[test]
+fn a_bot_using_only_player_input_finishes_the_course() {
+    // Stick plus keyboard buttons, then the recorded events replayed as an input script.
+    let bot = finish_the_course(Buttons::Keyboard);
+    let frames = bot.frame;
+    let script = ScriptedSource::parse(&bot.script, TICK).expect("the recorded script parses");
+    assert!(script.last_frame() < frames);
+    println!(
+        "replaying {} script lines over {frames} frames",
+        bot.script.lines().count()
+    );
+    let mut replay = ScriptedSource::parse(&bot.script, TICK).expect("parse");
+    let mut game = open_parkour();
+    let mut input = InputRuntime::from_world(&game.world().borrow());
+    for frame in 0..frames {
+        input.poll_source(&mut replay);
+        let f = input.frame(frame as f64 * TICK, TICK as f32);
+        game.frame(&f, TICK);
+    }
+    assert_eq!(
+        hud_text(&game.world().borrow()),
+        bot.seen.last().cloned().unwrap_or_default()
+    );
+}
+
+#[test]
+fn the_course_can_be_finished_on_a_gamepad() {
+    finish_the_course(Buttons::Gamepad);
 }

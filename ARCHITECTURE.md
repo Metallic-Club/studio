@@ -28,7 +28,11 @@ apps.
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
-  only non-default properties, stable order). Also `deep_clone()` used by Play.
+  only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
+  defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
+  default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
+  `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
+  either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
@@ -37,7 +41,7 @@ apps.
   `MAX_VERTICES`, `MAX_KEYFRAMES`, ...), and the gltf crate's own validation runs only after our reference checks.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
-: `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
+- **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here.
@@ -67,17 +71,22 @@ apps.
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
   scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
   egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
-  `InputState` turns keys, mouse and gamepad into `FrameInput`s without depending on a window library. Shared by
-  player and Studio.
+  Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
+  player and Studio; no window library in this crate.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
   physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
+  Private `PhysicsSyncCache` tracks part signatures and direct Humanoid-to-Model dependencies, including deleted
+  IDs and inherited character membership. It updates affected entries from the journal, avoids full workspace
+  snapshots for ordinary property/pose ticks, and falls back to cache reconciliation on lost history or a new world.
+  The physics wrapper retains its own synchronization/reset contract; no physics API is added by this cache.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
-  [--fps] [--autopilot] [--capture FRAME:PNG]`; winit window, wgpu surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless
-  mode for smoke tests (no window, no GPU).
+  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F]`; winit window, wgpu surface, egui-wgpu for the GUI pass,
+  gilrs for gamepads, headless mode for smoke tests (no window, no GPU). `devices.rs` holds the winit key and mouse
+  mapping and the gilrs `GamepadSource` (the mapping table of spec 4.2); both produce `RawEvent`s for the runtime.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -171,6 +180,37 @@ apps.
   as an interface only), `Op` + `MeshCommand` + `History`, `triangulate` to a local `MeshData` (switches to
   `metallic_meshgen`'s once merged), `uv` (box/planar, LSCM), `export` (GLB/glTF/OBJ). Demo:
   `cargo run -p metallic_modeling --example modeling_demo`.
+
+## Input flow
+Games listen to actions, never to raw keys (design: `docs/design/input-actions.md`; phase 1 is implemented: spec
+sections 3, 4.1, 4.2, 4.4 and 6).
+
+```
+winit keys/mouse, gilrs pads, --input-script  ->  RawEvent  ->  InputQueue (1,024 per frame)
+InputRuntime::evaluate(now, dt):  bindings -> actions (values, Pressed/Released/Triggered/StateChanged events)
+InputRuntime::frame_input():      CharacterControls actions -> FrameInput   (Move, Jump, Run, Look, Zoom)
+Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read FrameInput
+```
+
+- **Data model.** Classes `InputContext` (`Enabled`, `Priority`, `Sink`, `RebindGroup`), `InputAction` (`Type`,
+  `Trigger`, times, `Role`, touch fields) and `InputBinding` (`KeyCode`, composites, modifiers, `Scale`,
+  `ResponseCurve`, `Deadzone` ...) are in the class registry. `InputConfig::from_world` reads them from
+  `ReplicatedStorage`, `StarterPlayer` and `Players`; when the scene has no `CharacterControls` context the built-in one
+  (`default_character_controls`) is used, otherwise the scene wins entirely. `InputRuntime::sync(&World)` reloads
+  when the change journal reports an input instance.
+- **Evaluation.** Per binding: modifiers, dead zone (radial, rescaled), response curve, scale, delta time, clamp. Per
+  action: Bool is the OR of its bindings, vectors take the largest magnitude. Contexts are asked by priority; a `Sink`
+  context takes the controls its bindings use (per control, not per context). Bool actions are evaluated at each raw
+  event's own time, so Hold, Tap, DoubleTap and Repeat use event time (a 30 fps phone still reads a 200 ms tap) and
+  a press that ends inside one frame is not lost. `last_device()` follows the hysteresis rule of spec 4.4.
+- **No allocation per frame.** Bindings are compiled once (`load`) into dense arrays with a list of binding indices per
+  control; `evaluate`, `push` and `drain_events` use preallocated buffers (test `tests/input_alloc.rs`). Bench
+  `input_eval/96_bindings` (`benches/input_eval.rs`).
+- **Headless.** `InputRuntime::push(RawEvent)` is the only entry. `ScriptedSource` replays `--input-script` files
+  (`frame device control state [values]`). The Parkour route test sends its moves as raw events, records them as a
+  script and replays the script.
+- **Not yet** (later phases, spec section 15): Luau API (#251), touch controls (#252), Studio panel (#253), rebinding
+  files, glyphs, toggles (#254).
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

@@ -32,6 +32,8 @@ const CLASS_METHODS: &[(&str, &str)] = &[
     ("FireServer", "RemoteEvent"),
     ("FireClient", "RemoteEvent"),
     ("FireAllClients", "RemoteEvent"),
+    ("GetState", "InputAction"),
+    ("GetHoldProgress", "InputAction"),
 ];
 
 /// The event named `name` on an instance of `class`, if there is one.
@@ -44,6 +46,10 @@ fn event_kind(class: &str, name: &str) -> Option<EventKind> {
         "Heartbeat" if class == "RunService" => Some(EventKind::Heartbeat),
         "OnServerEvent" if class == "RemoteEvent" => Some(EventKind::OnServerEvent),
         "OnClientEvent" if class == "RemoteEvent" => Some(EventKind::OnClientEvent),
+        "Pressed" if class == "InputAction" => Some(EventKind::Pressed),
+        "Released" if class == "InputAction" => Some(EventKind::Released),
+        "Triggered" if class == "InputAction" => Some(EventKind::Triggered),
+        "StateChanged" if class == "InputAction" => Some(EventKind::StateChanged),
         _ => None,
     }
 }
@@ -299,6 +305,7 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
         }
         _ => {}
     }
+    state.check_input_member(class, key)?;
     if let Some(method) = state.methods.get(key) {
         let allowed = CLASS_METHODS
             .iter()

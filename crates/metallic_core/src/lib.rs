@@ -4,7 +4,8 @@
 //! [`classes`]), a name, typed properties ([`Value`]) whose defaults come from the class
 //! registry, one optional parent and an ordered list of children. Instances are addressed
 //! by [`InstanceId`], a generational handle that stays invalid after the instance is
-//! destroyed. Scenes are saved to and loaded from a diff-friendly text file
+//! destroyed. [`World::get_ref`] borrows values and shared defaults without cloning;
+//! [`World::get`] retains the owned-value interface. Scenes are saved to and loaded from a diff-friendly text file
 //! ([`save_scene`], [`load_scene`]).
 //! [`World::set`] rejects non-finite numeric components before changing state, recording a
 //! journal entry, or dispatching a property-change signal.
