@@ -25,6 +25,14 @@ Arrows point from a dependency to its user. Nothing below `runtime` knows about 
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here.
+- **metallic_physics2d** (#126, M3 early slice; standalone, not wired into the runtime yet): `PhysicsWorld2d` wraps
+  rapier2d behind our own plain-data types (`Scene2d` of `BodyDesc`/`JointDesc` keyed by caller `BodyId`s, so it does
+  not depend on how 2D maps onto Instances): `sync_from(&Scene2d)`, `step(&mut Scene2d, dt)` (fixed 1/60 s ticks with 4
+  solver substeps; non-finite `dt` is an error), `raycast`, `drain_touched`, `drain_sensor_events`. Shapes include
+  convex polygons, edge chains and merged tilemaps; one-way platforms, sensors, collision groups, revolute/prismatic/
+  distance/weld joints. Platformer characters (`add_character`, `CharacterConfig`: coyote time, jump buffer, variable
+  jump, wall slide/jump, drop-through, platform carry) run inside the fixed tick. Backend choice and the proposed 2D
+  Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost` runs server and client scripts over a shared `World`, exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Output goes through `OutputSink`.

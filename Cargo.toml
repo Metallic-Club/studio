@@ -10,9 +10,11 @@ publish = false
 
 [workspace.dependencies]
 rapier3d = "0.36.1"
+rapier2d = "0.36.1"
 metallic_core = { path = "crates/metallic_core" }
 metallic_render = { path = "crates/metallic_render" }
 metallic_physics = { path = "crates/metallic_physics" }
+metallic_physics2d = { path = "crates/metallic_physics2d" }
 metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
