@@ -96,6 +96,9 @@ remote:FireServer(5)
 ```
 
 ## Limits
+- Each VM has a 256 MiB memory cap. `string.gmatch` iterators retain shared subject
+  and pattern strings inside that cap; many iterators over one string share its
+  storage. Retained strings are released when the iterators become collectible.
 - Remote: at most 32 arguments, 10,000 values (tables and leaves, shared tables counted per reference) and 1 MB of string bytes per
   call (`remote payload too large`); at most 1,000 messages and 16 MB queued per VM per step (`remote queue full`).
 - Signals: at most 10,000 connections per signal (`too many connections`). All handlers of a step share a 0.25 s budget per VM;

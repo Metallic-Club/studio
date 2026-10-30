@@ -5,6 +5,8 @@
 //! `os.clock` and `os.time`, `collectgarbage("count")` only, a 0.1 s execution budget per
 //! resume and a 256 MB memory cap. Scripts run as coroutines, so `task.wait`,
 //! `task.spawn` and `task.delay` work; the host drives them by calling [`ScriptVm::step`].
+//! Pattern iterators retain shared VM-managed subject/pattern strings, keeping
+//! their storage inside that memory cap until the iterators are collected.
 //!
 //! [`ScriptHost`] sits on top: it runs a world's `Script`s and `LocalScript`s in a server
 //! and a client VM and gives them the Roblox-named API (`game`, `Instance`, services,
