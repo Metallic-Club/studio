@@ -107,9 +107,14 @@ Assistant's calls (owner may override):
 Milestone order (each ends in something the owner can try):
   1. **Engine and Studio first slice** (two halves, below): the Parkour game plays in the Metallic Engine, and
      Metallic Studio can open, edit and play it.
-  2. Multiplayer: test with a friend, dedicated server, standard and proximity voice chat. Renderer track starts.
+     Then **1C** (owner, 2026-10-30): an installer exe, updates and auto-update from GitHub Releases, a team "dev"
+     channel and developer mode, so the team of four (owner + 3, all with access to the private repo) can install
+     and test Studio.
+  2. Multiplayer and **Team Create** (moved here from milestone 4 at the owner's request; they share the networking):
+     test with a friend, dedicated server, several people editing one game at once, standard and proximity voice
+     chat. Renderer track starts.
   3. 2D (Box2D) and more templates: FPS with view models, Horror, Platformer, Battle Royale, Build example.
-  4. Creation workflow: asset browser, glTF import, local backups, version control, then Team Create.
+  4. Creation workflow: asset browser, glTF import, local backups, version control.
   5. (ongoing from 2) Renderer upgrades toward Unreal-level lighting and performance.
   6. Built-in modeller, animation editor and VFX editor, linked live to the game.
   7. Toolbox/Marketplace, community, the learning course, Litha as the in-studio teacher.
@@ -154,6 +159,20 @@ Milestone 1 details (assistant's calls):
 Acceptance: the owner does steps 1-5 on this PC from a built zip. Performance: at least 60 fps at 1080p on high
 settings on this PC (RTX 3060 Ti, Ryzen 5 5500, 32 GB) while playing Parkour; at least 30 fps at 1080p on low settings
 on integrated laptop graphics (Intel Iris Xe class), checked on such a machine or marked "not verified".
+
+**1C: install and update** (owner asked; details are the assistant's calls):
+- `Metallic Studio Setup.exe` installs per user (no admin prompt), with Start-menu entry, crow icon and uninstaller.
+- Releases are published as GitHub Releases on the private `Metallic-Club/studio` repo, built by one script that runs
+  locally or in GitHub Actions. Updater: Velopack (MIT), delta updates, two channels: `dev` (team builds, every
+  merge) and later `stable`.
+- Because the repo is private, Studio signs each team member in with GitHub's device sign-in (they approve in the
+  browser; Studio never sees a password) and keeps the token in Windows Credential Manager. One owner step: register
+  a GitHub OAuth app under Metallic-Club (its client ID is not secret).
+- Studio checks for updates on start and every 6 hours, downloads in the background, and offers "Restart to update";
+  a forced update only if a release is marked required.
+- **Developer mode** (on for the `dev` channel, toggle in Settings): fps/frame-time/memory overlay, log viewer,
+  Instance inspector, script VM stats, feature flags for unfinished features, and "Report a bug" that saves logs and a
+  screenshot to a zip.
 
 ## 8. Platform link
 
