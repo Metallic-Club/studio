@@ -96,6 +96,12 @@ apps.
   egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
+  `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
+  `from_components` sanitizes non-finite local components, saturates axes and wraps yaw; `is_canonical` rejects
+  the reserved -128 axis. `to_move_input` defensively produces finite, unit-bounded horizontal wishes while
+  retaining analog magnitude below full tilt. The shared `move_direction` preserves CameraController's existing
+  transform. This changes no Game input wiring and supplies no packet encoding, admission or prediction.
+  The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
   physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
@@ -306,8 +312,10 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
   screens). `TouchControls` captures each finger with the first thing it lands on and pushes `Device::Touch` events;
   sliding off a button sends `RawEvent::cancel` (Released without Triggered). `paint` draws it with egui in the
   visual-language colours. `ContextActionService:GetButton` reads the placed buttons (`Game::set_touch_buttons`).
-  The Controls page's touch settings (stick mode, opacity) drive the overlay; touch controls have their own glyphs.
-- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, a touch tab on the Controls page.
+  The Controls page's Touch tab (#333: stick mode, opacity, size 0.8x to 1.5x, Large controls) drives the overlay;
+  touch controls have their own glyphs. A held press whose action changes role is cancelled on reload. While touch
+  shows, `Game::set_gui_inset` moves the `ScreenGui` root below a top-placed menu button, eased with the fade.
+- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, swap sides and Edit layout.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
@@ -315,7 +323,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
 
 1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift sets
    `MoveInput::run`: 1.5 x `Humanoid.WalkSpeed`, which scripts still read unchanged); death, respawn, checkpoints and
-   character touches happen here.
+   character touches happen here. Humanoid tuning is clamped in the class registry (`metallic_core::classes`
+   `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills).
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
    touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;

@@ -12,7 +12,7 @@
 //!   "sticks": { "Thumbstick2": { "sensitivity": 1.25, "invertY": true, "deadzone": 0.1 } },
 //!   "assist": { "toggleAll": false, "replaceHolds": true, "holdTimeScale": 1.5 },
 //!   "glyphs": { "gamepadStyle": "Letters" },
-//!   "touch": { "stick": "Fixed", "opacity": 0.75 },
+//!   "touch": { "stick": "Fixed", "opacity": 0.75, "size": 1.2, "largeControls": true },
 //!   "updated": "2026-10-30T12:00:00Z"
 //! }
 //! ```
@@ -33,6 +33,7 @@ use super::config::{
     Role, STICK_ORBIT_SPEED, Trigger, ZOOM_PER_NOTCH,
 };
 use super::control::{Control, ControlKind, DeviceKind};
+pub use super::touch::CONTROL_SCALE_RANGE;
 use super::touch::StickMode;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -274,13 +275,18 @@ impl Default for AssistSettings {
     }
 }
 
-/// The touch overlay's settings (spec 7.4): floating or fixed stick, and its opacity.
+/// The touch overlay's settings (spec 7.2 and 8.1, Touch tab): floating or fixed stick, opacity,
+/// control size and the Large controls preset.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TouchSettings {
     /// Floating (the base appears under the thumb, the default) or fixed.
     pub stick_mode: StickMode,
     /// Opacity of every touch control: 0.25 to 1.
     pub opacity: f32,
+    /// Control size: 0.8x to 1.5x, never below 48 dp.
+    pub size: f32,
+    /// The Large controls preset: every control at least 15 mm (spec 7.2).
+    pub large_controls: bool,
 }
 
 /// The range of [`TouchSettings::opacity`].
@@ -291,6 +297,8 @@ impl Default for TouchSettings {
         Self {
             stick_mode: StickMode::Floating,
             opacity: 1.0,
+            size: 1.0,
+            large_controls: false,
         }
     }
 }
@@ -368,9 +376,10 @@ impl PlayerOverrides {
         self.sticks[stick.index()] = s;
     }
 
-    /// Sets the touch settings; the opacity is clamped to [`TOUCH_OPACITY_RANGE`].
+    /// Sets the touch settings; the opacity and size are clamped to their ranges.
     pub fn set_touch(&mut self, mut t: TouchSettings) {
         t.opacity = clamp_or(t.opacity, TOUCH_OPACITY_RANGE, 1.0);
+        t.size = clamp_or(t.size, CONTROL_SCALE_RANGE, 1.0);
         self.touch = t;
     }
 
@@ -531,6 +540,12 @@ impl PlayerOverrides {
                     if let Some(x) = take_num(&mut map, "opacity") {
                         o.touch.opacity = clamp_or(x, TOUCH_OPACITY_RANGE, 1.0);
                     }
+                    if let Some(x) = take_num(&mut map, "size") {
+                        o.touch.size = clamp_or(x, CONTROL_SCALE_RANGE, 1.0);
+                    }
+                    if let Some(b) = take_bool(&mut map, "largeControls") {
+                        o.touch.large_controls = b;
+                    }
                     o.touch_extra = map;
                 }
                 other => {
@@ -598,6 +613,12 @@ impl PlayerOverrides {
         }
         if self.touch.opacity != TouchSettings::default().opacity {
             touch.insert("opacity".into(), num(self.touch.opacity));
+        }
+        if self.touch.size != TouchSettings::default().size {
+            touch.insert("size".into(), num(self.touch.size));
+        }
+        if self.touch.large_controls {
+            touch.insert("largeControls".into(), Value::Bool(true));
         }
         if !touch.is_empty() {
             root.insert("touch".into(), Value::Object(touch));

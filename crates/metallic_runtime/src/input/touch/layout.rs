@@ -26,6 +26,8 @@ const SPARE_RING3: [f32; 5] = [100.0, 120.0, 140.0, 160.0, 180.0];
 pub const MENU_SIZE: f32 = 48.0;
 /// Large controls: the smallest control on a phone (15 mm) and a tablet (24 mm), spec 7.2.
 pub const LARGE_MIN: [f32; 2] = [94.0, 151.0];
+/// The player's control size (spec 8.1, Touch tab): 0.8x to 1.5x, never below 48 dp.
+pub const CONTROL_SCALE_RANGE: (f32, f32) = (0.8, 1.5);
 
 /// A rectangle in dp, origin top-left, y down.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -106,6 +108,9 @@ pub struct DeviceProfile {
     pub tablet: bool,
     /// The Large controls preset (every control at least 15 mm on a phone, 24 mm on a tablet).
     pub large: bool,
+    /// The player's control size: the stick and the buttons times this (0.8 to 1.5); the menu
+    /// button keeps its size.
+    pub scale: f32,
     /// Floating (default) or fixed stick.
     pub stick_mode: StickMode,
 }
@@ -118,6 +123,7 @@ impl DeviceProfile {
             insets,
             tablet,
             large: false,
+            scale: 1.0,
             stick_mode: StickMode::Floating,
         }
     }
@@ -162,6 +168,16 @@ impl DeviceProfile {
         DeviceProfile { large, ..self }
     }
 
+    /// With a control size, clamped to [`CONTROL_SCALE_RANGE`] (1 when not a number).
+    pub fn with_scale(self, scale: f32) -> DeviceProfile {
+        let scale = if scale.is_finite() {
+            scale.clamp(CONTROL_SCALE_RANGE.0, CONTROL_SCALE_RANGE.1)
+        } else {
+            1.0
+        };
+        DeviceProfile { scale, ..self }
+    }
+
     /// With a stick mode.
     pub fn with_stick_mode(self, stick_mode: StickMode) -> DeviceProfile {
         DeviceProfile { stick_mode, ..self }
@@ -200,34 +216,43 @@ pub struct Sizes {
 /// minimum and the rings so that neighbours stay 8 dp apart.
 pub fn sizes_for(profile: &DeviceProfile) -> Sizes {
     let t = usize::from(profile.tablet);
-    let mut primary: f32 = [72.0, 84.0][t];
-    let mut secondary: f32 = [56.0, 64.0][t];
-    let mut stick_radius: f32 = [60.0, 70.0][t];
-    let knob = [56.0f32, 65.0][t];
+    // The player's size, never below 48 dp (a profile built by hand may hold any number).
+    let k = if profile.scale.is_finite() {
+        profile
+            .scale
+            .clamp(CONTROL_SCALE_RANGE.0, CONTROL_SCALE_RANGE.1)
+    } else {
+        1.0
+    };
+    let sized = |dp: f32| (dp * k).max(MIN_CONTROL);
+    let mut primary: f32 = sized([72.0, 84.0][t]);
+    let mut secondary: f32 = sized([56.0, 64.0][t]);
+    let mut stick_radius: f32 = sized([60.0, 70.0][t] * 2.0) / 2.0;
+    let knob = sized([56.0f32, 65.0][t]);
     let mut menu = MENU_SIZE;
     let factor = if profile.tablet {
         TABLET_RING_FACTOR
     } else {
         1.0
     };
-    let mut r1 = RING_RADII[0] * factor;
-    let mut r2 = RING_RADII[1] * factor;
+    let mut r1 = RING_RADII[0] * factor * k;
+    let mut r2 = RING_RADII[1] * factor * k;
     if profile.large {
         let min = LARGE_MIN[t];
         primary = primary.max(min);
         secondary = secondary.max(min);
         stick_radius = stick_radius.max(min / 2.0);
         menu = menu.max(min);
-        // Ring 1 clears the primary and its neighbours 50 degrees apart; ring 2 clears ring 1
-        // and its neighbours 35 degrees apart.
-        let chord = |deg: f32| 2.0 * (deg.to_radians() / 2.0).sin();
-        r1 = r1
-            .max((primary + secondary) / 2.0 + MIN_GAP)
-            .max((secondary + MIN_GAP) / chord(50.0));
-        r2 = r2
-            .max(r1 + secondary + MIN_GAP)
-            .max((secondary + MIN_GAP) / chord(35.0));
     }
+    // Ring 1 clears the primary and its neighbours 50 degrees apart; ring 2 clears ring 1 and
+    // its neighbours 35 degrees apart. (At the standard sizes the spec's radii already do.)
+    let chord = |deg: f32| 2.0 * (deg.to_radians() / 2.0).sin();
+    r1 = r1
+        .max((primary + secondary) / 2.0 + MIN_GAP)
+        .max((secondary + MIN_GAP) / chord(50.0));
+    r2 = r2
+        .max(r1 + secondary + MIN_GAP)
+        .max((secondary + MIN_GAP) / chord(35.0));
     Sizes {
         primary,
         secondary,
