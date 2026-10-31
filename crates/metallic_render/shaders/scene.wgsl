@@ -46,6 +46,8 @@ struct VOut {
     // Unlit rows: the colour through `unfinish`, once per vertex (the inverse curve is a
     // bisection, too costly per pixel). Zero for other models.
     @location(7) @interpolate(flat) unlit: vec3<f32>,
+    // Positive view depth, interpolated with perspective correction.
+    @location(8) view_depth: f32,
 }
 
 // `VOut.unlit` for a colour shaded by `row`.
@@ -71,6 +73,7 @@ fn vs_main(v: VIn) -> VOut {
     let cof = mat3x3<f32>(cross(c1, c2), cross(c2, c0), cross(c0, c1));
     var out: VOut;
     out.clip = g.view_proj * wp;
+    out.view_depth = out.clip.w;
     out.world_pos = wp.xyz;
     out.world_n = normalize(cof * v.normal);
     out.local_p = v.pos * vec3<f32>(length(c0), length(c1), length(c2));
@@ -196,19 +199,30 @@ fn detail(id: i32, p: vec3<f32>, n: vec3<f32>, px: f32) -> vec4<f32> {
 
 // ---- shadows -----------------------------------------------------------
 
+// Shared by production shading and the numerical GPU regression probe.
+fn fragment_view_depth(in: VOut) -> f32 {
+    // Baseline checkpoint retains the original calculation for executed red evidence.
+    return 1.0 / in.clip.w;
+}
+
+// Returns the cascade count when the surface is beyond every cascade.
+fn shadow_cascade(view_depth: f32) -> u32 {
+    let count = u32(g.params.x);
+    for (var i = 0u; i < count; i = i + 1u) {
+        if (view_depth < g.cascade_splits[i]) {
+            return i;
+        }
+    }
+    return count;
+}
+
 fn shadow_factor(wp: vec3<f32>, n: vec3<f32>, view_depth: f32, frag: vec2<f32>) -> f32 {
     let count = i32(g.params.x);
     if (g.light_flags.x < 0.5) {
         return 1.0;
     }
-    var ci = -1;
-    for (var i = 0; i < count; i = i + 1) {
-        if (view_depth < g.cascade_splits[i]) {
-            ci = i;
-            break;
-        }
-    }
-    if (ci < 0) {
+    let ci = shadow_cascade(view_depth);
+    if (ci >= u32(count)) {
         return 1.0;
     }
     let texel = g.cascade_texel[ci];
@@ -373,7 +387,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     if (model == MODEL_FLAT) {
         sn = nf;
     }
-    let view_depth = 1.0 / in.clip.w;
+    let view_depth = fragment_view_depth(in);
     let sh = shadow_factor(in.world_pos, sn, view_depth, in.clip.xy);
     var col: vec3<f32>;
     switch model {
