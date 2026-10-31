@@ -253,8 +253,8 @@ fn getter_precision_and_existing_member_errors_are_preserved() {
         local name
         ok, name = pcall(function() return p.Name end)
         assert(ok and name == 'Part')
-        ok, err = pcall(function() p.Name = 'x' end)
-        assert(not ok and string.find(err, 'Part has been destroyed', 1, true))
+        ok, err = pcall(function() p.Parent = nil end)
+        assert(not ok and string.find(err, 'Parent property of Part is locked', 1, true))
         ok, err = pcall(function() return p[1.25] end)
         assert(not ok and string.find(err, 'member name must be a string', 1, true))
     end"#,

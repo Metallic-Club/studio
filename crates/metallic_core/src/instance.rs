@@ -103,6 +103,12 @@ impl DestroyedInstance {
         self.class
     }
 
+    /// Sets `prop` on the record only (the instance stays destroyed). The caller checks that the
+    /// class has the property and the value has its type.
+    pub fn set(&mut self, prop: &str, value: Value) {
+        self.props.insert(prop.to_string(), value);
+    }
+
     /// The last value of `prop` (the class default if it was never set), `None` if the class
     /// has no such property. References are returned as stored, live or not.
     pub fn get(&self, prop: &str) -> Option<Value> {

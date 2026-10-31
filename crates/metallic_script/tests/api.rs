@@ -320,7 +320,7 @@ fn destroyed_instance_reads_its_last_values_and_refuses_changes() {
         p:Destroy()
         print(workspace:FindFirstChild("Brick"))
         print(pcall(function() return p.Position end))
-        print(pcall(function() p.Name = "x" end))
+        print(pcall(function() p.Name = "x" end), p.Name)
         print(pcall(function() workspace:Destroy() end))
         print(pcall(function() workspace.Parent = nil end))
         "#,
@@ -330,7 +330,8 @@ fn destroyed_instance_reads_its_last_values_and_refuses_changes() {
     assert_eq!(lines[0], "print:nil");
     // Like Roblox, the last values stay readable.
     assert_eq!(lines[1], "print:true 0, 0, 0", "{lines:?}");
-    assert!(lines[2].ends_with("Brick has been destroyed"), "{lines:?}");
+    // Writes change the destroyed record only.
+    assert_eq!(lines[2], "print:true x", "{lines:?}");
     assert!(lines[3].contains("cannot be destroyed"), "{lines:?}");
     assert!(lines[4].contains("locked"), "{lines:?}");
 }
@@ -620,7 +621,7 @@ fn a_destroyed_touching_limb_stays_readable_in_touch_ended() {
             local ok, err = pcall(function() hit.Parent = workspace end)
             print(ok, err)
             ok, err = pcall(function() hit.Transparency = 1 end)
-            print(ok, err)
+            print(ok, err, hit.Transparency, hit.Parent)
             print(pcall(function() return hit:Clone() end))
         end)
         "#,
@@ -640,10 +641,8 @@ fn a_destroyed_touching_limb_stays_readable_in_touch_ended() {
             && lines[2].contains("Parent property of LeftFoot is locked"),
         "{lines:?}"
     );
-    assert!(
-        lines[3].starts_with("print:false ") && lines[3].contains("LeftFoot has been destroyed"),
-        "{lines:?}"
-    );
+    // Like Roblox, other writes work on the destroyed record and never bring it back.
+    assert_eq!(lines[3], "print:true nil 1 nil", "{lines:?}");
     assert!(lines[4].starts_with("print:false "), "{lines:?}");
     assert_eq!(lines.len(), 5, "{lines:?}");
 }
@@ -699,4 +698,70 @@ fn nothing_destroyed_is_kept_after_the_step_or_once_stopped() {
     rig.world.borrow_mut().destroy(p);
     rig.world.borrow_mut().take_destroyed(&mut kept);
     assert!(kept.is_empty());
+}
+
+#[test]
+fn a_character_destroyed_by_a_script_stays_readable_in_the_next_steps_touch_ended() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    let pad = rig.add("Part", "Pad", ws);
+    let character = rig.add("Model", "Bob", ws);
+    let foot = rig.add("Part", "LeftFoot", character);
+    rig.server_script(
+        "S",
+        r#"
+        local done = false
+        game:GetService("RunService").Heartbeat:Connect(function()
+            if not done then
+                done = true
+                workspace.Bob:Destroy()
+            end
+        end)
+        workspace.Pad.TouchEnded:Connect(function(hit)
+            print(hit.Name, hit.ClassName, hit.Parent)
+        end)
+        "#,
+    );
+    start(&mut rig);
+    // The step whose Heartbeat destroys the character; the controller notices afterwards and
+    // the TouchEnded reaches scripts in the next step.
+    let t = rig.run(0.0, 1);
+    assert!(!rig.world.borrow().is_alive(character));
+    rig.host.touch_ended(pad, foot);
+    let t = rig.run(t, 1);
+    assert_eq!(rig.lines(), ["print:LeftFoot Part nil"]);
+    // Two steps on, the table is gone: nothing is kept for longer.
+    rig.run(t, 1);
+    let mut kept = Vec::new();
+    rig.world.borrow_mut().take_destroyed(&mut kept);
+    assert!(kept.is_empty());
+}
+
+#[test]
+fn writes_to_a_destroyed_instance_stay_on_its_record() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    rig.add("Part", "Brick", ws);
+    rig.server_script(
+        "S",
+        r#"
+        local p = workspace.Brick
+        p:Destroy()
+        p.Name = "Gone"
+        p.Size = Vector3.new(9000, 1, 1)
+        p.CFrame = CFrame.new(1, 2, 3)
+        print(p.Name, p.Size.X, p.Position, p.Parent, workspace:FindFirstChild("Gone"))
+        print(pcall(function() p.NoSuch = 1 end))
+        print(pcall(function() p.Anchored = "yes" end))
+        "#,
+    );
+    start(&mut rig);
+    let lines = rig.lines();
+    // Size is clamped as for a live part; the instance never comes back.
+    assert_eq!(lines[0], "print:Gone 2048 1, 2, 3 nil nil", "{lines:?}");
+    assert!(
+        lines[1].contains("NoSuch is not a valid member of Part"),
+        "{lines:?}"
+    );
+    assert!(lines[2].starts_with("print:false "), "{lines:?}");
 }

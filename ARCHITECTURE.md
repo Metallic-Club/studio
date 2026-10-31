@@ -109,7 +109,7 @@ apps.
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged. A destroyed instance stays readable: each step the host takes the world's
   `DestroyedInstance`s, and every live Luau object of one keeps its own `Rc` copy (`Parent` nil, no children; changes
-  error). The step's table is emptied at its end, so the values go with the last Luau reference (the wrapper cache is
+  writes other than `Parent` change that record only). The step's table is kept one more step, then emptied, so the values go with the last Luau reference (the wrapper cache is
   weak).
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).

@@ -12,13 +12,20 @@ and reading any member of a destroyed instance raised an error, so `if hit.Paren
 - **Script host.** `start` turns keeping on and `stop` turns it off. When a script touches a destroyed instance, or at
   the end of each step, the host takes the world's `DestroyedInstance`s into a per-step table; each live Luau object
   of one (found through the weak wrapper cache) keeps an `Rc` of it, and so does an object made later in that step
-  (for example the `hit` of a `TouchEnded`). The table is emptied at the end of the step, so the values live only as
-  long as a Luau reference.
+  (for example the `hit` of a `TouchEnded`). The table is kept for one more step, then emptied, so the values live only as long as a Luau reference, plus
+  one step.
 - **Reading a destroyed instance.** Its last property values (`Name`, `ClassName`, `CFrame` from `Position` and
   `Orientation`, ...); `Parent` is nil; `FindFirstChild` nil; `GetChildren`/`GetDescendants` `{}`; `IsA` answers;
   child-by-name access and events error. Setting `Parent` errors with "The Parent property of X is locked: it has been
-  destroyed", other writes with "cannot set P: X has been destroyed"; `Clone` and `WaitForChild` error. If its values were
+  destroyed". Other writes work as in Roblox: they change this Luau object's record only (copied on first write, so
+  the other VM's object keeps the old values) and never bring the instance back. `Clone` and `WaitForChild` error. If its values were
   not kept (more than `DESTROYED_LIMIT` destroyed between two steps), only `Name` and `Parent` read.
+
+## Review fixes (FIX-FIRST on 1fcdd049)
+
+- Writes other than `Parent` are allowed and go to the record (Roblox behaviour), instead of being refused.
+- The step's table is kept one more step. A character destroyed by a script during a step reached scripts in the
+  next step's `TouchEnded` after the table was cleared, so `hit.Name` read "" and other reads errored.
 
 ## Tests
 
@@ -26,7 +33,9 @@ and reading any member of a destroyed instance raised an error, so `if hit.Paren
 a destroyed, never-seen limb in a `TouchEnded` handler reads `Name`, `ClassName`, properties, `Parent` nil, empty
 children, and the `hit.Parent and hit.Parent:FindFirstChild("Humanoid")` guard; writing `Parent` or a property
 errors; a script-held instance destroyed by the engine (and its slot reused) keeps its renamed `Name`; nothing is kept
-between steps or after `stop`.
+between steps or after `stop`; a character destroyed by a script mid-step is readable in the next step's
+`TouchEnded`, and the table is gone a step later; writes to a destroyed instance stay on its record (Size clamped,
+CFrame stored as Position and Orientation) and it never returns to the tree.
 
 ## Not done
 

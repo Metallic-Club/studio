@@ -206,7 +206,8 @@ impl ApiState {
     /// world kept it since).
     pub(crate) fn destroyed(&self, id: InstanceId) -> Option<Rc<DestroyedInstance>> {
         self.take_destroyed();
-        self.shared.destroyed.borrow().get(&id).cloned()
+        let now = self.shared.destroyed.borrow().get(&id).cloned();
+        now.or_else(|| self.shared.destroyed_before.borrow().get(&id).cloned())
     }
 
     /// Moves what the world kept of destroyed instances into the step's table.
@@ -400,6 +401,12 @@ fn destroyed_index(lua: &Lua, this: &LuaInstance, key: &str) -> mlua::Result<Val
     let state = &this.state;
     match key {
         "ClassName" => return Ok(Value::String(lua.create_string(class)?)),
+        "WorldPivot" if is_subclass(class, "Model") => {
+            return match snapshot.get("WorldPivot") {
+                Some(v @ CoreValue::CFrame(_)) => state.value_to_lua(lua, v),
+                _ => Err(this.destroyed_error()),
+            };
+        }
         "CFrame" if is_subclass(class, "BasePart") => {
             let vec = |name| match snapshot.get(name) {
                 Some(CoreValue::Vector3(v)) => v,
@@ -510,14 +517,7 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
     let member = member_name(&key)?;
     let key = member.as_ref();
     if this.is_destroyed()? {
-        return Err(lua_error(if key == "Parent" {
-            format!(
-                "The Parent property of {} is locked: it has been destroyed",
-                this.name()
-            )
-        } else {
-            format!("cannot set {key}: {} has been destroyed", this.name())
-        }));
+        return destroyed_new_index(this, key, value);
     }
     let class = this.class()?;
     match key {
@@ -571,6 +571,78 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
             Ok(())
         }
     }
+}
+
+/// Writing a destroyed instance, like Roblox: `Parent` is locked; other properties change on
+/// this object's record only, so later reads see them, and the instance stays destroyed.
+fn destroyed_new_index(this: &LuaInstance, key: &str, value: &Value) -> mlua::Result<()> {
+    if key == "Parent" {
+        return Err(lua_error(format!(
+            "The Parent property of {} is locked: it has been destroyed",
+            this.name()
+        )));
+    }
+    let Some(snapshot) = this.snapshot() else {
+        return Err(lua_error(format!(
+            "cannot set {key}: {} has been destroyed",
+            this.name()
+        )));
+    };
+    let class = snapshot.class_name();
+    let cf = |prop: &str| {
+        cframe(value).ok_or_else(|| {
+            lua_error(format!(
+                "invalid value for property {prop}: expected CFrame, got {}",
+                value.type_name()
+            ))
+        })
+    };
+    let changes: [Option<(&str, CoreValue)>; 2] = match key {
+        "ClassName" => return Err(lua_error("ClassName is read-only")),
+        "CFrame" if is_subclass(class, "BasePart") => {
+            let cf = cf("CFrame")?;
+            [
+                Some(("Position", CoreValue::Vector3(cf.position))),
+                Some(("Orientation", CoreValue::Vector3(cf.orientation_degrees()))),
+            ]
+        }
+        "WorldPivot" if is_subclass(class, "Model") => [
+            Some(("WorldPivot", CoreValue::CFrame(Box::new(cf("WorldPivot")?)))),
+            None,
+        ],
+        _ => {
+            let Some(def) = find_property(class, key).filter(|d| !d.hidden) else {
+                return if this.state.methods.contains_key(key) || event_kind(class, key).is_some() {
+                    Err(lua_error(format!("{key} is read-only")))
+                } else {
+                    Err(not_a_member(key, class))
+                };
+            };
+            let mut converted = lua_to_value(value, def.ty, key)?;
+            if key == "Size"
+                && let CoreValue::Vector3(size) = converted
+                && is_subclass(class, "BasePart")
+            {
+                converted = CoreValue::Vector3(transform::clamp_part_size(size));
+            }
+            [Some((key, converted)), None]
+        }
+    };
+    let mut kept = this.snapshot.borrow_mut();
+    let Some(record) = kept.as_mut() else {
+        return Err(this.destroyed_error());
+    };
+    // Copy on first write: other VMs' objects keep the values the instance had.
+    let record = Rc::make_mut(record);
+    for (prop, v) in changes.into_iter().flatten() {
+        if prop == "Name"
+            && let CoreValue::String(s) = &v
+        {
+            *this.name_hint.borrow_mut() = s.clone();
+        }
+        record.set(prop, v);
+    }
+    Ok(())
 }
 
 fn set_parent(this: &LuaInstance, value: &Value) -> mlua::Result<()> {

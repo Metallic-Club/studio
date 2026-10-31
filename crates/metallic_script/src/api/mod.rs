@@ -49,6 +49,9 @@ pub(crate) struct HostShared {
     /// destroyed instance stays readable. Emptied at the end of every step: by then each Luau
     /// object of one holds its own copy, which goes when the object is collected.
     pub(crate) destroyed: RefCell<HashMap<InstanceId, Rc<DestroyedInstance>>>,
+    /// The previous step's table, kept one more step: an instance destroyed by a script during a
+    /// step reaches scripts again in the next one (a `TouchEnded` of its character's limbs).
+    pub(crate) destroyed_before: RefCell<HashMap<InstanceId, Rc<DestroyedInstance>>>,
     /// Reused buffer for [`World::take_destroyed`].
     pub(crate) taken: RefCell<Vec<DestroyedInstance>>,
 }

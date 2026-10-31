@@ -41,8 +41,9 @@ All API tables are read-only.
 - The same instance is always the same Lua object (`a == b`, usable as a table key).
 - A destroyed instance stays readable, like in Roblox: `Name`, `ClassName` and its other properties keep their last
   values, `Parent` is `nil`, `FindFirstChild` returns `nil`, `GetChildren`/`GetDescendants` return `{}` and `IsA`
-  still answers. Changing it errors: `The Parent property of Brick is locked: it has been destroyed`, `cannot set Name:
-  Brick has been destroyed`; so do `Clone`, `WaitForChild` and its events. `Destroy` again does nothing. Services
+  still answers. Setting `Parent` errors (`The Parent property of Brick is locked: it has been destroyed`); setting any
+  other property works and later reads see it, but the instance stays destroyed. `Clone`, `WaitForChild` and its
+  events error; `Destroy` again does nothing. Services
   cannot be destroyed, cloned or reparented.
 - `WaitForChild` yields; `step` resumes it. With a timeout it returns nil afterwards. Without one it warns once after 5 s.
 
