@@ -2,6 +2,7 @@
 use crate::args::Args;
 use crate::capture::CaptureTarget;
 use crate::controls_store::Controls;
+use crate::dev_overlay::DevOverlay;
 use crate::devices::{GamepadSource, key_control, mouse_control};
 use crate::menu::{ControlsHint, Menu, MenuOutcome, UiLayer};
 use crate::overlay::Overlay;
@@ -105,7 +106,11 @@ pub fn run(
         menu_action,
         menu_presses,
         dead: false,
+        dev: DevOverlay::default(),
     };
+    if args.dev_overlay {
+        app.dev.set_on(true);
+    }
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
         return ExitCode::from(1);
@@ -176,6 +181,8 @@ struct App {
     menu_presses: u32,
     /// The character was dead last frame (toggles clear on death).
     dead: bool,
+    /// The developer overlay (F3).
+    dev: DevOverlay,
 }
 
 impl App {
@@ -486,6 +493,7 @@ impl App {
                 scale,
                 &self.game,
                 Some(&mut self.touch),
+                Some(&mut self.dev),
             );
             let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
             gfx.ui.draw(
@@ -523,6 +531,7 @@ impl App {
                     scale,
                     &self.game,
                     Some(&mut self.touch),
+                    Some(&mut self.dev),
                 );
                 let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
                 gfx.ui.draw(
@@ -656,6 +665,14 @@ impl ApplicationHandler for App {
                 self.touch.release_all(&mut self.input, now);
                 self.input.release_all(now);
                 self.set_captured(false);
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.physical_key == PhysicalKey::Code(winit::keyboard::KeyCode::F3) =>
+            {
+                // F3 is the developer overlay's, never a game control.
+                if event.state == ElementState::Pressed && !event.repeat {
+                    self.dev.toggle();
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Every key, Escape included, is a control: Escape is the default binding of

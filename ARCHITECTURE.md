@@ -191,7 +191,9 @@ apps.
   it logs the overlay's draw time at the end of a windowed emulated run. `pacing.rs` sets the loop's pace (#271):
   every turn while focused (vsync paces it), 30 frames a second while unfocused, and `ControlFlow::Wait` with the
   game paused while minimised or occluded; automated runs (`--fps`, `--frames`, `--capture`, `--autopilot`,
-  `--input-script`) always run flat out.
+  `--input-script`) always run flat out. `dev_overlay.rs` is the developer overlay (F3 or `--dev-overlay`, #23):
+  fps, frame and GPU time, time per subsystem and a frame graph; showing it turns the profiler on, hiding it
+  turns it off.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -209,7 +211,9 @@ apps.
   `explorer.rs`, `properties.rs` (live preview while the pointer is held, one undo step on release),
   `script_editor.rs`, `transform.rs`, `expr.rs`. Seams: `actions.rs` (toolbar/menu/key actions as data, with
   accessories), `keymap.rs` (bindings as data), `output.rs` (`OutputSink::push(tag, level, text)` over a bounded
-  channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
+  channel, drops counted; `ScriptOutput` adapts it to Luau output), `debugger/profiler_view.rs` (`ProfilerPanel`,
+  the Profiler tab beside Output in the bottom dock: frame graph, subsystem and GPU times, a scope timeline and
+  script times; it reads `metallic_profiler` and pauses on a clicked frame), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
   `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,

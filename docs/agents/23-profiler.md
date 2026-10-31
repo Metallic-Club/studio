@@ -20,6 +20,19 @@ Status: in progress, split into three PRs (all branches from main).
 - Cost when off: a scope reads one thread-local flag; the frame marks read one more. No clock reads, no queries,
   no allocation. `metallic_core` (the `instructions` gate's benchmark) is unchanged.
 
+## PR 2
+
+- Studio: `debugger/profiler_view.rs` (`ProfilerPanel`), a Profiler tab beside Output (View > Profiler). Record,
+  pause or resume, stop, clear; a frame graph stacked by subsystem with 60 and 30 fps lines (a click pauses on that
+  frame); subsystem and GPU stage times, a scope timeline, and script times sorted by time or name. Colours come
+  from theme tokens. `--scene profiler` plays the demo Parkour and pauses at frame 150 for review screenshots.
+- Player: `dev_overlay.rs`, F3 (never passed to the game as a control) or `--dev-overlay`. fps, mean and max frame
+  time, GPU time and time per subsystem over the last 60 frames, plus a 180-frame graph. Showing it enables the
+  profiler; hiding it disables and clears it, so it costs nothing while hidden.
+- Tests: `metallic_studio/tests/profiler_panel.rs` (kittest: records, clicks the graph to pause, resumes);
+  `dev_overlay` unit tests (`summary_averages_recent_frames`, `toggling_starts_and_stops_the_profiler`).
+- Screenshots: `23-shots/studio-profiler.png`, `23-shots/player-f3.png`.
+
 ## Review fixes (#401 FIX-FIRST)
 
 - `with_frames` no longer holds the recording state: the history is a separate thread-local, and a frame that ends

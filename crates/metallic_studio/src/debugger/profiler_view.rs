@@ -18,7 +18,7 @@ use crate::widgets::{Button, segmented, truncated};
 
 /// Frame times of the guide lines: 60 and 30 frames per second.
 const GUIDES_MS: [(f32, &str); 2] = [(1000.0 / 60.0, "60 fps"), (1000.0 / 30.0, "30 fps")];
-const GRAPH_HEIGHT: f32 = 72.0;
+const GRAPH_HEIGHT: f32 = 60.0;
 const MIN_BAR: f32 = 3.0;
 const ROW: f32 = 18.0;
 const TIMELINE_ROW: f32 = 18.0;
@@ -160,22 +160,31 @@ impl ProfilerPanel {
             );
             return;
         };
+        let top_down = egui::Layout::top_down(egui::Align::Min);
         let width = ui.available_width();
-        let side = (width * 0.26).clamp(180.0, 280.0);
-        let scripts = (width * 0.30).clamp(200.0, 360.0);
-        let middle = (width - side - scripts - 24.0).max(120.0);
+        let height = ui.available_height().max(80.0);
+        let side = (width * 0.28).clamp(170.0, 280.0);
+        let scripts = (width * 0.30).clamp(180.0, 360.0);
+        // Two 12 px gaps, plus the item spacing around each of the four items between columns.
+        let gaps = 24.0 + 4.0 * ui.spacing().item_spacing.x;
+        let middle = (width - side - scripts - gaps).max(100.0);
         ui.horizontal_top(|ui| {
-            ui.allocate_ui(vec2(side, ui.available_height()), |ui| {
-                subsystems(ui, &frame);
-                ui.add_space(6.0);
-                gpu(ui, &frame, self.selected.is_none());
+            ui.allocate_ui_with_layout(vec2(side, height), top_down, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("profiler-subsystems")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        subsystems(ui, &frame);
+                        ui.add_space(6.0);
+                        gpu(ui, &frame, self.selected.is_none());
+                    });
             });
             ui.add_space(12.0);
-            ui.allocate_ui(vec2(middle, ui.available_height()), |ui| {
+            ui.allocate_ui_with_layout(vec2(middle, height), top_down, |ui| {
                 timeline(ui, &frame);
             });
             ui.add_space(12.0);
-            ui.allocate_ui(vec2(scripts, ui.available_height()), |ui| {
+            ui.allocate_ui_with_layout(vec2(scripts, height), top_down, |ui| {
                 self.scripts(ui, &frame);
             });
         });
@@ -236,11 +245,6 @@ impl ProfilerPanel {
                         .color(theme::text_2()),
                 );
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                for s in Subsystem::ALL.iter().rev() {
-                    legend(ui, *s);
-                }
-            });
         });
     }
 
@@ -259,12 +263,18 @@ impl ProfilerPanel {
             .fold(GUIDES_MS[1].0 * 1.1, f32::max)
             .min(100.0);
         let y_of = |ms_value: f32| rect.bottom() - (ms_value / peak_ms).min(1.0) * rect.height();
+        // A label too close to the one below it (a tall spike squeezes the guides) is left out.
+        let mut last_label_y = f32::INFINITY;
         for (guide, label) in GUIDES_MS {
             let y = y_of(guide);
             painter.line_segment(
                 [pos2(rect.left(), y), pos2(rect.right(), y)],
                 Stroke::new(1.0, theme::line()),
             );
+            if last_label_y - y < 12.0 {
+                continue;
+            }
+            last_label_y = y;
             painter.text(
                 pos2(rect.left() + 4.0, y - 1.0),
                 Align2::LEFT_BOTTOM,
@@ -437,18 +447,6 @@ fn dim(ui: &mut Ui, text: &str) {
             .font(fonts::small())
             .color(theme::text_3()),
     );
-}
-
-fn legend(ui: &mut Ui, s: Subsystem) {
-    ui.label(
-        egui::RichText::new(s.label())
-            .font(fonts::small())
-            .color(theme::text_2()),
-    );
-    let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(2), colour(s));
-    ui.add_space(6.0);
 }
 
 /// A row: a colour mark (optional), a name cut to fit, and a value on the right.
