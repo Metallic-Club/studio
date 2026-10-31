@@ -32,7 +32,34 @@ the bug was reintroducing controller cache entries after cleanup.
 
 Guarded owned lane122, four jobs:
 `cargo test --locked -p metallic_physics --test stale_restore -j4 -- --test-threads=1`.
-Baseline0/1, corrected4/0/0. Full physics package and mandatory workspace/strictClippy/license/format gates are
+Baseline0/1, corrected4/0/0. At that checkpoint the full physics package and mandatory workspace/strictClippy/license/format gates were
 next, with actual Lua/GPU serialized by the coordinator and a pause if disk drops below5GB. Preserve original
 logs, external audit and benchmark domains. Get independent source review before publication; final source/head
 and exact-head CI must be recorded. No own merge or performance/client prediction acceptance claim.
+
+
+## Final local validation and disk interruption
+
+Reviewed source `6ab2720f9dc6ba70be792b444a25020ae3457c7b` on the pinned main above passed:
+
+- Dedicated stale/live/replacement/sanitization controls: **4 passed / zero failed**.
+- Full physics package: **88 passed / zero failed / zero ignored**, preserving all existing save/restore controls.
+- Full workspace no-run: first attempt intentionally stopped below the coordinator's5GB disk threshold, before
+  completion (guard exit-1; no compiler error reported). Its log and interruption receipt remain preserved.
+  After another released lane was cleaned, the same frozen source resumed in a separate log and passed.
+- Full serial workspace: `cargo test --locked --workspace -j4 -- --test-threads=1` through lane122 guard:
+  **2,019 passed / zero failed / eight upstream ignores**, across148 result summaries. No failed test was
+  retried, excluded or weakened. Actual Lua/GPU execution used the coordinator's sole managed window.
+- Strict full workspace/all-target Clippy: passed in34.47s with `--locked -j4 -- -D warnings`.
+- License, formatting and task whitespace checks: passed.
+- Independent coordinator source review: no blocker in the early lifetime guard and four tests; scope retained.
+
+After all checks, the coordinator-authorized native Cargo clean acquired the verified lane122 lock and removed
+only21 explicitly named first-party dev-profile packages. It reclaimed7.1GiB and left17,388,093,440 bytes free.
+Third-party dependencies, source, all external evidence and named benchmark domains were preserved. No test or
+benchmark binary retention is required for this correctness change. Actual/compile windows are released.
+
+Logs, source/result records and cleanup receipts live outside Git in `integration-evidence/431-stale-restore`.
+The final progress child is documentation only; crate-tree equality with6ab2720 will be recorded before push.
+Publish a review PR and inspect exact-head CI without further source commits for status-only updates. No own
+merge, new runtime/client policy or performance claim; PR422's adjacent touch cleanup remains separately owned.
