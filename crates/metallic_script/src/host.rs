@@ -189,6 +189,9 @@ impl ScriptHost {
         self.deliver_remotes();
         self.deliver_inputs();
         self.deliver_input_actions();
+        for side in self.sides() {
+            side.state.deliver_attribute_changes();
+        }
 
         let run_service = self
             .world

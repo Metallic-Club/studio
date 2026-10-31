@@ -72,6 +72,18 @@ pub enum Command {
         /// Value after.
         new: Value,
     },
+    /// Sets, changes or removes one attribute. `Nil` stands for "no attribute" in `old` (the
+    /// attribute is added) and in `new` (it is removed).
+    SetAttribute {
+        /// Instance changed.
+        id: InstanceId,
+        /// Attribute name.
+        name: String,
+        /// Value before (`Nil`: there was none).
+        old: Value,
+        /// Value after (`Nil`: remove it).
+        new: Value,
+    },
     /// Many property changes as one undo step: (instance, property, old value, new value). A
     /// gesture's preview overlay turns into this on release.
     SetProperties {
@@ -180,6 +192,21 @@ impl Command {
                     .unwrap_or("instance");
                 format!("Set {prop} of {what}")
             }
+            Command::SetAttribute { id, name, new, .. } => {
+                let what = world
+                    .get_ref(*id, "Name")
+                    .ok()
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("instance");
+                if matches!(new, Value::Nil) {
+                    format!("Remove attribute {name} of {what}")
+                } else {
+                    format!("Set attribute {name} of {what}")
+                }
+            }
             Command::Batch { name, .. } | Command::SetProperties { name, .. } => name.clone(),
             Command::Create { class, .. } => format!("Insert {class}"),
             Command::Delete { items } => format!("Delete {}", count(items.len(), "object")),
@@ -197,6 +224,9 @@ impl Command {
     fn apply(&mut self, world: &mut World, book: &mut Book) -> Result<(), CommandError> {
         match self {
             Command::SetProperty { id, prop, new, .. } => Ok(world.set(*id, prop, new.clone())?),
+            Command::SetAttribute { id, name, new, .. } => {
+                Ok(world.set_attribute(*id, name, new.clone())?)
+            }
             Command::SetProperties { changes, .. } => {
                 for i in 0..changes.len() {
                     let (id, prop, _, new) = &changes[i];
@@ -356,6 +386,9 @@ impl Command {
         match self {
             Command::SetProperty { id, prop, old, .. } => {
                 let _ = world.set(*id, prop, old.clone());
+            }
+            Command::SetAttribute { id, name, old, .. } => {
+                let _ = world.set_attribute(*id, name, old.clone());
             }
             Command::SetProperties { changes, .. } => {
                 for (id, prop, old, _) in changes.iter().rev() {

@@ -33,6 +33,20 @@ fn fmt_drag(n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
     }
 }
 
+/// A short text for an attribute value the panel cannot edit.
+fn attribute_summary(value: &Value) -> String {
+    match value {
+        Value::Vector3(v) => format!("Vector3({}, {}, {})", v.x, v.y, v.z),
+        Value::Color3(c) => format!("Color3({}, {}, {})", c.r, c.g, c.b),
+        Value::UDim2(u) => format!(
+            "UDim2({}, {}, {}, {})",
+            u.x_scale, u.x_offset, u.y_scale, u.y_offset
+        ),
+        Value::CFrame(_) => "CFrame".to_string(),
+        _ => String::new(),
+    }
+}
+
 /// Section of a property, in display order.
 fn section(prop: &str) -> usize {
     match prop {
@@ -65,6 +79,11 @@ pub struct Properties {
     cancelled: bool,
     /// Text being typed into a string field, by property name.
     text: HashMap<String, String>,
+    /// The Attributes section: text being typed into string attributes, by attribute name.
+    attr_text: HashMap<String, String>,
+    /// The Attributes section: name and type (0 Bool, 1 Number, 2 String) of the attribute to add.
+    attr_new_name: String,
+    attr_new_kind: usize,
 }
 
 /// What a widget asked for this frame.
@@ -181,6 +200,7 @@ impl Properties {
         props.retain(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter));
 
         let mut edits: Vec<Edit> = Vec::new();
+        let mut attribute_edit: Option<Command> = None;
         // Inputs in the property column are 24 px rows (spec 4.3).
         ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT;
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -208,11 +228,132 @@ impl Properties {
                         }
                     });
                 }
+                if ids.len() == 1 {
+                    attribute_edit = self.attributes_section(ui, state, active);
+                }
             });
 
         for e in edits {
             self.commit(state, &ids, e, pointer_down);
         }
+        if let Some(cmd) = attribute_edit {
+            let _ = state.apply(cmd);
+        }
+    }
+
+    /// The Attributes section of one instance: edit, remove and add attributes. Returns the
+    /// command for the one change made this frame, if any (each change is one undo step).
+    fn attributes_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &EditorState,
+        id: InstanceId,
+    ) -> Option<Command> {
+        let mut out = None;
+        let attributes: Vec<(String, Value)> = state
+            .world
+            .attributes(id)
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        let set = |name: &str, old: &Value, new: Value| Command::SetAttribute {
+            id,
+            name: name.to_string(),
+            old: old.clone(),
+            new,
+        };
+        egui::CollapsingHeader::new(
+            RichText::new("Attributes")
+                .font(crate::theme::fonts::strong())
+                .color(crate::theme::text_2()),
+        )
+        .default_open(true)
+        .show(ui, |ui| {
+            for (name, value) in &attributes {
+                ui.horizontal(|ui| {
+                    ui.label(name.as_str());
+                    match value {
+                        Value::Bool(b) => {
+                            let mut now = *b;
+                            if ui.checkbox(&mut now, "").changed() {
+                                out = Some(set(name, value, Value::Bool(now)));
+                            }
+                        }
+                        Value::Number(n) => {
+                            let mut now = *n;
+                            if ui.add(egui::DragValue::new(&mut now).speed(0.1)).changed() {
+                                out = Some(set(name, value, Value::Number(now)));
+                            }
+                        }
+                        Value::String(text) => {
+                            let buffer = self
+                                .attr_text
+                                .entry(name.clone())
+                                .or_insert_with(|| text.clone());
+                            let response = ui.add(
+                                egui::TextEdit::singleline(buffer).desired_width(f32::INFINITY),
+                            );
+                            if response.lost_focus() {
+                                let typed = std::mem::take(buffer);
+                                self.attr_text.remove(name);
+                                if typed != *text {
+                                    out = Some(set(name, value, Value::String(typed)));
+                                }
+                            }
+                        }
+                        other => {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} (edit in a script)",
+                                    attribute_summary(other)
+                                ))
+                                .color(ui_tokens().text_dim),
+                            );
+                        }
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        out = Some(set(name, value, Value::Nil));
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.attr_new_name)
+                        .hint_text("New attribute name")
+                        .desired_width(140.0),
+                );
+                egui::ComboBox::from_id_salt("attribute-type")
+                    .selected_text(["Bool", "Number", "String"][self.attr_new_kind])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in ["Bool", "Number", "String"].iter().enumerate() {
+                            ui.selectable_value(&mut self.attr_new_kind, i, *label);
+                        }
+                    });
+                let name = self.attr_new_name.trim().to_string();
+                let problem = metallic_core::check_attribute_name(&name)
+                    .err()
+                    .or_else(|| {
+                        state
+                            .world
+                            .attribute(id, &name)
+                            .map(|_| "that attribute already exists".to_string())
+                    });
+                let add = ui.add_enabled(problem.is_none(), egui::Button::new("Add"));
+                if let Some(problem) = &problem
+                    && !name.is_empty()
+                {
+                    add.on_disabled_hover_text(problem);
+                } else if add.clicked() {
+                    let value = match self.attr_new_kind {
+                        0 => Value::Bool(false),
+                        1 => Value::Number(0.0),
+                        _ => Value::String(String::new()),
+                    };
+                    out = Some(set(&name, &Value::Nil, value));
+                    self.attr_new_name.clear();
+                }
+            });
+        });
+        out
     }
 
     fn row(
