@@ -14,7 +14,7 @@ use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
-use crate::editor::{EditorState, INSERTABLE, UiRequest};
+use crate::editor::{EditorState, Gesture, INSERTABLE, UiRequest};
 use crate::editor_colour::ColourDock;
 use crate::editor_input_actions::InputActionsDock;
 use crate::editor_tools::{EditorTools, ViewContext};
@@ -218,19 +218,34 @@ impl EditorUi {
 
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
         let typing = ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta();
-        // A gesture holds values in the preview overlay: no global action runs until it ends
-        // (Esc cancels it in the viewport or in Properties).
-        let busy = self.viewport.is_dragging() || self.properties.is_busy();
-        let mut contexts: Vec<KeyContext> = Vec::with_capacity(2);
+        // A gesture (preview overlay, viewport drag, Properties scrub, brush stroke, lasso, array
+        // handle) is open: no action runs until it ends. Esc cancels it where it lives; a tool
+        // gesture's Esc is the keymap's `tool.cancel`.
+        let busy = self.state.gesture_active();
+        let fly = right_down;
+        let mut contexts: Vec<KeyContext> = Vec::with_capacity(4);
+        if !typing && !fly {
+            // The tools' contexts come first: their keys win over the same chord elsewhere.
+            if self.tools.popover_keys() {
+                contexts.push(KeyContext::Popover);
+            }
+            if self.tools.tool_keys(viewport_hovered) {
+                contexts.push(KeyContext::Tool);
+            }
+        }
         if !typing {
             contexts.push(KeyContext::Global);
-            if viewport_hovered && !right_down && !busy {
+            if viewport_hovered && !fly && !busy {
                 contexts.push(KeyContext::Viewport);
             }
         }
         let mut pressed = std::mem::take(&mut self.pressed);
         if busy {
             pressed.clear();
+            if !typing && self.tools.gesture() {
+                self.keymap.pressed(ctx, &[KeyContext::Tool], &mut pressed);
+                pressed.retain(|a| *a == "tool.cancel");
+            }
         } else if typing {
             // Only Save and Play keys work while a text field has focus (Ctrl+W must not close the game).
             self.keymap
@@ -571,7 +586,12 @@ impl EditorUi {
                     ui,
                     "Properties",
                     |_| {},
-                    |ui| self.properties.ui(ui, &mut self.state),
+                    |ui| {
+                        self.state.set_gesture(Gesture::Properties, false);
+                        self.properties.ui(ui, &mut self.state);
+                        self.state
+                            .set_gesture(Gesture::Properties, self.properties.is_busy());
+                    },
                 );
             });
         if let Some((prop, at)) = self.properties.take_colour_request() {
@@ -608,7 +628,12 @@ impl EditorUi {
                 if scene {
                     let before = ui.available_rect_before_wrap();
                     self.viewport.capture_pointer = self.tools.captures_pointer(&self.state);
+                    // Each gesture owner may edit during its own gesture; the flag is its
+                    // state after it ran (see EditorState::gesture_active).
+                    self.state.set_gesture(Gesture::Viewport, false);
                     self.viewport.ui(ui, &mut self.state, render_state);
+                    self.state
+                        .set_gesture(Gesture::Viewport, self.viewport.is_dragging());
                     viewport_hovered = ui.rect_contains_pointer(before);
                     // The tools read the picker while they edit the state; it is put back after.
                     let picks = std::mem::take(&mut self.state.picks);
@@ -619,19 +644,23 @@ impl EditorUi {
                         pointer: ui.ctx().pointer_latest_pos().filter(|_| viewport_hovered),
                         hovered: self.viewport.hovered(),
                     };
+                    self.state.set_gesture(Gesture::Tool, false);
                     self.tools.viewport(ui, &mut self.state, &cx);
+                    self.state.set_gesture(Gesture::Tool, self.tools.gesture());
                     self.state.picks = picks;
                 } else {
                     self.scripts.editor(ui, &mut self.state);
                 }
             });
 
-        self.tools.ui(&ctx, &mut self.state);
+        // The colour popover first: it is the topmost and takes its Esc before anything below.
         self.colour
             .show(&ctx, &mut self.state, self.viewport.hovered());
+        self.tools.ui(&ctx, &mut self.state);
 
         let right_down = ctx.input(|i| i.pointer.secondary_down());
         self.keys(&ctx, viewport_hovered, right_down);
+        self.state.set_gesture(Gesture::Tool, self.tools.gesture());
         if let Some(done) = self.requests() {
             exit = done;
         }

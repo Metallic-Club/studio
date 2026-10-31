@@ -82,12 +82,12 @@ fn slot(group: ToolbarGroup) -> usize {
     ORDER.iter().position(|g| *g == group).unwrap_or(0)
 }
 
-/// The groups to draw (in [`ORDER`]) when each group is `widths[slot]` wide and the toolbar has
-/// `available` points: all of them when they fit, otherwise the longest prefix of [`PRIORITY`]
-/// that fits beside a `chevron`-wide overflow button.
-pub fn fit(widths: &[f32; ORDER.len()], chevron: f32, available: f32) -> Vec<ToolbarGroup> {
+/// Which groups to draw, by [`ORDER`] slot, when each group is `widths[slot]` wide and the
+/// toolbar has `available` points: all of them when they fit, otherwise the longest prefix of
+/// [`PRIORITY`] that fits beside a `chevron`-wide overflow button.
+pub fn fit(widths: &[f32; ORDER.len()], chevron: f32, available: f32) -> [bool; ORDER.len()] {
     if widths.iter().sum::<f32>() <= available {
-        return ORDER.to_vec();
+        return [true; ORDER.len()];
     }
     let budget = available - chevron;
     let mut keep = [false; ORDER.len()];
@@ -100,11 +100,7 @@ pub fn fit(widths: &[f32; ORDER.len()], chevron: f32, available: f32) -> Vec<Too
         used += w;
         keep[slot(group)] = true;
     }
-    ORDER
-        .iter()
-        .zip(keep)
-        .filter_map(|(g, k)| k.then_some(*g))
-        .collect()
+    keep
 }
 
 impl Toolbar {
@@ -129,7 +125,7 @@ impl Toolbar {
         let available = ui.available_rect_before_wrap();
         let shown = if self.widths.iter().any(Option::is_none) {
             // Nothing measured yet: draw everything once to learn the widths.
-            ORDER.to_vec()
+            [true; ORDER.len()]
         } else {
             let widths = self.widths.map(|w| w.unwrap_or(0.0));
             fit(
@@ -138,13 +134,15 @@ impl Toolbar {
                 available.width(),
             )
         };
-        let mut layout = ToolbarLayout {
-            available,
-            ..ToolbarLayout::default()
-        };
+        // Reuse last frame's vectors: no allocation per frame.
+        let mut layout = std::mem::take(&mut self.layout);
+        layout.available = available;
+        layout.shown.clear();
+        layout.overflow.clear();
+        layout.chevron = None;
         let mut changed = false;
-        for group in ORDER {
-            if !shown.contains(&group) {
+        for (i, group) in ORDER.into_iter().enumerate() {
+            if !shown[i] {
                 layout.overflow.push(group);
                 continue;
             }
@@ -163,7 +161,7 @@ impl Toolbar {
                 .response
                 .rect;
             let width = rect.width() + ui.spacing().item_spacing.x;
-            let old = &mut self.widths[slot(group)];
+            let old = &mut self.widths[i];
             changed |= old.is_none_or(|w| (w - width).abs() > 0.5);
             *old = Some(width);
             layout.shown.push((group, rect));
@@ -182,9 +180,9 @@ impl Toolbar {
             changed |= self.chevron.is_none_or(|w| (w - width).abs() > 0.5);
             self.chevron = Some(width);
             layout.chevron = Some(response.rect);
-            let overflow = layout.overflow.clone();
+            let overflow = &layout.overflow;
             egui::Popup::menu(&response).show(|ui| {
-                actions.overflow_menu(ui, &overflow, state, keymap);
+                actions.overflow_menu(ui, overflow, state, keymap);
             });
         }
         if changed {
@@ -202,8 +200,15 @@ mod tests {
     fn everything_fits_or_the_lowest_priority_collapses_first() {
         // Tools, Settings, Snap, Edit, Play, View, Build.
         let w = [500.0, 300.0, 350.0, 80.0, 250.0, 40.0, 260.0];
-        assert_eq!(fit(&w, 36.0, 2000.0), ORDER.to_vec());
-        let narrow = fit(&w, 36.0, 1300.0);
+        let groups = |keep: [bool; 7]| -> Vec<ToolbarGroup> {
+            ORDER
+                .iter()
+                .zip(keep)
+                .filter_map(|(g, k)| k.then_some(*g))
+                .collect()
+        };
+        assert_eq!(groups(fit(&w, 36.0, 2000.0)), ORDER.to_vec());
+        let narrow = groups(fit(&w, 36.0, 1300.0));
         assert_eq!(
             narrow,
             vec![
@@ -213,7 +218,7 @@ mod tests {
                 ToolbarGroup::Play
             ]
         );
-        let tiny = fit(&w, 36.0, 800.0);
+        let tiny = groups(fit(&w, 36.0, 800.0));
         assert_eq!(tiny, vec![ToolbarGroup::Tools, ToolbarGroup::Play]);
         let used: f32 = tiny.iter().map(|g| w[slot(*g)]).sum();
         assert!(used + 36.0 <= 800.0);

@@ -19,4 +19,11 @@ After merging main (#337): the colour popover previews through `EditorState::pre
 Review fixes: the toolbar (`toolbar.rs`) collapses whole groups that do not fit into a "»" menu, lowest priority
 first (Build, View, Snap, Settings, Edit; Tools and Play last), tested at 1280, 1600 and 2600 px. Ctrl+wheel over
 the viewport changes the array count (linear, radial, path; clamped; the commit is still one step).
+Second review (FIX-FIRST): Esc routing through keymap contexts (Popover, Tool) with the colour popover first; brush
+strokes cancel on Esc, tool change, Play and focus loss; one gesture flag in `EditorState` (Save, Play, Undo, apply
+and tool commits refuse during any gesture); tool commits check `edit_refusal()`; the viewport only yields the pointer
+between gestures, so a release always ends its drag. Also: brush dab prefilter (`PickCache::near`/`first_in`),
+paint/lasso trail cap and bounds prefilter, no per-frame plan/selection/toolbar allocations, overflow-menu
+accessories disabled with their action. Tests in `tests/editor_wiring.rs`.
+
 Brush ownership means "inside `<parent>/<set>` folder" until tags (#78) exist.

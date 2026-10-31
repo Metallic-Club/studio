@@ -118,7 +118,12 @@ pub struct ArrangeSettings {
     handle: Option<HandleDrag>,
     handle_hover: bool,
     preview: Option<(PreviewKey, Result<Plan, String>)>,
+    /// The selection's pivot and size for the drag handle, cached per selection and world.
+    handle_basis: Option<(BasisKey, Option<(DVec3, DVec3)>)>,
 }
+
+/// What the cached handle basis was read for: selection revision and world change cursor.
+type BasisKey = (u64, metallic_core::ChangeCursor);
 
 impl Default for ArrangeSettings {
     fn default() -> Self {
@@ -163,11 +168,47 @@ impl Default for ArrangeSettings {
             handle: None,
             handle_hover: false,
             preview: None,
+            handle_basis: None,
         }
     }
 }
 
 impl ArrangeSettings {
+    /// True while the linear drag handle is held.
+    pub fn handle_active(&self) -> bool {
+        self.handle.is_some()
+    }
+
+    /// Ends a handle drag without its change: the count goes back to where the drag began.
+    pub fn cancel_handle(&mut self) {
+        if let Some(h) = self.handle.take() {
+            self.linear.count = h.start_count;
+            self.count_text = h.start_count.to_string();
+        }
+        self.handle_hover = false;
+    }
+
+    /// The selection's pivot and size (cached until the selection or the world changes).
+    fn basis(&mut self, state: &EditorState) -> Option<(DVec3, DVec3)> {
+        let key = (state.selection.revision(), state.world.change_cursor());
+        if let Some((k, b)) = &self.handle_basis
+            && *k == key
+        {
+            return *b;
+        }
+        let b = read_objects(&state.world, state.selection.ids())
+            .ok()
+            .filter(|o| !o.is_empty())
+            .map(|o| {
+                (
+                    selection_pivot(&o),
+                    selection_bounds_in(&o, &DMat3::IDENTITY).size(),
+                )
+            });
+        self.handle_basis = Some((key, b));
+        b
+    }
+
     /// True when the array popover needs viewport clicks (path points, the drag handle).
     pub fn wants_pointer(&self) -> bool {
         (self.mode == ArrayMode::Path && self.picking_points)
@@ -418,7 +459,8 @@ pub fn align_window(
                 }
             });
         });
-    if !open || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    // Esc is the keymap's `popover.close` (KeyContext::Popover).
+    if !open {
         *popover = None;
     }
 }
@@ -475,10 +517,14 @@ pub fn array_window(
                 ArrayMode::Path => &mut s.path.group,
             };
             ui.checkbox(group, "Group result");
-            let plan = s.preview(state).clone();
-            match &plan {
-                Ok(p) => {
-                    let n = p.copies.len();
+            // Only the count and the error text are needed; the cached plan is not copied.
+            let summary = match s.preview(state) {
+                Ok(p) => Ok(p.copies.len()),
+                Err(e) => Err(e.clone()),
+            };
+            match &summary {
+                Ok(n) => {
+                    let n = *n;
                     if ui
                         .add(crate::widgets::Button::primary(&format!(
                             "Make {n} {}",
@@ -494,14 +540,13 @@ pub fn array_window(
                 }
             }
         });
-    if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-        make = true;
-    }
+    // Enter and Esc are the keymap's `array.make` and `popover.close` (KeyContext::Popover).
     if make && run_array(state, s) {
         *popover = None;
     }
-    if !open || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if !open {
         s.picking_points = false;
+        s.cancel_handle();
         *popover = None;
     }
 }
@@ -776,14 +821,9 @@ fn linear_handle(
     pressed: bool,
     down: bool,
 ) {
-    let Ok(objects) = read_objects(&state.world, state.selection.ids()) else {
+    let Some((pivot, size)) = s.basis(state) else {
         return;
     };
-    if objects.is_empty() {
-        return;
-    }
-    let pivot = selection_pivot(&objects);
-    let size = selection_bounds_in(&objects, &DMat3::IDENTITY).size();
     let step = linear_step(size, s.linear.offset, s.linear.offset_is);
     if step.length() < 1e-9 {
         return;

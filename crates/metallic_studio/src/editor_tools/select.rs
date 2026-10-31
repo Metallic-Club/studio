@@ -4,7 +4,12 @@
 //! on release every Workspace part becomes a [`ScreenItem`] (its [`geom::snapshot`] box
 //! projected to the screen), [`lasso_hits`] or [`paint_hits`] picks the hits, and [`combine`]
 //! applies Shift (add) and Ctrl (remove). A click without travel selects the part under the
-//! cursor, or clears.
+//! cursor, or clears. The trail keeps at most [`MAX_TRAIL`] points (a long paint stroke thins
+//! itself), and only parts whose screen box reaches the trail's bounds are hit-tested.
+//!
+//! The Select similar popover's letters (C M L S K N T P) and Esc are keymap rows in
+//! [`crate::keymap::KeyContext::Popover`], so they follow the keymap's text-focus and
+//! right-mouse fly guards.
 use eframe::egui::{self, Pos2, Stroke};
 use glam::DVec2;
 use metallic_core::{InstanceId, Value};
@@ -18,11 +23,42 @@ use crate::tools::select::{
     combine, lasso_hits, paint_hits, select_similar,
 };
 
+/// Most points a lasso or paint trail keeps.
+pub const MAX_TRAIL: usize = 512;
+
 /// A lasso or paint trail in progress.
 #[derive(Debug, Default, Clone)]
 pub struct Gesture {
     trail: Vec<Pos2>,
     active: bool,
+}
+
+impl Gesture {
+    /// True while a trail is being drawn.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Drops the trail without selecting anything.
+    pub fn cancel(&mut self) {
+        self.trail.clear();
+        self.active = false;
+    }
+
+    fn push(&mut self, p: Pos2) {
+        if self.trail.last().is_some_and(|l| (*l - p).length() <= 2.0) {
+            return;
+        }
+        if self.trail.len() >= MAX_TRAIL {
+            // Keep every other point (the first stays, so a lasso still closes on it).
+            let mut keep = false;
+            self.trail.retain(|_| {
+                keep = !keep;
+                keep
+            });
+        }
+        self.trail.push(p);
+    }
 }
 
 /// Every BasePart under Workspace.
@@ -82,14 +118,13 @@ pub fn viewport(
     });
     let pos = ui.input(|i| i.pointer.interact_pos());
     if pressed && let Some(p) = cx.pointer {
-        g.trail = vec![p];
+        g.trail.clear();
+        g.trail.push(p);
         g.active = true;
     }
     if g.active {
-        if let Some(p) = pos
-            && g.trail.last().is_none_or(|l| (*l - p).length() > 2.0)
-        {
-            g.trail.push(p);
+        if let Some(p) = pos {
+            g.push(p);
         }
         if !down {
             g.active = false;
@@ -104,11 +139,14 @@ pub fn viewport(
     }
     let stroke = Stroke::new(1.5, theme::accent());
     if g.active && g.trail.len() > 1 {
-        let mut pts = g.trail.clone();
-        if mode == SelectMode::Lasso {
-            pts.push(g.trail[0]);
+        for w in g.trail.windows(2) {
+            painter.line_segment([w[0], w[1]], stroke);
         }
-        painter.add(egui::Shape::line(pts, stroke));
+        if mode == SelectMode::Lasso
+            && let (Some(first), Some(last)) = (g.trail.first(), g.trail.last())
+        {
+            painter.line_segment([*last, *first], stroke);
+        }
     }
     if mode == SelectMode::Paint
         && let Some(p) = cx.pointer
@@ -137,7 +175,27 @@ fn finish(
         // A click: the part under the cursor.
         cx.hovered.into_iter().collect()
     } else {
-        let items = screen_items(state, cx);
+        // Only parts whose screen box reaches the trail's bounds (plus the paint brush) can hit.
+        let reach = if mode == SelectMode::Paint {
+            PAINT_BRUSH_DIAMETER_PX * 0.5
+        } else {
+            0.0
+        };
+        let bounds = trail.iter().fold(None::<ScreenRect>, |r, p| {
+            Some(r.map_or(ScreenRect::from_corners(*p, *p), |r| {
+                ScreenRect::from_corners(r.min.min(*p), r.max.max(*p))
+            }))
+        });
+        let mut items = screen_items(state, cx);
+        if let Some(b) = bounds {
+            let (lo, hi) = (b.min - DVec2::splat(reach), b.max + DVec2::splat(reach));
+            items.retain(|i| {
+                i.rect.max.x >= lo.x
+                    && i.rect.min.x <= hi.x
+                    && i.rect.max.y >= lo.y
+                    && i.rect.min.y <= hi.y
+            });
+        }
         match mode {
             SelectMode::Lasso => lasso_hits(&items, &trail),
             _ => paint_hits(&items, &trail),
@@ -194,7 +252,8 @@ pub fn run_similar(state: &mut EditorState, key: SimilarKey) -> usize {
     n
 }
 
-/// The Select similar popover: one button per key, and the keys themselves while it is open.
+/// The Select similar popover: one button per key. Its letters and Esc are keymap rows
+/// (`similar.*`, `popover.close`), handled by the editor's key dispatch.
 pub fn similar_window(ctx: &egui::Context, state: &mut EditorState, popover: &mut Option<Popover>) {
     let mut open = true;
     let mut chosen = None;
@@ -211,26 +270,41 @@ pub fn similar_window(ctx: &egui::Context, state: &mut EditorState, popover: &mu
                 }
             }
         });
-    if !ctx.egui_wants_keyboard_input() {
-        ctx.input_mut(|i| {
-            for key in SimilarKey::ALL {
-                let Some(k) = egui::Key::from_name(&key.key().to_string()) else {
-                    continue;
-                };
-                if i.consume_key(egui::Modifiers::NONE, k) {
-                    chosen = Some(key);
-                }
-            }
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
-                *popover = None;
-            }
-        });
-    }
     if let Some(key) = chosen {
         run_similar(state, key);
         *popover = None;
     }
     if !open {
         *popover = None;
+    }
+}
+
+/// Keymap ids of the Select similar letters.
+pub const SIMILAR_ACTIONS: [(&str, SimilarKey); 8] = [
+    ("similar.color", SimilarKey::Color),
+    ("similar.material", SimilarKey::Material),
+    ("similar.style", SimilarKey::Style),
+    ("similar.size", SimilarKey::Size),
+    ("similar.class", SimilarKey::Class),
+    ("similar.name", SimilarKey::Name),
+    ("similar.tags", SimilarKey::Tags),
+    ("similar.parent", SimilarKey::Parent),
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_trail_thins_itself_and_keeps_its_start() {
+        let mut g = Gesture::default();
+        for i in 0..5000 {
+            g.push(Pos2::new(i as f32 * 3.0, 0.0));
+        }
+        assert!(g.trail.len() <= MAX_TRAIL);
+        assert_eq!(g.trail[0], Pos2::new(0.0, 0.0));
+        assert_eq!(*g.trail.last().unwrap(), Pos2::new(4999.0 * 3.0, 0.0));
+        g.cancel();
+        assert!(g.trail.is_empty() && !g.is_active());
     }
 }

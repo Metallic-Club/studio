@@ -196,6 +196,10 @@ apps.
   `Command::Step` in the editor's history, and `History::take_remaps()` feeds every rebuilt-id map to
   `InputActionsPanel::follow_remap`. `toolbar.rs` draws the toolbar groups in order and collapses whole groups that
   do not fit into a "»" overflow menu, lowest priority first (`PRIORITY`); a new action only needs a `ToolbarGroup`.
+  One gesture flag: `EditorState::gesture_active()` (preview overlay, or a `Gesture` reported by the viewport,
+  Properties or a tool) makes Save, Play, Undo, `apply` and tool commits (`edit_refusal()`) wait. Tool keys are keymap
+  rows in `KeyContext::Popover` and `KeyContext::Tool`, checked before Global and Viewport, so Esc reaches the
+  colour popover, then a building popover, then the tool, then the selection.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.

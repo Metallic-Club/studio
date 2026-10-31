@@ -598,3 +598,221 @@ fn a_narrow_toolbar_collapses_whole_groups_into_the_more_menu() {
         );
     }
 }
+
+// --- Review fixes: Esc routing, stroke cancel, one gesture flag, guarded commits, stuck drag.
+
+#[test]
+fn esc_reaches_the_colour_popover_then_the_building_popover_then_the_tool() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.set([sc.b, sc.c]);
+    h.state_mut().run_action("tool.measure");
+    h.state_mut().run_action("build.align");
+    h.run_steps(2);
+    let centre = h.state().viewport.rect().center();
+    h.hover_at(centre);
+    h.run_steps(2);
+
+    // The colour popover is topmost: Esc closes it and nothing else.
+    {
+        let ui = h.state_mut();
+        assert!(ui.colour.open(&ui.state, "Color", Pos2::new(900.0, 200.0)));
+    }
+    h.run_steps(2);
+    h.hover_at(centre);
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().colour.is_open(), "Esc closed the colour popover");
+    assert_eq!(h.state().tools.state().popover, Some(Popover::Align));
+    assert_eq!(h.state().tools.state().modal, Some(Modal::Measure));
+    assert_eq!(h.state().state.selection.len(), 2, "the selection stays");
+
+    // Then the Align popover, with the pointer over the viewport.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().tools.state().popover, None, "Esc closed Align");
+    assert_eq!(h.state().tools.state().modal, Some(Modal::Measure));
+    assert_eq!(h.state().state.selection.len(), 2);
+
+    // Then the tool, and only then the selection.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().tools.state().modal, None, "Esc left Measure");
+    assert_eq!(h.state().state.selection.len(), 2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(
+        h.state().state.selection.is_empty(),
+        "Esc cleared the selection"
+    );
+}
+
+#[test]
+fn popover_keys_follow_the_keymap_guards() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    let centre = h.state().viewport.rect().center();
+    h.state_mut().state.selection.set([sc.b]);
+    h.state_mut().run_action("select.similar");
+    h.hover_at(centre);
+    h.run_steps(2);
+    // Right mouse held (flying): S is a fly key, not Select similar.
+    h.event(Event::PointerButton {
+        pos: centre,
+        button: PointerButton::Secondary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.key_press(egui::Key::S);
+    h.run_steps(1);
+    h.event(Event::PointerButton {
+        pos: centre,
+        button: PointerButton::Secondary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert_eq!(
+        h.state().state.selection.len(),
+        1,
+        "no Select similar while flying"
+    );
+    assert_eq!(h.state().tools.state().popover, Some(Popover::Similar));
+    h.key_press(egui::Key::S);
+    h.run_steps(2);
+    assert_eq!(h.state().state.selection.len(), 2, "S picked Size");
+
+    // Array: Enter makes it (one step) through the keymap.
+    h.state_mut().state.selection.set([sc.a]);
+    h.state_mut().run_action("build.array");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().state.history.len(), 1);
+    assert_eq!(h.state().tools.state().popover, None);
+}
+
+/// Presses over the baseplate with the brush on and drags a little; returns where.
+fn start_stroke(h: &mut Harness<'static, EditorUi>, sc: &Scene) -> Pos2 {
+    h.state_mut().state.selection.set([sc.c]);
+    h.state_mut().run_action("tool.brush");
+    h.run_steps(2);
+    let at = screen(h, DVec3::new(-16.0, 0.0, 16.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    button(h, at, true, Modifiers::NONE);
+    h.hover_at(at + egui::vec2(20.0, 0.0));
+    h.run_steps(3);
+    assert!(h.state().tools.gesture(), "a stroke is held");
+    assert!(h.state().state.gesture_active());
+    at + egui::vec2(20.0, 0.0)
+}
+
+#[test]
+fn a_brush_stroke_cancelled_by_esc_tool_switch_or_focus_loss_never_commits() {
+    for how in ["esc", "tool", "focus"] {
+        let (ui, sc) = editor();
+        let mut h = harness(ui);
+        let before = snapshot(&h.state().state);
+        let at = start_stroke(&mut h, &sc);
+        match how {
+            "esc" => h.key_press(egui::Key::Escape),
+            "tool" => h.state_mut().run_action("tool.move"),
+            _ => h.input_mut().focused = false,
+        }
+        h.run_steps(2);
+        h.input_mut().focused = true;
+        button(&mut h, at, false, Modifiers::NONE);
+        assert!(!h.state().tools.gesture(), "{how}: the stroke ended");
+        // Turning the brush on again does not commit the old stroke either.
+        if h.state().tools.state().modal != Some(Modal::Brush) {
+            h.state_mut().run_action("tool.brush");
+        }
+        h.run_steps(3);
+        let s = &h.state().state;
+        assert!(s.history.is_empty(), "{how}: no step");
+        assert_eq!(snapshot(s), before, "{how}: the world is unchanged");
+    }
+}
+
+#[test]
+fn save_and_tool_edits_wait_for_a_colour_drag() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.set([sc.a, sc.b]);
+    h.run_steps(2);
+    h.get_by_label("Color swatch").click();
+    h.run_steps(4);
+    let centre = h.state().colour.popover().wheel_centre();
+    h.hover_at(centre);
+    h.run_steps(2);
+    button(&mut h, centre, true, Modifiers::NONE);
+    let to = centre + egui::vec2(30.0, -30.0);
+    h.hover_at(to);
+    h.run_steps(3);
+    let mid = snapshot(&h.state().state);
+    {
+        let ui = h.state_mut();
+        assert!(ui.state.gesture_active(), "the colour preview is a gesture");
+        assert!(ui.state.save().is_err(), "preview colours are never saved");
+        // Tool commits take the same refusal as EditorState::apply.
+        assert!(
+            !ui.actions.run("build.mirror", &mut ui.state),
+            "mirror waits"
+        );
+        run_align(
+            &mut ui.state,
+            &ArrangeSettings::default(),
+            Axis::Y,
+            Edge::Max,
+        );
+        assert!(ui.state.history.is_empty(), "no step during the drag");
+    }
+    assert_eq!(snapshot(&h.state().state), mid, "nothing moved");
+    // Ctrl+S during the drag does nothing either.
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::S);
+    h.run_steps(1);
+    button(&mut h, to, false, Modifiers::NONE);
+    h.run_steps(2);
+    let s = &h.state().state;
+    assert!(!s.gesture_active());
+    assert_eq!(s.history.len(), 1, "only the colour step");
+}
+
+#[test]
+fn a_viewport_drag_still_ends_when_a_tool_takes_the_pointer_mid_drag() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.tool = Tool::Move;
+    h.state_mut().state.selection.set([sc.a]);
+    h.run_steps(3);
+    let pivot = screen(&h, DVec3::new(-8.0, 2.0, 0.0));
+    let grab = pivot - egui::vec2(0.0, 54.0);
+    h.hover_at(grab);
+    h.run_steps(2);
+    button(&mut h, grab, true, Modifiers::NONE);
+    h.hover_at(grab - egui::vec2(0.0, 60.0));
+    h.run_steps(2);
+    assert!(h.state().viewport.is_dragging(), "the gizmo drag started");
+    // A tool turns pointer capture on mid-drag (any path: a hover over the array handle, ...).
+    h.state().tools.state().modal = Some(Modal::Measure);
+    h.hover_at(grab - egui::vec2(0.0, 90.0));
+    h.run_steps(2);
+    button(&mut h, grab - egui::vec2(0.0, 90.0), false, Modifiers::NONE);
+    h.run_steps(2);
+    {
+        let ui = h.state();
+        assert!(!ui.viewport.is_dragging(), "the release ended the drag");
+        assert!(!ui.state.gesture_active(), "keys are free again");
+        assert_eq!(ui.state.history.len(), 1, "the drag is one step");
+    }
+    // A viewport key works again.
+    let centre = h.state().viewport.rect().center();
+    h.hover_at(centre);
+    h.run_steps(1);
+    h.key_press(egui::Key::E);
+    h.run_steps(2);
+    assert_eq!(h.state().state.tool, Tool::Rotate);
+}

@@ -189,8 +189,9 @@ fn finish(state: &mut EditorState, done: Undoable, name: String) {
 
 /// Applies an arrange [`Plan`] and records it as one undo step named by the plan.
 pub fn commit_plan(state: &mut EditorState, plan: &Plan) -> Result<Committed, String> {
-    if state.play.is_playing() {
-        return Err("Stop the game to edit".into());
+    // The same refusal as EditorState::apply: no edit while playing or during a gesture.
+    if let Some(why) = state.edit_refusal() {
+        return Err(format!("Cannot {why}"));
     }
     if plan.is_empty() {
         return Err("Nothing to change".into());
@@ -254,8 +255,9 @@ pub fn commit_placements(
     placed: &[Placed],
     name: String,
 ) -> Result<Vec<InstanceId>, String> {
-    if state.play.is_playing() {
-        return Err("Stop the game to edit".into());
+    // The same refusal as EditorState::apply: no edit while playing or during a gesture.
+    if let Some(why) = state.edit_refusal() {
+        return Err(format!("Cannot {why}"));
     }
     let mut done = Undoable::default();
     let mut made = Vec::new();

@@ -51,6 +51,27 @@ pub struct BrushState {
     stroke: Option<Stroke<InstanceId>>,
     /// Stroke number, mixed into the seed so two strokes differ.
     strokes: u64,
+    /// Parts near the current dab (reused buffer, see `Probe`).
+    near: Vec<usize>,
+}
+
+impl BrushState {
+    /// True while a stroke is held.
+    pub fn has_stroke(&self) -> bool {
+        self.stroke.is_some()
+    }
+
+    /// Drops the stroke in progress. A stroke writes nothing until it ends, so the world is
+    /// already as it was.
+    pub fn cancel_stroke(&mut self) -> bool {
+        self.stroke.take().is_some()
+    }
+
+    /// `[` and `]`: the radius shrinks or grows by a quarter, within 1 to 256 studs.
+    pub fn step_radius(&mut self, bigger: bool) {
+        let r = self.settings.radius * if bigger { 1.25 } else { 0.8 };
+        self.settings.radius = r.clamp(1.0, 256.0);
+    }
 }
 
 /// Makes the brush set from the selection. Returns false (and says why) when nothing fits.
@@ -93,12 +114,15 @@ pub fn use_selection(b: &mut BrushState, state: &mut EditorState) -> bool {
     }
 }
 
-/// Ray casts against the scene's parts for the brush.
+/// Ray casts against the scene's parts for the brush. Only the parts near the dab (`near`, from
+/// [`PickCache::near`]) are tested: a dab's rays start within the radius of its centre and run
+/// two radii, so nothing farther than `radius * 1.5` can be hit.
 struct Probe<'a> {
     picks: &'a PickCache,
+    near: &'a [usize],
     state: &'a EditorState,
     set_folder: Option<InstanceId>,
-    tag: String,
+    tag: &'a str,
 }
 
 /// The outward normal of a part's box at a surface point.
@@ -137,12 +161,12 @@ impl Probe<'_> {
 
 impl SurfaceProbe for Probe<'_> {
     fn raycast(&self, origin: DVec3, direction: DVec3, max_distance: f64) -> Option<SurfaceHit> {
-        let hit = self.picks.first(
+        let hit = self.picks.first_in(
             &Ray {
                 origin,
                 dir: direction,
             },
-            &[],
+            self.near,
         )?;
         if hit.distance > max_distance {
             return None;
@@ -153,7 +177,7 @@ impl SurfaceProbe for Probe<'_> {
             _ => String::new(),
         };
         let tags = if self.in_set(hit.id) {
-            vec![self.tag.clone()]
+            vec![self.tag.to_string()]
         } else {
             Vec::new()
         };
@@ -264,18 +288,6 @@ pub fn viewport(
             f64::from(i.stable_dt.min(0.1)),
         )
     });
-    if cx.pointer.is_some() {
-        let (bigger, smaller) = ui.ctx().input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::NONE, egui::Key::CloseBracket),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::OpenBracket),
-            )
-        });
-        if bigger || smaller {
-            let r = b.settings.radius * if bigger { 1.25 } else { 0.8 };
-            b.settings.radius = r.clamp(1.0, 256.0);
-        }
-    }
     let under = cx.pointer.and_then(|p| {
         let ray = cx.ray(p);
         let hit = cx.picks.first(&ray, &[])?;
@@ -283,6 +295,7 @@ pub fn viewport(
         Some((point, box_normal(cx.picks, hit.id, point)))
     });
     let tag = b.set.as_ref().map(|(s, _)| s.tag()).unwrap_or_default();
+    let radius = b.settings.clamped().radius;
     let set_folder = b
         .set
         .as_ref()
@@ -310,11 +323,13 @@ pub fn viewport(
                 let near = existing(state, &b.settings, set);
                 b.stroke = Some(Stroke::begin(set.clone(), &settings, mode, near));
                 if let (Some(stroke), Some((p, n))) = (&mut b.stroke, under) {
+                    cx.picks.near(p, radius * 1.5, &mut b.near);
                     let probe = Probe {
                         picks: cx.picks,
+                        near: &b.near,
                         state,
                         set_folder,
-                        tag: tag.clone(),
+                        tag: &tag,
                     };
                     stroke.dab(&probe, p, n, DWELL_STEP_SECONDS);
                 }
@@ -322,11 +337,13 @@ pub fn viewport(
         }
     } else if down && b.stroke.is_some() {
         if let (Some(stroke), Some((p, n))) = (&mut b.stroke, under) {
+            cx.picks.near(p, radius * 1.5, &mut b.near);
             let probe = Probe {
                 picks: cx.picks,
+                near: &b.near,
                 state,
                 set_folder,
-                tag,
+                tag: &tag,
             };
             stroke.dab(&probe, p, n, dt);
         }

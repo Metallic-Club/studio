@@ -457,13 +457,16 @@ impl Viewport {
 
         let pointer = response.hover_pos();
         let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
+        // A tool takes the pointer only between gestures: a press or drag that began here
+        // always gets its release, so it ends (and the keys it holds are freed).
+        let capture = self.capture_pointer && self.drag.is_none() && self.press == Press::None;
         let summon = self.drag.is_none()
-            && !self.capture_pointer
+            && !capture
             && response.hovered()
             && ui.input(|i| i.key_down(self.holds.summon))
             && !ui.ctx().egui_wants_keyboard_input();
         let pivot = state.gizmo_pivot();
-        let frame = if self.capture_pointer {
+        let frame = if capture {
             None
         } else {
             self.gizmo_frame(state, &view, pivot, summon.then_some(pointer).flatten())
@@ -516,9 +519,7 @@ impl Viewport {
             state.insert_point = from_d(at);
         }
 
-        if self.capture_pointer {
-            self.press = Press::None;
-        } else {
+        if !capture {
             self.delta_keys(ui, &response, state);
             self.pointer_buttons(ui, &response, rect, &view, frame, pivot, state);
         }

@@ -29,7 +29,7 @@ pub fn box_edges(
     corners: &[DVec3; 8],
     stroke: Stroke,
 ) {
-    let pts: Vec<Option<Pos2>> = corners.iter().map(|c| cx.project(*c)).collect();
+    let pts: [Option<Pos2>; 8] = corners.map(|c| cx.project(c));
     for (a, b) in EDGES {
         if let (Some(a), Some(b)) = (pts[a], pts[b]) {
             painter.line_segment([a, b], stroke);

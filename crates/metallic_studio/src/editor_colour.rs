@@ -15,6 +15,8 @@
 //!   over no part) the window's pixel.
 //!
 //! The popover closes (committing anything pending) when the selection changes or Play starts.
+//! It is the topmost thing Esc reaches: while it is open, the Esc it handles is consumed, so the
+//! building popovers, the tools and the selection below it do not also react.
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -121,7 +123,7 @@ impl ColourDock {
     /// Opens the popover on `prop` of the selection, top-left corner at `pos`. Returns false
     /// when no selected instance has that Color3 property.
     pub fn open(&mut self, state: &EditorState, prop: &str, pos: Pos2) -> bool {
-        if state.play.is_playing() {
+        if state.edit_refusal().is_some() {
             return false;
         }
         let base = colour_targets(state, prop);
@@ -156,7 +158,11 @@ impl ColourDock {
         if stale && self.popover.is_open() {
             self.popover.close(&mut self.library);
         }
+        let was_open = self.popover.is_open();
         let events = self.popover.show(ctx, &mut self.library);
+        if was_open {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        }
         for event in events {
             self.handle(ctx, state, hovered_part, event);
         }

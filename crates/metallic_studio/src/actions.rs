@@ -221,7 +221,8 @@ impl ActionRegistry {
                 clicked = Some(a.id);
             }
             if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+                // A disabled action's accessory is disabled too.
+                ui.add_enabled_ui(enabled, |ui| acc(ui, state));
             }
         }
         if let Some(id) = clicked {
@@ -246,18 +247,19 @@ impl ActionRegistry {
                 format!("{} ({shortcut})", a.label)
             };
             let checked = a.is_checked(state);
+            let enabled = a.is_enabled(state);
             let button = Button::ghost(short_label(&a.label))
                 .compact()
                 .selected(checked);
             let resp = ui
-                .add_enabled(a.is_enabled(state), button)
+                .add_enabled(enabled, button)
                 .on_hover_text(&tip)
                 .on_disabled_hover_text(&tip);
             if resp.clicked() {
                 clicked = Some(a.id);
             }
             if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+                ui.add_enabled_ui(enabled, |ui| acc(ui, state));
             }
         }
         if let Some(id) = clicked {
@@ -289,7 +291,8 @@ impl ActionRegistry {
                         clicked = Some(a.id);
                     }
                     if let Some(acc) = &mut a.accessory {
-                        acc(ui, state);
+                        // A disabled action's accessory is disabled too.
+                        ui.add_enabled_ui(enabled, |ui| acc(ui, state));
                     }
                 });
             }
@@ -821,7 +824,17 @@ mod tests {
             .filter(|b| b.chord == esc)
             .map(|b| b.action)
             .collect();
-        assert_eq!(on_esc, ["edit.deselect", "drag.cancel"]);
+        // Esc closes a building popover or cancels a tool gesture first (#319); it never
+        // closes the game.
+        assert_eq!(
+            on_esc,
+            [
+                "popover.close",
+                "tool.cancel",
+                "edit.deselect",
+                "drag.cancel"
+            ]
+        );
         let mut r = default_actions();
         let mut s = state();
         assert!(r.run("file.close", &mut s));

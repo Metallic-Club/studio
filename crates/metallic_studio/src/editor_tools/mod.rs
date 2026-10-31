@@ -21,6 +21,20 @@
 //! While a tool owns the pointer (brush, measure, lasso, paint, array path points or the array
 //! handle) the editor sets [`crate::viewport::Viewport::capture_pointer`] and the tool paints its
 //! overlay over the viewport ([`EditorTools::viewport`]).
+//!
+//! **Keys.** The tools read no keys themselves. Their keys are keymap rows in two contexts the
+//! editor checks first ([`EditorTools::popover_keys`], [`EditorTools::tool_keys`]): with a
+//! popover open, Esc closes it (`popover.close`), Enter makes the array (`array.make`) and the
+//! Select similar letters run (`similar.*`); with the brush or Measure on over the viewport, Esc
+//! cancels the stroke or clears (`tool.cancel`) and `[` `]` change the radius
+//! (`brush.radius_*`). So text fields and right-mouse fly keep their keys, and Esc reaches the
+//! topmost thing first: the colour popover, then a building popover, then the tool, then the
+//! selection.
+//!
+//! **Gestures.** A brush stroke, a lasso or paint trail and an array handle drag are gestures
+//! ([`EditorTools::gesture`], reported as [`crate::editor::Gesture::Tool`]): Save, Play, Undo and
+//! other edits wait for them. A stroke is cancelled (nothing was written yet) by Esc, a tool
+//! change, Play, or the window losing focus.
 
 pub mod arrange;
 pub mod brush;
@@ -43,6 +57,7 @@ use crate::output::{Level, Tag};
 use crate::picking::PickCache;
 use crate::tools::measure::MeasureTool;
 use crate::tools::select::SelectMode;
+use crate::tools::select::SimilarKey;
 
 /// A tool that replaces the gizmo tools while it is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +148,38 @@ pub struct EditorTools {
 }
 
 fn editing(s: &EditorState) -> bool {
-    !s.play.is_playing()
+    s.edit_refusal().is_none()
+}
+
+impl ToolState {
+    /// Leaves Brush and Measure: the stroke in progress is dropped, measurements cleared.
+    fn leave_modal(&mut self) {
+        self.modal = None;
+        self.measure.clear();
+        self.brush.cancel_stroke();
+    }
+
+    /// Closes the open popover (and stops picking path points or dragging the handle).
+    fn close_popover(&mut self) {
+        self.popover = None;
+        self.arrange.picking_points = false;
+        self.arrange.cancel_handle();
+    }
+
+    /// Esc for the brush and Measure: cancel the stroke, else clear, else leave the tool.
+    fn cancel(&mut self, s: &mut EditorState) {
+        if self.brush.cancel_stroke() {
+            s.note("Brush stroke cancelled".into());
+        } else if self.select.is_active() {
+            self.select.cancel();
+        } else if self.modal == Some(Modal::Measure)
+            && (self.measure.measurements().len() > 0 || self.measure.pending().is_some())
+        {
+            self.measure.clear();
+        } else {
+            self.leave_modal();
+        }
+    }
 }
 
 fn selected(n: usize) -> impl Fn(&EditorState) -> bool {
@@ -171,8 +217,8 @@ impl EditorTools {
                         t.select_mode = t.select_mode.next();
                         s.note(format!("Select: {}", t.select_mode.label()));
                     }
-                    t.modal = None;
-                    t.measure.clear();
+                    t.leave_modal();
+                    t.select.cancel();
                     s.tool = Tool::Select;
                 },
             )
@@ -193,8 +239,8 @@ impl EditorTools {
             r.register(
                 Action::new(id, label, icon, ToolbarGroup::Tools, move |s| {
                     let mut t = a.borrow_mut();
-                    t.modal = None;
-                    t.measure.clear();
+                    t.leave_modal();
+                    t.select.cancel();
                     s.tool = tool;
                 })
                 .checked(move |s| s.tool == tool && b.borrow().modal.is_none()),
@@ -209,10 +255,10 @@ impl EditorTools {
                 // Icon buttons with the building actions: the labelled Tools group is full.
                 Action::new(id, label, icon, ToolbarGroup::Build, move |s| {
                     let mut t = a.borrow_mut();
-                    t.measure.clear();
                     if t.modal == Some(modal) {
-                        t.modal = None;
+                        t.leave_modal();
                     } else {
+                        t.leave_modal();
                         t.modal = Some(modal);
                         if modal == Modal::Brush && t.brush.set.is_none() {
                             brush::use_selection(&mut t.brush, s);
@@ -232,8 +278,9 @@ impl EditorTools {
             r.register(
                 Action::new(id, label, Icon::Text("S"), ToolbarGroup::Hidden, move |s| {
                     let mut t = a.borrow_mut();
+                    t.leave_modal();
+                    t.select.cancel();
                     t.select_mode = mode;
-                    t.modal = None;
                     s.tool = Tool::Select;
                 })
                 .checked(move |s| s.tool == Tool::Select && b.borrow().select_mode == mode),
@@ -301,6 +348,91 @@ impl EditorTools {
             Popover::Similar,
             1,
         ));
+        self.register_keys(r);
+    }
+
+    /// The keymap rows of the popovers and the brush/measure tool (see the module docs).
+    fn register_keys(&self, r: &mut ActionRegistry) {
+        let sh = &self.shared;
+        let hidden = |id, label, f: Box<dyn FnMut(&mut EditorState)>| {
+            let mut f = f;
+            Action::new(id, label, Icon::Text("K"), ToolbarGroup::Hidden, move |s| {
+                f(s)
+            })
+        };
+        let a = sh.clone();
+        r.register(hidden(
+            "popover.close",
+            "Close popover",
+            Box::new(move |_| a.borrow_mut().close_popover()),
+        ));
+        let (a, b) = (sh.clone(), sh.clone());
+        r.register(
+            hidden(
+                "array.make",
+                "Make the array",
+                Box::new(move |s| {
+                    let mut t = a.borrow_mut();
+                    if arrange::run_array(s, &mut t.arrange) {
+                        t.close_popover();
+                    }
+                }),
+            )
+            .enabled(move |s| editing(s) && b.borrow().popover == Some(Popover::Array)),
+        );
+        for (id, key) in select::SIMILAR_ACTIONS {
+            let (a, b) = (sh.clone(), sh.clone());
+            r.register(
+                hidden(
+                    id,
+                    similar_label(key),
+                    Box::new(move |s| {
+                        select::run_similar(s, key);
+                        a.borrow_mut().popover = None;
+                    }),
+                )
+                .enabled(move |s| editing(s) && b.borrow().popover == Some(Popover::Similar)),
+            );
+        }
+        let a = sh.clone();
+        r.register(hidden(
+            "tool.cancel",
+            "Cancel the tool",
+            Box::new(move |s| a.borrow_mut().cancel(s)),
+        ));
+        for (id, label, bigger) in [
+            ("brush.radius_down", "Smaller brush", false),
+            ("brush.radius_up", "Bigger brush", true),
+        ] {
+            let (a, b) = (sh.clone(), sh.clone());
+            r.register(
+                hidden(
+                    id,
+                    label,
+                    Box::new(move |_| a.borrow_mut().brush.step_radius(bigger)),
+                )
+                .enabled(move |_| b.borrow().modal == Some(Modal::Brush)),
+            );
+        }
+    }
+
+    /// True while a building popover is open: the editor checks
+    /// [`crate::keymap::KeyContext::Popover`] first.
+    pub fn popover_keys(&self) -> bool {
+        self.shared.borrow().popover.is_some()
+    }
+
+    /// True when [`crate::keymap::KeyContext::Tool`] is live: the brush or Measure is on and the
+    /// pointer is over the viewport, or a tool gesture is held.
+    pub fn tool_keys(&self, viewport_hovered: bool) -> bool {
+        let t = self.shared.borrow();
+        (t.modal.is_some() && viewport_hovered) || gesture_of(&t)
+    }
+
+    /// True while a tool gesture is held: a brush stroke, a lasso or paint trail, an array
+    /// handle drag.
+    pub fn gesture(&self) -> bool {
+        gesture_of(&self.shared.borrow())
     }
 
     /// The Build menu's "Mirror axis" choice (remembered for Ctrl+M and Ctrl+Shift+M).
@@ -337,8 +469,9 @@ impl EditorTools {
     pub fn ui(&mut self, ctx: &egui::Context, state: &mut EditorState) {
         let mut t = self.shared.borrow_mut();
         if state.play.is_playing() {
-            t.popover = None;
-            t.modal = None;
+            t.close_popover();
+            t.leave_modal();
+            t.select.cancel();
             return;
         }
         let t = &mut *t;
@@ -366,22 +499,24 @@ impl EditorTools {
         let painter = ui.painter_at(cx.rect);
         let mut t = self.shared.borrow_mut();
         let t = &mut *t;
-        let esc = cx.pointer.is_some()
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        // A gesture whose tool is no longer active, or a window that lost focus, ends without
+        // effect: nothing stays pending to commit later.
+        let focused = ui.input(|i| i.focused);
+        if !focused || t.modal != Some(Modal::Brush) {
+            t.brush.cancel_stroke();
+        }
+        let lasso =
+            t.modal.is_none() && state.tool == Tool::Select && t.select_mode != SelectMode::Box;
+        if !focused || !lasso {
+            t.select.cancel();
+        }
+        if !focused || t.popover != Some(Popover::Array) {
+            t.arrange.cancel_handle();
+        }
         match t.modal {
-            Some(Modal::Brush) => {
-                if esc {
-                    t.modal = None;
-                }
-                brush::viewport(ui, state, cx, &painter, &mut t.brush);
-            }
-            Some(Modal::Measure) => {
-                if esc {
-                    t.measure.clear();
-                }
-                measure::viewport(ui, state, cx, &painter, &mut t.measure);
-            }
-            None if state.tool == Tool::Select && t.select_mode != SelectMode::Box => {
+            Some(Modal::Brush) => brush::viewport(ui, state, cx, &painter, &mut t.brush),
+            Some(Modal::Measure) => measure::viewport(ui, state, cx, &painter, &mut t.measure),
+            None if lasso => {
                 select::viewport(ui, state, cx, &painter, t.select_mode, &mut t.select);
             }
             None => {}
@@ -390,5 +525,22 @@ impl EditorTools {
         if t.popover == Some(Popover::Array) {
             arrange::array_viewport(ui, state, cx, &painter, &mut t.arrange);
         }
+    }
+}
+
+fn gesture_of(t: &ToolState) -> bool {
+    t.brush.has_stroke() || t.select.is_active() || t.arrange.handle_active()
+}
+
+fn similar_label(key: SimilarKey) -> &'static str {
+    match key {
+        SimilarKey::Color => "Select similar: colour",
+        SimilarKey::Material => "Select similar: material",
+        SimilarKey::Style => "Select similar: look",
+        SimilarKey::Size => "Select similar: size",
+        SimilarKey::Class => "Select similar: class",
+        SimilarKey::Name => "Select similar: name",
+        SimilarKey::Tags => "Select similar: tags",
+        SimilarKey::Parent => "Select similar: parent",
     }
 }
