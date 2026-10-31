@@ -1,4 +1,25 @@
-// Physically based shading of instanced parts with procedural material detail.
+// Shading of instanced parts with procedural material detail. One surface shader serves every
+// shading model: each instance points at a row of the material table, and the row's model id
+// picks Lit, Toon, Unlit or Flat (src/shading.rs), so mixing models needs no extra pipelines.
+
+// One material table row (`MaterialRow` in src/shading.rs).
+struct MaterialRow {
+    surface: vec4<f32>, // x: model id, y: roughness (after the Look's floor), z: metalness, w: wrap
+    toon: vec4<f32>,    // x: bands, y: softness, z: flatten, w: light step in EV (0 = off)
+    tint: vec4<f32>,    // rgb: shade-side tint (linear), w: highlight size
+    extra: vec4<f32>,   // x: highlight strength, y: rim width, z: rim colour 0xRRGGBB, w: roughness floor
+}
+
+// MAX_ROWS in src/shading.rs.
+@group(0) @binding(3) var<uniform> materials: array<MaterialRow, 96>;
+
+const MODEL_LIT: u32 = 0u;
+const MODEL_TOON: u32 = 1u;
+const MODEL_UNLIT: u32 = 2u;
+const MODEL_FLAT: u32 = 3u;
+// Row of the Character class in the place Look's rows (CHARACTER_ROW in src/shading.rs).
+const CHARACTER_ROW: u32 = 10u;
+
 struct VIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -7,7 +28,8 @@ struct VIn {
     @location(4) m2: vec4<f32>,
     @location(5) m3: vec4<f32>,
     @location(6) color: vec4<f32>,
-    @location(7) material: vec4<f32>,
+    // x: material table row, y: flags, z: material id (procedural detail), w: reserved.
+    @location(7) material: vec4<u32>,
 }
 
 struct VOut {
@@ -17,7 +39,28 @@ struct VOut {
     @location(2) local_p: vec3<f32>,
     @location(3) local_n: vec3<f32>,
     @location(4) color: vec4<f32>,
-    @location(5) @interpolate(flat) material: vec4<f32>,
+    // Same as VIn.material.
+    @location(5) @interpolate(flat) material: vec4<u32>,
+    // Roughness and metalness: the row's for parts, the slot's for skinned meshes.
+    @location(6) @interpolate(flat) surf: vec2<f32>,
+    // Unlit rows: the colour through `unfinish`, once per vertex (the inverse curve is a
+    // bisection, too costly per pixel). Zero for other models.
+    @location(7) @interpolate(flat) unlit: vec3<f32>,
+    // Linear view depth (clip w), for the shadow cascade choice. Passed explicitly because the
+    // fragment `position.w` builtin is not portable: it reads 1/w on Vulkan but w on DX12 (#426).
+    @location(8) view_depth: f32,
+}
+
+// `VOut.unlit` for a colour shaded by `row`.
+fn unlit_colour(row: u32, c: vec3<f32>) -> vec3<f32> {
+    if (u32(material_row(row).surface.x + 0.5) == MODEL_UNLIT) {
+        return unfinish(c);
+    }
+    return vec3<f32>(0.0);
+}
+
+fn material_row(i: u32) -> MaterialRow {
+    return materials[min(i, 95u)];
 }
 
 @vertex
@@ -31,12 +74,15 @@ fn vs_main(v: VIn) -> VOut {
     let cof = mat3x3<f32>(cross(c1, c2), cross(c2, c0), cross(c0, c1));
     var out: VOut;
     out.clip = g.view_proj * wp;
+    out.view_depth = out.clip.w;
     out.world_pos = wp.xyz;
     out.world_n = normalize(cof * v.normal);
     out.local_p = v.pos * vec3<f32>(length(c0), length(c1), length(c2));
     out.local_n = v.normal;
     out.color = v.color;
     out.material = v.material;
+    out.surf = material_row(v.material.x).surface.yz;
+    out.unlit = unlit_colour(v.material.x, v.color.rgb);
     return out;
 }
 
@@ -180,32 +226,32 @@ fn shadow_factor(wp: vec3<f32>, n: vec3<f32>, view_depth: f32, frag: vec2<f32>) 
     return mix(lit, 1.0, fade);
 }
 
-// ---- lighting ----------------------------------------------------------
+// ---- shading models ----------------------------------------------------
 
-@fragment
-fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    let n = normalize(in.world_n);
-    let to_cam = g.camera_pos.xyz - in.world_pos;
-    let dist = length(to_cam);
-    let v = to_cam / max(dist, 1e-4);
-    let l = g.sun_dir.xyz;
+// Wrapped Lambert normalised so the integral over the sphere matches Lambert (`diffuse_ndl`
+// with an explicit wrap).
+fn wrap_ndl(ndl_raw: f32, w: f32) -> f32 {
+    return max((ndl_raw + w) / ((1.0 + w) * (1.0 + w)), 0.0);
+}
 
-    // Derivatives must be taken here, in uniform control flow, not inside `detail`'s switch.
-    let fw = fwidth(in.local_p);
-    let px = max(fw.x, max(fw.y, fw.z));
-    let d = detail(i32(in.material.z + 0.5), in.local_p, in.local_n, px);
-    let albedo = in.color.rgb * d.rgb;
-    let rough = clamp(in.material.x + d.w, 0.04, 1.0);
-    let metal = in.material.y;
+// The finish pass's exposure on the scene image (fixed and automatic), as `unfinish` reads it.
+fn scene_exposure() -> f32 {
+    var m = g.light_toon.y;
+    if (!(m > 0.0 && m < 1e30)) {
+        m = 1.0;
+    }
+    return max(g.params.z * m, 1e-6);
+}
+
+// Lit: GGX specular and wrapped Lambert diffuse with sky light and reflections.
+fn shade_lit(albedo: vec3<f32>, rough: f32, metal: f32, wrap: f32, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, sh: f32) -> vec3<f32> {
     let f0 = mix(vec3<f32>(0.04), albedo, metal);
     let diffuse_col = albedo * (1.0 - metal);
-
     let ndl = max(dot(n, l), 0.0);
     let ndv = max(dot(n, v), 1e-4);
     let h = normalize(l + v);
     let ndh = max(dot(n, h), 0.0);
     let vdh = max(dot(v, h), 0.0);
-
     let a = rough * rough;
     let a2 = a * a;
     let dd = ndh * ndh * (a2 - 1.0) + 1.0;
@@ -214,14 +260,136 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let big_g = (ndl / (ndl * (1.0 - k) + k)) * (ndv / (ndv * (1.0 - k) + k));
     let fres = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vdh, 5.0);
     let spec = big_d * big_g * fres / max(4.0 * ndl * ndv, 1e-3);
+    // The Look's wrap and LightingStyle.Soft's: the larger one bends the terminator.
+    let w = max(wrap, g.light_flags.y);
+    let direct = (diffuse_col / PI * wrap_ndl(dot(n, l), w) + spec * ndl) * g.sun_color.rgb * sh;
+    return direct + ambient_light(diffuse_col, f0, n, v, rough, ndv, sh);
+}
 
-    let view_depth = 1.0 / in.clip.w;
-    let sh = shadow_factor(in.world_pos, n, view_depth, in.clip.xy);
-    let direct = (diffuse_col / PI * diffuse_ndl(dot(n, l)) + spec * ndl) * g.sun_color.rgb * sh;
+// Flat: Lit's diffuse and sky light on the triangle's own normal, without the highlight, so
+// every face reads as one tone.
+fn shade_flat(albedo: vec3<f32>, rough: f32, metal: f32, wrap: f32, nf: vec3<f32>, v: vec3<f32>, l: vec3<f32>, sh: f32) -> vec3<f32> {
+    let f0 = mix(vec3<f32>(0.04), albedo, metal);
+    let diffuse_col = albedo * (1.0 - metal);
+    let ndv = max(dot(nf, v), 1e-4);
+    let w = max(wrap, g.light_flags.y);
+    let direct = diffuse_col / PI * wrap_ndl(dot(nf, l), w) * g.sun_color.rgb * sh;
+    return direct + ambient_light(diffuse_col, f0, nf, v, max(rough, 0.6), ndv, sh);
+}
 
-    let ambient = ambient_light(diffuse_col, f0, n, v, rough, ndv, sh);
+// Toon light steps: `bands` lit steps over the light amount x (0..1), edges `width` wide in
+// step units. 1 band is a two-tone lit/shade split at the terminator.
+fn toon_steps(x: f32, bands: f32, width: f32) -> f32 {
+    if (bands <= 1.0) {
+        return smoothstep(0.02 - width, 0.02 + width, x);
+    }
+    let s = x * bands;
+    let base = floor(s);
+    let edge = smoothstep(0.5 - width * bands, 0.5 + width * bands, s - base);
+    return clamp((base + edge) / bands, 0.0, 1.0);
+}
 
-    var col = direct + ambient;
+// Light arriving at a surface quantised to steps of `ev` EV around mid-grey as displayed, hue
+// kept (the Pixel 3D palette then survives exposure changes).
+fn quantise_light(light: vec3<f32>, ev: f32) -> vec3<f32> {
+    let e = scene_exposure();
+    let y = max(dot(light, vec3<f32>(0.2126, 0.7152, 0.0722)) * e, 1e-6);
+    let q = floor(log2(y / 0.18) / ev + 0.5) * ev;
+    return light * (0.18 * exp2(q) / y);
+}
+
+fn unpack_rgb8(p: f32) -> vec3<f32> {
+    let u = u32(p + 0.5);
+    let s = vec3<f32>(f32((u >> 16u) & 255u), f32((u >> 8u) & 255u), f32(u & 255u)) / 255.0;
+    // sRGB to linear (the same curve as `srgb_to_linear` in scene.rs).
+    return select(pow((s + 0.055) / 1.055, vec3<f32>(2.4)), s / 12.92, s <= vec3<f32>(0.04045));
+}
+
+// Toon: the sun term (N.L times the cast shadow) cut into bands, the shade side tinted, ambient
+// flattened toward the sky and ground average, a highlight blob and an optional rim.
+// `step_aa`, `spec_aa` and `rim_aa` are derivative widths taken in uniform control flow.
+fn shade_toon(albedo: vec3<f32>, row: MaterialRow, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, sh: f32, step_aa: f32, spec_aa: f32, rim_aa: f32) -> vec3<f32> {
+    let lit_x = clamp(dot(n, l), 0.0, 1.0) * sh;
+    let sun_term = toon_steps(lit_x, row.toon.x, max(row.toon.y, step_aa));
+    let up = sky_hemisphere(vec3<f32>(0.0, 1.0, 0.0));
+    let down = sky_hemisphere(vec3<f32>(0.0, -1.0, 0.0));
+    let hemi = mix(sky_hemisphere(n), 0.5 * (up + down), row.toon.z);
+    let open = mix(0.5 + 0.5 * n.y, 0.5, row.toon.z) * mix(0.55, 1.0, sh);
+    let ambient = hemi * g.light_ambient.w + g.light_ambient.rgb + g.light_outdoor.rgb * open;
+    let sun = g.sun_color.rgb / PI;
+    var light = sun * sun_term + ambient * mix(row.tint.rgb, vec3<f32>(1.0), sun_term);
+    if (row.toon.w > 0.0) {
+        light = quantise_light(light, row.toon.w);
+    }
+    var col = albedo * light;
+    // Highlight blob: a hard-edged Blinn-Phong spot of size `tint.w` on the lit side.
+    if (row.tint.w > 0.0) {
+        let ndh = dot(n, normalize(l + v));
+        let t = 1.0 - row.tint.w;
+        col = col + sun * (row.extra.x * smoothstep(t - spec_aa, t + spec_aa, ndh) * sun_term);
+    }
+    // Rim on the lit side.
+    if (row.extra.y > 0.0) {
+        let rt = 1.0 - row.extra.y;
+        let rim = smoothstep(rt - rim_aa, rt + rim_aa, 1.0 - max(dot(n, v), 0.0)) * sun_term;
+        col = col + unpack_rgb8(row.extra.z) * sun * (0.4 * rim);
+    }
+    return col;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let row = material_row(in.material.x);
+    let model = u32(row.surface.x + 0.5);
+    let n = normalize(in.world_n);
+    let to_cam = g.camera_pos.xyz - in.world_pos;
+    let dist = length(to_cam);
+    let v = to_cam / max(dist, 1e-4);
+    let l = g.sun_dir.xyz;
+
+    // Every derivative is taken here, in uniform control flow, not inside a model's branch.
+    let fw = fwidth(in.local_p);
+    let px = max(fw.x, max(fw.y, fw.z));
+    // Flat: the triangle's normal from the screen derivatives, turned to the shading normal's side.
+    let face = cross(dpdx(in.world_pos), dpdy(in.world_pos));
+    let face_len2 = dot(face, face);
+    var nf = select(n, face * inverseSqrt(max(face_len2, 1e-30)), face_len2 > 1e-24);
+    nf = select(nf, -nf, dot(nf, n) < 0.0);
+    // Toon edge widths: about one pixel of the light amount, the half-vector and the rim term.
+    let step_aa = 0.5 * fwidth(clamp(dot(n, l), 0.0, 1.0));
+    let spec_aa = max(fwidth(dot(n, normalize(l + v))), 1e-4);
+    let rim_aa = max(fwidth(dot(n, v)), 1e-4);
+
+    let d = detail(i32(in.material.z), in.local_p, in.local_n, px);
+    let albedo = in.color.rgb * d.rgb;
+    // The row's floor holds for skinned slots too (parts' rows are floored already).
+    let rough = clamp(max(in.surf.x, row.extra.w) + d.w, 0.04, 1.0);
+    let metal = in.surf.y;
+
+    if (model == MODEL_UNLIT) {
+        // Shown as its own colour: through `unfinish`, like toon characters (the detail
+        // multiplier is applied after it). Alpha 0 on opaque pixels keeps them out of the
+        // exposure meter (their light follows the exposure).
+        let a = select(in.color.a, 0.0, in.color.a >= 0.999);
+        return vec4<f32>(apply_fog(in.unlit * d.rgb, in.world_pos), a);
+    }
+    var sn = n;
+    if (model == MODEL_FLAT) {
+        sn = nf;
+    }
+    let sh = shadow_factor(in.world_pos, sn, in.view_depth, in.clip.xy);
+    var col: vec3<f32>;
+    switch model {
+        case MODEL_TOON: {
+            col = shade_toon(albedo, row, n, v, l, sh, step_aa, spec_aa, rim_aa);
+        }
+        case MODEL_FLAT: {
+            col = shade_flat(albedo, rough, metal, row.surface.w, nf, v, l, sh);
+        }
+        default: {
+            col = shade_lit(albedo, rough, metal, row.surface.w, n, v, l, sh);
+        }
+    }
     col = apply_fog(col, in.world_pos);
     return vec4<f32>(col, in.color.a);
 }

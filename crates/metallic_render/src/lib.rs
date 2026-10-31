@@ -14,12 +14,16 @@
 
 pub mod bloom;
 pub mod camera;
+pub mod edges;
 pub mod exposure;
 pub mod lighting;
+pub mod lut;
 pub mod materials;
 pub mod meshes;
+pub mod mlaa;
 pub mod post;
 pub mod scene;
+pub mod shading;
 pub mod shadows;
 pub mod skinned;
 pub mod sky;
@@ -31,11 +35,15 @@ mod renderer;
 
 pub use camera::Camera;
 pub use context::{RenderContext, RenderError};
+pub use edges::{EDGE_PASS, EdgePass};
 pub use exposure::{AutoExposure, ExposureMode, ExposureState};
 pub use glam;
 pub use lighting::LightingInputs;
+pub use lut::Lut3d;
 pub use metallic_asset;
+pub use mlaa::{MLAA_PASS, MlaaPass};
 pub use post::{FullscreenPass, PostChain, PostContext, PostDraw, PostPass, PostSlot};
 pub use renderer::{Quality, RenderSettings, Renderer};
+pub use shading::{MaterialTable, ModelParams, Shading, ShadingModel};
 pub use skinned::{SkinStyle, SkinnedInstance};
 pub use tonemap::{FinishSettings, LookTone, ToneCurve};
