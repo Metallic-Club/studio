@@ -20,7 +20,7 @@ use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use metallic_core::{InstanceId, World};
+use metallic_core::{DestroyedInstance, InstanceId, World};
 use mlua::{Error, Function, Table, WeakLua};
 
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
@@ -45,6 +45,12 @@ pub(crate) struct HostShared {
     pub(crate) local_player: Cell<Option<InstanceId>>,
     /// Input events, action states and device flags pushed by the host.
     pub(crate) input: input::InputShared,
+    /// What instances destroyed during this step were (from [`World::take_destroyed`]), so a
+    /// destroyed instance stays readable. Emptied at the end of every step: by then each Luau
+    /// object of one holds its own copy, which goes when the object is collected.
+    pub(crate) destroyed: RefCell<HashMap<InstanceId, Rc<DestroyedInstance>>>,
+    /// Reused buffer for [`World::take_destroyed`].
+    pub(crate) taken: RefCell<Vec<DestroyedInstance>>,
 }
 
 /// Everything the API functions of one VM need.

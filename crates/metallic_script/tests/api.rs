@@ -169,6 +169,7 @@ fn touch_ended_still_fires_when_the_touching_part_was_destroyed() {
         r#"
         workspace.Pad.Touched:Connect(function(hit) print("on", hit.Name) end)
         workspace.Pad.TouchEnded:Connect(function(hit)
+            -- The destroyed part's last values stay readable (#390).
             print("off", typeof(hit), (pcall(function() return hit.Name end)))
         end)
         "#,
@@ -185,7 +186,7 @@ fn touch_ended_still_fires_when_the_touching_part_was_destroyed() {
     rig.run(t, 1);
     assert_eq!(
         rig.lines(),
-        ["print:on LeftFoot", "print:off Instance false"]
+        ["print:on LeftFoot", "print:off Instance true"]
     );
 }
 
@@ -308,7 +309,7 @@ fn stop_then_start_connects_once() {
 }
 
 #[test]
-fn destroyed_instance_errors_with_its_name() {
+fn destroyed_instance_reads_its_last_values_and_refuses_changes() {
     let mut rig = Rig::new();
     let ws = rig.root("Workspace");
     rig.add("Part", "Brick", ws);
@@ -327,10 +328,8 @@ fn destroyed_instance_errors_with_its_name() {
     start(&mut rig);
     let lines = rig.lines();
     assert_eq!(lines[0], "print:nil");
-    assert!(
-        lines[1].starts_with("print:false") && lines[1].ends_with("Brick has been destroyed"),
-        "{lines:?}"
-    );
+    // Like Roblox, the last values stay readable.
+    assert_eq!(lines[1], "print:true 0, 0, 0", "{lines:?}");
     assert!(lines[2].ends_with("Brick has been destroyed"), "{lines:?}");
     assert!(lines[3].contains("cannot be destroyed"), "{lines:?}");
     assert!(lines[4].contains("locked"), "{lines:?}");
@@ -596,4 +595,108 @@ fn lighting_values_from_scripts_stay_in_range() {
     assert!(lines[1].ends_with(" 10"), "{}", lines[1]);
     assert!(lines[2].starts_with("print:false"), "{}", lines[2]);
     assert!(lines[2].ends_with(" 10"), "{}", lines[2]);
+}
+
+#[test]
+fn a_destroyed_touching_limb_stays_readable_in_touch_ended() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    let pad = rig.add("Part", "Pad", ws);
+    let character = rig.add("Model", "Bob", ws);
+    rig.add("Humanoid", "Humanoid", character);
+    let foot = rig.add("Part", "LeftFoot", character);
+    rig.world
+        .borrow_mut()
+        .set(foot, "Transparency", Value::Number(0.25))
+        .unwrap();
+    rig.server_script(
+        "S",
+        r#"
+        workspace.Pad.TouchEnded:Connect(function(hit)
+            print(hit.Name, hit.ClassName, hit.Transparency, hit.Parent)
+            print(hit:IsA("BasePart"), hit:FindFirstChild("X"), #hit:GetChildren(), #hit:GetDescendants())
+            -- The common guard reads nil instead of erroring.
+            if hit.Parent and hit.Parent:FindFirstChild("Humanoid") then print("humanoid") end
+            local ok, err = pcall(function() hit.Parent = workspace end)
+            print(ok, err)
+            ok, err = pcall(function() hit.Transparency = 1 end)
+            print(ok, err)
+            print(pcall(function() return hit:Clone() end))
+        end)
+        "#,
+    );
+    start(&mut rig);
+    let t = rig.run(0.0, 1);
+    // The character goes before the scripts hear about the end of the contact, and was never
+    // seen by a script before.
+    rig.world.borrow_mut().destroy(character);
+    rig.host.touch_ended(pad, foot);
+    rig.run(t, 1);
+    let lines = rig.lines();
+    assert_eq!(lines[0], "print:LeftFoot Part 0.25 nil", "{lines:?}");
+    assert_eq!(lines[1], "print:true nil 0 0", "{lines:?}");
+    assert!(
+        lines[2].starts_with("print:false ")
+            && lines[2].contains("Parent property of LeftFoot is locked"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[3].starts_with("print:false ") && lines[3].contains("LeftFoot has been destroyed"),
+        "{lines:?}"
+    );
+    assert!(lines[4].starts_with("print:false "), "{lines:?}");
+    assert_eq!(lines.len(), 5, "{lines:?}");
+}
+
+#[test]
+fn a_held_instance_destroyed_by_the_engine_keeps_its_last_values() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    let part = rig.add("Part", "Crate", ws);
+    rig.server_script(
+        "S",
+        r#"
+        local held = workspace.Crate
+        held.Name = "Renamed"
+        _G.check = function()
+            print(held.Name, held.ClassName, held.Parent, held.Anchored)
+        end
+        "#,
+    );
+    start(&mut rig);
+    let t = rig.run(0.0, 1);
+    // Destroyed between steps by the engine, then the slot is reused by a new part.
+    rig.world.borrow_mut().destroy(part);
+    let t = rig.run(t, 1);
+    rig.add("Part", "Other", ws);
+    rig.server_script("C", "_G.check()");
+    rig.run(t, 1);
+    assert_eq!(rig.lines(), ["print:Renamed Part nil false"]);
+}
+
+#[test]
+fn nothing_destroyed_is_kept_after_the_step_or_once_stopped() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    rig.server_script(
+        "S",
+        r#"
+        for i = 1, 200 do
+            local p = Instance.new("Part", workspace)
+            p:Destroy()
+        end
+        "#,
+    );
+    start(&mut rig);
+    rig.run(0.0, 2);
+    // The world keeps nothing between steps (the Luau objects hold their own values).
+    let mut kept = Vec::new();
+    rig.world.borrow_mut().take_destroyed(&mut kept);
+    assert!(kept.is_empty());
+    // Stopping turns keeping off.
+    rig.host.stop();
+    let p = rig.add("Part", "P", ws);
+    rig.world.borrow_mut().destroy(p);
+    rig.world.borrow_mut().take_destroyed(&mut kept);
+    assert!(kept.is_empty());
 }

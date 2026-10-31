@@ -37,7 +37,10 @@ apps.
   only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
-  `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
+  `classes::default_value` paths remain compatible. With `World::keep_destroyed(true)` (the script host sets it while
+  scripts run), `destroy` moves each destroyed node's class and properties into a `DestroyedInstance`, at most
+  `DESTROYED_LIMIT` until `take_destroyed`; reads and writes are unchanged. References to destroyed instances read as
+  `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
@@ -104,7 +107,10 @@ apps.
   Task queue ownership uses weak thread keys and fresh lease identities; task-created callbacks bind their
   function/arguments at creation. Coroutine admission adapters consume private scheduler markers while ordinary
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
-  retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
+  retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged. A destroyed instance stays readable: each step the host takes the world's
+  `DestroyedInstance`s, and every live Luau object of one keeps its own `Rc` copy (`Parent` nil, no children; changes
+  error). The step's table is emptied at its end, so the values go with the last Luau reference (the wrapper cache is
+  weak).
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
   Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the

@@ -163,6 +163,11 @@ impl ScriptHost {
             .collect();
         self.running.clear();
         self.cursor = None;
+        self.shared.destroyed.borrow_mut().clear();
+        // Destroyed instances stay readable to scripts while they run (see `keep_destroyed`).
+        if let Ok(mut world) = self.world.try_borrow_mut() {
+            world.keep_destroyed(true);
+        }
 
         self.server = Some(self.make_side(Context::Server)?);
         self.client = self
@@ -214,6 +219,18 @@ impl ScriptHost {
         for side in self.sides_mut() {
             side.vm.step(now);
         }
+        self.keep_destroyed();
+    }
+
+    /// Hands what each instance destroyed in this step was to its live Luau objects, then
+    /// forgets it: nothing outlives the objects that can still read it.
+    fn keep_destroyed(&self) {
+        for side in self.sides() {
+            if let Err(e) = side.state.keep_destroyed() {
+                self.output.error(&crate::vm::format_error(&e));
+            }
+        }
+        self.shared.destroyed.borrow_mut().clear();
     }
 
     /// Shuts active VMs down, dropping every connection and sleeping thread. `start` may be
@@ -230,6 +247,10 @@ impl ScriptHost {
         self.shared.queued.set([(0, 0); 2]);
         self.shared.joined.borrow_mut().clear();
         self.shared.input.clear();
+        self.shared.destroyed.borrow_mut().clear();
+        if let Ok(mut world) = self.world.try_borrow_mut() {
+            world.keep_destroyed(false);
+        }
         self.running.clear();
         self.cursor = None;
     }
