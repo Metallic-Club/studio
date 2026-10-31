@@ -128,6 +128,11 @@ impl Hub {
         }
     }
 
+    /// How many handlers `key` has.
+    fn count(&self, key: SignalKey) -> usize {
+        self.connections.borrow().get(&key).map_or(0, Vec::len)
+    }
+
     fn snapshot(&self, key: SignalKey) -> Vec<(Function, Rc<Cell<bool>>, u64)> {
         self.connections
             .borrow()
@@ -219,6 +224,22 @@ impl ApiState {
             .deadline
             .get()
             .is_some_and(|d| Instant::now() >= d)
+    }
+
+    /// Whether the lifecycle events (tag added or removed, attribute changed) of a log can be
+    /// handed to `handlers` handlers now. They are never dropped: when this step is out of time
+    /// or the deferred queue has no room for that many calls, the reader stays at the event and
+    /// takes it up again in the next step, in order. The events wait in the world's log (which
+    /// holds hundreds of thousands) instead of in the handler queue.
+    pub(crate) fn lifecycle_room(&self, handlers: usize) -> bool {
+        handlers == 0
+            || (!self.over_budget()
+                && self.pacing.deferred.borrow().len() + handlers <= MAX_DEFERRED)
+    }
+
+    /// How many handlers `key` has.
+    pub(crate) fn handler_count(&self, key: SignalKey) -> usize {
+        self.hub.count(key)
     }
 
     /// Runs handler calls that an earlier step had no time for, oldest first.
