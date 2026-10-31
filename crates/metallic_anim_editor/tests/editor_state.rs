@@ -173,7 +173,7 @@ fn demo_clips_are_valid() {
 
 #[test]
 fn theme_text_meets_contrast_on_its_surfaces() {
-    let t = Theme::METALLIC;
+    let t = Theme::current();
     let surfaces = [
         ("deep", t.deep),
         ("base", t.base),

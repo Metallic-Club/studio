@@ -2,36 +2,12 @@
 //! `Metallic\`, which another app may own. Cleanup removes a folder only when it holds the marker
 //! file Studio wrote when it created the folder.
 
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// The folder name under `%APPDATA%` and `%LOCALAPPDATA%` (the Velopack pack id).
-pub const STUDIO_FOLDER: &str = "MetallicStudio";
+pub use crate::theme::saved::{STUDIO_FOLDER, config_dir_in, resolve_config_dir};
 
 /// The file that says "Studio created this folder".
 pub const DATA_MARKER: &str = ".metallic-studio";
-
-/// Studio's folder under an app-data base: `<base>\MetallicStudio`.
-pub fn config_dir_in(base: &Path) -> PathBuf {
-    base.join(STUDIO_FOLDER)
-}
-
-/// Where Studio keeps its settings, with the environment passed in: `METALLIC_STUDIO_CONFIG_DIR`,
-/// else `%APPDATA%\MetallicStudio`, else `$XDG_CONFIG_HOME/MetallicStudio`, else
-/// `~/.config/MetallicStudio`. Empty values count as unset. `None` if nothing is known.
-pub fn resolve_config_dir(var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let get = |name: &str| var(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-    if let Some(dir) = get("METALLIC_STUDIO_CONFIG_DIR") {
-        return Some(dir);
-    }
-    if let Some(appdata) = get("APPDATA") {
-        return Some(config_dir_in(&appdata));
-    }
-    if let Some(xdg) = get("XDG_CONFIG_HOME") {
-        return Some(config_dir_in(&xdg));
-    }
-    get("HOME").map(|home| config_dir_in(&home.join(".config")))
-}
 
 /// Creates `dir`. When it did not exist, it also gets the marker; an existing folder is left as it
 /// is (and stays unmarked, so cleanup will not delete it).

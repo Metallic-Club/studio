@@ -3,7 +3,7 @@
 
 use egui::{Pos2, Rect, vec2};
 use egui_kittest::Harness;
-use metallic_anim_editor::theme::{Theme, install_system_fonts};
+use metallic_anim_editor::theme::{self, Theme};
 use metallic_anim_editor::{DemoApp, DopeSheet, DopeSheetLayout, EditorState, KeyRef, wave_clip};
 
 struct Ui {
@@ -20,12 +20,12 @@ fn harness() -> Harness<'static, Ui> {
         .build_ui_state(
             |ui, s: &mut Ui| {
                 if !s.fonts {
-                    // egui's bundled fonts are off (licence); use installed fonts like the demo does.
-                    assert!(install_system_fonts(ui.ctx()) > 0, "no system fonts found");
+                    // Install the shared theme and its bundled fonts, like the demo does.
+                    theme::apply(ui.ctx());
                     s.fonts = true;
                 }
                 s.rect = ui.available_rect_before_wrap();
-                DopeSheet::new(Theme::METALLIC).show(ui, &mut s.state);
+                DopeSheet::new(Theme::current()).show(ui, &mut s.state);
             },
             Ui {
                 state,

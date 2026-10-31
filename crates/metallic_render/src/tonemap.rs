@@ -295,7 +295,7 @@ fn agx(c: [f32; 3], punchy: bool) -> [f32; 3] {
 }
 
 /// Khronos PBR Neutral, ported from the Khronos reference (KhronosGroup/ToneMapping,
-/// `PBR_Neutral/pbrNeutral.glsl`). Copyright (c) The Khronos Group Inc., Apache License 2.0
+/// `PBR_Neutral/pbrNeutral.glsl`). Copyright (c) 2024 The Khronos Group Inc., Apache License 2.0
 /// (`LICENSES/Apache-2.0.txt`, notice in `LICENSES/THIRD-PARTY-CODE.md`). Modified: GLSL to Rust.
 fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
     const START: f32 = 0.8 - 0.04;
