@@ -4,8 +4,16 @@ use crate::classes::{self, class_def, default_value, default_value_ref, find_pro
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+mod extras;
+pub use extras::{
+    AttributeChange, AttributeChanges, AttributeCursor, MAX_ATTRIBUTE_NAME, MAX_ATTRIBUTE_STRING,
+    MAX_ATTRIBUTES, MAX_EXTRAS_BYTES, MAX_TAG, MAX_TAGS, TagChange, TagChanges, TagCursor,
+    check_attribute_name, check_attribute_value, check_tag,
+};
+use extras::{AttributeLog, Extras, TagLog};
 
 /// Most journal entries kept before the oldest half is dropped.
 const JOURNAL_LIMIT: usize = 16384;
@@ -129,6 +137,8 @@ struct Node {
     /// Only values that were set; everything else uses the class default.
     props: BTreeMap<String, Value>,
     builtin: bool,
+    /// Attributes (and later tags); `None` for the common instance that has none.
+    extras: Option<Box<Extras>>,
 }
 
 #[derive(Clone)]
@@ -147,6 +157,7 @@ const SERVICES: &[&str] = &[
     "StarterGui",
     "Lighting",
     "RunService",
+    "ServerStorage",
 ];
 
 /// A whole game tree: owns all instances, their properties and events.
@@ -162,6 +173,12 @@ pub struct World {
     journal: Vec<JournalEntry>,
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
+    attribute_log: AttributeLog,
+    /// Tag -> instances carrying it (detached ones too); `tagged` filters by game tree.
+    tag_index: HashMap<String, BTreeSet<InstanceId>>,
+    tag_log: TagLog,
+    /// Bytes of attribute data held, against `MAX_EXTRAS_BYTES`.
+    extras_bytes: usize,
 }
 
 impl World {
@@ -177,6 +194,10 @@ impl World {
             revision: 0,
             journal: Vec::new(),
             journal_floor: 0,
+            attribute_log: AttributeLog::default(),
+            tag_index: HashMap::new(),
+            tag_log: TagLog::default(),
+            extras_bytes: 0,
         }
     }
 
@@ -272,7 +293,7 @@ impl World {
 
     /// A world with the standard services (`Workspace`, `Players`, `ReplicatedStorage`,
     /// `ServerScriptService`, `StarterPlayer` with `StarterPlayerScripts`, `StarterGui`,
-    /// `Lighting`, `RunService`) as parentless built-in roots.
+    /// `Lighting`, `RunService`, `ServerStorage`) as parentless built-in roots.
     pub fn new_with_services() -> World {
         let mut w = World::new_empty();
         for s in SERVICES {
@@ -299,6 +320,7 @@ impl World {
             children: Vec::new(),
             props,
             builtin,
+            extras: None,
         };
         if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
@@ -408,6 +430,12 @@ impl World {
         if !self.is_alive(id) {
             return;
         }
+        if !self.tag_index.is_empty() {
+            if self.is_in_tree(id) {
+                self.log_subtree_tags(id, false);
+            }
+            self.forget_subtree_tags(id);
+        }
         self.detach(id);
         let mut gone = Vec::new();
         let mut stack = vec![id];
@@ -417,6 +445,9 @@ impl World {
                 continue;
             };
             if let Some(node) = slot.node.take() {
+                if let Some(extras) = &node.extras {
+                    self.extras_bytes -= extras::extras_cost(extras);
+                }
                 stack.extend(node.children);
                 slot.generation += 1;
                 self.free.push(cur.index);
@@ -475,6 +506,7 @@ impl World {
         if self.parent(id) == parent {
             return Ok(());
         }
+        let was_in_tree = !self.tag_index.is_empty() && self.is_in_tree(id);
         self.detach(id);
         if let Some(n) = self.node_mut(id) {
             n.parent = parent;
@@ -487,6 +519,10 @@ impl World {
             None => self.roots.push(id),
         }
         self.record_subtree(id);
+        // Tagged instances count as active while they are in the game tree.
+        if !self.tag_index.is_empty() && was_in_tree != self.is_in_tree(id) {
+            self.log_subtree_tags(id, !was_in_tree);
+        }
         Ok(())
     }
 
@@ -696,9 +732,26 @@ impl World {
         if !self.is_alive(id) {
             return Err(CoreError::InvalidInstance);
         }
+        // The copy holds its own attributes: refuse a clone the world has no budget for.
+        let extra = self.subtree_extras_cost(id);
+        if self.extras_bytes + extra > MAX_EXTRAS_BYTES {
+            return Err(CoreError::InvalidValue {
+                property: "Clone".into(),
+                reason: format!(
+                    "the attribute data budget of a world is {} MiB",
+                    MAX_EXTRAS_BYTES >> 20
+                ),
+            });
+        }
+        self.extras_bytes += extra;
         let mut map = HashMap::new();
         let root = self.clone_rec(id, None, &mut map);
         self.roots.push(root);
+        // `clone_rec` already journaled each copy in parent-before-child order.
+        let copies: Vec<InstanceId> = map.values().copied().collect();
+        for copy in copies {
+            self.index_tags_of(copy);
+        }
         for &copy in map.values() {
             if let Some(n) = self.node_mut(copy) {
                 for v in n.props.values_mut() {
@@ -719,11 +772,19 @@ impl World {
         parent: Option<InstanceId>,
         map: &mut HashMap<InstanceId, InstanceId>,
     ) -> InstanceId {
-        let (class, props, kids) = match self.node(id) {
-            Some(n) => (n.class, n.props.clone(), n.children.clone()),
+        let (class, props, kids, extras) = match self.node(id) {
+            Some(n) => (
+                n.class,
+                n.props.clone(),
+                n.children.clone(),
+                n.extras.clone(),
+            ),
             None => return id,
         };
         let copy = self.alloc(class, parent, props, false);
+        if let Some(node) = self.node_mut(copy) {
+            node.extras = extras;
+        }
         map.insert(id, copy);
         self.record(copy, Some(JournalKind::Created));
         for k in kids {
@@ -745,6 +806,10 @@ impl World {
             revision: 0,
             journal: Vec::new(),
             journal_floor: 0,
+            attribute_log: AttributeLog::default(),
+            tag_index: self.tag_index.clone(),
+            tag_log: TagLog::default(),
+            extras_bytes: self.extras_bytes,
         }
     }
 }

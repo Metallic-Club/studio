@@ -621,3 +621,48 @@ fn no_floating_toolbar_header_chip_or_hint_card_over_the_game() {
         );
     }
 }
+
+/// Every action the editor registers (built-ins, building tools, panels, colour), except the
+/// few in `PLAY_SAFE`, is disabled while playing, including those registered after
+/// `default_actions()` (#380 re-registers the tool actions).
+#[test]
+fn every_action_outside_play_safe_is_locked_while_playing() {
+    let output = OutputPanel::new();
+    let (mut state, part) = editor("", &output.log);
+    state.selection.select_only(part);
+    let mut ui = EditorUi::new(state, output);
+    assert!(
+        ui.actions
+            .get("tool.move")
+            .is_some_and(|a| a.is_enabled(&ui.state))
+    );
+    assert!(ui.state.start_play("play.start"));
+    let mut checked = 0;
+    for a in ui.actions.iter() {
+        if metallic_studio::actions::PLAY_SAFE.contains(&a.id) {
+            continue;
+        }
+        assert!(
+            !a.is_enabled(&ui.state),
+            "{} is enabled while playing",
+            a.id
+        );
+        checked += 1;
+    }
+    assert!(checked > 40, "the whole registry was checked ({checked})");
+    for id in [
+        "tool.select",
+        "tool.move",
+        "build.align",
+        "colour.open",
+        "view.input_actions",
+    ] {
+        assert!(ui.actions.get(id).is_some(), "{id} is registered");
+    }
+    ui.state.stop_play();
+    assert!(
+        ui.actions
+            .get("tool.move")
+            .is_some_and(|a| a.is_enabled(&ui.state))
+    );
+}
