@@ -65,7 +65,7 @@ fixtures with the new dependency. Fixture hashes and provenance live alongside
 the files. A CPU-only public-API test joins runtime, animation and asset types,
 while an upload test checks nontrivial scale/rotation/translation, column order,
 the bytemuck opt-in and the renderer's 96-byte instance offsets without a GPU.
-The current material-table header at byte80 is checked as four u32 words (row,
+The current material-table header at byte 80 is checked as four u32 words (row,
 flags, material ID, reserved), preserving the upstream integer shader ABI.
 
 Validation results and any remaining integration limits are recorded in

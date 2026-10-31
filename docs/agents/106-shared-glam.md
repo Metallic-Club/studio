@@ -153,5 +153,32 @@ material parameters. Shared glam 0.33, legacy fixtures, public interoperability,
 CPU-unavailable policy and camera call safeguards are retained. No wgpu upgrade,
 assertion relaxation, golden change, force push or own merge is introduced.
 
-Cargo is held pending the coordinator's build-slot release. This checkpoint is
-source-only; no refreshed execution or Clippy result is claimed for 995f880 yet.
+Executable checkpoint: `d614af740fae3abd2e3c9960caac6e4d1c0c1b89`, tree
+`d21706f6b7df036743caff86c9bac65deac8374e`. Refreshed checks use this exact source;
+the earlier a0/e993 and private b44 results remain separate historical evidence.
+
+- CPU-only renderer library checks passed 47 cases; the upload/camera target
+  passed both cases. The current shading GPU target passed all five cases,
+  including standard skinned-character materials. No assertion was weakened.
+- Full locked workspace prebuild and strict all-target Clippy passed. Clippy
+  still reports the documented dev-only nalgebra future-compatibility note.
+- Full locked workspace execution with serial harnesses passed 1,910 tests,
+  zero failures and eight upstream ignores across 143 result groups, including
+  doc tests. All three complete Parkour routes, unchanged Mikk tangent reference,
+  old animation files, public math interoperability, camera/layout regressions
+  and current shading cases passed. No retry, new ignore or budget change was
+  required.
+- All eight Python policy cases pass. Real normal/build, dev and standalone
+  active graphs each contain only glam 0.33.12. CPU-only runtime remains
+  unavailable in this main-based source, rather than being reported as a pass.
+- Licenses, workspace format and whitespace against the exact 995f880 pin pass.
+  Guarded lane116 and four build jobs were used; actual Lua/GPU execution used
+  the coordinator's sole window. The earlier unknown wrapper exit for the
+  recovered focused CPU log is not inferred; the complete full-suite wrapper
+  exit is independently recorded as zero.
+
+The standalone guarded `check --bins --locked -j 4` refresh passed in 11.74s
+after the full workspace run, with no standalone GPU execution. Its separate
+manifest/lock and source are identified independently from the workspace checks.
+Raw logs, exit metadata and source hashes for this refresh are retained under external
+`integration-evidence/106-main-995f880`. No own merge or force push was performed.
