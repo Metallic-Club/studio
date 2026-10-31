@@ -8,11 +8,19 @@ Branch `studio/435-reparent-noop`, exact fresh main
 `8699192791825af0c8c44edb9d833339440cc508`. Live issue/main checks found the task
 ready and unclaimed. No editor.rs or visual design change is in scope.
 
-First checkpoint: six new public EditorState/History regressions, production
-unchanged. They cover a saved no-op, one Undo reaching the prior real edit, redo's
-parked id, mixed moves, ancestor suppression and rejected-operation controls.
-Actual baseline execution is pending; source-derived failures are not yet called
-reproduced. Do not change production before recording that run.
+Test-only checkpoint `2c46b121a8ea38adba2cb73e3bb61ed0ba9ae574` retained the exact
+main commands implementation. Its actual commands-target run compiled and exited
+101: 19 passed, five failed, no ignores. All five failures were new public API
+regressions: extra saved-no-op history, one Undo consumed before the prior edit,
+lost redo, mixed recorded ids and an ancestor-suppressed no-op entry. Existing
+18 cases and the new rejected-operation/prior-history control passed. The red
+log, source blobs and before-execution manifest were saved before production edits.
+
+The fix adds one same-parent condition to the initial placement filter, after
+top_level ancestor suppression. No undo/take_last compensation, editor.rs change,
+generic history rewrite or prepopulated replay behavior change is introduced.
+The six test bodies are unchanged from the baseline. Focused green execution and
+independent review are next; no fixed result is claimed yet.
 
 Use released guarded lane124 and four jobs after the coordinator/core handoff.
 First command is the Studio commands integration target. Full gates follow a

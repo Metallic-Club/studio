@@ -217,6 +217,9 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  Initial Explorer reparent capture suppresses selected descendants before excluding roots already under the
+  destination. All-no-op drops use the existing Nothing path before history acceptance, preserving undo/redo,
+  parked ids and saved cleanliness; mixed drops record only genuine moves.
   `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
   and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
   Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one

@@ -141,7 +141,9 @@ pub enum Command {
         /// Where each removed root was; filled by apply.
         items: Vec<Placement>,
     },
-    /// Moves instances under a new parent (as last children).
+    /// Moves instances under a new parent (as last children). Initial placement capture
+    /// suppresses selected descendants before excluding built-ins and same-parent roots.
+    /// An all-no-op request returns [`CommandError::Nothing`] without a history entry.
     Reparent {
         /// Where each moved instance was before; filled by apply when empty.
         from: Vec<Placement>,
@@ -426,7 +428,7 @@ impl Command {
                     let ids: Vec<InstanceId> = from.iter().map(|p| p.id).collect();
                     *from = top_level(world, &ids)
                         .into_iter()
-                        .filter(|&id| !world.is_builtin(id))
+                        .filter(|&id| !world.is_builtin(id) && world.parent(id) != Some(*to))
                         .filter_map(|id| placement(world, id))
                         .collect();
                     from.sort_by_key(|p| p.index);
