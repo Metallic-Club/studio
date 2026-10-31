@@ -88,6 +88,7 @@ const SERVICES: &[&str] = &[
     "StarterGui",
     "Lighting",
     "RunService",
+    "ServerStorage",
 ];
 
 /// A whole game tree: owns all instances, their properties and events.
@@ -178,7 +179,7 @@ impl World {
 
     /// A world with the standard services (`Workspace`, `Players`, `ReplicatedStorage`,
     /// `ServerScriptService`, `StarterPlayer` with `StarterPlayerScripts`, `StarterGui`,
-    /// `Lighting`, `RunService`) as parentless built-in roots.
+    /// `Lighting`, `RunService`, `ServerStorage`) as parentless built-in roots.
     pub fn new_with_services() -> World {
         let mut w = World::new_empty();
         for s in SERVICES {
