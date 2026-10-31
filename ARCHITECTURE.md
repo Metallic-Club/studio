@@ -50,7 +50,12 @@ apps.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here.
+  and the Humanoid rules (death, respawn, checkpoints) live here. The controller records its support contact
+  (`SupportContact`, part of `CharacterState`) in body-local coordinates and carries the capsule's bottom-sphere
+  centre through the support's next observed pose change, so riders keep their radius on tilted spinners. Idle
+  facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum
+  uses the foot contact's point velocity (cached anchored rates, Rapier world-COM velocity for dynamic bodies).
+  The capsule stays upright; the carry sweep ignores the support but other parts can shorten it.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_vfx_editor** (#41, implemented): egui widgets for `metallic_vfx`: module stack, node canvas, curve and gradient editors, timeline and a live preview. Not wired into Studio yet.
