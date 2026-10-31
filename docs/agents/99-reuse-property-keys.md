@@ -107,3 +107,9 @@ pre-loop guard now explicitly panics in debug mode; no lint suppression or measu
 timing results stay pinned to `56d4585`/`b64bd23` and their original identical probe fingerprint. No release
 artifact is rebuilt or result relabeled. Next: refresh no-run, rerun strict Clippy, then the sole actual full
 workspace window granted after #356's release. Licenses/fmt/diff already passed before this guard-only change.
+
+Refreshed no-run and strict workspace/all-target Clippy passed at `af80ea9` (Clippy 5.78s). Before the actual
+suite, the remaining listener-key allocation assertions were relaxed only downward: they enforce the current
+upper bound, allowing a future signal-key optimization to reach zero. Exact observed counts remain printed
+and retained; all callback/value/cursor checks and exact-zero changed/no-op/default-reset assertions stay.
+This avoids freezing an unrelated known allocation as a behavioral requirement. No production/timing change.

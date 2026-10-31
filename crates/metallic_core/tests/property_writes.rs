@@ -216,13 +216,22 @@ fn warmed_property_write_allocation_matrix() {
     assert_eq!(changed, Counts::default());
     assert_eq!(noop, Counts::default());
     assert_eq!(default_reset, Counts::default());
-    // Signal lookup still builds its temporary key. This PR does not change signal storage.
+    // Signal lookup still builds its temporary key. Allow a future improvement to remove it;
+    // the printed observations retain the current exact cost without requiring it forever.
     let signal_key_cost = Counts {
         allocations: WRITES,
         requested_bytes: WRITES * "Position".len(),
     };
-    assert_eq!(unrelated_listener, signal_key_cost);
-    assert_eq!(matching_listener, signal_key_cost);
+    for counts in [unrelated_listener, matching_listener] {
+        assert!(
+            counts.allocations <= signal_key_cost.allocations,
+            "{counts:?}"
+        );
+        assert!(
+            counts.requested_bytes <= signal_key_cost.requested_bytes,
+            "{counts:?}"
+        );
+    }
 }
 
 #[test]
