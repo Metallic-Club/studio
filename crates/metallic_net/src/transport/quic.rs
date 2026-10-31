@@ -935,7 +935,7 @@ mod tests {
             2,
             "only one whole head is held outside the channel"
         );
-        assert_eq!(out, [prefix.clone()]);
+        assert_eq!(out.as_slice(), std::slice::from_ref(&prefix));
         assert_eq!(
             poll_events(
                 &mut receive,

@@ -233,7 +233,7 @@ fn quic_public_api_retains_large_head_and_legacy_poll_preserves_fifo() {
             }
         }
     );
-    assert_eq!(out, [prefix.clone()]);
+    assert_eq!(out.as_slice(), std::slice::from_ref(&prefix));
     assert_eq!(
         server.poll_bounded(&mut out, budget(1, 10)),
         PollReport {
