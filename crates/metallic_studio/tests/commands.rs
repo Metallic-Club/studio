@@ -191,6 +191,138 @@ fn reparent_undo_restores_index() {
 }
 
 #[test]
+fn same_parent_reparent_preserves_saved_world_history_and_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let c = course(&s);
+    let (a, b, cc) = (named(&s, "A"), named(&s, "B"), named(&s, "C"));
+    s.history.mark_saved();
+    s.selection.select_only(a);
+    let selection = s.selection.ids().to_vec();
+    let cursor = s.world.change_cursor();
+    let revision = s.history.revision();
+    let steps = s.history.len();
+    assert!(!s.is_dirty());
+
+    s.reparent(&[a], c);
+
+    assert_eq!(s.world.parent(a), Some(c));
+    assert_eq!(s.world.children(c), &[a, b, cc]);
+    assert_eq!(s.world.change_cursor(), cursor);
+    assert_eq!(s.selection.ids(), selection);
+    assert_eq!(s.history.len(), steps);
+    assert_eq!(s.history.revision(), revision);
+    assert!(!s.is_dirty(), "a no-op must not dirty a saved scene");
+}
+
+#[test]
+fn one_undo_after_same_parent_drop_reverts_the_prior_real_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let c = course(&s);
+    let a = named(&s, "A");
+    s.set_property(&[a], "Transparency", Value::Number(0.5));
+    s.reparent(&[a], c);
+    assert_eq!(s.world.get(a, "Transparency").unwrap(), Value::Number(0.5));
+    s.undo();
+    assert_eq!(s.world.get(a, "Transparency").unwrap(), Value::Number(0.0));
+    assert!(s.history.is_empty());
+}
+
+#[test]
+fn same_parent_drop_preserves_redo_and_its_parked_instance() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let c = course(&s);
+    let a = named(&s, "A");
+    let inserted = s.insert("Part", Some(c), None).unwrap();
+    s.undo();
+    assert!(s.history.is_parked(inserted));
+    let redo = s.history.redo_name(&s.world);
+    assert!(redo.is_some());
+    let revision = s.history.revision();
+
+    s.reparent(&[a], c);
+
+    assert_eq!(s.history.redo_name(&s.world), redo);
+    assert_eq!(s.history.revision(), revision);
+    assert!(
+        s.world.is_alive(inserted),
+        "redo's original id must survive"
+    );
+    assert!(s.history.is_parked(inserted));
+    s.redo();
+    assert!(s.is_live(inserted));
+    assert_eq!(s.world.parent(inserted), Some(c));
+}
+
+#[test]
+fn mixed_reparent_records_only_the_real_move_and_restores_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let c = course(&s);
+    let ws = s.world.root("Workspace").unwrap();
+    let (a, b, cc) = (named(&s, "A"), named(&s, "B"), named(&s, "C"));
+    let d = s.world.create("Part", Some(ws)).unwrap();
+    let old_workspace = s.world.children(ws).to_vec();
+
+    s.reparent(&[a, d], c);
+
+    assert_eq!(s.world.children(c), &[a, b, cc, d]);
+    match s.history.peek_undo().unwrap() {
+        Command::Reparent { from, to } => {
+            assert_eq!(*to, c);
+            assert_eq!(from.iter().map(|p| p.id).collect::<Vec<_>>(), [d]);
+        }
+        other => panic!("expected reparent, got {other:?}"),
+    }
+    s.undo();
+    assert_eq!(s.world.children(c), &[a, b, cc]);
+    assert_eq!(s.world.children(ws), old_workspace);
+    s.redo();
+    assert_eq!(s.world.children(c), &[a, b, cc, d]);
+}
+
+#[test]
+fn same_parent_ancestor_still_suppresses_a_selected_descendant() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let c = course(&s);
+    let a = named(&s, "A");
+    let ws = s.world.root("Workspace").unwrap();
+    let cursor = s.world.change_cursor();
+
+    s.reparent(&[c, a], ws);
+
+    assert_eq!(s.world.parent(c), Some(ws));
+    assert_eq!(s.world.parent(a), Some(c));
+    assert_eq!(s.world.change_cursor(), cursor);
+    assert!(s.history.is_empty());
+}
+
+#[test]
+fn rejected_reparents_do_not_unwind_a_prior_real_history_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let c = course(&s);
+    let a = named(&s, "A");
+    let ws = s.world.root("Workspace").unwrap();
+    let stale = s.world.create("Folder", Some(ws)).unwrap();
+    s.world.destroy(stale);
+    s.set_property(&[a], "Transparency", Value::Number(0.5));
+    let revision = s.history.revision();
+    for (ids, to) in [(vec![], c), (vec![ws], c), (vec![c], a), (vec![a], stale)] {
+        s.reparent(&ids, to);
+        assert_eq!(s.history.len(), 1);
+        assert_eq!(s.history.revision(), revision);
+        assert_eq!(s.world.parent(a), Some(c));
+        assert_eq!(s.world.get(a, "Transparency").unwrap(), Value::Number(0.5));
+    }
+    s.undo();
+    assert_eq!(s.world.get(a, "Transparency").unwrap(), Value::Number(0.0));
+}
+
+#[test]
 fn insert_selects_and_undo_parks() {
     let dir = tempfile::tempdir().unwrap();
     let (mut s, _log) = state_in(dir.path());
