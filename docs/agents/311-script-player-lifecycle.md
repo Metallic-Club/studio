@@ -293,3 +293,38 @@ released lane124 is the eventual guard-owned target; lane122 belongs to physics4
 lane123 to root305. Next: inspect the frozen source, run focused role/require plus GUI and
 server controls when granted, then mandatory full gates and append-only PR update. No
 transport, admission, blocked #336 implementation or multiplayer acceptance is included.
+
+
+## Second refresh: focused and full validation
+
+Frozen candidate `c0bbfab2fcc4c5d3265348367563b330b3fff7e5` on pinned main
+`995f880ced789284354ccbb1e64b6bf841382abc` passed the granted guarded lane124
+focused command: **56 passed, zero failed or ignored** across require (23),
+require_roles (4), host_roles (21), gui_events (2) and server_host (6). The new
+cache/rebind/transferred-loader controls passed without any production-source fix.
+The complete existing require error, cycle, sandbox, yielding and timeout controls
+remain unchanged and passed. The actual window was released directly to #408.
+
+The same frozen source then passed `test --workspace --locked -j 4 --no-run`
+(10m12s), strict `clippy --workspace --all-targets --locked -j 4 -- -D warnings`
+(5m01s), `cargo deny check licenses`, formatting and whitespace checks. During the
+active prebuild, disk headroom fell below five GB; subsequent Cargo was held while
+root reclaimed only its own disposable dev artifacts. The prebuild exited zero,
+and headroom was restored before Clippy. No benchmark domains were deleted or copied.
+
+The sole reserved normal guarded workspace command
+`test --workspace --locked -j 4 -- --test-threads=1` exited zero: **1,930 passed,
+zero failed, eight upstream ignores across 142 summaries**. All require, role,
+GUI/lifecycle, timeout, renderer, Parkour and Studio groups completed. No retry,
+new ignore, relaxed assertion or budget change was needed. The eight ignores are
+three window-opening launcher cases, a GPU stress case, two getter diagnostics,
+the manual large-pattern acceptance probe and the existing Studio actions example.
+Engine #406 confirmed its compile and actual work was held when this suite began;
+its actual window was released immediately after verified exit.
+
+Source/tree/blob provenance, raw logs and checksummed focused/full results are kept
+separately in `integration-evidence/335-module-refresh`. All earlier 1,868/1,242-test
+and other results retain their earlier source/base labels. This final commit adds
+validation prose only. Push normally to PR #335, return issue #311 to review and
+inspect the new exact-head CI; do not merge. No transport, admission, blocked #336
+implementation or live multiplayer acceptance is claimed.
