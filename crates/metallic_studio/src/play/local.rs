@@ -7,6 +7,7 @@ use std::sync::Arc;
 use eframe::egui;
 use metallic_core::World;
 use metallic_render::Renderer;
+use metallic_runtime::gui_input::{PointerId, PointerPhase};
 use metallic_runtime::input::RawEvent;
 use metallic_runtime::{FrameInput, FrameOutput, Game, InputRuntime, ProjectConfig, RuntimeError};
 
@@ -189,6 +190,24 @@ impl PlayView for LocalPlaySession {
 
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World)) {
         let _ = self.inspect_world(|world| inspect(world));
+    }
+
+    fn gui_pointer(
+        &mut self,
+        pointer: PointerId,
+        phase: PointerPhase,
+        at: [f32; 2],
+        screen: [f32; 2],
+    ) -> bool {
+        self.game
+            .as_mut()
+            .is_some_and(|game| game.0.gui_pointer(pointer, phase, at, screen))
+    }
+
+    fn gui_mouse_left(&mut self, at: [f32; 2]) {
+        if let Some(game) = self.game.as_mut() {
+            game.0.gui_mouse_left(at);
+        }
     }
 }
 

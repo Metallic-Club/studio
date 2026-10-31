@@ -15,10 +15,17 @@
 //! - **Mouse** goes to the game while the pointer is over the viewport, or while a button
 //!   pressed there is still held (a right-drag camera turn may leave the panel). Releases always
 //!   go through, so nothing stays held.
+//! - **The game's GUI first** (#79), exactly as in the Player: the pointer position and the
+//!   primary button go to [`PlayView::gui_pointer`] before the game's input. A primary press the
+//!   GUI takes (a button, an `Active` frame) is not sent as `MouseButton1`, nor is its release,
+//!   so a click on a button never also reaches the camera, a jump or `ContextActionService`.
+//!   Touch screens reach it through egui's emulated pointer (its first finger is the primary
+//!   button), so a tap on a button activates it; Studio gives the game no other touch input.
 //! - Losing the keyboard (a text field took it) or the window's focus releases every control.
 //!
 //! The event buffers are kept between frames, so a frame allocates nothing once they have grown.
 use eframe::egui::{self, Event, Key, Modifiers, MouseWheelUnit, PointerButton, Rect};
+use metallic_runtime::gui_input::{PointerId, PointerPhase};
 use metallic_runtime::input::{Control, Device, RawEvent};
 
 use super::PlayView;
@@ -37,6 +44,12 @@ pub struct PlayInput {
     modifiers: Modifiers,
     /// Mouse buttons pressed inside the viewport and not yet released.
     held: [bool; 3],
+    /// The game's GUI took the primary press that is still held.
+    gui_held: bool,
+    /// The pointer was over the viewport last frame (for the GUI's `MouseLeave`).
+    gui_hovered: bool,
+    /// Where the pointer last was for the GUI, in viewport points.
+    gui_at: Option<[f32; 2]>,
     /// The game had the keyboard last frame.
     had_keyboard: bool,
     /// Tab, Space and Enter events taken from the raw input before egui saw them.
@@ -77,8 +90,13 @@ impl PlayInput {
         if self.had_keyboard || self.held.iter().any(|&h| h) {
             view.release_input();
         }
+        if self.gui_held {
+            let at = self.gui_at.unwrap_or([f32::NAN; 2]);
+            view.gui_pointer(PointerId::Mouse, PointerPhase::Cancel, at, [0.0; 2]);
+        }
         self.modifiers = Modifiers::NONE;
         self.held = [false; 3];
+        self.gui_held = false;
         self.had_keyboard = false;
         self.game_keys.clear();
     }
@@ -118,7 +136,23 @@ impl PlayInput {
             }
         }
         self.game_keys.clear();
+        let screen = [viewport.width(), viewport.height()];
+        let to_gui = |p: egui::Pos2| [p.x - viewport.min.x, p.y - viewport.min.y];
+        // Hover and moves first, so a press lands on what the pointer is over now.
+        let pointer = ctx.input(|i| i.pointer.latest_pos());
+        if hovered || self.gui_held {
+            if let Some(p) = pointer.map(to_gui)
+                && self.gui_at != Some(p)
+            {
+                self.gui_at = Some(p);
+                view.gui_pointer(PointerId::Mouse, PointerPhase::Move, p, screen);
+            }
+        } else if self.gui_hovered {
+            view.gui_mouse_left(self.gui_at.take().unwrap_or([f32::NAN; 2]));
+        }
+        self.gui_hovered = hovered;
         let (modifiers, held) = (&mut self.modifiers, &mut self.held);
+        let (gui_held, gui_at) = (&mut self.gui_held, &mut self.gui_at);
         ctx.input_mut(|i| {
             if keyboard {
                 let now = i.modifiers;
@@ -148,11 +182,28 @@ impl PlayInput {
                     false
                 }
                 Event::PointerButton {
-                    button: b, pressed, ..
+                    button: b,
+                    pressed,
+                    pos,
+                    ..
                 } => {
                     let Some((slot, control)) = mouse_control(*b) else {
                         return true;
                     };
+                    // The primary button goes to the game's GUI first.
+                    if slot == 0 && *pressed && hovered {
+                        let at = to_gui(*pos);
+                        *gui_at = Some(at);
+                        if view.gui_pointer(PointerId::Mouse, PointerPhase::Down, at, screen) {
+                            *gui_held = true;
+                            return true;
+                        }
+                    } else if slot == 0 && !*pressed && *gui_held {
+                        *gui_held = false;
+                        let at = to_gui(*pos);
+                        view.gui_pointer(PointerId::Mouse, PointerPhase::Up, at, screen);
+                        return true;
+                    }
                     if *pressed && hovered {
                         held[slot] = true;
                         out.push(button(control, true, time));
@@ -232,6 +283,9 @@ mod tests {
     struct Recorder {
         events: RefCell<Vec<RawEvent>>,
         released: usize,
+        /// GUI calls: phase, position, screen.
+        gui: Vec<(PointerPhase, [f32; 2], [f32; 2])>,
+        left: usize,
     }
 
     impl PlayView for Recorder {
@@ -247,6 +301,30 @@ mod tests {
         fn render(&self, _: &mut metallic_render::Renderer, _: &wgpu::TextureView, _: (u32, u32)) {}
         fn paint_gui(&self, _: &egui::Painter) {}
         fn inspect_world(&self, _: &mut dyn FnMut(&metallic_core::World)) {}
+        /// A GUI button covers x < 100.
+        fn gui_pointer(
+            &mut self,
+            pointer: PointerId,
+            phase: PointerPhase,
+            at: [f32; 2],
+            screen: [f32; 2],
+        ) -> bool {
+            assert_eq!(pointer, PointerId::Mouse);
+            self.gui.push((phase, at, screen));
+            let held = self
+                .gui
+                .iter()
+                .rev()
+                .skip(1)
+                .find_map(|(p, a, _)| matches!(p, PointerPhase::Down).then_some(a[0] < 100.0));
+            match phase {
+                PointerPhase::Down => at[0] < 100.0,
+                _ => held.unwrap_or(false),
+            }
+        }
+        fn gui_mouse_left(&mut self, _: [f32; 2]) {
+            self.left += 1;
+        }
     }
 
     fn key(key: egui::Key, pressed: bool) -> Event {
@@ -314,5 +392,71 @@ mod tests {
                 .iter()
                 .any(|e| e.control == Control::MouseWheel)
         );
+    }
+
+    fn click(at: egui::Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    fn mouse1(view: &Recorder) -> Vec<f32> {
+        view.events
+            .borrow()
+            .iter()
+            .filter(|e| e.control == Control::MouseButton1)
+            .map(|e| e.value)
+            .collect()
+    }
+
+    /// #79: a click the game's GUI takes is not the game's input; one elsewhere is.
+    #[test]
+    fn the_game_gui_gets_the_primary_button_first() {
+        let mut input = PlayInput::new();
+        let mut view = Recorder::default();
+        // The viewport starts at (0, 0) and is 800 x 600 points (see `run`).
+        let on = egui::pos2(40.0, 30.0);
+        run(
+            vec![Event::PointerMoved(on), click(on, true)],
+            true,
+            &mut input,
+            &mut view,
+        );
+        run(vec![click(on, false)], true, &mut input, &mut view);
+        assert!(mouse1(&view).is_empty(), "the GUI took the click");
+        let phases: Vec<PointerPhase> = view.gui.iter().map(|g| g.0).collect();
+        assert_eq!(
+            phases,
+            [PointerPhase::Move, PointerPhase::Down, PointerPhase::Up]
+        );
+        assert_eq!(view.gui[1].1, [40.0, 30.0]);
+        assert_eq!(view.gui[1].2, [800.0, 600.0]);
+        let off = egui::pos2(400.0, 30.0);
+        run(
+            vec![Event::PointerMoved(off), click(off, true)],
+            true,
+            &mut input,
+            &mut view,
+        );
+        run(vec![click(off, false)], true, &mut input, &mut view);
+        assert_eq!(mouse1(&view), [1.0, 0.0], "off the GUI: the game's");
+        // Leaving the viewport is the GUI's MouseLeave.
+        run(Vec::new(), false, &mut input, &mut view);
+        assert_eq!(view.left, 1);
+    }
+
+    #[test]
+    fn a_held_gui_press_is_cancelled_when_input_is_released() {
+        let mut input = PlayInput::new();
+        let mut view = Recorder::default();
+        let on = egui::pos2(40.0, 30.0);
+        run(vec![click(on, true)], true, &mut input, &mut view);
+        input.release(&mut view);
+        assert_eq!(view.gui.last().map(|g| g.0), Some(PointerPhase::Cancel));
+        run(vec![click(on, false)], true, &mut input, &mut view);
+        assert!(mouse1(&view).is_empty(), "the stray release goes nowhere");
     }
 }
