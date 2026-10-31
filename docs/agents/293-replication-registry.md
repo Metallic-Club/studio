@@ -53,7 +53,7 @@ No running backend/server changes, credentials, public exposure, capacity guaran
 Publish one PR and move this issue to review; monitor CI and address review findings. Owner/lead merges only.
 After all four foundation branches are ready, validate a private composition before planning a live-play claim.
 
-## Current main compatibility refresh (not yet pushed)
+## Version-2 main compatibility refresh (published)
 
 Normal merged cb26593, then exact d1eecce. The latter really introduces boxed Value::CFrame and PropDef.hidden
 through the pivot APIs. Earlier abef7fc CFrame math alone did not do so; those source observations are distinct.
@@ -72,14 +72,28 @@ c422e66b55f8ac4e354427bdfa7f7034110f65747fc855a15f8449dd7bbffaeb. This v2 value 
 v1 diagnostic above. Logs: <TEMP>/metallic-293-v2-{core,workspace-build,workspace-tests,clippy,licenses}.log.
 Normal append-only push and exact-head CI/review follow; no own PR merge.
 
-## Lighting registry integration (fresh gates pending)
+## Lighting registry integration (version 3, tested)
 
 The latest normal merge pins b4909b5, whose lighting work adds NumRange and six registered classes. Both normal
 and hidden constructors now retain range, hidden and Repl independently. Existing main class indices0..33 stay
-intact; the five replication-only classes append at34..38. Published-preview indices are valid only under an
+intact; the five replication-only classes append at 34..38. Published-preview indices are valid only under an
 equal fingerprint and must not be reused across these schema changes.
 
 Encoding v3 includes range presence, min/max f64 bits and clamp-versus-wrap, in addition to v2's hidden/CFrame
 fields. The independently recomputed Bool fixture is f99a35223a1f029c7fb6a434291443c692c5e3fde105abbb814b322a76bd4809.
 Tests cover range presence/bounds/wrap/signed-zero, existing lighting indices and authoritative ClockTime wrapping.
-The earlier v2 checks above remain historical. This merge's core/workspace/strict-Clippy checks are not yet run.
+The earlier v2 checks above remain historical. Fresh gates at 563b2c7820f9996b571b8d8d036eca9fb15c02ad,
+pinning exact main b4909b582241cd1f5c946aa69a7e91021a8271d4, passed in guarded lane123:
+
+- Core: 78 passed, zero failed or ignored.
+- Full workspace with serial test harnesses: 1,458 passed, zero failed, six existing manual ignores (116 groups).
+- Strict full-workspace/all-target Clippy: passed; licenses, formatting and task-diff whitespace checks passed.
+- Two separate example processes printed the v3 registry hash
+  1b20a2fddd67fb759af608ce847b5e76d699214a8a787b8eb67436f22b95197e.
+  Lane ownership identifies this worktree, and the executable came from the fresh workspace build.
+- Independent source review checked the preserved main class prefix, inherited numeric ranges, all constructors
+  and the v3 hash encoding, and independently recomputed the fixture. No actionable findings.
+
+Logs: <TEMP>/metallic-293-v3-{core,workspace-build,workspace-tests,clippy,licenses}.log.
+Only this evidence describes the v3 lighting integration. Append-only publication and exact-head CI follow;
+the owner/lead remains responsible for merging.
