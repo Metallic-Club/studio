@@ -1336,3 +1336,35 @@ fn tokens_never_in_debug_or_logs() {
     // The only place the code exists is the address itself.
     assert!(handoff.expose().as_str().contains(WS));
 }
+
+/// A store whose delete always fails.
+struct BrokenStore;
+
+impl SecretStore for BrokenStore {
+    fn get(&self) -> Result<Option<String>, AuthError> {
+        Ok(None)
+    }
+    fn set(&self, _: &str) -> Result<(), AuthError> {
+        Ok(())
+    }
+    fn delete(&self) -> Result<(), AuthError> {
+        Err(AuthError::Store("locked".to_string()))
+    }
+}
+
+/// #289: the uninstall deletes the saved sign-ins (in memory here, never the real store); one
+/// failing store does not keep the others.
+#[test]
+fn uninstall_forgets_saved_sign_ins() {
+    let platform = MemorySecretStore::default();
+    let github = MemorySecretStore::default();
+    platform.set_secret(b"refresh").unwrap();
+    github.set("{}").unwrap();
+    let empty = MemorySecretStore::default();
+    assert_eq!(
+        metallic_launcher::forget_saved_sign_ins(&[&platform, &BrokenStore, &github, &empty]),
+        1
+    );
+    assert!(platform.get().unwrap().is_none());
+    assert!(github.get().unwrap().is_none());
+}

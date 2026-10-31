@@ -19,6 +19,7 @@ use eframe::egui::{
 };
 use metallic_tokens::consts as tk;
 
+use crate::icons::{self, Icon};
 use crate::theme::{self, fonts};
 use crate::widgets::{cut, plate::Plate};
 
@@ -57,6 +58,8 @@ pub struct Button<'a> {
     compact: bool,
     show_as: Option<ShowAs>,
     alt: Option<&'a str>,
+    glyph: Option<Icon>,
+    selected: bool,
 }
 
 /// Fills and ink for one button state.
@@ -83,6 +86,8 @@ impl<'a> Button<'a> {
             compact: false,
             show_as: None,
             alt: None,
+            glyph: None,
+            selected: false,
         }
     }
 
@@ -109,6 +114,18 @@ impl<'a> Button<'a> {
     /// A 16 px Phosphor icon before the text.
     pub fn icon(mut self, icon: char) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// One of the editor's drawn toolbar icons (16 px) before the text.
+    pub fn glyph(mut self, glyph: Icon) -> Self {
+        self.glyph = Some(glyph);
+        self
+    }
+
+    /// Draws a toggle that is on (a ghost button keeps `bg-active` and `text-1`).
+    pub fn selected(mut self, on: bool) -> Self {
+        self.selected = on;
         self
     }
 
@@ -177,59 +194,59 @@ impl<'a> Button<'a> {
             let fill = if self.kind == Kind::Ghost {
                 Color32::TRANSPARENT
             } else {
-                theme::BG_RAISED
+                theme::bg_raised()
             };
             return Palette {
                 rest: fill,
                 hover: fill,
                 press: fill,
-                text: theme::TEXT_OFF,
-                text_hover: theme::TEXT_OFF,
-                icon: theme::TEXT_OFF,
-                keycap_fill: theme::BG_ACTIVE.gamma_multiply(0.5),
-                keycap_text: theme::TEXT_OFF,
+                text: theme::text_off(),
+                text_hover: theme::text_off(),
+                icon: theme::text_off(),
+                keycap_fill: theme::bg_active().gamma_multiply(0.5),
+                keycap_text: theme::text_off(),
             };
         }
         match self.kind {
             Kind::Primary => Palette {
-                rest: theme::ACCENT,
-                hover: theme::ACCENT_HOVER,
-                press: theme::ACCENT_PRESS,
-                text: theme::ON_ACCENT,
-                text_hover: theme::ON_ACCENT,
-                icon: theme::ON_ACCENT,
-                keycap_fill: theme::KEYCAP_ON_ACCENT,
-                keycap_text: theme::ON_ACCENT,
+                rest: theme::accent(),
+                hover: theme::accent_hover(),
+                press: theme::accent_press(),
+                text: theme::on_accent(),
+                text_hover: theme::on_accent(),
+                icon: theme::on_accent(),
+                keycap_fill: theme::keycap_on_accent(),
+                keycap_text: theme::on_accent(),
             },
             Kind::Secondary => Palette {
-                rest: theme::BG_RAISED,
-                hover: theme::BG_HOVER,
-                press: theme::BG_ACTIVE,
-                text: theme::TEXT_1,
-                text_hover: theme::TEXT_1,
-                icon: theme::ICON,
-                keycap_fill: theme::BG_ACTIVE,
-                keycap_text: theme::TEXT_2,
+                rest: theme::bg_raised(),
+                hover: theme::bg_hover(),
+                press: theme::bg_active(),
+                text: theme::text_1(),
+                text_hover: theme::text_1(),
+                icon: theme::icon(),
+                keycap_fill: theme::bg_active(),
+                keycap_text: theme::text_2(),
             },
             Kind::Ghost => Palette {
                 rest: Color32::TRANSPARENT,
-                hover: theme::BG_HOVER,
-                press: theme::BG_ACTIVE,
-                text: theme::TEXT_2,
-                text_hover: theme::TEXT_1,
-                icon: theme::TEXT_2,
-                keycap_fill: theme::BG_ACTIVE,
-                keycap_text: theme::TEXT_2,
+                hover: theme::bg_hover(),
+                press: theme::bg_active(),
+                text: theme::text_2(),
+                text_hover: theme::text_1(),
+                icon: theme::text_2(),
+                keycap_fill: theme::bg_active(),
+                keycap_text: theme::text_2(),
             },
             Kind::Danger => Palette {
-                rest: theme::DANGER,
-                hover: theme::DANGER_HOVER,
-                press: theme::DANGER,
-                text: theme::TEXT_1,
-                text_hover: theme::TEXT_1,
-                icon: theme::TEXT_1,
-                keycap_fill: theme::KEYCAP_ON_ACCENT,
-                keycap_text: theme::TEXT_1,
+                rest: theme::danger(),
+                hover: theme::danger_hover(),
+                press: theme::danger(),
+                text: theme::on_danger(),
+                text_hover: theme::on_danger(),
+                icon: theme::on_danger(),
+                keycap_fill: theme::keycap_on_accent(),
+                keycap_text: theme::on_danger(),
             },
         }
     }
@@ -251,8 +268,13 @@ impl Widget for Button<'_> {
         let gap = tk::S4;
         let pad = self.pad_x();
         let mut content = text.size().x;
-        if let Some(icon) = &icon {
-            content += icon.size().x;
+        let lead = match (&icon, self.glyph) {
+            (Some(icon), _) => Some(icon.size().x),
+            (None, Some(_)) => Some(theme::ICON_BOX),
+            _ => None,
+        };
+        if let Some(w) = lead {
+            content += w;
             if !self.text.is_empty() {
                 content += gap;
             }
@@ -277,15 +299,20 @@ impl Widget for Button<'_> {
         let hovered = forced(ShowAs::Hovered) || (enabled && response.hovered());
         let pressed = forced(ShowAs::Pressed) || (enabled && response.is_pointer_button_down_on());
         let focused = forced(ShowAs::Focused) || (enabled && response.has_focus());
-        let hover = ctx.animate_bool_with_time(response.id.with("hover"), hovered, theme::T_FAST);
-        let press = ctx.animate_bool_with_time(response.id.with("press"), pressed, theme::T_FAST);
+        let hover = ctx.animate_bool_with_time(response.id.with("hover"), hovered, theme::t_fast());
+        let press = ctx.animate_bool_with_time(response.id.with("press"), pressed, theme::t_fast());
         let rect = if pressed {
             rect.translate(vec2(0.0, 1.0))
         } else {
             rect
         };
-        let fill = colors
-            .rest
+        let on = enabled && self.selected;
+        let rest = if on && self.kind == Kind::Ghost {
+            theme::bg_active()
+        } else {
+            colors.rest
+        };
+        let fill = rest
             .lerp_to_gamma(colors.hover, hover)
             .lerp_to_gamma(colors.press, press);
         let painter = ui.painter();
@@ -301,6 +328,20 @@ impl Widget for Button<'_> {
         }
 
         let mut x = rect.left() + pad;
+        if let (None, Some(glyph)) = (&icon, self.glyph) {
+            let at = Rect::from_center_size(
+                egui::pos2(x + theme::ICON_BOX / 2.0, rect.center().y),
+                Vec2::splat(theme::ICON_BOX),
+            );
+            let base = if on { theme::text_1() } else { colors.icon };
+            let tint = if self.kind == Kind::Ghost {
+                base.lerp_to_gamma(colors.text_hover, hover)
+            } else {
+                base
+            };
+            icons::paint(painter, at, glyph, tint);
+            x += theme::ICON_BOX + if self.text.is_empty() { 0.0 } else { gap };
+        }
         if let Some(icon) = icon {
             let pos = egui::pos2(x, rect.center().y - icon.size().y / 2.0);
             let tint = if self.kind == Kind::Ghost {
@@ -311,7 +352,8 @@ impl Widget for Button<'_> {
             x += icon.size().x + gap;
             painter.galley(pos, icon, tint);
         }
-        let ink = colors.text.lerp_to_gamma(colors.text_hover, hover);
+        let base_ink = if on { theme::text_1() } else { colors.text };
+        let ink = base_ink.lerp_to_gamma(colors.text_hover, hover);
         let pos = egui::pos2(x, rect.center().y - text.size().y / 2.0);
         painter.galley_with_override_text_color(pos, text, ink);
         if let Some(k) = keycap {
@@ -324,7 +366,7 @@ impl Widget for Button<'_> {
             let cap = if self.kind == Kind::Primary {
                 colors.keycap_fill
             } else {
-                colors.keycap_fill.lerp_to_gamma(theme::BG_HOVER, press)
+                colors.keycap_fill.lerp_to_gamma(theme::bg_hover(), press)
             };
             paint_keycap(painter, at, k, cap);
         }
@@ -337,7 +379,7 @@ impl Widget for Button<'_> {
                     rect.shrink(inset),
                     cut::inset_radius(self.radius(), inset),
                     cut::inset_cut(self.cut(), inset),
-                    Stroke::new(2.0, theme::ON_ACCENT),
+                    Stroke::new(2.0, theme::on_accent()),
                 );
             } else {
                 focus_ring(painter, rect, self.radius());
@@ -360,7 +402,7 @@ pub fn focus_ring(painter: &Painter, rect: Rect, radius: CornerRadius) {
             se: radius.se.saturating_add(out as u8),
         },
         0.0,
-        Stroke::new(2.0, theme::FOCUS),
+        Stroke::new(2.0, theme::focus()),
     );
 }
 
@@ -376,16 +418,16 @@ fn keycap_size(galley: &Galley) -> Vec2 {
 fn paint_keycap(painter: &Painter, rect: Rect, galley: Arc<Galley>, fill: Color32) {
     painter.rect_filled(rect, CornerRadius::same(theme::R_XS), fill);
     let pos = rect.center() - galley.size() / 2.0;
-    painter.galley(pos, galley, theme::TEXT_2);
+    painter.galley(pos, galley, theme::text_2());
 }
 
 /// An inline keycap (`F5`, `Ctrl K`), for help text: `bg-active` with `text-2`.
 pub fn keycap(ui: &mut Ui, keys: &str) -> Response {
-    let galley = layout(ui.painter(), keys, fonts::caption(), theme::TEXT_2);
+    let galley = layout(ui.painter(), keys, fonts::caption(), theme::text_2());
     let size = keycap_size(&galley);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     if ui.is_rect_visible(rect) {
-        paint_keycap(ui.painter(), rect, galley, theme::BG_ACTIVE);
+        paint_keycap(ui.painter(), rect, galley, theme::bg_active());
     }
     response
 }
@@ -417,7 +459,7 @@ mod tests {
 
     fn themed() -> egui::Context {
         let ctx = egui::Context::default();
-        theme::apply(&ctx);
+        theme::apply(&ctx, theme::ThemeId::Graphite);
         ctx
     }
 
@@ -472,7 +514,7 @@ mod tests {
         let r = pass(&ctx, vec![enter], false, || Button::primary("Create game"));
         assert!(!r.clicked());
         let p = Button::primary("x").palette(false);
-        assert_eq!((p.rest, p.text), (theme::BG_RAISED, theme::TEXT_OFF));
+        assert_eq!((p.rest, p.text), (theme::bg_raised(), theme::text_off()));
         let ghost = Button::ghost("x").palette(false);
         assert_eq!(ghost.rest, Color32::TRANSPARENT);
     }

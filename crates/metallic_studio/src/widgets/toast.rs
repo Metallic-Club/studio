@@ -140,12 +140,16 @@ impl Toasts {
             if toast.leaving == Some(f64::NEG_INFINITY) {
                 toast.leaving = Some(now);
             }
-            let enter = ((now - born) as f32 / theme::T_SLOW).clamp(0.0, 1.0);
+            let enter = progress((now - born) as f32, theme::t_slow());
             let exit = toast
                 .leaving
-                .map_or(0.0, |t| ((now - t) as f32 / theme::T_BASE).clamp(0.0, 1.0));
+                .map_or(0.0, |t| progress((now - t) as f32, theme::t_base()));
             let opacity = easing::cubic_out(enter) * (1.0 - easing::cubic_in(exit));
-            let slide = 8.0 * (1.0 - easing::cubic_out(enter)) + 4.0 * easing::cubic_in(exit);
+            let slide = if theme::reduce_motion() {
+                0.0
+            } else {
+                8.0 * (1.0 - easing::cubic_out(enter)) + 4.0 * easing::cubic_in(exit)
+            };
             let area = Area::new(Id::unique("toast").with(toast.id))
                 .order(Order::Foreground)
                 .anchor(Align2::RIGHT_BOTTOM, vec2(-EDGE, -bottom + slide))
@@ -175,7 +179,7 @@ impl Toasts {
         let before = self.items.len();
         self.items.retain(|t| {
             t.leaving.is_none_or(|left| {
-                left == f64::NEG_INFINITY || (now - left) as f32 <= theme::T_BASE
+                left == f64::NEG_INFINITY || (now - left) as f32 <= theme::t_base()
             })
         });
         if self.items.len() != before {
@@ -195,6 +199,16 @@ impl Toasts {
     }
 }
 
+/// How far a transition of `duration` seconds has got after `elapsed`, 0 to 1. A zero duration
+/// (reduced motion) is finished at once, never a division by zero.
+fn progress(elapsed: f32, duration: f32) -> f32 {
+    if duration <= 0.0 {
+        1.0
+    } else {
+        (elapsed / duration).clamp(0.0, 1.0)
+    }
+}
+
 enum Pressed {
     Action,
     Dismiss,
@@ -202,13 +216,13 @@ enum Pressed {
 
 fn draw(ui: &mut Ui, toast: &Toast) -> Option<Pressed> {
     let (icon, colour) = match toast.tone {
-        Tone::Success => (icons::CHECK_CIRCLE, theme::SUCCESS),
-        Tone::Info => (icons::INFO, theme::INFO),
-        Tone::Error => (icons::WARNING_CIRCLE, theme::ERROR),
+        Tone::Success => (icons::CHECK_CIRCLE, theme::success()),
+        Tone::Info => (icons::INFO, theme::info()),
+        Tone::Error => (icons::WARNING_CIRCLE, theme::error()),
     };
     let mut pressed = None;
     let frame = Frame::new()
-        .fill(theme::BG_HOVER)
+        .fill(theme::bg_hover())
         .corner_radius(CornerRadius::same(theme::R_MD))
         .shadow(theme::SHADOW_POP)
         .inner_margin(Margin::symmetric(14, 12))
@@ -225,7 +239,7 @@ fn draw(ui: &mut Ui, toast: &Toast) -> Option<Pressed> {
                 toast.text.clone(),
                 egui::TextFormat {
                     font_id: fonts::body(),
-                    color: theme::TEXT_1,
+                    color: theme::text_1(),
                     line_height: Some(18.0),
                     ..Default::default()
                 },
@@ -268,7 +282,7 @@ fn draw(ui: &mut Ui, toast: &Toast) -> Option<Pressed> {
     ui.painter().hline(
         rect.left() + r..=rect.right() - r,
         rect.top() + 0.5,
-        Stroke::new(1.0, theme::HIGHLIGHT),
+        Stroke::new(1.0, theme::highlight()),
     );
     pressed
 }
@@ -308,7 +322,7 @@ mod tests {
     #[test]
     fn notes_time_out_but_errors_stay() {
         let ctx = egui::Context::default();
-        crate::theme::apply(&ctx);
+        crate::theme::apply(&ctx, crate::theme::ThemeId::Graphite);
         let mut t = Toasts::default();
         t.push(Tone::Success, "done");
         t.push(Tone::Error, "failed");

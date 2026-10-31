@@ -51,8 +51,8 @@ pub use launch::{
 };
 pub use local_pages::{LOCAL_CSP, LocalPage, LocalResponse, OfflineReason, local_url, serve};
 pub use platform_auth::{
-    HandoffUrl, OneAtATime, PlatformAuth, Revocation, SignInReply, SignInTicket, platform_sign_in,
-    sign_out_in_background,
+    HandoffUrl, OneAtATime, PlatformAuth, Revocation, SignInReply, SignInTicket,
+    forget_saved_sign_ins, platform_sign_in, sign_out_in_background,
 };
 pub use play_limit::{LaunchGate, PlayLimiter};
 pub use protocol::{
@@ -65,8 +65,11 @@ pub use self_update::{
 pub use settings::{LauncherSettings, SettingsPatch, SettingsStore};
 pub use single_instance::{
     Acquired, HandoffListener, HandoffMessage, HandoffSender, MAX_HANDOFF_BYTES, decode, encode,
+    same_program,
 };
 pub use site::{LauncherConfig, SiteOrigin};
 pub use site_check::{SiteStatus, StartPage, check_site, start_page, user_agent};
-pub use tray::{CloseAction, TrayAction, on_close_requested, tray_menu};
+pub use tray::{
+    CloseAction, TrayAction, TrayMenuState, on_close_requested, show_on_start, tray_menu,
+};
 pub use url_policy::{NavDecision, PageOrigin, UrlPolicy, remote_content_allowed};

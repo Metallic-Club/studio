@@ -817,8 +817,7 @@ impl InputActionsPanel {
                 } else {
                     "No scene action has a role this preset covers".into()
                 };
-                if ui
-                    .add_enabled(enabled, egui::Button::new(p.label()))
+                if crate::theme::add_enabled(ui, enabled, egui::Button::new(p.label()))
                     .on_hover_text(tip)
                     .on_disabled_hover_text(
                         "Add CharacterControls to the scene, or give actions a Role",
@@ -2898,7 +2897,7 @@ fn pad_picker(ui: &mut Ui, glyphs: GlyphStyle, inputs: &mut Vec<CaptureInput>) {
 
 /// egui's key to our physical control name. Keys egui does not report (Shift, Ctrl, Alt) come
 /// from the modifier state instead.
-pub(super) fn egui_key_to_control(k: Key) -> Option<Control> {
+pub(crate) fn egui_key_to_control(k: Key) -> Option<Control> {
     use Control as C;
     Some(match k {
         Key::A => C::A,
