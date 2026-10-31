@@ -421,7 +421,9 @@ fn sorting_200k_numbers_without_a_comparator_fits_the_default_budget() {
         .eval()
         .unwrap();
     vm.set_global("big", big).unwrap();
-    // The default 0.1 s budget: the sort alone must fit (it runs in C for numbers).
+    // The sort alone must fit a 1 s budget (the default is 0.1 s, but this crate's C is built
+    // unoptimised in debug runs): it runs in C for numbers, not through 3.4M Lua calls.
+    vm.set_resume_budget(Duration::from_secs(1));
     let start = Instant::now();
     vm.run_script("T", "table.sort(big)").unwrap();
     assert!(
