@@ -7,19 +7,28 @@
 //! the UI thread and a paused script *breaks* instead of blocking, so Studio stays usable while
 //! paused: the viewport, Explorer and Properties keep working.
 //!
+//! Breakpoints stay on their lines when lines are added or removed above them
+//! ([`EditorState::shift_breakpoints`]) and are saved per place in Studio's settings
+//! ([`store::BreakpointStore`]), so they come back the next time the game is opened.
+//!
 //! Keys: F5 continues when paused (it is Play otherwise), F9 toggles a breakpoint on the script
-//! editor's cursor line, F10 steps over, F11 into, Shift+F11 out.
+//! editor's cursor line (during Play only while a script editor has focus, so games keep F9),
+//! F10 steps over, F11 into, Shift+F11 out.
 
 mod call_stack;
 mod gutter;
+mod store;
 mod variables;
 mod watch;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use eframe::egui::{self, RichText};
 use metallic_core::InstanceId;
-use metallic_script::{Breakpoint, DebugState, Debugger, PauseReason, Scope, VarHandle, VarNode};
+use metallic_script::{
+    Breakpoint, DebugState, Debugger, Frame, PauseReason, Scope, VarHandle, VarNode,
+};
 
 use crate::actions::{Action, ActionRegistry, ToolbarGroup};
 use crate::editor::EditorState;
@@ -28,16 +37,24 @@ use crate::tokens::ui_tokens;
 use crate::widgets::button::Button;
 
 pub use gutter::{Gutter, LineRow, gutter, hover, line_rows, name_at};
+pub use store::{BreakpointStore, Breakpoints, shift_lines};
 
 /// Breakpoints and options of the script debugger, kept with the edit session.
 #[derive(Debug, Default, Clone)]
 pub struct DebugSettings {
     /// Breakpoints by script and line.
-    pub breakpoints: BTreeMap<InstanceId, BTreeMap<u32, Breakpoint>>,
+    pub breakpoints: Breakpoints,
     /// Pause at errors that no `pcall` handles.
     pub break_on_error: bool,
+    /// The script and line F9 toggles: the shown script editor's cursor line while editing, and
+    /// during Play only while a script editor has focus. Set by the script editor each frame.
+    pub cursor: Option<(InstanceId, u32)>,
     /// Bumped by every debugger action, so cached views refresh.
     generation: u64,
+    /// Bumped by Continue, the steps and Pause: a pause seen after it is a new pause.
+    runs: u64,
+    /// Where breakpoints are saved (`None`: not saved, as in tests and screenshots).
+    store: Option<BreakpointStore>,
 }
 
 impl DebugSettings {
@@ -60,6 +77,15 @@ impl DebugSettings {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// Loads this place's saved breakpoints from `store` and saves later changes there.
+    pub fn load(&mut self, store: BreakpointStore, world: &metallic_core::World) {
+        let (breakpoints, break_on_error) = store.load(world);
+        self.breakpoints = breakpoints;
+        self.break_on_error = break_on_error;
+        self.store = Some(store);
+        self.generation += 1;
+    }
 }
 
 impl EditorState {
@@ -71,6 +97,40 @@ impl EditorState {
     /// True while the running game is paused in the debugger.
     pub fn is_paused(&self) -> bool {
         self.play.view().is_some_and(|v| v.is_paused())
+    }
+
+    /// Writes the breakpoints to this place's entry in Studio's settings, when it has one.
+    fn save_breakpoints(&self) {
+        if !self.can_save {
+            return;
+        }
+        if let Some(store) = &self.debug.store
+            && let Err(e) = store.save(
+                &self.world,
+                &self.debug.breakpoints,
+                self.debug.break_on_error,
+            )
+        {
+            log::warn!("could not save breakpoints: {e}");
+        }
+    }
+
+    /// Moves `script`'s breakpoints with its lines after an edit from `old` to `new` text.
+    pub fn shift_breakpoints(&mut self, script: InstanceId, old: &str, new: &str) {
+        let Some(lines) = self.debug.breakpoints.get(&script) else {
+            return;
+        };
+        let moved = shift_lines(lines, old, new);
+        if &moved == lines {
+            return;
+        }
+        if moved.is_empty() {
+            self.debug.breakpoints.remove(&script);
+        } else {
+            self.debug.breakpoints.insert(script, moved);
+        }
+        self.debug.generation += 1;
+        self.save_breakpoints();
     }
 
     /// Sets (`Some`) or removes (`None`) the breakpoint on `line` of `script`, now and for
@@ -95,6 +155,7 @@ impl EditorState {
             }
         }
         self.debug.generation += 1;
+        self.save_breakpoints();
     }
 
     /// Adds a plain breakpoint on `line` of `script`, or removes the one there.
@@ -113,30 +174,40 @@ impl EditorState {
             d.break_on_error(on);
         }
         self.debug.generation += 1;
+        self.save_breakpoints();
     }
 
-    /// Runs `act` on the game's debugger and marks views stale.
+    /// Runs `act` (continue, a step, pause) on the game's debugger and marks views stale.
     pub fn debug_act(&mut self, act: impl FnOnce(&mut Debugger<'_>)) {
         if let Some(mut d) = self.debugger() {
             act(&mut d);
         }
         self.debug.generation += 1;
+        self.debug.runs += 1;
     }
 }
 
 /// A debugger command run by an action.
 type DebugAct = fn(&mut Debugger<'_>);
 
-/// Registers the debugger's actions (`debug.*`; F9 is handled by the editor UI, which knows the
-/// script editor's cursor).
+/// Registers the debugger's actions (`debug.*`).
 pub fn register(r: &mut ActionRegistry) {
-    r.register(Action::new(
-        "debug.toggle_breakpoint",
-        "Toggle Breakpoint",
-        Icon::Text(""),
-        ToolbarGroup::Hidden,
-        |_| {},
-    ));
+    // On the script editor's cursor line ([`DebugSettings::cursor`]); disabled otherwise, which
+    // leaves F9 to a running game.
+    r.register(
+        Action::new(
+            "debug.toggle_breakpoint",
+            "Toggle Breakpoint",
+            Icon::Text(""),
+            ToolbarGroup::Hidden,
+            |s| {
+                if let Some((script, line)) = s.debug.cursor {
+                    s.toggle_breakpoint(script, line);
+                }
+            },
+        )
+        .enabled(|s| s.debug.cursor.is_some()),
+    );
     let paused = |s: &EditorState| s.is_paused();
     let actions: [(&'static str, &str, DebugAct); 4] = [
         ("debug.continue", "Continue", |d| d.resume()),
@@ -188,17 +259,27 @@ pub struct DebugPanel {
     /// Watch expressions.
     pub watches: Vec<String>,
     new_watch: String,
-    /// The debugger state when last read.
-    state: Option<DebugState>,
+    /// The pause when last read (`None` while running).
+    paused: Option<Paused>,
     seen: Option<u64>,
     was_paused: bool,
-    vars: HashMap<(usize, u8), Vec<VarNode>>,
-    expanded: HashMap<VarHandle, Vec<VarNode>>,
-    values: HashMap<String, Result<String, String>>,
+    /// The [`DebugSettings::runs`] of the pause last announced in Output.
+    announced: Option<u64>,
+    /// Caches for the selected frame, cleared when the game runs or the frame changes; shared so
+    /// drawing them each frame copies nothing.
+    vars: HashMap<u8, Rc<[VarNode]>>,
+    expanded: HashMap<VarHandle, Rc<[VarNode]>>,
+    values: HashMap<String, Result<Rc<str>, Rc<str>>>,
     editing: Option<Editing>,
     setting: Option<SetLocal>,
     /// A script to show at a line (the paused frame), taken by the editor UI.
     reveal: Option<(InstanceId, u32)>,
+}
+
+/// A paused game as last read.
+struct Paused {
+    reason: PauseReason,
+    stack: Rc<[Frame]>,
 }
 
 impl DebugPanel {
@@ -207,8 +288,10 @@ impl DebugPanel {
         DebugPanel::default()
     }
 
-    /// Reads the game's debugger state when it changed. On a new pause: a line in Output and a
-    /// request to show the paused script ([`DebugPanel::take_reveal`]).
+    /// Reads the game's debugger state when it changed. Once per pause (the game stopping, or
+    /// stopping again after Continue or a step): a line in Output and a request to show the
+    /// paused script ([`DebugPanel::take_reveal`]). Breakpoint edits and Set value while paused
+    /// only refresh the panes.
     pub fn poll(&mut self, state: &mut EditorState) {
         let paused = state.is_paused();
         if paused != self.was_paused {
@@ -222,31 +305,40 @@ impl DebugPanel {
         self.vars.clear();
         self.expanded.clear();
         self.values.clear();
-        let before = self.state.take();
-        self.state = state.debugger().map(|d| d.state());
-        let was = matches!(before, Some(DebugState::Paused { .. }));
-        if let Some(DebugState::Paused { reason, stack }) = &self.state {
-            if self.frame >= stack.len() {
+        let was = self.paused.is_some();
+        self.paused = match state.debugger().map(|d| d.state()) {
+            Some(DebugState::Paused { reason, stack }) => Some(Paused {
+                reason,
+                stack: stack.into(),
+            }),
+            _ => None,
+        };
+        let Some(p) = &self.paused else {
+            self.frame = 0;
+            return;
+        };
+        let runs = state.debug.runs;
+        if was && self.announced == Some(runs) {
+            if self.frame >= p.stack.len() {
                 self.frame = 0;
             }
-            if !was {
-                self.frame = 0;
-            }
-            if let Some(top) = stack.first() {
+            return;
+        }
+        self.announced = Some(runs);
+        self.frame = 0;
+        match p.stack.first() {
+            Some(top) => {
                 if let Some(script) = top.script {
                     self.reveal = Some((script, top.line));
                 }
                 state.output.studio(format!(
                     "Paused: {} at {}:{}",
-                    reason_text(reason),
+                    reason_text(&p.reason),
                     top.chunk,
                     top.line
                 ));
-            } else if !was {
-                state.output.studio("Paused");
             }
-        } else {
-            self.frame = 0;
+            None => state.output.studio("Paused"),
         }
     }
 
@@ -257,63 +349,67 @@ impl DebugPanel {
 
     /// The paused line of `script` in the selected frame, for the editor's marker.
     pub fn paused_line(&self, script: InstanceId) -> Option<u32> {
-        match &self.state {
-            Some(DebugState::Paused { stack, .. }) => stack
-                .get(self.frame)
-                .filter(|f| f.script == Some(script))
-                .map(|f| f.line),
-            _ => None,
-        }
+        self.paused
+            .as_ref()?
+            .stack
+            .get(self.frame)
+            .filter(|f| f.script == Some(script))
+            .map(|f| f.line)
     }
 
     /// True while paused (as of the last [`DebugPanel::poll`]).
     pub fn is_paused(&self) -> bool {
-        matches!(self.state, Some(DebugState::Paused { .. }))
+        self.paused.is_some()
     }
 
-    /// The value of `expr` in the selected frame, for hover tips (cached until the game runs).
-    pub fn hover_value(&mut self, state: &mut EditorState, expr: &str) -> Option<String> {
-        if !self.is_paused() {
-            return None;
-        }
-        let frame = self.frame;
-        self.value(state, frame, expr).ok()
-    }
-
-    fn value(
+    /// The value of `expr` in the selected frame, for hover tips over `script` (cached until
+    /// the game runs). `None` unless `script` is the selected frame's script: a name in another
+    /// script would be looked up in the wrong frame.
+    pub fn hover_value(
         &mut self,
         state: &mut EditorState,
-        frame: usize,
+        script: InstanceId,
         expr: &str,
-    ) -> Result<String, String> {
-        let key = format!("{frame}\u{0}{expr}");
-        if let Some(v) = self.values.get(&key) {
+    ) -> Option<Rc<str>> {
+        self.paused_line(script)?;
+        self.value(state, expr).ok()
+    }
+
+    /// `expr` evaluated in the selected frame (cached; the cache is cleared with the frame).
+    fn value(&mut self, state: &mut EditorState, expr: &str) -> Result<Rc<str>, Rc<str>> {
+        if let Some(v) = self.values.get(expr) {
             return v.clone();
         }
         let v = match state.debugger() {
-            Some(d) => d.evaluate(frame, expr).map_err(|e| e.message),
-            None => Err("not playing".into()),
+            Some(d) => d
+                .evaluate(self.frame, expr)
+                .map(Rc::from)
+                .map_err(|e| Rc::from(e.message)),
+            None => Err(Rc::from("not playing")),
         };
-        self.values.insert(key, v.clone());
+        self.values.insert(expr.to_string(), v.clone());
         v
     }
 
-    fn scope(
-        &mut self,
-        state: &mut EditorState,
-        frame: usize,
-        scope: Scope,
-        key: u8,
-    ) -> Vec<VarNode> {
-        if let Some(v) = self.vars.get(&(frame, key)) {
+    fn scope(&mut self, state: &mut EditorState, scope: Scope, key: u8) -> Rc<[VarNode]> {
+        if let Some(v) = self.vars.get(&key) {
             return v.clone();
         }
-        let v = state
+        let v: Rc<[VarNode]> = state
             .debugger()
-            .map(|d| d.variables(frame, scope))
-            .unwrap_or_default();
-        self.vars.insert((frame, key), v.clone());
+            .map(|d| d.variables(self.frame, scope))
+            .unwrap_or_default()
+            .into();
+        self.vars.insert(key, v.clone());
         v
+    }
+
+    /// Selects frame `frame` of the stack: Variables, Watch and hover values follow it.
+    fn select_frame(&mut self, frame: usize) {
+        self.frame = frame;
+        self.vars.clear();
+        self.expanded.clear();
+        self.values.clear();
     }
 
     fn begin_set_local(&mut self, name: &str, display: &str) {
@@ -382,14 +478,15 @@ impl DebugPanel {
         }
     }
 
-    fn expand(&mut self, state: &mut EditorState, handle: VarHandle) -> Vec<VarNode> {
+    fn expand(&mut self, state: &mut EditorState, handle: VarHandle) -> Rc<[VarNode]> {
         if let Some(v) = self.expanded.get(&handle) {
             return v.clone();
         }
-        let v = state
+        let v: Rc<[VarNode]> = state
             .debugger()
             .map(|d| d.expand(handle))
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into();
         self.expanded.insert(handle, v.clone());
         v
     }
@@ -477,14 +574,19 @@ impl DebugPanel {
         self.poll(state);
         let paused = self.is_paused();
         ui.horizontal(|ui| {
-            let status = match &self.state {
-                Some(DebugState::Paused { reason, stack }) => match stack.first() {
+            let status = match &self.paused {
+                Some(p) => match p.stack.first() {
                     Some(f) => {
-                        format!("Paused ({}) at {}:{}", reason_text(reason), f.chunk, f.line)
+                        format!(
+                            "Paused ({}) at {}:{}",
+                            reason_text(&p.reason),
+                            f.chunk,
+                            f.line
+                        )
                     }
                     None => "Paused".to_string(),
                 },
-                _ => "Running".to_string(),
+                None => "Running".to_string(),
             };
             ui.label(RichText::new(status).color(if paused {
                 ui_tokens().warning
@@ -531,14 +633,13 @@ impl DebugPanel {
             }
         });
         ui.separator();
-        let stack = match &self.state {
-            Some(DebugState::Paused { stack, .. }) => stack.clone(),
-            _ => Vec::new(),
+        let stack: Rc<[Frame]> = match &self.paused {
+            Some(p) => p.stack.clone(),
+            None => Rc::from([]),
         };
         ui.columns(3, |cols| {
             if let Some(frame) = call_stack::ui(&mut cols[0], &stack, self.frame) {
-                self.frame = frame;
-                self.values.clear();
+                self.select_frame(frame);
                 if let Some(script) = stack[frame].script {
                     self.reveal = Some((script, stack[frame].line));
                 }
@@ -611,7 +712,10 @@ mod tests {
         panel.poll(&mut state);
         assert_eq!(panel.paused_line(script), Some(2));
         assert_eq!(panel.take_reveal(), Some((script, 2)));
-        assert_eq!(panel.hover_value(&mut state, "hp").as_deref(), Some("100"));
+        assert_eq!(
+            panel.hover_value(&mut state, script, "hp").as_deref(),
+            Some("100")
+        );
         assert!(
             texts(&mut log)
                 .iter()
@@ -622,7 +726,10 @@ mod tests {
         state.debug_act(|d| d.step_over());
         panel.poll(&mut state);
         assert_eq!(panel.paused_line(script), Some(3));
-        assert_eq!(panel.hover_value(&mut state, "hp").as_deref(), Some("99"));
+        assert_eq!(
+            panel.hover_value(&mut state, script, "hp").as_deref(),
+            Some("99")
+        );
         state.debug_act(|d| d.resume());
         panel.poll(&mut state);
         assert!(!state.is_paused());
@@ -701,5 +808,94 @@ mod tests {
         panel.poll(&mut state);
         assert_eq!(panel.paused_line(script), Some(3));
         state.stop_play();
+    }
+
+    #[test]
+    fn a_pause_is_announced_once() {
+        let mut log = OutputLog::new(64);
+        let (mut state, script) = session(&log);
+        state.toggle_breakpoint(script, 2);
+        assert!(state.start_play("play.start"));
+        state.play.update(1.0 / 60.0);
+        let mut panel = DebugPanel::new();
+        panel.poll(&mut state);
+        assert_eq!(panel.take_reveal(), Some((script, 2)));
+        let paused = |log: &mut OutputLog| {
+            texts(log)
+                .iter()
+                .filter(|t| t.starts_with("Paused"))
+                .count()
+        };
+        assert_eq!(paused(&mut log), 1);
+
+        // Breakpoint edits and Set value while paused refresh the panes only.
+        state.toggle_breakpoint(script, 3);
+        panel.poll(&mut state);
+        state.toggle_breakpoint(script, 3);
+        panel.poll(&mut state);
+        assert_eq!(panel.take_reveal(), None, "the editor is not pulled back");
+        assert_eq!(paused(&mut log), 1);
+
+        // A step is a new pause: one more line and one reveal.
+        state.debug_act(|d| d.step_over());
+        panel.poll(&mut state);
+        panel.poll(&mut state);
+        assert_eq!(panel.take_reveal(), Some((script, 3)));
+        assert_eq!(paused(&mut log), 2);
+        state.stop_play();
+    }
+
+    #[test]
+    fn hover_values_only_over_the_paused_frames_script() {
+        let log = OutputLog::new(64);
+        let (mut state, script) = session(&log);
+        let other = state
+            .world
+            .create("Script", state.world.parent(script))
+            .unwrap();
+        state.toggle_breakpoint(script, 3);
+        assert!(state.start_play("play.start"));
+        state.play.update(1.0 / 60.0);
+        let mut panel = DebugPanel::new();
+        panel.poll(&mut state);
+        assert_eq!(
+            panel.hover_value(&mut state, script, "hp").as_deref(),
+            Some("99")
+        );
+        assert_eq!(
+            panel.hover_value(&mut state, other, "hp"),
+            None,
+            "a name in another script is not this frame's"
+        );
+        state.stop_play();
+    }
+
+    #[test]
+    fn breakpoints_follow_edits_and_f9_needs_a_cursor() {
+        let log = OutputLog::new(64);
+        let (mut state, script) = session(&log);
+        state.toggle_breakpoint(script, 2);
+        state.toggle_breakpoint(script, 3);
+        let edited = format!("-- new first line\n{SOURCE}");
+        state.shift_breakpoints(script, SOURCE, &edited);
+        assert_eq!(
+            state.debug.breakpoints[&script]
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            [3, 4]
+        );
+
+        let mut actions = crate::actions::ActionRegistry::new();
+        super::register(&mut actions);
+        let f9 = actions.get("debug.toggle_breakpoint").unwrap();
+        assert!(
+            !f9.is_enabled(&state),
+            "no script editor cursor: F9 is free"
+        );
+        state.debug.cursor = Some((script, 1));
+        assert!(f9.is_enabled(&state));
+        actions.run("debug.toggle_breakpoint", &mut state);
+        assert!(state.debug.get(script, 1).is_some());
     }
 }

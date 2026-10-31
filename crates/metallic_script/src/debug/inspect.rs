@@ -508,6 +508,10 @@ impl DebugCore {
         };
         let lua = s.lua().map_err(to_err)?;
         let env = self.frame_env(&lua, frame)?;
+        let owner = self
+            .with_frame(frame, |snap| snap.info.owner)
+            .flatten()
+            .unwrap_or(0);
         let f = lua
             .load(format!("return ({expr})"))
             .set_name("=[watch]")
@@ -515,7 +519,8 @@ impl DebugCore {
             .into_function()
             .map_err(to_err)?;
         let values = self
-            .quiet(|| s.call_guarded(&lua, 0, &f, ()))
+            // Run as the frame's script: what the watch creates counts against its quotas.
+            .quiet(|| s.call_guarded(&lua, owner, &f, ()))
             .map_err(|message| ScriptError { message })?;
         Ok(values.into_iter().next().unwrap_or(Value::Nil))
     }
@@ -558,6 +563,18 @@ impl DebugCore {
                 });
             }
             if let Some(slot) = snap.locals.iter_mut().rev().find(|(n, _)| n == name) {
+                // Luau locals are dynamically typed, so a new type is allowed; a warning says
+                // so, because it is usually a slip (a string typed for a number).
+                let luau_type = |v: &Value| match v {
+                    Value::Integer(_) => "number",
+                    v => v.type_name(),
+                };
+                let (was, now) = (luau_type(&slot.1), luau_type(&value));
+                if was != now && !slot.1.is_nil() && !value.is_nil() {
+                    s.sink.warn(&format!(
+                        "debugger: {name} changed type from {was} to {now}"
+                    ));
+                }
                 slot.1 = value.clone();
             }
             let (state, level) = (snap.state, snap.level);

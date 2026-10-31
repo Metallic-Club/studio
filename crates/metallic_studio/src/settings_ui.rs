@@ -24,6 +24,8 @@ pub struct Outcome {
     pub changed: bool,
     /// The creator closed the dialog.
     pub close: bool,
+    /// "Reset tips": every first-time hint may show again.
+    pub reset_tips: bool,
     /// The creator asked for the Third-party licences screen.
     pub licences: bool,
 }
@@ -140,6 +142,24 @@ fn body(ui: &mut Ui, settings: &mut Settings, out: &mut Outcome) {
     {
         out.changed = true;
     }
+    ui.add_space(24.0);
+
+    section(
+        ui,
+        "Tips",
+        "Short hints the first time a building shortcut would help.",
+    );
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut settings.show_tips, "Show tips").changed() {
+            out.changed = true;
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui.add(Button::secondary("Reset tips").compact()).clicked() {
+                out.reset_tips = true;
+            }
+        });
+    });
     ui.add_space(24.0);
 
     section(

@@ -25,14 +25,13 @@ pub fn ui(ui: &mut egui::Ui, panel_state: &mut DebugPanel, state: &mut EditorSta
                 ui.label(RichText::new("Not paused").color(ui_tokens().text_dim));
                 return;
             }
-            let frame = panel_state.frame;
             for (scope, title, key) in SCOPES {
-                let nodes = panel_state.scope(state, frame, scope, key);
+                let nodes = panel_state.scope(state, scope, key);
                 egui::CollapsingHeader::new(format!("{title} ({})", nodes.len()))
                     .id_salt(("debug_scope", key))
                     .default_open(scope == Scope::Locals)
                     .show(ui, |ui| {
-                        for node in &nodes {
+                        for node in nodes.iter() {
                             row(ui, panel_state, state, node, scope == Scope::Locals, 0);
                         }
                     });
@@ -56,8 +55,9 @@ fn row(
             egui::CollapsingHeader::new(text)
                 .id_salt(("debug_var", handle))
                 .show(ui, |ui| {
-                    for child in panel_state.expand(state, handle) {
-                        row(ui, panel_state, state, &child, false, depth + 1);
+                    let children = panel_state.expand(state, handle);
+                    for child in children.iter() {
+                        row(ui, panel_state, state, child, false, depth + 1);
                     }
                 });
         }

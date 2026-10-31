@@ -2,7 +2,9 @@
 //!
 //! Click toggles a breakpoint; right-click opens a menu to add a condition or a log message.
 //! Hovering a name in the text while paused shows its value.
-use eframe::egui::{self, Align2, Galley, Pos2, Rect, Response, Sense, Shape, Stroke, Vec2};
+use eframe::egui::{
+    self, Align2, Galley, Pos2, Rangef, Rect, Response, Sense, Shape, Stroke, Vec2,
+};
 use metallic_core::InstanceId;
 use metallic_script::Breakpoint;
 
@@ -20,12 +22,16 @@ pub struct Gutter {
     script: InstanceId,
 }
 
-/// Allocates the gutter for a script of `lines` lines, left of the text field.
-pub fn gutter(ui: &mut egui::Ui, script: InstanceId, lines: usize) -> Gutter {
+/// Allocates the gutter for a script of `lines` lines, left of the text field. `height` is the
+/// text field's height last frame, so wrapped lines (more rows than lines) stay inside it.
+pub fn gutter(ui: &mut egui::Ui, script: InstanceId, lines: usize, height: f32) -> Gutter {
     let font = ui_tokens().mono();
     let (digit, row) = ui.fonts_mut(|f| (f.glyph_width(&font, '0'), f.row_height(&font)));
-    let digits = lines.max(999).to_string().len() as f32;
-    let size = Vec2::new(DOT + digit * digits + 8.0, row * lines.max(30) as f32 + 8.0);
+    let digits = (lines.max(999).ilog10() + 1) as f32;
+    let size = Vec2::new(
+        DOT + digit * digits + 8.0,
+        (row * lines.max(30) as f32 + 8.0).max(height),
+    );
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     Gutter {
         rect,
@@ -41,6 +47,8 @@ pub struct LineRow {
     pub line: u32,
     /// Screen rectangle of its first row, across the gutter and text.
     pub rect: Rect,
+    /// Screen heights of all its rows (more than one when it wraps).
+    pub span: Rangef,
 }
 
 /// Screen rows of each logical line of `galley` drawn at `pos`.
@@ -54,7 +62,10 @@ pub fn line_rows(galley: &Galley, pos: Pos2, left: f32) -> Vec<LineRow> {
             out.push(LineRow {
                 line,
                 rect: Rect::from_x_y_ranges(left..=r.right().max(left + 1.0), r.y_range()),
+                span: r.y_range(),
             });
+        } else if let Some(last) = out.last_mut() {
+            last.span.max = r.bottom();
         }
         start = row.ends_with_newline;
         if start {
@@ -77,16 +88,12 @@ impl Gutter {
         let font = t.mono();
         let painter = ui.painter_at(self.rect);
         let paused = debug.paused_line(self.script);
-        let at = |p: Pos2| {
-            rows.iter()
-                .find(|r| r.rect.y_range().contains(p.y))
-                .map(|r| r.line)
-        };
+        let at = |p: Pos2| rows.iter().find(|r| r.span.contains(p.y)).map(|r| r.line);
         let hovered = self.response.hover_pos().and_then(at);
         let dot_x = self.rect.left() + DOT / 2.0;
         for r in rows {
             let y = r.rect.center().y;
-            if y < self.rect.top() - 20.0 || y > self.rect.bottom() + 20.0 {
+            if r.span.max < self.rect.top() - 20.0 || y > self.rect.bottom() + 20.0 {
                 continue;
             }
             let colour = if paused == Some(r.line) {
@@ -146,7 +153,7 @@ impl Gutter {
         if let Some(r) = paused.and_then(|l| rows.iter().find(|r| r.line == l)) {
             let band = Rect::from_x_y_ranges(
                 self.rect.right()..=r.rect.right().max(ui.clip_rect().right()),
-                r.rect.y_range(),
+                r.span,
             );
             ui.painter()
                 .rect_filled(band, 0.0, t.warning.gamma_multiply(0.12));
@@ -226,16 +233,17 @@ pub fn name_at(text: &str, index: usize) -> Option<String> {
     Some(s)
 }
 
-/// Shows the hovered name's value as a tooltip while paused.
+/// Shows the hovered name's value as a tooltip while paused, when `script` (the shown one) is
+/// the selected frame's script.
 pub fn hover(
     response: &Response,
     galley: &Galley,
     pos: Pos2,
-    text: &str,
+    (script, text): (InstanceId, &str),
     state: &mut EditorState,
     debug: &mut DebugPanel,
 ) {
-    if !debug.is_paused() || !response.hovered() {
+    if debug.paused_line(script).is_none() || !response.hovered() {
         return;
     }
     let Some(p) = response.hover_pos() else {
@@ -246,7 +254,7 @@ pub fn hover(
     let Some(name) = name_at(text, cursor.index.0) else {
         return;
     };
-    if let Some(value) = debug.hover_value(state, &name) {
+    if let Some(value) = debug.hover_value(state, script, &name) {
         let tip = egui::RichText::new(format!("{name} = {value}"))
             .font(ui_tokens().mono())
             .color(ui_tokens().text);

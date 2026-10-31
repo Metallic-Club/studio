@@ -1,6 +1,7 @@
 //! What the tray icon offers and what closing the window does. The icon itself is made in
 //! `platform`; the rules are here so they can be tested.
 
+use crate::bridge::BridgeEvent;
 use crate::settings::LauncherSettings;
 
 /// A tray menu entry.
@@ -57,6 +58,48 @@ pub fn tray_menu(studio_installed: bool, update_ready: bool) -> Vec<(TrayAction,
     items.push((TrayAction::CheckUpdates, "Check for updates"));
     items.push((TrayAction::Quit, "Quit"));
     items
+}
+
+/// What the tray menu shows now. Starts from what is installed; events keep it current.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrayMenuState {
+    /// Studio is installed ("Open Studio" is offered).
+    pub studio_installed: bool,
+    /// A Launcher update is downloaded ("Restart to update" is offered).
+    pub update_ready: bool,
+}
+
+impl TrayMenuState {
+    /// The menu items for this state ([`tray_menu`]).
+    pub fn items(self) -> Vec<(TrayAction, &'static str)> {
+        tray_menu(self.studio_installed, self.update_ready)
+    }
+
+    /// Applies `event`; true when the menu must be rebuilt. A finished Studio install looks at
+    /// the disk again with `studio_installed` (so "Open Studio" appears without a restart); a
+    /// downloaded update adds "Restart to update".
+    pub fn on_event(
+        &mut self,
+        event: &BridgeEvent,
+        studio_installed: impl FnOnce() -> bool,
+    ) -> bool {
+        let before = *self;
+        match event {
+            BridgeEvent::InstallFinished { product, .. } if product == "studio" => {
+                self.studio_installed = studio_installed();
+            }
+            BridgeEvent::UpdateReady { .. } => self.update_ready = true,
+            _ => {}
+        }
+        *self != before
+    }
+}
+
+/// Whether the window shows once the first page has loaded. `--hidden` (autostart) keeps it
+/// in the tray, but only when there is a tray icon: without one the Launcher could not be
+/// reached, so it shows anyway.
+pub fn show_on_start(start_hidden: bool, has_tray: bool) -> bool {
+    !(start_hidden && has_tray)
 }
 
 /// What the close button does.

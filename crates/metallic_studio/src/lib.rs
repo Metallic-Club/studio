@@ -26,7 +26,10 @@
 //! as a demo screen (`--scene colour`).
 //!
 //! [`tools`] holds the pure cores of the building tools (shared geometry, scatter, selection,
-//! measure, arrange) that the viewport drives. [`input_actions`] and [`data_dirs`] come from main.
+//! measure, arrange). [`editor_tools`] wires them to the toolbar, keymap, viewport and undo;
+//! [`editor_input_actions`] docks the [`input_actions`] panel with the editor's undo, and
+//! [`editor_colour`] hosts the colour popover for Properties' Color3 rows. [`data_dirs`] comes
+//! from main.
 //!
 //! [`splash`] is the startup window; [`widgets`] holds Studio's own buttons, plates, cards,
 //! toasts and the cut.
@@ -38,17 +41,23 @@
 pub mod actions;
 pub mod app;
 pub mod camera;
+pub mod collisions;
 pub mod colour;
 pub mod commands;
+pub mod context_bar;
 pub mod data_dirs;
 pub mod debugger;
 pub mod editor;
+pub mod editor_colour;
+pub mod editor_input_actions;
+pub mod editor_tools;
 pub mod editor_ui;
 pub mod error;
 pub mod explorer;
 pub mod expr;
 pub mod github_auth;
 pub mod gizmo;
+pub mod hints;
 pub mod icons;
 pub mod input_actions;
 pub mod keymap;
@@ -73,10 +82,12 @@ pub mod start_screen;
 pub mod templates;
 pub mod theme;
 pub mod tokens;
+pub mod toolbar;
 pub mod tools;
 pub mod transform;
 pub mod updater;
 pub mod viewport;
+pub mod viewport_header;
 pub mod widgets;
 
 pub use error::StudioError;
