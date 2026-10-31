@@ -102,6 +102,9 @@ pub struct PhysicsWorld {
     accumulator: f64,
     /// Replica mode: no body is ever integrated (see [`PhysicsWorld::new_replica`]).
     replica: bool,
+    /// Whether Rapier has stepped: from then on [`PhysicsWorld::sync_from`] must not run
+    /// Rapier's collision pipeline (see there).
+    stepped: bool,
 }
 
 impl Default for PhysicsWorld {
@@ -168,6 +171,7 @@ impl PhysicsWorld {
             characters: HashSet::new(),
             accumulator: 0.0,
             replica: false,
+            stepped: false,
         }
     }
 
@@ -199,6 +203,7 @@ impl PhysicsWorld {
         for id in gone {
             self.remove_entry(id, touched::Removed::Gone);
         }
+        let mut added = Vec::new();
         for (id, character) in parts {
             let Some(state) = sync::read_part(world, id) else {
                 continue;
@@ -211,15 +216,33 @@ impl PhysicsWorld {
                 self.remove_entry(id, touched::Removed::Rebuilt);
             }
             if !self.entries.contains_key(&id) {
-                self.add_entry(id, &state, character);
+                added.push(self.add_entry(id, &state, character));
             }
         }
-        // Refresh the broad phase so raycasts work before the first step.
-        self.rapier.detect_collisions(&(), &self.collector);
-        self.collect_touches();
+        if self.stepped {
+            // Rapier 0.36.1's collision pipeline (`detect_collisions`) takes the change flags of
+            // bodies inserted since the last step without giving them an island, so once the
+            // simulation runs, a body added or rebuilt here would never be linked to what it
+            // touches (#423; a debug assertion in Rapier's island manager, and a broken island
+            // in release). Only the query tree is updated, so raycasts see new colliders at
+            // once; their contacts start in the next step.
+            let r = &mut self.rapier;
+            for handle in added {
+                if let Some(co) = r.colliders.get(handle) {
+                    let aabb = co.compute_broad_phase_aabb(&r.integration_parameters, &r.bodies);
+                    r.broad_phase
+                        .set_aabb(&r.integration_parameters, handle, aabb);
+                }
+            }
+        } else {
+            // Refresh the broad phase so raycasts work before the first step; the first step
+            // builds the islands from scratch.
+            self.rapier.detect_collisions(&(), &self.collector);
+            self.collect_touches();
+        }
     }
 
-    fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) {
+    fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) -> ColliderHandle {
         let mat = sync::material_props(&s.material);
         let pose = to_pose(s.position, s.orientation);
         let builder = if s.anchored || self.replica {
@@ -268,6 +291,7 @@ impl PhysicsWorld {
         if character {
             self.characters.insert(id);
         }
+        collider
     }
 
     fn remove_entry(&mut self, id: InstanceId, why: touched::Removed) {
@@ -357,6 +381,7 @@ impl PhysicsWorld {
 
         for _ in 0..substeps {
             self.rapier.step_with_events(&(), &self.collector);
+            self.stepped = true;
         }
 
         // Land movers exactly on their target and make them fixed again.
