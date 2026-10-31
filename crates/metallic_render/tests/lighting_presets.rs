@@ -4,13 +4,14 @@ mod support;
 
 use metallic_core::Value;
 use metallic_core::lighting::{PRESETS, apply_preset, find_preset};
-use metallic_render::{Quality, RenderContext, RenderSettings, Renderer};
+use metallic_render::{Quality, RenderSettings};
+use support::gpu::{TestContext as RenderContext, TestRenderer as Renderer};
 use support::reference_scene::{chroma, lumas, reference_camera, reference_world, stats};
 
 const SIZE: (u32, u32) = (160, 90);
 
 fn renderer() -> Option<Renderer> {
-    let Ok(ctx) = RenderContext::new_headless() else {
+    let Some(ctx) = RenderContext::new_headless() else {
         eprintln!("no GPU adapter; skipping");
         return None;
     };
@@ -30,7 +31,7 @@ fn every_preset_renders_within_bounds() {
         let mut world = reference_world();
         apply_preset(&mut world, preset).expect("apply");
         r.sync(&world);
-        let px = r.capture(&reference_camera(), SIZE).expect("capture");
+        let px = r.capture(&reference_camera(), SIZE);
         let (mean, p1, p99) = stats(&lumas(&px));
         let c = chroma(&px);
         let id = preset.id;
@@ -54,10 +55,7 @@ fn presets_differ_in_the_image() {
         let mut world = reference_world();
         apply_preset(&mut world, preset).expect("apply");
         r.sync(&world);
-        images.push((
-            preset.id,
-            r.capture(&reference_camera(), SIZE).expect("capture"),
-        ));
+        images.push((preset.id, r.capture(&reference_camera(), SIZE)));
     }
     for (i, (a, pa)) in images.iter().enumerate() {
         for (b, pb) in &images[i + 1..] {
@@ -77,13 +75,13 @@ fn lighting_edits_reach_the_image() {
     let Some(mut r) = renderer() else { return };
     let mut world = reference_world();
     r.sync(&world);
-    let day = r.capture(&reference_camera(), SIZE).expect("capture");
+    let day = r.capture(&reference_camera(), SIZE);
     let lighting = world.root("Lighting").expect("lighting");
     world
         .set(lighting, "ClockTime", Value::Number(0.0))
         .expect("clock");
     r.sync(&world);
-    let night = r.capture(&reference_camera(), SIZE).expect("capture");
+    let night = r.capture(&reference_camera(), SIZE);
     let (d, _, _) = stats(&lumas(&day));
     let (n, _, _) = stats(&lumas(&night));
     assert!(n < d - 0.15, "midnight {n} not darker than day {d}");
@@ -91,7 +89,7 @@ fn lighting_edits_reach_the_image() {
     // Back to the default preset gives back the same image.
     apply_preset(&mut world, find_preset("clear-day").expect("preset")).expect("apply");
     r.sync(&world);
-    let again = r.capture(&reference_camera(), SIZE).expect("capture");
+    let again = r.capture(&reference_camera(), SIZE);
     assert_eq!(day, again);
 }
 
@@ -100,13 +98,13 @@ fn shadows_and_fog_switches_work() {
     let Some(mut r) = renderer() else { return };
     let mut world = reference_world();
     r.sync(&world);
-    let base = r.capture(&reference_camera(), SIZE).expect("capture");
+    let base = r.capture(&reference_camera(), SIZE);
     let lighting = world.root("Lighting").expect("lighting");
     world
         .set(lighting, "GlobalShadows", Value::Bool(false))
         .expect("shadows");
     r.sync(&world);
-    let unshadowed = r.capture(&reference_camera(), SIZE).expect("capture");
+    let unshadowed = r.capture(&reference_camera(), SIZE);
     assert_ne!(base, unshadowed, "GlobalShadows had no effect");
     world
         .set(lighting, "GlobalShadows", Value::Bool(true))
@@ -115,7 +113,7 @@ fn shadows_and_fog_switches_work() {
         .set(lighting, "FogEnd", Value::Number(60.0))
         .expect("fog end");
     r.sync(&world);
-    let fogged = r.capture(&reference_camera(), SIZE).expect("capture");
+    let fogged = r.capture(&reference_camera(), SIZE);
     assert!(
         chroma(&fogged) < chroma(&base),
         "FogEnd 60 did not wash the scene"

@@ -1,7 +1,11 @@
 //! Renders small scenes on a real (or software) adapter. Skipped when the machine has none.
+#[path = "support/gpu.rs"]
+mod gpu;
+
+use gpu::{TestContext as RenderContext, TestRenderer as Renderer};
 use metallic_core::{Color3, Value, Vec3 as V3, World};
 use metallic_render::glam::Vec3;
-use metallic_render::{Camera, Quality, RenderContext, RenderSettings, Renderer};
+use metallic_render::{Camera, Quality, RenderSettings};
 
 const SIZE: (u32, u32) = (320, 200);
 
@@ -43,7 +47,7 @@ fn camera() -> Camera {
 }
 
 fn render(quality: Quality) -> Option<Vec<u8>> {
-    let ctx = RenderContext::new_headless().ok()?;
+    let ctx = RenderContext::new_headless()?;
     let mut r = Renderer::with_settings(
         &ctx,
         wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -51,7 +55,7 @@ fn render(quality: Quality) -> Option<Vec<u8>> {
     );
     r.sync(&scene());
     assert_eq!(r.part_count(), 3);
-    Some(r.capture(&camera(), SIZE).expect("capture"))
+    Some(r.capture(&camera(), SIZE))
 }
 
 fn distinct_colours(px: &[u8]) -> usize {
@@ -80,7 +84,7 @@ fn high_quality_frame_has_sky_ground_and_objects() {
 
 #[test]
 fn low_quality_renders_and_resizing_is_safe() {
-    let Ok(ctx) = RenderContext::new_headless() else {
+    let Some(ctx) = RenderContext::new_headless() else {
         eprintln!("no graphics adapter, skipping");
         return;
     };
@@ -93,7 +97,7 @@ fn low_quality_renders_and_resizing_is_safe() {
     );
     r.sync(&scene());
     for size in [(320, 200), (97, 61), (640, 480), (320, 200)] {
-        let px = r.capture(&camera(), size).expect("capture");
+        let px = r.capture(&camera(), size);
         assert_eq!(px.len(), (size.0 * size.1 * 4) as usize);
         assert!(distinct_colours(&px) > 50);
     }
@@ -117,7 +121,7 @@ fn low_quality_renders_and_resizing_is_safe() {
     r.set_settings(RenderSettings {
         quality: Quality::High,
     });
-    let px = r.capture(&camera(), SIZE).expect("capture");
+    let px = r.capture(&camera(), SIZE);
     assert!(distinct_colours(&px) > 200);
 }
 
@@ -130,7 +134,7 @@ fn skinned_avatar_draws_and_picks_its_level_of_detail() {
     use metallic_render::{SkinStyle, SkinnedInstance};
     use std::sync::Arc;
 
-    let Ok(ctx) = RenderContext::new_headless() else {
+    let Some(ctx) = RenderContext::new_headless() else {
         eprintln!("no graphics adapter, skipping");
         return;
     };
@@ -158,7 +162,7 @@ fn skinned_avatar_draws_and_picks_its_level_of_detail() {
         look_at: Vec3::new(0.0, 2.75, 0.0),
         fov_deg: 60.0,
     };
-    let before = r.capture(&close, SIZE).expect("capture");
+    let before = r.capture(&close, SIZE);
     let instance = SkinnedInstance {
         model: &model,
         joints: &joints,
@@ -169,7 +173,7 @@ fn skinned_avatar_draws_and_picks_its_level_of_detail() {
         style: SkinStyle::Standard,
     };
     r.set_skinned(&[instance]);
-    let with = r.capture(&close, SIZE).expect("capture");
+    let with = r.capture(&close, SIZE);
     assert_eq!(r.skinned_lods(), [0]);
     let centre = |px: &[u8]| {
         let i = ((SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2) * 4) as usize;
@@ -193,11 +197,11 @@ fn skinned_avatar_draws_and_picks_its_level_of_detail() {
         position: Vec3::new(0.0, 2.75, 200.0),
         ..close
     };
-    r.capture(&far, SIZE).expect("capture");
+    r.capture(&far, SIZE);
     assert_eq!(r.skinned_lods(), [2]);
 
     r.set_skinned(&[]);
-    let cleared = r.capture(&close, SIZE).expect("capture");
+    let cleared = r.capture(&close, SIZE);
     assert_eq!(centre(&before), centre(&cleared));
 }
 
@@ -210,7 +214,7 @@ fn toon_avatar_has_ink_outline_and_warm_shading() {
     use metallic_render::{SkinStyle, SkinnedInstance};
     use std::sync::Arc;
 
-    let Ok(ctx) = RenderContext::new_headless() else {
+    let Some(ctx) = RenderContext::new_headless() else {
         eprintln!("no graphics adapter, skipping");
         return;
     };
@@ -255,7 +259,7 @@ fn toon_avatar_has_ink_outline_and_warm_shading() {
             detail_scale: scale,
             style,
         }]);
-        r.capture(&cam, SIZE).expect("capture")
+        r.capture(&cam, SIZE)
     };
     let toon = shot(SkinStyle::Toon);
     let standard = shot(SkinStyle::Standard);
