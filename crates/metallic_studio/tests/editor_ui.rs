@@ -30,11 +30,27 @@ fn editor() -> (EditorUi, InstanceId, InstanceId) {
     (EditorUi::new(state, output), model, part)
 }
 
+/// The panels use the bundled font families, which the theme installs for the next pass: the
+/// first pass only installs them. Returns true on that first pass (draw nothing).
+fn install_theme(ui: &egui::Ui, themed: &mut bool) -> bool {
+    if *themed {
+        return false;
+    }
+    metallic_studio::theme::apply(ui.ctx(), metallic_studio::theme::ThemeId::Graphite);
+    *themed = true;
+    ui.ctx().request_repaint();
+    true
+}
+
 fn harness(ui: EditorUi) -> Harness<'static, EditorUi> {
+    let mut themed = false;
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(
-            |ui, editor: &mut EditorUi| {
+            move |ui, editor: &mut EditorUi| {
+                if install_theme(ui, &mut themed) {
+                    return;
+                }
                 editor.ui(ui, None);
             },
             ui,
@@ -216,10 +232,14 @@ fn dirty_shell(scene: std::path::PathBuf) -> (Harness<'static, Shell>, InstanceI
     ui.state
         .set_property(&[part], "Transparency", Value::Number(0.5));
     assert!(ui.state.is_dirty());
+    let mut themed = false;
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(
-            |ui, shell: &mut Shell| {
+            move |ui, shell: &mut Shell| {
+                if install_theme(ui, &mut themed) {
+                    return;
+                }
                 let exit = shell.editor.ui(ui, None);
                 if exit != EditorExit::Stay {
                     shell.exit = exit;

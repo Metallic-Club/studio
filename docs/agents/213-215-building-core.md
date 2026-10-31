@@ -25,6 +25,19 @@ Stacks on #319 (`studio/10-studio-editing`). Spec: `docs/design/building-tools.m
 - No BVH: candidates come from the part list with a screen-space cull; measured inside budget (see PR).
 - No Collisions chip and no outer screen-space rotate ring yet.
 
+## Review fixes (FIX-FIRST on cbe7d1f1)
+- Pivots are written on every drag frame (back to the start values at no motion), so no stale `WorldPivot`.
+- Resize uses core's 0.001 to 2048 limits; the 0.05 floor is gone (spec 4.3 updated).
+- Global keys wait while a Properties scrub or viewport drag is open; Esc cancels a scrub. `EditorState` refuses
+  apply, undo, redo and one-shot commits while the overlay holds a gesture.
+- Losing window focus cancels a viewport drag (as Esc).
+- Virtual surface hits beyond 4096 studs (grazing rays) are rejected; the drag keeps its last placement.
+- A `WorldPivot` that cannot be made orthonormal is refused with a status note.
+- A set `WorldPivot` moves with its Model even when a `PrimaryPart` gives the pivot (core `pivot_to`).
+- Ctrl+D before an Alt-drag has moved does nothing (the selection stays on live parts).
+- Spec 2.2 grid rule is now "snap the bounding-box min corner on each axis" (faces on grid lines) for surface
+  placement, Snap to grid and Off grid; handle and arrow drags still snap the amount.
+
 ## Tests
 - `tests/building.rs`: 500 parts x 60 frames = one step, one undo restores, Esc unchanged; 1,000-part commit time;
   Duplicate and move; Ctrl+R/T; End; snap to grid rule; pivot edit and reset; editable delta; body drag on a surface,

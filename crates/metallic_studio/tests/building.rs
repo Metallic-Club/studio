@@ -505,5 +505,9 @@ fn a_world_pivot_that_cannot_be_made_orthonormal_is_refused() {
         s.world.get(model, "WorldPivotSet").unwrap(),
         Value::Bool(false)
     );
-    assert!(s.current_note().unwrap_or("").contains("WorldPivot not set"));
+    assert!(
+        s.current_note()
+            .unwrap_or("")
+            .contains("WorldPivot not set")
+    );
 }

@@ -356,6 +356,12 @@ pub const CUT_LG: f32 = tk::CUT_LG;
 pub const ROW_HEIGHT: f32 = tk::H_ROW;
 /// Secondary buttons and inputs.
 pub const CONTROL_HEIGHT: f32 = tk::H_CONTROL;
+/// Icon box inside a button or row.
+pub const ICON_BOX: f32 = 16.0;
+/// Docked panel header and panel tab strip.
+pub const HEADER_HEIGHT: f32 = tk::H_CONTROL;
+/// Status bar height.
+pub const STATUS_HEIGHT: f32 = tk::H_ROW;
 /// Primary button, toolbar.
 pub const CONTROL_HEIGHT_LG: f32 = tk::H_CONTROL_LG;
 
