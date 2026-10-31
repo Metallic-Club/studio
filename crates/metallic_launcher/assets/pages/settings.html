@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metallic Play settings</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/pages.css">
+</head>
+<body>
+<main class="card">
+  <p class="brand">Metallic Play</p>
+  <h1>Settings</h1>
+  <form id="settings-form" novalidate>
+    <label class="check">
+      <input type="checkbox" id="close-to-tray">
+      <span>Keep Metallic Play running in the tray when I close the window</span>
+    </label>
+
+    <h2>Updates</h2>
+    <label class="field" for="channel">Update channel</label>
+    <select class="text" id="channel">
+      <option value="dev">Team builds (dev)</option>
+      <option value="stable">Stable</option>
+    </select>
+    <p class="hint">The update channel applies after you restart Metallic Play.</p>
+    <div class="actions">
+      <button type="button" id="github-sign-in" class="btn btn-secondary">Sign in to GitHub for team builds</button>
+    </div>
+    <p class="status" id="github-status" role="status" aria-live="polite"></p>
+
+    <h2>Developer</h2>
+    <label class="check">
+      <input type="checkbox" id="developer-mode">
+      <span>Developer mode</span>
+    </label>
+    <label class="field" for="dev-url">Development address</label>
+    <input class="text" type="text" id="dev-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Address of your development server">
+    <p class="hint">Developer mode and the development address apply after you restart Metallic Play.</p>
+
+    <div class="actions">
+      <button type="submit" id="save" class="btn btn-primary" disabled>Save</button>
+      <a class="btn btn-ghost" href="/offline.html" data-back>Back</a>
+    </div>
+    <p class="status" id="settings-status" role="status" aria-live="polite"></p>
+  </form>
+</main>
+<script src="/pages.js"></script>
+</body>
+</html>

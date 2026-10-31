@@ -244,3 +244,119 @@ fn names_are_checked_up_front() {
     assert!(p.set_bool("Speed", true).is_err());
     assert!(p.fire("Nope").is_err());
 }
+
+#[test]
+fn playback_rate_scales_how_fast_a_state_plays() {
+    let time_after = |rate: f32| {
+        let mut p = player();
+        p.set_playback_rate(rate);
+        p.update(0.5);
+        p.motion_samples()[0].time
+    };
+    // Idle is 2 s long and loops.
+    assert!((time_after(1.0) - 0.5).abs() < 1e-5);
+    assert!((time_after(2.0) - 1.0).abs() < 1e-5);
+    assert!((time_after(0.5) - 0.25).abs() < 1e-5);
+    assert_eq!(time_after(-3.0), 0.0);
+    assert_eq!(time_after(f32::NAN), 0.0);
+}
+
+#[test]
+fn crossfade_eases_with_smoothstep() {
+    let mut p = player();
+    p.set_float("Speed", 5.0).unwrap();
+    p.update(0.0);
+    p.update(0.05); // a quarter of the 0.2 s blend
+    let run = p
+        .motion_samples()
+        .into_iter()
+        .find(|m| m.clip == 1)
+        .unwrap();
+    assert!((run.weight - 0.15625).abs() < 1e-5, "{}", run.weight);
+    p.update(0.05); // halfway: symmetric
+    let run = p
+        .motion_samples()
+        .into_iter()
+        .find(|m| m.clip == 1)
+        .unwrap();
+    assert!((run.weight - 0.5).abs() < 1e-5, "{}", run.weight);
+}
+
+#[test]
+fn a_transition_mid_fade_keeps_the_pose_continuous() {
+    let mut p = player();
+    p.set_float("Speed", 5.0).unwrap();
+    p.update(0.0);
+    p.update(0.1); // halfway through Idle -> Run
+    let by_clip = |p: &StateMachinePlayer| {
+        let mut w = [0.0f32; 4];
+        for s in p.motion_samples() {
+            w[s.clip] += s.weight;
+        }
+        w
+    };
+    let before = by_clip(&p);
+    p.fire("Jump").unwrap();
+    assert_eq!(p.update(0.0).as_deref(), Some("Jump"));
+    let after = by_clip(&p);
+    assert!((after.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    for (b, a) in before.iter().zip(after) {
+        assert!((b - a).abs() < 1e-5, "{before:?} -> {after:?}");
+    }
+    // The jump takes over by the end of its own 0.1 s fade.
+    p.update(0.15);
+    assert!(!p.is_blending());
+    assert_eq!(p.motion_samples().len(), 1);
+}
+
+#[test]
+fn the_outgoing_mix_keeps_playing_during_a_crossfade() {
+    let mut p = player();
+    p.update(0.3); // idle at 0.3 s
+    p.set_playback_rate(2.0);
+    p.set_float("Speed", 5.0).unwrap();
+    p.update(0.0); // Idle -> Run, 0.2 s fade
+    let idle_at = |p: &StateMachinePlayer| {
+        p.motion_samples()
+            .iter()
+            .find(|m| m.clip == 0)
+            .unwrap()
+            .time
+    };
+    let t0 = idle_at(&p);
+    p.update(0.05);
+    // The outgoing idle advanced at the rate its state had when the fade began (2x).
+    assert!(
+        (idle_at(&p) - t0 - 0.1).abs() < 1e-5,
+        "{} -> {}",
+        t0,
+        idle_at(&p)
+    );
+}
+
+#[test]
+fn motion_samples_into_reuses_its_buffer() {
+    let mut p = player();
+    let mut out = Vec::new();
+    // Warm up through every kind of mix (a crossfade, a 1-clip state).
+    p.set_float("Speed", 5.0).unwrap();
+    for _ in 0..30 {
+        p.update(1.0 / 60.0);
+        p.motion_samples_into(&mut out);
+    }
+    p.set_float("Speed", 0.0).unwrap();
+    for _ in 0..30 {
+        p.update(1.0 / 60.0);
+        p.motion_samples_into(&mut out);
+    }
+    let (ptr, cap) = (out.as_ptr(), out.capacity());
+    for i in 0..200 {
+        p.set_float("Speed", if (i / 40) % 2 == 0 { 5.0 } else { 0.0 })
+            .unwrap();
+        p.update(1.0 / 60.0);
+        p.motion_samples_into(&mut out);
+        let total: f32 = out.iter().map(|m| m.weight).sum();
+        assert!((total - 1.0).abs() < 1e-5);
+    }
+    assert_eq!((out.as_ptr(), out.capacity()), (ptr, cap));
+}

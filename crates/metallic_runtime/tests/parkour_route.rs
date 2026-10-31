@@ -5,9 +5,18 @@
 //! jumps when there is no ground just ahead of it, waits for the moving platform and hops across
 //! the spinning-bar arena. After a death it resumes from its last checkpoint. It must finish
 //! within the time and death limits below, and the HUD must show the checkpoints and the time.
+//!
+//! The bot never builds a `FrameInput`: it sends raw events (a gamepad stick, and either the
+//! keyboard or gamepad buttons) to an `InputRuntime` with the default `CharacterControls`, like the
+//! Player does, and records them as an `--input-script`. A second run replays that script through
+//! a `ScriptedSource` and must end the same way. The touch run puts fingers on the automatic touch
+//! controls of the emulated phone (`metallic-player --emulate phone`): the floating stick, Jump
+//! and Run, and its recorded finger script replays the same way.
 use metallic_core::{InstanceId, Value, Vec3, World};
 use metallic_physics::{HumanoidState, PhysicsWorld};
-use metallic_runtime::{FrameInput, Game, StdoutSink, TICK};
+use metallic_runtime::input::touch::{DeviceProfile, TouchControls, TouchPhase};
+use metallic_runtime::input::{Control, Device, DeviceKind, RawEvent, ScriptedSource};
+use metallic_runtime::{FrameInput, Game, InputRuntime, StdoutSink, TICK};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -219,7 +228,35 @@ fn hud_text(w: &World) -> String {
     }
 }
 
+/// Which buttons the bot presses; the stick always moves.
+#[derive(Clone, Copy, PartialEq)]
+enum Buttons {
+    /// Space and Shift on the keyboard.
+    Keyboard,
+    /// A and L3 on the gamepad.
+    Gamepad,
+    /// Fingers on the touch overlay of the emulated phone: the stick, Jump and Run.
+    Touch,
+}
+
+/// Fingers of the touch run.
+const STICK_FINGER: u64 = 0;
+const JUMP_FINGER: u64 = 1;
+const RUN_FINGER: u64 = 2;
+
 struct Bot {
+    input: InputRuntime,
+    /// The touch overlay's controls (touch run only).
+    touch: Option<TouchControls>,
+    /// Where the stick finger is (touch run).
+    stick_at: [f32; 2],
+    buttons: Buttons,
+    /// Frames played so far; event times are `frame * TICK`.
+    frame: u64,
+    /// What the player holds now (to send only changes).
+    held: FrameInput,
+    /// The events sent so far, as an `--input-script`.
+    script: String,
     game: Game,
     route: Vec<Step>,
     /// Static copy of the level for "is there ground ahead" rays.
@@ -265,7 +302,133 @@ impl Bot {
             .is_some()
     }
 
-    fn tick(&mut self, input: FrameInput) -> Option<HumanoidState> {
+    /// Sends one event to the input runtime and records it in the script.
+    fn send(
+        &mut self,
+        device: Device,
+        control: Control,
+        state: &str,
+        nums: &[f32],
+        event: RawEvent,
+    ) {
+        let dev = match device {
+            Device::Gamepad(n) => format!("gamepad{n}"),
+            _ => "keyboard".to_string(),
+        };
+        let values: String = nums.iter().map(|n| format!(" {n}")).collect();
+        let name = control.name();
+        self.script.push_str(&format!(
+            "{} {dev} {name} {state}{values}
+",
+            self.frame
+        ));
+        self.input.push(event);
+    }
+
+    /// Sends one finger event to the touch controls and records it in the script.
+    fn finger(&mut self, id: u64, phase: TouchPhase, at: [f32; 2], time: f64) {
+        let name = match phase {
+            TouchPhase::Down => "Down",
+            TouchPhase::Move => "Move",
+            TouchPhase::Up => "Up",
+            TouchPhase::Cancel => "Cancel",
+        };
+        self.script.push_str(&format!(
+            "{} touch{id} {name} pos {} {}\n",
+            self.frame, at[0], at[1]
+        ));
+        let touch = self.touch.as_mut().expect("touch controls");
+        touch.touch(&mut self.input, id, phase, at, time);
+    }
+
+    /// The touch run: the stick finger lands on the stick's rest point and slides one radius in
+    /// the wanted direction; Jump and Run are held with their own fingers.
+    fn play_touch(&mut self, want: FrameInput, time: f64) {
+        let touch = self.touch.as_mut().expect("touch controls");
+        touch.sync(&mut self.input, time);
+        let layout = touch.layout().clone();
+        let stick = layout.stick.expect("Parkour has a stick");
+        let centre = |label: &str| {
+            let set = touch.set();
+            layout
+                .buttons
+                .iter()
+                .find(|b| set.buttons[b.index].label == label)
+                .map(|b| b.center)
+                .expect("button placed")
+        };
+        let (jump_at, run_at) = (centre("Jump"), centre("Run"));
+        let m = want.movement;
+        if m != self.held.movement {
+            let target = [
+                stick.center[0] + m[0] * stick.radius,
+                stick.center[1] - m[1] * stick.radius,
+            ];
+            if m == [0.0; 2] {
+                self.finger(STICK_FINGER, TouchPhase::Up, self.stick_at, time);
+            } else {
+                if self.held.movement == [0.0; 2] {
+                    self.finger(STICK_FINGER, TouchPhase::Down, stick.center, time);
+                }
+                self.finger(STICK_FINGER, TouchPhase::Move, target, time);
+            }
+            self.stick_at = target;
+        }
+        for (now, before, id, at) in [
+            (want.jump, self.held.jump, JUMP_FINGER, jump_at),
+            (want.run, self.held.run, RUN_FINGER, run_at),
+        ] {
+            if now != before {
+                let phase = if now {
+                    TouchPhase::Down
+                } else {
+                    TouchPhase::Up
+                };
+                self.finger(id, phase, at, time);
+            }
+        }
+    }
+
+    /// Turns what the bot wants into raw events, evaluates the actions and returns the result.
+    fn play_input(&mut self, want: FrameInput) -> FrameInput {
+        let time = self.frame as f64 * TICK;
+        if self.buttons == Buttons::Touch {
+            self.play_touch(want, time);
+            self.held = want;
+            self.frame += 1;
+            return self.input.frame(time, TICK as f32);
+        }
+        let pad = Device::Gamepad(0);
+        if want.movement != self.held.movement {
+            let m = want.movement;
+            let e = RawEvent::vector(pad, Control::Thumbstick1, m, time);
+            self.send(pad, Control::Thumbstick1, "axis", &m, e);
+        }
+        let (jump_dev, jump_key, run_dev, run_key) = match self.buttons {
+            Buttons::Keyboard => (
+                Device::KeyboardMouse,
+                Control::Space,
+                Device::KeyboardMouse,
+                Control::LeftShift,
+            ),
+            Buttons::Gamepad | Buttons::Touch => (pad, Control::ButtonA, pad, Control::ButtonL3),
+        };
+        for (now, before, device, control) in [
+            (want.jump, self.held.jump, jump_dev, jump_key),
+            (want.run, self.held.run, run_dev, run_key),
+        ] {
+            if now != before {
+                let e = RawEvent::button(device, control, f32::from(u8::from(now)), time);
+                self.send(device, control, if now { "down" } else { "up" }, &[], e);
+            }
+        }
+        self.held = want;
+        self.frame += 1;
+        self.input.frame(time, TICK as f32)
+    }
+
+    fn tick(&mut self, want: FrameInput) -> Option<HumanoidState> {
+        let input = self.play_input(want);
         let out = self.game.frame(&input, TICK);
         self.step_time += TICK;
         let text = hud_text(&self.world().borrow());
@@ -376,14 +539,31 @@ impl Bot {
     }
 }
 
-#[test]
-fn a_bot_using_only_player_input_finishes_the_course() {
+fn open_parkour() -> Game {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/parkour");
     let mut game = Game::open(&dir, None, Rc::new(StdoutSink)).expect("load Parkour");
     game.start().expect("start");
+    game
+}
+
+/// Plays the course with the bot and checks the HUD; returns the bot (with its script).
+fn finish_the_course(buttons: Buttons) -> Bot {
+    let game = open_parkour();
+    let mut input = InputRuntime::from_world(&game.world().borrow());
+    let touch = (buttons == Buttons::Touch).then(|| {
+        input.set_forced_device(Some(DeviceKind::Touch));
+        TouchControls::new(DeviceProfile::phone())
+    });
     let mut probe = PhysicsWorld::new();
     probe.sync_from(&game.world().borrow());
     let mut bot = Bot {
+        input,
+        touch,
+        stick_at: [0.0; 2],
+        buttons,
+        frame: 0,
+        held: FrameInput::default(),
+        script: String::new(),
         game,
         route: route(),
         probe,
@@ -415,4 +595,69 @@ fn a_bot_using_only_player_input_finishes_the_course() {
         "one decimal: {last}"
     );
     assert!(seconds > 20.0 && seconds <= time, "{seconds} vs {time}");
+    bot
+}
+
+#[test]
+fn a_bot_using_only_player_input_finishes_the_course() {
+    // Stick plus keyboard buttons, then the recorded events replayed as an input script.
+    let bot = finish_the_course(Buttons::Keyboard);
+    let frames = bot.frame;
+    let script = ScriptedSource::parse(&bot.script, TICK).expect("the recorded script parses");
+    assert!(script.last_frame() < frames);
+    println!(
+        "replaying {} script lines over {frames} frames",
+        bot.script.lines().count()
+    );
+    let mut replay = ScriptedSource::parse(&bot.script, TICK).expect("parse");
+    let mut game = open_parkour();
+    let mut input = InputRuntime::from_world(&game.world().borrow());
+    for frame in 0..frames {
+        input.poll_source(&mut replay);
+        let f = input.frame(frame as f64 * TICK, TICK as f32);
+        game.frame(&f, TICK);
+    }
+    assert_eq!(
+        hud_text(&game.world().borrow()),
+        bot.seen.last().cloned().unwrap_or_default()
+    );
+}
+
+#[test]
+fn the_course_can_be_finished_on_a_gamepad() {
+    finish_the_course(Buttons::Gamepad);
+}
+
+/// Spec 14 and #252: Parkour plays fully in the touch emulator (`--emulate phone`): the stick,
+/// Jump and Run, driven by finger events only; the recorded finger script replays the same way.
+#[test]
+fn the_course_can_be_finished_with_touch_controls() {
+    let bot = finish_the_course(Buttons::Touch);
+    assert!(
+        bot.script.lines().all(|l| l.contains(" touch")),
+        "fingers only"
+    );
+    assert!(bot.script.contains("touch1 Down"), "Jump was pressed");
+    assert!(bot.script.contains("touch2 Down"), "Run was pressed");
+    let frames = bot.frame;
+    let mut replay = ScriptedSource::parse(&bot.script, TICK).expect("the finger script parses");
+    let mut game = open_parkour();
+    let mut input = InputRuntime::from_world(&game.world().borrow());
+    input.set_forced_device(Some(DeviceKind::Touch));
+    let mut touch = TouchControls::new(DeviceProfile::phone());
+    let mut fingers = Vec::new();
+    for frame in 0..frames {
+        let now = frame as f64 * TICK;
+        touch.sync(&mut input, now);
+        replay.poll_fingers(frame, &mut fingers);
+        for f in fingers.drain(..) {
+            touch.touch(&mut input, f.finger, f.phase, f.pos, now);
+        }
+        let f = input.frame(now, TICK as f32);
+        game.frame(&f, TICK);
+    }
+    assert_eq!(
+        hud_text(&game.world().borrow()),
+        bot.seen.last().cloned().unwrap_or_default()
+    );
 }

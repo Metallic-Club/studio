@@ -10,7 +10,9 @@ use metallic_core::{Color3, InstanceId, UDim2, Vec3};
 use mlua::{Function, Lua, MultiValue, UserDataRef, Value};
 use std::rc::Rc;
 
-use super::datatypes::{LuaColor3, LuaUDim2, LuaVector3, color, udim2, vector};
+use super::datatypes::{
+    LuaColor3, LuaUDim2, LuaVector2, LuaVector3, color, udim2, vector, vector2,
+};
 use super::instance::LuaInstance;
 use super::signals::EventKind;
 use super::{ApiState, lua_error};
@@ -40,6 +42,7 @@ pub(crate) enum Wire {
     Number(f64),
     Str(Vec<u8>),
     Vector3(Vec3),
+    Vector2([f64; 2]),
     Color3(Color3),
     UDim2(UDim2),
     Instance(InstanceId),
@@ -127,6 +130,8 @@ impl ApiState {
             Value::UserData(ud) => {
                 if let Some(v) = vector(value) {
                     Wire::Vector3(v)
+                } else if let Some(v) = vector2(value) {
+                    Wire::Vector2(v)
                 } else if let Some(c) = color(value) {
                     Wire::Color3(c)
                 } else if let Some(u) = udim2(value) {
@@ -152,6 +157,7 @@ impl ApiState {
             Wire::Number(n) => Value::Number(*n),
             Wire::Str(bytes) => Value::String(lua.create_string(bytes)?),
             Wire::Vector3(v) => Value::UserData(lua.create_userdata(LuaVector3(*v))?),
+            Wire::Vector2(v) => Value::UserData(lua.create_userdata(LuaVector2(*v))?),
             Wire::Color3(c) => Value::UserData(lua.create_userdata(LuaColor3(*c))?),
             Wire::UDim2(u) => Value::UserData(lua.create_userdata(LuaUDim2(*u))?),
             Wire::Instance(id) => {

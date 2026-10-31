@@ -2,6 +2,12 @@
 """Build Metallic Studio, pack it with Velopack and publish it as a GitHub Release.
 
     python tools/release.py --channel dev --version 0.1.1
+    python tools/release.py --app launcher --channel dev --version 0.1.1
+
+`--app studio` (the default) is the Studio release described here. `--app launcher` builds the
+Metallic Launcher (`Metallic.exe`) and the Player (`metallic-player.exe`, staged beside it), packs
+them as MetallicLauncher on the Velopack channel `launcher-<channel>` with the WebView2 framework
+check, and uploads to the same repository as a release tagged `launcher-v<version>-<channel>`.
 
 Steps: cargo build --release, stage the files with the main exe renamed to "Metallic Studio.exe",
 `vpk pack` (installer "MetallicStudio-<channel>-Setup.exe" plus full and delta packages), then
@@ -30,6 +36,10 @@ PACK_ID = "MetallicStudio"
 PACK_TITLE = "Metallic Studio"
 MAIN_EXE = "Metallic Studio.exe"
 CARGO_BIN = "metallic_studio"
+# The [[bin]] name in crates/metallic_studio/Cargo.toml, which differs from the package name.
+STUDIO_BUILT_EXE = "metallic-studio.exe"
+# Repo folders Studio reads beside its exe at run time (templates_dir() in metallic_studio).
+STUDIO_FOLDERS = ["templates"]
 REPO_URL = "https://github.com/Metallic-Club/studio"
 ROOT = Path(__file__).resolve().parent.parent
 ICON_PNG = ROOT / "branding" / "placeholder-icon.png"
@@ -37,6 +47,17 @@ ICON_ICO = ROOT / "branding" / "icon.ico"
 OUT_DIR = ROOT / "target" / "release-out"
 VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", re.ASCII)
 CARGO_TOML = ROOT / "Cargo.toml"
+
+# The Launcher: one package holding the Launcher and the Player. Studio's own settings stay in the
+# constants above so its release output does not change.
+LAUNCHER_PACK_ID = "MetallicLauncher"
+LAUNCHER_PACK_TITLE = "Metallic Play"
+LAUNCHER_MAIN_EXE = "Metallic.exe"
+LAUNCHER_CARGO_PACKAGES = ["metallic_launcher", "metallic_player"]
+# (file in target/release, name in the package)
+LAUNCHER_FILES = [("Metallic.exe", "Metallic.exe"), ("metallic-player.exe", "metallic-player.exe")]
+LAUNCHER_CHANNEL_PREFIX = "launcher-"
+LAUNCHER_TAG_PREFIX = "launcher-v"
 
 
 def valid_version(version):
@@ -81,11 +102,17 @@ def run(command, dry_run, check=True):
     return result.returncode
 
 
+def vpk_version_from_help(text):
+    """vpk 1.3.x has no --version flag; read the version from its -h description line."""
+    match = re.search(r"Velopack CLI (\S+)", text)
+    return match.group(1) if match else None
+
+
 def check_vpk_version(vpk, dry_run):
     if dry_run:
         return
     try:
-        found = subprocess.run([vpk, "--version"], capture_output=True, text=True, check=True).stdout.strip()
+        found = vpk_version_from_help(subprocess.run([vpk, "-h"], capture_output=True, text=True, check=True).stdout)
     except (OSError, subprocess.CalledProcessError):
         sys.exit(f"vpk not found. Install it: dotnet tool install --global vpk --version {VPK_VERSION}")
     if found != VPK_VERSION:
@@ -110,8 +137,25 @@ def make_icon(dry_run):
     return target
 
 
+def pack_command(vpk, app, version, channel, stage, icon, notes):
+    """The `vpk pack` command line. Both name runtime win-x64 (vpk otherwise assumes x86); the
+    Launcher's adds the WebView2 framework check and uses the Velopack channel `launcher-<channel>`."""
+    if app == "launcher":
+        return [vpk, "pack", "--packId", LAUNCHER_PACK_ID, "--packVersion", version,
+                "--packDir", str(stage), "--mainExe", LAUNCHER_MAIN_EXE, "--packTitle", LAUNCHER_PACK_TITLE,
+                "--icon", str(icon), "--framework", "webview2", "--runtime", "win-x64",
+                "--channel", f"{LAUNCHER_CHANNEL_PREFIX}{channel}", "--outputDir", str(OUT_DIR),
+                "--releaseNotes", str(notes)]
+    return [vpk, "pack", "--packId", PACK_ID, "--packVersion", version,
+            "--packDir", str(stage), "--mainExe", MAIN_EXE, "--packTitle", PACK_TITLE,
+            "--icon", str(icon), "--runtime", "win-x64", "--channel", channel, "--outputDir", str(OUT_DIR),
+            "--releaseNotes", str(notes)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--app", choices=["studio", "launcher"], default="studio",
+                        help="what to release (default: studio)")
     parser.add_argument("--channel", choices=["dev", "stable"])
     parser.add_argument("--version", help="X.Y.Z, for example 0.1.1")
     parser.add_argument("--required", action="store_true",
@@ -140,26 +184,43 @@ def main():
         parser.error("--version must look like 0.1.1 (no leading v, no channel suffix)")
     check_version(args.version, CARGO_TOML.read_text(encoding="utf-8"))
 
-    tag = f"v{args.version}-{args.channel}"
+    launcher = args.app == "launcher"
+    tag = f"{LAUNCHER_TAG_PREFIX if launcher else 'v'}{args.version}-{args.channel}"
+    pack_channel = f"{LAUNCHER_CHANNEL_PREFIX}{args.channel}" if launcher else args.channel
     token = os.environ.get("GITHUB_TOKEN", "")
     if not args.no_upload and not args.dry_run and not token:
         sys.exit("GITHUB_TOKEN is not set (the workflow provides it; by hand: set it from `gh auth token`).")
 
     check_vpk_version(args.vpk, args.dry_run)
 
-    run(["cargo", "build", "--release", "-p", CARGO_BIN, "-j", str(args.jobs)], args.dry_run)
+    if launcher:
+        cargo = ["cargo", "build", "--release"]
+        for package in LAUNCHER_CARGO_PACKAGES:
+            cargo += ["-p", package]
+        run(cargo + ["-j", str(args.jobs)], args.dry_run)
+    else:
+        run(["cargo", "build", "--release", "-p", CARGO_BIN, "-j", str(args.jobs)], args.dry_run)
 
     stage = OUT_DIR / "stage"
     notes = OUT_DIR / "release-notes.md"
-    print(f"+ stage {CARGO_BIN}.exe as {MAIN_EXE} in {stage.relative_to(ROOT)}")
+    staged = LAUNCHER_FILES if launcher else [(STUDIO_BUILT_EXE, MAIN_EXE)]
+    folders = [] if launcher else STUDIO_FOLDERS
+    for built, name in staged:
+        print(f"+ stage {built} as {name} in {stage.relative_to(ROOT)}")
+    for folder in folders:
+        print(f"+ stage folder {folder}/ in {stage.relative_to(ROOT)}")
     if not args.dry_run:
         shutil.rmtree(OUT_DIR / "stage", ignore_errors=True)
         stage.mkdir(parents=True)
-        exe = ROOT / "target" / "release" / f"{CARGO_BIN}.exe"
-        if not exe.exists():
-            sys.exit(f"{exe} not found; did the build use another target dir (CARGO_TARGET_DIR)?")
-        shutil.copy2(exe, stage / MAIN_EXE)
-        lines = [f"Metallic Studio {args.version} ({args.channel})"]
+        for built, name in staged:
+            exe = ROOT / "target" / "release" / built
+            if not exe.exists():
+                sys.exit(f"{exe} not found; did the build use another target dir (CARGO_TARGET_DIR)?")
+            shutil.copy2(exe, stage / name)
+        for folder in folders:
+            shutil.copytree(ROOT / folder, stage / folder)
+        title = LAUNCHER_PACK_TITLE if launcher else PACK_TITLE
+        lines = [f"{title} {args.version} ({args.channel})"]
         if args.required:
             lines += ["", "required: true"]
         notes.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -168,23 +229,22 @@ def main():
 
     if not args.no_upload:
         # Fetch earlier packages so vpk can build delta updates. The first release has none.
-        code = run([args.vpk, "download", "github", "--repoUrl", REPO_URL, "--channel", args.channel,
+        code = run([args.vpk, "download", "github", "--repoUrl", REPO_URL, "--channel", pack_channel,
                     "--outputDir", str(OUT_DIR), "--token", token], args.dry_run, check=False)
         if code != 0:
             print(f"WARNING: 'vpk download github' failed with exit code {code}. Expected for the very first "
                   "release of a channel; otherwise this release will have no delta package.", file=sys.stderr)
 
-    run([args.vpk, "pack", "--packId", PACK_ID, "--packVersion", args.version,
-         "--packDir", str(stage), "--mainExe", MAIN_EXE, "--packTitle", PACK_TITLE,
-         "--icon", str(icon), "--channel", args.channel, "--outputDir", str(OUT_DIR),
-         "--releaseNotes", str(notes)], args.dry_run)
+    run(pack_command(args.vpk, args.app, args.version, args.channel, stage, icon, notes), args.dry_run)
 
     if args.no_upload:
         print("Packed; not uploading (--no-upload).")
         return
 
-    upload = [args.vpk, "upload", "github", "--repoUrl", REPO_URL, "--channel", args.channel,
-              "--outputDir", str(OUT_DIR), "--tag", tag, "--releaseName", f"Metallic Studio {args.version} ({args.channel})",
+    app_title = LAUNCHER_PACK_TITLE if launcher else "Metallic Studio"
+    release_name = f"{app_title} {args.version} ({args.channel})"
+    upload = [args.vpk, "upload", "github", "--repoUrl", REPO_URL, "--channel", pack_channel,
+              "--outputDir", str(OUT_DIR), "--tag", tag, "--releaseName", release_name,
               "--publish", "--token", token]
     if args.channel == "dev":
         upload.append("--pre")

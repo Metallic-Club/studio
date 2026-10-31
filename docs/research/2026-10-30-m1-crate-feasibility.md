@@ -9,7 +9,14 @@ against the same sources.
 **Baseline.** `origin/main` at `96aceb0` (2026-10-30), after waves 1 and 2, Task 8 (#184), the avatar (#266),
 the per-VM script budget (#270) and the Launcher L1 plan (#188) [R2]. Status words follow CLAUDE.md:
 
-| Task | Issue | Status on `main` | Crates it uses |
+This is a dated research snapshot, rather than a current feature inventory. The publication pass merged
+`5c84cf7` and checked two conclusions against that source: Task 10's editor is now implemented through PR #319,
+including viewport, Explorer, Properties and command history; the updater uses an exact-tag source, so Velopack's
+ten-release discovery window is no longer a Metallic download blocker. The remaining sections retain their
+`96aceb0` observations unless explicitly marked otherwise. Check current source and issue status before starting
+a recommended task.
+
+| Task | Issue | Status at baseline `96aceb0` | Crates it uses |
 |---|---|---|---|
 | 5 Humanoid character | #5 closed | implemented | rapier3d 0.36.1 |
 | 6 Luau VM, 7 Luau API | #6, #7 closed | implemented, tested | mlua 0.12.2 (`luau`, `vendored`), luau0-src 0.22.0+luau740 |
@@ -42,17 +49,18 @@ Where this document disagrees with one of them, it says so.
   safe API has no line hooks under Luau and treats `LUA_BREAK` as an error, so pausing has to be a yield from the
   debug hook. The merged VM already fits that design: handlers run as threads, and unknown yields park the thread.
   For the profiler, `puffin_egui` is pinned to egui 0.33, so Studio needs its own timeline view.
-- **Task 13 is implemented**, with a GitHub App instead of the plan's OAuth app. Four issues remain:
+- **Task 13 is implemented**, with a GitHub App instead of the plan's OAuth app. Three findings remain in this snapshot:
   - ~~The download path still uses Velopack's `GithubSource`, which reads only the 10 newest releases.~~ Fixed
     by #237 (closes #202): the updater now passes an exact-tag source to Velopack.
   - Velopack is pinned to a prerelease.
   - The keyring entry roams and is not named as documented.
   - The plan and spec still describe an OAuth app with `repo` scope.
-- **Licence gates were opened without an owner confirmation.** `deny.toml` now allows OFL-1.1 and Ubuntu-font-1.0
+- **Licence rules and recorded decisions disagree in this snapshot.** `deny.toml` allows OFL-1.1 and Ubuntu-font-1.0
   for every crate (a conductor ruling, "R11"), and adds a CDLA-Permissive-2.0 exception for `webpki-roots`. Its own
-  comment says the CDLA exception "Needs a lead/owner decision". CLAUDE.md's licence list is unchanged.
-- **The Launcher plan puts its releases in the same repo.** Velopack's 10-release window then affects `dev` updates
-  in M1, not only a later `stable` channel.
+  comment says the CDLA exception "Needs a lead/owner decision". CLAUDE.md's licence list is unchanged; this
+  research did not locate the R11 decision text (section 8). Verify the current ruling before changing policy.
+- **The Launcher plan puts its releases in the same repo.** The exact-tag updater fix above removes the
+  ten-release download-window concern. Release location still needs a product decision for channel ownership.
 - **Tasks 6-7 cover the sandbox and budget risks** this research found, with tests. Two gaps remain: long single Rust
   calls cannot be interrupted, and the compiler debug level is not yet switchable for the debugger.
 
@@ -127,7 +135,10 @@ lockfile also lists 0.31.1 and 0.32.1 [R2]. The UI research's choice of own gizm
    layouter and a painted gutter. Task 15 needs that gutter for breakpoints. tree-sitter-luau is a candidate only (no
    release since 2024-12; compiles C). With syntect, prefer `fancy-regex`.
 7. **Undo.** Use the plan's `History`/`Command`:
-   - Delete stores the subtree through the scene serializer, and undo restores the same `InstanceId`s.
+   - A serialized subtree alone cannot guarantee restoring the same generational `InstanceId`s after destruction.
+     The later Task 10 implementation at `5c84cf7` preserves identity by parking detached instances until their
+     history entries are discarded (`crates/metallic_studio/src/commands.rs`, `History::is_parked`). Reattach those
+     same live instances on undo; do not promise identity reuse through scene deserialization.
    - History is read-only during Play.
    - Hand-written history is preferred over the `undo` crate.
 8. **Picking.** Use the GPU ID buffer with 1×1 (click) and rectangle (marquee) readback. If `PhysicsWorld::raycast`

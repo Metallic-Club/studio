@@ -4,13 +4,13 @@
 //! process. Each frame [`Avatar::update`] places it on the `HumanoidRootPart` (feet
 //! [`ROOT_HEIGHT`] studs below the root centre, so they rest on the floor), turns it smoothly
 //! toward the character's facing and animates it with the built-in
-//! [`crate::locomotion::Locomotion`] controller. The character's invisible body parts still do
+//! [`crate::locomotion::Locomotion`] state machine. The character's invisible body parts still do
 //! the collisions and touches.
 use crate::locomotion::{Locomotion, LocomotionInput};
 use metallic_physics::ROOT_HEIGHT;
-use metallic_render::SkinnedInstance;
 use metallic_render::glam::{Mat4, Vec3};
 use metallic_render::metallic_asset::{Pose, SkinnedModel};
+use metallic_render::{SkinStyle, SkinnedInstance};
 use std::f32::consts::{PI, TAU};
 use std::sync::{Arc, OnceLock};
 
@@ -85,12 +85,17 @@ impl Avatar {
     }
 
     /// Advances by `dt` seconds: the character's root centre is at `root` and faces `target_yaw`
-    /// radians; `input` drives the animation.
-    pub fn update(&mut self, root: Vec3, target_yaw: f32, input: LocomotionInput, dt: f32) {
+    /// radians; `input` drives the animation (its `turn_rate` is set here from the shown turn).
+    pub fn update(&mut self, root: Vec3, target_yaw: f32, mut input: LocomotionInput, dt: f32) {
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        input.turn_rate = 0.0;
         if target_yaw.is_finite() {
             let diff = (target_yaw - self.yaw + PI).rem_euclid(TAU) - PI;
-            self.yaw = (self.yaw + diff * (1.0 - (-dt / TURN_TIME).exp())).rem_euclid(TAU);
+            let step = diff * (1.0 - (-dt / TURN_TIME).exp());
+            self.yaw = (self.yaw + step).rem_euclid(TAU);
+            if dt > 0.0 {
+                input.turn_rate = step / dt;
+            }
         }
         self.locomotion
             .update(&self.model, input, dt, &mut self.pose);
@@ -118,6 +123,7 @@ impl Avatar {
             center: self.feet + Vec3::new(0.0, height * 0.5, 0.0),
             height,
             detail_scale: 1.0 / STUD_METRES,
+            style: SkinStyle::Toon,
         }
     }
 }

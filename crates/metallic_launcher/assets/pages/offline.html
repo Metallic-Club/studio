@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metallic Play</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/pages.css">
+</head>
+<body>
+<main class="card">
+  <p class="brand">Metallic Play</p>
+
+  <section class="reason reason-unreachable">
+    <h1>Can't reach Metallic</h1>
+    <p>We couldn't connect to Metallic. Check your internet connection and try again. We'll keep checking in the background and open Metallic Play as soon as it answers.</p>
+  </section>
+  <section class="reason reason-notconfigured">
+    <h1>Metallic Play isn't set up yet</h1>
+    <p>This copy of Metallic Play doesn't know where to find the site. Update Metallic Play, then try again.</p>
+  </section>
+  <section class="reason reason-loadfailed">
+    <h1>The page didn't load</h1>
+    <p>Something went wrong while loading Metallic Play. Try again in a moment.</p>
+  </section>
+
+  <div class="actions">
+    <button type="button" id="retry" class="btn btn-primary">Try again</button>
+    <a class="btn btn-ghost" href="/settings.html">Settings</a>
+  </div>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+</main>
+<script src="/pages.js"></script>
+</body>
+</html>

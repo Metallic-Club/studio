@@ -48,6 +48,11 @@ runs). Prefer the workflow.
 - Only the owner decides when a stable release is cut. Dev builds come first; stable is a dev build that was tested.
 - A release can be marked required (Studio then insists on restarting): add `--required` to the script, or put the line
   `required: true` in the release notes. Use it only for breaking changes (file format, protocol).
+- The check accumulates skipped releases through a published same-channel version at/below the installed version
+  or the end of the list. A required flag on an older skipped page still applies to the newest offer. The existing
+  maximum of five pages of 50 remains; a scan truncated before that boundary reports an error rather than an
+  incomplete optional offer. This relies on the release process above publishing increasing versions, not on GitHub
+  sorting arbitrary version strings. Later-page failures also produce no partial offer.
 
 ## Protect the release tags (owner, one time)
 Anyone who can push a tag `v*` can start a release. Add a tag ruleset: repo `Metallic-Club/studio`, Settings, Rules,
@@ -97,3 +102,31 @@ Nobody has published a real release yet. Still to do with the owner: register th
 add the tag ruleset; publish `0.1.0-dev`; install from the Setup.exe; publish `0.1.1-dev`; see Studio offer and apply
 it; take screenshots. Studio's `main` must also call `velopack::VelopackApp::build().run()` first thing (see the task 13
 report), otherwise the installer hooks do not run.
+
+## Releasing the Launcher
+The product name is **Metallic Play** (owner choice, 2026-10-30): `--packTitle "Metallic Play"`, so shortcuts and the Apps entry read "Metallic Play". The pack id stays `MetallicLauncher`.
+The Launcher (`Metallic.exe`) and the Player (`metallic-player.exe`) ship as one Velopack package, `MetallicLauncher`, from the
+same repo as Studio. Studio's release path is unchanged.
+- **Tag:** `launcher-vX.Y.Z-<channel>` (channel `dev` or `stable`), for example `launcher-v0.1.1-dev`. A `v*` tag is still Studio;
+  a `launcher-v*` tag runs the Launcher release in `.github/workflows/release.yml` (same "commit must be on `main`" check, same
+  pinned actions, same version check against `[workspace.package] version`).
+- **Velopack channel:** `launcher-<channel>` (`launcher-dev`). The Launcher's own updater reads that channel
+  (`LAUNCHER_FEED` in `metallic_update`). Velopack names the installer `<packId>-<channel>-Setup.exe`, so the file is
+  `MetallicLauncher-launcher-dev-Setup.exe` (`MetallicLauncher-launcher-stable-Setup.exe` on stable). Studio's and the
+  Launcher's updaters each pick releases by tag prefix (`v` / `launcher-v`), so they ignore each other's releases.
+- **By hand** (needs .NET and the pinned `vpk`, see above): `GITHUB_TOKEN` from `gh auth token`, then
+  `python tools/release.py --app launcher --channel dev --version 0.1.1`. `--dry-run` prints the commands (cargo build of
+  `metallic_launcher` and `metallic_player`, `vpk pack ... --framework webview2 --channel launcher-dev`, `vpk upload`).
+- **WebView2:** `--framework webview2` makes Setup install the WebView2 runtime when it is missing (Windows 11 has it). The
+  Launcher also shows a message box if it is still missing at start.
+- **Steps:** bump the version, merge to `main`, tag the merged commit (owner or lead), watch the "Release" workflow.
+- **Not covered:** code signing (Windows SmartScreen will warn), a public feed for players (the repo is private).
+- **CI:** the `launcher-linux-check` job runs `cargo check -p metallic_launcher -p metallic_update` on Ubuntu. It proves the
+  Windows/other `cfg` split compiles; it does not prove a Linux Launcher works.
+- **Acceptance:** the install round trip is recorded in `docs/agents/197-launcher-release.md`.
+
+## Check before the Launcher ships (Task 9)
+The Launcher installs Studio by running `MetallicStudio-<channel>-Setup.exe --silent`. The `--silent` flag is from memory
+of Velopack's Setup command line and has never been run against a real Setup. With a real Setup, check: no dialog, exit
+code 0, Studio is not started afterwards, `current\sq.version` exists. The Launcher kills a Setup that runs longer than
+10 minutes and reports the install as failed.

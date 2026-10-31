@@ -14,7 +14,7 @@ interface change.
   crate-source reads (velopack 1.3.39, keyring 3.6.3) were made 2026-10-30.
 
 ## Next
-- Open the PR (`Closes #42`) when the lead asks; set #42 to `status:review`.
+- Finish the publication checks, open the PR (`Closes #42`) and set #42 to `status:review`.
 - The follow-up issues listed in section 10 of the doc are not created. File them when the lead or conductor agrees.
 
 ## Commands
@@ -28,5 +28,22 @@ cargo deny check licenses
 ## Open questions
 - These need the owner: the CDLA exception for `webpki-roots`, OFL/Ubuntu fonts allowed for all crates, GitHub App
   registration and the plan/spec wording, the release repo for `stable`, and code signing (doc section 9).
-- Doc findings against merged Task 13 code (10-release window in `download`, velopack prerelease pin, keyring target
+- Doc findings against baseline Task 13 code (velopack prerelease pin, keyring target
   and roaming) are for the lead to accept or reject.
+
+## Publication continuation
+
+The original author explicitly released the claim in issue #42 at 2026-10-30 23:09 UTC. Codex root continued
+the published branch at 05c5823930c4b80ac898714745f914ca973fc8f0; the cited 96aceb0 is the research's code baseline,
+not that branch head. A normal merge pins current source 5c84cf7566901c73bd9de3621ab6ad384add8030. New task edits
+remain limited to this progress note and the research document; the earlier observations stay dated to 96aceb0.
+
+The accuracy pass records Task 10's implementation, removes the contradictory remaining ten-release download
+claim because TaggedGithubSource pins the selected tag, and corrects the undo recommendation: scene serialization
+alone cannot restore destroyed generational IDs. Current command history parks live instances and reattaches
+them, disposing of them when history releases the entry. License findings describe the historical evidence gap
+without asserting that no owner ever approved the policy. No dependencies or public interfaces change.
+
+The original source index is preserved. Selected primary API pages for mlua 0.12.2, Velopack 1.2.161 and puffin
+were checked again during the publication pass; this is not a new audit of every historical citation or an update
+of every candidate version. Fresh mandatory checks and independent review are pending before publication.
