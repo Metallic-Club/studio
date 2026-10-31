@@ -209,3 +209,20 @@ The minimal merge changes are complete, but queue behavior remains uncorrected f
 Do not start Cargo while compilation is held. When a slot/window is granted, compile first and distinguish
 fixture errors from actual behavior failures, retain the red result, then add GUI clearing at the same binding
 cleanup points as existing input/remotes. Production budgets, scheduler and protected-call APIs stay unchanged.
+
+
+## Observed current-main integration red
+
+At test-only `70a123b` on pinned `a0bb1bfc`, the granted focused command selected gui_events, host_roles and
+server_host. Cargo returned 101: both existing GUI cases passed, and the role binary passed 20 cases but
+failed `queued_gui_events_do_not_cross_client_binding_changes`: the replacement binding received one click
+queued for the previous binding (expected zero). The valid/no-op first-binding controls ran before that
+assertion; role routing, pointer payload, World-borrow/GUI ownership and all existing role-budget cases passed.
+Cargo stopped after that binary, so server_host was compiled but not executed in this baseline command.
+This is a reproduced gap in the proposed refreshed role integration, not an unchanged-main bug claim.
+Raw log: `integration-evidence/335-main-refresh/focused-gui-role-baseline.log`.
+
+The narrow correction adds GUI queue clearing beside the existing action-input/remotes cleanup for explicit
+rebind, local removal and invalid-binding cleanup. The same-binding early return is preserved; stop keeps
+both cleanup paths from the merge. No production budget, scheduler, authentication or roster ordering change.
+The focused green rerun is next within the granted short window, then release it to #309 before broad gates.

@@ -218,6 +218,7 @@ impl ScriptHost {
             self.client_scope = None;
             self.cursor = None;
             self.shared.input.clear();
+            self.gui_events.clear();
             self.shared.remotes.borrow_mut().clear();
             self.shared.queued.set([(0, 0); 2]);
             self.input_dispatched = false;
@@ -227,7 +228,7 @@ impl ScriptHost {
 
     /// Binds a Client host to an existing live Player; returns false for the same binding.
     /// Eligible LocalScripts start on the next step, or during start when bound beforehand.
-    /// Rebinding cancels the old client scripts, tasks, connections and queued remotes/input.
+    /// Rebinding cancels the old client scripts, tasks, connections and queued remotes, action input and GUI events.
     /// It does not register a PlayerAdded event; use [`Self::add_player`] for roster changes.
     ///
     /// # Errors
@@ -249,6 +250,7 @@ impl ScriptHost {
         self.shared.remotes.borrow_mut().clear();
         self.shared.queued.set([(0, 0); 2]);
         self.shared.input.clear();
+        self.gui_events.clear();
         self.input_dispatched = false;
         Ok(true)
     }
@@ -655,6 +657,7 @@ impl ScriptHost {
                     self.shared.remotes.borrow_mut().clear();
                     self.shared.queued.set([(0, 0); 2]);
                     self.shared.input.clear();
+                    self.gui_events.clear();
                     self.input_dispatched = false;
                 }
                 self.shared.local_player.set(None);
@@ -788,7 +791,8 @@ impl ScriptHost {
 
     /// Queues an event of a GUI element for the client scripts; the next `step` fires it, in
     /// report order. At most [`MAX_GUI_EVENTS_PER_STEP`] wait at once (more are dropped), and
-    /// server-only hosts discard them.
+    /// server-only hosts discard them. Client binding changes discard pending GUI events;
+    /// a no-op binding retains valid queued input.
     pub fn gui_event(&mut self, event: GuiEvent) {
         if self.role != ScriptRole::Server && self.gui_events.len() < MAX_GUI_EVENTS_PER_STEP {
             self.gui_events.push(event);
