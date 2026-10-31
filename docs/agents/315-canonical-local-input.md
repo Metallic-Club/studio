@@ -44,3 +44,14 @@ The PR CI merge build will supply current-main integration evidence.
 
 Use an owned guarded build lane with four jobs; coordinate actual Lua suites with other workers. Publish one PR, monitor its CI/review, then test private composition
 with the existing Simulation foundation so this module stays available without presentation.
+
+## Published-branch current-main refresh
+
+Normal merge a321805 includes exact d1eecce. The single Runtime lib.rs conflict was an additive export union;
+LocalInput/move_direction and the new HumanoidState export are both retained. The movement implementation is
+unchanged. Earlier 1,052-test evidence remains pinned to cb26593, not relabelled.
+
+Fresh guarded full workspace prebuild and strict all-target Clippy passed; fresh licenses, format and whitespace
+also passed. Final actual locked serial workspace suite passed 1,229 tests, zero failures, six existing manual
+probes ignored. Log: <TEMP>/metallic-315-main-merge-tests.log. No budget/test exclusion changes or own PR merge.
+Append-only publication and exact-head CI/review follow; compose with the render-free Simulation afterward.
