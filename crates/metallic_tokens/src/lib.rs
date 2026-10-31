@@ -126,6 +126,11 @@ impl TokenSet {
         &self.tokens
     }
 
+    /// The `$reduced-motion` overrides as (CSS name, value) pairs, e.g. `("t-fast", "0ms")`.
+    pub fn reduced_motion(&self) -> &[(String, String)] {
+        &self.reduced_motion
+    }
+
     /// The ids of every theme: [`DEFAULT_THEME`] first, then those in `$themes`.
     pub fn theme_ids(&self) -> Vec<&str> {
         std::iter::once(DEFAULT_THEME)

@@ -30,7 +30,7 @@ impl Plate {
     /// Level 2: secondary buttons, cards, segments (`bg-raised`, `r-sm`, both edges).
     pub fn raised() -> Self {
         Self {
-            fill: theme::BG_RAISED,
+            fill: theme::bg_raised(),
             radius: CornerRadius::same(theme::R_SM),
             cut: 0.0,
             highlight: true,
@@ -42,7 +42,7 @@ impl Plate {
     /// A panel-coloured surface with only the top highlight (cards at rest, the stage).
     pub fn panel() -> Self {
         Self {
-            fill: theme::BG_PANEL,
+            fill: theme::bg_panel(),
             radius: CornerRadius::same(theme::R_MD),
             edge_low: false,
             ..Self::raised()
@@ -52,7 +52,7 @@ impl Plate {
     /// Level 3: menus, popovers, toasts, tooltips (`bg-hover`, `r-md`, the pop shadow).
     pub fn floating() -> Self {
         Self {
-            fill: theme::BG_HOVER,
+            fill: theme::bg_hover(),
             radius: CornerRadius::same(theme::R_MD),
             edge_low: false,
             shadow: theme::SHADOW_POP,
@@ -63,7 +63,7 @@ impl Plate {
     /// Level 4: dialogs and the splash (`bg-panel`, `r-lg`, `cut-lg`, the modal shadow).
     pub fn modal() -> Self {
         Self {
-            fill: theme::BG_PANEL,
+            fill: theme::bg_panel(),
             radius: CornerRadius::same(theme::R_LG),
             cut: theme::CUT_LG,
             edge_low: false,
@@ -102,12 +102,15 @@ impl Plate {
         }
         let (top, bottom) = edge_lines(rect, self.radius, self.cut);
         if self.highlight {
-            painter.add(Shape::line_segment(top, Stroke::new(1.0, theme::HIGHLIGHT)));
+            painter.add(Shape::line_segment(
+                top,
+                Stroke::new(1.0, theme::highlight()),
+            ));
         }
         if self.edge_low {
             painter.add(Shape::line_segment(
                 bottom,
-                Stroke::new(1.0, theme::EDGE_LOW),
+                Stroke::new(1.0, theme::edge_low()),
             ));
         }
     }
@@ -157,7 +160,7 @@ mod tests {
         assert!(Plate::raised().highlight && Plate::raised().edge_low);
         assert_eq!(Plate::raised().shadow, Shadow::NONE);
         assert_eq!(Plate::floating().shadow, theme::SHADOW_POP);
-        assert_eq!(Plate::floating().fill, theme::BG_HOVER);
+        assert_eq!(Plate::floating().fill, theme::bg_hover());
         assert_eq!(Plate::modal().shadow, theme::SHADOW_MODAL);
         assert_eq!(Plate::modal().cut, theme::CUT_LG);
     }

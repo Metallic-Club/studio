@@ -80,7 +80,7 @@ impl ColourDemo {
                     "Stand-in for the Properties panel until the editor lands (#10, #213). \
                      Click the Color row or press C.",
                 )
-                .color(theme::TEXT_DIM),
+                .color(theme::text_2()),
             );
             ui.add_space(12.0);
 
@@ -95,7 +95,7 @@ impl ColourDemo {
             painter.rect_stroke(
                 part,
                 6.0,
-                Stroke::new(1.0, theme::BORDER),
+                Stroke::new(1.0, theme::line_strong()),
                 StrokeKind::Inside,
             );
             painter.text(
@@ -107,13 +107,13 @@ impl ColourDemo {
                     "Demo part"
                 },
                 FontId::proportional(12.0),
-                theme::TEXT,
+                theme::text_1(),
             );
             ui.add_space(12.0);
 
             // A Properties-style row: label, swatch and the colour as R, G, B.
             let row = ui.horizontal(|ui| {
-                ui.label(RichText::new("Color").color(theme::TEXT_DIM));
+                ui.label(RichText::new("Color").color(theme::text_2()));
                 ui.add_space(24.0);
                 let text = format!("{}, {}, {}", shown.r, shown.g, shown.b);
                 ui.add(
@@ -138,7 +138,7 @@ impl ColourDemo {
             ui.add_space(16.0);
             ui.label(RichText::new("Undo history").strong());
             if self.history.is_empty() {
-                ui.label(RichText::new("Nothing committed yet").color(theme::TEXT_DIM));
+                ui.label(RichText::new("Nothing committed yet").color(theme::text_2()));
             }
             for name in self.history.iter().rev().take(8) {
                 ui.label(RichText::new(name).monospace());

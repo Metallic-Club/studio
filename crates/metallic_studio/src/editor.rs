@@ -112,6 +112,8 @@ pub enum UiRequest {
     OpenScript(InstanceId),
     /// Run a registered action (context menus).
     RunAction(&'static str),
+    /// Open the Settings dialog (Ctrl+,).
+    OpenSettings,
 }
 
 /// Everything about one open game except the UI.
