@@ -116,3 +116,21 @@ request identity including signed zero; and boxed payload bytes enforcing both r
 eviction. The virtual BasePart.CFrame rejection case remains correct. Low-level Set continues delegating to
 World::set, without adding hidden-property policy or high-level transform normalization/bookkeeping. All fresh
 merged-source gates remain pending; no prior-base CI result is claimed for this update.
+
+### Fresh verification on the stored-CFrame base
+
+The fixed source is `60a8c9a43a01279c23b8e14271279708f5800039`, including exact main
+`d1eeccee2c3d46ca61921baffa562af4bd9472e8`. The coordinator reviewed the boxed conversions, all-component bit
+equality, owned payload accounting and unchanged hidden-field semantics without an actionable finding.
+
+- Guarded lane116 `cargo test -p metallic_core -j 4 -- --test-threads=1`: **67 passed**, zero failed/ignored,
+  including all **14 edit-kernel integration tests**.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: passed (1m44s), including canonical net/examples.
+- `cargo deny check licenses`, `cargo fmt --all --check` and diff whitespace check: passed on that pinned source.
+- Final guarded `cargo test --workspace -j 4 -- --test-threads=1`: **1,239 passed, zero failed, six existing manual
+  probes ignored**, including all Lua/Parkour/network/Studio sections. The command performed the necessary rebuild
+  and ran serially in the coordinator-reserved actual-test window after issue 311's suite exited.
+
+The final evidence commit changes only this note. Published history is preserved through normal merges/pushes;
+no rebase, force-push or own merge is used. Current-head GitHub CI is checked after pushing this refreshed input.
+The earlier 1,005-test and green CI result at `4447974` remains historical old-base evidence, not this new-base proof.
