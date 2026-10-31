@@ -45,11 +45,25 @@ Status: implemented, tested.
   Parkour/avatar shots from `metallic_runtime --example avatar_shots`. Realistic shading is unchanged.
 - Reference images: `docs/rendering/shading-models/*.png`, from `--example shading_models` (the reference scene in
   lit, lit-soft, toon, toon-stepped, flat, unlit and mixed).
-- Frame time at 1920 x 1080 on an RTX 3060 Ti, High quality, measured from submit to idle (median of 200 frames):
-  - Main, Realistic: 1.10 ms.
-  - This branch: Lit 1.15, Soft 1.03, Toon 1.04, Toon stepped 1.04, Flat 1.07, Unlit 1.01, Mixed 1.18.
-  - Every model is within the run-to-run noise of main (about 0.1 ms).
-  - Unlit first cost 2.66 ms, because the bisection in `unfinish` ran per pixel. It now runs once per vertex.
+- GPU time at 1920 x 1080, High quality, from timestamp queries (`Renderer::enable_gpu_timing`). Medians of 200
+  frames, three runs. A scratch build of main with the same timer is the baseline.
+
+  | Run | ms |
+  |---|---|
+  | RTX 3060 Ti, main, Realistic | 0.694 |
+  | RTX 3060 Ti, Lit | 0.715 (+3%) |
+  | RTX 3060 Ti, Soft | 0.718 |
+  | RTX 3060 Ti, Toon | 0.707 |
+  | RTX 3060 Ti, Toon stepped | 0.713 |
+  | RTX 3060 Ti, Flat | 0.709 |
+  | RTX 3060 Ti, Unlit | 0.629 |
+  | RTX 3060 Ti, Mixed | 0.715 |
+  | WARP (software), main, median of 20 | 978 |
+  | WARP, Lit, median of 20 | 1055 (+8%; +4% on the 10th percentile, noisy) |
+
+  The cost is the row fetch in both stages and the model switch. Lit's first run each time sits at about 0.80 ms
+  while the GPU clocks up; main's first run does the same (0.77). The earlier wall-clock numbers mostly measured the
+  CPU. Unlit first cost much more when `unfinish` (a bisection) ran per pixel; it now runs once per vertex.
 - Tests:
   - `tests/shading.rs` runs on the GPU, serialised behind a mutex:
     - Unlit shows the part colour within 3 levels, and other rows are unchanged to the byte.
