@@ -3416,6 +3416,7 @@ dependencies = [
  "egui_kittest",
  "image",
  "metallic_anim",
+ "metallic_ui_theme",
 ]
 
 [[package]]
@@ -3615,6 +3616,7 @@ dependencies = [
  "metallic_runtime",
  "metallic_script",
  "metallic_tokens",
+ "metallic_ui_theme",
  "metallic_update",
  "png",
  "rfd",
@@ -3632,6 +3634,16 @@ name = "metallic_tokens"
 version = "0.1.1"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "metallic_ui_theme"
+version = "0.1.1"
+dependencies = [
+ "egui",
+ "log",
+ "metallic_tokens",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]
@@ -3668,6 +3680,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "image",
+ "metallic_ui_theme",
  "metallic_vfx",
 ]
 
