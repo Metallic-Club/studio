@@ -244,6 +244,12 @@ apps.
   docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
   `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
   drag, Play or camera flight; shown ids in `hints.ron` in the config folder; Settings "Show tips"/"Reset tips").
+  Style picker (#224): `style_picker.rs` (`StylePicker`, action `style.open`, L): a 4 x 2 radio group of tiles that
+  writes `LookOverride` (#222) to the selection's Models or each part; hover 150 ms or Space previews through the
+  preview overlay, a click or Enter is one undo step, Esc cancels. Thumbnails come from a `ThumbnailSource`
+  (`GpuThumbnails`: its own `Renderer` on Studio's device rendering an isolated copy of the selection with `capture`),
+  one per frame into a per-opening cache. Properties shows `LookOverride` as a Style row that opens the picker;
+  Explorer draws a style glyph on rows with their own override.
   Arrange core (#217, #218): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional

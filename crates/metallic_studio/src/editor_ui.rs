@@ -34,6 +34,7 @@ use crate::panel;
 use crate::play::input::PlayInput;
 use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
+use crate::style_picker::StylePicker;
 use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::toolbar::{Toolbar, ToolbarLayout};
@@ -99,6 +100,8 @@ pub struct EditorUi {
     pub header: ViewportHeader,
     /// The floating toolbar over the selection (spec 3.2).
     pub context_bar: ContextBar,
+    /// The building style picker (L, Properties > Style).
+    pub style_picker: StylePicker,
     /// First-time hints (spec 14.1); in memory until the app loads the saved ones.
     pub hints: Hints,
     /// Selection and history revisions the hints last looked at.
@@ -126,9 +129,11 @@ impl EditorUi {
         let tools = EditorTools::new(&mut actions);
         let input_actions = InputActionsDock::new(&state.world, &mut actions);
         let colour = ColourDock::new(&state, &mut actions);
+        let style_picker = StylePicker::new(&mut actions);
         let mut ui = EditorUi {
             state,
             actions,
+            style_picker,
             keymap: Keymap::metallic(),
             output,
             viewport: Viewport::new(),
@@ -430,6 +435,7 @@ impl EditorUi {
     fn start_play(&mut self, ctx: &egui::Context, id: &'static str) {
         self.scripts.flush(&mut self.state);
         self.colour.close(&mut self.state);
+        self.style_picker.close(&mut self.state);
         self.properties.finish_gesture(&mut self.state);
         self.viewport.cancel_drag(&mut self.state);
         self.tools.cancel_gestures();
@@ -904,6 +910,9 @@ impl EditorUi {
         // The colour popover first: it is the topmost and takes its Esc before anything below.
         self.colour
             .show(&ctx, &mut self.state, self.viewport.hovered());
+        // Then the style picker: its Esc, arrows, Space and Enter come before the tools' keys.
+        self.style_picker
+            .show(&ctx, &mut self.state, self.viewport.rect(), render_state);
         self.tools.ui(&ctx, &mut self.state);
         // Then the tool popovers' and the brush/measure keys (Esc, Enter, letters, [ ]), before
         // the contextual toolbar and the hint card can take Esc.
