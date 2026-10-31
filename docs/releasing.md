@@ -12,6 +12,15 @@ end to end (the owner round trip is pending, see the last section).
 - Studio (`crates/metallic_studio/src/updater.rs`) lists the releases of its channel, offers a newer one, downloads it
   and restarts. Because the repo is private, each person signs in once with GitHub's device sign-in
   (`github_auth.rs`); the session lives in Windows Credential Manager under `MetallicStudio/github`.
+- Shipped builds use the `dist` Cargo profile (`[profile.dist]` in the root `Cargo.toml`): `release` plus thin LTO,
+  one codegen unit, `panic = "unwind"` and line-table debug info in a separate file. The script runs
+  `cargo build --locked --profile dist -p <package> -j 4` and stages the exes from `target/dist/`, not
+  `target/release/`. Panics must keep unwinding: asset import catches glTF parser panics, mlua turns a panic in a Rust
+  callback into a Lua error, and the update download worker reports a panicked thread as an error. Measurements and
+  reasons: `docs/agents/123-dist-profile.md`.
+- Each release's `.pdb` files (debug info with file:line tables, not shipped in the package) are copied to
+  `target/release-symbols/<tag>/`. Keep them for a release built by hand; they are what turns a crash address into a
+  source line. The workflow does not keep them yet (its runner is thrown away), see the progress note.
 - The Velopack CLI is pinned to `1.3.39-g8d2844f` in `tools/release.py` (`VPK_VERSION`). It is the same version as the
   `velopack` crate in `crates/metallic_studio/Cargo.toml`. Change both together.
 

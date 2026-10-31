@@ -60,7 +60,9 @@ jobs:
           dotnet tool install --global vpk --version "$pinned"
       - name: Install Pillow (icon conversion)
         run: python -m pip install Pillow==11.3.0
-      - name: Build, pack and publish
+      # release.py builds with `cargo build --locked --profile dist` ([profile.dist] in the root Cargo.toml)
+      # and stages the exes from target/dist/.
+      - name: Build (dist profile), pack and publish
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
