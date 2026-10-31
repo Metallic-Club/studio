@@ -133,8 +133,12 @@ apps.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
-  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
-  egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
+  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel and the
+  TextButton/ImageButton of #79 drawn with an egui painter with egui's bundled fonts; their licence texts are in
+  `LICENSES/`). Clicks: the host gives the left mouse button, the cursor and fingers to `Game::gui_pointer` before
+  the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
+  and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
+  never reaches the game's input.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
