@@ -28,7 +28,7 @@ struct Globals {
     sun_disc: vec4<f32>,       // xyz: toward the sun, w: cos(disc radius)
     moon_disc: vec4<f32>,      // xyz: toward the moon, w: cos(disc radius)
     celestial: vec4<f32>,      // x: sun disc scale, y: moon radiance, z: bodies shown, w: night
-    light_toon: vec4<f32>,     // x: toon light of the default lighting (reference)
+    light_toon: vec4<f32>,     // x: toon light of the default lighting (reference), y: auto exposure
 }
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -49,5 +49,9 @@ fn sky_gradient(d: vec3<f32>) -> vec3<f32> {
 // grading: the inverse of the tone curve and exposure. Toon shading picks display colours
 // directly and goes through this, so it lands in the HDR target like any other light.
 fn unfinish(y: vec3<f32>) -> vec3<f32> {
-    return invert_curve(y, u32(g.params.y + 0.5)) / max(g.params.z, 1e-6);
+    var m = g.light_toon.y;
+    if (!(m > 0.0 && m < 1e30)) {
+        m = 1.0;
+    }
+    return invert_curve(y, u32(g.params.y + 0.5)) / max(g.params.z * m, 1e-6);
 }

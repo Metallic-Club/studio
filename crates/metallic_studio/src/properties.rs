@@ -5,20 +5,21 @@
 //! drag and accept expressions (`3*4`, `+2` adds to the current value, see [`crate::expr`]).
 //!
 //! **One gesture, one undo step:** while the pointer is held (scrubbing a number, dragging in the
-//! colour picker) changes write the world directly as a live preview, and the first value of each
-//! touched property is remembered. When the pointer is released the whole gesture is recorded as
-//! one step. Typed values and toggles apply at once as one step each.
+//! colour picker) changes go through the editor's [`crate::preview::PreviewOverlay`], which writes
+//! them as a live preview and remembers the first value of each touched property. When the
+//! pointer is released the whole gesture is recorded as one `SetProperties` step. Typed values
+//! and toggles apply at once as one step each.
 use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
 use metallic_core::classes::{PropDef, all_properties, find_property};
 use metallic_core::{CFrame, Color3, InstanceId, UDim2, Value, Vec3};
 
-use crate::commands::Command;
+use crate::commands::{Command, PropName};
 use crate::editor::{EditorState, UiRequest};
 use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
-use metallic_core::transform::clamp_part_size;
+use metallic_core::transform::{clamp_part_size, orthonormal};
 
 /// Formats a number field like egui does, but never as "-0" (a negative zero or a tiny negative
 /// value that rounds to zero shows as "0").
@@ -58,8 +59,10 @@ const SECTION_NAMES: [&str; 5] = ["Data", "Appearance", "Transform", "Physics", 
 #[derive(Default)]
 pub struct Properties {
     filter: String,
-    /// Live-preview gesture: first value of every (instance, property) touched.
-    gesture: Vec<(InstanceId, String, Value)>,
+    /// The property of the open live-preview gesture (its values live in the overlay).
+    gesture: Option<String>,
+    /// Esc cancelled the gesture; ignore the widget until the pointer is released.
+    cancelled: bool,
     /// Text being typed into a string field, by property name.
     text: HashMap<String, String>,
 }
@@ -80,35 +83,49 @@ impl Properties {
 
     /// True while a live-preview gesture is open.
     pub fn in_gesture(&self) -> bool {
-        !self.gesture.is_empty()
+        self.gesture.is_some()
+    }
+
+    /// True while a scrub is open or was cancelled with the pointer still held: global keys wait.
+    pub fn is_busy(&self) -> bool {
+        self.gesture.is_some() || self.cancelled
+    }
+
+    /// Esc during a scrub: every previewed value goes back and no step is recorded.
+    pub fn cancel_gesture(&mut self, state: &mut EditorState) {
+        if self.gesture.take().is_some() {
+            state.preview.cancel(&mut state.world);
+            self.cancelled = true;
+        }
+    }
+
+    /// Shows `value` for `prop` on the selection as a live scrub would (pointer held): it is
+    /// previewed, and recorded as one step when the pointer is released. For scripted checks.
+    pub fn scrub(&mut self, state: &mut EditorState, prop: &str, value: Value) {
+        let ids = state.selection.ids().to_vec();
+        self.commit(state, &ids, Edit::Set(prop.to_string(), value), true);
     }
 
     fn finish_gesture(&mut self, state: &mut EditorState) {
-        if self.gesture.is_empty() {
+        let Some(prop) = self.gesture.take() else {
             return;
+        };
+        let n = state.preview.len();
+        let name = if n == 1 {
+            format!("Set {prop}")
+        } else {
+            format!("Set {prop} ({n} changes)")
+        };
+        if let Some(cmd) = state.preview.commit(name) {
+            state.record(cmd);
         }
-        let mut commands: Vec<Command> = self
-            .gesture
-            .drain(..)
-            .filter_map(|(id, prop, old)| {
-                let new = state.world.get(id, &prop).ok()?;
-                (new != old).then(|| Command::set(id, &prop, old, new))
-            })
-            .collect();
-        match commands.len() {
-            0 => {}
-            1 => state.record(commands.remove(0)),
-            n => {
-                let prop = match &commands[0] {
-                    Command::SetProperty { prop, .. } => prop.clone(),
-                    _ => String::new(),
-                };
-                state.record(Command::Batch {
-                    name: format!("Set {prop} ({n} changes)"),
-                    commands,
-                });
-            }
-        }
+    }
+
+    /// Sets `prop` to `value` on every selected instance as one step, exactly as typing the value
+    /// into the panel does (clamps and pivot rules included). For scripted checks and commands.
+    pub fn set(&mut self, state: &mut EditorState, prop: &str, value: Value) {
+        let ids = state.selection.ids().to_vec();
+        self.commit(state, &ids, Edit::Set(prop.to_string(), value), false);
     }
 
     /// Draws the panel.
@@ -116,6 +133,9 @@ impl Properties {
         let pointer_down = ui.input(|i| i.pointer.primary_down());
         if !pointer_down {
             self.finish_gesture(state);
+            self.cancelled = false;
+        } else if self.gesture.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.cancel_gesture(state);
         }
         let ids: Vec<InstanceId> = state.selection.ids().to_vec();
         let Some(&active) = ids.last() else {
@@ -204,12 +224,16 @@ impl Properties {
         p: &PropDef,
         edits: &mut Vec<Edit>,
     ) {
-        let Ok(value) = state.world.get(active, p.name) else {
+        let Some(value) = read(&state.world, active, p.name) else {
             return;
         };
-        let mixed = ids
-            .iter()
-            .any(|&id| state.world.get_ref(id, p.name).ok() != Some(&value));
+        let mixed = if p.name == "WorldPivot" {
+            ids.iter()
+                .any(|&id| read(&state.world, id, p.name).as_ref() != Some(&value))
+        } else {
+            ids.iter()
+                .any(|&id| state.world.get_ref(id, p.name).ok() != Some(&value))
+        };
         let playing = state.play.is_playing();
         let hover_bg = ui.painter().add(egui::Shape::Noop);
         let numeric = matches!(
@@ -419,7 +443,11 @@ impl Properties {
     }
 
     fn commit(&mut self, state: &mut EditorState, ids: &[InstanceId], edit: Edit, live: bool) {
-        if state.play.is_playing() {
+        if state.play.is_playing() || (live && self.cancelled) {
+            return;
+        }
+        // A viewport drag owns the overlay; a Properties edit waits for it.
+        if !live && state.preview.is_active() {
             return;
         }
         let (prop, values): (String, Vec<(InstanceId, Value)>) = match edit {
@@ -431,7 +459,7 @@ impl Properties {
                 let vals = ids
                     .iter()
                     .filter_map(|&id| {
-                        let old = state.world.get(id, &prop).ok()?;
+                        let old = read(&state.world, id, &prop)?;
                         Some((id, with_component(&old, axis, x)?))
                     })
                     .collect();
@@ -439,27 +467,51 @@ impl Properties {
             }
         };
         // Part sizes stay inside the engine's limits, as a script's write would.
+        let mut refused = None;
         let values: Vec<(InstanceId, Value)> = values
             .into_iter()
-            .map(|(id, v)| match v {
+            .filter_map(|(id, v)| match v {
                 Value::Vector3(s) if prop == "Size" && state.world.is_a(id, "BasePart") => {
-                    (id, Value::Vector3(clamp_part_size(s)))
+                    Some((id, Value::Vector3(clamp_part_size(s))))
                 }
-                v => (id, v),
+                // A Model's WorldPivot is made orthonormal like core's `set_world_pivot`; one that
+                // cannot be (degenerate axes, not finite) is refused, as core refuses it.
+                Value::CFrame(cf) if prop == "WorldPivot" => match orthonormal(*cf, "WorldPivot") {
+                    Ok(cf) => Some((id, Value::CFrame(Box::new(cf)))),
+                    Err(e) => {
+                        refused = Some(e.to_string());
+                        None
+                    }
+                },
+                v => Some((id, v)),
             })
             .collect();
+        if let Some(why) = refused {
+            state.note(format!("WorldPivot not set: {why}"));
+        }
+        // Setting WorldPivot also marks it set (`WorldPivotSet`), as core's `set_world_pivot`
+        // does; without that the pivot keeps following the bounding box.
+        let marks: Vec<InstanceId> = if prop == "WorldPivot" {
+            values
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|&id| state.world.is_a(id, "Model"))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if live {
+            let name: PropName = prop.as_str().into();
+            let set: PropName = "WorldPivotSet".into();
             for (id, v) in values {
-                if !self
-                    .gesture
-                    .iter()
-                    .any(|(gid, gp, _)| *gid == id && *gp == prop)
-                    && let Ok(old) = state.world.get(id, &prop)
-                {
-                    self.gesture.push((id, prop.clone(), old));
-                }
-                let _ = state.world.set(id, &prop, v);
+                let _ = state.preview.set(&mut state.world, id, &name, v);
             }
+            for id in marks {
+                let _ = state
+                    .preview
+                    .set(&mut state.world, id, &set, Value::Bool(true));
+            }
+            self.gesture = Some(prop);
             return;
         }
         let mut commands: Vec<Command> = values
@@ -469,6 +521,13 @@ impl Properties {
                 (old != v).then(|| Command::set(id, &prop, old, v))
             })
             .collect();
+        for id in marks {
+            if let Ok(old) = state.world.get(id, "WorldPivotSet")
+                && old != Value::Bool(true)
+            {
+                commands.push(Command::set(id, "WorldPivotSet", old, Value::Bool(true)));
+            }
+        }
         match commands.len() {
             0 => {}
             1 => {
@@ -482,6 +541,16 @@ impl Properties {
             }
         }
     }
+}
+
+/// The value Properties shows and edits: a Model's `WorldPivot` is its pivot as Luau reads it
+/// (the bounding-box centre until set); everything else is the stored value.
+fn read(world: &metallic_core::World, id: InstanceId, prop: &str) -> Option<Value> {
+    if prop == "WorldPivot" && world.is_a(id, "Model") {
+        let cf = metallic_core::transform::world_pivot(world, id).ok()?;
+        return Some(Value::CFrame(Box::new(cf)));
+    }
+    world.get(id, prop).ok()
 }
 
 fn drag_speed(prop: &str) -> f64 {

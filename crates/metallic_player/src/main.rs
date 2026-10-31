@@ -5,7 +5,7 @@
 //!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
 //!                 [--capture FRAME:PNG]... [--input-script <file>]
 //!                 [--no-overrides] [--menu main|keyboard|gamepad|assist|touch]
-//!                 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]
+//!                 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]
 //! ```
 //! Windowed by default. Input is read as actions (`metallic_runtime::input`); the default
 //! `CharacterControls`: WASD/arrows or the d-pad move, Space or A jumps, Shift or L3 runs,
@@ -24,7 +24,8 @@
 //! finger and a right click pins or lifts a second finger. On a real touch screen the overlay
 //! fades in at the first touch. Input scripts drive fingers with lines like
 //! `90 touch0 Down pos 140 300` (dp); headless runs with `--emulate` route them the same way.
-//! `--reduce-motion` shows and hides the overlay without its 140 ms fade.
+//! `--reduce-motion` shows and hides the overlay without its 140 ms fade. `--minimised` starts with
+//! the window minimised (to check CPU use while minimised; see `pacing.rs`).
 //! Exit code: 0 on a clean exit, 1 when the project cannot be loaded or started, 2 for bad
 //! arguments.
 #![warn(missing_docs)]
@@ -36,6 +37,7 @@ mod data_dir;
 mod devices;
 mod menu;
 mod overlay;
+mod pacing;
 mod touch_overlay;
 mod window;
 

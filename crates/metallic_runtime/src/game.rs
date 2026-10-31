@@ -11,7 +11,8 @@ use crate::project::ProjectConfig;
 use metallic_core::{InstanceId, Value, Vec3, World, load_scene};
 pub use metallic_physics::RUN_MULTIPLIER;
 use metallic_physics::{
-    CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, spawn_character,
+    CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, RESPAWN_DELAY,
+    spawn_character,
 };
 use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
@@ -82,6 +83,10 @@ pub struct Game {
     /// The local character's skinned avatar and the character Model it belongs to.
     avatar: Option<(InstanceId, Avatar)>,
     running: bool,
+    /// The copies of `StarterGui` made by the last [`Game::start`] (removed by the next one).
+    gui_copies: Vec<InstanceId>,
+    /// Seconds the local character has been gone (destroyed or taken out of the Workspace).
+    character_gone: f64,
     /// `InputRuntime::device_changes` when the scripts were last told the last-used device.
     input_device_changes: Option<u64>,
     /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
@@ -138,6 +143,8 @@ impl Game {
             physics_sync: PhysicsSyncCache::default(),
             avatar: None,
             running: false,
+            gui_copies: Vec::new(),
+            character_gone: 0.0,
             input_device_changes: None,
             gui_inset: 0.0,
         }
@@ -179,7 +186,8 @@ impl Game {
     }
 
     /// Starts the game: runs the scripts (which creates the local player `Player1`), copies the
-    /// contents of `StarterGui` into the player's `PlayerGui` (once; M1 has no ResetOnSpawn),
+    /// contents of `StarterGui` into the player's `PlayerGui` (once per start; M1 has no
+    /// ResetOnSpawn; a restart after [`Game::stop`] replaces the copies of the last start),
     /// spawns the character on the first `SpawnLocation` and fires `CharacterAdded`.
     /// Calling it again while running does nothing.
     ///
@@ -205,6 +213,7 @@ impl Game {
         self.focus = self.root_position().unwrap_or_default();
         self.time = 0.0;
         self.accumulator = 0.0;
+        self.character_gone = 0.0;
         self.running = true;
         Ok(())
     }
@@ -219,7 +228,10 @@ impl Game {
             .root("Players")
             .and_then(|p| world.find_first_child(p, LOCAL_PLAYER_NAME))
             .ok_or_else(|| RuntimeError::Start("no local player".into()))?;
-        copy_starter_gui(&mut world, player);
+        for old in self.gui_copies.drain(..) {
+            world.destroy(old);
+        }
+        self.gui_copies = copy_starter_gui(&mut world, player);
         let model = spawn_character(&mut world, player)
             .map_err(|e| RuntimeError::Start(format!("cannot spawn the character: {e}")))?;
         Ok((player, model))
@@ -321,7 +333,8 @@ impl Game {
     /// (an accumulator carries the remainder; `dt` is clamped to [`MAX_FRAME_DT`], a negative or
     /// non-finite `dt` counts as 0). Each tick, in order:
     /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches);
-    /// 2. physics step (movers, loose parts);
+    /// 2. physics step (movers, loose parts); then a character that was destroyed or taken out
+    ///    of the Workspace respawns after [`RESPAWN_DELAY`];
     /// 3. events fed to the scripts: part-part touches both ways, character touches as
     ///    `part.Touched(HumanoidRootPart)`, `Humanoid.Died`, `CharacterAdded` on respawn;
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
@@ -436,6 +449,7 @@ impl Game {
 
     /// One fixed simulation tick. Returns false, having done nothing, when the world is borrowed.
     fn tick(&mut self, input: &FrameInput) -> bool {
+        let respawned;
         let move_input = MoveInput {
             dir: self.camera.move_direction(input.movement),
             jump: input.jump,
@@ -450,6 +464,17 @@ impl Game {
                     .step(&mut world, &self.physics, character, move_input, TICK);
             }
             self.physics.step(&mut world, TICK);
+            respawned = respawn_if_gone(
+                &mut world,
+                &self.characters,
+                self.player,
+                &mut self.character_gone,
+            );
+        }
+        if let (Some(player), Some(character)) = (self.player, respawned) {
+            self.character = Some(character);
+            self.sync_physics_now();
+            self.scripts.character_added(player, character);
         }
         self.feed_events();
         self.time += TICK;
@@ -476,6 +501,11 @@ impl Game {
                 CharacterEvent::Respawned {
                     player, character, ..
                 } => {
+                    // Checked when it fires: never announce a Model that is already gone.
+                    let alive = self.world.try_borrow().is_ok_and(|w| w.is_alive(character));
+                    if !alive {
+                        continue;
+                    }
                     if Some(player) == self.player {
                         self.character = Some(character);
                     }
@@ -578,10 +608,68 @@ impl Game {
     }
 }
 
-/// Copies every child of `StarterGui` into the player's `PlayerGui`.
-fn copy_starter_gui(world: &mut World, player: InstanceId) {
+/// The one respawn timer for a character that is gone without dying (#273): a Model a script
+/// destroyed, took out of the Workspace or stripped of its `HumanoidRootPart`. `gone` counts
+/// the seconds; after [`RESPAWN_DELAY`] a new character spawns.
+///
+/// The player's `Character` property is read each tick (never a cached id), so a respawn that
+/// already happened (the controller's after a death, or a script's) cancels this timer, and a
+/// dead character is left to the controller's own timer: one character ever spawns.
+fn respawn_if_gone(
+    world: &mut World,
+    controller: &CharacterController,
+    player: Option<InstanceId>,
+    gone: &mut f64,
+) -> Option<InstanceId> {
+    let player = player.filter(|&p| world.is_alive(p))?;
+    let character = match world.get(player, "Character") {
+        Ok(Value::Ref(c)) => c,
+        _ => None,
+    };
+    let present = character.is_some_and(|c| {
+        world.is_alive(c)
+            && in_workspace(world, c)
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    // The controller respawns a dead character it can still step (Humanoid and root present).
+    let dying = character.is_some_and(|c| {
+        world.is_alive(c)
+            && controller.state(c) == Some(HumanoidState::Dead)
+            && world.find_first_child(c, "Humanoid").is_some()
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    if present || dying {
+        *gone = 0.0;
+        return None;
+    }
+    *gone += TICK;
+    if *gone < RESPAWN_DELAY {
+        return None;
+    }
+    *gone = 0.0;
+    spawn_character(world, player).ok()
+}
+
+/// True when `id` is a descendant of the Workspace.
+fn in_workspace(world: &World, id: InstanceId) -> bool {
+    let Some(ws) = world.root("Workspace") else {
+        return false;
+    };
+    let mut at = world.parent(id);
+    while let Some(p) = at {
+        if p == ws {
+            return true;
+        }
+        at = world.parent(p);
+    }
+    false
+}
+
+/// Copies every child of `StarterGui` into the player's `PlayerGui` and returns the copies.
+fn copy_starter_gui(world: &mut World, player: InstanceId) -> Vec<InstanceId> {
+    let mut copies = Vec::new();
     let Some(starter) = world.root("StarterGui") else {
-        return;
+        return copies;
     };
     let Some(gui) = world
         .children(player)
@@ -589,15 +677,18 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
         .copied()
         .find(|&c| world.is_a(c, "PlayerGui"))
     else {
-        return;
+        return copies;
     };
     for child in world.children(starter).to_vec() {
-        if let Ok(copy) = world.clone_subtree(child)
-            && world.set_parent(copy, Some(gui)).is_err()
-        {
-            world.destroy(copy);
+        if let Ok(copy) = world.clone_subtree(child) {
+            if world.set_parent(copy, Some(gui)).is_ok() {
+                copies.push(copy);
+            } else {
+                world.destroy(copy);
+            }
         }
     }
+    copies
 }
 
 /// The runtime action of an `InputAction` instance.
@@ -721,5 +812,98 @@ mod tests {
         assert_eq!(seen, [state::JUMP, state::FALL, state::LAND]);
         run(&mut g, FrameInput::default(), 0.6);
         assert_eq!(avatar(&g).locomotion().state(), state::GROUND);
+    }
+
+    /// #273: a Died handler that takes the body out of the Workspace (without destroying it)
+    /// gets exactly one new character, and `Player.Character` is that one.
+    #[test]
+    fn a_body_removed_on_death_respawns_once() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.2);
+        let player = g.player().unwrap();
+        let old = g.character().unwrap();
+        {
+            let mut w = g.world.borrow_mut();
+            let humanoid = w.find_first_child(old, "Humanoid").unwrap();
+            w.set(humanoid, "Health", Value::Number(0.0)).unwrap();
+        }
+        g.frame(&FrameInput::default(), TICK);
+        // What the Died handler does.
+        g.world.borrow_mut().set_parent(old, None).unwrap();
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY + 1.0);
+        let w = g.world.borrow();
+        let ws = w.root("Workspace").unwrap();
+        let models: Vec<_> = w
+            .children(ws)
+            .iter()
+            .copied()
+            .filter(|&c| w.is_a(c, "Model"))
+            .collect();
+        assert_eq!(models.len(), 1, "one character: {models:?}");
+        assert_eq!(g.character(), Some(models[0]));
+        assert_eq!(
+            w.get(player, "Character").unwrap(),
+            Value::Ref(Some(models[0]))
+        );
+    }
+
+    fn screen_guis(g: &Game) -> usize {
+        let w = g.world.borrow();
+        let Some(gui) = crate::gui::local_player_gui(&w) else {
+            return 0;
+        };
+        w.children(gui)
+            .iter()
+            .filter(|&&c| w.is_a(c, "ScreenGui"))
+            .count()
+    }
+
+    /// #273: stop then start again gives one copy of the StarterGui, not two.
+    #[test]
+    fn a_restart_does_not_duplicate_the_hud() {
+        let mut w = World::new_with_services();
+        let starter = w.root("StarterGui").unwrap();
+        let hud = w.create("ScreenGui", Some(starter)).unwrap();
+        w.set(hud, "Name", Value::String("HUD".into())).unwrap();
+        let mut g = Game::from_world("test".into(), w, Rc::new(Silent));
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 1);
+        g.stop();
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 1, "one HUD after a restart");
+        // A GUI a script made at run time is not ours to remove.
+        {
+            let mut w = g.world.borrow_mut();
+            let gui = crate::gui::local_player_gui(&w).unwrap();
+            w.create("ScreenGui", Some(gui)).unwrap();
+        }
+        g.stop();
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 2);
+    }
+
+    /// #273: a script that destroys the character gets a new one after the respawn delay.
+    #[test]
+    fn a_destroyed_character_respawns_after_the_delay() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.2);
+        let old = g.character().unwrap();
+        g.world.borrow_mut().destroy(old);
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY - 0.5);
+        assert_eq!(g.character(), Some(old), "not before the delay");
+        run(&mut g, FrameInput::default(), 1.0);
+        let new = g.character().unwrap();
+        assert_ne!(new, old);
+        assert!(g.world.borrow().is_alive(new));
+        assert!(g.root_position().is_some());
+        let player = g.player().unwrap();
+        assert_eq!(
+            g.world.borrow().get(player, "Character").unwrap(),
+            Value::Ref(Some(new))
+        );
+        // Removed from the Workspace without being destroyed counts too.
+        g.world.borrow_mut().set_parent(new, None).unwrap();
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY + 0.5);
+        assert_ne!(g.character(), Some(new));
     }
 }

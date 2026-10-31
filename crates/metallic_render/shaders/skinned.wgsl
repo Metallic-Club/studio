@@ -68,7 +68,8 @@ fn fs_toon(in: VOut) -> @location(0) vec4<f32> {
     let rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * (1.0 - lit);
     tone = mix(tone, base * TOON_SHADE * 1.18, 0.5 * rim);
     let c = unfinish(tone * toon_light());
-    return vec4<f32>(toon_fog(c, in.world_pos), 1.0);
+    // Alpha 0 marks toon pixels: the exposure meter must not read them back.
+    return vec4<f32>(toon_fog(c, in.world_pos), 0.0);
 }
 
 struct OutlineOut {
@@ -107,5 +108,6 @@ fn vs_outline(v: SkinIn) -> OutlineOut {
 @fragment
 fn fs_outline(in: OutlineOut) -> @location(0) vec4<f32> {
     let c = unfinish(TOON_INK * min(toon_light(), vec3<f32>(1.0)));
-    return vec4<f32>(toon_fog(c, in.world_pos), 1.0);
+    // Alpha 0 marks toon pixels: the exposure meter must not read them back.
+    return vec4<f32>(toon_fog(c, in.world_pos), 0.0);
 }

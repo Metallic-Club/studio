@@ -18,6 +18,10 @@
 //! and the undo, selection and gizmo APIs the building tools use ([`commands`], [`selection`],
 //! [`gizmo`]). Panels take colours, font sizes and metrics only from [`tokens::ui_tokens`].
 //!
+//! Building core (#213-#215): [`preview`] (the gesture overlay: one gesture, one undo step),
+//! [`snapping`] (point and surface snapping), [`pivot`] (pivots and rigid motions) and the
+//! drag behaviours in [`gizmo`] and [`viewport`].
+//!
 //! [`colour`] holds the building colour popover, its colour maths and palette files; it also runs
 //! as a demo screen (`--scene colour`).
 //!
@@ -51,8 +55,10 @@ pub mod licences;
 pub mod output;
 pub mod panel;
 pub mod picking;
+pub mod pivot;
 pub mod play;
 pub mod png_image;
+pub mod preview;
 pub mod properties;
 pub mod recent;
 pub mod screenshot;
@@ -60,6 +66,7 @@ pub mod script_editor;
 pub mod selection;
 pub mod settings;
 pub mod settings_ui;
+pub mod snapping;
 pub mod splash;
 pub mod start_screen;
 pub mod templates;

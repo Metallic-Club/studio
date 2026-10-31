@@ -3,7 +3,11 @@
 
 const CURVE_LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
-// ---- AgX (Troy Sobotka; polynomial fit). WGSL mat3x3 takes columns. ----
+// ---- AgX (Troy Sobotka), minimal polynomial fit. WGSL mat3x3 takes columns. ----
+// Ported from "Minimal AgX Implementation" by Benjamin Wrensch,
+// https://iolite-engine.com/blog_posts/minimal_agx_implementation
+// Copyright (c) 2024 Missing Deadlines (Benjamin Wrensch). MIT License; full notice in
+// LICENSES/THIRD-PARTY-CODE.md.
 const AGX_INSET: mat3x3<f32> = mat3x3<f32>(
     vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
     vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
@@ -36,6 +40,11 @@ fn agx(c_in: vec3<f32>, punchy: bool) -> vec3<f32> {
 }
 
 // ---- Khronos PBR Neutral ----
+// Ported from the Khronos PBR Neutral reference (pbrNeutral.glsl),
+// https://github.com/KhronosGroup/ToneMapping/tree/main/PBR_Neutral
+// Copyright (c) 2024 The Khronos Group Inc. Licensed under the Apache License, Version 2.0
+// (LICENSES/Apache-2.0.txt); notice and changes in LICENSES/THIRD-PARTY-CODE.md. Modified:
+// GLSL to WGSL.
 fn pbr_neutral(c_in: vec3<f32>) -> vec3<f32> {
     let start = 0.8 - 0.04;
     let desat = 0.15;
@@ -57,6 +66,9 @@ fn pbr_neutral(c_in: vec3<f32>) -> vec3<f32> {
 }
 
 // ---- ACES: Hill's fit (rows as published, so transposed for WGSL) and Narkowicz's ----
+// Hill's fit is ported from Baking Lab (https://github.com/TheRealMJP/BakingLab, ACES.hlsl),
+// Copyright (c) 2016 MJP, MIT License (LICENSES/THIRD-PARTY-CODE.md); fit by Stephen Hill.
+// Narkowicz's fit: "ACES Filmic Tone Mapping Curve", Krzysztof Narkowicz, 2016 (a formula).
 const ACES_IN_ROWS: mat3x3<f32> = mat3x3<f32>(
     vec3<f32>(0.59719, 0.35458, 0.04823),
     vec3<f32>(0.07600, 0.90834, 0.01566),

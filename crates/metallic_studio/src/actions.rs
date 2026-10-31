@@ -22,7 +22,9 @@
 //! place that shows it.
 use eframe::egui::{self, RichText};
 
-use crate::editor::{EditorState, Space, Tool, UiRequest};
+use metallic_render::glam::DVec3;
+
+use crate::editor::{EditorState, MOVE_STEPS, PivotMode, ROTATE_STEPS, Space, Tool, UiRequest};
 use crate::icons::Icon;
 use crate::keymap::Keymap;
 use crate::theme;
@@ -36,8 +38,10 @@ pub enum ToolbarGroup {
     Hidden,
     /// Select / Move / Rotate / Scale.
     Tools,
-    /// Snap and space settings.
+    /// Increment, space and pivot settings.
     Settings,
+    /// Snap target chips (Grid, Surface, Vertex, Edge, Align), drawn as text toggles.
+    Snap,
     /// Undo, redo.
     Edit,
     /// Play cluster (centred): play modes and Stop.
@@ -221,6 +225,42 @@ impl ActionRegistry {
         }
     }
 
+    /// Draws the actions of `group` as text toggle chips (the snap targets).
+    pub fn chips(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: ToolbarGroup,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for a in self.actions.iter_mut().filter(|a| a.group == group) {
+            let shortcut = keymap.label(a.id);
+            let tip = if shortcut.is_empty() {
+                a.label.clone()
+            } else {
+                format!("{} ({shortcut})", a.label)
+            };
+            let checked = a.is_checked(state);
+            let button = Button::ghost(short_label(&a.label))
+                .compact()
+                .selected(checked);
+            let resp = ui
+                .add_enabled(a.is_enabled(state), button)
+                .on_hover_text(&tip)
+                .on_disabled_hover_text(&tip);
+            if resp.clicked() {
+                clicked = Some(a.id);
+            }
+            if let Some(acc) = &mut a.accessory {
+                acc(ui, state);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+        }
+    }
+
     /// Draws menu entries for `ids` (label and shortcut).
     pub fn menu_items(
         &mut self,
@@ -244,6 +284,17 @@ impl ActionRegistry {
     }
 }
 
+/// The chip text: the first word of the label ("Grid snapping" shows "Grid").
+fn short_label(label: &str) -> &str {
+    label.split(' ').next().unwrap_or(label)
+}
+
+/// An increment without trailing zeros ("0.25", "1", "11.25").
+fn fmt_step(v: f64) -> String {
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 /// The built-in editor actions.
 pub fn default_actions() -> ActionRegistry {
     let mut r = ActionRegistry::new();
@@ -255,39 +306,254 @@ pub fn default_actions() -> ActionRegistry {
         ("tool.move", "Move", Icon::Move, Tool::Move),
         ("tool.rotate", "Rotate", Icon::Rotate, Tool::Rotate),
         ("tool.scale", "Scale", Icon::Scale, Tool::Scale),
+        (
+            "tool.transform",
+            "Transform",
+            Icon::Text("T"),
+            Tool::Transform,
+        ),
     ] {
         r.register(
             Action::new(id, label, icon, ToolbarGroup::Tools, move |s| s.tool = tool)
                 .checked(move |s| s.tool == tool),
         );
     }
+    let mut off_grid: Option<((metallic_core::ChangeCursor, u64, u64, u64), bool)> = None;
     r.register(
         Action::new(
-            "snap.toggle",
-            "Snap to increments",
+            "snap.grid",
+            "Grid snapping",
             Icon::Snap,
-            ToolbarGroup::Settings,
+            ToolbarGroup::Snap,
+            |s| s.snapping.grid = !s.snapping.grid,
+        )
+        .checked(|s| s.snapping.grid)
+        .accessory(move |ui, s| {
+            ui.menu_button(format!("{} stud", fmt_step(s.snapping.move_step)), |ui| {
+                for &step in MOVE_STEPS {
+                    if ui
+                        .selectable_label(
+                            s.snapping.move_step == step,
+                            format!("{} stud", fmt_step(step)),
+                        )
+                        .clicked()
+                    {
+                        s.snapping.move_step = step;
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Move and scale increment ([ and ])");
+            ui.menu_button(format!("{}°", fmt_step(s.snapping.rotate_step)), |ui| {
+                for &step in ROTATE_STEPS {
+                    if ui
+                        .selectable_label(
+                            s.snapping.rotate_step == step,
+                            format!("{}°", fmt_step(step)),
+                        )
+                        .clicked()
+                    {
+                        s.snapping.rotate_step = step;
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Rotate increment (Shift+[ and Shift+])");
+            // Off-grid check, recomputed only when the world, selection or increments change.
+            let key = (
+                s.world.change_cursor(),
+                s.selection.revision(),
+                s.snapping.move_step.to_bits(),
+                s.snapping.rotate_step.to_bits(),
+            );
+            let off = match off_grid {
+                Some((k, v)) if k == key => v,
+                _ => {
+                    let v = s.off_grid();
+                    off_grid = Some((key, v));
+                    v
+                }
+            };
+            if off
+                && ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Off grid").small().color(theme::warning()),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Snap selection to grid (Ctrl+Shift+Home)")
+                    .clicked()
+            {
+                s.snap_selection_to_grid();
+            }
+        }),
+    );
+    for (id, label, get, flip) in [
+        (
+            "snap.surface",
+            "Surface snapping",
+            (|s: &EditorState| s.snapping.surface) as fn(&EditorState) -> bool,
+            (|s: &mut EditorState| s.snapping.surface = !s.snapping.surface)
+                as fn(&mut EditorState),
+        ),
+        (
+            "snap.vertex",
+            "Vertex snapping (hold V for one drag)",
+            |s| s.snapping.vertex,
+            |s| s.snapping.vertex = !s.snapping.vertex,
+        ),
+        (
+            "snap.edge",
+            "Edge snapping",
+            |s| s.snapping.edge,
+            |s| s.snapping.edge = !s.snapping.edge,
+        ),
+        (
+            "snap.align",
+            "Align to surface",
+            |s| s.snapping.align,
+            |s| s.snapping.align = !s.snapping.align,
+        ),
+    ] {
+        r.register(Action::new(id, label, Icon::Snap, ToolbarGroup::Snap, flip).checked(get));
+    }
+    r.register(
+        Action::new(
+            "snap.soft",
+            "Soft snap",
+            Icon::Snap,
+            ToolbarGroup::Hidden,
             |s| {
-                s.snapping.enabled = !s.snapping.enabled;
+                s.snapping.soft = !s.snapping.soft;
+                let on = if s.snapping.soft { "on" } else { "off" };
+                s.note(format!("Soft snap {on}"));
             },
         )
-        .checked(|s| s.snapping.enabled)
+        .checked(|s| s.snapping.soft),
+    );
+    for (id, label, up, rotate) in [
+        ("increment.move_down", "Halve move increment", false, false),
+        ("increment.move_up", "Double move increment", true, false),
+        (
+            "increment.rotate_down",
+            "Smaller rotate increment",
+            false,
+            true,
+        ),
+        ("increment.rotate_up", "Larger rotate increment", true, true),
+    ] {
+        r.register(Action::new(
+            id,
+            label,
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            move |s| {
+                if rotate {
+                    s.step_rotate_increment(up);
+                } else {
+                    s.step_move_increment(up);
+                }
+            },
+        ));
+    }
+    r.register(
+        Action::new(
+            "pivot.mode",
+            "Pivot or selection centre",
+            Icon::Text("Pv"),
+            ToolbarGroup::Settings,
+            |s| {
+                s.pivot_mode = match s.pivot_mode {
+                    PivotMode::Pivot => PivotMode::Centre,
+                    PivotMode::Centre => PivotMode::Pivot,
+                };
+            },
+        )
+        .checked(|s| s.pivot_mode == PivotMode::Centre)
         .accessory(|ui, s| {
-            ui.add(
-                egui::DragValue::new(&mut s.snapping.move_step)
-                    .range(0.05..=64.0)
-                    .speed(0.05)
-                    .suffix(" stud"),
-            )
-            .on_hover_text("Move and scale increment");
-            ui.add(
-                egui::DragValue::new(&mut s.snapping.rotate_step)
-                    .range(1.0..=90.0)
-                    .speed(0.5)
-                    .suffix("°"),
-            )
-            .on_hover_text("Rotate increment");
+            ui.label(
+                RichText::new(match s.pivot_mode {
+                    PivotMode::Pivot => "Pivot",
+                    PivotMode::Centre => "Centre",
+                })
+                .color(ui_tokens().text_dim),
+            );
         }),
+    );
+    r.register(
+        Action::new(
+            "pivot.edit",
+            "Edit pivot",
+            Icon::Text("P"),
+            ToolbarGroup::Settings,
+            |s| s.pivot_edit = !s.pivot_edit,
+        )
+        .checked(|s| s.pivot_edit)
+        .enabled(editing),
+    );
+    r.register(
+        Action::new(
+            "pivot.reset",
+            "Reset pivot",
+            Icon::Text("P"),
+            ToolbarGroup::Hidden,
+            |s| {
+                s.reset_pivot();
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.rotate90",
+            "Rotate 90°",
+            Icon::Rotate,
+            ToolbarGroup::Hidden,
+            |s| {
+                s.rotate_selection(DVec3::Y, 90.0, "Rotate");
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.tilt90",
+            "Tilt 90°",
+            Icon::Rotate,
+            ToolbarGroup::Hidden,
+            |s| {
+                let axis = s.tilt_axis();
+                s.rotate_selection(axis, 90.0, "Tilt");
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.drop",
+            "Drop onto surface below",
+            Icon::Text("v"),
+            ToolbarGroup::Hidden,
+            |s| {
+                s.drop_selection();
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.snap_to_grid",
+            "Snap selection to grid",
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            |s| {
+                s.snap_selection_to_grid();
+            },
+        )
+        .enabled(has_selection),
     );
     r.register(
         Action::new(
@@ -475,8 +741,11 @@ mod tests {
     fn every_bound_key_has_an_action() {
         let r = default_actions();
         for b in Keymap::metallic().bindings() {
-            if b.action.starts_with("drag.") || b.action.starts_with("output.") {
-                continue; // handled by the viewport drag and the Output panel
+            if b.action.starts_with("drag.")
+                || b.action.starts_with("output.")
+                || b.action.starts_with("hold.")
+            {
+                continue; // handled by the viewport drag, held keys and the Output panel
             }
             assert!(r.get(b.action).is_some(), "no action for {}", b.action);
         }
