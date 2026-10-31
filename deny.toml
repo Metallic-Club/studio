@@ -12,15 +12,14 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "MPL-2.0",
-    # Fonts bundled by egui (epaint_default_fonts).
-    "OFL-1.1",
-    "Ubuntu-font-1.0",
 ]
 confidence-threshold = 0.8
 # Needs a lead/owner decision (task 13): the Velopack updater pulls in ureq with the Mozilla CA bundle,
 # whose licence is the permissive data licence CDLA-Permissive-2.0. Allowed for this one crate only.
 exceptions = [
     { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+    # Fonts bundled by egui; font licences only for this crate (texts in LICENSES/).
+    { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
 ]
 
 [licenses.private]
