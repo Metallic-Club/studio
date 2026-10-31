@@ -15,7 +15,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use metallic_core::{AttributeChanges, AttributeCursor, CoreError, Value as CoreValue};
+use metallic_core::{
+    AttributeChanges, AttributeCursor, CoreError, Value as CoreValue, check_attribute_name,
+};
 use mlua::{Function, Lua, Table, UserDataRef, Value};
 
 use super::cframe::cframe;
@@ -126,6 +128,10 @@ pub(crate) fn methods(lua: &Lua) -> mlua::Result<Vec<(&'static str, Function)>> 
     })?;
     let signal = lua.create_function(|lua, (this, name): (UserDataRef<LuaInstance>, String)| {
         live(&this)?;
+        // Names are validated like SetAttribute's, so a signal cannot be made for a name no
+        // attribute can have (and nothing of any length is stored).
+        check_attribute_name(&name)
+            .map_err(|e| lua_error(format!("invalid attribute name: {e}")))?;
         let id = this.state.attribute_name_id(&name)?;
         lua.create_userdata(LuaSignal {
             state: this.state.clone(),
@@ -155,6 +161,11 @@ impl ApiState {
         Ok(id)
     }
 
+    /// Where this VM has read the world's attribute log up to.
+    pub(crate) fn attribute_cursor(&self) -> AttributeCursor {
+        self.attributes.cursor.get()
+    }
+
     /// Fires `AttributeChanged` and `GetAttributeChangedSignal` handlers for what changed in the
     /// world since this VM last looked. Called once per `step`.
     pub(crate) fn deliver_attribute_changes(self: &Rc<Self>) {
@@ -167,8 +178,14 @@ impl ApiState {
             let (changes, next) = world.attribute_changes_since(cursor);
             self.attributes.cursor.set(next);
             match changes {
-                // Too many changes since the last step: the individual events are lost.
-                AttributeChanges::Overflow => return,
+                // The log is trimmed by its readers, so this needs hundreds of thousands of
+                // unread changes: say so instead of dropping the events silently.
+                AttributeChanges::Overflow => {
+                    self.sink.warn(
+                        "attribute change events were lost: too many attribute changes in one step",
+                    );
+                    return;
+                }
                 AttributeChanges::Changes(list) => list
                     .into_iter()
                     .filter(|c| world.is_alive(c.id))

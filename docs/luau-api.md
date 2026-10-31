@@ -60,7 +60,12 @@ Any instance (parts, models, services, scripts) can carry named values outside i
 - `inst.AttributeChanged:Connect(function(name) ... end)` and `inst:GetAttributeChangedSignal(name):Connect(function() ... end)`
   fire for a set, change or removal. Like the other signals they run in the next `step`, whoever made the change (this VM, the
   other VM or the editor); the handler reads the current value with `GetAttribute`, so two changes in one step fire twice and
-  both see the last value. A VM can make signals for at most 4096 different attribute names.
+  both see the last value. `GetAttributeChangedSignal(name)` checks the name like `SetAttribute` does, and a VM can make
+  signals for at most 4096 different attribute names. No event is dropped silently: the world keeps every change until each
+  VM has read it (hundreds of thousands fit), and handler calls that do not fit in a step's time budget wait for later steps
+  (a full queue warns).
+- Attribute data is outside the VM's memory cap, so a world holds at most 16 MiB of it (names, values and, with tags,
+  tags); beyond that `SetAttribute` and `Clone()` raise a budget error until something is removed or destroyed.
 - `Clone()` copies attributes; scene files store them (`attributes: [("Name", Value), ...]` per instance, written only when
   there are any, so older files and older Studios keep working); Studio shows them under **Attributes** in Properties (add,
   edit Bool/Number/String, remove; every change is one undo step).

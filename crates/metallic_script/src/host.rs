@@ -196,6 +196,15 @@ impl ScriptHost {
         for side in self.sides() {
             side.state.deliver_attribute_changes();
         }
+        // Every reader of the attribute log is past what it delivered: drop those entries.
+        let cursors: Vec<_> = self
+            .sides()
+            .iter()
+            .map(|s| s.state.attribute_cursor())
+            .collect();
+        if let Ok(mut world) = self.world.try_borrow_mut() {
+            world.trim_attribute_log(&cursors);
+        }
 
         let run_service = self
             .world

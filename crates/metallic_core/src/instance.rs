@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod extras;
 pub use extras::{
     AttributeChange, AttributeChanges, AttributeCursor, MAX_ATTRIBUTE_NAME, MAX_ATTRIBUTE_STRING,
-    MAX_ATTRIBUTES, check_attribute_name, check_attribute_value,
+    MAX_ATTRIBUTES, MAX_EXTRAS_BYTES, check_attribute_name, check_attribute_value,
 };
 use extras::{AttributeLog, Extras};
 
@@ -103,6 +103,8 @@ pub struct World {
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
     attribute_log: AttributeLog,
+    /// Bytes of attribute data held, against `MAX_EXTRAS_BYTES`.
+    extras_bytes: usize,
 }
 
 impl World {
@@ -119,6 +121,7 @@ impl World {
             journal: Vec::new(),
             journal_floor: 0,
             attribute_log: AttributeLog::default(),
+            extras_bytes: 0,
         }
     }
 
@@ -315,6 +318,9 @@ impl World {
                 continue;
             };
             if let Some(node) = slot.node.take() {
+                if let Some(extras) = &node.extras {
+                    self.extras_bytes -= extras::extras_cost(extras);
+                }
                 stack.extend(node.children);
                 slot.generation += 1;
                 self.free.push(cur.index);
@@ -591,6 +597,18 @@ impl World {
         if !self.is_alive(id) {
             return Err(CoreError::InvalidInstance);
         }
+        // The copy holds its own attributes: refuse a clone the world has no budget for.
+        let extra = self.subtree_extras_cost(id);
+        if self.extras_bytes + extra > MAX_EXTRAS_BYTES {
+            return Err(CoreError::InvalidValue {
+                property: "Clone".into(),
+                reason: format!(
+                    "the attribute data budget of a world is {} MiB",
+                    MAX_EXTRAS_BYTES >> 20
+                ),
+            });
+        }
+        self.extras_bytes += extra;
         let mut map = HashMap::new();
         let root = self.clone_rec(id, None, &mut map);
         self.roots.push(root);
@@ -652,6 +670,7 @@ impl World {
             journal: Vec::new(),
             journal_floor: 0,
             attribute_log: AttributeLog::default(),
+            extras_bytes: self.extras_bytes,
         }
     }
 }

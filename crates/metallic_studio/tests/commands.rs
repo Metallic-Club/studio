@@ -361,3 +361,43 @@ fn attributes_follow_delete_undo_and_duplicate() {
         Some(&Value::String("Red".into()))
     );
 }
+
+#[test]
+fn dragging_a_number_attribute_is_one_undo_step() {
+    use metallic_studio::properties::Properties;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    s.apply(Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Nil,
+        new: Value::Number(1.0),
+    })
+    .unwrap();
+    let before = s.history.len();
+    let mut p = Properties::new();
+    for i in 1..=100 {
+        p.scrub_attribute(&mut s, a, "Speed", 1.0 + f64::from(i) * 0.1);
+        assert_eq!(
+            s.history.len(),
+            before,
+            "nothing is recorded during the drag"
+        );
+    }
+    // The world shows the live value.
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(11.0)));
+    p.end_attribute_scrub(&mut s);
+    assert_eq!(s.history.len(), before + 1, "one step for the whole drag");
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(1.0)));
+    s.redo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(11.0)));
+    // A drag that ends where it started records nothing; a second end does nothing.
+    let before = s.history.len();
+    p.scrub_attribute(&mut s, a, "Speed", 5.0);
+    p.scrub_attribute(&mut s, a, "Speed", 11.0);
+    p.end_attribute_scrub(&mut s);
+    p.end_attribute_scrub(&mut s);
+    assert_eq!(s.history.len(), before);
+}

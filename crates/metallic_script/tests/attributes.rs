@@ -300,3 +300,82 @@ fn only_a_bounded_number_of_signal_names_per_vm() {
     );
     assert!(lines.contains(&"print:true".to_string()), "{lines:?}");
 }
+
+#[test]
+fn signal_names_are_validated_like_attribute_names() {
+    let mut rig = Rig::new();
+    part(&rig, "P");
+    let lines = run(
+        &mut rig,
+        "local p = workspace.P
+         local function try(name) local ok, e = pcall(p.GetAttributeChangedSignal, p, name) print(ok, e) end
+         try('')
+         try('has space')
+         try('RBXThing')
+         try(string.rep('a', 5000))
+         try('Fine_1')",
+    );
+    let falses = lines
+        .iter()
+        .filter(|l| l.starts_with("print:false") && l.contains("invalid attribute name"))
+        .count();
+    assert_eq!(falses, 4, "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.starts_with("print:true")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn thousands_of_changes_in_one_step_all_arrive_in_order() {
+    let mut rig = Rig::new();
+    part(&rig, "P");
+    rig.server_script(
+        "Main",
+        "local p = workspace.P
+         local seen, last, ordered = 0, -1, true
+         p.AttributeChanged:Connect(function(name)
+             seen += 1
+             local n = tonumber(string.sub(name, 2))
+             if n ~= (last + 1) % 100 then ordered = false end
+             last = n
+         end)
+         for i = 0, 5999 do p:SetAttribute('a' .. (i % 100), i) end
+         task.wait(2)
+         print(seen, ordered)",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 300);
+    let lines = rig.lines();
+    assert!(lines.contains(&"print:6000 true".to_string()), "{lines:?}");
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("lost") || l.contains("dropped")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn the_host_trims_the_log_it_has_delivered() {
+    let mut rig = Rig::new();
+    part(&rig, "P");
+    let before = rig.world.borrow().attribute_cursor();
+    rig.server_script(
+        "Main",
+        "local p = workspace.P
+         for i = 1, 100 do p:SetAttribute('x', i) end",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 3);
+    // Both VMs have read everything, so the log was trimmed past a cursor taken before it.
+    assert_eq!(
+        rig.world.borrow().attribute_changes_since(before).0,
+        metallic_core::AttributeChanges::Overflow
+    );
+    let now = rig.world.borrow().attribute_cursor();
+    assert_eq!(
+        rig.world.borrow().attribute_changes_since(now).0,
+        metallic_core::AttributeChanges::Changes(Vec::new())
+    );
+}
