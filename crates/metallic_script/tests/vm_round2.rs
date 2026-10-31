@@ -576,6 +576,7 @@ fn concat_behaves_exactly_like_the_raw_c_function() {
             local ok, r = pcall(function() return table.concat(table.unpack(args, 1, args.n)) end)
             return tostring(ok) .. '|' .. (ok and #r or strip(r))
         end
+        function mkz(n) local t = mk(n) t[0] = 'z' t[-1] = 'y' return t end
         function mk(n, holes)
             local t = {}
             for i = 1, n do t[i] = (i % 7) .. 'x' end
@@ -622,6 +623,34 @@ fn concat_behaves_exactly_like_the_raw_c_function() {
             }
             for sep in ["5", "''", "{}"] {
                 calls.push(format!("show(mk({n}, {hole}), {sep})"));
+            }
+        }
+    }
+    // A value at index 0 (and -1): a start or end the platform reads as 0 or -1 walks it.
+    for n in ["1", "8193", "50000"] {
+        for i in [
+            "0/0",
+            "math.huge",
+            "-math.huge",
+            "2^53",
+            "-2^53",
+            "2^31",
+            "'1e30'",
+            "'-1e30'",
+            "nil",
+        ] {
+            for j in [
+                "nil",
+                "0/0",
+                "math.huge",
+                "-math.huge",
+                "2^53",
+                "-2^53",
+                "'1e30'",
+                "-1",
+                "0",
+            ] {
+                calls.push(format!("show(mkz({n}), ',', {i}, {j})"));
             }
         }
     }
