@@ -21,7 +21,6 @@
 //!   zone, response curve, scale; composites; Bool OR and largest-magnitude combine; the triggers
 //!   Press, Release, Hold, Tap, DoubleTap and Repeat measured in event time; context priority
 //!   and sink; the last-used device with its hysteresis rule.
-//! - [`ScriptedSource`]: `--input-script` files and tests.
 //! - [`overrides`]: the player's changes (rebound controls, hold or toggle, stick and mouse
 //!   sensitivity, inversion and dead zone, the hold assists) as a JSON file of differences per
 //!   game ([`OverrideStore`]); [`InputRuntime::set_overrides`] applies them.
@@ -29,6 +28,10 @@
 //!   listening, conflicts with Swap / Replace / Cancel, `Required` and `Menu`.
 //! - [`glyph`]: how a binding looks (keycaps, mouse, a generic gamepad in Letters or Positions
 //!   style); [`InputRuntime::glyphs`] caches them per action and device.
+//! - [`touch`]: the automatic touch controls (spec 7): which actions get a stick, a look pad or
+//!   a button, the layout rule, finger routing and the overlay's drawing. Fingers become
+//!   `Device::Touch` events on `TouchStick`, `TouchLook` and `TouchButton1` to `TouchButton7`.
+//! - [`ScriptedSource`]: `--input-script` files and tests (also finger lines for touch).
 
 mod config;
 mod control;
@@ -39,23 +42,25 @@ mod runtime;
 mod script;
 #[cfg(test)]
 mod tests;
+pub mod touch;
+
 #[cfg(test)]
 mod tests_controls;
 
 pub use config::{
     ActionDef, ActionType, BindingDef, CHARACTER_CONTROLS, ContextDef, DEFAULT_GROUP, InputConfig,
     MENU_ACTION, MOUSE_ORBIT_SPEED, PAD_ZOOM_SPEED, Role, STICK_ORBIT_SPEED, SYSTEM_CONTEXT,
-    SYSTEM_GROUP, SYSTEM_PRIORITY, Trigger, ZOOM_PER_NOTCH, default_character_controls,
-    system_context,
+    SYSTEM_GROUP, SYSTEM_PRIORITY, TouchPlacement, TouchSlot, Trigger, ZOOM_PER_NOTCH,
+    default_character_controls, system_context,
 };
 pub use control::{
     CONTROL_COUNT, Control, ControlKind, Device, DeviceKind, InputQueue, MAX_GAMEPADS,
-    QUEUE_CAPACITY, RawEvent, RawSource,
+    QUEUE_CAPACITY, RawEvent, RawSource, TOUCH_BUTTON_SLOTS,
 };
 pub use glyph::{GamepadStyle, Glyph};
-pub use overrides::{OverrideStore, PlayerOverrides, Slot};
+pub use overrides::{OverrideStore, PlayerOverrides, Slot, TouchSettings};
 pub use runtime::{ActionEvent, ActionEventKind, ActionId, ActionValue, InputRuntime};
-pub use script::ScriptedSource;
+pub use script::{FingerEvent, ScriptedSource};
 
 /// Stick tilt below this counts as centred (the default dead zone of `Thumbstick1` and
 /// `Thumbstick2`, radial and rescaled so the output starts from 0).

@@ -3554,6 +3554,7 @@ dependencies = [
  "metallic_physics",
  "metallic_render",
  "metallic_script",
+ "metallic_tokens",
  "png",
  "serde",
  "serde_json",

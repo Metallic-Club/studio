@@ -97,7 +97,8 @@ apps.
   snapshots for ordinary property/pose ticks, and falls back to cache reconciliation on lost history or a new world.
   The physics wrapper retains its own synchronization/reset contract; no physics API is added by this cache.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
-  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F] [--no-overrides] [--menu PAGE]`; winit window, wgpu
+  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F] [--no-overrides] [--menu PAGE]
+  [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]`; winit window, wgpu
   surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless mode for smoke tests (no window, no GPU).
   `devices.rs` holds the winit key and mouse mapping and the gilrs `GamepadSource` (the mapping table of spec 4.2); both
   produce `RawEvent`s for the runtime. `menu/` is the Player menu (#254): Resume, Controls, Leave game. The Controls
@@ -105,6 +106,9 @@ apps.
   `menu/glyph_paint.rs`, the in-play hint in `menu/hud.rs`) takes raw events while open, so it works with keyboard,
   mouse or gamepad alone. `controls_store.rs` and `data_dir.rs` load and save the overrides per game in the Player's
   own data folder (`%APPDATA%\MetallicPlayer`, `METALLIC_PLAYER_DATA_DIR` overrides it).
+  `touch_overlay.rs` connects the automatic touch controls to winit: real touches, device emulation (the window takes
+  the device's shape, the mouse is a finger, a right click pins a second one), the 140 ms fade and `TouchImage` files;
+  it logs the overlay's draw time at the end of a windowed emulated run.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -218,7 +222,8 @@ Games listen to actions, never to raw keys (design: `docs/design/input-actions.m
 sections 3, 4.1, 4.2, 4.4 and 6).
 
 ```
-winit keys/mouse, gilrs pads, --input-script  ->  RawEvent  ->  InputQueue (1,024 per frame)
+winit touches, --emulate mouse, finger script lines  ->  TouchControls (layout, finger capture)  --+
+winit keys/mouse, gilrs pads, --input-script  ->  RawEvent  ->  InputQueue (1,024 per frame)  <--+
 InputRuntime::evaluate(now, dt):  bindings -> actions (values, Pressed/Released/Triggered/StateChanged events)
 InputRuntime::frame_input():      CharacterControls actions -> FrameInput   (Move, Jump, Run, Look, Zoom)
 Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read FrameInput
@@ -250,7 +255,16 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
   hold-time scale, per-stick sensitivity, dead zone and invert. `glyph.rs` maps controls to drawn glyphs (keycaps,
   mouse, Letters and Positions face buttons; no brand art); `InputRuntime::glyph(s)` caches them per action and
   device, and `glyph_changes()` counts changes of device, binding or style.
-- **Not yet** (later phases, spec section 15): touch controls (#252), Studio panel (#253), Luau glyph API.
+- **Touch** (#252, spec 7, `input/touch/`). `TouchSet` picks the controls on every load: a Direction2D action with
+  `ShowOnTouch` gets the stick or the look pad (`TouchSlot`, role, context priority), Bool actions get buttons sorted by
+  `TouchOrder` (at most 6, plus the menu button for role `Menu`). The runtime adds implicit bindings: `TouchStick`
+  (dead zone 0.15), `TouchLook` (0.01 rad per dp) and `TouchButton1` to `TouchButton7`. `layout(profile, set)` is the
+  pure placement rule in dp (48 dp minimum, 8 dp gaps, 16 dp inside the safe area, spare ring slots for narrow
+  screens). `TouchControls` captures each finger with the first thing it lands on and pushes `Device::Touch` events;
+  sliding off a button sends `RawEvent::cancel` (Released without Triggered). `paint` draws it with egui in the
+  visual-language colours. `ContextActionService:GetButton` reads the placed buttons (`Game::set_touch_buttons`).
+  The Controls page's touch settings (stick mode, opacity) drive the overlay; touch controls have their own glyphs.
+- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, a touch tab on the Controls page.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
