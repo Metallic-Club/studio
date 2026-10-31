@@ -677,3 +677,123 @@ fn replica_physics_never_moves_loose_parts() {
             .is_some()
     );
 }
+
+#[test]
+fn filtered_raycast_include_exclude_and_can_collide() {
+    use metallic_physics::RayQuery;
+    let mut world = World::new_with_services();
+    let near = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, -10.0),
+        Vec3::new(4.0, 4.0, 4.0),
+        true,
+    );
+    let far = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, -20.0),
+        Vec3::new(4.0, 4.0, 4.0),
+        true,
+    );
+    let ghost = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, -5.0),
+        Vec3::new(4.0, 1.0, 4.0),
+        true,
+    );
+    world.set(ghost, "CanCollide", Value::Bool(false)).unwrap();
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    let origin = Vec3::new(0.0, 0.0, 0.0);
+    let dir = Vec3::new(0.0, 0.0, -100.0);
+    let query = |include, instances: &'static [InstanceId], respect| RayQuery {
+        include,
+        instances,
+        respect_can_collide: respect,
+    };
+    // A part that is not CanCollide is hit unless the query respects CanCollide.
+    let hit = phys
+        .raycast_filtered(origin, dir, &query(false, &[], false))
+        .unwrap();
+    assert_eq!(hit.instance, ghost);
+    let hit = phys
+        .raycast_filtered(origin, dir, &query(false, &[], true))
+        .unwrap();
+    assert_eq!(hit.instance, near);
+    // Exclude skips the listed parts.
+    let list = Box::leak(Box::new([ghost, near]));
+    let hit = phys
+        .raycast_filtered(origin, dir, &query(false, list, false))
+        .unwrap();
+    assert_eq!(hit.instance, far);
+    // Include hits only the listed parts, nearest first.
+    let list = Box::leak(Box::new([far, near]));
+    let hit = phys
+        .raycast_filtered(origin, dir, &query(true, list, false))
+        .unwrap();
+    assert_eq!(hit.instance, near);
+    let list = Box::leak(Box::new([far]));
+    let hit = phys
+        .raycast_filtered(origin, dir, &query(true, list, false))
+        .unwrap();
+    assert_eq!(hit.instance, far);
+    // Include with nothing listed hits nothing.
+    assert!(
+        phys.raycast_filtered(origin, dir, &query(true, &[], false))
+            .is_none()
+    );
+}
+
+#[test]
+fn a_ray_that_starts_inside_a_part_skips_it_and_the_normal_is_unit() {
+    let mut world = World::new_with_services();
+    let big = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(10.0, 10.0, 10.0),
+        true,
+    );
+    let wall = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, -30.0),
+        Vec3::new(10.0, 10.0, 2.0),
+        true,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    let _ = big;
+    // Starts inside `big`: it is not hit (as in Roblox), the wall is, with a unit normal.
+    let hit = phys
+        .raycast(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -100.0), &[])
+        .unwrap();
+    assert_eq!(hit.instance, wall);
+    assert!(
+        (hit.normal.magnitude() - 1.0).abs() < 1e-6,
+        "{:?}",
+        hit.normal
+    );
+    assert!((hit.normal.z - 1.0).abs() < 1e-6);
+    assert!((hit.distance - 29.0).abs() < 1e-3);
+    // Starting inside with nothing else ahead finds nothing.
+    assert!(
+        phys.raycast(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 100.0, 0.0), &[])
+            .is_none()
+    );
+    // Every hit normal is unit length.
+    for dir in [
+        Vec3::new(1.0, 0.3, -100.0),
+        Vec3::new(-0.7, 0.9, -100.0),
+        Vec3::new(0.0, -0.2, -100.0),
+    ] {
+        let hit = phys.raycast(Vec3::new(0.0, 0.0, 12.0), dir, &[]).unwrap();
+        assert!((hit.normal.magnitude() - 1.0).abs() < 1e-6);
+    }
+    // Non-finite input finds nothing.
+    assert!(
+        phys.raycast(
+            Vec3::new(f64::NAN, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            &[]
+        )
+        .is_none()
+    );
+}

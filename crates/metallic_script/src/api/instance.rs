@@ -35,6 +35,7 @@ const CLASS_METHODS: &[(&str, &str)] = &[
     ("FireServer", "RemoteEvent"),
     ("FireClient", "RemoteEvent"),
     ("FireAllClients", "RemoteEvent"),
+    ("Raycast", "Workspace"),
     ("GetState", "InputAction"),
     ("GetHoldProgress", "InputAction"),
     // PVInstance methods: BasePart and Model (PVInstance itself is not a registry class).

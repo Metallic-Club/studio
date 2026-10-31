@@ -14,8 +14,7 @@ use std::rc::Rc;
 
 use metallic_core::{InstanceId, Value as CoreValue, Vec3};
 use mlua::{
-    Function, Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods, UserDataRef,
-    Value,
+    Function, Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods, UserDataRef, Value,
 };
 
 use super::datatypes::{LuaVector3, vector};

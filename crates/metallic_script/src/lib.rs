@@ -20,6 +20,7 @@
 mod api;
 mod host;
 mod pattern;
+mod scene;
 mod task_lib;
 mod vm;
 
@@ -29,6 +30,7 @@ pub use api::{
 };
 pub use api::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
 pub use host::{LOCAL_PLAYER_NAME, ScriptHost};
+pub use scene::{SceneHit, SceneQuery, SceneRay};
 pub use vm::{
     Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,
     ScriptVm,

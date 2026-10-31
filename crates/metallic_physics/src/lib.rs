@@ -511,9 +511,19 @@ impl PhysicsWorld {
     /// Like [`Self::raycast`], with a filter: `query.instances` are the only parts that can be
     /// hit (`include`) or the parts that are skipped. Parts with `CanCollide = false` are hit
     /// unless `query.respect_can_collide` (Roblox's `RaycastParams.RespectCanCollide`).
-    pub fn raycast_filtered(&self, origin: Vec3, dir: Vec3, query: &RayQuery<'_>) -> Option<RayHit> {
+    pub fn raycast_filtered(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        query: &RayQuery<'_>,
+    ) -> Option<RayHit> {
         let max = dir.magnitude();
-        if max <= 0.0 || !max.is_finite() || !origin.x.is_finite() || !origin.y.is_finite() || !origin.z.is_finite() {
+        if max <= 0.0
+            || !max.is_finite()
+            || !origin.x.is_finite()
+            || !origin.y.is_finite()
+            || !origin.z.is_finite()
+        {
             return None;
         }
         let unit = dir.unit();

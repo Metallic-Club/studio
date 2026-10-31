@@ -128,6 +128,11 @@ impl ScriptHost {
         }
     }
 
+    /// Gives `workspace:Raycast` something to ask. Without one, `Raycast` finds nothing.
+    pub fn set_scene_query(&mut self, query: Rc<dyn crate::SceneQuery>) {
+        *self.shared.scene.borrow_mut() = Some(query);
+    }
+
     /// True between `start` and `stop`.
     pub fn is_running(&self) -> bool {
         self.server.is_some()

@@ -61,6 +61,31 @@ pub struct FrameOutput {
     pub state: Option<HumanoidState>,
 }
 
+/// What `workspace:Raycast` asks: the game's physics.
+struct PhysicsQuery(Rc<RefCell<PhysicsWorld>>);
+
+impl metallic_script::SceneQuery for PhysicsQuery {
+    fn raycast(&self, ray: &metallic_script::SceneRay) -> Option<metallic_script::SceneHit> {
+        // The physics is only borrowed by the game between script steps.
+        let physics = self.0.try_borrow().ok()?;
+        let hit = physics.raycast_filtered(
+            ray.origin,
+            ray.direction,
+            &metallic_physics::RayQuery {
+                include: ray.include,
+                instances: &ray.parts,
+                respect_can_collide: ray.respect_can_collide,
+            },
+        )?;
+        Some(metallic_script::SceneHit {
+            instance: hit.instance,
+            position: hit.position,
+            normal: hit.normal,
+            distance: hit.distance,
+        })
+    }
+}
+
 /// One running game: the world, its physics, characters, scripts and camera.
 ///
 /// The world is shared with the script host as `Rc<RefCell<World>>`; the game never holds a
@@ -206,6 +231,9 @@ impl Game {
         if self.running {
             return Ok(());
         }
+        // The parts are in the physics before any script runs, so a raycast at the top of a
+        // script already hits them (parts the scripts create are added after the next tick).
+        self.sync_physics_now();
         self.scripts
             .start()
             .map_err(|e| RuntimeError::Start(e.message))?;
@@ -391,9 +419,9 @@ impl Game {
             self.focus = root + Vec3::new(0.0, FOCUS_HEIGHT, 0.0);
         }
         let ignore = self.character_parts();
-        self.last_camera = self
-            .camera
-            .camera(self.focus, &self.physics.borrow(), &ignore, dt as f32);
+        self.last_camera =
+            self.camera
+                .camera(self.focus, &self.physics.borrow(), &ignore, dt as f32);
         FrameOutput {
             camera: self.last_camera,
             ticks,
@@ -511,8 +539,13 @@ impl Game {
                 return false;
             };
             if let Some(character) = self.character {
-                self.characters
-                    .step(&mut world, &self.physics.borrow(), character, move_input, TICK);
+                self.characters.step(
+                    &mut world,
+                    &self.physics.borrow(),
+                    character,
+                    move_input,
+                    TICK,
+                );
                 // The body animation advances with the simulation, so the touch volumes follow
                 // the limbs on any host, headless or not.
                 self.bodies
@@ -575,7 +608,8 @@ impl Game {
             self.scripts.touched(a, b);
             self.scripts.touched(b, a);
         }
-        for (a, b) in self.physics.drain_touch_ended() {
+        let ended = self.physics.borrow_mut().drain_touch_ended();
+        for (a, b) in ended {
             self.scripts.touch_ended(a, b);
             self.scripts.touch_ended(b, a);
         }
