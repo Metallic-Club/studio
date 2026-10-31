@@ -230,13 +230,15 @@ impl MaterialTable {
     }
 
     /// Sets (or replaces) the shading of a style slot. Rows change only when the shading does.
-    ///
-    /// # Panics
-    /// If `slot` is not below [`MAX_STYLES`].
-    pub fn set_style(&mut self, slot: usize, shading: &Shading) {
-        assert!(slot < MAX_STYLES, "style slot {slot} out of range");
+    /// A slot of [`MAX_STYLES`] or more is ignored with a warning (it has no rows), and the
+    /// call returns false; otherwise it returns true.
+    pub fn set_style(&mut self, slot: usize, shading: &Shading) -> bool {
+        if slot >= MAX_STYLES {
+            log::warn!("material table: style slot {slot} ignored (slots are 0..{MAX_STYLES})");
+            return false;
+        }
         if self.styles[slot].as_ref() == Some(shading) {
-            return;
+            return true;
         }
         let base = slot * ROWS_PER_STYLE;
         for (i, m) in MATERIAL_TABLE.iter().enumerate() {
@@ -247,6 +249,7 @@ impl MaterialTable {
         self.rows[base + CHARACTER_ROW] = MaterialRow::new(&character, &MATERIAL_TABLE[0]);
         self.styles[slot] = Some(shading.clone());
         self.dirty = true;
+        true
     }
 
     /// The shading of a style slot, if set.
@@ -297,6 +300,19 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn slots_past_the_table_are_ignored() {
+        let mut t = MaterialTable::default();
+        assert!(t.take_dirty());
+        let before = *t.rows();
+        assert!(!t.set_style(MAX_STYLES, &Shading::uniform(ModelParams::UNLIT)));
+        assert!(!t.set_style(usize::MAX, &Shading::uniform(ModelParams::UNLIT)));
+        assert!(!t.take_dirty(), "nothing to upload");
+        assert_eq!(*t.rows(), before);
+        assert!(t.style(MAX_STYLES).is_none());
+        assert!(t.set_style(MAX_STYLES - 1, &Shading::uniform(ModelParams::UNLIT)));
     }
 
     #[test]

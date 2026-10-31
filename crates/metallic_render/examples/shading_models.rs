@@ -1,9 +1,11 @@
 //! Renders the reference scene under each shading model and times them at 1080p (#63).
 //!
-//! `cargo run --release -p metallic_render --example shading_models -- OUT_DIR [WIDTH HEIGHT]`
-//! writes `OUT_DIR/<name>.png` (default 960 x 540) for the shadings below and prints, per
-//! shading, the median, 10th and 90th percentile frame time at 1920 x 1080 over 200 frames
-//! (submit to idle, High quality), and the luma mean / p1 / p99 and mean chroma of each image. `docs/rendering/shading-models/` holds its output.
+//! `cargo run --release -p metallic_render --example shading_models -- OUT_DIR [WIDTH HEIGHT]
+//! [--software]` writes `OUT_DIR/<name>.png` (default 960 x 540) for the shadings below and
+//! prints, per shading, the luma mean / p1 / p99 and mean chroma of the image, then the median,
+//! 10th and 90th percentile GPU time of a 1920 x 1080 frame (High quality) from timestamp
+//! queries, over 200 frames (20 on the software adapter). Without timestamp queries it prints
+//! wall-clock time from submit to idle instead. `--software` uses the software adapter (WARP). `docs/rendering/shading-models/` holds its output.
 #[path = "../tests/support/reference_scene.rs"]
 mod reference_scene;
 
@@ -115,12 +117,19 @@ fn write_png(path: &std::path::Path, px: &[u8], (w, h): (u32, u32)) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    let software = args.iter().any(|a| a == "--software");
+    args.retain(|a| a != "--software");
     let out = std::path::PathBuf::from(args.get(1).map_or("shading-models", String::as_str));
     let width: u32 = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(960);
     let height: u32 = args.get(3).and_then(|a| a.parse().ok()).unwrap_or(540);
     std::fs::create_dir_all(&out).expect("output folder");
-    let ctx = RenderContext::new_headless().expect("headless device");
+    let ctx = if software {
+        RenderContext::new_headless_software()
+    } else {
+        RenderContext::new_headless()
+    }
+    .expect("headless device");
     println!("adapter: {}", ctx.adapter_name);
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut renderer = Renderer::with_settings(
@@ -132,6 +141,9 @@ fn main() {
     );
     renderer.sync(&reference_world());
     let cam = reference_camera();
+    let timestamps = renderer.enable_gpu_timing();
+    let (warm, frames) = if software { (3, 20) } else { (60, 200) };
+    let clock = if timestamps { "GPU" } else { "wall" };
 
     let size = (1920, 1080);
     let tex = ctx.device.create_texture(&wgpu::TextureDescriptor {
@@ -159,18 +171,19 @@ fn main() {
             "{name:<13} luma mean {mean:.3} p1 {p1:.3} p99 {p99:.3} chroma {:.3}",
             chroma(&px)
         );
-        let mut ms = Vec::with_capacity(200);
-        for i in 0..260 {
+        let mut ms = Vec::with_capacity(frames);
+        for i in 0..warm + frames {
             let t = std::time::Instant::now();
             renderer.render(&view, &cam, size);
+            let gpu = renderer.read_gpu_time_ms();
             let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
-            if i >= 60 {
-                ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            if i >= warm {
+                ms.push(gpu.unwrap_or_else(|| t.elapsed().as_secs_f64() * 1000.0));
             }
         }
         ms.sort_by(f64::total_cmp);
         println!(
-            "{name:<13} 1080p: median {:.3} ms, p10 {:.3}, p90 {:.3}",
+            "{name:<13} 1080p {clock}: median {:.3} ms, p10 {:.3}, p90 {:.3}",
             ms[ms.len() / 2],
             ms[ms.len() / 10],
             ms[ms.len() * 9 / 10]

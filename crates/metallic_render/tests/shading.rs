@@ -272,3 +272,26 @@ fn the_character_row_shades_standard_skinned_meshes() {
     r.set_skinned(&[instance(SkinStyle::Toon)]);
     assert_eq!(r.capture(&cam, SIZE).expect("capture"), toon_style);
 }
+
+#[test]
+fn gpu_timing_measures_a_frame_where_supported() {
+    let _gpu = gpu();
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let mut r = renderer(&ctx);
+    r.sync(&scene());
+    assert_eq!(r.read_gpu_time_ms(), None, "off by default");
+    if !r.enable_gpu_timing() {
+        eprintln!("no timestamp queries on {}, skipping", ctx.adapter_name);
+        return;
+    }
+    assert_eq!(r.read_gpu_time_ms(), None, "no frame yet");
+    r.capture(&camera(), SIZE).expect("capture");
+    let ms = r.read_gpu_time_ms().expect("a timed frame");
+    assert!(ms > 0.0 && ms < 1000.0, "{ms} ms");
+    // Readable again after the next frame (the readback buffer was unmapped).
+    r.capture(&camera(), SIZE).expect("capture");
+    assert!(r.read_gpu_time_ms().is_some());
+}
