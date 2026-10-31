@@ -79,16 +79,25 @@ impl Theme {
     }
 }
 
-/// Reads a theme word, giving the default for a word this build does not know.
+/// Reads a theme word, giving the default for a word this build does not know or a value that is
+/// not a word at all (`theme = 3`), so a bad theme never costs the other settings.
 fn theme_or_default<'de, D>(deserializer: D) -> Result<Theme, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let word = String::deserialize(deserializer)?;
-    Ok(Theme::ALL
-        .into_iter()
-        .find(|theme| theme.as_str() == word)
-        .unwrap_or_default())
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Word(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Word(word) => Theme::ALL
+            .into_iter()
+            .find(|theme| theme.as_str() == word)
+            .unwrap_or_default(),
+        Value::Other(_) => Theme::default(),
+    })
 }
 
 impl Default for LauncherSettings {

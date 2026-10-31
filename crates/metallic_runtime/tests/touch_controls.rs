@@ -1,5 +1,7 @@
 //! End to end (spec 14, #252): a finger on an automatic touch button fires the `InputAction`
 //! for a LocalScript, and `ContextActionService:GetButton` returns the overlay's button.
+#![cfg(feature = "presentation")]
+
 use metallic_core::{Value, World};
 use metallic_runtime::input::touch::{DeviceProfile, TouchButtonInfo, TouchControls, TouchPhase};
 use metallic_runtime::{Game, InputRuntime, TICK};
