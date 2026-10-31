@@ -5,9 +5,11 @@ Clickable UI (GuiButton, TextButton, ImageButton) follows in a second PR.
 
 ## Design
 
-- Curves and the timeline come from `metallic_anim` (`ease`, the `TweenInfo::sample` rules: delay once, then
-  `RepeatCount + 1` cycles, `Reverses` doubles a cycle and ends at the start, a negative count repeats forever). The
-  script side keeps the timeline in f64; a unit test checks it against `metallic_anim::TweenInfo::sample`.
+- Curves come from `metallic_anim::ease` (Back and Elastic InOut use Penner's own forms, as Roblox). The timeline is
+  Roblox's: `RepeatCount + 1` cycles of one pass (two with `Reverses`, ending at the start), `DelayTime` before every
+  pass, a negative count repeats forever. `Info::phase` computes it in f64 (`Delayed`/`Playing`/`Finished`).
+- Memory: `Create` gives each `Tween` userdata a Lua buffer (its user value) as large as the Rust-side state, so the
+  goals count toward the VM's 256 MB Lua limit and an unbounded `Create` loop fails with "not enough memory".
 - Each VM owns a `Tweens` list. `ScriptHost::step` calls `advance_tweens(dt)` for each side after inputs and before
   `Heartbeat`: one world borrow, values lerped `a*(1-t) + b*t` (exact at both ends), exact goals written at the end.
   No wall clock, so a headless simulation (#309) is deterministic.

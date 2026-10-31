@@ -167,8 +167,11 @@ end)
 `TweenService:Create(instance, TweenInfo.new(time, style, direction, repeatCount, reverses, delayTime), goals)` returns
 a `Tween`. `TweenInfo.new` defaults: 1 s, `Enum.EasingStyle.Quad`, `Enum.EasingDirection.Out`, 0 repeats, no reverse,
 no delay; the fields read back (`info.Time`, `info.EasingStyle`, ...). All 11 Roblox easing styles (Linear, Sine, Back,
-Quad, Quart, Quint, Bounce, Elastic, Exponential, Circular, Cubic) and the three directions;
-`TweenService:GetValue(alpha, style, direction)` returns the curve.
+Quad, Quart, Quint, Bounce, Elastic, Exponential, Circular, Cubic) and the three directions (Penner's curves, InOut
+included); `TweenService:GetValue(alpha, style, direction)` returns the curve.
+- Timeline: `repeatCount + 1` cycles, each a pass to the goal and, with `reverses`, a pass back (ending at the start).
+  As in Roblox, `delayTime` is waited before every pass, reverses and repeats included (`PlaybackState` is `Delayed`
+  and the values hold). A negative `repeatCount` repeats forever.
 
 - Tweenable goals: number, `Vector3`, `Color3`, `UDim2`, `CFrame` (a part's `CFrame`, a model's `WorldPivot`) and bool,
   which keeps its start value until the tween ends and then snaps. Unknown, hidden or other-typed properties error in
@@ -181,8 +184,9 @@ Quad, Quart, Quint, Bounce, Elastic, Exponential, Circular, Cubic) and the three
 - Playing a tween cancels the other playing tweens of the same instance that animate one of its properties (a part's
   `CFrame` overlaps `Position` and `Orientation`).
 - Tweens advance on the host's step clock (`ScriptHost::step` `dt`), before `RunService.Heartbeat`, so a headless
-  host gives the same values every run. A step allocates nothing for playing tweens. At most 10,000 tweens play at
-  once per VM; `Play` beyond that errors.
+  host gives the same values every run. A step allocates nothing per playing tween. A tween's engine-side state counts
+  toward the script's memory limit while the `Tween` object lives, so creating tweens without bound fails like any
+  other allocation ("not enough memory"). At most 10,000 tweens play at once per VM; `Play` beyond that errors.
 
 ```lua
 local TweenService = game:GetService("TweenService")

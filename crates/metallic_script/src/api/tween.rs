@@ -3,10 +3,16 @@
 //! `TweenService:Create(instance, info, goals)` makes a [`LuaTween`]; `Play` starts it from the
 //! properties' values at that moment. Every playing tween of a VM advances once per host step,
 //! before `RunService.Heartbeat` fires, by the step's `dt`: no wall clock, so a headless host
-//! gives the same values on every run. Timeline, as in `metallic_anim::TweenInfo`: `DelayTime`
-//! once, then `RepeatCount + 1` cycles of `Time` seconds (twice that with `Reverses`, which ends
-//! back at the start); a negative `RepeatCount` repeats forever. Curves are
-//! `metallic_anim::ease`, Roblox's 11 styles by 3 directions.
+//! gives the same values on every run. Timeline, as in Roblox: `RepeatCount + 1` cycles, each
+//! a pass to the goal and, with `Reverses`, a pass back (ending at the start); `DelayTime` is
+//! waited before every pass, reverses and repeats included (`PlaybackState.Delayed`, the values
+//! held). A negative `RepeatCount` repeats forever. Curves are `metallic_anim::ease`, Roblox's
+//! 11 styles by 3 directions.
+//!
+//! Memory: a tween's Rust-side state (its goals) is charged to the VM's Lua memory budget, by a
+//! Lua buffer of the same size that its Lua object keeps alive, so `Create` in a loop runs into
+//! the same "not enough memory" limit as any other script allocation. Tweens playing after their
+//! Lua object was collected are bounded by [`MAX_PLAYING_TWEENS`].
 //!
 //! Tweenable: number, `Vector3`, `Color3`, `UDim2`, `CFrame` (a part's `CFrame`, a model's
 //! `WorldPivot` and CFrame properties) and bool, which keeps its start value until the tween
@@ -111,31 +117,50 @@ impl Default for Info {
     }
 }
 
+/// Where a tween is on its timeline (see [`Info::phase`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Phase {
+    /// Waiting `DelayTime` before pass `pass` (0 is the first), holding linear progress `hold`.
+    Delayed { pass: u64, hold: f64 },
+    /// Moving, at linear progress (`0` start, `1` goal).
+    Playing(f64),
+    /// Over, at linear progress `0` (it reversed) or `1`.
+    Finished(f64),
+}
+
 impl Info {
-    /// Linear progress (`0` start, `1` goal) at `elapsed` seconds after `Play`, and whether
-    /// the whole timeline is over. Same timeline as `metallic_anim::TweenInfo::sample`, in f64
-    /// so a long-running repeat keeps its precision.
-    fn progress(&self, elapsed: f64) -> (f64, bool) {
-        let t = elapsed - self.delay;
+    /// The phase `elapsed` seconds after `Play`. Every pass (to the goal, or back with
+    /// `Reverses`) is `DelayTime` of waiting, then `Time` of motion. Computed in f64 so a
+    /// long-running repeat keeps its precision.
+    fn phase(&self, elapsed: f64) -> Phase {
         let end = if self.reverses { 0.0 } else { 1.0 };
-        let cycle = if self.reverses {
-            2.0 * self.time
-        } else {
-            self.time
-        };
-        if cycle <= 0.0 {
-            return (end, self.repeat_count >= 0);
+        let per_cycle: u64 = if self.reverses { 2 } else { 1 };
+        let pass_time = self.delay + self.time;
+        let passes = (self.repeat_count >= 0)
+            .then(|| (u64::from(self.repeat_count.unsigned_abs()) + 1) * per_cycle);
+        if pass_time <= 0.0 {
+            return match passes {
+                Some(_) => Phase::Finished(end),
+                None => Phase::Playing(end),
+            };
         }
-        if self.repeat_count >= 0 && t >= cycle * (f64::from(self.repeat_count) + 1.0) {
-            return (end, true);
+        let t = elapsed.max(0.0);
+        let pass = (t / pass_time).floor() as u64;
+        if passes.is_some_and(|n| pass >= n) {
+            return Phase::Finished(end);
         }
-        let in_cycle = t.max(0.0).rem_euclid(cycle);
-        let linear = if in_cycle <= self.time {
-            in_cycle / self.time
+        let backward = self.reverses && pass % 2 == 1;
+        let within = t - pass as f64 * pass_time;
+        if within < self.delay {
+            let hold = if backward { 1.0 } else { 0.0 };
+            return Phase::Delayed { pass, hold };
+        }
+        let u = if self.time > 0.0 {
+            ((within - self.delay) / self.time).min(1.0)
         } else {
-            1.0 - (in_cycle - self.time) / self.time
+            1.0
         };
-        (linear, false)
+        Phase::Playing(if backward { 1.0 - u } else { u })
     }
 
     fn eased(&self, linear: f64) -> f64 {
@@ -298,12 +323,22 @@ impl TweenData {
             return false;
         }
         self.elapsed += dt;
-        if self.elapsed < self.info.delay {
-            self.state = PlaybackState::Delayed;
-            return true;
-        }
-        self.state = PlaybackState::Playing;
-        let (linear, finished) = self.info.progress(self.elapsed);
+        let (linear, finished) = match self.info.phase(self.elapsed) {
+            // Before the first pass nothing is written: the values are still the start.
+            Phase::Delayed { pass: 0, .. } => {
+                self.state = PlaybackState::Delayed;
+                return true;
+            }
+            Phase::Delayed { hold, .. } => {
+                self.state = PlaybackState::Delayed;
+                (hold, false)
+            }
+            Phase::Playing(linear) => {
+                self.state = PlaybackState::Playing;
+                (linear, false)
+            }
+            Phase::Finished(linear) => (linear, true),
+        };
         let eased = self.info.eased(linear);
         for prop in &self.props {
             let value = match (finished, prop.start) {
@@ -579,10 +614,9 @@ impl LuaTween {
                     data.elapsed = 0.0;
                 }
             }
-            data.state = if data.elapsed < data.info.delay {
-                PlaybackState::Delayed
-            } else {
-                PlaybackState::Playing
+            data.state = match data.info.phase(data.elapsed) {
+                Phase::Delayed { .. } => PlaybackState::Delayed,
+                _ => PlaybackState::Playing,
             };
         }
         let mut playing = state.tweens.playing.borrow_mut();
@@ -651,6 +685,15 @@ impl LuaTween {
         if let Some(key) = completed_key(&self.state, id) {
             self.state.hub.remove_key(key);
         }
+    }
+
+    /// Heap bytes of this tween's Rust-side state (charged to the Lua memory budget).
+    fn rust_bytes(&self) -> usize {
+        let data = self.data.borrow();
+        // The Rc allocation (two counts, the RefCell flag, the data) plus the goals.
+        2 * std::mem::size_of::<usize>()
+            + std::mem::size_of::<RefCell<TweenData>>()
+            + data.props.capacity() * std::mem::size_of::<Prop>()
     }
 
     fn unlist(&self) {
@@ -909,13 +952,21 @@ pub(crate) fn install_service(lua: &Lua, state: &Rc<ApiState>) -> mlua::Result<(
         "Create",
         errors::guarded_fn(
             lua,
-            |_,
+            |lua,
              (this, instance, info, goals): (
                 UserDataRef<LuaTweenService>,
                 Value,
                 Value,
                 Value,
-            )| this.create(&instance, &info, &goals),
+            )| {
+                let tween = this.create(&instance, &info, &goals)?;
+                let bytes = tween.rust_bytes();
+                let object = lua.create_userdata(tween)?;
+                // The Rust-side state is charged to the Lua memory budget: a buffer of its size
+                // lives as long as the Lua object (and fails like any allocation past the cap).
+                object.set_user_value(lua.create_buffer_with_capacity(bytes)?)?;
+                Ok(object)
+            },
         )?,
     )?;
     service.raw_set(
@@ -961,38 +1012,32 @@ mod tests {
     }
 
     #[test]
-    fn timeline_matches_metallic_anim() {
-        let cases = [
-            info(1.0, 0, false, 0.0),
-            info(0.5, 2, true, 0.25),
-            info(2.0, -1, false, 1.0),
-            info(0.0, 0, false, 0.0),
-        ];
-        for i in cases {
-            let anim = metallic_anim::TweenInfo {
-                time: i.time as f32,
-                easing_style: i.style,
-                easing_direction: i.direction,
-                repeat_count: i.repeat_count,
-                reverses: i.reverses,
-                delay_time: i.delay as f32,
-            };
-            for step in 0..200 {
-                let t = step as f64 * 0.037;
-                // `advance` only samples once the delay is over.
-                if t > i.delay {
-                    let (linear, finished) = i.progress(t);
-                    let sample = anim.sample(t as f32);
-                    assert_eq!(finished, sample.finished, "{i:?} at {t}");
-                    assert!(
-                        (i.eased(linear) as f32 - sample.alpha).abs() < 1e-4,
-                        "{i:?} at {t}: {} vs {}",
-                        i.eased(linear),
-                        sample.alpha
-                    );
-                }
+    fn delay_comes_before_every_pass_reverses_and_repeats_included() {
+        // 1 s of motion, 0.5 s delay, reverses, one repeat: 4 passes of 1.5 s.
+        let i = info(1.0, 1, true, 0.5);
+        assert_eq!(i.phase(0.25), Phase::Delayed { pass: 0, hold: 0.0 });
+        assert_eq!(i.phase(1.0), Phase::Playing(0.5));
+        assert_eq!(i.phase(1.75), Phase::Delayed { pass: 1, hold: 1.0 });
+        assert_eq!(i.phase(2.5), Phase::Playing(0.5));
+        assert_eq!(i.phase(3.25), Phase::Delayed { pass: 2, hold: 0.0 });
+        assert_eq!(i.phase(4.75), Phase::Delayed { pass: 3, hold: 1.0 });
+        assert_eq!(i.phase(5.5), Phase::Playing(0.5));
+        assert_eq!(i.phase(6.0), Phase::Finished(0.0));
+        // No reverse, forever: the delay before each repeat.
+        let i = info(1.0, -1, false, 0.5);
+        assert_eq!(
+            i.phase(99.25),
+            Phase::Delayed {
+                pass: 66,
+                hold: 0.0
             }
-        }
+        );
+        assert_eq!(i.phase(100.0), Phase::Playing(0.5));
+        // No delay: one plain pass, then done.
+        let i = info(2.0, 0, false, 0.0);
+        assert_eq!(i.phase(1.0), Phase::Playing(0.5));
+        assert_eq!(i.phase(2.0), Phase::Finished(1.0));
+        assert_eq!(info(0.0, 0, false, 0.0).phase(0.0), Phase::Finished(1.0));
     }
 
     #[test]

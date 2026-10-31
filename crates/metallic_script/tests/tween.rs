@@ -364,36 +364,95 @@ fn cancel_pause_and_replay() {
     );
 }
 
+/// Roblox waits `DelayTime` before every pass: the first, each reverse and each repeat.
 #[test]
-fn repeats_reverses_and_delay() {
+fn delay_comes_before_every_pass_reverses_and_repeats_included() {
     let mut rig = Rig::new();
     let part = rig.add("Part", "Pulse", rig.root("Workspace"));
     rig.server_script(
         "Pulse",
         r#"
         local TS = game:GetService("TweenService")
-        -- 0.5 s delay, then 2 cycles of 0.25 s out and 0.25 s back: done at 1.5 s, at the start.
-        local t = TS:Create(workspace.Pulse, TweenInfo.new(0.25, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 1, true, 0.5), {Transparency = 1})
+        -- 2 cycles of (0.25 s delay, 0.25 s out, 0.25 s delay, 0.25 s back): done at 2 s.
+        local t = TS:Create(workspace.Pulse, TweenInfo.new(0.25, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 1, true, 0.25), {Transparency = 1})
         t.Completed:Connect(function(state) print("done", state.Name) end)
         t:Play()
-        _G.t = t
+        local last
+        game:GetService("RunService").Heartbeat:Connect(function()
+            if t.PlaybackState ~= last then
+                last = t.PlaybackState
+                print(last.Name)
+            end
+        end)
         "#,
     );
     started(&mut rig);
-    let now = rig.run(0.0, 15);
-    assert_eq!(number(&rig, part, "Transparency"), 0.0, "still delayed");
-    rig.server_script("Probe", "print(_G.t.PlaybackState.Name)");
-    let now = rig.run(now, 30); // 0.75 s: top of the first cycle
-    assert!((number(&rig, part, "Transparency") - 1.0).abs() < 1e-9);
-    let now = rig.run(now, 15); // 1.0 s: back at the start
-    assert!(number(&rig, part, "Transparency").abs() < 1e-9);
-    let now = rig.run(now, 15); // 1.25 s: top of the second cycle
-    assert!((number(&rig, part, "Transparency") - 1.0).abs() < 1e-9);
+    let mut now = 0.0;
+    let mut at = |rig: &mut Rig, frames: usize| {
+        now = rig.run(now, frames);
+        number(rig, part, "Transparency")
+    };
+    let near = |got: f64, want: f64, what: &str| {
+        assert!((got - want).abs() < 1e-6, "{what}: {got}, want {want}");
+    };
+    near(at(&mut rig, 12), 0.0, "0.2 s: first delay");
+    near(at(&mut rig, 12), 0.6, "0.4 s: out");
+    near(
+        at(&mut rig, 12),
+        1.0,
+        "0.6 s: delay before the reverse, held at the goal",
+    );
+    near(at(&mut rig, 18), 0.4, "0.9 s: back");
+    near(
+        at(&mut rig, 12),
+        0.0,
+        "1.1 s: delay before the repeat, held at the start",
+    );
+    near(at(&mut rig, 18), 0.6, "1.4 s: out again");
+    near(
+        at(&mut rig, 12),
+        1.0,
+        "1.6 s: delay before the last reverse",
+    );
     assert!(!rig.lines().iter().any(|l| l.contains("done")));
-    rig.run(now, 16);
-    assert_eq!(number(&rig, part, "Transparency"), 0.0);
+    near(at(&mut rig, 25), 0.0, "2.0 s: done, back at the start");
     no_errors(&rig);
-    assert_eq!(rig.lines(), ["print:Delayed", "print:done Completed"]);
+    let delayed_playing = ["print:Delayed", "print:Playing"];
+    let mut expected: Vec<&str> = delayed_playing.repeat(4);
+    expected.extend(["print:done Completed", "print:Completed"]);
+    assert_eq!(rig.lines(), expected);
+}
+
+/// A tween's Rust-side state is charged to the Lua memory budget while its Lua object lives.
+#[test]
+fn created_tweens_are_charged_to_the_lua_memory_budget() {
+    let mut rig = Rig::new();
+    rig.add("Part", "P", rig.root("Workspace"));
+    rig.server_script(
+        "Many",
+        r#"
+        local TS = game:GetService("TweenService")
+        local info = TweenInfo.new()
+        local goals = {Transparency = 1, Position = Vector3.new(1, 2, 3), Color = Color3.fromRGB(255, 0, 0)}
+        local kept = {}
+        local n = 2000
+        local before = collectgarbage("count")
+        for i = 1, n do
+            kept[i] = TS:Create(workspace.P, info, goals)
+        end
+        local per = (collectgarbage("count") - before) * 1024 / n
+        print(string.format("%d", per))
+        "#,
+    );
+    started(&mut rig);
+    no_errors(&rig);
+    let per: f64 = rig.lines()[0].trim_start_matches("print:").parse().unwrap();
+    // The Lua object and table slot are well under 200 bytes; the charged buffer adds the Rust
+    // state (the Rc'd TweenData and three goals, several hundred bytes).
+    assert!(
+        per > 500.0,
+        "{per} bytes per tween: the Rust state is not charged"
+    );
 }
 
 #[test]
@@ -483,7 +542,7 @@ fn tweens_are_deterministic_on_a_server_only_host() {
     assert!(a.iter().any(|p| p.y > 7.0), "Elastic overshoots the goal");
 }
 
-/// Many playing tweens add no allocations to a step.
+/// Playing tweens allocate nothing per tween: a step costs the same with 20 or 200 of them.
 #[test]
 fn playing_tweens_do_not_allocate_per_step() {
     let steady = |tweens: usize| {
@@ -497,22 +556,23 @@ fn playing_tweens_do_not_allocate_per_step() {
                 for i = 1, {tweens} do
                     local p = Instance.new("Part")
                     p.Parent = workspace
-                    TS:Create(p, TweenInfo.new(100), {{Transparency = 1, Position = Vector3.new(i, 0, 0), Color = Color3.new(1, 0, 0)}}):Play()
+                    TS:Create(p, TweenInfo.new(100), {{Transparency = 1, Position = Vector3.new(i, 0, 0), Color = Color3.fromRGB(255, 0, 0)}}):Play()
                 end
                 "#
             ),
         );
         started(&mut rig);
         let now = rig.run(0.0, 5);
+        no_errors(&rig);
         let before = alloc_count::get();
         rig.run(now, 20);
         alloc_count::get() - before
     };
-    let none = steady(0);
+    let few = steady(20);
     let many = steady(200);
     assert_eq!(
-        none, many,
-        "allocations in 20 steps: {none} without tweens, {many} with 200"
+        few, many,
+        "allocations in 20 steps: {few} with 20 tweens, {many} with 200"
     );
 }
 

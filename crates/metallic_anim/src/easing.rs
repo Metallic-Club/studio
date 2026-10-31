@@ -4,7 +4,9 @@
 //! `f(1) = 1`. The other directions are derived from it:
 //!
 //! - **Out**: `1 - f(1 - t)` (fast start, gentle stop; the usual default for UI motion).
-//! - **InOut**: `f(2t) / 2` for the first half, `1 - f(2 - 2t) / 2` for the second.
+//! - **InOut**: `f(2t) / 2` for the first half, `1 - f(2 - 2t) / 2` for the second, except
+//!   `Back` and `Elastic`, which use Penner's own InOut forms (a 1.525 times larger overshoot,
+//!   a 1.5 times longer period), as Roblox does.
 //!
 //! `Back` and `Elastic` overshoot (values leave `[0, 1]`); every other style stays inside.
 
@@ -169,12 +171,35 @@ pub fn ease(style: EasingStyle, direction: EasingDirection, t: f32) -> f32 {
     match direction {
         EasingDirection::In => style.ease_in(t),
         EasingDirection::Out => 1.0 - style.ease_in(1.0 - t),
-        EasingDirection::InOut => {
-            if t < 0.5 {
-                style.ease_in(2.0 * t) / 2.0
-            } else {
-                1.0 - style.ease_in(2.0 - 2.0 * t) / 2.0
-            }
-        }
+        EasingDirection::InOut => match style {
+            EasingStyle::Back => back_in_out(t),
+            EasingStyle::Elastic => elastic_in_out(t),
+            _ if t < 0.5 => style.ease_in(2.0 * t) / 2.0,
+            _ => 1.0 - style.ease_in(2.0 - 2.0 * t) / 2.0,
+        },
+    }
+}
+
+/// Penner's Back InOut: the overshoot is 1.525 times the In/Out one, so the curve is not the In
+/// curve mirrored (Roblox matches this).
+fn back_in_out(t: f32) -> f32 {
+    const S: f32 = 1.701_58 * 1.525;
+    let u = 2.0 * t;
+    if t < 0.5 {
+        u * u * ((S + 1.0) * u - S) / 2.0
+    } else {
+        let u = u - 2.0;
+        (u * u * ((S + 1.0) * u + S) + 2.0) / 2.0
+    }
+}
+
+/// Penner's Elastic InOut: period 0.45, 1.5 times the In/Out period of 0.3.
+fn elastic_in_out(t: f32) -> f32 {
+    use std::f32::consts::PI;
+    let c = 2.0 * PI / 4.5;
+    if t < 0.5 {
+        -(2.0f32.powf(20.0 * t - 10.0) * ((20.0 * t - 11.125) * c).sin()) / 2.0
+    } else {
+        2.0f32.powf(-20.0 * t + 10.0) * ((20.0 * t - 11.125) * c).sin() / 2.0 + 1.0
     }
 }
