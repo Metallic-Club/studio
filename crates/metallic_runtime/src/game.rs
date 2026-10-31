@@ -68,7 +68,8 @@ pub struct FrameOutput {
 pub struct Game {
     name: String,
     world: Rc<RefCell<World>>,
-    physics: PhysicsWorld,
+    /// Shared with the script host, whose `workspace:Raycast` asks it (see [`PhysicsQuery`]).
+    physics: Rc<RefCell<PhysicsWorld>>,
     characters: CharacterController,
     scripts: ScriptHost,
     camera: CameraController,
@@ -130,12 +131,14 @@ impl Game {
     /// A game over an already loaded world (Studio's Play passes a copy of the edited world).
     pub fn from_world(name: String, world: World, output: Rc<dyn OutputSink>) -> Game {
         let world = Rc::new(RefCell::new(world));
-        let scripts = ScriptHost::new(world.clone(), output);
+        let mut scripts = ScriptHost::new(world.clone(), output);
+        let physics = Rc::new(RefCell::new(PhysicsWorld::new()));
+        scripts.set_scene_query(Rc::new(PhysicsQuery(physics.clone())));
         let camera = CameraController::new();
         Game {
             name,
             world,
-            physics: PhysicsWorld::new(),
+            physics,
             characters: CharacterController::new(),
             scripts,
             camera,
@@ -390,7 +393,7 @@ impl Game {
         let ignore = self.character_parts();
         self.last_camera = self
             .camera
-            .camera(self.focus, &self.physics, &ignore, dt as f32);
+            .camera(self.focus, &self.physics.borrow(), &ignore, dt as f32);
         FrameOutput {
             camera: self.last_camera,
             ticks,
@@ -509,13 +512,13 @@ impl Game {
             };
             if let Some(character) = self.character {
                 self.characters
-                    .step(&mut world, &self.physics, character, move_input, TICK);
+                    .step(&mut world, &self.physics.borrow(), character, move_input, TICK);
                 // The body animation advances with the simulation, so the touch volumes follow
                 // the limbs on any host, headless or not.
                 self.bodies
                     .animate(&mut self.characters, &world, character, TICK as f32);
             }
-            self.physics.step(&mut world, TICK);
+            self.physics.borrow_mut().step(&mut world, TICK);
             respawned = respawn_if_gone(
                 &mut world,
                 &self.characters,
@@ -567,7 +570,8 @@ impl Game {
                 CharacterEvent::CheckpointReached { .. } => {}
             }
         }
-        for (a, b) in self.physics.drain_touched() {
+        let touched = self.physics.borrow_mut().drain_touched();
+        for (a, b) in touched {
             self.scripts.touched(a, b);
             self.scripts.touched(b, a);
         }
@@ -577,7 +581,7 @@ impl Game {
     fn sync_physics_if_changed(&mut self) {
         if let Ok(world) = self.world.try_borrow() {
             self.physics_sync
-                .synchronize(&mut self.physics, &world, false);
+                .synchronize(&mut self.physics.borrow_mut(), &world, false);
         }
     }
 
@@ -587,7 +591,7 @@ impl Game {
             return;
         };
         self.physics_sync
-            .synchronize(&mut self.physics, &world, true);
+            .synchronize(&mut self.physics.borrow_mut(), &world, true);
     }
 
     /// Moves and animates the local character's avatar; a new character (after a respawn) gets a

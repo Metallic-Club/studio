@@ -76,6 +76,20 @@ pub struct RayHit {
     pub distance: f64,
 }
 
+/// How many parts a ray may start inside before [`PhysicsWorld::raycast_filtered`] gives up.
+const MAX_INSIDE_SKIPS: usize = 16;
+
+/// Which parts a filtered ray can hit; see [`PhysicsWorld::raycast_filtered`].
+#[derive(Debug, Clone, Copy)]
+pub struct RayQuery<'a> {
+    /// True: only `instances` can be hit. False: `instances` are skipped.
+    pub include: bool,
+    /// The parts the filter lists.
+    pub instances: &'a [InstanceId],
+    /// True: parts with `CanCollide = false` are not hit.
+    pub respect_can_collide: bool,
+}
+
 /// Rapier handles and bookkeeping for one part.
 struct Entry {
     body: RigidBodyHandle,
@@ -478,33 +492,64 @@ impl PhysicsWorld {
     ///
     /// Like Roblox, the length of `dir` is the maximum distance in studs. Returns `None` when
     /// nothing is hit within that distance or `dir` is zero. Reflects the state of the last
-    /// [`Self::sync_from`] or [`Self::step`].
+    /// [`Self::sync_from`] or [`Self::step`]. A part the ray starts inside is not hit (as in
+    /// Roblox), so the normal of a hit is always unit length.
     pub fn raycast(&self, origin: Vec3, dir: Vec3, ignore: &[InstanceId]) -> Option<RayHit> {
+        self.raycast_filtered(
+            origin,
+            dir,
+            &RayQuery {
+                include: false,
+                instances: ignore,
+                respect_can_collide: true,
+            },
+        )
+    }
+
+    /// Like [`Self::raycast`], with a filter: `query.instances` are the only parts that can be
+    /// hit (`include`) or the parts that are skipped. Parts with `CanCollide = false` are hit
+    /// unless `query.respect_can_collide` (Roblox's `RaycastParams.RespectCanCollide`).
+    pub fn raycast_filtered(&self, origin: Vec3, dir: Vec3, query: &RayQuery<'_>) -> Option<RayHit> {
         let max = dir.magnitude();
-        if max <= 0.0 || !max.is_finite() {
+        if max <= 0.0 || !max.is_finite() || !origin.x.is_finite() || !origin.y.is_finite() || !origin.z.is_finite() {
             return None;
         }
         let unit = dir.unit();
         let ray = Ray::new(to_vector(origin), to_vector(unit));
-        let skip: Vec<ColliderHandle> = ignore
+        let listed: HashSet<ColliderHandle> = query
+            .instances
             .iter()
             .filter_map(|id| self.entries.get(id).map(|e| e.collider))
             .collect();
-        let predicate = |h: ColliderHandle, _: &rapier3d::prelude::Collider| !skip.contains(&h);
-        let filter = QueryFilter::default()
-            .exclude_sensors()
-            .predicate(&predicate);
-        let (handle, hit) = self
-            .rapier
-            .cast_ray_and_get_normal(&ray, max as f32, true, filter)?;
-        let instance = *self.owners.get(&handle)?;
-        let distance = f64::from(hit.time_of_impact);
-        Some(RayHit {
-            instance,
-            position: origin + unit * distance,
-            normal: from_vector(hit.normal),
-            distance,
-        })
+        // Parts the ray starts inside are skipped: they have no entry surface to report.
+        let mut inside: Vec<ColliderHandle> = Vec::new();
+        for _ in 0..MAX_INSIDE_SKIPS {
+            let predicate = |h: ColliderHandle, _: &rapier3d::prelude::Collider| {
+                listed.contains(&h) == query.include && !inside.contains(&h)
+            };
+            let mut filter = QueryFilter::default().predicate(&predicate);
+            if query.respect_can_collide {
+                filter = filter.exclude_sensors();
+            }
+            let (handle, hit) = self
+                .rapier
+                .cast_ray_and_get_normal(&ray, max as f32, true, filter)?;
+            let normal = from_vector(hit.normal);
+            if normal.magnitude() < 0.5 {
+                // Started inside this collider (distance 0, no normal): look past it.
+                inside.push(handle);
+                continue;
+            }
+            let instance = *self.owners.get(&handle)?;
+            let distance = f64::from(hit.time_of_impact);
+            return Some(RayHit {
+                instance,
+                position: origin + unit * distance,
+                normal: normal.unit(),
+                distance,
+            });
+        }
+        None
     }
 
     /// The collider of a synced part.
