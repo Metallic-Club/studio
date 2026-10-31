@@ -30,7 +30,8 @@ def exit_status(code, windows):
 
 def execute(command, timeout, environment):
     started = time.monotonic()
-    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     timed_out = False
     try:
         stdout, stderr = child.communicate(timeout=timeout)
@@ -80,6 +81,11 @@ def matrix(executable, output, revision, timeout=120, environment=None, launch=e
         prefix = f"{index:02d}-threads-{threads}"
         (output / f"{prefix}.stdout.log").write_bytes(stdout)
         (output / f"{prefix}.stderr.log").write_bytes(stderr)
+        try:
+            after_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
+        except OSError:
+            after_hash = None
+        changed = after_hash != expected_hash
         diagnostic_lines = stderr.decode("utf-8", errors="replace").splitlines()
         adapters = [line for line in diagnostic_lines if "[metallic-gpu]" in line and "phase=adapter.ready " in line]
         unavailable = sum("[metallic-gpu]" in line and "phase=context.unavailable " in line for line in diagnostic_lines)
@@ -88,6 +94,8 @@ def matrix(executable, output, revision, timeout=120, environment=None, launch=e
             "exit": exit_status(code, os.name == "nt"),
             "timed_out": timed_out,
             "elapsed_seconds": elapsed,
+            "executable_sha256_after": after_hash,
+            "executable_changed": changed,
             "gpu_contexts_ready": len(adapters),
             "unavailable_setups": unavailable,
             "adapters": adapters,
@@ -98,6 +106,10 @@ def matrix(executable, output, revision, timeout=120, environment=None, launch=e
             result["outcome"] = "timeout" if timed_out else "child_failure"
             save()
             return 1  # Never conceal a failure with a later successful rerun.
+        if changed:
+            result["outcome"] = "executable_changed"
+            save()
+            return 1
         save()
     complete = all(t["gpu_contexts_ready"] == EXPECTED_CASES and not t["unavailable_setups"] for t in result["trials"])
     result["outcome"] = "no_crash_observed" if complete else "inconclusive_adapter_coverage"

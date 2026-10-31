@@ -90,6 +90,48 @@ class MatrixTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 runner.matrix(executable, output, "fixture", launch=launch)
 
+    def test_last_successful_trial_mutation_is_not_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "headless"
+            executable.write_bytes(b"original")
+            calls = []
+
+            def launch(command, timeout, environment):
+                calls.append(command)
+                if len(calls) == 6:
+                    executable.write_bytes(b"changed during final child")
+                markers = b"[metallic-gpu] phase=adapter.ready backend=fixture\n" * 4
+                return 0, False, b"retained last stdout", markers, 0.0
+
+            output = root / "evidence"
+            self.assertEqual(runner.matrix(executable, output, "fixture", launch=launch), 1)
+            result = json.loads((output / "results.json").read_text())
+            self.assertEqual(len(calls), 6)
+            self.assertEqual(result["outcome"], "executable_changed")
+            self.assertTrue(result["trials"][-1]["executable_changed"])
+            self.assertEqual(result["trials"][-1]["exit"]["raw"], 0)
+            self.assertEqual((output / "06-threads-4.stdout.log").read_bytes(), b"retained last stdout")
+
+    def test_changed_image_does_not_replace_a_child_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "headless"
+            executable.write_bytes(b"original")
+
+            def launch(command, timeout, environment):
+                executable.write_bytes(b"changed")
+                return 139, False, b"failure stdout", b"failure stderr", 0.0
+
+            output = root / "evidence"
+            self.assertEqual(runner.matrix(executable, output, "fixture", launch=launch), 1)
+            result = json.loads((output / "results.json").read_text())
+            self.assertEqual(result["outcome"], "child_failure")
+            self.assertEqual(len(result["trials"]), 1)
+            self.assertEqual(result["trials"][0]["exit"]["raw"], 139)
+            self.assertTrue(result["trials"][0]["executable_changed"])
+            self.assertEqual((output / "01-threads-1.stderr.log").read_bytes(), b"failure stderr")
+
     def test_owned_child_is_reaped_on_timeout(self):
         code, timed_out, stdout, stderr, _ = runner.execute(
             [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(10)"],

@@ -50,6 +50,9 @@ of that owned process and reaps it before proceeding; forced termination of the
 runner, or a repeated interruption during cleanup, is outside this cooperative
 protocol. No unrelated process is stopped. The output directory must not already
 exist, and executable hashes are rechecked before every trial.
+They are also rechecked and recorded after every child, including the last; a
+changed/unreadable image prevents a successful outcome without discarding any
+child failure or captured output. Windows children use CREATE_NO_WINDOW.
 
 `results.json` records source HEAD, executable hash, requested test override,
 actual adapter lines per trial, raw exit status, signed/hex32 representation and

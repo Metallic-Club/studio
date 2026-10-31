@@ -37,9 +37,23 @@ classification, evidence retention and missing/partial adapter coverage. Format
 and whitespace checks passed. Rust compilation and all GPU observations remain
 pending; these policy tests are not crash reproduction evidence.
 
-Source checkpoint and root worker-coordinator review before build/actual GPU use.
-Slot two is granted for guarded lane121 compile-only checks with four jobs;
-actual GPU work is held until issue349's full Lua window is released. First run
-is the bounded matrix without artificial load, followed by required gates in
+Rust source checkpoint b68455f compiled all render test targets without running
+them in 1m08s via guarded lane121 with four build jobs. The root worker coordinator
+reviewed the wrappers without an actionable Rust concern. Its Python review found
+two gaps: Windows child creation flags and a missing post-child binary hash.
+
+The new final-trial-mutation regression first failed against the proposed runner
+(returned zero instead of one, 0.022s); this is a tool-policy red, not a renderer
+crash. After correction, all nine runner tests passed in 0.641s, including a
+combined child-failure/image-change case preserving the original failure/output.
+Children now use CREATE_NO_WINDOW on Windows. Post-child hashes are recorded even
+on the last trial; an unreadable/changed image cannot produce no_crash_observed.
+Logs are `metallic-353-last-mutation-red.log` and
+`metallic-353-runner-green.log` in the local temporary directory.
+
+Issue349's actual window is released; the first bounded six-child GPU matrix is
+granted after this Python-only checkpoint. Rust sources remain exactly b68455f;
+no new Rust build is required. Record source/toolchain/executable provenance before
+execution, preserve every observation, then run the remaining required gates in
 coordinated windows. No renderer crash has been reproduced or hidden in this task.
 No own-PR merge or remote-machine action is permitted.
