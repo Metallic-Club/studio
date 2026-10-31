@@ -303,7 +303,9 @@ fn ref_prop(world: &World, id: InstanceId, prop: &str) -> Option<InstanceId> {
 }
 
 /// Root position for a new character: on top of the RespawnLocation, the first SpawnLocation,
-/// or (0, 3, 0).
+/// or (0, 3, 0). A pad whose top lies outside the world ([`WORLD_LIMIT`]) is skipped and the
+/// default is used, so the new character is not killed for leaving the world as soon as it
+/// spawns, again and again (#345).
 fn spawn_point(world: &World, player: InstanceId, workspace: InstanceId) -> Vec3 {
     let pad = ref_prop(world, player, "RespawnLocation")
         .filter(|&p| world.is_a(p, "BasePart"))
@@ -317,6 +319,7 @@ fn spawn_point(world: &World, player: InstanceId, workspace: InstanceId) -> Vec3
         let half = (up[0].abs() * size.x + up[1].abs() * size.y + up[2].abs() * size.z) / 2.0;
         Some(pos + Vec3::new(0.0, half + ROOT_HEIGHT, 0.0))
     });
+    let on_top = on_top.filter(|&p| in_world(p, f64::NEG_INFINITY));
     on_top.unwrap_or(Vec3::new(0.0, ROOT_HEIGHT, 0.0))
 }
 
@@ -504,7 +507,8 @@ impl CharacterController {
             }
         } else {
             let health = num_prop(world, humanoid, "Health").unwrap_or(0.0);
-            // A NaN Health dies too (#172).
+            // `World::set` refuses NaN, so a NaN Health cannot be written today; the is_nan
+            // check stays as a guard in case a future path stores one (#172, #345).
             if health.is_nan() || health <= 0.0 || !in_world(root_pos, floor) {
                 self.die(&mut m, character, humanoid);
             }

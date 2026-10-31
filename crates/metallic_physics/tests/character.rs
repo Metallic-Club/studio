@@ -1078,3 +1078,22 @@ fn leaving_the_world_kills_and_respawns() {
     sim.run(0.1, idle());
     assert_eq!(sim.died_count(), 2);
 }
+
+/// #345: a SpawnLocation beyond `WORLD_LIMIT` is skipped, so the character spawns at the default
+/// point and lives instead of dying and respawning in a loop.
+#[test]
+fn spawn_location_outside_the_world_is_skipped() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    part(
+        &mut world,
+        "SpawnLocation",
+        Vec3::new(WORLD_LIMIT * 2.0, 0.5, 0.0),
+        Vec3::new(6.0, 1.0, 6.0),
+    );
+    let mut sim = Sim::start(world);
+    assert!((sim.root_pos() - Vec3::new(0.0, 3.0, 0.0)).magnitude() < 1e-9);
+    sim.run(RESPAWN_DELAY + 1.0, idle());
+    assert_eq!(sim.died_count(), 0);
+    assert_eq!(respawned_count(&sim), 0);
+}
