@@ -184,5 +184,38 @@ LocalInput foundation and Arrange follow-up. The sole conflict in runtime lib.rs
 keeps LocalInput and its re-export unconditional, with the presentation attribute
 remaining only on locomotion. No later main changes are included.
 
-Source-only preparation is complete; fresh compatibility gates are pending a
-build/actual-test grant. No Cargo is started during root's reserved actual suite.
+The tested source is `492d62a26bb56219b0b23f2fe7da21d92e4d3ff3`, tree
+`6b4c65359f1e9f0e8177e85256441908db0f8740`, with main pinned at 7203830.
+Both compatibility merges preserve the published ancestors; no history was
+rebased or force-pushed. The task-range whitespace diff is checked against this
+pin. The incoming upstream lighting document's existing trailing blank line is
+left unchanged.
+
+Fresh guarded lane121 checks with four build jobs:
+
+- CPU-only no-run prebuild passed in 24.42s; full default workspace no-run
+  prebuild passed in 2m08s.
+- Strict full-workspace all-target Clippy passed in 56.18s; CPU-only strict
+  all-target Clippy passed in 9.44s.
+- Full default workspace serial suite exited zero: 1,463 passed, zero failed,
+  six existing manual ignores across 119 result groups including doc tests.
+  All three complete Parkour routes passed, including the new touch route.
+  HDR/post-chain (seven), lighting presets (four), touch integration (three),
+  LocalInput (five), Simulation (seven) and runner (two) cases passed.
+- After an explicit CPU no-run refresh, its actual serial library/CLI/runner/
+  Simulation suite passed all 18 cases, with zero failures or ignores. This
+  selection matches the original CPU CI target; LocalInput's separate five
+  integration cases also passed in the default workspace run above.
+
+Actual Lua suites used coordinated exclusive windows. The full log preserves the
+results; no test failure or performance claim occurred in this refresh. Logs in
+the local temporary directory use prefix `metallic-299-720-`: `cpu-prebuild.log`,
+`workspace-prebuild.log`, `clippy-final.log`, `cpu-clippy-final.log`,
+`workspace-final.log`, `cpu-refresh.log` and `cpu-final.log`.
+Both graph policy cases and the actual 86-package CPU normal/build graph passed;
+no presentation dependency was found. Final license, format and pinned-range
+whitespace checks passed; license output is `licenses-final.log` under the same
+prefix. The final evidence-only append commit leaves production sources exactly
+492d62a. Exact-head remote CI is inspected after publication; earlier results
+remain separately identified above. No remote machine changes or own-PR merge
+were performed.
