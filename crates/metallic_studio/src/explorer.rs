@@ -290,7 +290,7 @@ impl Explorer {
             }
         }
         if resp.double_clicked() {
-            if state.world.is_a(row.id, "Script") {
+            if state.world.is_a(row.id, "Script") || state.world.is_a(row.id, "ModuleScript") {
                 actions.push(Action::Open(row.id));
             } else if row.has_children {
                 actions.push(Action::Toggle(row.id));

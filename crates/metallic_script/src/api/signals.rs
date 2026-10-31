@@ -340,6 +340,7 @@ impl ApiState {
             .borrow_mut()
             .retain(|w| self.budget.owner_of(&w.thread) != Some(owner));
         self.pacing.streaks.borrow_mut().remove(&owner);
+        self.require.release_owner(owner);
         self.drop_bound_actions(owner);
         self.budget.cancel_owner(owner);
     }
