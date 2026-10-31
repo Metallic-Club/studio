@@ -16,8 +16,8 @@ use metallic_core::{ChangeCursor, Changes, InstanceId, Value as CoreValue, World
 use mlua::Value;
 
 use crate::api::{
-    self, ApiState, BoundResult, EventKind, HostShared, InputActionEvent, InputDevice, InputValue,
-    RemoteTarget, TouchButtonInfo,
+    self, ApiState, BoundResult, EventKind, GuiEvent, HostShared, InputActionEvent, InputDevice,
+    InputValue, MAX_GUI_EVENTS_PER_STEP, RemoteTarget, TouchButtonInfo,
 };
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
@@ -80,6 +80,8 @@ pub struct ScriptHost {
     resume_budget: Duration,
     /// `dispatch_input_now` already delivered this frame's action events.
     input_dispatched: bool,
+    /// GUI events for the client scripts, delivered by the next step.
+    gui_events: Vec<GuiEvent>,
 }
 
 impl ScriptHost {
@@ -98,6 +100,7 @@ impl ScriptHost {
             cursor: None,
             resume_budget: RESUME_BUDGET,
             input_dispatched: false,
+            gui_events: Vec::new(),
         }
     }
 
@@ -208,6 +211,7 @@ impl ScriptHost {
             world.trim_attribute_log(&cursors);
             world.trim_tag_log(&tag_cursors);
         }
+        self.deliver_gui_events();
 
         let run_service = self
             .world
@@ -247,6 +251,7 @@ impl ScriptHost {
         self.shared.input.clear();
         self.running.clear();
         self.cursor = None;
+        self.gui_events.clear();
     }
 
     /// Queues an event of an `InputAction` instance for the client scripts: the next `step`
@@ -502,6 +507,25 @@ impl ScriptHost {
                 self.output.error(&e.message);
             }
         }
+    }
+
+    /// Queues an event of a GUI element for the client scripts; the next `step` fires it, in
+    /// report order. At most [`MAX_GUI_EVENTS_PER_STEP`] wait at once (more are dropped), and
+    /// server-only hosts discard them.
+    pub fn gui_event(&mut self, event: GuiEvent) {
+        if self.run_client && self.gui_events.len() < MAX_GUI_EVENTS_PER_STEP {
+            self.gui_events.push(event);
+        }
+    }
+
+    fn deliver_gui_events(&mut self) {
+        if let Some(client) = &self.client {
+            for event in &self.gui_events {
+                client.state.deliver_gui_event(event);
+            }
+        }
+        // Keeps the capacity: no allocation per step once grown.
+        self.gui_events.clear();
     }
 
     fn deliver_inputs(&mut self) {

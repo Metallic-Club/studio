@@ -10,6 +10,7 @@ mod attributes;
 mod cframe;
 mod datatypes;
 mod errors;
+mod gui;
 mod input;
 mod instance;
 mod pivot;
@@ -27,6 +28,7 @@ use mlua::{Error, Function, Table, WeakLua};
 
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
 
+pub use gui::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
 pub use input::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,

@@ -68,6 +68,8 @@ pub(crate) enum EventKind {
     TagAdded(u32),
     /// `CollectionService:GetInstanceRemovedSignal(tag)`.
     TagRemoved(u32),
+    /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
+    Gui(super::gui::GuiEventKind),
 }
 
 /// One signal: an event of one instance.

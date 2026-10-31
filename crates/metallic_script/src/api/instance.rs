@@ -65,7 +65,7 @@ fn event_kind(class: &str, name: &str) -> Option<EventKind> {
         "Released" if class == "InputAction" => Some(EventKind::Released),
         "Triggered" if class == "InputAction" => Some(EventKind::Triggered),
         "StateChanged" if class == "InputAction" => Some(EventKind::StateChanged),
-        _ => None,
+        _ => super::gui::GuiEventKind::of(class, name).map(EventKind::Gui),
     }
 }
 
