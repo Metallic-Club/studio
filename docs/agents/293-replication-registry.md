@@ -111,3 +111,18 @@ Studio documentation example ignored,
 across 120 groups. These results include the newly merged Studio editing and character-limit tests; the earlier
 1,458-test result above belongs to b4909b5. The actual suite ran alone in the shared Lua test window.
 Logs for this refresh use <TEMP>/metallic-293-current-{workspace-build,workspace-tests,clippy,licenses}.log.
+
+## Final test-isolation compatibility refresh
+
+GitHub identified one further real conflict against exact main d34c50fcfd9b3e768013526ea7b8ea27bb3e25e9:
+adjacent Cargo.lock entries for this task's existing sha2 dependency and upstream's tempfile test dependency.
+The normal merge at f7871419f988b10e444418ebbdeaca67b737e7e9 preserves both. Core policy and hash encoding
+are unchanged; upstream's test-folder isolation, out-of-world spawn filtering and touch/inset changes are retained.
+
+Fresh guarded lane123 results at that frozen source: full workspace 1,544 passed, zero failed, seven upstream
+ignores across 120 groups; workspace no-run build 1m44s; strict full-workspace/all-target Clippy 22.36s; licenses,
+format and task-range whitespace passed. The actual suite ran alone in the shared Lua test window. Two separate
+rebuilt registry-example processes again returned
+37ca80ce29f36fbecaee50550c68b3c242e9f3f4e3a903094957c7d3ee0b9839.
+Logs: <TEMP>/metallic-293-final-{workspace-build,workspace-tests,clippy,licenses}.log.
+Later commits only record evidence. Publish append-only, monitor exact-head CI and leave merging to the owner/lead.
