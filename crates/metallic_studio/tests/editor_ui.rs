@@ -418,6 +418,57 @@ fn ctrl_comma_asks_for_the_settings_dialog() {
 }
 
 #[test]
+fn ctrl_w_closes_the_game_through_the_unsaved_changes_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, _) = dirty_shell(dir.path().join("main.mscene"));
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(3);
+    assert!(h.state().editor.is_confirming(), "dirty: asks first");
+    assert_eq!(h.state().exit, EditorExit::Stay);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    // Clean game: Ctrl+W closes at once.
+    h.state_mut().editor.state.history.mark_saved();
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(3);
+    assert_eq!(h.state().exit, EditorExit::Close);
+}
+
+#[test]
+fn escape_clears_the_selection_and_never_closes() {
+    let (ui, model, _part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.select_only(model);
+    h.hover_at(egui::pos2(640.0, 400.0));
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().state.selection.ids().is_empty());
+}
+
+#[test]
+fn ctrl_w_does_nothing_while_a_text_field_has_focus() {
+    use egui::accesskit::Role;
+    let (mut ui, _model, part) = editor();
+    let ws = ui.state.world.root("Workspace").unwrap();
+    let script = ui.state.world.create("Script", Some(ws)).unwrap();
+    ui.state
+        .set_property(&[part], "Transparency", Value::Number(0.5));
+    assert!(ui.state.is_dirty());
+    ui.state
+        .request(metallic_studio::editor::UiRequest::OpenScript(script));
+    let mut h = harness(ui);
+    h.get_by_role(Role::MultilineTextInput).click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(3);
+    assert!(
+        !h.state().is_confirming(),
+        "Ctrl+W must not start closing the game from a text field"
+    );
+}
+
+#[test]
 fn global_keys_wait_during_a_properties_scrub_and_esc_cancels_it() {
     let (ui, _model, part) = editor();
     let mut h = harness(ui);

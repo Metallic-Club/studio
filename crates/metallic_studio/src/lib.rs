@@ -54,6 +54,7 @@ pub mod hints;
 pub mod icons;
 pub mod input_actions;
 pub mod keymap;
+pub mod licences;
 pub mod output;
 pub mod panel;
 pub mod picking;

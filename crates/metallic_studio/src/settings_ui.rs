@@ -26,6 +26,8 @@ pub struct Outcome {
     pub close: bool,
     /// "Reset tips": every first-time hint may show again.
     pub reset_tips: bool,
+    /// The creator asked for the Third-party licences screen.
+    pub licences: bool,
 }
 
 /// The interface sizes Settings offers, with their labels.
@@ -160,6 +162,17 @@ fn body(ui: &mut Ui, settings: &mut Settings, out: &mut Outcome) {
     });
     ui.add_space(24.0);
 
+    section(
+        ui,
+        "About",
+        "The fonts, icons and libraries Metallic Studio is built with, and their licences.",
+    );
+    ui.add_space(8.0);
+    if ui.add(Button::secondary("Third-party licences")).clicked() {
+        out.licences = true;
+    }
+    ui.add_space(24.0);
+
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("Changes are saved as you make them.")
@@ -212,6 +225,7 @@ mod tests {
                     let out = show(&ctx, &mut state.0);
                     state.1.changed |= out.changed;
                     state.1.close |= out.close;
+                    state.1.licences |= out.licences;
                 },
                 (Settings::default(), Outcome::default()),
             );
@@ -226,6 +240,9 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().0.interface_size, 130);
         assert!(harness.state().0.reduce_motion);
+        harness.get_by_label("Third-party licences").click();
+        harness.run();
+        assert!(harness.state().1.licences);
         harness.get_by_label("Done").click();
         harness.run();
         assert!(harness.state().1.close);

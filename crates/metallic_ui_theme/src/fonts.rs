@@ -1,6 +1,6 @@
 //! Studio's typefaces: Archivo for all interface text, JetBrains Mono for code and changing
 //! numbers, Noto Sans as the Greek and Cyrillic fallback, Phosphor for icons. The files and their
-//! licences are in `crates/metallic_studio/assets/fonts` (see `NOTICE.txt` there).
+//! licences are in `crates/metallic_ui_theme/assets/fonts` (see `NOTICE.txt` there).
 //!
 //! Archivo and Noto Sans are variable fonts: each voice below is one instance picked with
 //! [`FontTweak::coords`] (`wght`, `wdth`), so one file gives every weight. egui's own fonts are
@@ -8,16 +8,16 @@
 
 use std::sync::Arc;
 
-use eframe::egui::{
+use egui::{
     self, FontData, FontDefinitions, FontFamily, FontId, FontTweak, epaint::text::VariationCoords,
 };
 use metallic_tokens::consts as tk;
 
-const ARCHIVO: &[u8] = include_bytes!("../../assets/fonts/Archivo-Variable.ttf");
-const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf");
-const NOTO_SANS: &[u8] = include_bytes!("../../assets/fonts/NotoSans-Variable.ttf");
-const PHOSPHOR: &[u8] = include_bytes!("../../assets/fonts/Phosphor.ttf");
-const PHOSPHOR_FILL: &[u8] = include_bytes!("../../assets/fonts/Phosphor-Fill.ttf");
+const ARCHIVO: &[u8] = include_bytes!("../assets/fonts/Archivo-Variable.ttf");
+const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Variable.ttf");
+const NOTO_SANS: &[u8] = include_bytes!("../assets/fonts/NotoSans-Variable.ttf");
+const PHOSPHOR: &[u8] = include_bytes!("../assets/fonts/Phosphor.ttf");
+const PHOSPHOR_FILL: &[u8] = include_bytes!("../assets/fonts/Phosphor-Fill.ttf");
 
 /// Family of labels, button text and names (weight 580).
 pub const UI_STRONG: &str = "ui-strong";

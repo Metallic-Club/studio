@@ -787,6 +787,20 @@ pub fn default_actions() -> ActionRegistry {
         },
     ));
     r.register(Action::new(
+        "file.close",
+        "Close game",
+        Icon::Text("W"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::CloseGame),
+    ));
+    r.register(Action::new(
+        "edit.deselect",
+        "Clear selection",
+        Icon::Text("Esc"),
+        ToolbarGroup::Hidden,
+        |s| s.selection.clear(),
+    ));
+    r.register(Action::new(
         "settings.open",
         "Settings",
         Icon::Text(","),
@@ -917,6 +931,29 @@ mod tests {
             s.take_requests().as_slice(),
             [UiRequest::OpenSettings]
         ));
+    }
+
+    #[test]
+    fn ctrl_w_closes_the_game_and_escape_only_clears_the_selection() {
+        let keymap = Keymap::metallic();
+        assert_eq!(keymap.label("file.close"), "Ctrl+W");
+        let esc = crate::keymap::KeyChord::parse("Escape").expect("parses");
+        let on_esc: Vec<_> = keymap
+            .bindings()
+            .iter()
+            .filter(|b| b.chord == esc)
+            .map(|b| b.action)
+            .collect();
+        assert_eq!(on_esc, ["edit.deselect", "drag.cancel"]);
+        let mut r = default_actions();
+        let mut s = state();
+        assert!(r.run("file.close", &mut s));
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::CloseGame]
+        ));
+        assert!(r.run("edit.deselect", &mut s));
+        assert!(s.take_requests().is_empty(), "Esc asks for no close");
     }
 
     #[test]

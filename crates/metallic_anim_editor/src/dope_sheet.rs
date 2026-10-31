@@ -499,7 +499,7 @@ impl DopeSheet {
             } else if active {
                 t.select_weak
             } else if row % 2 == 0 {
-                Color32::from_rgb(0x14, 0x13, 0x19)
+                t.deep.lerp_to_gamma(t.base, 0.5)
             } else {
                 t.deep
             };

@@ -102,6 +102,7 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("edit.rename", "F2", KeyContext::Global),
     ("edit.select_all", "Ctrl+A", KeyContext::Global),
     ("file.save", "Ctrl+S", KeyContext::Global),
+    ("file.close", "Ctrl+W", KeyContext::Global),
     ("settings.open", "Ctrl+,", KeyContext::Global),
     ("tool.select", "Q", KeyContext::Viewport),
     ("tool.move", "W", KeyContext::Viewport),
@@ -135,6 +136,8 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
     ("output.clear", "Ctrl+L", KeyContext::Global),
+    // Esc never closes anything: it clears the selection, or cancels a gizmo drag.
+    ("edit.deselect", "Escape", KeyContext::Viewport),
     ("drag.cancel", "Escape", KeyContext::Drag),
     ("drag.lock_x", "X", KeyContext::Drag),
     ("drag.lock_y", "Y", KeyContext::Drag),

@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-use crate::theme::{self, ThemeId};
+use crate::theme;
+pub use crate::theme::ThemeChoice;
 
 /// The smallest interface size, in percent.
 pub const SIZE_MIN: u16 = 90;
@@ -22,85 +23,9 @@ pub const SIZE_STEP: u16 = 10;
 /// The interface size when nothing is saved.
 pub const SIZE_DEFAULT: u16 = 100;
 /// Largest `settings.toml` that is read (64 KiB); a bigger file counts as corrupt.
-pub const MAX_FILE_BYTES: u64 = 64 * 1024;
+pub const MAX_FILE_BYTES: u64 = theme::saved::MAX_FILE_BYTES;
 /// The file name inside the config folder.
-pub const FILE_NAME: &str = "settings.toml";
-
-/// Which theme the creator picked. `System` follows the Windows light or dark setting.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ThemeChoice {
-    /// Always Graphite (the default).
-    #[default]
-    Graphite,
-    /// Always Titanium.
-    Titanium,
-    /// Always Light.
-    Light,
-    /// Light when the system is light, Graphite when it is dark.
-    System,
-}
-
-impl ThemeChoice {
-    /// Every choice, in the order Settings lists them.
-    pub const ALL: [ThemeChoice; 4] = [
-        ThemeChoice::Graphite,
-        ThemeChoice::Titanium,
-        ThemeChoice::Light,
-        ThemeChoice::System,
-    ];
-
-    /// The name stored in `settings.toml`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ThemeChoice::Graphite => "graphite",
-            ThemeChoice::Titanium => "titanium",
-            ThemeChoice::Light => "light",
-            ThemeChoice::System => "system",
-        }
-    }
-
-    /// The name creators see.
-    pub fn label(self) -> &'static str {
-        match self {
-            ThemeChoice::Graphite => "Graphite",
-            ThemeChoice::Titanium => "Titanium",
-            ThemeChoice::Light => "Light",
-            ThemeChoice::System => "System",
-        }
-    }
-
-    /// Reads a stored name (any letter case); `None` for an unknown one.
-    pub fn parse(text: &str) -> Option<ThemeChoice> {
-        let text = text.trim();
-        if text.eq_ignore_ascii_case("system") {
-            return Some(ThemeChoice::System);
-        }
-        ThemeId::parse(text).map(ThemeChoice::from)
-    }
-
-    /// The theme to draw, given what the system reports (`None` when it does not say).
-    pub fn resolve(self, system: Option<egui::Theme>) -> ThemeId {
-        match self {
-            ThemeChoice::Graphite => ThemeId::Graphite,
-            ThemeChoice::Titanium => ThemeId::Titanium,
-            ThemeChoice::Light => ThemeId::Light,
-            ThemeChoice::System => match system {
-                Some(egui::Theme::Light) => ThemeId::Light,
-                _ => ThemeId::Graphite,
-            },
-        }
-    }
-}
-
-impl From<ThemeId> for ThemeChoice {
-    fn from(id: ThemeId) -> Self {
-        match id {
-            ThemeId::Graphite => ThemeChoice::Graphite,
-            ThemeId::Titanium => ThemeChoice::Titanium,
-            ThemeId::Light => ThemeChoice::Light,
-        }
-    }
-}
+pub const FILE_NAME: &str = theme::saved::SETTINGS_FILE;
 
 /// What the creator can change in Settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,6 +208,7 @@ struct Applied(Settings);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::ThemeId;
 
     fn temp_file() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tmp");

@@ -175,6 +175,8 @@ pub struct Hints {
     dup_moves: u32,
     moves: VecDeque<(InstanceId, f64, Instant)>,
     recoloured: HashSet<InstanceId>,
+    /// Last frame: the pointer was over the card or one of its buttons had keyboard focus.
+    engaged: bool,
 }
 
 impl Default for Hints {
@@ -191,6 +193,7 @@ impl Default for Hints {
             dup_moves: 0,
             moves: VecDeque::new(),
             recoloured: HashSet::new(),
+            engaged: false,
         }
     }
 }
@@ -261,6 +264,7 @@ impl Hints {
     pub fn dismiss(&mut self) {
         self.current = None;
         self.show_me = None;
+        self.engaged = false;
     }
 
     /// Feeds one event. `blocked` is true during a drag, Play or camera flight: no hint fires
@@ -363,7 +367,9 @@ impl Hints {
         if blocked {
             return;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+        // Esc dismisses the card when the creator is on it (pointer over it or a button focused);
+        // otherwise Esc keeps its editor meaning (clear the selection, cancel a drag).
+        if self.engaged && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
             self.dismiss();
             return;
         }
@@ -373,6 +379,8 @@ impl Hints {
             ctx.request_repaint();
         }
         let mut close = false;
+        let mut focused = false;
+        let mut card = Rect::NOTHING;
         let mut show_me = false;
         Area::new(Id::NULL.with("hint-card"))
             .order(Order::Foreground)
@@ -405,22 +413,24 @@ impl Hints {
                     });
                     ui.add_space(8.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(Button::secondary("Got it").compact()).clicked() {
-                            close = true;
-                        }
-                        if ui.add(Button::ghost("Show me").compact()).clicked() {
-                            show_me = true;
-                        }
+                        let got = ui.add(Button::secondary("Got it").compact());
+                        let me = ui.add(Button::ghost("Show me").compact());
+                        close = got.clicked();
+                        show_me = me.clicked();
+                        focused = got.has_focus() || me.has_focus();
                     });
                 });
                 // The plate goes under the content (drawn after layout, on a lower layer).
                 let rect = inner.response.rect;
+                card = rect;
                 let painter = ui.painter().clone().with_layer_id(egui::LayerId::new(
                     Order::Middle,
                     Id::NULL.with("hint-card-plate"),
                 ));
                 Plate::floating().paint(&painter, rect);
             });
+        let hovered = ctx.pointer_hover_pos().is_some_and(|p| card.contains(p));
+        self.engaged = hovered || focused;
         if close {
             self.dismiss();
         }

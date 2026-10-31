@@ -19,7 +19,7 @@ Branch `studio/226-building-surfaces`, from main after #337.
   toggle. Items: tool (cycles), increment, colour swatch (split when mixed), Align, Mirror, Array when registered,
   More (Anchored, CanCollide, Group).
 - Status line (spec 3.3): drag readout moved to the right side next to count and size, in mono.
-- Hints (spec 14.1) in `hints.rs`: 8 hints, detectors fed by `EditorUi::watch_hints`, rules tested; card bottom-left
+- Hints (spec 14.1) in `hints.rs`: 8 hints, detectors fed by `EditorUi::watch_hints`, rules tested; card bottom-left (Esc dismisses it when the pointer is on the card or a card button has focus; otherwise Esc keeps its editor meaning)
   with keycap, sentence, "Show me", "Got it"; Esc dismisses; `hints.ron`; Settings "Show tips" and "Reset tips".
 
 ## Coordination with #380 (`studio/wire-editor-panels`)

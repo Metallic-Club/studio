@@ -188,6 +188,8 @@ pub enum UiRequest {
     RunAction(&'static str),
     /// Open the Settings dialog (Ctrl+,).
     OpenSettings,
+    /// Close the game, asking first when it has unsaved changes (Ctrl+W, like File > Close game).
+    CloseGame,
 }
 
 /// Everything about one open game except the UI.

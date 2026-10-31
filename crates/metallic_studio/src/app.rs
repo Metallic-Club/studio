@@ -7,6 +7,7 @@ use eframe::egui::{self, TextureHandle};
 
 use crate::colour::demo::ColourDemo;
 use crate::editor_ui::{EditorExit, EditorUi};
+use crate::licences::Licences;
 use crate::png_image::{RgbaImage, decode_png};
 use crate::recent::RecentProjects;
 use crate::screenshot::ScreenshotJob;
@@ -44,6 +45,10 @@ pub enum Scene {
     Components,
     /// The start screen with the Settings dialog open.
     Settings,
+    /// The start screen with the Third-party licences screen open.
+    Licences,
+    /// The same, on the Rust libraries list.
+    LicencesCrates,
 }
 
 /// Command-line options (all for design review; creators start Studio without any).
@@ -63,7 +68,7 @@ pub struct Options {
 
 impl Options {
     /// Parses `--screenshot <path>`,
-    /// `--scene splash|start|firstrun|error|editor|colour|components|settings`,
+    /// `--scene splash|start|firstrun|error|editor|colour|components|settings|licences|licences-crates`,
     /// `--theme graphite|titanium|light|system`, `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -91,6 +96,8 @@ impl Options {
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
                         "settings" => Scene::Settings,
+                        "licences" | "licenses" => Scene::Licences,
+                        "licences-crates" => Scene::LicencesCrates,
                         other => return Err(format!("unknown scene {other}")),
                     }
                 }
@@ -144,6 +151,8 @@ pub struct StudioApp {
     settings: SettingsStore,
     /// The Settings dialog is showing.
     settings_open: bool,
+    /// The Third-party licences screen, while it is showing.
+    licences: Option<Licences>,
 }
 
 /// Decodes the embedded brand icon.
@@ -206,6 +215,11 @@ impl StudioApp {
             quit_confirmed: false,
             settings,
             settings_open: options.scene == Scene::Settings && shot,
+            licences: match options.scene {
+                Scene::Licences if shot => Some(Licences::default()),
+                Scene::LicencesCrates if shot => Some(Licences::on_crates()),
+                _ => None,
+            },
             screenshot: options.screenshot.clone().map(ScreenshotJob::new),
             options,
             icon,
@@ -239,12 +253,15 @@ impl StudioApp {
                 let recent = self.boot.recent.take().unwrap_or_default();
                 let shot = self.options.screenshot.is_some();
                 let scene = self.options.scene;
-                let recent =
-                    if shot && matches!(scene, Scene::Start | Scene::Error | Scene::Settings) {
-                        start_screen::demo_recent(&templates_dir())
-                    } else {
-                        recent
-                    };
+                let recent = if shot
+                    && matches!(
+                        scene,
+                        Scene::Start | Scene::Error | Scene::Settings | Scene::Licences
+                    ) {
+                    start_screen::demo_recent(&templates_dir())
+                } else {
+                    recent
+                };
                 let mut start = StartScreen::new(templates, recent);
                 if shot {
                     // Display only: nothing is written, and no real path or user name can end up
@@ -325,6 +342,7 @@ impl eframe::App for StudioApp {
                         }
                     },
                     Some(StartAction::OpenSettings) => self.settings_open = true,
+                    Some(StartAction::OpenLicences) => self.licences = Some(Licences::default()),
                     None => {}
                 }
             }
@@ -366,9 +384,18 @@ impl eframe::App for StudioApp {
                     _ => crate::hints::Hints::load_default().reset(),
                 }
             }
+            if out.licences {
+                self.settings_open = false;
+                self.licences = Some(Licences::default());
+            }
             if out.close {
                 self.settings_open = false;
             }
+        }
+        if let Some(screen) = &mut self.licences
+            && screen.show(&ctx)
+        {
+            self.licences = None;
         }
         if let Some(job) = &mut self.screenshot {
             job.tick(&ctx);
@@ -403,6 +430,12 @@ mod tests {
         assert_eq!(opts.size, Some([1440.0, 900.0]));
         assert!(Options::parse(["--size", "big"].map(str::to_owned)).is_err());
         assert!(Options::parse(["--size", "10x10"].map(str::to_owned)).is_err());
+    }
+
+    #[test]
+    fn licences_scene_is_parsed() {
+        let opts = Options::parse(["--scene", "licences"].map(str::to_owned)).unwrap();
+        assert_eq!(opts.scene, Scene::Licences);
     }
 
     #[test]
