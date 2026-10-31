@@ -81,7 +81,8 @@ apps.
   first step `sync_from` runs Rapier's collision pipeline (raycasts and touches work at once; the first step builds the
   islands); after it, only the query tree (`BroadPhaseBvh::set_aabb`), since that pipeline leaves bodies inserted after a
   step out of the islands in Rapier 0.36.1 (#423); their contacts start in the next step. Anchored parts that
-  are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
+  are moved or rotated become kinematic movers (linear + angular velocity); moves faster than `TELEPORT_SPEED` or turns
+  faster than `TELEPORT_ANGULAR_SPEED` are plain teleports. `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
   R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
   that never push. Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every
