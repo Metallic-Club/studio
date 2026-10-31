@@ -36,6 +36,8 @@ const MAX_DEFERRED: usize = 10_000;
 pub(crate) enum EventKind {
     /// `BasePart.Touched(hit)`
     Touched,
+    /// `BasePart.TouchEnded(hit)`
+    TouchEnded,
     /// `Humanoid.Died()`
     Died,
     /// `Player.CharacterAdded(model)`
