@@ -250,11 +250,12 @@ fn cframe_new_twelve_numbers_is_orthonormal() {
         local scaled = CFrame.new(1, 2, 3, 2, 0, 0, 0, 2, 0, 0, 0, 2)
         orthonormal(scaled, "scaled")
         same(scaled, CFrame.new(1, 2, 3), "scaled")
-        -- Skewed: right (1, 0, 0), up (1, 1, 0), back (0, 0, 2). The look vector is kept.
+        -- Skewed: right (1, 0, 0), up (1, 1, 0), back (0, 0, 2). The right axis is kept.
         local skewed = CFrame.new(0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 2)
         orthonormal(skewed, "skewed")
         near(skewed.LookVector, V(0, 0, -1), "skewed look")
-        near(skewed.UpVector, V(1, 1, 0).Unit, "skewed up")
+        near(skewed.RightVector, V(1, 0, 0), "skewed right")
+        near(skewed.UpVector, V(0, 1, 0), "skewed up")
         -- What a script builds is what a property stores.
         local p = Instance.new("Part")
         p.PivotOffset = skewed

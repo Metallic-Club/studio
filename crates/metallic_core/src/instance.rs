@@ -451,7 +451,7 @@ impl World {
     /// material, a non-finite Number/Vector3/Color3/UDim2/CFrame component, or a CFrame rotation
     /// that cannot be orthonormalised). A CFrame is stored through
     /// [`crate::CFrame::try_orthonormalize`]: an already orthonormal one bit for bit, a scaled or
-    /// skewed one re-orthonormalised keeping its look vector. Rejected writes change
+    /// skewed one re-orthonormalised keeping its right axis. Rejected writes change
     /// neither properties, the change journal, nor signals. Properties with a registry range
     /// ([`crate::classes::NumRange`]) are clamped (or wrapped) into it. Fires `property_changed` when an accepted value changes.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {

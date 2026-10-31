@@ -7,7 +7,7 @@
 //!
 //! A stored CFrame always has a right-handed orthonormal rotation (`inverse` relies on it):
 //! `World::set` and the scene loader pass every CFrame through [`CFrame::try_orthonormalize`],
-//! which keeps the look vector, and refuse the ones it cannot fix.
+//! which keeps the right axis (Gram-Schmidt on right, then up), and refuse the ones it cannot fix.
 use crate::value::Vec3;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
@@ -497,10 +497,10 @@ impl CFrame {
     /// - A rotation that is already orthonormal and right-handed to within
     ///   [`ORTHONORMAL_TOLERANCE`] comes back bit for bit, so round trips and saved scenes do not
     ///   drift.
-    /// - Otherwise the look direction is kept, the up axis loses its part along the look and is
-    ///   normalised (Gram-Schmidt), and right is `look x up`: the same basis as
-    ///   [`CFrame::look_at`]. A scale on the axes is dropped; a mirrored (left-handed) matrix gets
-    ///   its right axis flipped.
+    /// - Otherwise the right axis is kept, the up axis loses its part along right and is
+    ///   normalised (Gram-Schmidt), and back is `right x up` (the rule `Orthonormalize` has
+    ///   used since it was added). A scale on the axes is dropped; a mirrored (left-handed)
+    ///   matrix gets its back axis flipped.
     /// - `None` when a component is not finite, an axis column is shorter than
     ///   [`MIN_AXIS_LENGTH`], or the columns are (nearly) parallel or coplanar:
     ///   `|det R| / (|right| |up| |back|)` below [`DEGENERATE_EPSILON`].
@@ -522,10 +522,10 @@ impl CFrame {
         if det > 0.0 && self.is_orthonormal() {
             return Some(self);
         }
-        let look = back * (-1.0 / lengths[2]);
-        let right = cross(look, up).unit();
-        let up = cross(right, look);
-        let out = CFrame::from_axes(self.position, right, up, look * -1.0);
+        let right = right * (1.0 / lengths[0]);
+        let up = (up - right * dot(up, right)).unit();
+        let back = cross(right, up);
+        let out = CFrame::from_axes(self.position, right, up, back);
         out.is_finite().then_some(out)
     }
 
@@ -543,7 +543,7 @@ impl CFrame {
     }
 
     /// The rotation re-orthonormalised by the stored-CFrame rule ([`CFrame::try_orthonormalize`],
-    /// which keeps the look vector) (`Orthonormalize`). A rotation that cannot be orthonormalised
+    /// which keeps the right axis) (`Orthonormalize`). A rotation that cannot be orthonormalised
     /// (degenerate or not finite) comes back unchanged, so writing it to a property still fails.
     pub fn orthonormalize(self) -> CFrame {
         self.try_orthonormalize().unwrap_or(self)

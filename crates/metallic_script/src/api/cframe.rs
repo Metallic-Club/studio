@@ -57,7 +57,7 @@ fn euler_args(args: &[Option<f64>]) -> (f64, f64, f64) {
 
 /// `CFrame.new(x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22)`, re-orthonormalised like a
 /// stored CFrame ([`CFrame::try_orthonormalize`]: an orthonormal matrix is kept bit for bit, a
-/// scaled or skewed one keeps its look vector), so a script reads back what a property stores.
+/// scaled or skewed one keeps its right axis), so a script reads back what a property stores.
 /// A finite matrix that cannot be orthonormalised (a zero column, parallel columns) gets the
 /// identity rotation at the given position: Roblox does not document that case. A non-finite
 /// matrix is kept as given, so assigning it to a property still errors.

@@ -111,7 +111,7 @@ Code: `metallic_core::transform`, shared with Studio's building tools. Spec: `do
   so does `Resize`. `ScaleTo` and `PivotTo` compute and check every new value first. If a part would leave the size
   limits, or a position would overflow, they error and change nothing (`GetScale` included).
 - **CFrame properties.** `PivotOffset`, `WorldPivot`, `BasePart.CFrame` and `PivotTo`'s target are made orthonormal on
-  write (every CFrame property is, in `World::set`). A scaled or skewed matrix keeps its look vector and corrects up
+  write (every CFrame property is, in `World::set`). A scaled or skewed matrix keeps its right axis and corrects up
   and right (`CFrame:Orthonormalize`), so `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate
   rotation (for example all zeros from `fromMatrix`) errors.
 - `Model:GetBoundingBox()` returns `(CFrame, Vector3)`: the box around every BasePart descendant, oriented like the

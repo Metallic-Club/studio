@@ -1,5 +1,5 @@
 //! Stored CFrames keep a right-handed orthonormal rotation (issue #363): `World::set` and the
-//! scene loader fix scaled or skewed matrices (keeping the look vector) and refuse degenerate ones.
+//! scene loader fix scaled or skewed matrices (keeping the right axis) and refuse degenerate ones.
 use metallic_core::*;
 
 mod common;
@@ -134,8 +134,12 @@ fn skewed_rotation_cframe_is_normalized() {
     let cf = stored(&world, part, "PivotOffset");
     assert_orthonormal(cf);
     assert_eq!(cf.position, skewed.position);
-    // The look vector keeps its direction; up stays on the side it pointed to.
-    assert!(close(cf.look_vector(), skewed.look_vector().unit(), 1e-12));
+    // The right axis keeps its direction; up stays on the side it pointed to.
+    assert!(close(
+        cf.right_vector(),
+        skewed.right_vector().unit(),
+        1e-12
+    ));
     assert!(dot(cf.up_vector(), skewed.up_vector()) > 0.0);
     // Stored values are a fixed point: writing it back changes nothing.
     let before = world.change_cursor();
@@ -221,12 +225,10 @@ fn scene_load_normalizes_cframe() {
     let cf = stored(&loaded, part, "PivotOffset");
     assert_orthonormal(cf);
     assert_eq!(cf.position, position);
+    // Right (2, 0, 0) is kept; up (2, 2, 0) loses its part along right.
+    assert!(close(cf.right_vector(), Vec3::new(1.0, 0.0, 0.0), 1e-12));
+    assert!(close(cf.up_vector(), Vec3::new(0.0, 1.0, 0.0), 1e-12));
     assert!(close(cf.look_vector(), Vec3::new(0.0, 0.0, -1.0), 1e-12));
-    assert!(close(
-        cf.up_vector(),
-        Vec3::new(1.0, 1.0, 0.0).unit(),
-        1e-12
-    ));
 
     // A degenerate matrix in a scene file fails the load.
     std::fs::write(

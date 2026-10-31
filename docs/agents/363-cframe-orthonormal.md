@@ -7,7 +7,7 @@ Branch: `studio/363-cframe-orthonormal` (from `origin/main` `8bc3cd7`).
 
 `World::set` accepted any finite `Value::CFrame`, including zero, scaled or skewed rotations, and
 `CFrame::inverse` (used by `get_pivot`, `pivot_to`, `scale_to`) assumes an orthonormal one. Decided rule
-(lead's call, following Roblox): re-orthonormalise on write keeping the look vector, refuse what cannot be fixed.
+(lead's call, following Roblox): re-orthonormalise on write keeping the right axis (the rule `Orthonormalize` already had since #304; the coordinator chose this over keeping the look vector so merged behaviour does not change), refuse what cannot be fixed.
 
 ## Done
 
@@ -30,9 +30,8 @@ Branch: `studio/363-cframe-orthonormal` (from `origin/main` `8bc3cd7`).
   `scaled_rotation_cframe_is_normalized`, `skewed_rotation_cframe_is_normalized`,
   `nearly_orthonormal_cframe_is_kept`, `nan_cframe_is_still_refused`, `scene_load_normalizes_cframe`);
   `crates/metallic_script/tests/cframe.rs` `cframe_new_twelve_numbers_is_orthonormal`.
-- `crates/metallic_script/tests/pivot.rs` `pivot_offset_is_made_orthonormal` updated: the skewed matrix now keeps
-  its look vector (turns -45 degrees about Z), the skewed and zero targets are built with `fromMatrix` because
-  `CFrame.new` already fixes them.
+- `crates/metallic_script/tests/pivot.rs` `pivot_offset_is_made_orthonormal` updated: the skewed and zero targets are built
+  with `fromMatrix` because `CFrame.new` already fixes them; expected values are unchanged.
 - Docs: ARCHITECTURE.md metallic_core bullet, `docs/luau-api.md` (CFrame constructors, CFrame properties).
 
 ## Next

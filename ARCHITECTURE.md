@@ -37,7 +37,7 @@ apps.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `World::set` (so also the scene loader) stores every CFrame through `CFrame::try_orthonormalize`:
-  an orthonormal rotation is kept bit for bit, a scaled or skewed one is re-orthonormalised keeping its look vector, and
+  an orthonormal rotation is kept bit for bit, a scaled or skewed one is re-orthonormalised keeping its right axis, and
   a degenerate one (zero or parallel columns) is refused like a NaN. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.

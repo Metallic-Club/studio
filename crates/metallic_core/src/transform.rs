@@ -31,7 +31,7 @@ fn size_in_limits(size: Vec3) -> bool {
 }
 
 /// `cf` with its rotation made orthonormal by the stored-CFrame rule
-/// ([`CFrame::try_orthonormalize`]: keeps the look vector), as `World::set` stores it. Errors
+/// ([`CFrame::try_orthonormalize`]: keeps the right axis), as `World::set` stores it. Errors
 /// when the rotation is degenerate or not finite.
 pub fn orthonormal(cf: CFrame, property: &str) -> Result<CFrame, CoreError> {
     if !cf.is_finite() {

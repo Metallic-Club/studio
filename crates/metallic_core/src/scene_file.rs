@@ -246,7 +246,7 @@ impl Loader {
 /// Errors: [`CoreError::Io`] if unreadable, [`CoreError::Scene`] if it does not parse, has an
 /// unsupported version or a dangling reference; class/property errors from [`World::create`] and [`World::set`].
 /// Every property goes through [`World::set`], so a CFrame with a scaled or skewed rotation is
-/// re-orthonormalised (keeping its look vector) and a degenerate one fails the load.
+/// re-orthonormalised (keeping its right axis) and a degenerate one fails the load.
 pub fn load_scene(path: &Path) -> Result<World, CoreError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CoreError::Io(format!("{}: {e}", path.display())))?;

@@ -449,10 +449,9 @@ fn pivot_offset_is_made_orthonormal() {
         -- A scaled rotation (2 on the diagonal) is stored as the plain rotation.
         p.PivotOffset = CFrame.new(1, 2, 3, 2, 0, 0, 0, 2, 0, 0, 0, 2)
         same(p.PivotOffset, CFrame.new(1, 2, 3), "scaled matrix")
-        -- A skewed one: right (1, 0, 0), up (1, 1, 0), back (0, 0, 1). Gram-Schmidt keeps the
-        -- look vector and up's direction across it, so the frame turns -45 degrees about Z.
+        -- A skewed one: right (1, 0, 0), up (1, 1, 0); Gram-Schmidt keeps right, fixes up.
         p.PivotOffset = CFrame.new(0, -1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1)
-        same(p.PivotOffset, CFrame.new(0, -1, 0) * CFrame.Angles(0, 0, -math.pi / 4), "skewed matrix")
+        same(p.PivotOffset, CFrame.new(0, -1, 0), "skewed matrix")
         local target = CFrame.new(5, 6, 7) * CFrame.Angles(0.3, 0.6, 0.9)
         p:PivotTo(target)
         same(p:GetPivot(), target, "round trip")
