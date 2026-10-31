@@ -1,5 +1,18 @@
 # #330 Creation/destruction instruction coverage
 
+## Current status
+
+Source checkpoint `c5f2f5ad64e58b232b887358d5b1eecc5075e038`, based on pinned main `d1eecce`.
+Focused checks passed: 13 Python policy/storage tests, three Rust example tests, five native release modes,
+matching local PDB symbols, real native collector completion and refusal of wall-time substitution. Independent
+read-only review found no actionable issue. Earlier artifact/source hashes remain pinned to `5211155`; the core
+and benchmark source did not change during the main refresh. Only the later progress prose is uncommitted.
+
+Required workspace prebuild, strict all-target Clippy, licenses and formatting have passed on the pinned source.
+Actual serial workspace tests passed: **1,224 passed, zero failures, six existing ignored tests**. Lane114 is
+idle and the timing window has been released. All required local gates are green; PR publication and real Linux
+instruction evidence remain next. No instruction or wall-time performance pass is claimed from local checks.
+
 ## Goal and scope
 
 Close the existing instruction gate's create/destroy coverage gap without treating instruction counts as wall
@@ -12,7 +25,7 @@ No production engine API, dependency, workflow, transport/physics code or PR #31
 benchmark source/toolchain copying still builds identical fixed workloads at the exact PR base/head. Existing
 compiler/platform/machine/Valgrind/profile/source compatibility and failure handling remain unchanged.
 
-## Implemented, not yet Rust-validated
+## Initial implementation checkpoint (before Rust validation)
 
 - Add `metallic_perf_create`: create exactly 1,000 additional Parts under the fixture's populated Workspace.
   It grows from 1,000 to 2,000 Parts and includes normal allocation/linking/journal costs.
@@ -88,3 +101,52 @@ base/head gate calibrates the expanded harness rather than measuring PR #318's u
 
 Both focused commands have exited and the slot was released to the conductor. Broad required gates remain
 queued; no local Cargo is active. No whole-workspace or instruction acceptance claim at this checkpoint.
+
+
+## Single pre-gate main refresh
+
+Before broad gates, the shared main ref advanced to `d1eeccee2c3d46ca61921baffa562af4bd9472e8` (PR #323
+Controls and PR #329 Studio data-folder ownership). There were no changes to metallic_core, perf tools or the
+performance workflow. After committing focused evidence, one unpublished rebase completed cleanly, producing
+`c5f2f5ad64e58b232b887358d5b1eecc5075e038`. A direct diff verifies the example, measurement source/tests and
+performance docs are identical to focused checkpoint `5211155`; all incoming controls/data-folder code remains
+preserved. Earlier focused artifacts remain pinned to their original source and are not relabelled. No published
+branch was rewritten. Full guarded source validation awaits its next granted slot; lane114 is idle.
+
+
+Independent C2 read-only review at `c5f2f5` found no actionable issue in fixed mutation counts, collection/setup
+boundaries, completion checks, exact workload registration or fail-closed threshold/report handling. Reviewed
+git blobs: example `b81a5f739612c37ffc713a123e2f374fc1a7f834`, collector
+`53473a413e98e40cbc27e6199a850e8920bfbdfe`, policy tests
+`91db250d795d04e0ac19d481a11190287be12c4c`. The reviewer performed no edits, builds or tests.
+
+
+## Broad compile gates
+
+After the conductor released the compile slot, guarded forced-clean workspace prebuild passed in 4m06s at
+`c5f2f5a`/`d1eecce`. Command: `test --workspace --locked --no-run -j 4`. Package-only cleanup removed 204 local
+files / 27.2 MiB and retained third-party caches and the separately named release example. Compile paths identify
+this exact worktree. Strict `clippy --workspace --all-targets --locked -j 4 -- -D warnings` passed in 1m29s.
+Formatting/diff checks and `cargo deny check licenses` (`licenses ok`) also passed. Logs are `workspace-prebuild.log`,
+`clippy.log` and `licenses.log` in the retained integration evidence directory.
+
+No actual workspace test has run at this checkpoint. Its binaries are ready, and the lane was released after
+verified Clippy exit. `prebuilt-smoke-provenance.json` records the current workspace smoke and spawned player
+hashes/timestamps before execution, avoiding an ambiguous feature-graph comparison if diagnosis is later needed.
+The conductor owns the next serial timing-window grant. No source or budget changed during these checks.
+
+
+## Final actual workspace gate
+
+The conductor released the actual timing window after #305 exited. The guarded full workspace command on
+unchanged `c5f2f5a`/`d1eecce` exited zero: **1,224 passed, zero failed, six existing ignored tests across 109
+summaries**. Command: `test --workspace --locked -j 4 -- --test-threads=1`. Both Parkour routes and every default
+Luau suite passed. No package-only graph, test exclusion, budget change or failure retry was used. The actual
+window/lane was released immediately after verified exit and parsed totals. `workspace-tests.log` and
+`workspace-results.json` retain the result and log checksum under the same integration evidence directory.
+
+The earlier three example tests and 13 Python policy/storage tests are recorded separately, not added to this
+workspace count. Required prebuild/Clippy/licenses/format checks are complete. Commit this documentation-only
+validation record, push the owned branch, open/attach one PR and set issue #330 to review. Real five-workload
+Callgrind artifacts remain pending CI; no new source commit or rerun is needed just to record later CI metadata.
+Keep the named native artifact and all old #318 evidence intact. The wall-time target remains unresolved.
