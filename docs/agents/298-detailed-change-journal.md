@@ -216,6 +216,32 @@ new no-op/explicit-reorder contract. No executable behavior changed during this 
 
 Cargo remains held for resource coordination after a disk-space interruption in another lane. Owned lane116
 firstparty dev artifacts were cleaned using native package-scoped Cargo after path/owner/cache-tag validation;
-thirdparty cache and all external historical performance/source evidence were preserved. No fresh #318 Rust
-gate or timing result is claimed yet. The eight current upstream manual/UI ignores and any new layout probe
-remain separate from execution success; actual counts will be recorded only after a verified run.
+thirdparty cache and all external historical performance/source evidence were preserved. At that checkpoint,
+no fresh #318 Rust gate or timing result was claimed. The following record supersedes only that pending-check
+status; historical measurements and failures remain unchanged.
+
+
+### Fresh explicit-ordering validation
+
+At exact `6003cc4dc7bbce3a6f7c57be5b84f393ef4b645b` (a public-comment/progress-only child of executable
+checkpoint `f23d161cc38577412919401e52a4c9a17665ed84`), all required checks passed against pinned main
+`a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`:
+
+- Guarded core tests: **97 passed, zero failed, one ignored** manual journal-layout observation.
+- Guarded full workspace prebuild: passed.
+- Strict full workspace/all-target Clippy: passed in 42.74s, with `--locked -j 4 -- -D warnings`.
+- License, formatting and task-range whitespace checks: passed.
+- Final full workspace command: `cargo test --locked --workspace -j 4 -- --test-threads=1`, through
+  `tools/cargo_lane.py` in owned lane116: **1,861 passed, zero failed, nine ignored across 138 summaries**.
+  The test-profile incremental rebuild finished in 10.56s before execution. No failures were retried,
+  excluded or weakened. Eight ignores are upstream manual/UI/stress/doc probes; the ninth is this branch's
+  manual journal-layout probe, not executed in this validation.
+
+Logs and exact source/result records are retained outside Git in `integration-evidence/318-ordering-a0bb1bf`.
+After verified exit zero, lane116 was idle and the actual timing window was explicitly handed to the next
+worker's #335 suite. No further Rust execution is needed for this documentation-only validation record.
+
+The original **5% local wall-time target remains unresolved**. These correctness gates do not remeasure the
+historical compact layout/allocation results, establish new performance acceptance or erase the older recorded
+smoke timeout. Publish by normal append-only push and inspect CI against the final exact head. No own merge,
+network service, durable journal or milestone acceptance is claimed.
