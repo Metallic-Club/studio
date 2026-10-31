@@ -1,9 +1,11 @@
 # Issue 311: explicit ScriptHost roles and player lifecycle
 
-Status: resumed by Codex studio_core for the conductor-authorized PR #335 refresh onto exact main
-`a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`. The append-only merge preserves GUI/input/button events,
-TouchEnded and explicit roles. No refreshed Cargo check has run yet; compilation is held. Earlier results
-below remain historical source-specific evidence, rather than checks of this new main merge.
+Status: refreshed by Codex studio_core onto exact main `a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`.
+Normal merge and the narrow GUI-binding queue correction are committed; fixed source `ad3ded1` passed all
+29 focused role/GUI/server controls. The test-only baseline reproduced one stale-click rebind failure, with
+22 other executed checks passing. Full mandatory gates remain pending; new Cargo is held after a shared-disk
+exhaustion event until the conductor reassigns build slots. Earlier broad results below remain historical,
+not checks of the current source. The focused actual window was released immediately after verified exit.
 
 Branch `studio/311-script-player-lifecycle`, initial main
 `e20f0828454d21ae2325b671add29f9bf5c3a7c3`. This user-prioritized remaining A3
@@ -226,3 +228,18 @@ The narrow correction adds GUI queue clearing beside the existing action-input/r
 rebind, local removal and invalid-binding cleanup. The same-binding early return is preserved; stop keeps
 both cleanup paths from the merge. No production budget, scheduler, authentication or roster ordering change.
 The focused green rerun is next within the granted short window, then release it to #309 before broad gates.
+
+
+## Focused green and resource hold
+
+The identical focused selection at `ad3ded1d55a0e8ae8350d23edc60539c5ba4cccc` exited zero: 29 passed,
+zero failures or ignores (21 role/lifecycle, two GUI, six server-only cases). The role binary completed in
+1.68s; command durations are observations rather than latency benchmarks. The stale-click failure is fixed,
+while valid no-op binding input, fresh post-rebind input, ownership/borrow retry, routing/payload, held
+aggregate deadlines and all older role controls pass. No scheduler or production budget changed.
+
+Logs and `focused-results.json` remain under `integration-evidence/335-main-refresh`. The compile/actual
+window was explicitly released to #309. Root subsequently held all Cargo because C: filled during another
+prebuild; this branch has no active compiler or test. Do not start broad gates until a slot is reassigned.
+The old root lane114/debug has no binary-retention requirement from this task; named benchmark/release domains
+remain protected. No new-main bug, multiplayer acceptance, authentication or direct PR/main merge is claimed.
