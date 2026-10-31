@@ -234,5 +234,32 @@ sole Game::paint_gui conflict with Simulation's World borrow and the new third
 gui_inset argument. No CPU-kernel change is needed. The renderer/script/physics/
 net/player changes remain upstream-identical. No newer base is included.
 
-Source review and fresh required gates remain pending; old checks are retained
-as historical evidence. Cargo remains held until the next explicit build grant.
+The final tested source is `632b47ea4b083ce9121b820d075af271ea333a87`, tree
+`cb4273f8d442791b7bda111fae08ef646606942a`, pinned at exact main 5c84cf7.
+studio_core independently reviewed the compatibility scope without an actionable
+concern: Game blob d9bd296, Simulation 1d8c6b7, lib 083049e and touch test dfc5477.
+No source changed after that review or during the following gates.
+
+- Full workspace no-run passed in 1m13s; CPU-only no-run passed in 14.03s.
+- Strict full-workspace all-target Clippy passed in 26.95s; CPU-only all-target
+  Clippy passed in 10.97s.
+- `cargo test --workspace --locked -j 4 -- --test-threads=1` exited zero:
+  1,539 passed, zero failed, seven upstream ignores across 122 result groups,
+  including doc tests. All three complete Parkour routes passed. Compared with
+  the prior pin, the additional ignore is an upstream Studio actions documentation
+  example. This task introduces no ignored test.
+- After an explicit CPU no-run refresh, all 18 selected library/CLI/runner/
+  Simulation cases passed with zero failures or ignores. Actual Lua suites used
+  coordinated exclusive windows; other managed compile-only work may run in the
+  separately assigned build slot. No performance claim follows from these tests.
+- Both graph-policy cases passed; the actual CPU-only normal/build graph remains
+  86 packages without presentation dependencies. Final license, format and
+  task-range whitespace checks against 5c84cf7 passed.
+
+Saved logs use local temporary prefix `metallic-299-5c-`: `workspace-prebuild.log`,
+`cpu-prebuild.log`, `clippy-final.log`, `cpu-clippy-final.log`,
+`workspace-final.log`, `cpu-refresh.log`, `cpu-final.log` and
+`licenses-final.log`. Earlier pins/results above remain historical evidence.
+The final evidence-only append commit preserves production source 632b47e.
+Exact-head CI is inspected after publication; no own-PR merge or remote-machine
+action was performed.
