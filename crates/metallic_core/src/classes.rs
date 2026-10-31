@@ -702,6 +702,15 @@ static CLASSES: &[ClassDef] = &[
             }),
         ],
     ),
+    // Last, with the other appended classes: `require(moduleScript)` runs its `Source` once per
+    // script VM. It never runs by itself, so it has no `Enabled`.
+    class(
+        "ModuleScript",
+        "Instance",
+        &[p("Source", ValueType::String, || {
+            Value::String(String::new())
+        })],
+    ),
 ];
 
 /// Looks up a class by name.
@@ -750,6 +759,7 @@ pub fn class_def(name: &str) -> Option<&'static ClassDef> {
         "GuiButton" => 34,
         "TextButton" => 35,
         "ImageButton" => 36,
+        "ModuleScript" => 37,
         _ => return None,
     };
     CLASSES.get(index)

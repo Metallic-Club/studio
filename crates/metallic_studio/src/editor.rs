@@ -60,6 +60,7 @@ pub const INSERTABLE: &[&str] = &[
     "Checkpoint",
     "Script",
     "LocalScript",
+    "ModuleScript",
     "Folder",
     "Model",
     "RemoteEvent",
