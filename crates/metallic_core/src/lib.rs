@@ -26,8 +26,8 @@ pub use cframe::{CFrame, RotationOrder};
 pub use instance::{
     AttributeChange, AttributeChanges, AttributeCursor, ChangeCursor, Changes, InstanceId,
     MAX_ATTRIBUTE_NAME, MAX_ATTRIBUTE_STRING, MAX_ATTRIBUTES, MAX_EXTRAS_BYTES, MAX_TAG, MAX_TAGS,
-    TagChange, TagChanges, TagCursor, World, check_attribute_name, check_attribute_value,
-    check_tag,
+    PropertyChange, TagChange, TagChanges, TagCursor, World, check_attribute_name,
+    check_attribute_value, check_tag,
 };
 pub use scene_file::{load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};

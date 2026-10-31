@@ -14,6 +14,7 @@ mod gui;
 mod input;
 mod instance;
 mod pivot;
+mod property_signals;
 mod remote;
 mod require;
 mod services;
@@ -61,6 +62,8 @@ pub(crate) struct ApiState {
     pub(crate) shared: Rc<HostShared>,
     pub(crate) hub: Hub,
     pub(crate) pacing: Pacing,
+    /// Instances whose `Changed` signals this VM watches (see `property_signals`).
+    props: property_signals::PropWatch,
     pub(crate) lua: WeakLua,
     /// Weak-valued table `instance id -> userdata`, so one instance is one Lua object.
     cache: Table,
@@ -144,6 +147,7 @@ fn build(
     raw.extend(services::methods(lua)?);
     raw.extend(remote::methods(lua)?);
     raw.extend(pivot::methods(lua)?);
+    raw.extend(property_signals::methods(lua)?);
     raw.extend(input::action_methods(lua)?);
     raw.extend(attributes::methods(lua)?);
     raw.extend(tags::methods(lua)?);
@@ -171,6 +175,7 @@ fn build(
         shared,
         hub: Hub::default(),
         pacing: Pacing::default(),
+        props: property_signals::PropWatch::default(),
         lua: lua.weak(),
         cache,
         spawn,

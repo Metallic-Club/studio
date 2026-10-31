@@ -343,13 +343,23 @@ impl Budget {
         self.sched.current_owner()
     }
 
+    /// Gives a parking thread ownership state, so cancelling its owner blocks it.
+    pub(crate) fn adopt(&self, thread: &Thread) -> mlua::Result<()> {
+        self.sched.adopt(thread)
+    }
+
+    /// Whether a parked thread may still be resumed (suspended and not cancelled).
+    pub(crate) fn can_resume_parked(&self, thread: &Thread) -> bool {
+        self.sched.can_resume_parked(thread)
+    }
+
     /// Cancels the sleeping threads of a script.
     pub(crate) fn cancel_owner(&self, owner: u64) {
         self.sched.cancel_owner(owner);
     }
 
     /// Resumes a thread that parked itself with a plain `coroutine.yield` (for example
-    /// a future `Event:Wait()`), under the same budget. If it yields again it is
+    /// `WaitForChild` or `Event:Wait()`), under the same budget. If it yields again it is
     /// parked or put to sleep as usual.
     pub fn resume(&self, thread: &Thread, args: impl IntoLuaMulti) -> Result<(), ScriptError> {
         let lua = self.lua()?;

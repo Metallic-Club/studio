@@ -49,6 +49,9 @@ apps.
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
   `PropDef::normalize` converts a String write outside `allowed` to its stored form (a display name to an id).
+  The change journal (`change_cursor`, `changes_since`) also keeps which property a `set` changed:
+  `property_changes_since(cursor)` lists every real property change in order (not deduplicated); cursors of one world
+  are ordered. `metallic_script` builds `Instance.Changed` on it (#410).
   `look_override` (#222): `BasePart.LookOverride` and `Model.LookOverride` (String, default `inherit`; ids
   `realistic`, `soft`, `toon`, `low-poly`, `voxel`, `pixel-3d`, `retro-32`; display names such as "Retro / PS1" are
   accepted on write). `resolve(world, id)` gives the effective style: own value, else the nearest ancestor Model's
@@ -82,6 +85,8 @@ apps.
   `PhysicsWorld::scripted_pose` is the pose the next step gives a part; the controller adds the step from an
   anchored support's body pose to it as a final lead, so riders trail a Heartbeat-moved platform by one tick, not
   two (#374). `relative_velocity` is measured against the support's motion at the bottom-sphere centre.
+  `sync_from` refreshes contacts with a zero-length physics step, never Rapier's collision-only `detect_collisions`,
+  which leaves contacts that already touch at insert time out of the persistent islands (#405).
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_ui_theme** (S8): the render-free egui theme shared by Studio, `metallic_anim_editor` and `metallic_vfx_editor`:
@@ -105,10 +110,16 @@ apps.
   The host exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
+  `Instance.Changed` and `GetPropertyChangedSignal` (#410, `api/property_signals.rs`) never run inside `World::set`:
+  each `step` reads `World::property_changes_since` for the instances that VM watches (from the first read of either
+  signal until destroy; nothing is read while none is watched), skips hidden properties and fires through the normal
+  dispatch, so a write inside a handler fires on the next step.
   Task queue ownership uses weak thread keys and fresh lease identities; task-created callbacks bind their
   function/arguments at creation. Coroutine admission adapters consume private scheduler markers while ordinary
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
+  `signal:Wait()` parks its thread in the VM's signal hub until the next fire (dropped with its script or instance);
+  `signal:Once(fn)` is a connection that disconnects itself before its one call.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio). Headless contexts (tests, screenshots) use Vulkan, DX12 or Metal and fall back to OpenGL only without them. Every instance, adapter and device `context.rs` makes is set up under one process-wide lock: wgpu's Windows OpenGL (WGL) setup crashes the process (access violation, heap corruption) when threads do it at once (#276, upstream gfx-rs/wgpu#9760); rendering and teardown stay parallel.
   Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the
