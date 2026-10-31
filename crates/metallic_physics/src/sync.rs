@@ -27,6 +27,18 @@ pub struct MaterialProps {
 /// | Brick         | 1.90    | 0.80     | 0.00        |
 /// | Ice           | 0.92    | 0.02     | 0.00        |
 /// | Sand          | 1.60    | 0.50     | 0.00        |
+/// | WoodPlanks    | 0.35    | 0.48     | 0.00        |
+/// | Slate         | 2.69    | 0.40     | 0.00        |
+/// | Cobblestone   | 2.69    | 0.50     | 0.00        |
+/// | Marble        | 2.56    | 0.20     | 0.00        |
+/// | Granite       | 2.69    | 0.40     | 0.00        |
+/// | Pebble        | 2.40    | 0.40     | 0.00        |
+/// | Fabric        | 0.70    | 0.35     | 0.00        |
+/// | DiamondPlate  | 7.85    | 0.35     | 0.05        |
+/// | CorrodedMetal | 7.85    | 0.70     | 0.05        |
+/// | Snow          | 0.90    | 0.30     | 0.00        |
+/// | Rock          | 2.69    | 0.50     | 0.00        |
+/// | Asphalt       | 2.36    | 0.80     | 0.00        |
 ///
 /// Unknown names fall back to Plastic.
 pub fn material_props(name: &str) -> MaterialProps {
@@ -40,6 +52,16 @@ pub fn material_props(name: &str) -> MaterialProps {
         "Brick" => (1.9, 0.8, 0.0),
         "Ice" => (0.92, 0.02, 0.0),
         "Sand" => (1.6, 0.5, 0.0),
+        "WoodPlanks" => (0.35, 0.48, 0.0),
+        "Slate" | "Granite" => (2.69, 0.4, 0.0),
+        "Cobblestone" | "Rock" => (2.69, 0.5, 0.0),
+        "Marble" => (2.56, 0.2, 0.0),
+        "Pebble" => (2.4, 0.4, 0.0),
+        "Fabric" => (0.7, 0.35, 0.0),
+        "DiamondPlate" => (7.85, 0.35, 0.05),
+        "CorrodedMetal" => (7.85, 0.7, 0.05),
+        "Snow" => (0.9, 0.3, 0.0),
+        "Asphalt" => (2.36, 0.8, 0.0),
         _ => (0.7, 0.4, 0.0),
     };
     MaterialProps {

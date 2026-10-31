@@ -1,4 +1,5 @@
-//! Per-material shading parameters. Surface detail is generated in the shader, so no texture files are needed.
+//! Per-material shading parameters. Without a texture set ([`crate::textures`]) surface detail is
+//! generated in the shader, so no texture files are needed.
 
 /// Shading parameters of one material.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -9,60 +10,50 @@ pub struct MaterialParams {
     pub roughness: f32,
     /// 0 for dielectrics, 1 for bare metal.
     pub metalness: f32,
+    /// The shader's procedural detail pattern (an index of the first ten materials): the look
+    /// without textures, and the fallback when a texture set has no layer for the material.
+    pub detail: u32,
+    /// Studs one texture repeat covers (triplanar, in the part's own studs), or 0 for a
+    /// material that stays untextured (Plastic, SmoothPlastic and Glass keep their procedural
+    /// look in every texture set).
+    pub tile_studs: f32,
 }
 
-/// One entry per registry material, in registry order (the index is also the shader's material id).
-pub const MATERIAL_TABLE: [MaterialParams; 10] = [
+const fn m(name: &'static str, roughness: f32, metalness: f32, detail: u32, tile: f32) -> MaterialParams {
     MaterialParams {
-        name: "Plastic",
-        roughness: 0.55,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "SmoothPlastic",
-        roughness: 0.28,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "Metal",
-        roughness: 0.34,
-        metalness: 1.0,
-    },
-    MaterialParams {
-        name: "Wood",
-        roughness: 0.72,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "Concrete",
-        roughness: 0.92,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "Glass",
-        roughness: 0.06,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "Grass",
-        roughness: 0.95,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "Brick",
-        roughness: 0.85,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "Ice",
-        roughness: 0.12,
-        metalness: 0.0,
-    },
-    MaterialParams {
-        name: "Sand",
-        roughness: 0.98,
-        metalness: 0.0,
-    },
+        name,
+        roughness,
+        metalness,
+        detail,
+        tile_studs: tile,
+    }
+}
+
+/// One entry per registry material, in registry order (the index is also the instance's
+/// material id).
+pub const MATERIAL_TABLE: [MaterialParams; 22] = [
+    m("Plastic", 0.55, 0.0, 0, 0.0),
+    m("SmoothPlastic", 0.28, 0.0, 1, 0.0),
+    m("Metal", 0.34, 1.0, 2, 4.0),
+    m("Wood", 0.72, 0.0, 3, 6.0),
+    m("Concrete", 0.92, 0.0, 4, 8.0),
+    m("Glass", 0.06, 0.0, 5, 0.0),
+    m("Grass", 0.95, 0.0, 6, 8.0),
+    m("Brick", 0.85, 0.0, 7, 6.4),
+    m("Ice", 0.12, 0.0, 8, 8.0),
+    m("Sand", 0.98, 0.0, 9, 8.0),
+    m("WoodPlanks", 0.7, 0.0, 3, 8.0),
+    m("Slate", 0.8, 0.0, 4, 8.0),
+    m("Cobblestone", 0.88, 0.0, 4, 6.0),
+    m("Marble", 0.22, 0.0, 1, 10.0),
+    m("Granite", 0.6, 0.0, 4, 6.0),
+    m("Pebble", 0.85, 0.0, 9, 5.0),
+    m("Fabric", 0.9, 0.0, 0, 2.0),
+    m("DiamondPlate", 0.38, 1.0, 2, 3.0),
+    m("CorrodedMetal", 0.7, 1.0, 2, 6.0),
+    m("Snow", 0.8, 0.0, 9, 10.0),
+    m("Rock", 0.9, 0.0, 4, 10.0),
+    m("Asphalt", 0.9, 0.0, 4, 8.0),
 ];
 
 /// Index of a material in [`MATERIAL_TABLE`]; unknown names fall back to `Plastic` (index 0).
@@ -100,6 +91,19 @@ mod tests {
         for m in &MATERIAL_TABLE {
             assert!((0.0..=1.0).contains(&m.roughness));
             assert!((0.0..=1.0).contains(&m.metalness));
+        }
+    }
+
+    #[test]
+    fn detail_patterns_exist_and_the_classic_materials_keep_their_own() {
+        for (i, m) in MATERIAL_TABLE.iter().enumerate() {
+            assert!(m.detail < 10, "{}", m.name);
+            if i < 10 {
+                assert_eq!(m.detail, i as u32, "{}", m.name);
+            }
+        }
+        for name in ["Plastic", "SmoothPlastic", "Glass"] {
+            assert_eq!(material_params(name).tile_studs, 0.0, "{name} stays untextured");
         }
     }
 

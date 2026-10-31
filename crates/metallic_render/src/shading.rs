@@ -13,9 +13,9 @@ use bytemuck::{Pod, Zeroable};
 
 /// Styles the table holds at once (the place Look plus per-part styles).
 pub const MAX_STYLES: usize = 8;
-/// Rows per style: the ten materials, then the Character class row and one reserved row.
-pub const ROWS_PER_STYLE: usize = 12;
-/// All rows (96 x 64 B = 6 KB, one uniform buffer).
+/// Rows per style: the 22 materials, then the Character class row and one reserved row.
+pub const ROWS_PER_STYLE: usize = 24;
+/// All rows (192 x 80 B = 15 KB, one uniform buffer under the 16 KB every device allows).
 pub const MAX_ROWS: usize = MAX_STYLES * ROWS_PER_STYLE;
 /// Offset of the Character class row inside a style's rows (skinned characters drawn by the
 /// standard surface shader use it).
@@ -154,7 +154,38 @@ impl Shading {
     }
 }
 
-/// One row of the GPU material table (64 bytes, `MaterialRow` in `scene.wgsl`).
+/// Where a material's textures are (#146): a layer of the texture arrays of one size class.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextureRef {
+    /// Layer in the size class's detail, normal and ORM arrays.
+    pub layer: u32,
+    /// Size class (index into [`crate::textures::SIZE_CLASSES`]).
+    pub class: u32,
+    /// Nearest filtering (pixel sets).
+    pub nearest: bool,
+    /// Studs one repeat covers.
+    pub tile_studs: f32,
+    /// Normal map strength, 0..1.
+    pub normal_strength: f32,
+}
+
+impl TextureRef {
+    /// The row's `texture` field: layer, repeats per stud, normal strength, class + 4 x nearest.
+    /// Layer -1 means untextured (procedural detail).
+    fn pack(this: Option<&TextureRef>) -> [f32; 4] {
+        match this {
+            Some(t) => [
+                t.layer as f32,
+                1.0 / t.tile_studs.max(0.01),
+                t.normal_strength.clamp(0.0, 1.0),
+                (t.class + if t.nearest { 4 } else { 0 }) as f32,
+            ],
+            None => [-1.0, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+/// One row of the GPU material table (80 bytes, `MaterialRow` in `scene.wgsl`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct MaterialRow {
@@ -167,6 +198,9 @@ pub struct MaterialRow {
     /// Toon: highlight strength, rim width, rim colour packed as 0xRRGGBB (exact in an f32);
     /// all models: the roughness floor (skinned slots, which bring their own roughness).
     pub extra: [f32; 4],
+    /// Textures (#146): layer (-1 = procedural detail), repeats per stud, normal strength,
+    /// size class + 4 when filtered nearest.
+    pub texture: [f32; 4],
 }
 
 fn srgb8_to_linear(c: [f32; 3]) -> [f32; 3] {
@@ -199,6 +233,7 @@ impl MaterialRow {
                 packed as f32,
                 p.roughness_floor.clamp(0.0, 1.0),
             ],
+            texture: TextureRef::pack(None),
         }
     }
 }
@@ -208,6 +243,7 @@ impl MaterialRow {
 pub struct MaterialTable {
     rows: Box<[MaterialRow; MAX_ROWS]>,
     styles: [Option<Shading>; MAX_STYLES],
+    textures: [Option<TextureRef>; MATERIAL_TABLE.len()],
     dirty: bool,
 }
 
@@ -223,6 +259,7 @@ impl MaterialTable {
         let mut t = MaterialTable {
             rows: Box::new([MaterialRow::zeroed(); MAX_ROWS]),
             styles: Default::default(),
+            textures: [None; MATERIAL_TABLE.len()],
             dirty: true,
         };
         t.set_style(0, place);
@@ -240,16 +277,43 @@ impl MaterialTable {
         if self.styles[slot].as_ref() == Some(shading) {
             return true;
         }
+        self.write_style(slot, shading);
+        self.styles[slot] = Some(shading.clone());
+        self.dirty = true;
+        true
+    }
+
+    fn write_style(&mut self, slot: usize, shading: &Shading) {
         let base = slot * ROWS_PER_STYLE;
         for (i, m) in MATERIAL_TABLE.iter().enumerate() {
-            self.rows[base + i] = MaterialRow::new(&shading.for_material(m.name), m);
+            let mut row = MaterialRow::new(&shading.for_material(m.name), m);
+            row.texture = TextureRef::pack(self.textures[i].as_ref());
+            self.rows[base + i] = row;
         }
         // Character: Plastic's surface (skinned slots bring their own roughness and metalness).
         let character = shading.character.unwrap_or(shading.default);
         self.rows[base + CHARACTER_ROW] = MaterialRow::new(&character, &MATERIAL_TABLE[0]);
-        self.styles[slot] = Some(shading.clone());
+    }
+
+    /// Sets each material's textures (registry order; `None` keeps procedural detail) in every
+    /// style slot. Rows change only when the references do.
+    pub fn set_textures(&mut self, textures: &[Option<TextureRef>; MATERIAL_TABLE.len()]) {
+        if &self.textures == textures {
+            return;
+        }
+        self.textures = *textures;
+        let styles = self.styles.clone();
+        for (slot, shading) in styles.iter().enumerate() {
+            if let Some(shading) = shading {
+                self.write_style(slot, shading);
+            }
+        }
         self.dirty = true;
-        true
+    }
+
+    /// The texture of a material (registry index), if any.
+    pub fn texture(&self, material: usize) -> Option<&TextureRef> {
+        self.textures.get(material).and_then(Option::as_ref)
     }
 
     /// The shading of a style slot, if set.
@@ -278,9 +342,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rows_are_64_bytes_and_the_table_fits_a_uniform_buffer() {
-        assert_eq!(std::mem::size_of::<MaterialRow>(), 64);
-        assert_eq!(MAX_ROWS * 64, 6144);
+    fn rows_are_80_bytes_and_the_table_fits_a_uniform_buffer() {
+        assert_eq!(std::mem::size_of::<MaterialRow>(), 80);
+        assert_eq!(MAX_ROWS * 80, 15360);
+        assert!(MAX_ROWS * 80 <= 16384, "the WebGPU minimum uniform binding size");
+    }
+
+    #[test]
+    fn textures_fill_every_style_and_untextured_rows_say_procedural() {
+        let mut t = MaterialTable::default();
+        t.set_style(3, &Shading::uniform(ModelParams::TOON));
+        assert!(t.take_dirty());
+        let mut refs = [None; MATERIAL_TABLE.len()];
+        refs[7] = Some(TextureRef {
+            layer: 2,
+            class: 1,
+            nearest: true,
+            tile_studs: 4.0,
+            normal_strength: 0.5,
+        });
+        t.set_textures(&refs);
+        assert!(t.take_dirty());
+        t.set_textures(&refs);
+        assert!(!t.take_dirty(), "the same textures upload nothing");
+        for slot in [0, 3] {
+            let brick = t.rows()[MaterialTable::row(slot, 7) as usize];
+            assert_eq!(brick.texture, [2.0, 0.25, 0.5, 5.0], "slot {slot}");
+            let plastic = t.rows()[MaterialTable::row(slot, 0) as usize];
+            assert_eq!(plastic.texture[0], -1.0);
+        }
+        assert_eq!(t.rows()[MaterialTable::row(3, 7) as usize].surface[0], 1.0, "still toon");
+        // A style set later gets the textures too.
+        t.set_style(5, &Shading::default());
+        assert_eq!(t.rows()[MaterialTable::row(5, 7) as usize].texture[0], 2.0);
     }
 
     #[test]
