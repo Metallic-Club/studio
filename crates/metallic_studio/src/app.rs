@@ -11,7 +11,7 @@ use crate::recent::RecentProjects;
 use crate::screenshot::ScreenshotJob;
 use crate::start_screen::{StartAction, StartScreen};
 use crate::templates::{list_templates, templates_dir};
-use crate::{StudioError, theme};
+use crate::{StudioError, theme, widgets};
 
 /// The brand icon (a placeholder until the final brand files arrive).
 const ICON_PNG: &[u8] = include_bytes!("../../../branding/placeholder-icon.png");
@@ -35,6 +35,8 @@ pub enum Scene {
     Error,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
     Colour,
+    /// Every Studio widget in every state (design review).
+    Components,
 }
 
 /// Command-line options (all for design review; creators start Studio without any).
@@ -46,10 +48,13 @@ pub struct Options {
     pub scene: Scene,
     /// Parent folder for new games (shown in the start screen).
     pub location: Option<PathBuf>,
+    /// Window size in points (`--size 1440x900`), to compare captures with the mockups.
+    pub size: Option<[f32; 2]>,
 }
 
 impl Options {
-    /// Parses `--screenshot <path>`, `--scene splash|start|error|colour`, `--location <dir>`.
+    /// Parses `--screenshot <path>`, `--scene splash|start|error|colour|components`,
+    /// `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut opts = Self::default();
@@ -59,12 +64,14 @@ impl Options {
             match arg.as_str() {
                 "--screenshot" => opts.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--location" => opts.location = Some(PathBuf::from(value("--location")?)),
+                "--size" => opts.size = Some(parse_size(&value("--size")?)?),
                 "--scene" => {
                     opts.scene = match value("--scene")?.as_str() {
                         "splash" => Scene::Splash,
                         "start" => Scene::Start,
                         "error" => Scene::Error,
                         "colour" | "color" => Scene::Colour,
+                        "components" => Scene::Components,
                         other => return Err(format!("unknown scene {other}")),
                     }
                 }
@@ -75,11 +82,24 @@ impl Options {
     }
 }
 
+/// Parses `1440x900` into a size in points.
+fn parse_size(text: &str) -> Result<[f32; 2], String> {
+    let bad = || format!("--size wants <width>x<height>, got {text}");
+    let (w, h) = text.split_once(['x', 'X']).ok_or_else(bad)?;
+    let w: f32 = w.trim().parse().map_err(|_| bad())?;
+    let h: f32 = h.trim().parse().map_err(|_| bad())?;
+    if w < 320.0 || h < 240.0 {
+        return Err(bad());
+    }
+    Ok([w, h])
+}
+
 enum Phase {
     Splash { since: Instant },
     Start,
     Opened { name: String, path: PathBuf },
     Colour(Box<ColourDemo>),
+    Components,
 }
 
 /// The eframe application.
@@ -125,6 +145,7 @@ impl StudioApp {
                 }
                 Phase::Colour(Box::new(demo))
             }
+            (_, Scene::Components) => Phase::Components,
             (_, Scene::Splash) => Phase::Splash {
                 since: Instant::now() + Duration::from_secs(3600),
             },
@@ -196,6 +217,7 @@ impl eframe::App for StudioApp {
                 }
                 // Drawn above, where it can borrow the phase mutably.
                 Phase::Colour(_) => {}
+                Phase::Components => widgets::components::show(ui, self.icon.as_ref()),
                 Phase::Opened { name, path } => {
                     let (name, path) = (name.clone(), path.clone());
                     let mut back = false;
@@ -235,6 +257,16 @@ mod tests {
     fn colour_scene_is_parsed() {
         let opts = Options::parse(["--scene".to_owned(), "colour".to_owned()]).unwrap();
         assert_eq!(opts.scene, Scene::Colour);
+    }
+
+    #[test]
+    fn size_and_components_scene_are_parsed() {
+        let args = ["--scene", "components", "--size", "1440x900"].map(str::to_owned);
+        let opts = Options::parse(args).unwrap();
+        assert_eq!(opts.scene, Scene::Components);
+        assert_eq!(opts.size, Some([1440.0, 900.0]));
+        assert!(Options::parse(["--size", "big"].map(str::to_owned)).is_err());
+        assert!(Options::parse(["--size", "10x10"].map(str::to_owned)).is_err());
     }
 
     #[test]

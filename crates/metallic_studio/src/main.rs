@@ -14,7 +14,7 @@ fn main() -> eframe::Result {
         Ok(o) => o,
         Err(message) => {
             eprintln!(
-                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|error|colour --location <dir>]"
+                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|error|colour|components --location <dir> --size <w>x<h>]"
             );
             std::process::exit(2);
         }
@@ -22,7 +22,7 @@ fn main() -> eframe::Result {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(WINDOW_TITLE)
-        .with_inner_size([1280.0, 800.0])
+        .with_inner_size(options.size.unwrap_or([1280.0, 800.0]))
         .with_min_inner_size([960.0, 600.0]);
     match icon_image() {
         Ok(img) => {

@@ -126,6 +126,26 @@ pub fn strong() -> FontId {
     FontId::new(tk::T_STRONG_SIZE, FontFamily::Name(UI_STRONG.into()))
 }
 
+/// `caption`: counts and keycaps (never smaller).
+pub fn caption() -> FontId {
+    FontId::new(tk::T_CAPTION_SIZE, FontFamily::Name(UI_STRONG.into()))
+}
+
+/// `small`: metadata and help text.
+pub fn small() -> FontId {
+    FontId::proportional(tk::T_SMALL_SIZE)
+}
+
+/// `body`: default interface text.
+pub fn body() -> FontId {
+    FontId::proportional(tk::T_BODY_SIZE)
+}
+
+/// `body-lg`: descriptions.
+pub fn body_lg() -> FontId {
+    FontId::proportional(tk::T_BODY_LG_SIZE)
+}
+
 /// `heading`: panel and section headings.
 pub fn heading() -> FontId {
     FontId::new(tk::T_HEADING_SIZE, FontFamily::Name(HEADING.into()))

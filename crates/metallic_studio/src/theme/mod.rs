@@ -6,6 +6,7 @@
 //! [`Visuals`] can express them; the raised-plate edges and the cut come with Studio's own widgets.
 
 pub mod fonts;
+pub mod icons;
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, Visuals,
@@ -92,6 +93,34 @@ pub const INFO_BG: Color32 = rgba(tk::INFO_BG);
 pub const DANGER: Color32 = rgba(tk::DANGER);
 /// Destructive buttons under the pointer.
 pub const DANGER_HOVER: Color32 = rgba(tk::DANGER_HOVER);
+/// Text on [`ART_SCRIM`] (the same in every theme).
+pub const ART_TEXT: Color32 = rgba(tk::G_100);
+/// Icons on [`ART_SCRIM`].
+pub const ART_ICON: Color32 = rgba(tk::G_200);
+
+// Tokens the research document proposes but `metallic_tokens` does not carry yet (task T1 adds
+// them to the JSON). The values are the Graphite ones from sections 3.1 and 3.5.
+/// Plate behind text and chips on game art (`art-scrim`, the same in every theme).
+pub const ART_SCRIM: Color32 = Color32::from_rgba_unmultiplied_const(18, 17, 22, 199);
+/// 1 px bottom edge of raised plates (`edge-low`, black at 30 %).
+pub const EDGE_LOW: Color32 = Color32::from_rgba_unmultiplied_const(0, 0, 0, 77);
+/// Keycap fill on the accent (`rgb(17 16 21 / .16)`).
+pub const KEYCAP_ON_ACCENT: Color32 = Color32::from_rgba_unmultiplied_const(17, 16, 21, 41);
+/// Modal scrim (`backdrop`).
+pub const BACKDROP: Color32 = Color32::from_rgba_unmultiplied_const(12, 11, 15, 153);
+/// Stage swap, panel collapse, progress fill (`t-panel`, seconds).
+pub const T_PANEL: f32 = 0.24;
+/// Splash in, splash to start screen (`t-splash`, seconds).
+pub const T_SPLASH: f32 = 0.32;
+/// Hover and press fills (`t-fast`, seconds).
+pub const T_FAST: f32 = tk::T_FAST;
+/// Menus, focus ring, toast exit (`t-base`, seconds).
+pub const T_BASE: f32 = tk::T_BASE;
+/// Toast enter (`t-slow`, seconds).
+pub const T_SLOW: f32 = tk::T_SLOW;
+
+/// Titanium: the light metal plate behind the emblem on the splash (`g-200`).
+pub const TITANIUM: Color32 = rgba(tk::G_200);
 
 // The first theme's names, kept for the code that already uses them.
 /// Window background (`bg-base`).
@@ -117,6 +146,13 @@ pub const R_SM: u8 = tk::R_SM as u8;
 pub const R_MD: u8 = tk::R_MD as u8;
 /// Stage, splash, dialogs.
 pub const R_LG: u8 = tk::R_LG as u8;
+
+/// The chamfer on the primary button.
+pub const CUT_SM: f32 = tk::CUT_SM;
+/// The chamfer on a selected card.
+pub const CUT_MD: f32 = tk::CUT_MD;
+/// The chamfer on the stage, the splash and dialogs.
+pub const CUT_LG: f32 = tk::CUT_LG;
 
 /// Tree, property and list rows.
 pub const ROW_HEIGHT: f32 = tk::H_ROW;

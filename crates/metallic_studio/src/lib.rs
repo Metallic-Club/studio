@@ -6,7 +6,8 @@
 //! rest of the editor arrive in later tasks and plug into [`app::StudioApp`]. [`colour`] holds the
 //! building colour popover, its colour maths and palette files; until the editor exists it runs
 //! as a demo screen (`--scene colour`). [`tools`] holds the pure cores of the building tools
-//! (shared geometry, scatter, selection, measure, arrange) that the viewport will drive.
+//! (shared geometry, scatter, selection, measure, arrange) that the viewport will drive. [`widgets`]
+//! holds Studio's own buttons, plates and the cut.
 //!
 //! Library code returns [`StudioError`]; only `main.rs` decides what to show on failure.
 
@@ -25,5 +26,6 @@ pub mod templates;
 pub mod theme;
 pub mod tools;
 pub mod updater;
+pub mod widgets;
 
 pub use error::StudioError;
