@@ -60,6 +60,16 @@ pub(crate) enum EventKind {
     StateChanged,
     /// `UserInputService.LastInputTypeChanged(type)`
     LastInputTypeChanged,
+    /// `Instance.AttributeChanged(name)` for id 0, `GetAttributeChangedSignal(name)` for the
+    /// interned name id of that attribute (no arguments).
+    AttributeChanged(u32),
+    /// `CollectionService:GetInstanceAddedSignal(tag)`: the interned tag id; the instance is the
+    /// argument.
+    TagAdded(u32),
+    /// `CollectionService:GetInstanceRemovedSignal(tag)`.
+    TagRemoved(u32),
+    /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
+    Gui(super::gui::GuiEventKind),
 }
 
 /// One signal: an event of one instance.
@@ -116,6 +126,11 @@ impl Hub {
         if let Some(list) = self.connections.borrow_mut().get_mut(&key) {
             list.retain(|c| c.id != id);
         }
+    }
+
+    /// How many handlers `key` has.
+    fn count(&self, key: SignalKey) -> usize {
+        self.connections.borrow().get(&key).map_or(0, Vec::len)
     }
 
     fn snapshot(&self, key: SignalKey) -> Vec<(Function, Rc<Cell<bool>>, u64)> {
@@ -209,6 +224,22 @@ impl ApiState {
             .deadline
             .get()
             .is_some_and(|d| Instant::now() >= d)
+    }
+
+    /// Whether the lifecycle events (tag added or removed, attribute changed) of a log can be
+    /// handed to `handlers` handlers now. They are never dropped: when this step is out of time
+    /// or the deferred queue has no room for that many calls, the reader stays at the event and
+    /// takes it up again in the next step, in order. The events wait in the world's log (which
+    /// holds hundreds of thousands) instead of in the handler queue.
+    pub(crate) fn lifecycle_room(&self, handlers: usize) -> bool {
+        handlers == 0
+            || (!self.over_budget()
+                && self.pacing.deferred.borrow().len() + handlers <= MAX_DEFERRED)
+    }
+
+    /// How many handlers `key` has.
+    pub(crate) fn handler_count(&self, key: SignalKey) -> usize {
+        self.hub.count(key)
     }
 
     /// Runs handler calls that an earlier step had no time for, oldest first.
@@ -338,6 +369,7 @@ impl ApiState {
             .borrow_mut()
             .retain(|w| self.budget.owner_of(&w.thread) != Some(owner));
         self.pacing.streaks.borrow_mut().remove(&owner);
+        self.require.release_owner(owner);
         self.drop_bound_actions(owner);
         self.budget.cancel_owner(owner);
     }

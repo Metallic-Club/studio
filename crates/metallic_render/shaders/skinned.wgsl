@@ -14,7 +14,11 @@ fn vs_skinned(v: SkinIn) -> VOut {
     out.local_p = v.pos * skin.params.x;
     out.local_n = v.normal;
     out.color = skin.slot_color[s];
-    out.material = skin.slot_material[s];
+    let sm = skin.slot_material[s];
+    // The place Look's Character row picks the shading model; the slot keeps its own surface.
+    out.material = vec4<u32>(CHARACTER_ROW, 0u, u32(sm.z + 0.5), 0u);
+    out.surf = sm.xy;
+    out.unlit = unlit_colour(CHARACTER_ROW, out.color.rgb);
     return out;
 }
 

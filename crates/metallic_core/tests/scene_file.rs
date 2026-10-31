@@ -121,3 +121,30 @@ fn pivots_and_scale_survive_a_save() {
     assert_eq!(transform::model_scale(&w2, m2), 2.0);
     assert_eq!(w2.get(m2, "PrimaryPart").unwrap(), Value::Ref(Some(p2)));
 }
+
+#[test]
+fn module_script_source_round_trips_and_is_not_a_script() {
+    let dir = TestDir::new("module_script_round_trip");
+    let mut w = World::new_with_services();
+    let rs = w.root("ReplicatedStorage").unwrap();
+    let m = w.create("ModuleScript", Some(rs)).unwrap();
+    w.set(m, "Name", Value::String("Config".into())).unwrap();
+    w.set(
+        m,
+        "Source",
+        Value::String("local M = {}\nreturn M -- \"quoted\"".into()),
+    )
+    .unwrap();
+    assert!(!w.is_a(m, "Script"), "a ModuleScript never runs by itself");
+    assert!(w.set(m, "Enabled", Value::Bool(false)).is_err());
+    let path = dir.file("module.ron");
+    save_scene(&w, &path).unwrap();
+    let w2 = load_scene(&path).unwrap();
+    let rs2 = w2.root("ReplicatedStorage").unwrap();
+    let m2 = w2.find_first_child(rs2, "Config").unwrap();
+    assert_eq!(w2.class_name(m2), Some("ModuleScript"));
+    assert_eq!(
+        w2.get(m2, "Source").unwrap(),
+        Value::String("local M = {}\nreturn M -- \"quoted\"".into())
+    );
+}
