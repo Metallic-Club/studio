@@ -21,5 +21,5 @@ fn fs_main(in: SkyOut) -> @location(0) vec4<f32> {
     var col = sky_gradient(dir);
     let disc = smoothstep(0.99975, 0.99991, dot(dir, g.sun_dir.xyz));
     col = mix(col, vec3<f32>(0.95, 0.92, 0.86), disc * 0.9);
-    return vec4<f32>(finish(col, in.clip.xy), 1.0);
+    return vec4<f32>(col, 1.0);
 }

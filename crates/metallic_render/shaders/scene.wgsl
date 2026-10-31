@@ -234,5 +234,5 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     var col = direct + ambient;
     let fog = 1.0 - exp(-pow(dist * g.camera_pos.w, 2.0));
     col = mix(col, g.sky_horizon.rgb, clamp(fog, 0.0, 1.0));
-    return vec4<f32>(finish(col, in.clip.xy), in.color.a);
+    return vec4<f32>(col, in.color.a);
 }
