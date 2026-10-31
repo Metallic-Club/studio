@@ -8,6 +8,7 @@ use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_expos
 use crate::meshes::{MeshKind, Vertex};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
 use crate::scene::{InstanceRaw, Scene};
+use crate::shading::{MAX_ROWS, MaterialRow, MaterialTable, Shading};
 use crate::shadows::{
     Cascade, MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
 };
@@ -121,7 +122,7 @@ struct Globals {
 const MESH_ATTRS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
 const INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
-    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4
+    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Uint32x4
 ];
 
 fn vertex_layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
@@ -371,6 +372,9 @@ pub struct Renderer {
     blended: InstanceBuffer,
     blended_kinds: Vec<MeshKind>,
     scratch_instances: Vec<InstanceRaw>,
+    /// The GPU material table (`materials` in scene.wgsl) and its CPU copy.
+    material_buffer: wgpu::Buffer,
+    material_table: MaterialTable,
     scratch_blended: Vec<(f32, MeshKind, InstanceRaw)>,
     scratch_cascades: Vec<Cascade>,
     globals: wgpu::Buffer,
@@ -463,6 +467,16 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -492,7 +506,19 @@ impl Renderer {
             }],
         });
         let shadow_map = ShadowMap::new(&device, settings.shadow_resolution(), settings.cascades());
-        let global_group = make_global_group(&device, &global_layout, &globals, &shadow_map);
+        let material_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("metallic material table"),
+            size: std::mem::size_of::<[MaterialRow; MAX_ROWS]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let global_group = make_global_group(
+            &device,
+            &global_layout,
+            &globals,
+            &shadow_map,
+            &material_buffer,
+        );
         let cascade_slots = make_cascade_slots(&device, &shadow_layout, settings.cascades());
         let hdr_features = ctx
             .adapter
@@ -543,6 +569,8 @@ impl Renderer {
             blended,
             blended_kinds: Vec::new(),
             scratch_instances: Vec::new(),
+            material_buffer,
+            material_table: MaterialTable::default(),
             scratch_blended: Vec::new(),
             scratch_cascades: Vec::new(),
             globals,
@@ -586,6 +614,7 @@ impl Renderer {
             &self.global_layout,
             &self.globals,
             &self.shadow_map,
+            &self.material_buffer,
         );
         self.cascade_slots =
             make_cascade_slots(&self.device, &self.shadow_layout, settings.cascades());
@@ -701,6 +730,23 @@ impl Renderer {
             }
         }
         self.lighting = Some(inputs.clone());
+    }
+
+    /// Sets how the place Look shades (style slot 0 of the material table): its default model,
+    /// material overrides and the Character row. Uploaded with the next frame, only if it
+    /// changed.
+    pub fn set_shading(&mut self, shading: &Shading) {
+        self.material_table.set_style(0, shading);
+    }
+
+    /// Sets the shading of a per-part style slot (1 to 7; #223 assigns slots to styles).
+    pub fn set_style_shading(&mut self, slot: usize, shading: &Shading) {
+        self.material_table.set_style(slot, shading);
+    }
+
+    /// The material table the renderer draws with.
+    pub fn material_table(&self) -> &MaterialTable {
+        &self.material_table
     }
 
     /// Sets the skinned instances (characters) to draw from the next [`Renderer::render`] on.
@@ -924,6 +970,13 @@ impl Renderer {
         }
         self.ensure_attachments(size);
         self.upload_scene();
+        if self.material_table.take_dirty() {
+            self.queue.write_buffer(
+                &self.material_buffer,
+                0,
+                bytemuck::cast_slice(self.material_table.rows().as_slice()),
+            );
+        }
         self.select_skinned_lods(camera, size.1);
 
         // Blended parts are re-sorted every frame because the order depends on the camera.
@@ -1425,6 +1478,7 @@ fn make_global_group(
     layout: &wgpu::BindGroupLayout,
     globals: &wgpu::Buffer,
     shadow: &ShadowMap,
+    materials: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic globals group"),
@@ -1441,6 +1495,10 @@ fn make_global_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(&shadow.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: materials.as_entire_binding(),
             },
         ],
     })
