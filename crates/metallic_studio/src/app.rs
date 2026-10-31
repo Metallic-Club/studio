@@ -154,7 +154,7 @@ impl StudioApp {
             center + Vec2::new(0.0, 56.0),
             Align2::CENTER_CENTER,
             WINDOW_TITLE,
-            FontId::proportional(26.0),
+            theme::fonts::display(),
             theme::TEXT,
         );
         ui.painter().text(

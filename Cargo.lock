@@ -3578,6 +3578,7 @@ dependencies = [
  "log",
  "metallic_core",
  "metallic_runtime",
+ "metallic_tokens",
  "metallic_update",
  "png",
  "rfd",

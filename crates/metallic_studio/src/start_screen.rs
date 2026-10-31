@@ -224,12 +224,13 @@ impl StartScreen {
         let new_game = egui::Button::new((
             egui::Atom::grow(),
             RichText::new("+ New game")
-                .strong()
-                .size(16.0)
-                .color(theme::DEEP),
+                .font(theme::fonts::strong())
+                .size(15.0)
+                .color(theme::ON_ACCENT),
             egui::Atom::grow(),
         ))
         .fill(theme::ACCENT)
+        .stroke(Stroke::NONE)
         .corner_radius(CornerRadius::same(8))
         .min_size(Vec2::new(ui.available_width(), 44.0));
         if ui
@@ -239,7 +240,7 @@ impl StartScreen {
             self.new_game();
         }
         ui.add_space(20.0);
-        ui.label(RichText::new("Recent games").strong().size(15.0));
+        ui.label(RichText::new("Recent games").font(theme::fonts::heading()));
         ui.add_space(4.0);
         if self.recent.items().is_empty() {
             egui::Frame::new()
@@ -248,7 +249,7 @@ impl StartScreen {
                 .inner_margin(16.0)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("No games yet").strong());
+                    ui.label(RichText::new("No games yet").font(theme::fonts::strong()));
                     ui.label(
                         RichText::new("Games you create or open show up here, newest first.")
                             .color(theme::TEXT_DIM),
@@ -259,7 +260,7 @@ impl StartScreen {
             for item in items {
                 let resp = ui
                     .add(
-                        egui::Button::new(RichText::new(&item.name).strong())
+                        egui::Button::new(RichText::new(&item.name).font(theme::fonts::strong()))
                             .min_size(Vec2::new(ui.available_width(), 0.0))
                             .frame(true),
                     )
@@ -296,7 +297,7 @@ impl StartScreen {
         let mut action = None;
         ui.label(
             RichText::new("What do you want to make?")
-                .size(28.0)
+                .font(theme::fonts::display())
                 .strong(),
         );
         ui.label(
@@ -313,7 +314,7 @@ impl StartScreen {
                 .inner_margin(20.0)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("No templates found").strong());
+                    ui.label(RichText::new("No templates found").font(theme::fonts::strong()));
                     ui.label(
                         RichText::new(format!(
                             "Studio looked in {}. Reinstall Studio or open a game folder instead.",
@@ -327,7 +328,7 @@ impl StartScreen {
 
         action = self.selected_panel(ui);
         ui.add_space(22.0);
-        ui.label(RichText::new("All starting points").strong().size(15.0));
+        ui.label(RichText::new("All starting points").font(theme::fonts::heading()));
         self.tiles(ui);
         action
     }
@@ -367,7 +368,11 @@ impl StartScreen {
                         |ui| {
                             ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
                             ui.add_space(20.0);
-                            ui.label(RichText::new(&template.name).size(22.0).strong());
+                            ui.label(
+                                RichText::new(&template.name)
+                                    .font(theme::fonts::title())
+                                    .strong(),
+                            );
                             ui.label(RichText::new(&template.description).color(theme::TEXT));
                             ui.add_space(8.0);
                             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -446,8 +451,13 @@ impl StartScreen {
                 .color(theme::TEXT_DIM),
             );
         }
-        let create = egui::Button::new(RichText::new("Create game").strong().color(theme::DEEP))
-            .fill(theme::ACCENT);
+        let create = egui::Button::new(
+            RichText::new("Create game")
+                .font(theme::fonts::strong())
+                .color(theme::ON_ACCENT),
+        )
+        .fill(theme::ACCENT)
+        .stroke(Stroke::NONE);
         let create_clicked = ui.add(create).clicked();
         (name_resp.expect("grid ran"), create_clicked)
     }
@@ -490,7 +500,7 @@ impl StartScreen {
                     egui::pos2(rect.left() + 10.0, image_rect.bottom() + 8.0),
                     Align2::LEFT_TOP,
                     &t.name,
-                    FontId::proportional(14.0),
+                    theme::fonts::strong(),
                     theme::TEXT,
                 );
                 let desc_font = FontId::proportional(12.0);
