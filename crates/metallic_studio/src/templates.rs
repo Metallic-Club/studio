@@ -1,7 +1,8 @@
 //! Game templates: listing them from disk and creating a new project from one.
 //!
-//! A template is a folder with a `template.toml` (`id`, `name`, `description`, `preview`, `order`)
-//! next to the project files. Project settings metadata lives in `metallic.toml` as `[[setting]]`
+//! A template is a folder with a `template.toml` (`id`, `name`, `description`, `preview`, `order`,
+//! and for the start screen the optional `kind`, `facts`, `inside` and `look`) next to the project
+//! files. Project settings metadata lives in `metallic.toml` as `[[setting]]`
 //! and survives creation/renaming. Catalog metadata, previews and root test fixtures stay in
 //! the template. Legacy settings in `template.toml` are migrated into the project file.
 //!
@@ -38,6 +39,39 @@ pub struct TemplateInfo {
     pub order: i64,
     /// The template's files when they are compiled into Studio instead of read from `dir`.
     pub embedded: Option<&'static [EmbeddedFile]>,
+    /// What kind of game it starts (the start screen's filter and art chip).
+    pub kind: TemplateKind,
+    /// A short line under the name, e.g. "3D, third-person" (empty when the catalog has none).
+    pub facts: String,
+    /// What the template contains, for the "Inside:" line (empty when the catalog has none).
+    pub inside: String,
+    /// The lighting look it ships with, for the art chip (empty when the catalog has none).
+    pub look: String,
+}
+
+/// The kind of game a template starts, as written in `template.toml` (`kind = "3d"`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum TemplateKind {
+    /// A 3D game (the default).
+    #[default]
+    #[serde(rename = "3d")]
+    ThreeD,
+    /// A 2D game.
+    #[serde(rename = "2d")]
+    TwoD,
+    /// An empty world to build in.
+    #[serde(rename = "empty")]
+    Empty,
+}
+
+impl TemplateKind {
+    /// "3D" or "2D" for the art chip (an empty world is 3D).
+    pub fn dimension(self) -> &'static str {
+        match self {
+            Self::TwoD => "2D",
+            Self::ThreeD | Self::Empty => "3D",
+        }
+    }
 }
 
 /// One file of a template that is compiled into Studio.
@@ -75,6 +109,38 @@ struct TemplateFile {
     description: String,
     preview: String,
     order: i64,
+    #[serde(default)]
+    kind: TemplateKind,
+    #[serde(default)]
+    facts: String,
+    #[serde(default)]
+    inside: String,
+    #[serde(default)]
+    look: String,
+}
+
+impl TemplateFile {
+    /// The catalog entry for a template whose files are at `dir` (or compiled in).
+    fn into_info(
+        self,
+        preview_path: PathBuf,
+        dir: PathBuf,
+        embedded: Option<&'static [EmbeddedFile]>,
+    ) -> TemplateInfo {
+        TemplateInfo {
+            id: self.id,
+            name: self.name,
+            description: self.description,
+            preview_path,
+            dir,
+            order: self.order,
+            embedded,
+            kind: self.kind,
+            facts: self.facts,
+            inside: self.inside,
+            look: self.look,
+        }
+    }
 }
 
 /// The folder templates are read from: env `METALLIC_TEMPLATES_DIR`, else `<exe dir>/templates`.
@@ -94,15 +160,8 @@ fn read_template(dir: &Path) -> Result<TemplateInfo, String> {
     let text =
         fs::read_to_string(&file).map_err(|e| format!("cannot read {TEMPLATE_FILE}: {e}"))?;
     let parsed = parse_template_file(&text)?;
-    Ok(TemplateInfo {
-        id: parsed.id,
-        name: parsed.name,
-        description: parsed.description,
-        preview_path: dir.join(parsed.preview),
-        dir: dir.to_path_buf(),
-        order: parsed.order,
-        embedded: None,
-    })
+    let preview = dir.join(&parsed.preview);
+    Ok(parsed.into_info(preview, dir.to_path_buf(), None))
 }
 
 /// Parses and checks a `template.toml`; `Err` carries a short reason for the log.
@@ -131,15 +190,7 @@ pub fn builtin_baseplate() -> Option<TemplateInfo> {
         None => Err(format!("{TEMPLATE_FILE} is missing")),
     };
     match parsed {
-        Ok(parsed) => Some(TemplateInfo {
-            id: parsed.id,
-            name: parsed.name,
-            description: parsed.description,
-            preview_path: PathBuf::new(),
-            dir: PathBuf::new(),
-            order: parsed.order,
-            embedded: Some(BASEPLATE_FILES),
-        }),
+        Ok(parsed) => Some(parsed.into_info(PathBuf::new(), PathBuf::new(), Some(BASEPLATE_FILES))),
         Err(reason) => {
             log::warn!("built-in Baseplate template is broken: {reason}");
             None
@@ -491,4 +542,35 @@ pub fn create_from_template(
         };
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_screen_fields_are_optional_and_parsed() {
+        let base =
+            "id = \"a\"\nname = \"A\"\ndescription = \"d\"\npreview = \"p.png\"\norder = 1\n";
+        let plain = parse_template_file(base).expect("old catalogs still parse");
+        assert_eq!(plain.kind, TemplateKind::ThreeD);
+        assert!(plain.facts.is_empty() && plain.inside.is_empty() && plain.look.is_empty());
+        let full =
+            format!("{base}kind = \"2d\"\nfacts = \"2D, side view\"\nlook = \"Paper look\"\n");
+        let parsed = parse_template_file(&full).expect("parse");
+        assert_eq!(parsed.kind, TemplateKind::TwoD);
+        assert_eq!(parsed.kind.dimension(), "2D");
+        assert_eq!(
+            (parsed.facts.as_str(), parsed.look.as_str()),
+            ("2D, side view", "Paper look")
+        );
+        assert!(parse_template_file(&format!("{base}kind = \"4d\"\n")).is_err());
+    }
+
+    #[test]
+    fn the_built_in_baseplate_is_an_empty_world() {
+        let baseplate = builtin_baseplate().expect("compiled-in catalog parses");
+        assert_eq!(baseplate.kind, TemplateKind::Empty);
+        assert!(!baseplate.inside.is_empty());
+    }
 }

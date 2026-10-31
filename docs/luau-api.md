@@ -149,6 +149,10 @@ StarterGui, Lighting, RunService, UserInputService, ContextActionService. Others
 - Player: `UserId`, `Character`, `CharacterAdded`. Combined startup creates a `PlayerGui` for its local player;
   server-only startup adds no player or GUI.
 - `Humanoid:TakeDamage(n)` only lowers `Health` (not below 0). Death is detected by the character controller.
+- Humanoid tuning is clamped on write: `Health` and `MaxHealth` to 0..1e9, `WalkSpeed` and `JumpPower` to 0..1000,
+  `MaxSlopeAngle` to 0..89. Setting a NaN or infinite number raises an error and keeps the old value. A character
+  dies when `Health` is 0, when it falls below `Workspace.FallenPartsDestroyHeight`, or when its root goes more than
+  1,000,000 studs from the origin on any axis.
 - `RunService:IsServer()`, `RunService:IsClient()`, `RunService.Heartbeat`.
 
 ```lua

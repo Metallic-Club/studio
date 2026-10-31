@@ -84,6 +84,8 @@ pub struct Game {
     running: bool,
     /// `InputRuntime::device_changes` when the scripts were last told the last-used device.
     input_device_changes: Option<u64>,
+    /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
+    gui_inset: f32,
 }
 
 impl Game {
@@ -137,6 +139,7 @@ impl Game {
             avatar: None,
             running: false,
             input_device_changes: None,
+            gui_inset: 0.0,
         }
     }
 
@@ -408,10 +411,26 @@ impl Game {
         self.scripts.set_input_devices(touch, keyboard, gamepad);
     }
 
+    /// Sets the GUI inset: the top `points` of the screen belong to the Player's own controls
+    /// (the touch overlay's menu button, spec 7.2), so every ScreenGui is laid out in the screen
+    /// below it, like Roblox's default `IgnoreGuiInset = false`. Zero when nothing is there.
+    pub fn set_gui_inset(&mut self, points: f32) {
+        self.gui_inset = if points.is_finite() {
+            points.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// The GUI inset in points.
+    pub fn gui_inset(&self) -> f32 {
+        self.gui_inset
+    }
+
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.world.try_borrow() {
-            crate::gui::paint(&world, painter);
+            crate::gui::paint(&world, painter, self.gui_inset);
         }
     }
 

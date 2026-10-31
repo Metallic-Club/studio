@@ -4,7 +4,7 @@
 //! metallic-player <project dir> [--scene <file relative to project>] [--headless --frames N]
 //!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
 //!                 [--capture FRAME:PNG]... [--input-script <file>]
-//!                 [--no-overrides] [--menu main|keyboard|gamepad|assist]
+//!                 [--no-overrides] [--menu main|keyboard|gamepad|assist|touch]
 //!                 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]
 //! ```
 //! Windowed by default. Input is read as actions (`metallic_runtime::input`); the default
@@ -12,7 +12,7 @@
 //! right-drag or the right stick turns the camera, the wheel or R1/L1 zoom; the left stick
 //! moves; Esc (or Start) opens the Player menu: Resume, Controls (rebinding, hold or toggle,
 //! stick and mouse settings; saved per game in the Player's data folder) and Leave game.
-//! `--no-overrides` ignores the saved controls; `--menu main|keyboard|gamepad|assist` starts with
+//! `--no-overrides` ignores the saved controls; `--menu main|keyboard|gamepad|assist|touch` starts with
 //! the menu or a Controls tab open (for screenshots). `--headless` runs N frames of 1/60 s without a window or GPU (smoke tests).
 //! `--input-script <file>` plays input events (`frame device control state [values]`, for
 //! example `30 keyboard Space down`) in either mode, with 1/60 s of input time per frame. `--fps` plays 60 s in a fixed 1920x1080 window without
@@ -109,9 +109,15 @@ fn run_headless(
 ) {
     let mut input = InputRuntime::from_world(&game.world().borrow());
     controls.apply(&mut input);
-    // The player's touch settings (stick mode) apply to the emulated device.
-    let stick_mode = input.overrides().touch.stick_mode;
-    let mut touch = emulate.map(|p| TouchControls::new(p.with_stick_mode(stick_mode)));
+    // The player's touch settings (stick mode, sizes) apply to the emulated device.
+    let t = input.overrides().touch;
+    let mut touch = emulate.map(|p| {
+        TouchControls::new(
+            p.with_stick_mode(t.stick_mode)
+                .with_scale(t.size)
+                .with_large(t.large_controls),
+        )
+    });
     if touch.is_some() {
         input.set_forced_device(Some(DeviceKind::Touch));
         game.set_input_devices(true, false, false);

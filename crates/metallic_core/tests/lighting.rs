@@ -5,11 +5,8 @@ use metallic_core::lighting::{
 };
 use metallic_core::*;
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join("metallic_core_lighting_tests");
-    std::fs::create_dir_all(&d).unwrap();
-    d.join(name)
-}
+mod common;
+use common::TestDir;
 
 /// A value of the property's type that differs from `v` (inside its range).
 fn other(v: &Value, def: &classes::PropDef) -> Value {
@@ -145,10 +142,11 @@ fn an_edited_preset_no_longer_matches() {
 
 #[test]
 fn every_preset_survives_a_scene_save_and_load() {
+    let dir = TestDir::new("every_preset_survives_a_scene_save_and_load");
     for p in &PRESETS {
         let mut w = World::new_with_services();
         apply_preset(&mut w, p).unwrap();
-        let path = tmp(&format!("{}.ron", p.id));
+        let path = dir.file(&format!("{}.ron", p.id));
         save_scene(&w, &path).unwrap();
         let loaded = load_scene(&path).unwrap();
         assert_eq!(matching_preset(&loaded).map(|m| m.id), Some(p.id));
@@ -160,7 +158,7 @@ fn every_preset_survives_a_scene_save_and_load() {
             p.id
         );
         // Saving the loaded world again gives the same file.
-        let again = tmp(&format!("{}-again.ron", p.id));
+        let again = dir.file(&format!("{}-again.ron", p.id));
         save_scene(&loaded, &again).unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
@@ -173,6 +171,7 @@ fn every_preset_survives_a_scene_save_and_load() {
 
 #[test]
 fn hand_set_lighting_survives_a_scene_save_and_load() {
+    let dir = TestDir::new("hand_set_lighting_survives_a_scene_save_and_load");
     let mut w = World::new_with_services();
     let l = w.root("Lighting").unwrap();
     w.set(l, "ClockTime", Value::Number(6.25)).unwrap();
@@ -182,7 +181,7 @@ fn hand_set_lighting_survives_a_scene_save_and_load() {
         .unwrap();
     let bloom = w.create("BloomEffect", Some(l)).unwrap();
     w.set(bloom, "Enabled", Value::Bool(false)).unwrap();
-    let path = tmp("hand.ron");
+    let path = dir.file("hand.ron");
     save_scene(&w, &path).unwrap();
     let loaded = load_scene(&path).unwrap();
     let l2 = loaded.root("Lighting").unwrap();
@@ -203,6 +202,7 @@ fn hand_set_lighting_survives_a_scene_save_and_load() {
 /// (ClockTime wraps), and non-finite values are refused, both on write and on load.
 #[test]
 fn lighting_values_are_kept_in_range_on_write_and_load() {
+    let dir = TestDir::new("lighting_values_are_kept_in_range_on_write_and_load");
     let mut w = World::new_with_services();
     let lighting = w.root("Lighting").unwrap();
     let mut ids = vec![("Lighting", lighting)];
@@ -275,7 +275,7 @@ fn lighting_values_are_kept_in_range_on_write_and_load() {
     w.set(l, "Brightness", Value::Number(7.0)).unwrap();
     w.set(l, "FogColor", Value::Color3(Color3::new(1.0, 2.0, 3.0)))
         .unwrap();
-    let path = tmp("out_of_range.ron");
+    let path = dir.file("out_of_range.ron");
     save_scene(&w, &path).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     let edited = text.replacen("7.0", "1e39", 1).replacen("3.0", "1e300", 1);

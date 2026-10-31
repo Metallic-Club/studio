@@ -46,8 +46,8 @@ Player from `ShowOnTouch` actions, the touch input path through `InputRuntime`, 
   as 6 in all (primary + S1..S5); S6's slot is a spare. Raising `MAX_BUTTONS` to 7 is one constant.
 - The mockup's tablet primary sits 28 dp from the corner; the spec text says 24. Built as the spec says.
 - GUI hit-testing (a touch that lands on a GUI button) is not built: the Player GUI has no interactive buttons yet.
-- Stick mode and opacity are saved in the player's overrides (`"touch": {"stick", "opacity"}`) and the overlay
-  reads them, but the Controls page has no Touch tab to change them yet.
+- Stick mode and opacity are saved in the player's overrides (`"touch": {"stick", "opacity"}`); the Touch tab came
+  in #333.
 - Safe-area insets: winit 0.30 has no safe-area API, so desktop uses zero (emulation uses the presets).
 
 ## Commands that matter

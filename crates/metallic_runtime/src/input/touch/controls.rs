@@ -120,8 +120,8 @@ impl TouchControls {
 
     /// Follows the runtime's touch actions: when they changed (a scene edit, `BindAction`,
     /// `SetTitle`), the controls are placed again and held fingers keep what they hold, matched
-    /// by action path. A finger whose control went away holds nothing from then on (the runtime
-    /// ends its press as a cancel). Returns true when they changed.
+    /// by action path. A finger whose control went away, or whose action changed its role, holds
+    /// nothing from then on (the runtime ends its press as a cancel). Returns true when they changed.
     pub fn sync(&mut self, rt: &mut InputRuntime, time: f64) -> bool {
         if self.generation == Some(rt.touch_generation()) {
             return false;
@@ -139,10 +139,7 @@ impl TouchControls {
             let Some(mut f) = self.fingers[i] else {
                 continue;
             };
-            let same = |slot: usize| {
-                old.button_in_slot(slot)
-                    .and_then(|d| self.set.slot_of(&d.path))
-            };
+            let same = |slot: usize| old.button_in_slot(slot).and_then(|d| self.set.follow(d));
             f.capture = match f.capture {
                 Capture::Button { slot, live } => match same(slot) {
                     Some(s) if s != MENU_SLOT => {

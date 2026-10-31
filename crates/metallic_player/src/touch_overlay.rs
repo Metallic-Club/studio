@@ -42,6 +42,26 @@ pub fn parse_emulation(name: &str) -> Option<DeviceProfile> {
     Some(if portrait { p.portrait() } else { p })
 }
 
+/// The menu button moves the GUI down only when its top edge is in this top part of the screen.
+const MENU_TOP_BAND: f32 = 0.25;
+
+/// The GUI inset in points (#333) while the touch controls fully show: the ScreenGuis start below
+/// the menu button, with the usual 8 dp gap, so a top-centre game banner does not cover it. 0 when
+/// there is no menu button or a custom layout put it lower than the top band (spec 7.3).
+pub fn gui_inset(controls: &TouchControls, view: &Viewport, scale: f32) -> f32 {
+    let screen_h = controls.profile().size[1];
+    let Some(menu) = controls
+        .layout()
+        .menu
+        .filter(|m| m.center[1] - m.radius <= MENU_TOP_BAND * screen_h)
+    else {
+        return 0.0;
+    };
+    let bottom_dp = menu.center[1] + menu.radius + 8.0;
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    (view.origin[1] + bottom_dp * view.px_per_dp) / scale
+}
+
 /// The window size for an emulated device, in physical pixels.
 pub fn emulation_window(profile: &DeviceProfile) -> (u32, u32) {
     let [w, h] = profile.size.map(f64::from);
@@ -321,8 +341,12 @@ impl TouchOverlay {
                 ..p
             }
         });
-        self.controls
-            .set_profile(profile.with_stick_mode(settings.stick_mode));
+        self.controls.set_profile(
+            profile
+                .with_stick_mode(settings.stick_mode)
+                .with_scale(settings.size)
+                .with_large(settings.large_controls),
+        );
         self.controls.set_px_per_dp(self.view.px_per_dp);
         self.controls.sync(rt, time);
         let shown = self.emulated.is_some() || rt.last_device() == DeviceKind::Touch;
@@ -338,6 +362,8 @@ impl TouchOverlay {
             self.controls.button_infos(shown, &mut self.infos);
             game.set_touch_buttons(&self.infos);
         }
+        // The GUI eases down and up with the controls' fade, not in one jump.
+        game.set_gui_inset(gui_inset(&self.controls, &self.view, scale) * self.alpha);
     }
 
     /// A finger event in dp (input scripts, emulation).
@@ -577,6 +603,8 @@ mod tests {
         o.set_touch(TouchSettings {
             stick_mode: StickMode::Fixed,
             opacity: 0.5,
+            size: 1.2,
+            large_controls: true,
         });
         rt.set_overrides(o);
         let mut game = Game::from_world(
@@ -591,7 +619,98 @@ mod tests {
         );
         overlay.update(&mut rt, &mut game, (1600, 739), 1.0, 1.0, 0.016);
         assert_eq!(overlay.controls.profile().stick_mode, StickMode::Fixed);
+        assert!(overlay.controls.profile().large, "Large controls");
+        assert_eq!(overlay.controls.profile().scale, 1.2);
         assert_eq!(overlay.opacity, 0.5);
+    }
+
+    /// #333: while touch shows, the game's GUI starts below the menu button.
+    #[test]
+    fn the_gui_starts_below_the_menu_button_while_touch_shows() {
+        use metallic_runtime::input::InputConfig;
+        let game = || {
+            Game::from_world(
+                "t".into(),
+                metallic_core::World::new_with_services(),
+                std::rc::Rc::new(metallic_runtime::StdoutSink),
+            )
+        };
+        let mut rt = InputRuntime::new(&InputConfig::player_defaults());
+        let mut g = game();
+        let mut phone = TouchOverlay::new(
+            std::path::Path::new("."),
+            Some(DeviceProfile::phone()),
+            false,
+        );
+        phone.update(&mut rt, &mut g, (1600, 739), 2.0, 1.0, 0.016);
+        let menu = phone.controls.layout().menu.expect("the menu button");
+        let bottom = menu.center[1] + menu.radius + 8.0;
+        let want = (phone.view.origin[1] + bottom * phone.view.px_per_dp) / 2.0;
+        assert!(
+            (g.gui_inset() - want).abs() < 1e-3,
+            "{} vs {want}",
+            g.gui_inset()
+        );
+        assert!(g.gui_inset() > 0.0);
+        // On a desktop with the keyboard in use, the touch controls hide and the GUI has the
+        // whole screen.
+        let mut rt = InputRuntime::new(&InputConfig::player_defaults());
+        let mut g = game();
+        let mut desktop = TouchOverlay::new(std::path::Path::new("."), None, false);
+        desktop.update(&mut rt, &mut g, (1280, 720), 1.0, 1.0, 0.016);
+        assert_eq!(g.gui_inset(), 0.0);
+        // A touch arrives: the GUI eases down with the 140 ms fade instead of jumping.
+        rt.set_forced_device(Some(DeviceKind::Touch));
+        let mut seen = Vec::new();
+        for i in 0..12 {
+            desktop.update(
+                &mut rt,
+                &mut g,
+                (1280, 720),
+                1.0,
+                0.1 + i as f64 * 0.016,
+                0.016,
+            );
+            seen.push(g.gui_inset());
+        }
+        let full = gui_inset(&desktop.controls, &desktop.view, 1.0);
+        assert!(full > 0.0);
+        assert!(seen[0] > 0.0 && seen[0] < full * 0.25, "{seen:?}");
+        assert!(seen.windows(2).all(|w| w[1] >= w[0]), "{seen:?}");
+        assert!((seen[11] - full).abs() < 1e-3, "{seen:?} vs {full}");
+    }
+
+    /// #339 review: a custom layout that puts the menu button at the bottom leaves the GUI alone.
+    #[test]
+    fn a_menu_button_at_the_bottom_leaves_the_gui_alone() {
+        use metallic_runtime::input::{InputConfig, Role, TouchPlacement};
+        let mut config = InputConfig::player_defaults();
+        let menu = config
+            .contexts
+            .iter_mut()
+            .flat_map(|c| c.actions.iter_mut())
+            .find(|a| a.role == Role::Menu)
+            .expect("the Menu action");
+        // Bottom centre of the safe area.
+        menu.touch_custom = Some(TouchPlacement {
+            position: [0.5, -24.0, 1.0, -64.0],
+            size: 48.0,
+        });
+        let mut rt = InputRuntime::new(&config);
+        let mut g = Game::from_world(
+            "t".into(),
+            metallic_core::World::new_with_services(),
+            std::rc::Rc::new(metallic_runtime::StdoutSink),
+        );
+        let mut phone = TouchOverlay::new(
+            std::path::Path::new("."),
+            Some(DeviceProfile::phone()),
+            false,
+        );
+        phone.update(&mut rt, &mut g, (1600, 739), 2.0, 1.0, 0.016);
+        let placed = phone.controls.layout().menu.expect("the menu button");
+        assert!(placed.center[1] > 300.0, "at the bottom: {placed:?}");
+        assert_eq!(g.gui_inset(), 0.0);
     }
 
     #[test]
