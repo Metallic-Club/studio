@@ -61,7 +61,9 @@ apps.
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
-  are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
+  are moved or rotated become kinematic movers (linear + angular velocity). `sync_from` refreshes contacts with a
+  zero-length physics step, never Rapier's collision-only `detect_collisions`, which leaves contacts that already touch
+  at insert time out of the persistent islands (#405). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
   R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
   that never push. Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every

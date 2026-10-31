@@ -187,6 +187,8 @@ impl PhysicsWorld {
     /// New parts get a body, parts whose Size/Shape/Material/Anchored/CanCollide changed are
     /// rebuilt, and parts that were destroyed or are no longer BaseParts are removed. Call it
     /// after adding or removing parts or changing those properties; moving parts needs no sync.
+    /// It ends with a zero-length physics step, so raycasts and touches see the new bodies right
+    /// away while nothing moves; a rebuilt part resting on another stays linked to it (#405).
     pub fn sync_from(&mut self, world: &World) {
         let parts = sync::collect_parts(world);
         let alive: HashSet<InstanceId> = parts.iter().map(|&(id, _)| id).collect();
@@ -214,9 +216,25 @@ impl PhysicsWorld {
                 self.add_entry(id, &state, character);
             }
         }
-        // Refresh the broad phase so raycasts work before the first step.
-        self.rapier.detect_collisions(&(), &self.collector);
+        self.refresh_collisions();
         self.collect_touches();
+    }
+
+    /// Updates the broad and narrow phase for the bodies `sync_from` just added or removed, so
+    /// raycasts and touches see them before the first step, without advancing time.
+    ///
+    /// This is a full physics step of zero length, not Rapier's collision-only
+    /// `detect_collisions`: that one consumes the new bodies' change flags without registering
+    /// them in the island manager, so a contact that is already touching when the pair is
+    /// created is never linked into the persistent islands. Rapier 0.36 only links a contact on
+    /// its touching transition, so the next real step would not link it either: wrong sleeping
+    /// in release builds and a "not linked in the persistent islands" panic in debug ones (#405).
+    /// With `dt = 0` nothing moves, gravity adds no velocity and sleep timers do not advance.
+    fn refresh_collisions(&mut self) {
+        let dt = self.rapier.integration_parameters.dt;
+        self.rapier.integration_parameters.dt = 0.0;
+        self.rapier.step_with_events(&(), &self.collector);
+        self.rapier.integration_parameters.dt = dt;
     }
 
     fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) {
