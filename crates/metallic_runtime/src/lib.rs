@@ -50,6 +50,7 @@ pub use camera_controller::CameraController;
 pub use game::{FrameOutput, Game};
 #[cfg(feature = "presentation")]
 pub use input::{FrameInput, InputRuntime};
+pub use metallic_physics::HumanoidState;
 pub use project::ProjectConfig;
 pub use simulation::{
     MAX_FRAME_DT, MoveInput, PlayerInput, RUN_MULTIPLIER, Simulation, StdoutSink, TICK, TICK_RATE,

@@ -1,6 +1,7 @@
 # #299 Shared graphics-free Simulation foundation
 
-Status: implemented and all local gates passed; preparing PR for review.
+Status: PR 309 published; original gates/CI passed at 893ff3e. Compatibility normal
+merge of pinned d1eecce is source-audited; refreshed validation is pending.
 
 Branch `studio/299-headless-simulation`, initial base
 `fbaa17d03d4321b300e6f3ce6d17dc38d5c36223`. User-prioritized narrow A3 foundation;
@@ -89,12 +90,42 @@ Saved local logs: `metallic-299-cpu-prebuild.log`, `metallic-299-cpu-tests.log`,
 `metallic-299-clippy-final.log`, `metallic-299-cpu-clippy-final.log`,
 `metallic-299-cpu-prebuild-final.log`, `metallic-299-cpu-pinned.log` and
 `metallic-299-licenses-final.log`. No unchanged-main red claim is made for this new
-API extraction. New Linux CPU CI remains pending until the PR runs.
+API extraction. These logs/results describe the original pinned base, not the
+substantive compatibility merge below.
 
-## Next
+## Original publication
 
 Refreshed once to main ebf359a: the exact diff from fbaa17d contains the M2a plan and
 release Python tooling/tests only, with no runtime/script/physics or manifest changes.
-The final CPU suite has exited and lane121/timing ownership is released. Publish
-and attach one PR from the pinned tested base, then inspect CI. This documentation
-result commit changes no tested source behavior. No own-PR merge or remote machine changes.
+PR 309 was published/attached at `893ff3e0a06a80c7eec0b27349e6a3892a678e59`.
+Attempt 1 executed no steps because GitHub reported an account payment/spending
+condition. Attempt 2 was already running when a rerun was requested; no duplicate
+or billing change was submitted. All required checks passed: Windows (6m07s),
+Linux CPU tests/Clippy (1m24s), launcher Linux (1m18s), portability (12s), and
+instructions (1m35s). These results are historical after the main ABI/features changed.
+
+## Compatibility refresh: normal published-branch merge
+
+Normally merged exact main `d1eeccee2c3d46ca61921baffa562af4bd9472e8` into the
+published branch without rebasing, force-pushing or changing published ancestors.
+There were no textual conflicts. The pre-note automatic merge tree was
+`c77db66e63c5a5a29c26b948205296f8f1ece225`.
+
+The source audit preserves upstream A4 state/replica physics, A5 transport,
+boxed-CFrame/pivot behavior, controls/overrides/glyphs and Avatar V4. Core, physics,
+net, player, avatar, locomotion, input and avatar-art files are byte-identical to
+the pinned main. Game still delegates its sole CPU kernel to Simulation; automatic
+merging retained vertical LocomotionInput and the new avatar turning/style behavior.
+FrameOutput is retained, and HumanoidState is unconditionally re-exported for CPU
+and presentation builds. The manifest retains new serde_json/tempfile dependencies
+and presentation gates on graphics dependencies and presentation-only targets.
+
+No stubs, copied unmerged branches, registry changes or feature removals were used.
+The full runtime Role/NetDriver/client-Game work remains issue 336, blocked on the
+separate foundations; this does not complete A3 or accept M2.
+
+Slot two is explicitly granted for CPU-only and default runtime no-run prebuilds
+and graph-policy checks, with four build jobs and guarded lane121 ownership.
+Report each compile result; no actual Lua until a separately released window.
+Old 893ff3e green results do not validate this merged tree. No own-PR merge or
+remote machine changes.

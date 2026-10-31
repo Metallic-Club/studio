@@ -57,6 +57,13 @@ class StagedBinaryTests(unittest.TestCase):
     def test_studio_exe_is_its_bin(self):
         self.assertIn(release.STUDIO_BUILT_EXE.removesuffix(".exe"), self.bin_names(release.CARGO_BIN))
 
+    def test_studio_ships_its_templates(self):
+        # A fresh install otherwise shows "No templates found" on the start screen.
+        self.assertIn("templates", release.STUDIO_FOLDERS)
+        self.assertTrue(any((release.ROOT / "templates").glob("*/template.toml")))
+        for folder in release.STUDIO_FOLDERS:
+            self.assertTrue((release.ROOT / folder).is_dir(), folder)
+
     def test_launcher_files_are_bins(self):
         bins = set().union(*(self.bin_names(p) for p in release.LAUNCHER_CARGO_PACKAGES))
         for built, _ in release.LAUNCHER_FILES:
@@ -74,6 +81,13 @@ class PackCommandTests(unittest.TestCase):
             ["vpk", "pack", "--packId", "MetallicStudio", "--packVersion", "0.1.0", "--packDir", "STAGE",
              "--mainExe", "Metallic Studio.exe", "--packTitle", "Metallic Studio", "--icon", "ICON",
              "--runtime", "win-x64", "--channel", "dev", "--outputDir", out, "--releaseNotes", "NOTES"])
+
+    def test_studio_pack_title_is_never_a_bare_metallic(self):
+        # A bare "Metallic" title would overwrite another app's Metallic.lnk shortcut.
+        self.assertEqual(release.PACK_TITLE, "Metallic Studio")
+        self.assertEqual(release.PACK_ID, "MetallicStudio")
+        cmd = release.pack_command("vpk", "studio", "0.1.0", "dev", "S", "I", "N")
+        self.assertNotEqual(cmd[cmd.index("--packTitle") + 1].strip().lower(), "metallic")
 
     def test_launcher_pack_line(self):
         vpk, stage, icon, notes = self.ARGS
