@@ -74,10 +74,10 @@ impl KeyChord {
         if self.shift {
             s.push_str("Shift+");
         }
-        s.push_str(if self.key == Key::Comma {
-            ","
-        } else {
-            self.key.name()
+        s.push_str(match self.key {
+            Key::Comma => ",",
+            Key::Period => ".",
+            key => key.name(),
         });
         s
     }
@@ -135,6 +135,7 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("hold.summon", "Space", KeyContext::Viewport),
     ("view.frame_selection", "F", KeyContext::Viewport),
     ("view.frame_all", "Home", KeyContext::Viewport),
+    ("view.focus_context_bar", "Ctrl+.", KeyContext::Global),
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
     ("play.stop", "Escape", KeyContext::Play),
