@@ -56,6 +56,7 @@ pub struct Button<'a> {
     width: Option<f32>,
     compact: bool,
     show_as: Option<ShowAs>,
+    alt: Option<&'a str>,
 }
 
 /// Fills and ink for one button state.
@@ -81,6 +82,7 @@ impl<'a> Button<'a> {
             width: None,
             compact: false,
             show_as: None,
+            alt: None,
         }
     }
 
@@ -120,6 +122,12 @@ impl<'a> Button<'a> {
     /// At least this wide; the content stays left-aligned.
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    /// The accessible name (and tooltip) of an icon-only button.
+    pub fn alt(mut self, name: &'a str) -> Self {
+        self.alt = Some(name);
         self
     }
 
@@ -244,14 +252,22 @@ impl Widget for Button<'_> {
         let pad = self.pad_x();
         let mut content = text.size().x;
         if let Some(icon) = &icon {
-            content += icon.size().x + gap;
+            content += icon.size().x;
+            if !self.text.is_empty() {
+                content += gap;
+            }
         }
         if let Some(k) = &keycap {
             content += keycap_size(k).x + gap;
         }
         let width = (content + 2.0 * pad).max(self.width.unwrap_or(0.0)).ceil();
         let (rect, response) = ui.allocate_exact_size(vec2(width, self.height()), Sense::click());
-        response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, enabled, self.text));
+        let name = self.alt.unwrap_or(self.text);
+        response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, enabled, name));
+        let response = match self.alt {
+            Some(alt) if self.text.is_empty() => response.on_hover_text(alt),
+            _ => response,
+        };
         if !ui.is_rect_visible(rect) {
             return response;
         }

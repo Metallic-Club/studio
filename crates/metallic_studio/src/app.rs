@@ -10,7 +10,7 @@ use crate::png_image::{RgbaImage, decode_png};
 use crate::recent::RecentProjects;
 use crate::screenshot::ScreenshotJob;
 use crate::splash::{self, Splash};
-use crate::start_screen::{StartAction, StartScreen};
+use crate::start_screen::{self, StartAction, StartScreen};
 use crate::templates::{TemplateInfo, list_templates, templates_dir};
 use crate::{StudioError, theme, widgets};
 
@@ -26,10 +26,12 @@ const DEMO_LOCATION: &str = r"C:\Games";
 pub enum Scene {
     /// The splash.
     Splash,
-    /// The start screen (default).
+    /// The start screen with a few recent games (default).
     #[default]
     Start,
-    /// The start screen after pressing Create on a non-empty folder.
+    /// The start screen on a first run: no recent games.
+    FirstRun,
+    /// The start screen after pressing Create on a non-empty folder, with an error toast.
     Error,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
     Colour,
@@ -51,7 +53,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// Parses `--screenshot <path>`, `--scene splash|start|error|colour|components`,
+    /// Parses `--screenshot <path>`, `--scene splash|start|firstrun|error|colour|components`,
     /// `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -67,6 +69,7 @@ impl Options {
                     opts.scene = match value("--scene")?.as_str() {
                         "splash" => Scene::Splash,
                         "start" => Scene::Start,
+                        "firstrun" => Scene::FirstRun,
                         "error" => Scene::Error,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
@@ -115,7 +118,6 @@ pub struct StudioApp {
     options: Options,
     icon: Option<TextureHandle>,
     screenshot: Option<ScreenshotJob>,
-    pending_error_scene: bool,
     /// The window still has the splash's borderless, see-through look.
     splash_window: bool,
 }
@@ -166,7 +168,6 @@ impl StudioApp {
             start: None,
             splash_window: options.shows_splash(),
             screenshot: options.screenshot.clone().map(ScreenshotJob::new),
-            pending_error_scene: options.scene == Scene::Error,
             options,
             icon,
         };
@@ -190,11 +191,26 @@ impl StudioApp {
             _ => {
                 let templates = self.boot.templates.take().unwrap_or_default();
                 let recent = self.boot.recent.take().unwrap_or_default();
+                let shot = self.options.screenshot.is_some();
+                let scene = self.options.scene;
+                let recent = if shot && matches!(scene, Scene::Start | Scene::Error) {
+                    start_screen::demo_recent(&templates_dir())
+                } else {
+                    recent
+                };
                 let mut start = StartScreen::new(templates, recent);
-                if self.options.screenshot.is_some() {
+                if shot {
                     // Display only: nothing is written, and no real path or user name can end up
                     // in a picture.
                     start.set_location(Path::new(DEMO_LOCATION));
+                    if scene != Scene::FirstRun {
+                        start.select_id("parkour");
+                    }
+                    if scene == Scene::Error {
+                        start.set_error(&StudioError::FolderNotEmpty(PathBuf::new()).to_string());
+                        let gone = templates_dir().join("arena-prototype");
+                        start.report_missing("Arena Prototype", &gone);
+                    }
                 } else if let Some(location) = &self.options.location {
                     start.set_location(location);
                 }
@@ -242,14 +258,10 @@ impl eframe::App for StudioApp {
                 }
             }
             Phase::Start => {
-                if let Some(start) = &mut self.start {
-                    if self.pending_error_scene {
-                        self.pending_error_scene = false;
-                        start.set_error(&StudioError::FolderNotEmpty(PathBuf::new()).to_string());
-                    }
-                    if let Some(StartAction::OpenProject { name, path }) = start.show(ui) {
-                        self.phase = Phase::Opened { name, path };
-                    }
+                if let Some(start) = &mut self.start
+                    && let Some(StartAction::OpenProject { name, path }) = start.show(ui)
+                {
+                    self.phase = Phase::Opened { name, path };
                 }
             }
             Phase::Components => widgets::components::show(ui, self.icon.as_ref()),
