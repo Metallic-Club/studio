@@ -289,6 +289,15 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "approx"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f2a05fd1bd10b2527e20a2cd32d8873d115b8b39fe219ee25f42a8aca6ba278"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
@@ -2339,19 +2348,9 @@ dependencies = [
 
 [[package]]
 name = "glam"
-version = "0.15.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3abb554f8ee44336b72d522e0a7fe86a29e09f839a36022fa869a7dfe941a54b"
-
-[[package]]
-name = "glam"
 version = "0.30.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
-dependencies = [
- "bytemuck",
- "serde_core",
-]
 
 [[package]]
 name = "glam"
@@ -2371,8 +2370,10 @@ version = "0.33.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
 dependencies = [
- "approx",
+ "approx 0.5.1",
+ "bytemuck",
  "libm",
+ "serde_core",
 ]
 
 [[package]]
@@ -2381,11 +2382,11 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d74079318e3a077bd3d15faa90fde24fa37bb9f157f92f853e6019a15fd413"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "glam 0.33.12",
- "nalgebra",
+ "nalgebra 0.35.0",
  "num-traits",
- "simba",
+ "simba 0.10.2",
 ]
 
 [[package]]
@@ -3401,7 +3402,7 @@ name = "metallic_anim"
 version = "0.1.1"
 dependencies = [
  "criterion",
- "glam 0.30.10",
+ "glam 0.33.12",
  "ron",
  "serde",
  "thiserror 2.0.21",
@@ -3423,7 +3424,7 @@ dependencies = [
 name = "metallic_asset"
 version = "0.1.1"
 dependencies = [
- "glam 0.30.10",
+ "glam 0.33.12",
  "gltf",
  "serde_json",
  "thiserror 2.0.21",
@@ -3436,7 +3437,7 @@ dependencies = [
  "cpal",
  "criterion",
  "flacenc",
- "glam 0.30.10",
+ "glam 0.33.12",
  "hound",
  "symphonia",
  "thiserror 2.0.21",
@@ -3483,7 +3484,7 @@ version = "0.1.1"
 dependencies = [
  "bytemuck",
  "criterion",
- "glam 0.30.10",
+ "glam 0.33.12",
  "mikktspace",
  "png",
  "thiserror 2.0.21",
@@ -3496,7 +3497,7 @@ dependencies = [
  "criterion",
  "eframe",
  "egui_kittest",
- "glam 0.30.10",
+ "glam 0.33.12",
  "gltf",
  "image",
  "proptest",
@@ -3561,7 +3562,7 @@ name = "metallic_render"
 version = "0.1.1"
 dependencies = [
  "bytemuck",
- "glam 0.30.10",
+ "glam 0.33.12",
  "log",
  "metallic_asset",
  "metallic_core",
@@ -3579,7 +3580,7 @@ version = "0.1.1"
 dependencies = [
  "criterion",
  "egui",
- "glam 0.30.10",
+ "glam 0.33.12",
  "metallic_anim",
  "metallic_asset",
  "metallic_core",
@@ -3611,7 +3612,7 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "env_logger",
- "glam 0.30.10",
+ "glam 0.33.12",
  "log",
  "metallic_core",
  "metallic_render",
@@ -3692,7 +3693,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d0b56b403871a8f992ca626d52cc0a690d4841baea8955dc4af6304ac62f8b0"
 dependencies = [
- "glam 0.15.2",
+ "nalgebra 0.26.2",
 ]
 
 [[package]]
@@ -3831,21 +3832,36 @@ dependencies = [
 
 [[package]]
 name = "nalgebra"
+version = "0.26.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "476d1d59fe02fe54c86356e91650cd892f392782a1cb9fc524ec84f7aa9e1d06"
+dependencies = [
+ "approx 0.4.0",
+ "matrixmultiply",
+ "num-complex 0.3.1",
+ "num-rational 0.3.2",
+ "num-traits",
+ "simba 0.4.0",
+ "typenum",
+]
+
+[[package]]
+name = "nalgebra"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adc43a60c217b0c6ff46e47f26911015ad8d2e5a8be1af668c67e370d99a4346"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "glam 0.30.10",
  "glam 0.31.1",
  "glam 0.32.1",
  "glam 0.33.12",
  "matrixmultiply",
  "nalgebra-macros",
- "num-complex",
- "num-rational",
+ "num-complex 0.4.6",
+ "num-rational 0.4.2",
  "num-traits",
- "simba",
+ "simba 0.10.2",
  "typenum",
 ]
 
@@ -3954,6 +3970,15 @@ dependencies = [
 
 [[package]]
 name = "num-complex"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "747d632c0c558b87dbabbe6a82f3b4ae03720d0646ac5b7b4dae89394be5f2c5"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
@@ -3995,6 +4020,17 @@ version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
 dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12ac428b1cb17fce6f731001d307d351ec70a6d202fc2e60f7d4c5e42d8f4f07"
+dependencies = [
+ "autocfg",
+ "num-integer",
  "num-traits",
 ]
 
@@ -4662,7 +4698,7 @@ version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe1ba500175e957aaa27ddc92290ec8ff503d73331365443660816d6302e2a31"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "arrayvec",
  "bitflags 2.13.2",
  "downcast-rs 2.0.2",
@@ -4676,7 +4712,7 @@ dependencies = [
  "num-derive 0.5.1",
  "num-traits",
  "ordered-float",
- "simba",
+ "simba 0.10.2",
  "slab",
  "smallvec",
  "spade",
@@ -4689,7 +4725,7 @@ version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b626edc0b497dba4bdf6e1e0797895294ed9f61dac2bd28cb5d34d37ad2ca7e"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "arrayvec",
  "bitflags 2.13.2",
  "downcast-rs 2.0.2",
@@ -4703,13 +4739,19 @@ dependencies = [
  "num-traits",
  "ordered-float",
  "rstar",
- "simba",
+ "simba 0.10.2",
  "slab",
  "smallvec",
  "spade",
  "static_assertions",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "peniko"
@@ -5249,17 +5291,17 @@ version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b73d84c8e78f4fbd46fb5c800bbdb15cad6ef2bd517de6a4d31fe60edd838f8d"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "arrayvec",
  "bitflags 2.13.2",
  "glamx",
  "log",
- "nalgebra",
+ "nalgebra 0.35.0",
  "num-traits",
  "parry2d",
  "profiling",
  "serde",
- "simba",
+ "simba 0.10.2",
  "static_assertions",
  "thiserror 2.0.21",
  "wide",
@@ -5271,17 +5313,17 @@ version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "033e2edc815d61ab97bd74ed5d1cbea5ebe575218774a7cfedbd3551f0033317"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "arrayvec",
  "bitflags 2.13.2",
  "glamx",
  "log",
- "nalgebra",
+ "nalgebra 0.35.0",
  "num-traits",
  "parry3d",
  "profiling",
  "serde",
- "simba",
+ "simba 0.10.2",
  "static_assertions",
  "thiserror 2.0.21",
  "wide",
@@ -5511,7 +5553,7 @@ version = "6.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21db5f9893e91f41798c88680037dba611ca6674703c1a18601b01a72c8adb89"
 dependencies = [
- "num-complex",
+ "num-complex 0.4.6",
  "num-integer",
  "num-traits",
  "primal-check",
@@ -5828,13 +5870,25 @@ dependencies = [
 
 [[package]]
 name = "simba"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5132a955559188f3d13c9ba831e77c802ddc8782783f050ed0c52f5988b95f4c"
+dependencies = [
+ "approx 0.4.0",
+ "num-complex 0.3.1",
+ "num-traits",
+ "paste",
+]
+
+[[package]]
+name = "simba"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1a7200d82ff1c7b4235efd12f11e2537a402c91cf83a5cb97ce80eef787fde7"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "libm",
- "num-complex",
+ "num-complex 0.4.6",
  "num-traits",
  "wide",
 ]
@@ -6137,7 +6191,7 @@ dependencies = [
  "bytemuck",
  "lazy_static",
  "log",
- "num-complex",
+ "num-complex 0.4.6",
  "rustfft",
  "smallvec",
 ]

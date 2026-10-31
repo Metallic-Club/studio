@@ -31,6 +31,7 @@ mod renderer;
 pub use camera::Camera;
 pub use context::{RenderContext, RenderError};
 pub use exposure::{AutoExposure, ExposureMode, ExposureState};
+/// Math types from the shared workspace glam version.
 pub use glam;
 pub use lighting::LightingInputs;
 pub use metallic_asset;

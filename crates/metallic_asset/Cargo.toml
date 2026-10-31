@@ -9,7 +9,7 @@ publish.workspace = true
 # glTF 2.0 container and JSON parsing (MIT OR Apache-2.0). Without the default `import` feature:
 # no image decoding and no file or URI loading; only the .glb's own BIN chunk is read.
 gltf = { version = "1.4.1", default-features = false, features = ["names"] }
-glam = "0.30.10"
+glam.workspace = true
 thiserror = "2.0.21"
 
 [dev-dependencies]

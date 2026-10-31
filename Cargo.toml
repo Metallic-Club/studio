@@ -11,6 +11,8 @@ license = "LicenseRef-Metallic-Proprietary"
 publish = false
 
 [workspace.dependencies]
+# Shared public math types across animation, assets, rendering, audio and physics.
+glam = "0.33.12"
 rapier3d = "0.36.1"
 rapier2d = "0.36.1"
 metallic_core = { path = "crates/metallic_core" }
