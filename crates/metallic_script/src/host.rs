@@ -17,8 +17,8 @@ use metallic_core::{ChangeCursor, Changes, InstanceId, Value as CoreValue, World
 use mlua::Value;
 
 use crate::api::{
-    self, ApiState, BoundResult, EventKind, HostShared, InputActionEvent, InputDevice, InputValue,
-    RemoteTarget,
+    self, ApiState, BoundResult, EventKind, GuiEvent, HostShared, InputActionEvent, InputDevice,
+    InputValue, MAX_GUI_EVENTS_PER_STEP, RemoteTarget, TouchButtonInfo,
 };
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
@@ -58,6 +58,10 @@ enum HostEvent {
         part: InstanceId,
         hit: InstanceId,
     },
+    TouchEnded {
+        part: InstanceId,
+        hit: InstanceId,
+    },
     Died {
         humanoid: InstanceId,
     },
@@ -91,6 +95,8 @@ pub struct ScriptHost {
     resume_budget: Duration,
     /// `dispatch_input_now` already delivered this frame's action events.
     input_dispatched: bool,
+    /// GUI events for the client scripts, delivered by the next step.
+    gui_events: Vec<GuiEvent>,
 }
 
 impl ScriptHost {
@@ -122,6 +128,7 @@ impl ScriptHost {
             cursor: None,
             resume_budget: RESUME_BUDGET,
             input_dispatched: false,
+            gui_events: Vec::new(),
         }
     }
 
@@ -376,6 +383,7 @@ impl ScriptHost {
         self.deliver_remotes();
         self.deliver_inputs();
         self.deliver_input_actions();
+        self.deliver_gui_events();
 
         let run_service = self
             .world
@@ -419,6 +427,7 @@ impl ScriptHost {
         self.running.clear();
         self.cursor = None;
         self.client_scope = None;
+        self.gui_events.clear();
     }
 
     /// Queues an event of an `InputAction` instance for the client scripts: the next `step`
@@ -444,6 +453,17 @@ impl ScriptHost {
     /// Sets `UserInputService.TouchEnabled`, `KeyboardEnabled` and `GamepadEnabled`.
     pub fn set_input_devices(&mut self, touch: bool, keyboard: bool, gamepad: bool) {
         self.shared.input.set_devices(touch, keyboard, gamepad);
+    }
+
+    /// Sets the touch overlay's buttons that `ContextActionService:GetButton` returns. Call it
+    /// when the overlay places its buttons again or shows or hides; unchanged lists cost a
+    /// comparison only.
+    pub fn set_touch_buttons(&mut self, buttons: &[TouchButtonInfo]) {
+        let mut mine = self.shared.input.touch_buttons.borrow_mut();
+        if mine.as_slice() != buttons {
+            mine.clear();
+            mine.extend_from_slice(buttons);
+        }
     }
 
     /// Sets `UserInputService.PreferredInput`.
@@ -479,6 +499,12 @@ impl ScriptHost {
     /// Queues `part.Touched(hit)` for the next `step`.
     pub fn touched(&mut self, part: InstanceId, hit: InstanceId) {
         self.inputs.push(HostEvent::Touched { part, hit });
+    }
+
+    /// Queues `part.TouchEnded(hit)` for the next `step`. It fires while `part` exists, also
+    /// when `hit` has been destroyed by then.
+    pub fn touch_ended(&mut self, part: InstanceId, hit: InstanceId) {
+        self.inputs.push(HostEvent::TouchEnded { part, hit });
     }
 
     /// Queues `Humanoid.Died` for the next `step`.
@@ -760,11 +786,36 @@ impl ScriptHost {
         }
     }
 
+    /// Queues an event of a GUI element for the client scripts; the next `step` fires it, in
+    /// report order. At most [`MAX_GUI_EVENTS_PER_STEP`] wait at once (more are dropped), and
+    /// server-only hosts discard them.
+    pub fn gui_event(&mut self, event: GuiEvent) {
+        if self.role != ScriptRole::Server && self.gui_events.len() < MAX_GUI_EVENTS_PER_STEP {
+            self.gui_events.push(event);
+        }
+    }
+
+    fn deliver_gui_events(&mut self) {
+        if let Some(client) = &self.client {
+            for event in &self.gui_events {
+                client.state.deliver_gui_event(event);
+            }
+        }
+        // Keeps the capacity: no allocation per step once grown.
+        self.gui_events.clear();
+    }
+
     fn deliver_inputs(&mut self) {
         for input in std::mem::take(&mut self.inputs) {
             match input {
                 HostEvent::Touched { part, hit } => {
                     self.fire_instance_event(part, EventKind::Touched, Some(hit));
+                }
+                HostEvent::TouchEnded { part, hit } => {
+                    // The touching part may be gone already (its character was destroyed or
+                    // replaced before scripts ran): the surviving part still hears the end,
+                    // with the destroyed part as `hit`.
+                    self.fire_touch_ended(part, hit);
                 }
                 HostEvent::Died { humanoid } => {
                     self.fire_instance_event(humanoid, EventKind::Died, None);
@@ -808,6 +859,21 @@ impl ScriptHost {
             state.fire((source, event), &|lua| match arg {
                 Some(id) => Ok(vec![Value::UserData(state.wrap(lua, id)?)]),
                 None => Ok(Vec::new()),
+            });
+        }
+    }
+
+    /// Fires `part.TouchEnded(hit)` in active VMs while `part` exists, even when `hit` was
+    /// destroyed (scripts get the destroyed instance; reading its members errors).
+    fn fire_touch_ended(&self, part: InstanceId, hit: InstanceId) {
+        let alive = self.world.try_borrow().is_ok_and(|w| w.is_alive(part));
+        if !alive {
+            return;
+        }
+        for side in self.sides() {
+            let state = &side.state;
+            state.fire((part, EventKind::TouchEnded), &|lua| {
+                Ok(vec![Value::UserData(state.wrap(lua, hit)?)])
             });
         }
     }

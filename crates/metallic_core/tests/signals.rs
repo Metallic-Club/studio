@@ -106,3 +106,119 @@ fn interleaved_signals_preserve_local_handler_order_and_repeated_disconnect_is_h
     assert_eq!(local.len(), 2);
     assert_eq!(other.len(), 3);
 }
+
+/// Ids are world-local (#263): the first Part of two independent worlds has the same id, so a
+/// signal connected in world B with world A's handle fires for B's own Part.
+#[test]
+fn equal_ids_from_independent_worlds_address_the_local_instance() {
+    let mut a = World::new_empty();
+    let mut b = World::new_empty();
+    let part_a = a.create("Part", None).unwrap();
+    let part_b = b.create("Part", None).unwrap();
+    assert_eq!(part_a, part_b);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&seen);
+    b.property_changed(part_a, "Anchored")
+        .connect(move |value| observed.lock().unwrap().push(value.clone()));
+    b.set(part_b, "Anchored", Value::Bool(true)).unwrap();
+    assert_eq!(*seen.lock().unwrap(), vec![Value::Bool(true)]);
+
+    // An id that does not resolve in B is inert there: its signal never fires.
+    let second_a = a.create("Part", None).unwrap();
+    assert!(!b.is_alive(second_a));
+    let quiet = Arc::new(Mutex::new(0));
+    let observed = Arc::clone(&quiet);
+    b.property_changed(second_a, "Anchored")
+        .connect(move |_| *observed.lock().unwrap() += 1);
+    b.set(part_b, "Anchored", Value::Bool(false)).unwrap();
+    assert!(b.get(second_a, "Anchored").is_err());
+    assert_eq!(*quiet.lock().unwrap(), 0);
+}
+
+/// #97: moving an instance to the parent it already has is a no-op, as in Roblox: no
+/// `child_added`, the child keeps its place, and nothing is journaled.
+#[test]
+fn set_parent_to_the_current_parent_changes_nothing() {
+    let mut world = World::new_with_services();
+    let workspace = world.root("Workspace").unwrap();
+    let a = world.create("Part", Some(workspace)).unwrap();
+    let b = world.create("Part", Some(workspace)).unwrap();
+    let added = Arc::new(Mutex::new(0));
+    let observed = Arc::clone(&added);
+    world
+        .child_added
+        .connect(move |_| *observed.lock().unwrap() += 1);
+    let cursor = world.change_cursor();
+
+    world.set_parent(a, Some(workspace)).unwrap();
+    assert_eq!(world.children(workspace), [a, b]);
+    assert_eq!(*added.lock().unwrap(), 0);
+
+    // The same for a root that is made a root again.
+    let loose = world.create("Part", None).unwrap();
+    let roots = world.roots().to_vec();
+    world.set_parent(loose, None).unwrap();
+    assert_eq!(world.roots(), roots.as_slice());
+    let first_root = roots[0];
+    world.set_parent(first_root, None).unwrap();
+    assert_eq!(world.roots(), roots.as_slice());
+
+    let (changes, _) = world.changes_since(cursor);
+    let metallic_core::Changes::Ids(ids) = changes else {
+        panic!("the journal overflowed");
+    };
+    assert!(
+        !ids.contains(&a) && !ids.contains(&first_root),
+        "a no-op move is not a change"
+    );
+
+    // A real move still fires and goes last.
+    world.set_parent(a, Some(b)).unwrap();
+    world.set_parent(a, Some(workspace)).unwrap();
+    assert_eq!(world.children(workspace), [b, a]);
+    assert_eq!(*added.lock().unwrap(), 2);
+}
+
+/// #97: `set_parent_at` reorders within a parent (fires nothing, journals the move) and puts a
+/// moved child at its index (fires `child_added` once).
+#[test]
+fn set_parent_at_reorders_and_places() {
+    let mut world = World::new_with_services();
+    let workspace = world.root("Workspace").unwrap();
+    let a = world.create("Part", Some(workspace)).unwrap();
+    let b = world.create("Part", Some(workspace)).unwrap();
+    let c = world.create("Part", Some(workspace)).unwrap();
+    let added = Arc::new(Mutex::new(0));
+    let observed = Arc::clone(&added);
+    world
+        .child_added
+        .connect(move |_| *observed.lock().unwrap() += 1);
+    let cursor = world.change_cursor();
+
+    world.set_parent_at(c, Some(workspace), 0).unwrap();
+    assert_eq!(world.children(workspace), [c, a, b]);
+    world.set_parent_at(c, Some(workspace), 99).unwrap();
+    assert_eq!(world.children(workspace), [a, b, c]);
+    assert_eq!(*added.lock().unwrap(), 0, "a reorder is not an add");
+    let (changes, cursor) = world.changes_since(cursor);
+    let metallic_core::Changes::Ids(ids) = changes else {
+        panic!("the journal overflowed");
+    };
+    assert!(ids.contains(&c), "a reorder is journaled");
+
+    // Already there: nothing at all.
+    world.set_parent_at(a, Some(workspace), 0).unwrap();
+    let (changes, _) = world.changes_since(cursor);
+    assert!(matches!(changes, metallic_core::Changes::Ids(ids) if ids.is_empty()));
+
+    // A move to another parent at an index.
+    let x = world.create("Part", Some(b)).unwrap();
+    let y = world.create("Part", Some(b)).unwrap();
+    *added.lock().unwrap() = 0;
+    world.set_parent_at(c, Some(b), 1).unwrap();
+    assert_eq!(world.children(b), [x, c, y]);
+    assert_eq!(world.children(workspace), [a, b]);
+    assert_eq!(*added.lock().unwrap(), 1);
+    // The same rules as set_parent: no cycles.
+    assert!(world.set_parent_at(b, Some(x), 0).is_err());
+}

@@ -159,6 +159,59 @@ fn touched_connects_and_disconnects() {
 }
 
 #[test]
+fn touch_ended_still_fires_when_the_touching_part_was_destroyed() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    let pad = rig.add("Part", "Pad", ws);
+    let foot = rig.add("Part", "LeftFoot", ws);
+    rig.server_script(
+        "S",
+        r#"
+        workspace.Pad.Touched:Connect(function(hit) print("on", hit.Name) end)
+        workspace.Pad.TouchEnded:Connect(function(hit)
+            print("off", typeof(hit), (pcall(function() return hit.Name end)))
+        end)
+        "#,
+    );
+    start(&mut rig);
+    let t = rig.run(0.0, 1);
+    rig.host.touched(pad, foot);
+    let t = rig.run(t, 1);
+    // The character goes before the scripts hear about the end of the contact.
+    rig.world.borrow_mut().destroy(foot);
+    rig.host.touch_ended(pad, foot);
+    // The destroyed side's own TouchEnded has nobody left to fire on.
+    rig.host.touch_ended(foot, pad);
+    rig.run(t, 1);
+    assert_eq!(
+        rig.lines(),
+        ["print:on LeftFoot", "print:off Instance false"]
+    );
+}
+
+#[test]
+fn touch_ended_fires_with_the_part_that_left() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    let pad = rig.add("Part", "Pad", ws);
+    let hand = rig.add("Part", "LeftHand", ws);
+    rig.server_script(
+        "S",
+        r#"
+        workspace.Pad.Touched:Connect(function(hit) print("on", hit.Name) end)
+        workspace.Pad.TouchEnded:Connect(function(hit) print("off", hit.Name) end)
+        "#,
+    );
+    start(&mut rig);
+    let t = rig.run(0.0, 1);
+    rig.host.touched(pad, hand);
+    let t = rig.run(t, 1);
+    rig.host.touch_ended(pad, hand);
+    rig.run(t, 1);
+    assert_eq!(rig.lines(), ["print:on LeftHand", "print:off LeftHand"]);
+}
+
+#[test]
 fn connect_inside_handler_does_not_fire_in_same_dispatch() {
     let mut rig = Rig::new();
     let ws = rig.root("Workspace");
@@ -518,4 +571,29 @@ fn api_tables_are_read_only() {
     assert!(lines[1].starts_with("print:false"), "{lines:?}");
     assert!(lines[2].starts_with("print:false"), "{lines:?}");
     assert_eq!(lines[3], "print:Vector3 true 4 1");
+}
+
+#[test]
+fn lighting_values_from_scripts_stay_in_range() {
+    let mut rig = Rig::new();
+    rig.server_script(
+        "S",
+        r#"
+        local L = game:GetService("Lighting")
+        L.Brightness = 1e39
+        L.ExposureCompensation = -1e300
+        L.ClockTime = 26
+        L.Ambient = Color3.fromRGB(255, 0, 0)
+        print(L.Brightness, L.ExposureCompensation, L.ClockTime)
+        print(pcall(function() L.Brightness = math.huge end), L.Brightness)
+        print(pcall(function() L.Brightness = 0/0 end), L.Brightness)
+        "#,
+    );
+    start(&mut rig);
+    let lines = rig.lines();
+    assert_eq!(lines[0], "print:10 -5 2");
+    assert!(lines[1].starts_with("print:false"), "{}", lines[1]);
+    assert!(lines[1].ends_with(" 10"), "{}", lines[1]);
+    assert!(lines[2].starts_with("print:false"), "{}", lines[2]);
+    assert!(lines[2].ends_with(" 10"), "{}", lines[2]);
 }

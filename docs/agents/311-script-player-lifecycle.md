@@ -1,8 +1,9 @@
 # Issue 311: explicit ScriptHost roles and player lifecycle
 
-Status: all eighteen role/lifecycle cases and 61 focused cases passed on cb26593;
-independent final review is clean. Refreshed onto pinned d1eecce for ABI compatibility;
-all required local gates passed. Preparing one PR for review; remote CI pending.
+Status: resumed by Codex studio_core for the conductor-authorized PR #335 refresh onto exact main
+`a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`. The append-only merge preserves GUI/input/button events,
+TouchEnded and explicit roles. No refreshed Cargo check has run yet; compilation is held. Earlier results
+below remain historical source-specific evidence, rather than checks of this new main merge.
 
 Branch `studio/311-script-player-lifecycle`, initial main
 `e20f0828454d21ae2325b671add29f9bf5c3a7c3`. This user-prioritized remaining A3
@@ -175,3 +176,22 @@ Lane121 and its actual/check windows are released; all Cargo is held. Commit thi
 documentation-only result, publish/attach the PR, set issue 311 to review and inspect
 CI. This does not change tested production behavior or claim A3/M2 acceptance.
 Do not merge the PR.
+
+
+## Current-main compatibility refresh
+
+Previous published head: `e8f6efea1455b53f9d3ae4833b08e1ce3bedfa9a`. The conductor assigned this existing
+branch/worktree to Codex studio_core while engine_research owns #309/runtime and another worker owns #317.
+Normal append-only merge of pinned main `a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`; no rebase, force push
+or own PR merge. Issue #311 is in progress during the refresh. All main source changes remain intact.
+
+Only two textual conflicts occurred: `host.rs::stop` keeps both client-scope reset and GUI-queue clearing;
+`lib.rs` keeps GUI exports plus ScriptRole. Auto-merged GUI event queuing still referenced removed
+`run_client`; it now uses the equivalent explicit `role != Server` predicate. TouchEnded, GUI signal kinds
+and PlayerRemoving coexist. Compilation is held, so no new green result is claimed.
+
+Next source/test check: queue cleanup across explicit Client rebind/removal/invalid binding must include the
+new GUI queue alongside existing input/remotes. Add public role/GUI payload and transition controls, observe
+proposed-integration reds when granted, then apply narrow queue cleanup if reproduced. Preserve trusted
+roster ownership, aggregate/held deadlines, nil/multiple coroutine results and native protected-call behavior.
+No runtime driver, edit kernel, journal or dependency/schema work is included in this refresh.

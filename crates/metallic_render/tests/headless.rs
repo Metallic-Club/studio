@@ -153,6 +153,9 @@ fn skinned_avatar_draws_and_picks_its_level_of_detail() {
     );
     let empty = World::new_with_services();
     r.sync(&empty);
+    // Coverage is counted as changed pixels: keep the exposure fixed so the background does
+    // not change with the metered brightness.
+    r.auto_exposure.enabled = false;
     let close = Camera {
         position: Vec3::new(0.0, 2.75, 4.0),
         look_at: Vec3::new(0.0, 2.75, 0.0),
@@ -231,6 +234,9 @@ fn toon_avatar_has_ink_outline_and_warm_shading() {
         },
     );
     r.sync(&World::new_with_services());
+    // The default lighting's bloom lifts a 2 px dark line by about 15/255; this test checks the
+    // ink colour itself.
+    r.post_mut().remove("bloom");
     let cam = Camera {
         position: Vec3::new(0.0, 2.75, 9.0),
         look_at: Vec3::new(0.0, 2.75, 0.0),

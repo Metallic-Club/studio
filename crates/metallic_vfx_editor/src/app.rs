@@ -386,11 +386,11 @@ impl VfxEditor {
         };
         egui::Panel::top("vfx-title")
             .exact_size(40.0)
-            .frame(bar(color::BG_DEEP))
+            .frame(bar(color::bg_deep()))
             .show(ui, |ui| self.title_bar(ui));
         egui::Panel::bottom("vfx-status")
             .exact_size(24.0)
-            .frame(bar(color::BG_DEEP))
+            .frame(bar(color::bg_deep()))
             .show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("vfx-left")
             .exact_size(232.0)
@@ -407,7 +407,7 @@ impl VfxEditor {
             .frame(theme::panel_frame())
             .show(ui, |ui| self.timeline_panel(ui));
         egui::CentralPanel::default()
-            .frame(Frame::new().fill(color::BG_BASE))
+            .frame(Frame::new().fill(color::bg_base()))
             .show(ui, |ui| self.centre(ui));
         self.commit_if_idle(ui);
     }
@@ -417,7 +417,7 @@ impl VfxEditor {
             ui.label(
                 RichText::new("VFX Editor")
                     .font(theme::semibold(14.0))
-                    .color(color::TEXT),
+                    .color(color::text()),
             );
             ui.add_space(12.0);
             ui.menu_button("File", |ui| {
@@ -432,7 +432,7 @@ impl VfxEditor {
                     }
                     ui.close();
                 }
-                ui.label(RichText::new("Drop a .vfx.ron file to open it").color(color::TEXT_3));
+                ui.label(RichText::new("Drop a .vfx.ron file to open it").color(color::text_3()));
             });
             ui.menu_button("Edit", |ui| {
                 if ui
@@ -451,9 +451,9 @@ impl VfxEditor {
                 }
             });
             ui.add_space(16.0);
-            ui.label(RichText::new(&self.effect.name).color(color::TEXT_2));
+            ui.label(RichText::new(&self.effect.name).color(color::text_2()));
             if !self.undo.is_empty() || self.dirty {
-                ui.label(RichText::new("edited").color(color::TEXT_3));
+                ui.label(RichText::new("edited").color(color::text_3()));
             }
         });
     }
@@ -461,9 +461,9 @@ impl VfxEditor {
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             let c = if self.status.starts_with("Invalid") || self.status.starts_with("Could not") {
-                color::ERROR
+                color::error()
             } else {
-                color::TEXT_3
+                color::text_3()
             };
             ui.label(RichText::new(&self.status).color(c).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -473,7 +473,7 @@ impl VfxEditor {
                         self.seed,
                         self.sim.particle_count()
                     ))
-                    .color(color::TEXT_3)
+                    .color(color::text_3())
                     .size(11.0),
                 );
             });
@@ -487,7 +487,7 @@ impl VfxEditor {
             ui.label(
                 RichText::new(text)
                     .font(theme::semibold(14.0))
-                    .color(color::TEXT),
+                    .color(color::text()),
             );
         });
         ui.add_space(4.0);
@@ -504,14 +504,14 @@ impl VfxEditor {
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
         let r = rect.shrink2(Vec2::new(6.0, 0.0));
         let fill = if selected {
-            color::SELECT
+            color::select()
         } else if resp.hovered() {
-            color::BG_HOVER
+            color::bg_hover()
         } else {
             egui::Color32::TRANSPARENT
         };
         ui.painter().rect_filled(r, theme::R_SM, fill);
-        let text = if dim { color::TEXT_3 } else { color::TEXT };
+        let text = if dim { color::text_3() } else { color::text() };
         ui.painter().text(
             Pos2::new(r.min.x + 10.0, r.center().y),
             egui::Align2::LEFT_CENTER,
@@ -524,7 +524,7 @@ impl VfxEditor {
             egui::Align2::RIGHT_CENTER,
             detail,
             egui::FontId::proportional(11.0),
-            color::TEXT_3,
+            color::text_3(),
         );
         resp
     }
@@ -589,7 +589,7 @@ impl VfxEditor {
         }
         ui.horizontal(|ui| {
             ui.add_space(10.0);
-            ui.menu_button(RichText::new("+ Add").color(color::ICON), |ui| {
+            ui.menu_button(RichText::new("+ Add").color(color::icon()), |ui| {
                 if ui.button("Emitter").clicked() {
                     self.effect.emitters.push(Emitter {
                         name: format!("Emitter {}", self.effect.emitters.len() + 1),
@@ -672,7 +672,7 @@ impl VfxEditor {
                 Pos2::new(sep.min.x, sep.min.y),
                 Pos2::new(sep.max.x, sep.min.y),
             ],
-            Stroke::new(1.0, color::LINE),
+            Stroke::new(1.0, color::line()),
         );
         Self::section_title(ui, "Library");
         ui.horizontal(|ui| {
@@ -734,7 +734,7 @@ impl VfxEditor {
             ui.label(
                 RichText::new(title)
                     .font(theme::semibold(14.0))
-                    .color(color::TEXT),
+                    .color(color::text()),
             );
         });
         ui.add_space(6.0);
@@ -763,7 +763,7 @@ impl VfxEditor {
                                         self.effect.trails.len(),
                                         self.effect.beams.len()
                                     ))
-                                    .color(color::TEXT_3),
+                                    .color(color::text_3()),
                                 );
                             }
                             Selection::Emitter(i) => {
@@ -870,7 +870,7 @@ impl VfxEditor {
         let header = Rect::from_min_size(full.min, Vec2::new(full.width(), 36.0));
         ui.painter().line_segment(
             [full.left_top(), full.right_top()],
-            Stroke::new(1.0, color::LINE),
+            Stroke::new(1.0, color::line()),
         );
         let mut header_ui =
             ui.new_child(egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(10.0, 5.0))));
@@ -903,7 +903,7 @@ impl VfxEditor {
             ui.label(
                 RichText::new(format!("{shown:.2} / {len:.2} s"))
                     .font(egui::FontId::monospace(12.0))
-                    .color(color::TEXT),
+                    .color(color::text()),
             );
             ui.add_space(10.0);
             egui::ComboBox::from_id_salt("speed")
@@ -942,7 +942,7 @@ impl VfxEditor {
         let body = Rect::from_min_max(Pos2::new(full.min.x, header.max.y), full.max);
         ui.painter().line_segment(
             [body.left_top(), body.right_top()],
-            Stroke::new(1.0, color::LINE),
+            Stroke::new(1.0, color::line()),
         );
         let len = self.timeline_length();
         let shown = if self.effect.duration > 0.0 {
@@ -960,10 +960,10 @@ impl VfxEditor {
     fn centre(&mut self, ui: &mut Ui) {
         let full = ui.max_rect();
         let header = Rect::from_min_size(full.min, Vec2::new(full.width(), 36.0));
-        ui.painter().rect_filled(header, 0.0, color::BG_PANEL);
+        ui.painter().rect_filled(header, 0.0, color::bg_panel());
         ui.painter().line_segment(
             [header.left_bottom(), header.right_bottom()],
-            Stroke::new(1.0, color::LINE),
+            Stroke::new(1.0, color::line()),
         );
         let mut hui =
             ui.new_child(egui::UiBuilder::new().max_rect(header.shrink2(Vec2::new(10.0, 5.0))));
@@ -982,7 +982,7 @@ impl VfxEditor {
                 }
             }
             ui.add_space(12.0);
-            ui.label(RichText::new("Style").color(color::TEXT_2));
+            ui.label(RichText::new("Style").color(color::text_2()));
             let styles: Vec<&str> = std::iter::once("Authored")
                 .chain(ArtStyle::ALL.iter().map(|s| s.label()))
                 .collect();
@@ -1021,7 +1021,7 @@ impl VfxEditor {
                             }
                         }
                     });
-                ui.label(RichText::new("Motion").color(color::TEXT_2));
+                ui.label(RichText::new("Motion").color(color::text_2()));
             });
         });
 
@@ -1050,7 +1050,7 @@ impl VfxEditor {
                 ui.painter().rect_stroke(
                     inset,
                     CornerRadius::same(theme::R_LG),
-                    Stroke::new(1.0, color::LINE_STRONG),
+                    Stroke::new(1.0, color::line_strong()),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -1079,7 +1079,7 @@ impl VfxEditor {
             egui::Align2::LEFT_TOP,
             info,
             egui::FontId::proportional(11.0),
-            color::TEXT_3,
+            color::text_3(),
         );
     }
 
@@ -1222,7 +1222,7 @@ impl VfxEditor {
                 egui::Align2::CENTER_CENTER,
                 "This effect has no emitters. Trails and beams are edited in the inspector.",
                 egui::FontId::proportional(13.0),
-                color::TEXT_3,
+                color::text_3(),
             );
         }
     }
@@ -1235,7 +1235,7 @@ impl VfxEditor {
                     "{}  ·  human-readable, one property per line",
                     presets::file_name(&self.effect.name)
                 ))
-                .color(color::TEXT_2),
+                .color(color::text_2()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Apply").clicked() {
@@ -1260,7 +1260,7 @@ impl VfxEditor {
             });
         });
         if let Some(err) = &self.source_error {
-            child.label(RichText::new(err).color(color::ERROR));
+            child.label(RichText::new(err).color(color::error()));
         }
         child.add_space(6.0);
         egui::ScrollArea::vertical()

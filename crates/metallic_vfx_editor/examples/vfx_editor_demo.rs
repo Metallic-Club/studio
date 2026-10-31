@@ -26,9 +26,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Metallic VFX Editor",
         options,
         Box::new(|cc| {
-            if !theme::install_fonts(&cc.egui_ctx) {
-                eprintln!("no system UI font found; text will not render");
-            }
             theme::apply(&cc.egui_ctx);
             Ok(Box::new(Demo { editor }))
         }),

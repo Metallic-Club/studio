@@ -27,8 +27,9 @@ mod vm;
 
 pub use api::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
-    MAX_ACTION_EVENTS_PER_STEP, USER_INPUT_TYPES,
+    MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
 };
+pub use api::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
 pub use host::{LOCAL_PLAYER_NAME, ScriptHost, ScriptRole};
 pub use vm::{
     Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,
