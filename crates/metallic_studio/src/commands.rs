@@ -511,7 +511,8 @@ pub fn placement(world: &World, id: InstanceId) -> Option<Placement> {
 
 /// Moves `id` under `parent` at `index` (clamped to the end).
 ///
-/// `World::set_parent` appends; the siblings that belong after `index` are re-appended in order.
+/// Uses `World::set_parent_at` (`set_parent` alone appends, and moving to the same parent is
+/// a no-op there).
 pub fn place(
     world: &mut World,
     id: InstanceId,
@@ -521,18 +522,7 @@ pub fn place(
     if placement(world, id).is_some_and(|p| p.parent == parent && p.index == index) {
         return Ok(());
     }
-    world.set_parent(id, parent)?;
-    let siblings: Vec<InstanceId> = match parent {
-        Some(p) => world.children(p).to_vec(),
-        None => world.roots().to_vec(),
-    };
-    let last = siblings.len().saturating_sub(1);
-    if index < last {
-        for &s in &siblings[index..last] {
-            world.set_parent(s, parent)?;
-        }
-    }
-    Ok(())
+    world.set_parent_at(id, parent, index)
 }
 
 fn park(
