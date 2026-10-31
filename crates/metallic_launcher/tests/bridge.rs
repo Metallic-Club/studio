@@ -362,7 +362,7 @@ fn bundled_settings_page_can_change_everything_and_see_everything() {
     let value = set(json!({"developerMode": true, "devUrl": "http://127.0.0.1:5173"}));
     assert_eq!(
         value,
-        json!({"ok": {"closeToTray": true, "developerMode": true, "devUrl": "http://127.0.0.1:5173", "channel": "dev"}})
+        json!({"ok": {"closeToTray": true, "developerMode": true, "devUrl": "http://127.0.0.1:5173", "channel": "dev", "theme": "graphite"}})
     );
     // null clears the address; a bad address changes nothing.
     let value = set(json!({"devUrl": null}));
@@ -372,6 +372,13 @@ fn bundled_settings_page_can_change_everything_and_see_everything() {
     let value = set(json!({"devUrl": "https://metallic.example/with/path", "closeToTray": false}));
     assert_eq!(value, json!({"error": "badRequest"}));
     assert!(host.settings.lock().unwrap().close_to_tray);
+    // The page theme: the four words are accepted, anything else is a bad request.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(set(json!({"theme": "light"}))["ok"]["theme"], "light");
+    assert_eq!(
+        set(json!({"theme": "neon"})),
+        json!({"error": "badRequest"})
+    );
 }
 
 #[test]
@@ -836,6 +843,7 @@ fn site_cannot_set_local_only_settings() {
         json!({"closeToTray": true, "developerMode": true, "devUrl": null}),
         json!({"channel": "stable"}),
         json!({"closeToTray": true, "channel": "dev"}),
+        json!({"theme": "light"}),
     ] {
         for page in [SITE, DEV] {
             let body = json!({"id": 1, "cmd": "setSettings", "args": {"patch": patch}}).to_string();

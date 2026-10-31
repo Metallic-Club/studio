@@ -22,13 +22,33 @@ Host-injected client action events likewise have no receiver and are discarded o
 access keeps its existing client-only restriction.
 The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
 
-This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,
-ModuleScript/require loader or playable multiplayer. The separate scheduler correctness work in #173 and the later
+This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process
+or playable multiplayer. The separate scheduler correctness work in #173 and the later
 process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
 
 ## Globals
-`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
-All API tables are read-only.
+`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
+
+## ModuleScript and `require`
+`ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
+sandboxed Luau under the requiring thread's deadline (it may `task.wait`), and returns the module's single return value to every
+caller; `script` inside the module is the ModuleScript. The cache is scoped to the VM, so the server VM and the client VM of a
+host each run a module once. Rules, as in Roblox:
+
+- the module must return exactly one value (`nil` counts): otherwise `<Full.Name>: Module code did not return exactly one value`;
+- a cyclic require errors with `Requested module was required recursively` instead of hanging;
+- an error in the module (including a syntax error) propagates to the requiring script with the module's own position, e.g.
+  `ReplicatedStorage.Config:3: boom`, and is cached: later requires raise the same error without running the module again;
+- only a `ModuleScript` instance is accepted: anything else raises `Attempted to call require with invalid argument(s).`;
+- the cached value is kept for the life of the VM; changing `Source` afterwards has no effect until the VM restarts.
+
+A second script that requires a module while another thread is still loading it (the module yielded, for example in
+`task.wait`) **waits** for it and gets the same value; it is a cycle only when the requiring thread is the loading thread or
+the loader is itself waiting on a module the requiring thread is loading. A script that is stopped while loading a module
+releases it, so the next `require` loads it afresh. If the thread loading a module dies without reporting (a timeout outside
+the module's own error handling), the module is marked failed with `<Full.Name>: Requested module experienced an error while
+loading`, and every later `require` raises that. A client VM cannot require a ModuleScript under `ServerScriptService` or
+`ServerStorage`: it raises `Attempted to require a ModuleScript that is only available on the server`.
 
 ## Instance
 - `Instance.new(class, parent?)`. Services cannot be created; an unknown class errors.
@@ -178,6 +198,36 @@ end)
   release queued ownership so manual resumes work again, preserving nil/multiple values and native errors.
 - Native `pcall` and `xpcall` are unchanged. Ordinary coroutine creation, yielding, status and close behavior
   remain available; internally tagged results are consumed by the scheduler/admission helpers.
+
+## GUI and buttons
+The local player's `PlayerGui` (copied from `StarterGui` at start) is drawn over the 3D view: `ScreenGui` (`Enabled`,
+`DisplayOrder`), `Frame` (`Position`, `Size`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`, `ZIndex`, `Active`,
+`ClipsDescendants`), `TextLabel` (`Text`, `TextColor3`, `TextSize`) and the buttons `TextButton` (`Text`, `TextColor3`,
+`TextSize`) and `ImageButton` (`Image`, `ImageColor3`, `ImageTransparency`; the image is not drawn yet). Both buttons
+are `GuiButton`s (`AutoButtonColor`), which are `Frame`s here (Roblox's GuiObject).
+
+- Order: ScreenGuis by `DisplayOrder`, then each element above its parent and siblings by `ZIndex` (Roblox's default
+  `ZIndexBehavior.Sibling`); ties keep tree order. `ClipsDescendants` cuts its descendants to its rectangle, for drawing
+  and clicks.
+- A press goes to the front-most element under the pointer that takes clicks: a button, or an element with
+  `Active = true`. Other elements let it through. A press taken by the GUI never reaches the game (camera, jump,
+  `ContextActionService`).
+- Button events: `MouseButton1Down(x, y)`, then on release over the same button `MouseButton1Up(x, y)`,
+  `MouseButton1Click()` and `Activated(inputObject, clickCount)`. A finger tap fires the same events. `AutoButtonColor`
+  darkens the background while hovered or pressed.
+- Every Frame: `MouseEnter(x, y)` and `MouseLeave(x, y)` (mouse only), `InputBegan(input)`, `InputChanged(input)` (mouse
+  movement, at most once per frame) and `InputEnded(input)` for the elements under the pointer down to the first that
+  takes clicks. `input` has `UserInputType` (`MouseButton1`, `MouseMovement` or `Touch`), `UserInputState`, `Position`
+  (Vector3, GUI points), `Delta` and `KeyCode`.
+- Events reach LocalScripts at the next step; at most 256 wait at once. Not yet: gamepad selection, `Modal`,
+  `MouseButton2` events, double-click counts, `ZIndexBehavior.Global`.
+
+```lua
+local button = script.Parent.Play
+button.Activated:Connect(function(input)
+    print("play pressed with", input.UserInputType.Name)
+end)
+```
 
 ## RemoteEvent
 `FireServer(...)` (client only), `FireClient(player, ...)` and `FireAllClients(...)` (server only), `OnServerEvent(player, ...)`

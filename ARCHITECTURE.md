@@ -138,11 +138,24 @@ apps.
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
   parts. The level of detail is picked from the projected height in pixels (LOD1 below 220 px, LOD2 below 80 px).
+  Shading models (#63, `shading.rs`): one surface shader (`fs_main` in `scene.wgsl`) switches on the model id in a
+  row of the material table, a 96-row uniform buffer (8 style slots x 12 rows of 64 B: the 10 materials, the
+  Character row, one reserved). `ShadingModel` is Lit, Toon, Unlit or Flat; `ModelParams` holds the look-spec
+  parameters (wrap, roughness floor, bands, softness, shade tint, flatten, highlight, rim, light steps). A `Shading`
+  is a default model plus material overrides and the Character row; `Renderer::set_shading` sets style slot 0 (the
+  place Look), `set_style_shading` the per-part slots, and the table uploads only when a slot changed.
+  `InstanceRaw.material` is four u32: [0] row, [1] flags (reserved for hull, vertex snap, affine, nearest and the
+  style slot), [2] material id for procedural detail, [3] reserved. Standard skinned meshes use the Character row
+  with their slot's own roughness and metalness; `SkinStyle::Toon` (#320) keeps its own pipeline.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
-  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
-  egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
+  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel and the
+  TextButton/ImageButton of #79 drawn with an egui painter with egui's bundled fonts; their licence texts are in
+  `LICENSES/`). Clicks: the host gives the left mouse button, the cursor and fingers to `Game::gui_pointer` before
+  the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
+  and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
+  never reaches the game's input.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
@@ -214,10 +227,11 @@ apps.
   plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
   `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
   While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
-  Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
-  Properties and the script editor are read-only, the status bar shows the session's `PlayStatus` ("Playing", theme
-  `success`) and the viewport a `success` frame. Esc with the unsaved-changes prompt open answers the prompt. Exposure
-  adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  Stop, Save, Close game, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout
+  are off, Properties and the script editor are read-only, the status bar shows the session's `PlayStatus`
+  ("Playing", theme `success`) and the viewport a `success` frame. Quit and Close game (Ctrl+W) stop Play before
+  the unsaved-changes prompt opens; Esc answers the prompt. Exposure adaptation resets when Play starts and after
+  Stop. Play is asked for with `UiRequest::StartPlay`, so open script
   tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
   and Studio stays in edit mode.
   Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
@@ -234,22 +248,37 @@ apps.
   docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
   `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
   drag, Play or camera flight; shown ids in `hints.ron` in the config folder; Settings "Show tips"/"Reset tips").
-  Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
+  Arrange core (#217, #218): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
-  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; #10's
-  `History` and #213's preview turn a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
+  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; `editor_tools` turns a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
+  Editor wiring (#319): `editor_tools/` registers the building tools as actions and keys (Build menu and toolbar:
+  align A, distribute, mirror Ctrl+M / Ctrl+Shift+M, array Ctrl+Shift+D with ghosts, a drag handle and Ctrl+wheel count, scatter brush
+  B, measure Shift+M, select similar Shift+G, lasso/paint select modes on Q). Each op reads
+  `tools::geom::snapshot` and commits one `History` step (`editor_tools/commit.rs`); errors go to Output. Overlays
+  paint over the viewport (`viewport.capture_pointer` hands the pointer to a modal tool). `editor_colour.rs` opens the
+  colour popover from a Properties Color3 swatch or C: live preview, one step on commit, Esc restores.
+  `editor_input_actions.rs` docks the Input Actions panel (View > Input actions): its `EditStep`s become
+  `Command::Step` in the editor's history, and `History::take_remaps()` feeds every rebuilt-id map to
+  `InputActionsPanel::follow_remap`. `toolbar.rs` draws the top bar's Edit, Play, View and Build groups (Tools, Settings and Snap are in #384's viewport header) in order and collapses whole groups that
+  do not fit into a "»" overflow menu, lowest priority first (`PRIORITY`); a new action only needs a `ToolbarGroup`.
+  `ActionRegistry::register` locks every action outside `PLAY_SAFE` while playing, whoever registers it. The
+  contextual toolbar hides while a building tool has the pointer; the hint card waits for `gesture_active()`.
+  One gesture flag: `EditorState::gesture_active()` (preview overlay, or a `Gesture` reported by the viewport,
+  Properties or a tool) makes Save, Play, Undo, `apply` and tool commits (`edit_refusal()`) wait. Tool keys are keymap
+  rows in `KeyContext::Popover` and `KeyContext::Tool`, checked before Global and Viewport, so Esc reaches the
+  colour popover, then a building popover, then the tool, then the selection.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
-  Input Actions panel (#253): `input_actions/` is self-contained until the editor shell (#10) exists. It edits
+  Input Actions panel (#253): `input_actions/` (docked by `editor_input_actions.rs`, see above). It edits
   `InputContext` > `InputAction` > `InputBinding` instances; every change is one `EditStep` (built by `StepBuilder`,
-  handed to a `CommandSink`; `History` is the stand-in undo stack). Logic modules: `capture`, `checks`, `presets`,
+  handed to a `CommandSink`; its own `History` is used only by the standalone demo). Logic modules: `capture`, `checks`, `presets`,
   `touch` (device presets, automatic touch layout, custom `TouchPosition`), `preview`. View: `InputActionsPanel::show`
   or `show_with_sink`. Demo: `cargo run -p metallic_studio --example input_actions`.
   Colour (#221): `colour/` holds `ColourPopover` (ring + square, Hex/RGB/HSV, eyedropper hook, recent, palettes,
   OKLCh harmonies). It returns `ColourEvent`s (preview, commit with undo name, cancel) and never edits the scene;
-  the Properties panel and preview overlay will consume them (#10, #213). Recent colours live in the user config
+  `editor_colour.rs` consumes them for the editor. Recent colours live in the user config
   (`recent-colours.toml`), saved palettes in the project (`palettes/<name>.palette.ron`). Demo: `--scene colour`.
 - **metallic_update** (Launcher L1 Task 1): no UI. `http.rs` (`HttpClient`, `UreqClient`, redacting `Token`; `get_to_writer` streams a download and drops `Authorization` when a redirect leaves the host), `feed.rs`
   (`ReleaseFeed`, `STUDIO_FEED`, `LAUNCHER_FEED`, `UpdateChecker::check/check_quietly/download/apply_and_restart/apply_after_exit`,
@@ -466,7 +495,8 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
 - **A material:** the material list in `classes.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
-  procedural detail), and density/friction in `metallic_physics`. Test `material_table_has_every_registry_material`
+  procedural detail), and density/friction in `metallic_physics`. The material table has one spare row per style
+  (`ROWS_PER_STYLE` in `shading.rs`, and `CHARACTER_ROW` in `scene.wgsl`, moves up by one). Test `material_table_has_every_registry_material`
   must still pass.
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.

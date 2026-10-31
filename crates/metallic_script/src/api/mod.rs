@@ -9,10 +9,12 @@
 mod cframe;
 mod datatypes;
 mod errors;
+mod gui;
 mod input;
 mod instance;
 mod pivot;
 mod remote;
+mod require;
 mod services;
 mod signals;
 
@@ -25,6 +27,7 @@ use mlua::{Error, Function, Table, WeakLua};
 
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
 
+pub use gui::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
 pub use input::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
@@ -78,6 +81,8 @@ pub(crate) struct ApiState {
     bind_wrapper: Function,
     /// `UserInputService` and `ContextActionService`.
     input_services: input::InputServices,
+    /// Which thread is loading which ModuleScript, and who waits for it.
+    pub(crate) require: require::RequireState,
 }
 
 impl ApiState {
@@ -166,6 +171,7 @@ fn build(
         pending_destroy: RefCell::new(Vec::new()),
         bind_wrapper,
         input_services: input::InputServices::new(),
+        require: require::RequireState::default(),
     });
     input::install_services(lua, &state)?;
 
@@ -181,6 +187,9 @@ fn build(
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }
     set("Enum", mlua::Value::Table(state.enums.table.clone())).map_err(to_err)?;
+    let (lib, shared_g) = vm.env_parts();
+    let require = require::install(lua, &state, lib, shared_g)?;
+    set("require", mlua::Value::Function(require)).map_err(to_err)?;
     set("game", mlua::Value::UserData(services::game(lua, &state)?)).map_err(to_err)?;
     let workspace = state.world()?.root("Workspace");
     let workspace = match workspace {

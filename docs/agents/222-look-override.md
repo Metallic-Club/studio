@@ -34,3 +34,9 @@ There is also a renderer `Scene` test and a Luau test (`part.LookOverride = "Ret
 
 Coordination: #317 and #318 also edit `instance.rs` and `lib.rs`. This branch changes only the `allowed` check in
 `World::set` and adds one `pub mod` line.
+
+Review follow-ups (folded into #63):
+- While no Model has a value, a journaled part reads only its own property (no ancestor walk).
+- `visit` checks the class before reading `LookOverride`, so Folders, Scripts and services build no error on rebuild.
+- For #223: `apply` returns only parts whose resolved style changed. When the place Look (`Lighting.Look`) changes,
+  the renderer must also redraw every part that resolves to `None` (they follow the place Look).

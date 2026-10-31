@@ -120,7 +120,7 @@ WARP (software, 20 frames, noisy):
 | Low, AA off | 1209 |
 | Low + MLAA | 1216 |
 
-`Renderer::enable_gpu_timing` / `read_gpu_time_ms` (from #63) are carried here too, so this branch measures on its own.
+GPU times come from `Renderer::enable_gpu_timing` / `read_gpu_time_ms` (#63).
 
 ## Per-frame cost
 

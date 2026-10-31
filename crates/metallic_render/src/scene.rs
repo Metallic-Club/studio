@@ -1,6 +1,7 @@
 //! CPU side of the renderer: turns the parts of a [`World`] into draw lists.
-use crate::materials::{material_index, material_params};
+use crate::materials::material_index;
 use crate::meshes::MeshKind;
+use crate::shading::MaterialTable;
 use bytemuck::{Pod, Zeroable};
 use glam::{EulerRot, Mat4, Vec3};
 use metallic_core::look_override::LookOverrides;
@@ -15,8 +16,10 @@ pub struct InstanceRaw {
     pub model: [[f32; 4]; 4],
     /// Linear RGB colour and alpha (`1 - Transparency`).
     pub color: [f32; 4],
-    /// Roughness, metalness, material id, unused.
-    pub material: [f32; 4],
+    /// [0] material table row ([`MaterialTable::row`]), [1] flags (bit 0 hull, 1 vertex snap,
+    /// 2 affine, 3 nearest, bits 4-7 style slot; none used yet), [2] material id for the
+    /// procedural detail, [3] reserved.
+    pub material: [u32; 4],
 }
 
 /// One part ready to draw.
@@ -271,7 +274,7 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
         rot.z.to_radians(),
     );
     let model = Mat4::from_translation(position) * rotation * Mat4::from_scale(size);
-    let params = material_params(&material);
+    let index = material_index(&material);
     Some(PartDraw {
         id,
         kind: MeshKind::from_shape(&shape),
@@ -283,12 +286,8 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
                 srgb_to_linear(color[2] / 255.0),
                 1.0 - transparency,
             ],
-            material: [
-                params.roughness,
-                params.metalness,
-                material_index(&material) as f32,
-                0.0,
-            ],
+            // Style slot 0 (the place Look) until #223 maps resolved styles to slots.
+            material: [MaterialTable::row(0, index), 0, index as u32, 0],
         },
         style,
     })

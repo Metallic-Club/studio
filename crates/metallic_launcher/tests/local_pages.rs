@@ -130,15 +130,43 @@ fn has_event_handler(text: &str) -> bool {
     false
 }
 
+/// The pages' own text files: HTML, CSS and script (not fonts, images or licence texts).
+fn page_text_files() -> impl Iterator<Item = (&'static str, &'static str)> {
+    BUNDLED
+        .iter()
+        .filter(|(path, _, _)| {
+            path.ends_with(".html") || path.ends_with(".css") || path.ends_with(".js")
+        })
+        .map(|(path, _, body)| (*path, std::str::from_utf8(body).expect("UTF-8")))
+}
+
+/// Every `url(...)` target in `css`, without quotes.
+fn css_urls(css: &str) -> Vec<&str> {
+    css.split("url(")
+        .skip(1)
+        .map(|rest| {
+            rest.split(')')
+                .next()
+                .unwrap_or("")
+                .trim_matches(['"', '\''])
+        })
+        .collect()
+}
+
 #[test]
 fn bundled_pages_have_no_remote_urls_or_inline_script() {
-    for (path, _, body) in BUNDLED {
-        let text = std::str::from_utf8(body).expect("bundled files are UTF-8");
+    for (path, text) in page_text_files() {
         assert!(!text.contains("http://"), "{path}: remote address");
         assert!(!text.contains("https://"), "{path}: remote address");
         assert!(!text.contains("//cdn"), "{path}: remote address");
         assert!(!text.contains("@import"), "{path}: stylesheet import");
-        assert!(!text.contains("url("), "{path}: css url()");
+        // The only css url()s are the bundled fonts.
+        for target in css_urls(text) {
+            assert!(
+                target.starts_with("/fonts/") && serve(target).status == 200,
+                "{path}: css url({target})"
+            );
+        }
         if path.ends_with(".html") {
             assert!(!text.contains("style="), "{path}: inline style");
             assert!(!text.contains("<style"), "{path}: inline style");
@@ -152,6 +180,70 @@ fn bundled_pages_have_no_remote_urls_or_inline_script() {
                 assert!(inner.trim().is_empty(), "{path}: script with a body");
             }
         }
+    }
+}
+
+#[test]
+fn pages_load_the_bundled_fonts_and_set_the_theme_before_painting() {
+    // Acceptance for the network-off case: Archivo and JetBrains Mono come from the Launcher.
+    let css = std::str::from_utf8(serve("/pages.css").body).unwrap();
+    for font in [
+        "/fonts/Archivo-Variable.woff2",
+        "/fonts/JetBrainsMono-Variable.woff2",
+    ] {
+        assert!(
+            css.contains(&format!("url(\"{font}\") format(\"woff2\")")),
+            "{font}"
+        );
+        let r = serve(font);
+        assert_eq!((r.status, r.content_type), (200, "font/woff2"));
+        assert_eq!(&r.body[..4], b"wOF2", "{font} is WOFF2");
+    }
+    // The token CSS names the same families the @font-face rules declare.
+    let tokens = std::str::from_utf8(serve("/tokens.css").body).unwrap();
+    assert!(tokens.contains("--font: 'Archivo'"));
+    assert!(tokens.contains("--mono: 'JetBrains Mono'"));
+    assert!(css.contains("font-family: \"Archivo\""));
+    assert!(css.contains("font-family: \"JetBrains Mono\""));
+    // The licences the settings page links to are served.
+    let settings = std::str::from_utf8(serve("/settings.html").body).unwrap();
+    for link in settings.split("href=\"").skip(1) {
+        let target = link.split('"').next().unwrap();
+        assert_eq!(serve(target).status, 200, "settings links to {target}");
+    }
+    assert!(
+        std::str::from_utf8(serve("/fonts/LICENSE-Phosphor.txt").body)
+            .unwrap()
+            .contains("MIT License")
+    );
+    for licence in ["/fonts/OFL-Archivo.txt", "/fonts/OFL-JetBrainsMono.txt"] {
+        let r = serve(licence);
+        assert_eq!(r.status, 200, "{licence}");
+        assert!(
+            std::str::from_utf8(r.body)
+                .unwrap()
+                .contains("SIL OPEN FONT LICENSE")
+        );
+    }
+    // Every page picks its theme in <head>, before the body paints, and names a theme the
+    // token CSS has.
+    for (path, text) in page_text_files().filter(|(p, _)| p.ends_with(".html")) {
+        let head = text.split("</head>").next().unwrap();
+        assert!(
+            head.contains("<script src=\"/theme.js\"></script>"),
+            "{path}"
+        );
+    }
+    let theme_js = std::str::from_utf8(serve("/theme.js").body).unwrap();
+    for id in metallic_tokens::parse(metallic_tokens::TOKENS_JSON)
+        .unwrap()
+        .theme_ids()
+    {
+        assert!(tokens.contains(&format!("[data-theme=\"{id}\"]")), "{id}");
+        assert!(
+            theme_js.contains(&format!("\"{id}\"")),
+            "theme.js knows {id}"
+        );
     }
 }
 
