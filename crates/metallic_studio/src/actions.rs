@@ -25,6 +25,7 @@ use eframe::egui::{self, RichText};
 use crate::editor::{EditorState, Space, Tool, UiRequest};
 use crate::icons::{self, Icon};
 use crate::keymap::Keymap;
+use crate::theme;
 use crate::tokens::ui_tokens;
 
 /// Where an action appears on the toolbar.
@@ -181,12 +182,11 @@ impl ActionRegistry {
             let button = egui::Button::new("")
                 .selected(checked)
                 .min_size(egui::vec2(28.0, 26.0));
-            let resp = ui
-                .add_enabled(enabled, button)
+            let resp = theme::add_enabled(ui, enabled, button)
                 .on_hover_text(&tip)
                 .on_disabled_hover_text(&tip);
             let colour = if !enabled {
-                ui_tokens().text_dim.gamma_multiply(0.6)
+                theme::TEXT_OFF
             } else if a.id == "play.start" || (a.group == ToolbarGroup::Play && a.id != "play.stop")
             {
                 ui_tokens().success
@@ -218,7 +218,7 @@ impl ActionRegistry {
         for &id in ids {
             let Some(a) = self.get(id) else { continue };
             let button = egui::Button::new(&a.label).shortcut_text(keymap.label(id));
-            if ui.add_enabled(a.is_enabled(state), button).clicked() {
+            if theme::add_enabled(ui, a.is_enabled(state), button).clicked() {
                 clicked = Some(id);
             }
         }
