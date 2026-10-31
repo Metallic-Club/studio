@@ -6,7 +6,7 @@ use std::path::PathBuf;
 /// Usage text printed for bad arguments.
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
 [--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
-[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist] \
+[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist|touch] \
 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]";
 
 /// Parsed arguments.
@@ -91,9 +91,12 @@ impl Args {
                 "--no-overrides" => args.no_overrides = true,
                 "--menu" => {
                     let v = value("--menu")?;
-                    if !matches!(v.as_str(), "main" | "keyboard" | "gamepad" | "assist") {
+                    if !matches!(
+                        v.as_str(),
+                        "main" | "keyboard" | "gamepad" | "assist" | "touch"
+                    ) {
                         return Err(format!(
-                            "unknown menu page `{v}` (main, keyboard, gamepad or assist)"
+                            "unknown menu page `{v}` (main, keyboard, gamepad, assist or touch)"
                         ));
                     }
                     args.menu = Some(v);
@@ -209,6 +212,10 @@ mod tests {
         assert_eq!(a.menu.as_deref(), Some("gamepad"));
         assert!(a.no_overrides);
         assert!(parse("p --menu shop").is_err());
+        assert_eq!(
+            parse("p --menu touch").unwrap().menu.as_deref(),
+            Some("touch")
+        );
         assert_eq!(parse("p").unwrap().menu, None);
     }
 

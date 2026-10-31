@@ -65,6 +65,7 @@ pub fn run(
             menu.show_tab(match page {
                 "gamepad" => crate::menu::Tab::Gamepad,
                 "assist" => crate::menu::Tab::Assist,
+                "touch" => crate::menu::Tab::Touch,
                 _ => crate::menu::Tab::Keyboard,
             });
         }
@@ -379,6 +380,9 @@ impl App {
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         if self.pace() == Pace::Paused {
             // The system may still ask for a paint while minimised: the game stays paused.
+            // M2 follow-up: a networked client must not pause (the server keeps simulating and
+            // the client has to keep receiving and acknowledging); it should keep ticking
+            // without drawing instead.
             self.paused = true;
             return;
         }

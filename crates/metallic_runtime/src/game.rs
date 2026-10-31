@@ -89,6 +89,8 @@ pub struct Game {
     character_gone: f64,
     /// `InputRuntime::device_changes` when the scripts were last told the last-used device.
     input_device_changes: Option<u64>,
+    /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
+    gui_inset: f32,
 }
 
 impl Game {
@@ -144,6 +146,7 @@ impl Game {
             gui_copies: Vec::new(),
             character_gone: 0.0,
             input_device_changes: None,
+            gui_inset: 0.0,
         }
     }
 
@@ -423,10 +426,26 @@ impl Game {
         self.scripts.set_input_devices(touch, keyboard, gamepad);
     }
 
+    /// Sets the GUI inset: the top `points` of the screen belong to the Player's own controls
+    /// (the touch overlay's menu button, spec 7.2), so every ScreenGui is laid out in the screen
+    /// below it, like Roblox's default `IgnoreGuiInset = false`. Zero when nothing is there.
+    pub fn set_gui_inset(&mut self, points: f32) {
+        self.gui_inset = if points.is_finite() {
+            points.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// The GUI inset in points.
+    pub fn gui_inset(&self) -> f32 {
+        self.gui_inset
+    }
+
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.world.try_borrow() {
-            crate::gui::paint(&world, painter);
+            crate::gui::paint(&world, painter, self.gui_inset);
         }
     }
 
@@ -442,15 +461,19 @@ impl Game {
             let Ok(mut world) = self.world.try_borrow_mut() else {
                 return false;
             };
-            self.physics.step(&mut world, TICK);
             if let Some(character) = self.character {
                 self.characters
                     .step(&mut world, &self.physics, character, move_input, TICK);
             }
+            self.physics.step(&mut world, TICK);
+            if let Some(character) = self.character {
+                // Movers moved in this physics step carry the character standing on them now.
+                self.characters.carry(&mut world, &self.physics, character);
+            }
             respawned = respawn_if_gone(
                 &mut world,
+                &self.characters,
                 self.player,
-                self.character,
                 &mut self.character_gone,
             );
         }
@@ -484,6 +507,11 @@ impl Game {
                 CharacterEvent::Respawned {
                     player, character, ..
                 } => {
+                    // Checked when it fires: never announce a Model that is already gone.
+                    let alive = self.world.try_borrow().is_ok_and(|w| w.is_alive(character));
+                    if !alive {
+                        continue;
+                    }
                     if Some(player) == self.player {
                         self.character = Some(character);
                     }
@@ -586,25 +614,42 @@ impl Game {
     }
 }
 
-/// Counts how long (`gone`, seconds) the local character has been gone and spawns a new one
-/// after [`RESPAWN_DELAY`]. A dead character is the controller's business (it respawns too);
-/// this covers a Model that a script destroyed or took out of the Workspace.
+/// The one respawn timer for a character that is gone without dying (#273): a Model a script
+/// destroyed, took out of the Workspace or stripped of its `HumanoidRootPart`. `gone` counts
+/// the seconds; after [`RESPAWN_DELAY`] a new character spawns.
+///
+/// The player's `Character` property is read each tick (never a cached id), so a respawn that
+/// already happened (the controller's after a death, or a script's) cancels this timer, and a
+/// dead character is left to the controller's own timer: one character ever spawns.
 fn respawn_if_gone(
     world: &mut World,
+    controller: &CharacterController,
     player: Option<InstanceId>,
-    character: Option<InstanceId>,
     gone: &mut f64,
 ) -> Option<InstanceId> {
-    let (player, character) = (player?, character?);
-    let missing = !world.is_alive(character)
-        || !in_workspace(world, character)
-        || world.find_first_child(character, ROOT_PART).is_none();
-    if !missing {
+    let player = player.filter(|&p| world.is_alive(p))?;
+    let character = match world.get(player, "Character") {
+        Ok(Value::Ref(c)) => c,
+        _ => None,
+    };
+    let present = character.is_some_and(|c| {
+        world.is_alive(c)
+            && in_workspace(world, c)
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    // The controller respawns a dead character it can still step (Humanoid and root present).
+    let dying = character.is_some_and(|c| {
+        world.is_alive(c)
+            && controller.state(c) == Some(HumanoidState::Dead)
+            && world.find_first_child(c, "Humanoid").is_some()
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    if present || dying {
         *gone = 0.0;
         return None;
     }
     *gone += TICK;
-    if *gone < RESPAWN_DELAY || !world.is_alive(player) {
+    if *gone < RESPAWN_DELAY {
         return None;
     }
     *gone = 0.0;
@@ -775,15 +820,6 @@ mod tests {
         assert_eq!(avatar(&g).locomotion().state(), state::GROUND);
     }
 
-    fn set_x(g: &Game, part: InstanceId, x: f64) {
-        let mut w = g.world.borrow_mut();
-        let Ok(Value::Vector3(p)) = w.get(part, "Position") else {
-            panic!("no position");
-        };
-        w.set(part, "Position", Value::Vector3(Vec3::new(x, p.y, p.z)))
-            .unwrap();
-    }
-
     fn x_of(g: &Game, part: InstanceId) -> f64 {
         match g.world.borrow().get(part, "Position") {
             Ok(Value::Vector3(p)) => p.x,
@@ -791,34 +827,95 @@ mod tests {
         }
     }
 
-    /// The first part under Workspace (the floor of [`game`]).
-    fn floor(g: &Game) -> InstanceId {
-        let w = g.world.borrow();
+    /// #273: a floor that a `Heartbeat` script moves carries the character with it. Scripts run
+    /// after physics (spec order: character, physics, scripts), so the physics step applies a
+    /// Heartbeat move one tick later, as in Roblox; the character follows within that same
+    /// step (`CharacterController::carry`), so it trails the drawn floor by exactly one
+    /// Heartbeat move and never drifts. Before the fix it trailed by two.
+    #[test]
+    fn a_heartbeat_mover_carries_the_character_one_move_behind_at_most() {
+        let mut w = World::new_with_services();
         let ws = w.root("Workspace").unwrap();
-        w.children(ws)
-            .iter()
-            .copied()
-            .find(|&c| w.is_a(c, "Part"))
-            .unwrap()
+        let floor = w.create("Part", Some(ws)).unwrap();
+        w.set(floor, "Name", Value::String("Floor".into())).unwrap();
+        w.set(floor, "Size", Value::Vector3(Vec3::new(400.0, 1.0, 400.0)))
+            .unwrap();
+        w.set(floor, "Position", Value::Vector3(Vec3::new(0.0, -0.5, 0.0)))
+            .unwrap();
+        w.set(floor, "Anchored", Value::Bool(true)).unwrap();
+        let script = w.create("Script", w.root("ServerScriptService")).unwrap();
+        w.set(
+            script,
+            "Source",
+            Value::String(
+                r#"local floor = workspace:WaitForChild("Floor")
+local beats = 0
+-- Still for 60 Heartbeats (the character lands), then 0.05 studs a Heartbeat for 60.
+game:GetService("RunService").Heartbeat:Connect(function()
+    beats = beats + 1
+    if beats > 60 and beats <= 120 then
+        floor.Position = floor.Position + Vector3.new(0.05, 0, 0)
+    end
+end)"#
+                    .into(),
+            ),
+        )
+        .unwrap();
+        let mut g = Game::from_world("test".into(), w, Rc::new(Silent));
+        g.start().unwrap();
+        run(&mut g, FrameInput::default(), 1.0);
+        let gap = g.root_position().unwrap().x - x_of(&g, floor);
+        let mut trail = Vec::new();
+        for _ in 0..60 {
+            g.frame(&FrameInput::default(), TICK);
+            trail.push(gap - (g.root_position().unwrap().x - x_of(&g, floor)));
+        }
+        assert!(
+            (x_of(&g, floor) - 3.0).abs() < 1e-6,
+            "the script moved the floor"
+        );
+        for (i, t) in trail.iter().enumerate().skip(2) {
+            assert!(
+                (t - 0.05).abs() < 1e-3,
+                "frame {i}: trails the floor by {t} studs ({trail:?})"
+            );
+        }
+        // Stopped: the character catches up and sits where it started on the floor.
+        run(&mut g, FrameInput::default(), 0.2);
+        let end = g.root_position().unwrap().x - x_of(&g, floor);
+        assert!((end - gap).abs() < 1e-3, "settled {} off", end - gap);
     }
 
-    /// #273: the character collides with movers where they are drawn, not one tick behind.
+    /// #273: a Died handler that takes the body out of the Workspace (without destroying it)
+    /// gets exactly one new character, and `Player.Character` is that one.
     #[test]
-    fn a_moving_floor_carries_the_character_without_lag() {
+    fn a_body_removed_on_death_respawns_once() {
         let mut g = game();
-        run(&mut g, FrameInput::default(), 0.5);
-        let floor = floor(&g);
-        let gap = g.root_position().unwrap().x - x_of(&g, floor);
-        // A script moves the floor 0.05 studs a tick (3 studs/s) along +X.
-        for k in 1..=30 {
-            set_x(&g, floor, 0.05 * f64::from(k));
-            g.frame(&FrameInput::default(), TICK);
+        run(&mut g, FrameInput::default(), 0.2);
+        let player = g.player().unwrap();
+        let old = g.character().unwrap();
+        {
+            let mut w = g.world.borrow_mut();
+            let humanoid = w.find_first_child(old, "Humanoid").unwrap();
+            w.set(humanoid, "Health", Value::Number(0.0)).unwrap();
         }
-        let after = g.root_position().unwrap().x - x_of(&g, floor);
-        assert!(
-            (after - gap).abs() < 0.01,
-            "the character drifted {} studs against the floor",
-            after - gap
+        g.frame(&FrameInput::default(), TICK);
+        // What the Died handler does.
+        g.world.borrow_mut().set_parent(old, None).unwrap();
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY + 1.0);
+        let w = g.world.borrow();
+        let ws = w.root("Workspace").unwrap();
+        let models: Vec<_> = w
+            .children(ws)
+            .iter()
+            .copied()
+            .filter(|&c| w.is_a(c, "Model"))
+            .collect();
+        assert_eq!(models.len(), 1, "one character: {models:?}");
+        assert_eq!(g.character(), Some(models[0]));
+        assert_eq!(
+            w.get(player, "Character").unwrap(),
+            Value::Ref(Some(models[0]))
         );
     }
 

@@ -8,7 +8,8 @@
 //! - **Minimised or occluded:** `ControlFlow::Wait` and no redraw requests. Nothing is presented
 //!   then, so nothing else would slow the loop down and it would spin a CPU core. The game is
 //!   paused: no frames run, and the first frame after the window comes back starts from a fresh
-//!   frame time instead of the time spent minimised.
+//!   frame time instead of the time spent minimised. (Offline only: a networked client must keep
+//!   ticking while minimised; that is an M2 follow-up.)
 //! - **Automated runs** (`--fps`, `--frames`, `--capture`, `--autopilot`, `--input-script`)
 //!   always run flat out, so a measurement or a scripted run is never throttled or paused.
 use std::time::{Duration, Instant};

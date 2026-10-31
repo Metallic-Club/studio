@@ -11,9 +11,14 @@ Goal: issues #271 (a minimised Player spins a CPU core) and #273 (small runtime 
 - #273 restart: `Game::start` after `stop` removes the StarterGui copies of the last start before copying again (GUI
   that scripts made at run time stays).
 - #273 destroyed character: a local character Model that is destroyed, taken out of the Workspace or missing its
-  `HumanoidRootPart` is replaced after `RESPAWN_DELAY` (5 s), with `CharacterAdded`.
-- #273 mover lag: each tick steps physics before the character controller, so the character meets movers where they
-  are drawn.
+  `HumanoidRootPart` is replaced after `RESPAWN_DELAY` (5 s), with `CharacterAdded`. One timer: it reads
+  `Player.Character` each tick, leaves a dead character to the controller's own respawn, and is cancelled by any
+  respawn, so a body moved out of the Workspace on death respawns once.
+- #273 mover lag: the tick order stays character, physics, scripts (M2 spec, `docs/simulation.md`). After the physics
+  step, `CharacterController::carry` moves a grounded character by its ground part's movement in that step (linear plus
+  angular velocity at the feet times the step time), replacing the carry inside the controller's sweep. Movers set
+  before a frame are followed exactly; a `Heartbeat` mover is followed one Heartbeat behind (scripts run after
+  physics, as in Roblox), down from two.
 - #273 banner overflow: GUI text that does not fit its label shrinks to fit (never below 8 pt). Engine-side only; the
   Parkour banner itself is unchanged because #333 moves it for touch.
 - #273 docs: `m1-build.md` now says egui is built with `default_fonts`.
