@@ -22,13 +22,33 @@ Host-injected client action events likewise have no receiver and are discarded o
 access keeps its existing client-only restriction.
 The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
 
-This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,
-ModuleScript/require loader or playable multiplayer. The separate scheduler correctness work in #173 and the later
+This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process
+or playable multiplayer. The separate scheduler correctness work in #173 and the later
 process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
 
 ## Globals
-`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
-All API tables are read-only.
+`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
+
+## ModuleScript and `require`
+`ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
+sandboxed Luau under the requiring thread's deadline (it may `task.wait`), and returns the module's single return value to every
+caller; `script` inside the module is the ModuleScript. The cache is scoped to the VM, so the server VM and the client VM of a
+host each run a module once. Rules, as in Roblox:
+
+- the module must return exactly one value (`nil` counts): otherwise `<Full.Name>: Module code did not return exactly one value`;
+- a cyclic require errors with `Requested module was required recursively` instead of hanging;
+- an error in the module (including a syntax error) propagates to the requiring script with the module's own position, e.g.
+  `ReplicatedStorage.Config:3: boom`, and is cached: later requires raise the same error without running the module again;
+- only a `ModuleScript` instance is accepted: anything else raises `Attempted to call require with invalid argument(s).`;
+- the cached value is kept for the life of the VM; changing `Source` afterwards has no effect until the VM restarts.
+
+A second script that requires a module while another thread is still loading it (the module yielded, for example in
+`task.wait`) **waits** for it and gets the same value; it is a cycle only when the requiring thread is the loading thread or
+the loader is itself waiting on a module the requiring thread is loading. A script that is stopped while loading a module
+releases it, so the next `require` loads it afresh. If the thread loading a module dies without reporting (a timeout outside
+the module's own error handling), the module is marked failed with `<Full.Name>: Requested module experienced an error while
+loading`, and every later `require` raises that. A client VM cannot require a ModuleScript under `ServerScriptService` or
+`ServerStorage`: it raises `Attempted to require a ModuleScript that is only available on the server`.
 
 ## Instance
 - `Instance.new(class, parent?)`. Services cannot be created; an unknown class errors.
