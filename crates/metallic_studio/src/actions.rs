@@ -12,11 +12,16 @@
 //! let players = Rc::new(Cell::new(2u8));
 //! let p = players.clone();
 //! registry.register(
-//!     Action::new("play.team_test", "Team Test", Icon::Players, ToolbarGroup::Play, move |s| s.start_play("play.team_test"))
+//!     Action::new("play.team_test", "Team Test", Icon::Players, ToolbarGroup::Play, move |s| s.request(UiRequest::StartPlay("play.team_test")))
 //!         .enabled(|s| !s.play.is_playing())
 //!         .accessory(move |ui, _| { let mut n = p.get(); ui.add(egui::DragValue::new(&mut n).range(1..=8)); p.set(n); }),
 //! );
 //! ```
+//!
+//! A play action asks the UI with [`UiRequest::StartPlay`] rather than calling
+//! [`EditorState::start_play`] itself, so the UI first commits open script tabs and ends any
+//! live-preview gesture: Play runs what is on screen. While a session runs, every editing
+//! action (tools, snapping, undo, delete...) is disabled, accessories included.
 //!
 //! The shortcut shown in the tooltip comes from the [`Keymap`], so rebinding a key updates every
 //! place that shows it.
@@ -245,15 +250,16 @@ impl ActionRegistry {
             let button = Button::ghost(short_label(&a.label))
                 .compact()
                 .selected(checked);
+            let enabled = a.is_enabled(state);
             let resp = ui
-                .add_enabled(a.is_enabled(state), button)
+                .add_enabled(enabled, button)
                 .on_hover_text(&tip)
                 .on_disabled_hover_text(&tip);
             if resp.clicked() {
                 clicked = Some(a.id);
             }
             if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+                ui.add_enabled_ui(enabled, |ui| acc(ui, state));
             }
         }
         if let Some(id) = clicked {
@@ -315,7 +321,8 @@ pub fn default_actions() -> ActionRegistry {
     ] {
         r.register(
             Action::new(id, label, icon, ToolbarGroup::Tools, move |s| s.tool = tool)
-                .checked(move |s| s.tool == tool),
+                .checked(move |s| s.tool == tool)
+                .enabled(editing),
         );
     }
     let mut off_grid: Option<((metallic_core::ChangeCursor, u64, u64, u64), bool)> = None;
@@ -569,6 +576,7 @@ pub fn default_actions() -> ActionRegistry {
             },
         )
         .checked(|s| s.space == Space::Local)
+        .enabled(editing)
         .accessory(|ui, s| {
             ui.label(
                 RichText::new(match s.space {
@@ -671,6 +679,20 @@ pub fn default_actions() -> ActionRegistry {
         },
     ));
     r.register(Action::new(
+        "file.close",
+        "Close game",
+        Icon::Text("W"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::CloseGame),
+    ));
+    r.register(Action::new(
+        "edit.deselect",
+        "Clear selection",
+        Icon::Text("Esc"),
+        ToolbarGroup::Hidden,
+        |s| s.selection.clear(),
+    ));
+    r.register(Action::new(
         "settings.open",
         "Settings",
         Icon::Text(","),
@@ -693,17 +715,41 @@ pub fn default_actions() -> ActionRegistry {
     ));
     r.register(
         Action::new("play.start", "Play", Icon::Play, ToolbarGroup::Play, |s| {
-            s.start_play("play.start")
+            s.request(UiRequest::StartPlay("play.start"))
         })
-        .enabled(|s| !s.play.is_playing() && s.play.modes().any(|(id, _)| id == "play.start")),
+        .enabled(|s| !s.play.is_playing() && s.play.has_mode("play.start")),
     );
     r.register(
-        Action::new("play.stop", "Stop", Icon::Stop, ToolbarGroup::Play, |s| {
-            s.play.stop()
-        })
+        Action::new(
+            "play.stop",
+            "Stop",
+            Icon::Stop,
+            ToolbarGroup::Play,
+            EditorState::stop_play,
+        )
         .enabled(|s| s.play.is_playing()),
     );
+    lock_while_playing(&mut r);
     r
+}
+
+/// Actions that stay usable while a play session runs: the play controls, Save (it writes the
+/// edit world, which Play never changes) and Settings.
+pub const PLAY_SAFE: &[&str] = &["play.start", "play.stop", "file.save", "settings.open"];
+
+/// Disables every action not in [`PLAY_SAFE`] while playing (tools, snapping, pivots, edit
+/// commands, selection, view framing). A disabled action also leaves its shortcut to the game.
+/// Actions registered later decide for themselves.
+fn lock_while_playing(r: &mut ActionRegistry) {
+    for a in &mut r.actions {
+        if PLAY_SAFE.contains(&a.id) {
+            continue;
+        }
+        let before = a.enabled.take();
+        a.enabled = Some(Box::new(move |s: &EditorState| {
+            !s.play.is_playing() && before.as_ref().is_none_or(|f| f(s))
+        }));
+    }
 }
 
 #[cfg(test)]
@@ -756,13 +802,74 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_w_closes_the_game_and_escape_only_clears_the_selection() {
+        let keymap = Keymap::metallic();
+        assert_eq!(keymap.label("file.close"), "Ctrl+W");
+        let esc = crate::keymap::KeyChord::parse("Escape").expect("parses");
+        let on_esc: Vec<_> = keymap
+            .bindings()
+            .iter()
+            .filter(|b| b.chord == esc)
+            .map(|b| b.action)
+            .collect();
+        // play.stop only in the Play context (while a game runs).
+        assert_eq!(on_esc, ["play.stop", "edit.deselect", "drag.cancel"]);
+        let mut r = default_actions();
+        let mut s = state();
+        assert!(r.run("file.close", &mut s));
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::CloseGame]
+        ));
+        assert!(r.run("edit.deselect", &mut s));
+        assert!(s.take_requests().is_empty(), "Esc asks for no close");
+    }
+
+    #[test]
     fn tools_switch_and_disabled_actions_do_not_run() {
         let mut r = default_actions();
         let mut s = state();
         assert!(r.run("tool.rotate", &mut s));
         assert_eq!(s.tool, Tool::Rotate);
         assert!(!r.run("edit.undo", &mut s), "nothing to undo");
+        assert!(r.run("play.start", &mut s), "Play is registered");
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::StartPlay("play.start")]
+        ));
+        s.play = crate::play::PlayController::new();
         assert!(!r.run("play.start", &mut s), "no Play mode registered");
+    }
+
+    #[test]
+    fn editing_actions_are_off_while_playing() {
+        let mut r = default_actions();
+        let mut s = state();
+        s.start_play("play.start");
+        assert!(s.play.is_playing());
+        for id in [
+            "tool.move",
+            "snap.surface",
+            "pivot.mode",
+            "edit.delete",
+            "edit.select_all",
+            "view.frame_all",
+            "play.start",
+        ] {
+            assert!(r.get(id).is_some(), "{id} exists");
+            assert!(
+                !r.get(id).is_some_and(|a| a.is_enabled(&s)),
+                "{id} runs while playing"
+            );
+        }
+        for id in ["file.save", "settings.open", "play.stop"] {
+            assert!(r.get(id).is_some_and(|a| a.is_enabled(&s)), "{id} is off");
+        }
+        assert!(!r.run("tool.rotate", &mut s));
+        assert_eq!(s.tool, Tool::Move);
+        assert!(r.run("play.stop", &mut s));
+        assert!(!s.play.is_playing());
+        assert!(r.run("tool.rotate", &mut s));
     }
 
     #[test]

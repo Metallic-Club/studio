@@ -362,7 +362,8 @@ Material (asset, text RON like scenes)
   shading_model: Lit | Toon | ToonFace | Unlit | Flat | Retro | LitSprite | Custom(shader asset)
   alpha: Opaque | Mask(cutoff) | Blend | Additive | Premultiplied
   base: color, color_map, normal_map, orm_map (occlusion/roughness/metalness), emissive(+map), roughness, metalness
-  toon: ramp (bands + softness | ramp texture + row), shadow_tint | shadow_map, spec_size, spec_strength,
+  toon: ramp (bands + softness | ramp texture + row; `bands` counts steps, so N bands give N + 1 tones and 1 is
+  two-tone lit/shadow), shadow_tint | shadow_map, spec_size, spec_strength,
         rim_width, rim_color
   outline: hull { width_px, color, vertex_alpha_width, use_outline_normals }, post_edges: on/off
   retro: snap_grid, affine, vertex_lighting
@@ -583,9 +584,10 @@ Implementation is #41 (`metallic_vfx`). Target design:
   modules whose inputs are expression graphs (Niagara + VFX Graph [R154][R150]). Only attributes a later stage reads
   get stored [R151]. Compiles to WGSL (naga-validated, cached by hash) and to CPU bytecode for tiny emitters and
   previews (Destiny [R161]).
-- **GPU runtime:** slab of particle pools in large storage buffers; dead list, ping-pong alive lists, counters and
-  indirect args packed into one bookkeeping buffer to stay inside the downlevel limit of 4 storage buffers per stage
-  [R169]. Per frame: spawn requests -> emit -> update (depth collision, AABB via integer atomics, since DX12 has no
+- **GPU runtime:** slab of particle pools in large storage buffers. The dead list and both ping-pong alive lists
+  share one buffer, the counters take a second and the indirect args a third, so no entry point binds more than 3
+  storage buffers (4 in all with the pool), inside the downlevel limit of 4 per stage [R169]. Counters and args
+  cannot share a buffer: a dispatch may not read its indirect args from a buffer it also binds for writing. Per frame: spawn requests -> emit -> update (depth collision, AABB via integer atomics, since DX12 has no
   float atomics [R21]) -> optional sort (16-bit depth keys) -> draw indirect. Batch small emitters of the same
   variant into one dispatch (Niagara's 1-vs-64 particle note [R155]). `particles_sim.wgsl` and
   `particles_draw.wgsl` prototype emit/update/finish and flipbook + soft-particle drawing.
@@ -651,9 +653,9 @@ Files in `docs/research/style-shaders/` (research samples, not engine code):
 | `tonemap.wgsl` | Finish pass: exposure, white balance, ACES fit / Khronos PBR Neutral / clamp, contrast, saturation, 3D LUT, sRGB handling |
 | `pixel_art.wgsl` | Low-res quantise (levels or 64-colour palette in OKLab) with Bayer 4/8 from bit maths; sharp-bilinear upscale with sub-texel camera offset |
 | `ps1_retro.wgsl` | Vertex snapping, affine UVs (`@interpolate(linear)`), Gouraud, vertex fog, cutout alpha |
-| `particles_sim.wgsl` | GPU particles: emit from dead list, indirect update, survivors to ping-pong alive list, DrawIndirect args |
-| `particles_draw.wgsl` | Billboards from storage, flipbook frame blend, soft particles, premultiplied alpha |
-| `check/` | Standalone Rust harness (own `[workspace]`, not in the engine workspace): builds every pipeline on a real GPU and renders four looks |
+| `particles_sim.wgsl` | GPU particles: emit from dead list, indirect update, survivors to the other half of a ping-pong alive list, DrawIndirect args; 3 storage buffers per entry point at most |
+| `particles_draw.wgsl` | Billboards from storage, flipbook frame blend (by age it plays once and holds the last frame; with `fps` it loops), soft particles, premultiplied alpha |
+| `check/` | Standalone Rust harness (own `[workspace]` and committed `Cargo.lock`, not in the engine workspace): builds every pipeline on a real GPU, runs the particle simulation with read-back checks, and renders four looks |
 
 What I ran (2026-10-30, 01:05-01:40 Chicago, this PC: RTX 3060 Ti, driver 610.88):
 ```
@@ -668,10 +670,23 @@ cargo run --release --manifest-path docs/research/style-shaders/check/Cargo.toml
 ```
 (`CARGO_TARGET_DIR` pointed at a scratch folder so nothing built lands in the repo.)
 
+What each sample's check proves (#111):
+- Run and read back: `particles_sim.wgsl`. `style_shaders_check` simulates 8 frames (emit, prepare, indirect
+  update, finish) and compares the counters, both indirect args, the alive and dead lists (every slot exactly
+  once) and the live particles with a CPU model, including slot recycling when the pool is full.
+- Drawn: `surface.wgsl`, `outline_post.wgsl`, `tonemap.wgsl` and `pixel_art.wgsl`, by `render_looks` (below).
+- Compiles only (module and pipeline created, never drawn): `outline_hull.wgsl`, `toon_ramp.wgsl`,
+  `ps1_retro.wgsl` and `particles_draw.wgsl`.
+
+Rerun for #111 (2026-10-31, same PC): `style_shaders_check` on DX12 (DXC and FXC) and Vulkan, 13 pipelines plus
+the particle run, 0 failures. With the args buffer bound in `cs_update`, wgpu rejects the indirect dispatch
+(`STORAGE_READ_WRITE` and `INDIRECT` conflict in one dispatch), and a dead-list write broken on purpose fails the
+list check.
+
 `render_looks` draws the same seven-object scene through `surface.wgsl` and the post samples. Output in
 `docs/research/style-shaders/shots/`:
 - `pbr.png`: Lit + ACES fit.
-- `toon.png`: Toon (3 bands, tinted shadows, rim, spec blob) + 2 px post edges + PBR Neutral.
+- `toon.png`: Toon (3 bands = 4 tones, tinted shadows, rim, spec blob) + 2 px post edges + PBR Neutral.
 - `flat.png`: Flat model on a low-poly sphere + 1 px edges + PBR Neutral.
 - `pixel.png`: Toon at 320x180, 1 px edges, clamp curve, 16-colour palette, Bayer 4x4 at 0.4, sharp upscale to
   1280x720.
@@ -718,8 +733,9 @@ Cheap only; none changes M1's look or tests. Ordered by value.
    sample count. For EDGE with MSAA > 1, schedule the separate 1x depth/normal prepass from section 4.3; the scene
    keeps its own multisampled depth. With MSAA off, store the scene 1x depth and normal/mask MRT instead. These
    targets and EDGE belong to #62/#65, not M1; retain Discard where no later consumer needs the attachment.
-5. **Internal size separate from output size.** `RenderSettings { quality, render_scale: f32 }` (1.0 in M1); the
-   HDR and depth targets use `output size x render_scale`; the finish pass samples with a linear filter. This
+5. **Internal size separate from output size.** `RenderSettings { quality, render_scale_percent: u8 }` (100 in
+   M1; a whole percent, because `RenderSettings` derives `Eq` and an `f32` field would break it); the HDR and depth
+   targets use `output size x render_scale_percent / 100`; the finish pass samples with a linear filter. This
    unlocks pixel looks and the Iris Xe 67% mode.
 6. **Named stages.** Keep `render()` as `shadows() -> scene() -> post() -> finish()` private methods, each taking the
    encoder and named targets. That shape lets a render graph replace the order in M5 without a rewrite.
