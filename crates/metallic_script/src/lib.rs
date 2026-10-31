@@ -27,7 +27,10 @@ pub use api::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
 };
-pub use api::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
+pub use api::{
+    GUI_CLICK_RESERVE, GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP,
+    MAX_POINTER_INPUTS_PER_STEP, PointerInput,
+};
 pub use host::{LOCAL_PLAYER_NAME, ScriptHost};
 pub use vm::{
     Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,

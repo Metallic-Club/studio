@@ -16,8 +16,9 @@ use metallic_core::{ChangeCursor, Changes, InstanceId, Value as CoreValue, World
 use mlua::Value;
 
 use crate::api::{
-    self, ApiState, BoundResult, EventKind, GuiEvent, HostShared, InputActionEvent, InputDevice,
-    InputValue, MAX_GUI_EVENTS_PER_STEP, RemoteTarget, TouchButtonInfo,
+    self, ApiState, BoundResult, EventKind, GUI_CLICK_RESERVE, GuiEvent, GuiEventKind, HostShared,
+    InputActionEvent, InputDevice, InputValue, MAX_GUI_EVENTS_PER_STEP,
+    MAX_POINTER_INPUTS_PER_STEP, PointerInput, RemoteTarget, TouchButtonInfo,
 };
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
@@ -82,6 +83,10 @@ pub struct ScriptHost {
     input_dispatched: bool,
     /// GUI events for the client scripts, delivered by the next step.
     gui_events: Vec<GuiEvent>,
+    /// The last `MouseButton1Up` was dropped, so its `Click` and `Activated` are too.
+    gui_click_dropped: bool,
+    /// `UserInputService` pointer events for the client scripts, delivered by the next step.
+    pointer_inputs: Vec<PointerInput>,
 }
 
 impl ScriptHost {
@@ -101,6 +106,8 @@ impl ScriptHost {
             resume_budget: RESUME_BUDGET,
             input_dispatched: false,
             gui_events: Vec::new(),
+            gui_click_dropped: false,
+            pointer_inputs: Vec::new(),
         }
     }
 
@@ -237,6 +244,8 @@ impl ScriptHost {
         self.running.clear();
         self.cursor = None;
         self.gui_events.clear();
+        self.gui_click_dropped = false;
+        self.pointer_inputs.clear();
     }
 
     /// Queues an event of an `InputAction` instance for the client scripts: the next `step`
@@ -495,11 +504,42 @@ impl ScriptHost {
     }
 
     /// Queues an event of a GUI element for the client scripts; the next `step` fires it, in
-    /// report order. At most [`MAX_GUI_EVENTS_PER_STEP`] wait at once (more are dropped), and
-    /// server-only hosts discard them.
+    /// report order. At most [`MAX_GUI_EVENTS_PER_STEP`] wait at once (more are dropped): a
+    /// click's `MouseButton1Up`, `MouseButton1Click` and `Activated` are kept or dropped
+    /// together, and hover and move events leave the last [`GUI_CLICK_RESERVE`] places to
+    /// presses and clicks. Server-only hosts discard them.
     pub fn gui_event(&mut self, event: GuiEvent) {
-        if self.run_client && self.gui_events.len() < MAX_GUI_EVENTS_PER_STEP {
+        if !self.run_client {
+            return;
+        }
+        let len = self.gui_events.len();
+        let keep = match event.kind {
+            GuiEventKind::MouseButton1Up => {
+                self.gui_click_dropped = len + 3 > MAX_GUI_EVENTS_PER_STEP;
+                !self.gui_click_dropped
+            }
+            // The Up before them kept room for both.
+            GuiEventKind::MouseButton1Click | GuiEventKind::Activated => {
+                !self.gui_click_dropped && len < MAX_GUI_EVENTS_PER_STEP
+            }
+            GuiEventKind::MouseEnter | GuiEventKind::MouseLeave | GuiEventKind::InputChanged => {
+                len + GUI_CLICK_RESERVE < MAX_GUI_EVENTS_PER_STEP
+            }
+            GuiEventKind::MouseButton1Down
+            | GuiEventKind::InputBegan
+            | GuiEventKind::InputEnded => len < MAX_GUI_EVENTS_PER_STEP,
+        };
+        if keep {
             self.gui_events.push(event);
+        }
+    }
+
+    /// Queues a pointer press or release for `UserInputService.InputBegan`/`InputEnded` of the
+    /// client scripts (after the step's GUI events). At most [`MAX_POINTER_INPUTS_PER_STEP`]
+    /// wait at once; server-only hosts discard them.
+    pub fn pointer_input(&mut self, input: PointerInput) {
+        if self.run_client && self.pointer_inputs.len() < MAX_POINTER_INPUTS_PER_STEP {
+            self.pointer_inputs.push(input);
         }
     }
 
@@ -508,9 +548,13 @@ impl ScriptHost {
             for event in &self.gui_events {
                 client.state.deliver_gui_event(event);
             }
+            for input in &self.pointer_inputs {
+                client.state.deliver_pointer_input(input);
+            }
         }
         // Keeps the capacity: no allocation per step once grown.
         self.gui_events.clear();
+        self.pointer_inputs.clear();
     }
 
     fn deliver_inputs(&mut self) {

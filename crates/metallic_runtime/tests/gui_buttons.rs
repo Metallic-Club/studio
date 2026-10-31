@@ -344,3 +344,165 @@ fn a_click_on_a_button_does_not_reach_game_input() {
     let fire: Vec<&String> = elsewhere.iter().filter(|l| l.starts_with("Fire")).collect();
     assert_eq!(fire, ["Fire Begin", "Fire End"]);
 }
+
+/// Sets a property of the Hud element `name` (or of the Hud itself for `"Hud"`).
+fn set(r: &mut Rig, name: &str, prop: &str, value: Value) {
+    let world = r.game.world();
+    let mut w = world.borrow_mut();
+    let gui = metallic_runtime::gui::local_player_gui(&w).unwrap();
+    let hud = w.find_first_child(gui, "Hud").unwrap();
+    let id = if name == "Hud" {
+        hud
+    } else {
+        w.find_first_child(hud, name).unwrap()
+    };
+    w.set(id, prop, value).unwrap();
+}
+
+fn add_script(r: &mut Rig, source: &str) {
+    {
+        let world = r.game.world();
+        let mut w = world.borrow_mut();
+        let scripts = w
+            .find_first_child(w.root("StarterPlayer").unwrap(), "StarterPlayerScripts")
+            .unwrap();
+        let s = w.create("LocalScript", Some(scripts)).unwrap();
+        w.set(s, "Source", Value::String(source.into())).unwrap();
+    }
+    r.frame();
+    r.lines();
+}
+
+/// Roblox: a press the GUI sinks still reaches `UserInputService.InputBegan`, with
+/// `gameProcessed` true; one the GUI does not take has it false.
+#[test]
+fn user_input_service_sees_presses_with_game_processed() {
+    let mut r = Rig::new();
+    add_script(
+        &mut r,
+        r#"
+        local UIS = game:GetService("UserInputService")
+        UIS.InputBegan:Connect(function(input, processed)
+            print("UIS began", input.UserInputType.Name, input.Position.X, processed)
+        end)
+        UIS.InputEnded:Connect(function(input, processed)
+            print("UIS ended", input.UserInputType.Name, processed)
+        end)
+        "#,
+    );
+    let uis = |r: &mut Rig| -> Vec<String> {
+        r.lines()
+            .into_iter()
+            .filter(|l| l.starts_with("UIS"))
+            .collect()
+    };
+    r.pointer(PointerId::Mouse, PointerPhase::Down, [220.0, 120.0]);
+    r.pointer(PointerId::Mouse, PointerPhase::Up, [220.0, 120.0]);
+    r.frame();
+    assert_eq!(
+        uis(&mut r),
+        [
+            "UIS began MouseButton1 220 true",
+            "UIS ended MouseButton1 true"
+        ]
+    );
+    r.pointer(PointerId::Touch(3), PointerPhase::Down, [700.0, 500.0]);
+    r.pointer(PointerId::Touch(3), PointerPhase::Up, [700.0, 500.0]);
+    // A release whose press was never seen (an overlay button's finger) is not reported.
+    r.pointer(PointerId::Touch(4), PointerPhase::Up, [700.0, 500.0]);
+    r.frame();
+    assert_eq!(
+        uis(&mut r),
+        ["UIS began Touch 700 false", "UIS ended Touch false"]
+    );
+}
+
+/// Like Roblox, a button is `Active` by default; an inactive one still clicks but does not
+/// fire `Activated`.
+#[test]
+fn an_inactive_button_clicks_without_activating() {
+    let mut r = Rig::new();
+    set(&mut r, "Play", "Active", Value::Bool(false));
+    assert!(r.pointer(PointerId::Mouse, PointerPhase::Down, [220.0, 120.0]));
+    assert!(r.pointer(PointerId::Mouse, PointerPhase::Up, [220.0, 120.0]));
+    r.frame();
+    let lines = r.lines();
+    assert!(
+        lines.contains(&"Play MouseButton1Click".to_string()),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.contains("Activated")), "{lines:?}");
+}
+
+/// More fingers than `MAX_PRESSES` on a button: every new press is still the GUI's (the
+/// oldest is ended instead), so none leaks to the touch controls.
+#[test]
+fn presses_past_the_limit_never_leak_to_the_game() {
+    let mut r = Rig::new();
+    let n = metallic_runtime::gui_input::MAX_PRESSES as u64 + 5;
+    for id in 0..n {
+        assert!(
+            r.pointer(PointerId::Touch(id), PointerPhase::Down, [220.0, 120.0]),
+            "press {id}"
+        );
+    }
+    // The newest are held and click; the evicted oldest release untracked.
+    assert!(r.pointer(PointerId::Touch(n - 1), PointerPhase::Up, [220.0, 120.0]));
+    assert!(!r.pointer(PointerId::Touch(0), PointerPhase::Up, [220.0, 120.0]));
+    r.frame();
+    let lines = r.lines();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("Play Activated"))
+            .count(),
+        1,
+        "{lines:?}"
+    );
+}
+
+/// `ScreenGui.ZIndexBehavior`: `Sibling` keeps a child above its parent; `Global` sorts every
+/// element of the ScreenGui by `ZIndex`.
+#[test]
+fn zindex_behavior_global_sorts_across_parents() {
+    let mut r = Rig::new();
+    {
+        let world = r.game.world();
+        let mut w = world.borrow_mut();
+        let gui = metallic_runtime::gui::local_player_gui(&w).unwrap();
+        let hud = w.find_first_child(gui, "Hud").unwrap();
+        let shop = w.find_first_child(hud, "Shop").unwrap();
+        // A button inside Shop (ZIndex 1) under Play's left part, with ZIndex 5. In Sibling
+        // mode it stays with its parent, behind Play (ZIndex 2).
+        let inner = w.create("TextButton", Some(shop)).unwrap();
+        w.set(inner, "Name", Value::String("Inner".into())).unwrap();
+        w.set(
+            inner,
+            "Position",
+            Value::UDim2(UDim2::new(0.0, 60.0, 0.0, 0.0)),
+        )
+        .unwrap();
+        w.set(
+            inner,
+            "Size",
+            Value::UDim2(UDim2::new(0.0, 40.0, 0.0, 50.0)),
+        )
+        .unwrap();
+        w.set(inner, "ZIndex", Value::Number(5.0)).unwrap();
+    }
+    let front = |r: &mut Rig| {
+        let world = r.game.world();
+        let w = world.borrow();
+        let items = metallic_runtime::gui::layout(&w, SCREEN, 0.0);
+        let i = metallic_runtime::gui::pick(&items, [175.0, 120.0]).unwrap();
+        w.get(items[i].id, "Name").unwrap()
+    };
+    assert_eq!(front(&mut r), Value::String("Play".into()), "Sibling");
+    set(
+        &mut r,
+        "Hud",
+        "ZIndexBehavior",
+        Value::String("Global".into()),
+    );
+    assert_eq!(front(&mut r), Value::String("Inner".into()), "Global");
+}

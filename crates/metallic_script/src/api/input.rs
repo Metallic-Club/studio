@@ -14,7 +14,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use metallic_core::classes::{INPUT_ACTION_TYPES, INPUT_TRIGGERS, TOUCH_SLOTS};
+use metallic_core::classes::{INPUT_ACTION_TYPES, INPUT_TRIGGERS, TOUCH_SLOTS, ZINDEX_BEHAVIORS};
 use metallic_core::{InstanceId, Value as CoreValue, Vec3, World};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods,
@@ -449,6 +449,7 @@ impl Enums {
             ("ContextActionPriority", CONTEXT_ACTION_PRIORITIES.to_vec()),
             ("RotationOrder", named(&ROTATION_ORDERS)),
             ("NormalId", named(&NORMAL_IDS)),
+            ("ZIndexBehavior", named(ZINDEX_BEHAVIORS)),
         ];
         let table = lua.create_table()?;
         let mut items = HashMap::new();
@@ -1320,15 +1321,20 @@ impl UserData for LuaUis {
                     "PreferredInput" => Ok(this
                         .state
                         .enum_value("PreferredInput", info.preferred.enum_name())),
-                    "LastInputTypeChanged" => {
+                    "LastInputTypeChanged" | "InputBegan" | "InputEnded" => {
                         let carrier = this
                             .state
                             .world()?
                             .root("RunService")
                             .ok_or_else(|| lua_error("the world has no RunService"))?;
+                        let kind = match key.as_str() {
+                            "InputBegan" => EventKind::UisInputBegan,
+                            "InputEnded" => EventKind::UisInputEnded,
+                            _ => EventKind::LastInputTypeChanged,
+                        };
                         Ok(Value::UserData(lua.create_userdata(LuaSignal {
                             state: this.state.clone(),
-                            key: (carrier, EventKind::LastInputTypeChanged),
+                            key: (carrier, kind),
                         })?))
                     }
                     other => member(&this.methods, other, "UserInputService"),

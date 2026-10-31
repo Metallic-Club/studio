@@ -181,26 +181,32 @@ end)
 
 ## GUI and buttons
 The local player's `PlayerGui` (copied from `StarterGui` at start) is drawn over the 3D view: `ScreenGui` (`Enabled`,
-`DisplayOrder`), `Frame` (`Position`, `Size`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`, `ZIndex`, `Active`,
+`DisplayOrder`, `ZIndexBehavior`), `Frame` (`Position`, `Size`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`, `ZIndex`, `Active`,
 `ClipsDescendants`), `TextLabel` (`Text`, `TextColor3`, `TextSize`) and the buttons `TextButton` (`Text`, `TextColor3`,
 `TextSize`) and `ImageButton` (`Image`, `ImageColor3`, `ImageTransparency`; the image is not drawn yet). Both buttons
-are `GuiButton`s (`AutoButtonColor`), which are `Frame`s here (Roblox's GuiObject).
+are `GuiButton`s (`AutoButtonColor`; `Active` defaults to true), which are `Frame`s here (Roblox's GuiObject).
 
-- Order: ScreenGuis by `DisplayOrder`, then each element above its parent and siblings by `ZIndex` (Roblox's default
-  `ZIndexBehavior.Sibling`); ties keep tree order. `ClipsDescendants` cuts its descendants to its rectangle, for drawing
-  and clicks.
+- Order: ScreenGuis by `DisplayOrder`, then by the ScreenGui's `ZIndexBehavior` (`Enum.ZIndexBehavior` or its name):
+  `Sibling` (the default) draws each element above its parent and siblings by `ZIndex`; `Global` sorts every element of
+  the ScreenGui by `ZIndex`, whatever its depth. Ties keep tree order. `ClipsDescendants` cuts its descendants to its
+  rectangle, for drawing and clicks.
 - A press goes to the front-most element under the pointer that takes clicks: a button, or an element with
   `Active = true`. Other elements let it through. A press taken by the GUI never reaches the game (camera, jump,
   `ContextActionService`).
 - Button events: `MouseButton1Down(x, y)`, then on release over the same button `MouseButton1Up(x, y)`,
-  `MouseButton1Click()` and `Activated(inputObject, clickCount)`. A finger tap fires the same events. `AutoButtonColor`
+  `MouseButton1Click()` and, when the button is `Active`, `Activated(inputObject, clickCount)`, in that order (Roblox's
+  docs give none; this follows their descriptions). A finger tap fires the same events. `AutoButtonColor`
   darkens the background while hovered or pressed.
 - Every Frame: `MouseEnter(x, y)` and `MouseLeave(x, y)` (mouse only), `InputBegan(input)`, `InputChanged(input)` (mouse
   movement, at most once per frame) and `InputEnded(input)` for the elements under the pointer down to the first that
   takes clicks. `input` has `UserInputType` (`MouseButton1`, `MouseMovement` or `Touch`), `UserInputState`, `Position`
   (Vector3, GUI points), `Delta` and `KeyCode`.
-- Events reach LocalScripts at the next step; at most 256 wait at once. Not yet: gamepad selection, `Modal`,
-  `MouseButton2` events, double-click counts, `ZIndexBehavior.Global`.
+- `UserInputService.InputBegan(input, gameProcessed)` and `InputEnded` fire for every left-button and finger press and
+  release; `gameProcessed` is true when the GUI took the press, as in Roblox. Keys and other buttons are #80.
+- Events reach LocalScripts at the next step; at most 256 wait at once. A click's Up, Click and Activated are kept or
+  dropped together, and hover and move events leave 32 places to presses and clicks. Up to 16 presses are held at once;
+  a new one past that ends the oldest (no click) and is still the GUI's. Not yet: gamepad selection, `Modal`,
+  `MouseButton2` events, double-click counts.
 
 ```lua
 local button = script.Parent.Play
@@ -278,9 +284,10 @@ The value is the action's value as the runtime reported it. On the server any of
   `Visible`, `AbsolutePosition` and `AbsoluteSize` (`Vector2`, dp from the top-left of the screen), `Position` and `Size`
   (`UDim2` offsets in dp).
 
-### UserInputService (last input only)
-`GetLastInputType()`, `LastInputTypeChanged(type)`, `PreferredInput`, `TouchEnabled`, `KeyboardEnabled`, `GamepadEnabled`.
-Raw events stay with #80.
+### UserInputService (last input and pointer presses)
+`GetLastInputType()`, `LastInputTypeChanged(type)`, `PreferredInput`, `TouchEnabled`, `KeyboardEnabled`, `GamepadEnabled`,
+and `InputBegan`/`InputEnded(input, gameProcessed)` for left-button and finger presses (see GUI and buttons). Other raw
+events stay with #80.
 
 ### Host side
 `ScriptHost::input_action_event`, `set_action_state`, `set_input_devices`, `set_preferred_input`, `set_last_input_type` and

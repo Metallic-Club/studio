@@ -62,6 +62,10 @@ pub(crate) enum EventKind {
     LastInputTypeChanged,
     /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
     Gui(super::gui::GuiEventKind),
+    /// `UserInputService.InputBegan(inputObject, gameProcessed)` (pointer presses).
+    UisInputBegan,
+    /// `UserInputService.InputEnded(inputObject, gameProcessed)` (pointer releases).
+    UisInputEnded,
 }
 
 /// One signal: an event of one instance.

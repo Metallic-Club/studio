@@ -88,3 +88,89 @@ fn the_gui_event_queue_is_bounded_per_step() {
     rig.run(now, 2);
     assert_eq!(rig.lines(), [format!("print:{MAX_GUI_EVENTS_PER_STEP}")]);
 }
+
+/// The cap never splits a click: hover and moves leave room for it, and a click that does not
+/// fit is dropped whole.
+#[test]
+fn the_gui_event_cap_keeps_clicks_whole() {
+    let mut rig = Rig::new();
+    let gui = rig.add("ScreenGui", "Hud", rig.root("Workspace"));
+    let button = rig.add("TextButton", "Go", gui);
+    rig.local_script(
+        "Ui",
+        r#"
+        local go = workspace.Hud.Go
+        local seen = {}
+        for _, e in {"MouseButton1Down", "MouseButton1Up", "MouseButton1Click", "Activated"} do
+            go[e]:Connect(function() table.insert(seen, e) end)
+        end
+        game:GetService("RunService").Heartbeat:Connect(function()
+            if #seen > 0 then print(table.concat(seen, " ")) table.clear(seen) end
+        end)
+        "#,
+    );
+    rig.host.start().unwrap();
+    let click = [
+        GuiEventKind::MouseButton1Up,
+        GuiEventKind::MouseButton1Click,
+        GuiEventKind::Activated,
+    ];
+    // A flood of hover events, then a click: the click is kept.
+    for _ in 0..MAX_GUI_EVENTS_PER_STEP * 2 {
+        rig.host.gui_event(event(button, GuiEventKind::MouseEnter));
+    }
+    for kind in click {
+        rig.host.gui_event(event(button, kind));
+    }
+    let now = rig.run(0.0, 1);
+    assert_eq!(
+        rig.lines(),
+        ["print:MouseButton1Up MouseButton1Click Activated"]
+    );
+    // Presses fill the queue to two places short: the next click is dropped whole.
+    for _ in 0..MAX_GUI_EVENTS_PER_STEP - 2 {
+        rig.host
+            .gui_event(event(button, GuiEventKind::MouseButton1Down));
+    }
+    for kind in click {
+        rig.host.gui_event(event(button, kind));
+    }
+    rig.run(now, 1);
+    // `lines` keeps everything printed so far: the second step's line is the last.
+    let lines = rig.lines();
+    assert_eq!(lines.len(), 2);
+    let second = &lines[1];
+    assert!(second.starts_with("print:MouseButton1Down"));
+    assert!(
+        !second.contains("Up") && !second.contains("Click") && !second.contains("Activated"),
+        "the click was split"
+    );
+}
+
+/// `ScreenGui.ZIndexBehavior` takes `Enum.ZIndexBehavior` items (or their names) and reads back
+/// as the item.
+#[test]
+fn zindex_behavior_is_an_enum_property() {
+    let mut rig = Rig::new();
+    rig.add("ScreenGui", "Hud", rig.root("Workspace"));
+    rig.local_script(
+        "Ui",
+        r#"
+        local hud = workspace.Hud
+        print(hud.ZIndexBehavior == Enum.ZIndexBehavior.Sibling, Enum.ZIndexBehavior.Global.Value)
+        hud.ZIndexBehavior = Enum.ZIndexBehavior.Global
+        print(hud.ZIndexBehavior.Name)
+        hud.ZIndexBehavior = "Sibling"
+        print(hud.ZIndexBehavior.Name)
+        print(pcall(function() hud.ZIndexBehavior = Enum.KeyCode.A end))
+        "#,
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 1);
+    let lines = rig.lines();
+    assert_eq!(
+        &lines[..3],
+        ["print:true 0", "print:Global", "print:Sibling"]
+    );
+    assert!(lines[3].starts_with("print:false"), "{lines:?}");
+}

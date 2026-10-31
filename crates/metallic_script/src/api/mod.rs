@@ -26,7 +26,10 @@ use mlua::{Error, Function, Table, WeakLua};
 
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
 
-pub use gui::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
+pub use gui::{
+    GUI_CLICK_RESERVE, GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP,
+    MAX_POINTER_INPUTS_PER_STEP, PointerInput,
+};
 pub use input::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,

@@ -8,10 +8,11 @@
 //! A top inset (the Player's touch menu button, [`crate::Game::set_gui_inset`]) moves the
 //! ScreenGuis' screen down and makes it shorter by that much.
 //!
-//! Draw order (back to front), Roblox's default `ZIndexBehavior.Sibling`: ScreenGuis by
-//! `DisplayOrder`, then each element before its descendants and siblings by `ZIndex`; ties keep
-//! tree order. An element with `ClipsDescendants` shows its descendants only inside its own
-//! rectangle, for drawing and for clicks.
+//! Draw order (back to front): ScreenGuis by `DisplayOrder`, then inside each by its
+//! `ZIndexBehavior`. `Sibling` (Roblox's default): each element before its descendants, siblings
+//! by `ZIndex`. `Global`: every element of the ScreenGui by `ZIndex`, whatever its depth. Ties
+//! keep tree order (a parent before its children). An element with `ClipsDescendants` shows its
+//! descendants only inside its own rectangle, for drawing and for clicks.
 //!
 //! `BackgroundTransparency` 1 draws no background; a TextLabel's or TextButton's `Text` is
 //! centred in its rectangle in `TextColor3` at `TextSize` points. Text that would not fit its
@@ -89,6 +90,8 @@ pub struct GuiItem {
     pub text: Option<(String, [u8; 3], f32)>,
     /// How it takes the pointer.
     pub pointer: Pointer,
+    /// Its `ZIndex`.
+    pub z_index: f64,
 }
 
 impl GuiItem {
@@ -195,9 +198,39 @@ pub fn layout_into(
     let guis = scratch.len();
     for i in 0..guis {
         let sg = scratch[i].2;
+        let first = out.len();
         children_into(world, sg, full, clip, with_text, scratch, out);
+        if matches!(world.get(sg, "ZIndexBehavior"), Ok(Value::String(b)) if b == "Global") {
+            sort_global(&mut out[first..], scratch);
+        }
     }
     scratch.clear();
+}
+
+/// Reorders one ScreenGui's elements (laid out in tree order) by `ZIndex`, ties in tree order,
+/// using the end of `scratch` and allocating nothing once it has grown.
+fn sort_global(items: &mut [GuiItem], scratch: &mut LayoutScratch) {
+    let base = scratch.len();
+    for (n, item) in items.iter().enumerate() {
+        scratch.push((item.z_index, n as u32, item.id));
+    }
+    sort_keys(&mut scratch[base..]);
+    // Position k takes the item that was at scratch[base + k].1: follow each cycle with swaps,
+    // marking each slot done.
+    const DONE: u32 = u32::MAX;
+    for k in 0..items.len() {
+        let mut cur = k;
+        while scratch[base + cur].1 != DONE {
+            let src = scratch[base + cur].1 as usize;
+            scratch[base + cur].1 = DONE;
+            if src == k {
+                break;
+            }
+            items.swap(cur, src);
+            cur = src;
+        }
+    }
+    scratch.truncate(base);
 }
 
 /// Sorts by key, ties in tree order (an unstable sort on both, which never allocates).
@@ -280,6 +313,7 @@ fn add_element(
         background,
         text,
         pointer,
+        z_index: number(world, id, "ZIndex"),
     });
     let inner = if flag(world, id, "ClipsDescendants") {
         [
