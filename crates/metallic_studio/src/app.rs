@@ -1,11 +1,12 @@
-//! The Studio application: splash, start screen, and the placeholder for the opened game.
+//! The Studio application: splash, start screen, and the editor for the opened game.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use eframe::egui::{self, RichText, TextureHandle};
+use eframe::egui::{self, TextureHandle};
 
 use crate::colour::demo::ColourDemo;
+use crate::editor_ui::{EditorExit, EditorUi};
 use crate::png_image::{RgbaImage, decode_png};
 use crate::recent::RecentProjects;
 use crate::screenshot::ScreenshotJob;
@@ -33,6 +34,8 @@ pub enum Scene {
     FirstRun,
     /// The start screen after pressing Create on a non-empty folder, with an error toast.
     Error,
+    /// The editor with the bundled Parkour template open (nothing is saved).
+    Editor,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
     Colour,
     /// Every Studio widget in every state (design review).
@@ -53,7 +56,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// Parses `--screenshot <path>`, `--scene splash|start|firstrun|error|colour|components`,
+    /// Parses `--screenshot <path>`, `--scene splash|start|firstrun|error|editor|colour|components`,
     /// `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -71,6 +74,7 @@ impl Options {
                         "start" => Scene::Start,
                         "firstrun" => Scene::FirstRun,
                         "error" => Scene::Error,
+                        "editor" => Scene::Editor,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
                         other => return Err(format!("unknown scene {other}")),
@@ -98,7 +102,7 @@ fn parse_size(text: &str) -> Result<[f32; 2], String> {
 enum Phase {
     Splash(Splash),
     Start,
-    Opened { name: String, path: PathBuf },
+    Opened(Box<EditorUi>),
     Colour(Box<ColourDemo>),
     Components,
 }
@@ -120,6 +124,8 @@ pub struct StudioApp {
     screenshot: Option<ScreenshotJob>,
     /// The window still has the splash's borderless, see-through look.
     splash_window: bool,
+    /// The user agreed to quit from the unsaved-changes prompt; the next close is let through.
+    quit_confirmed: bool,
 }
 
 /// Decodes the embedded brand icon.
@@ -157,6 +163,8 @@ impl StudioApp {
                 Phase::Colour(Box::new(demo))
             }
             Scene::Components => Phase::Components,
+            Scene::Editor if shot => EditorUi::demo(&templates_dir().join("parkour"))
+                .map_or(Phase::Start, |e| Phase::Opened(Box::new(e))),
             // The capture shows the second step running, like the mockup.
             Scene::Splash if shot => Phase::Splash(Splash::held_at(1)),
             _ if shot => Phase::Start,
@@ -167,6 +175,7 @@ impl StudioApp {
             boot: Boot::default(),
             start: None,
             splash_window: options.shows_splash(),
+            quit_confirmed: false,
             screenshot: options.screenshot.clone().map(ScreenshotJob::new),
             options,
             icon,
@@ -230,7 +239,7 @@ impl eframe::App for StudioApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         match &mut self.phase {
             Phase::Colour(demo) => {
@@ -261,25 +270,31 @@ impl eframe::App for StudioApp {
                 if let Some(start) = &mut self.start
                     && let Some(StartAction::OpenProject { name, path }) = start.show(ui)
                 {
-                    self.phase = Phase::Opened { name, path };
+                    match EditorUi::open(&path) {
+                        Ok(editor) => self.phase = Phase::Opened(Box::new(editor)),
+                        Err(e) => {
+                            log::warn!("could not open {name}: {e}");
+                            start.set_error(&e.to_string());
+                        }
+                    }
                 }
             }
             Phase::Components => widgets::components::show(ui, self.icon.as_ref()),
-            Phase::Opened { name, path } => {
-                let (name, path) = (name.clone(), path.clone());
-                let mut back = false;
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.label(RichText::new(name).font(theme::fonts::title()));
-                    ui.label(RichText::new(path.to_string_lossy()).color(theme::TEXT_2));
-                    ui.add_space(12.0);
-                    ui.label("The editor opens here in the next step of the roadmap.");
-                    ui.add_space(12.0);
-                    back = ui
-                        .add(widgets::Button::secondary("Back to start"))
-                        .clicked();
-                });
-                if back {
-                    self.phase = Phase::Start;
+            Phase::Opened(editor) => {
+                // Closing the window with unsaved changes asks first (#319 review).
+                if ctx.input(|i| i.viewport().close_requested())
+                    && !self.quit_confirmed
+                    && !editor.request_quit()
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+                match editor.ui(ui, frame.wgpu_render_state()) {
+                    EditorExit::Stay => {}
+                    EditorExit::Close => self.phase = Phase::Start,
+                    EditorExit::Quit => {
+                        self.quit_confirmed = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 }
             }
         }

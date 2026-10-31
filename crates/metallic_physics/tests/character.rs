@@ -1,7 +1,7 @@
 use metallic_core::{Color3, InstanceId, Value, Vec3, World};
 use metallic_physics::{
     CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MoveInput,
-    PhysicsWorld, RESPAWN_DELAY, spawn_character,
+    PhysicsWorld, RESPAWN_DELAY, WORLD_LIMIT, spawn_character,
 };
 
 const DT: f64 = 1.0 / 60.0;
@@ -896,4 +896,185 @@ fn place_character_poses_the_limbs() {
     assert!((sim.root_pos() - Vec3::new(1.0, 2.0, 3.0)).magnitude() < 1e-9);
     let leg = sim.world.find_first_child(ch, "Left Leg").unwrap();
     assert!((v3(&sim.world, leg, "Position") - Vec3::new(0.5, 0.0, 3.0)).magnitude() < 1e-9);
+}
+
+// ---- Sanitising Humanoid tuning and the controller state (#172, #272) ----
+
+fn finite(v: Vec3) -> bool {
+    v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
+}
+
+fn jump() -> MoveInput {
+    MoveInput {
+        jump: true,
+        ..MoveInput::default()
+    }
+}
+
+fn respawned_count(sim: &Sim) -> usize {
+    sim.events
+        .iter()
+        .filter(|e| matches!(e, CharacterEvent::Respawned { .. }))
+        .count()
+}
+
+/// #172: a NaN JumpPower is refused, so the character keeps jumping and walking.
+#[test]
+fn nan_jump_power_does_not_freeze_the_character() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let h = sim.humanoid();
+    assert!(
+        sim.world
+            .set(h, "JumpPower", Value::Number(f64::NAN))
+            .is_err()
+    );
+    assert_eq!(num(&sim.world, h, "JumpPower"), 50.0);
+    sim.run(0.1, jump());
+    sim.run(1.5, idle());
+    let start = sim.root_pos();
+    sim.run(2.0, walk(1.0, 0.0));
+    let moved = sim.root_pos().x - start.x;
+    assert!((moved - 32.0).abs() < 1.0, "walked {moved} studs in 2 s");
+}
+
+/// #172: a non-finite vertical speed in a restored state (the controller's own write boundary)
+/// is reset, so the character is not frozen afterwards.
+#[test]
+fn non_finite_restored_state_is_reset_to_rest() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let ch = sim.character();
+    let mut state = sim.ctl.save_state(&sim.world, ch).unwrap();
+    state.vertical = f64::NAN;
+    state.inherited = Vec3::new(f64::INFINITY, 0.0, 0.0);
+    state.velocity = Vec3::new(f64::NAN, f64::NAN, f64::NAN);
+    state.yaw = f64::NAN;
+    sim.ctl.restore_state(&mut sim.world, ch, &state);
+    let start = sim.root_pos();
+    sim.run(2.0, walk(1.0, 0.0));
+    let end = sim.root_pos();
+    assert!(finite(end));
+    assert!((end.x - start.x - 32.0).abs() < 1.0, "walked to {end:?}");
+    assert!(finite(sim.ctl.velocity(ch).unwrap()));
+    // A NaN move direction is ignored rather than spread into the pose.
+    sim.run(
+        0.5,
+        MoveInput {
+            dir: Vec3::new(f64::NAN, 0.0, 1.0),
+            ..MoveInput::default()
+        },
+    );
+    assert!(finite(sim.root_pos()));
+    assert_eq!(sim.died_count(), 0);
+}
+
+/// #172: a NaN Health is refused; Health 0 still kills (the death test is `!(health > 0)`).
+#[test]
+fn nan_health_is_refused_and_zero_health_dies() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.25, idle());
+    let h = sim.humanoid();
+    assert!(sim.world.set(h, "Health", Value::Number(f64::NAN)).is_err());
+    assert_eq!(num(&sim.world, h, "Health"), 100.0);
+    sim.world.set(h, "Health", Value::Number(-1e300)).unwrap();
+    assert_eq!(num(&sim.world, h, "Health"), 0.0);
+    sim.run(0.1, idle());
+    assert_eq!(sim.died_count(), 1);
+    sim.run(RESPAWN_DELAY + 0.1, idle());
+    assert_eq!(respawned_count(&sim), 1);
+}
+
+/// #272: WalkSpeed 1e300 is clamped to 1000 studs/s; the avatar stays finite.
+#[test]
+fn huge_walk_speed_is_clamped_and_stays_finite() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let h = sim.humanoid();
+    sim.world.set(h, "WalkSpeed", Value::Number(1e300)).unwrap();
+    assert_eq!(num(&sim.world, h, "WalkSpeed"), 1000.0);
+    let start = sim.root_pos();
+    sim.run(0.1, walk(0.0, -1.0));
+    let end = sim.root_pos();
+    assert!(finite(end), "root {end:?}");
+    let moved = start.z - end.z;
+    assert!(moved > 50.0 && moved <= 1000.0 * 0.1 + 1.0, "moved {moved}");
+    sim.run(3.0, walk(0.0, -1.0));
+    assert!(finite(sim.root_pos()));
+}
+
+/// #272: JumpPower 1e300 is clamped to 1000; the jump peaks near 1000^2 / (2 g) and lands.
+#[test]
+fn huge_jump_power_is_clamped_and_stays_finite() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let h = sim.humanoid();
+    sim.world.set(h, "JumpPower", Value::Number(1e300)).unwrap();
+    assert_eq!(num(&sim.world, h, "JumpPower"), 1000.0);
+    let ground = sim.root_pos().y;
+    let mut peak = ground;
+    sim.frame(jump());
+    for _ in 0..(12.0 * 60.0) as usize {
+        sim.frame(idle());
+        assert!(finite(sim.root_pos()));
+        peak = peak.max(sim.root_pos().y);
+    }
+    let apex = 1000.0_f64.powi(2) / (2.0 * 196.2);
+    assert!((peak - ground - apex).abs() < 0.02 * apex, "peak {peak}");
+    assert!((sim.root_pos().y - ground).abs() < 0.1, "landed");
+    assert_eq!(sim.died_count(), 0);
+}
+
+/// #272: a character outside the world bounds dies and respawns, including when the position
+/// is huge (beyond [`WORLD_LIMIT`]) rather than below `FallenPartsDestroyHeight`.
+#[test]
+fn leaving_the_world_kills_and_respawns() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let old = sim.character();
+    let mut state = sim.ctl.save_state(&sim.world, old).unwrap();
+    state.position = Vec3::new(0.0, 3.0, -1e300);
+    sim.ctl.restore_state(&mut sim.world, old, &state);
+    sim.run(0.1, idle());
+    assert_eq!(sim.died_count(), 1);
+    sim.run(RESPAWN_DELAY + 0.1, idle());
+    assert_eq!(respawned_count(&sim), 1);
+    assert_ne!(sim.character(), old);
+    let p = sim.root_pos();
+    assert!(finite(p) && p.z.abs() < 1.0, "respawned at {p:?}");
+
+    // Just past the limit on X, set by a script.
+    let root = sim.root();
+    sim.world
+        .set(
+            root,
+            "Position",
+            Value::Vector3(Vec3::new(WORLD_LIMIT * 1.5, 3.0, 0.0)),
+        )
+        .unwrap();
+    sim.run(0.1, idle());
+    assert_eq!(sim.died_count(), 2);
+
+    // A non-finite restored position is never written, and the character keeps living.
+    sim.run(RESPAWN_DELAY + 0.1, idle());
+    let ch = sim.character();
+    let before = sim.root_pos();
+    let mut s = sim.ctl.save_state(&sim.world, ch).unwrap();
+    s.position = Vec3::new(f64::NAN, f64::INFINITY, 0.0);
+    sim.ctl.restore_state(&mut sim.world, ch, &s);
+    assert_eq!(sim.root_pos(), before);
+    sim.run(0.1, idle());
+    assert_eq!(sim.died_count(), 2);
 }

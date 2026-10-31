@@ -20,6 +20,7 @@ wgpu = "30.0.1"
 toml = "1.1.8"
 
 [dev-dependencies]
+metallic_tokens.workspace = true
 png = "0.18.1"
 tempfile = "3"
 criterion.workspace = true

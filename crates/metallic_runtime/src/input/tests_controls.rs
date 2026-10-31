@@ -972,7 +972,11 @@ fn the_player_defaults_hold_menu_on_escape_and_start() {
     let r = Rig::new(PlayerOverrides::default());
     let menu = r.id(MENU_ACTION);
     let keys: Vec<_> = r.rt.bindings(menu).filter_map(|b| b.key).collect();
-    assert_eq!(keys, [Control::Escape, Control::ButtonStart]);
+    // Plus the touch overlay's menu button (#252), which phones use.
+    assert_eq!(
+        keys,
+        [Control::Escape, Control::ButtonStart, Control::TouchButton7]
+    );
     // From the scene too, and the rebind group defaults to Game when the scene names none.
     let mut w = metallic_core::World::new_with_services();
     let rs = w.root("ReplicatedStorage").unwrap();

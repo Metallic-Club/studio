@@ -26,7 +26,7 @@ fn focus(p: &mut ControlsPage, want: &Item) {
     let moves = |p: &ControlsPage| {
         !matches!(
             p.focused_item(),
-            Some(Item::Slider(_)) | Some(Item::GlyphStyle)
+            Some(Item::Slider(_)) | Some(Item::GlyphStyle) | Some(Item::StickMode)
         )
     };
     for _ in 0..80 {
@@ -211,9 +211,11 @@ fn tabs_cycle_and_the_hold_switch_toggles() {
     p.nav(Nav::NextTab);
     assert_eq!(p.tab(), Tab::Assist);
     p.nav(Nav::NextTab);
+    assert_eq!(p.tab(), Tab::Touch);
+    p.nav(Nav::NextTab);
     assert_eq!(p.tab(), Tab::Keyboard);
     p.nav(Nav::PrevTab);
-    assert_eq!(p.tab(), Tab::Assist);
+    assert_eq!(p.tab(), Tab::Touch);
     p.set_tab(Tab::Keyboard);
     let hold = Item::Hold(RUN.into());
     focus(&mut p, &hold);
@@ -254,4 +256,163 @@ fn overrides_for_unknown_actions_never_break_the_rows() {
     }
     assert!(p.toggles(RUN), "toggle every hold applies to Run");
     assert!(!p.toggles("Gone/Action") || p.base().action("Gone/Action").is_none());
+}
+
+/// #333: the Touch tab, by keyboard or gamepad only: stick mode, opacity and button size.
+#[test]
+fn the_touch_tab_sets_stick_opacity_and_size() {
+    use metallic_runtime::input::touch::StickMode;
+    let mut p = page();
+    for _ in 0..3 {
+        p.nav(Nav::NextTab);
+    }
+    assert_eq!(p.tab(), Tab::Touch);
+    let settings: Vec<_> = p
+        .rows()
+        .iter()
+        .filter_map(|r| match r.kind {
+            RowKind::Setting(name, _) => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        settings,
+        ["Stick", "Opacity", "Button size", "Large controls"]
+    );
+    // Stick: Right picks Fixed, Accept flips back, Left keeps Floating.
+    focus(&mut p, &Item::StickMode);
+    assert!(p.nav(Nav::Right).changed);
+    assert_eq!(p.touch().stick_mode, StickMode::Fixed);
+    assert!(!p.nav(Nav::Right).changed, "already Fixed");
+    assert!(p.nav(Nav::Accept).changed);
+    assert_eq!(p.touch().stick_mode, StickMode::Floating);
+    assert!(p.nav(Nav::Right).changed);
+    // Opacity: 5% steps, 25% to 100%.
+    focus(&mut p, &Item::Slider(SliderId::TouchOpacity));
+    assert!(!p.nav(Nav::Right).changed, "starts at 100%");
+    assert!(p.nav(Nav::Left).changed);
+    let (v, _, text) = p.slider(SliderId::TouchOpacity);
+    assert!((v - 0.95).abs() < 1e-4 && text == "95%", "{v} {text}");
+    for _ in 0..40 {
+        p.nav(Nav::Left);
+    }
+    assert_eq!(p.touch().opacity, 0.25, "clamped");
+    // Button size: 10% steps, 80% to 150%.
+    focus(&mut p, &Item::Slider(SliderId::TouchSize));
+    assert!(p.nav(Nav::Right).changed);
+    assert!((p.touch().size - 1.1).abs() < 1e-4);
+    for _ in 0..20 {
+        p.nav(Nav::Right);
+    }
+    assert_eq!(p.touch().size, 1.5, "clamped");
+    // Large controls.
+    focus(&mut p, &Item::Switch(SwitchId::LargeControls));
+    assert!(p.nav(Nav::Accept).changed);
+    assert!(p.touch().large_controls);
+    // Saved with the other overrides.
+    let back = PlayerOverrides::from_json(&p.overrides().to_json("x")).unwrap();
+    assert_eq!(back.touch, p.touch());
+    // Reset this tab puts the touch settings back and nothing else.
+    focus(&mut p, &Item::ResetTab);
+    p.nav(Nav::Accept);
+    p.nav(Nav::Left);
+    assert!(p.nav(Nav::Accept).changed);
+    assert!(p.overrides().is_empty());
+    assert_eq!(p.toast().map(|t| t.text.as_str()), Some("Touch reset"));
+}
+
+/// The screen point at `fx` (0 left, 1 right) across the cell of `item`, as the painter places
+/// the content at `origin`.
+fn cell_point(p: &ControlsPage, item: &Item, fx: f32) -> egui::Pos2 {
+    let r = p
+        .rows()
+        .iter()
+        .flat_map(|row| row.cells.iter())
+        .find(|c| &c.item == item)
+        .unwrap_or_else(|| panic!("no cell {item:?}"))
+        .rect;
+    egui::pos2(
+        p.origin.x + r.left() + fx * r.width(),
+        p.origin.y + r.center().y - p.scroll,
+    )
+}
+
+/// #339 review: the Touch tab with the mouse only. A click picks the clicked segment (never
+/// toggles), sliders jump to the click, the switch flips.
+#[test]
+fn the_touch_tab_works_with_the_mouse() {
+    use metallic_runtime::input::touch::StickMode;
+    let mut p = page();
+    p.origin = egui::pos2(100.0, 50.0);
+    p.viewport_h = 2000.0;
+    let tab = egui::Rect::from_min_size(egui::pos2(500.0, 10.0), egui::vec2(80.0, 30.0));
+    p.tab_rects = vec![(tab, Tab::Touch)];
+    p.click(tab.center());
+    assert_eq!(p.tab(), Tab::Touch);
+    // The stick's segments sit in the cell minus 44 pt on the right: 1/4 is Floating, the
+    // middle of the second half (of the segments) is Fixed.
+    let seg = |p: &ControlsPage, i: f32| {
+        let r = segments_rect(
+            p.rows()
+                .iter()
+                .flat_map(|row| row.cells.iter())
+                .find(|c| c.item == Item::StickMode)
+                .unwrap()
+                .rect,
+        );
+        egui::pos2(
+            p.origin.x + r.left() + (i + 0.5) * r.width() / 2.0,
+            p.origin.y + r.center().y - p.scroll,
+        )
+    };
+    assert!(
+        !p.click(seg(&p, 0.0)).changed,
+        "Floating is already selected"
+    );
+    assert_eq!(p.touch().stick_mode, StickMode::Floating);
+    assert!(p.click(seg(&p, 1.0)).changed);
+    assert_eq!(p.touch().stick_mode, StickMode::Fixed);
+    assert!(!p.click(seg(&p, 1.0)).changed, "a second click keeps Fixed");
+    assert_eq!(p.touch().stick_mode, StickMode::Fixed);
+    // Opacity: a click at the left end is 25%, at the right end 100%.
+    let opacity = Item::Slider(SliderId::TouchOpacity);
+    assert!(p.click(cell_point(&p, &opacity, 0.0)).changed);
+    assert_eq!(p.touch().opacity, 0.25);
+    p.click(cell_point(&p, &opacity, 1.0));
+    assert_eq!(p.touch().opacity, 1.0);
+    // Button size: halfway is 115%.
+    p.click(cell_point(&p, &Item::Slider(SliderId::TouchSize), 0.5));
+    assert!((p.touch().size - 1.15).abs() < 1e-3, "{}", p.touch().size);
+    // Large controls.
+    let large = Item::Switch(SwitchId::LargeControls);
+    assert!(p.click(cell_point(&p, &large, 0.5)).changed);
+    assert!(p.touch().large_controls);
+    assert!(p.click(cell_point(&p, &large, 0.5)).changed);
+    assert!(!p.touch().large_controls);
+}
+
+/// #339 review: the glyph style's segments select too.
+#[test]
+fn a_click_selects_the_clicked_glyph_style() {
+    let mut p = page();
+    p.set_tab(Tab::Gamepad);
+    p.origin = egui::pos2(0.0, 0.0);
+    p.viewport_h = 5000.0;
+    let r = segments_rect(
+        p.rows()
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .find(|c| c.item == Item::GlyphStyle)
+            .unwrap()
+            .rect,
+    );
+    let at = |i: f32| egui::pos2(r.left() + (i + 0.5) * r.width() / 3.0, r.center().y);
+    assert!(!p.click(at(0.0)).changed, "Auto is already selected");
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Auto);
+    assert!(p.click(at(2.0)).changed);
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Positions);
+    assert!(!p.click(at(2.0)).changed);
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Positions);
+    assert!(p.click(at(1.0)).changed);
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Letters);
 }

@@ -17,7 +17,7 @@ use mlua::Value;
 
 use crate::api::{
     self, ApiState, BoundResult, EventKind, HostShared, InputActionEvent, InputDevice, InputValue,
-    RemoteTarget,
+    RemoteTarget, TouchButtonInfo,
 };
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
@@ -253,6 +253,17 @@ impl ScriptHost {
     /// Sets `UserInputService.TouchEnabled`, `KeyboardEnabled` and `GamepadEnabled`.
     pub fn set_input_devices(&mut self, touch: bool, keyboard: bool, gamepad: bool) {
         self.shared.input.set_devices(touch, keyboard, gamepad);
+    }
+
+    /// Sets the touch overlay's buttons that `ContextActionService:GetButton` returns. Call it
+    /// when the overlay places its buttons again or shows or hides; unchanged lists cost a
+    /// comparison only.
+    pub fn set_touch_buttons(&mut self, buttons: &[TouchButtonInfo]) {
+        let mut mine = self.shared.input.touch_buttons.borrow_mut();
+        if mine.as_slice() != buttons {
+            mine.clear();
+            mine.extend_from_slice(buttons);
+        }
     }
 
     /// Sets `UserInputService.PreferredInput`.

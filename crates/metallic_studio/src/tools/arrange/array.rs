@@ -99,7 +99,8 @@ pub enum PathFill {
 /// Array-along-path options.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathOptions {
-    /// Points the curve passes through, in order (picked parts' positions or clicked points).
+    /// Points the curve passes through, in order (picked parts' positions or clicked points);
+    /// at most [`MAX_PATH_POINTS`](super::path::MAX_PATH_POINTS).
     pub points: Vec<DVec3>,
     /// Spacing or count.
     pub fill: PathFill,
@@ -409,9 +410,10 @@ pub fn along_path(objects: &[Object], opts: &PathOptions) -> Result<Plan, Arrang
     plan_copies(objects, &transforms, opts.group)
 }
 
-/// Where the linear drag handle sits: one step past the last copy.
+/// Where the linear drag handle sits: one step past the last copy. `count` is clamped to
+/// [`MAX_COPIES`], so it cannot overflow.
 pub fn handle_position(pivot: DVec3, step: DVec3, count: usize) -> DVec3 {
-    pivot + step * (count + 1) as f64
+    pivot + step * (count.min(MAX_COPIES) + 1) as f64
 }
 
 /// The count after dragging the handle `along` studs in the step's direction (negative removes
@@ -497,6 +499,7 @@ pub fn parse_angle(text: &str) -> Option<AngleField> {
 mod tests {
     use super::*;
     use crate::tools::arrange::math::{max_diff, rotation_from_orientation};
+    use crate::tools::arrange::path::MAX_PATH_POINTS;
     use crate::tools::arrange::testing::*;
 
     #[test]
@@ -1032,5 +1035,34 @@ mod tests {
             group: false,
         };
         assert!(along_path(&objs(&w, &[m]), &p).is_err());
+    }
+
+    #[test]
+    fn handle_position_clamps_huge_counts() {
+        let step = d(2.0, 0.0, 0.0);
+        let at_max = handle_position(DVec3::ZERO, step, MAX_COPIES);
+        assert_dvec(at_max, d(2.0 * (MAX_COPIES + 1) as f64, 0.0, 0.0));
+        assert_dvec(handle_position(DVec3::ZERO, step, usize::MAX), at_max);
+        assert_dvec(handle_position(DVec3::ZERO, step, MAX_COPIES + 1), at_max);
+    }
+
+    #[test]
+    fn paths_are_capped_at_max_points() {
+        let mut w = world();
+        let a = part(&mut w, v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        let path = |n: usize| PathOptions {
+            points: (0..n).map(|i| d(i as f64, 0.0, (i % 2) as f64)).collect(),
+            fill: PathFill::Count(4),
+            align: false,
+            up: Axis::Y,
+            group: false,
+        };
+        assert!(along_path(&objs(&w, &[a]), &path(MAX_PATH_POINTS)).is_ok());
+        match along_path(&objs(&w, &[a]), &path(MAX_PATH_POINTS + 1)) {
+            Err(ArrangeError::Invalid(msg)) => {
+                assert!(msg.contains("1024"), "message names the limit: {msg}");
+            }
+            other => panic!("expected the point cap, got {other:?}"),
+        }
     }
 }

@@ -14,6 +14,7 @@
 mod cframe;
 pub mod classes;
 mod instance;
+pub mod lighting;
 mod scene_file;
 mod signal;
 pub mod transform;
