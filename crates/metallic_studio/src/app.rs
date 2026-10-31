@@ -22,6 +22,9 @@ use crate::{StudioError, theme, widgets};
 const ICON_PNG: &[u8] = include_bytes!("../../../branding/placeholder-icon.png");
 /// Window title.
 pub const WINDOW_TITLE: &str = "Metallic Studio";
+/// The Profiler screenshot pauses on this frame, once there is history to show.
+const PROFILER_SHOT_FRAME: u64 = 150;
+
 /// The folder shown in screenshots (never touched).
 const DEMO_LOCATION: &str = r"C:\Games";
 
@@ -41,6 +44,8 @@ pub enum Scene {
     Editor,
     /// The same editor with Play running (the game drawn in the viewport).
     Playing,
+    /// Play running with the Profiler tab recording, paused on a frame (#23).
+    Profiler,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
     Colour,
     /// Every Studio widget in every state (design review).
@@ -70,7 +75,7 @@ pub struct Options {
 
 impl Options {
     /// Parses `--screenshot <path>`,
-    /// `--scene splash|start|firstrun|error|editor|playing|colour|components|settings|licences|licences-crates`,
+    /// `--scene splash|start|firstrun|error|editor|playing|profiler|colour|components|settings|licences|licences-crates`,
     /// `--theme graphite|titanium|light|system`, `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -96,6 +101,7 @@ impl Options {
                         "error" => Scene::Error,
                         "editor" => Scene::Editor,
                         "playing" => Scene::Playing,
+                        "profiler" => Scene::Profiler,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
                         "settings" => Scene::Settings,
@@ -211,6 +217,15 @@ impl StudioApp {
                     Phase::Opened(Box::new(e))
                 })
             }
+            Scene::Profiler if shot => {
+                EditorUi::demo(&templates_dir().join("parkour")).map_or(Phase::Start, |mut e| {
+                    e.state.start_play("play.start");
+                    e.bottom = crate::editor_ui::BottomTab::Profiler;
+                    e.profiler.set_recording(true);
+                    e.profiler.pause_at(PROFILER_SHOT_FRAME);
+                    Phase::Opened(Box::new(e))
+                })
+            }
             // The capture shows the second step running, like the mockup.
             Scene::Splash if shot => Phase::Splash(Splash::held_at(1)),
             _ if shot => Phase::Start,
@@ -229,7 +244,14 @@ impl StudioApp {
                 Scene::LicencesCrates if shot => Some(Licences::on_crates()),
                 _ => None,
             },
-            screenshot: options.screenshot.clone().map(ScreenshotJob::new),
+            screenshot: options.screenshot.clone().map(|path| {
+                let job = ScreenshotJob::new(path);
+                if options.scene == Scene::Profiler {
+                    job.after(PROFILER_SHOT_FRAME as u32 + 20)
+                } else {
+                    job
+                }
+            }),
             options,
             icon,
         };

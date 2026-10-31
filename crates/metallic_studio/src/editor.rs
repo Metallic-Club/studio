@@ -207,6 +207,8 @@ pub enum UiRequest {
     OpenSettings,
     /// Close the game, asking first when it has unsaved changes (Ctrl+W, like File > Close game).
     CloseGame,
+    /// Show the Profiler tab of the bottom panel (View > Profiler).
+    ShowProfiler,
 }
 
 /// Everything about one open game except the UI.

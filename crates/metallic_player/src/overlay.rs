@@ -1,4 +1,5 @@
 //! The in-game GUI pass: egui paints the game's PlayerGui over the 3D view.
+use crate::dev_overlay::DevOverlay;
 use crate::touch_overlay::TouchOverlay;
 use egui::{Id, LayerId, Order, ViewportInfo};
 use metallic_runtime::Game;
@@ -18,7 +19,7 @@ impl Overlay {
         Overlay { ctx, renderer }
     }
 
-    /// Paints the game's GUI, then the touch overlay, into `target` (already holding the 3D
+    /// Paints the game's GUI, then the touch overlay and the developer overlay, into `target` (already holding the 3D
     /// frame) of `size` pixels at `scale` pixels per point.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
@@ -30,6 +31,7 @@ impl Overlay {
         scale: f32,
         game: &Game,
         touch: Option<&mut TouchOverlay>,
+        dev: Option<&mut DevOverlay>,
     ) {
         let scale = if scale.is_finite() && scale > 0.0 {
             scale
@@ -57,6 +59,9 @@ impl Overlay {
         game.paint_gui(&painter);
         if let Some(touch) = touch {
             touch.paint(&self.ctx, scale);
+        }
+        if let Some(dev) = dev {
+            dev.paint(&self.ctx);
         }
         let mut full = self.ctx.end_pass();
         let primitives = self

@@ -68,6 +68,7 @@ pub mod pivot;
 pub mod play;
 pub mod png_image;
 pub mod preview;
+pub mod profiler;
 pub mod properties;
 pub mod recent;
 pub mod screenshot;

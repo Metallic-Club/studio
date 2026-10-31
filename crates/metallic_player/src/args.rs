@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 /// Usage text printed for bad arguments.
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
-[--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
+[--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--dev-overlay] [--frames N] \
 [--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist|touch] \
 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]";
 
@@ -27,6 +27,8 @@ pub struct Args {
     /// Play without a person: run forward in a circle and jump every few seconds (to measure the
     /// frame rate with the character animating).
     pub autopilot: bool,
+    /// Start with the developer overlay (Ctrl+Shift+F3) shown.
+    pub dev_overlay: bool,
     /// Frames to save as PNG: (frame number, path).
     pub captures: Vec<(u64, PathBuf)>,
     /// Camera position and look-at point for captured frames instead of the game camera (for
@@ -62,6 +64,7 @@ impl Args {
             quality: Quality::High,
             fps: false,
             autopilot: false,
+            dev_overlay: false,
             captures: Vec::new(),
             capture_view: None,
             input_script: None,
@@ -102,6 +105,7 @@ impl Args {
                     args.menu = Some(v);
                 }
                 "--autopilot" => args.autopilot = true,
+                "--dev-overlay" => args.dev_overlay = true,
                 "--frames" => {
                     let v = value("--frames")?;
                     args.frames = Some(v.parse().map_err(|_| format!("bad frame count `{v}`"))?);

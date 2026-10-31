@@ -2,6 +2,7 @@
 use crate::args::Args;
 use crate::capture::CaptureTarget;
 use crate::controls_store::Controls;
+use crate::dev_overlay::DevOverlay;
 use crate::devices::{GamepadSource, key_control, mouse_control};
 use crate::menu::{ControlsHint, Menu, MenuOutcome, UiLayer};
 use crate::overlay::Overlay;
@@ -24,7 +25,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// How long `--fps` measures.
@@ -105,7 +106,12 @@ pub fn run(
         menu_action,
         menu_presses,
         dead: false,
+        dev: DevOverlay::default(),
+        modifiers: ModifiersState::empty(),
     };
+    if args.dev_overlay {
+        app.dev.set_on(true);
+    }
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
         return ExitCode::from(1);
@@ -176,6 +182,10 @@ struct App {
     menu_presses: u32,
     /// The character was dead last frame (toggles clear on death).
     dead: bool,
+    /// The developer overlay (Ctrl+Shift+F3).
+    dev: DevOverlay,
+    /// Modifier keys held now, for the developer chords ([`dev_chord`]).
+    modifiers: ModifiersState,
 }
 
 impl App {
@@ -486,6 +496,7 @@ impl App {
                 scale,
                 &self.game,
                 Some(&mut self.touch),
+                Some(&mut self.dev),
             );
             let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
             gfx.ui.draw(
@@ -523,6 +534,7 @@ impl App {
                     scale,
                     &self.game,
                     Some(&mut self.touch),
+                    Some(&mut self.dev),
                 );
                 let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
                 gfx.ui.draw(
@@ -652,12 +664,22 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(true) => self.focused = true,
             WindowEvent::Focused(false) => {
                 self.focused = false;
+                self.modifiers = ModifiersState::empty();
                 let now = self.input_clock();
                 self.touch.release_all(&mut self.input, now);
                 self.input.release_all(now);
                 self.set_captured(false);
             }
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::KeyboardInput { event, .. } => {
+                // Ctrl+Shift+F3 also toggles the developer overlay. The key still goes to the game
+                // below: function keys are bindable, and the game never loses a key to a tool.
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && dev_chord(self.modifiers, event.physical_key) == Some(KeyCode::F3)
+                {
+                    self.dev.toggle();
+                }
                 // Every key, Escape included, is a control: Escape is the default binding of
                 // the `Menu` action, which opens the Player menu.
                 if let PhysicalKey::Code(code) = event.physical_key
@@ -773,5 +795,34 @@ impl ApplicationHandler for App {
         {
             gfx.window.request_redraw();
         }
+    }
+}
+
+/// The function key of a developer chord (Ctrl+Shift+F3 and friends), or `None` for any other
+/// key. Function keys are bindable game controls, so a tool reacts only with Ctrl and Shift held,
+/// and the key is still passed to the game: no key is ever taken from it.
+fn dev_chord(modifiers: ModifiersState, key: PhysicalKey) -> Option<KeyCode> {
+    let PhysicalKey::Code(code) = key else {
+        return None;
+    };
+    let chord = modifiers.control_key() && modifiers.shift_key() && !modifiers.alt_key();
+    (chord && matches!(code, KeyCode::F3 | KeyCode::F4 | KeyCode::F6)).then_some(code)
+}
+
+#[cfg(test)]
+mod dev_chord_tests {
+    use super::*;
+
+    #[test]
+    fn only_ctrl_shift_makes_a_dev_chord() {
+        let f3 = PhysicalKey::Code(KeyCode::F3);
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(dev_chord(cs, f3), Some(KeyCode::F3));
+        assert_eq!(dev_chord(ModifiersState::empty(), f3), None);
+        assert_eq!(dev_chord(ModifiersState::CONTROL, f3), None);
+        assert_eq!(dev_chord(ModifiersState::SHIFT, f3), None);
+        assert_eq!(dev_chord(cs | ModifiersState::ALT, f3), None);
+        assert_eq!(dev_chord(cs, PhysicalKey::Code(KeyCode::F5)), None);
+        assert_eq!(dev_chord(cs, PhysicalKey::Code(KeyCode::KeyW)), None);
     }
 }

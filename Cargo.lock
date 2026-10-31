@@ -3553,6 +3553,7 @@ dependencies = [
  "metallic_profiler",
  "metallic_render",
  "metallic_runtime",
+ "metallic_ui_theme",
  "png",
  "wgpu",
  "winit",

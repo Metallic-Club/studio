@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! metallic-player <project dir> [--scene <file relative to project>] [--headless --frames N]
-//!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
+//!                 [--quality low|high] [--fps] [--autopilot] [--frames N] [--dev-overlay]
 //!                 [--capture FRAME:PNG]... [--input-script <file>]
 //!                 [--no-overrides] [--menu main|keyboard|gamepad|assist|touch]
 //!                 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]
@@ -34,6 +34,7 @@ mod args;
 mod capture;
 mod controls_store;
 mod data_dir;
+mod dev_overlay;
 mod devices;
 mod menu;
 mod overlay;
