@@ -1,0 +1,323 @@
+{
+  "base": "238c6fb8af7a05f031cb29930e59c8afe57cf0fa",
+  "allocation_results": {
+    "baseline": {
+      "source": "97d2b70b66d1b1911db02a1590f3ace7bd4b7c70",
+      "operations_per_case": 1000,
+      "rows": {
+        "changed": {
+          "allocations": 1000,
+          "requested_bytes": 8000
+        },
+        "noop": {
+          "allocations": 1000,
+          "requested_bytes": 8000
+        },
+        "default_reset": {
+          "allocations": 0,
+          "requested_bytes": 0
+        },
+        "unrelated_listener": {
+          "allocations": 2000,
+          "requested_bytes": 16000
+        },
+        "matching_listener": {
+          "allocations": 2000,
+          "requested_bytes": 16000
+        }
+      },
+      "log_sha256": "63e74be7a095eeda6bcabdb24b9cc46aea99be8c86462793dc097529c10d205c"
+    },
+    "fixed": {
+      "source": "b64bd23b8f189fa1b4e4f4e92a5ff99d6aec4b4b",
+      "operations_per_case": 1000,
+      "rows": {
+        "changed": {
+          "allocations": 0,
+          "requested_bytes": 0
+        },
+        "noop": {
+          "allocations": 0,
+          "requested_bytes": 0
+        },
+        "default_reset": {
+          "allocations": 0,
+          "requested_bytes": 0
+        },
+        "unrelated_listener": {
+          "allocations": 1000,
+          "requested_bytes": 8000
+        },
+        "matching_listener": {
+          "allocations": 1000,
+          "requested_bytes": 8000
+        }
+      },
+      "log_sha256": "0e0ca91af8d2f723199d555325676604910f2d1a7cf5454233b6b85a7203b905"
+    }
+  },
+  "timing_inputs": {
+    "baseline": {
+      "source": "56d4585a87e4a5e2b505613c285e222d6c2a70b2",
+      "base": "238c6fb8af7a05f031cb29930e59c8afe57cf0fa",
+      "production_blob": "fb24317ae027f84b8abecb73e2293a891a230cca",
+      "probe_sha256": "e643cc85bb2e21d5ad6f7891880f4a4894ace546b1cdb1379be95f02f674c47c",
+      "executable_sha256": "e50c8995120e1b4d6820e6c4002dcc7e2e47e7bcc469c05df988b35c39e35503",
+      "allocator": "default system; no counting hook"
+    },
+    "fixed": {
+      "source": "b64bd23b8f189fa1b4e4f4e92a5ff99d6aec4b4b",
+      "base": "238c6fb8af7a05f031cb29930e59c8afe57cf0fa",
+      "production_blob": "825ef862af1bb738d861256c05450cbbe801f49c",
+      "probe_sha256": "e643cc85bb2e21d5ad6f7891880f4a4894ace546b1cdb1379be95f02f674c47c",
+      "executable_sha256": "645915808eb37520a6dfa1fc53e57ba8823987a4c58b756077d992ffc491f6e5",
+      "allocator": "default system; no counting hook"
+    }
+  },
+  "timing_plan": {
+    "warmups_per_side": 1,
+    "pairs": 8,
+    "pair_order": "baseline/fixed on odd pairs; fixed/baseline on even pairs",
+    "operations_per_loop": 100000,
+    "hashes_verified_before_and_after_every_trial": true,
+    "no_cargo_or_rustc_at_entry": true
+  },
+  "host_before": {
+    "utc": "2026-10-31T02:44:20.126327+00:00",
+    "busy_percent": 38.802083333333336
+  },
+  "host_after": {
+    "utc": "2026-10-31T02:44:21.942462+00:00",
+    "busy_percent": 34.473684210526315
+  },
+  "warmups": [
+    {
+      "key": "baseline",
+      "label": "warmup",
+      "operations": 100000,
+      "get_ns": 24.074,
+      "borrowed_get_ns": 18.08,
+      "set_ns": 212.317
+    },
+    {
+      "key": "fixed",
+      "label": "warmup",
+      "operations": 100000,
+      "get_ns": 19.17,
+      "borrowed_get_ns": 11.299,
+      "set_ns": 68.236
+    }
+  ],
+  "runs": [
+    {
+      "key": "baseline",
+      "label": "pair-01",
+      "operations": 100000,
+      "get_ns": 28.298,
+      "borrowed_get_ns": 16.551,
+      "set_ns": 154.701,
+      "pair": 1
+    },
+    {
+      "key": "fixed",
+      "label": "pair-01",
+      "operations": 100000,
+      "get_ns": 30.053,
+      "borrowed_get_ns": 11.066,
+      "set_ns": 60.465,
+      "pair": 1
+    },
+    {
+      "key": "fixed",
+      "label": "pair-02",
+      "operations": 100000,
+      "get_ns": 18.459,
+      "borrowed_get_ns": 10.893,
+      "set_ns": 68.291,
+      "pair": 2
+    },
+    {
+      "key": "baseline",
+      "label": "pair-02",
+      "operations": 100000,
+      "get_ns": 18.206,
+      "borrowed_get_ns": 13.929,
+      "set_ns": 130.539,
+      "pair": 2
+    },
+    {
+      "key": "baseline",
+      "label": "pair-03",
+      "operations": 100000,
+      "get_ns": 18.118,
+      "borrowed_get_ns": 10.81,
+      "set_ns": 105.152,
+      "pair": 3
+    },
+    {
+      "key": "fixed",
+      "label": "pair-03",
+      "operations": 100000,
+      "get_ns": 19.247,
+      "borrowed_get_ns": 10.788,
+      "set_ns": 77.895,
+      "pair": 3
+    },
+    {
+      "key": "fixed",
+      "label": "pair-04",
+      "operations": 100000,
+      "get_ns": 22.002,
+      "borrowed_get_ns": 14.487,
+      "set_ns": 70.528,
+      "pair": 4
+    },
+    {
+      "key": "baseline",
+      "label": "pair-04",
+      "operations": 100000,
+      "get_ns": 18.725,
+      "borrowed_get_ns": 10.919,
+      "set_ns": 143.118,
+      "pair": 4
+    },
+    {
+      "key": "baseline",
+      "label": "pair-05",
+      "operations": 100000,
+      "get_ns": 23.229,
+      "borrowed_get_ns": 12.593,
+      "set_ns": 201.722,
+      "pair": 5
+    },
+    {
+      "key": "fixed",
+      "label": "pair-05",
+      "operations": 100000,
+      "get_ns": 36.53,
+      "borrowed_get_ns": 14.109,
+      "set_ns": 86.44,
+      "pair": 5
+    },
+    {
+      "key": "fixed",
+      "label": "pair-06",
+      "operations": 100000,
+      "get_ns": 21.555,
+      "borrowed_get_ns": 14.09,
+      "set_ns": 89.815,
+      "pair": 6
+    },
+    {
+      "key": "baseline",
+      "label": "pair-06",
+      "operations": 100000,
+      "get_ns": 19.964,
+      "borrowed_get_ns": 14.647,
+      "set_ns": 104.282,
+      "pair": 6
+    },
+    {
+      "key": "baseline",
+      "label": "pair-07",
+      "operations": 100000,
+      "get_ns": 19.669,
+      "borrowed_get_ns": 11.863,
+      "set_ns": 104.06,
+      "pair": 7
+    },
+    {
+      "key": "fixed",
+      "label": "pair-07",
+      "operations": 100000,
+      "get_ns": 18.832,
+      "borrowed_get_ns": 12.423,
+      "set_ns": 57.618,
+      "pair": 7
+    },
+    {
+      "key": "fixed",
+      "label": "pair-08",
+      "operations": 100000,
+      "get_ns": 19.955,
+      "borrowed_get_ns": 10.818,
+      "set_ns": 52.991,
+      "pair": 8
+    },
+    {
+      "key": "baseline",
+      "label": "pair-08",
+      "operations": 100000,
+      "get_ns": 18.17,
+      "borrowed_get_ns": 11.832,
+      "set_ns": 102.933,
+      "pair": 8
+    }
+  ],
+  "summary": {
+    "get_ns": {
+      "baseline_median": 19.197000000000003,
+      "baseline_min": 18.118,
+      "baseline_max": 28.298,
+      "fixed_median": 20.755,
+      "fixed_min": 18.459,
+      "fixed_max": 36.53,
+      "paired_ratio_median": 1.071003584684024,
+      "paired_ratio_min": 0.9574457267781789,
+      "paired_ratio_max": 1.572603211502863,
+      "all_pair_ratios": [
+        1.062018517209697,
+        1.01389651763155,
+        1.062313721161276,
+        1.175006675567423,
+        1.572603211502863,
+        1.0796934482067722,
+        0.9574457267781789,
+        1.0982388552559161
+      ]
+    },
+    "borrowed_get_ns": {
+      "baseline_median": 12.228,
+      "baseline_min": 10.81,
+      "baseline_max": 16.551,
+      "fixed_median": 11.7445,
+      "fixed_min": 10.788,
+      "fixed_max": 14.487,
+      "paired_ratio_median": 0.9799682910948982,
+      "paired_ratio_min": 0.6686000845870341,
+      "paired_ratio_max": 1.3267698507189303,
+      "all_pair_ratios": [
+        0.6686000845870341,
+        0.7820374757699763,
+        0.9979648473635523,
+        1.3267698507189303,
+        1.1203843405066307,
+        0.9619717348262442,
+        1.0472055972351009,
+        0.9143002028397565
+      ]
+    },
+    "set_ns": {
+      "baseline_median": 117.84549999999999,
+      "baseline_min": 102.933,
+      "baseline_max": 201.722,
+      "fixed_median": 69.40950000000001,
+      "fixed_min": 52.991,
+      "fixed_max": 89.815,
+      "paired_ratio_median": 0.5189784721823842,
+      "paired_ratio_min": 0.39085073787499763,
+      "paired_ratio_max": 0.8612704014115571,
+      "all_pair_ratios": [
+        0.39085073787499763,
+        0.5231463394081463,
+        0.7407847687157638,
+        0.49279615422239,
+        0.4285105243850447,
+        0.8612704014115571,
+        0.5536997885835095,
+        0.5148106049566222
+      ]
+    }
+  },
+  "interpretation": "Warmed scalar key allocation eliminated. Setter lower in all eight pairs, but read controls vary widely; no reliable speedup, universal wall-time threshold, clean-host or whole-engine zero-allocation claim."
+}

@@ -1,5 +1,12 @@
 # #99 Reuse stored property keys
 
+## Current status
+
+Fixed source `b64bd23` passed focused debug/release allocation and semantic checks. The planned eight paired
+release observations are complete and retained with wide control ranges; no reliable timing gain is claimed.
+Mandatory workspace and strict Clippy gates are queued. Baseline/fixed release targets are frozen and all
+local Rust is idle. Full details and source checkpoints follow.
+
 ## Scope and base
 
 Claimed by Codex studio_core on branch `studio/99-reuse-property-keys`, exact base
@@ -69,3 +76,21 @@ target and the original instrumented baseline remain retained. No target artifac
 bytes match SHA256 `e643cc85bb2e21d5ad6f7891880f4a4894ace546b1cdb1379be95f02f674c47c`. Candidate timing will
 use another release target, and workspace gates will use `99-dev`, preventing later guard owner/profile
 transitions from cleaning retained release artifacts. No actual timing has executed yet.
+
+## Executed fixed allocation and timing observations
+
+Fixed source `b64bd23` passed all three allocation/semantic/unwind tests in debug (31.33s fresh build) and
+release. Changed and no-op Position rows are zero allocations/bytes; default resets remain zero; unrelated
+and matching listeners are each 1,000 / 8,000, preserving the explicitly remaining signal lookup cost.
+The fixed release prebuild passed in 1m01s. Both release targets are frozen; gates use separate `99-dev`.
+
+After explicit release from the other worker and a no-Cargo/rustc entry snapshot, the system-allocator probes
+ran exactly one warm-up each plus eight alternating pairs. Every before/after executable hash matched,
+including the final trial. Timing exit was zero and the window was immediately released. Median paired
+fixed/baseline ratios: owned get 1.0710 (0.9574–1.5726), borrowed get 0.9800 (0.6686–1.3268), setter 0.5190
+(0.3909–0.8613). Although all setter pairs were lower, the read controls moved widely. No reliable speedup,
+clean-host or universal wall-time pass is claimed. CPU samples were 38.8%/34.5% busy, with no causal claim.
+
+See `docs/research/2026-10-30-property-write-allocations.md` and its linked complete JSON evidence. Root's
+independent read-only review of `b64bd23` found no actionable concern; it ran no tests. Mandatory full workspace,
+strict Clippy/licenses/fmt remain next, after an explicit build/timing-window grant. No own merge or force push.
