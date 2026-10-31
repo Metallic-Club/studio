@@ -574,6 +574,10 @@ impl Game {
             self.scripts.touched(a, b);
             self.scripts.touched(b, a);
         }
+        for (a, b) in self.physics.drain_touch_ended() {
+            self.scripts.touch_ended(a, b);
+            self.scripts.touch_ended(b, a);
+        }
     }
 
     /// Re-syncs changed part signatures and character membership; pose-only changes need no sync.

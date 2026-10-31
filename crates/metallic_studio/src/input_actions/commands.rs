@@ -283,7 +283,9 @@ impl EditStep {
         Ok(map)
     }
 
-    fn remap(&mut self, map: &IdMap) {
+    /// Rewrites the ids of every edit with `map` (old id to new id), after another step rebuilt
+    /// instances this step refers to.
+    pub fn remap(&mut self, map: &IdMap) {
         remap_all(&mut self.edits, map);
     }
 }

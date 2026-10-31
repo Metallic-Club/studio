@@ -278,3 +278,274 @@ fn undoing_everything_after_the_cap_is_still_dirty() {
     s.undo();
     assert!(!s.is_dirty());
 }
+
+#[test]
+fn attribute_commands_undo_and_redo_with_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let add = Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Nil,
+        new: Value::Number(3.0),
+    };
+    assert_eq!(add.name(&s.world), "Set attribute Speed of A");
+    s.apply(add).unwrap();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(3.0)));
+    s.apply(Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Number(3.0),
+        new: Value::Number(4.0),
+    })
+    .unwrap();
+    let remove = Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Number(4.0),
+        new: Value::Nil,
+    };
+    assert_eq!(remove.name(&s.world), "Remove attribute Speed of A");
+    s.apply(remove).unwrap();
+    assert_eq!(s.world.attribute(a, "Speed"), None);
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(4.0)));
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(3.0)));
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), None);
+    s.redo();
+    s.redo();
+    s.redo();
+    assert_eq!(s.world.attribute(a, "Speed"), None);
+    // A bad name is refused and leaves nothing on the undo stack.
+    let before = s.history.len();
+    assert!(
+        s.apply(Command::SetAttribute {
+            id: a,
+            name: "bad name".into(),
+            old: Value::Nil,
+            new: Value::Bool(true),
+        })
+        .is_err()
+    );
+    assert_eq!(s.history.len(), before);
+}
+
+#[test]
+fn attributes_follow_delete_undo_and_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    s.apply(Command::SetAttribute {
+        id: a,
+        name: "Team".into(),
+        old: Value::Nil,
+        new: Value::String("Red".into()),
+    })
+    .unwrap();
+    s.selection.select_only(a);
+    s.duplicate_selection();
+    let copy = s.selection.ids()[0];
+    assert_ne!(copy, a);
+    assert_eq!(
+        s.world.attribute(copy, "Team"),
+        Some(&Value::String("Red".into()))
+    );
+    s.selection.select_only(a);
+    s.delete_selection();
+    s.undo();
+    assert_eq!(
+        s.world.attribute(a, "Team"),
+        Some(&Value::String("Red".into()))
+    );
+}
+
+#[test]
+fn tag_commands_undo_and_redo_with_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let add = Command::SetTag {
+        id: a,
+        tag: "Lava".into(),
+        on: true,
+        changed: false,
+    };
+    assert_eq!(add.name(&s.world), "Add tag Lava to A");
+    s.apply(add).unwrap();
+    assert!(s.world.has_tag(a, "Lava"));
+    assert_eq!(s.world.tagged("Lava"), [a]);
+    let remove = Command::SetTag {
+        id: a,
+        tag: "Lava".into(),
+        on: false,
+        changed: false,
+    };
+    assert_eq!(remove.name(&s.world), "Remove tag Lava from A");
+    s.apply(remove).unwrap();
+    assert!(!s.world.has_tag(a, "Lava"));
+    s.undo();
+    assert!(s.world.has_tag(a, "Lava"));
+    s.undo();
+    assert!(!s.world.has_tag(a, "Lava"));
+    s.redo();
+    assert!(s.world.has_tag(a, "Lava"));
+    assert!(
+        s.apply(Command::SetTag {
+            id: a,
+            tag: String::new(),
+            on: true,
+            changed: false,
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn tags_follow_delete_undo_and_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    s.apply(Command::SetTag {
+        id: a,
+        tag: "Checkpoint".into(),
+        on: true,
+        changed: false,
+    })
+    .unwrap();
+    s.selection.select_only(a);
+    s.duplicate_selection();
+    assert_eq!(
+        s.world.tagged("Checkpoint").len(),
+        2,
+        "the copy is tagged too"
+    );
+    s.selection.select_only(a);
+    s.delete_selection();
+    assert_eq!(
+        s.world.tagged("Checkpoint").len(),
+        1,
+        "deleting takes it out"
+    );
+    s.undo();
+    assert_eq!(s.world.tagged("Checkpoint").len(), 2, "undo puts it back");
+}
+
+#[test]
+fn dragging_a_number_attribute_is_one_undo_step() {
+    use metallic_studio::properties::Properties;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    s.apply(Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Nil,
+        new: Value::Number(1.0),
+    })
+    .unwrap();
+    let before = s.history.len();
+    let mut p = Properties::new();
+    for i in 1..=100 {
+        p.scrub_attribute(&mut s, a, "Speed", 1.0 + f64::from(i) * 0.1);
+        assert_eq!(
+            s.history.len(),
+            before,
+            "nothing is recorded during the drag"
+        );
+    }
+    // The world shows the live value.
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(11.0)));
+    p.end_attribute_scrub(&mut s);
+    assert_eq!(s.history.len(), before + 1, "one step for the whole drag");
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(1.0)));
+    s.redo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(11.0)));
+    // A drag that ends where it started records nothing; a second end does nothing.
+    let before = s.history.len();
+    p.scrub_attribute(&mut s, a, "Speed", 5.0);
+    p.scrub_attribute(&mut s, a, "Speed", 11.0);
+    p.end_attribute_scrub(&mut s);
+    p.end_attribute_scrub(&mut s);
+    assert_eq!(s.history.len(), before);
+}
+
+#[test]
+fn undoing_a_redundant_add_tag_keeps_the_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let tag = |on| Command::SetTag {
+        id: a,
+        tag: "Lava".into(),
+        on,
+        changed: false,
+    };
+    s.apply(tag(true)).unwrap();
+    assert!(s.world.has_tag(a, "Lava"));
+    // Adding it again changes nothing; undoing that second add must not remove the tag.
+    s.apply(tag(true)).unwrap();
+    s.undo();
+    assert!(
+        s.world.has_tag(a, "Lava"),
+        "the first add is still in effect"
+    );
+    s.redo();
+    assert!(s.world.has_tag(a, "Lava"));
+    s.undo();
+    s.undo();
+    assert!(!s.world.has_tag(a, "Lava"));
+    // The same for a redundant remove.
+    s.apply(tag(false)).unwrap();
+    s.undo();
+    assert!(
+        !s.world.has_tag(a, "Lava"),
+        "undoing a no-op remove adds nothing"
+    );
+    s.apply(tag(true)).unwrap();
+    s.apply(tag(false)).unwrap();
+    s.undo();
+    assert!(s.world.has_tag(a, "Lava"), "a real remove is still undone");
+}
+
+#[test]
+fn the_edit_world_does_not_keep_attribute_and_tag_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let start = s.world.attribute_cursor();
+    let tags = s.world.tag_cursor();
+    for i in 0..300 {
+        s.apply(Command::SetAttribute {
+            id: a,
+            name: "N".into(),
+            old: if i == 0 {
+                Value::Nil
+            } else {
+                Value::Number(f64::from(i - 1))
+            },
+            new: Value::Number(f64::from(i)),
+        })
+        .unwrap();
+    }
+    s.apply(Command::SetTag {
+        id: a,
+        tag: "T".into(),
+        on: true,
+        changed: false,
+    })
+    .unwrap();
+    assert_eq!(
+        s.world.attribute_changes_since(start).0,
+        metallic_core::AttributeChanges::Overflow,
+        "nothing reads the log, so the edits were not kept"
+    );
+    assert_eq!(
+        s.world.tag_changes_since(tags).0,
+        metallic_core::TagChanges::Overflow
+    );
+    assert!(s.world.change_log_capacity() < 10_000);
+}
