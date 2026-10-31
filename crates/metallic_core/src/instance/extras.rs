@@ -21,8 +21,13 @@ pub const MAX_ATTRIBUTE_NAME: usize = 100;
 pub const MAX_ATTRIBUTE_STRING: usize = 65_536;
 /// Most attributes one instance can hold.
 pub const MAX_ATTRIBUTES: usize = 1024;
-/// Most attribute changes the log keeps before the oldest half is dropped.
-const LOG_LIMIT: usize = 4096;
+/// Most attribute and tag changes a log keeps before the oldest half is dropped. Readers that
+/// follow the log trim it ([`World::trim_attribute_log`]), so this only matters when changes
+/// pile up unread (hundreds of thousands in one step).
+const LOG_LIMIT: usize = 262_144;
+/// Most bytes of attribute data (names, values; tags too) one world holds, 16 MiB. Scripts
+/// allocate this outside the VM's own memory cap, so it is budgeted here.
+pub const MAX_EXTRAS_BYTES: usize = 16 * 1024 * 1024;
 
 /// What a node holds besides class, parent, children and registry properties.
 #[derive(Clone, Default)]
@@ -106,6 +111,15 @@ impl<T: Clone> ChangeLog<T> {
                 .collect(),
         )
     }
+
+    /// Drops the entries up to and including sequence number `seq` (every reader is past them).
+    fn trim_to(&mut self, seq: u64) {
+        let cut = self.entries.partition_point(|(s, _)| *s <= seq);
+        if cut > 0 {
+            self.floor = self.entries[cut - 1].0;
+            self.entries.drain(..cut);
+        }
+    }
 }
 
 pub(super) type AttributeLog = ChangeLog<AttributeChange>;
@@ -152,6 +166,33 @@ pub fn check_attribute_value(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// What an attribute costs against [`MAX_EXTRAS_BYTES`]: its name, its value, a fixed overhead.
+fn entry_cost(name: &str, value: &Value) -> usize {
+    let value = match value {
+        Value::String(s) => s.len(),
+        Value::CFrame(_) => 96,
+        Value::Vector3(_) | Value::Color3(_) => 24,
+        Value::UDim2(_) => 32,
+        _ => 8,
+    };
+    name.len() + value + 48
+}
+
+/// What the attributes of one node cost against [`MAX_EXTRAS_BYTES`].
+pub(super) fn extras_cost(extras: &Extras) -> usize {
+    extras
+        .attributes
+        .iter()
+        .map(|(name, value)| entry_cost(name, value))
+        .sum::<usize>()
+        + extras.tags.iter().map(|t| tag_cost(t)).sum::<usize>()
+}
+
+/// What a tag costs against [`MAX_EXTRAS_BYTES`].
+fn tag_cost(tag: &str) -> usize {
+    tag.len() + 32
+}
+
 fn invalid(name: &str, reason: String) -> CoreError {
     CoreError::InvalidValue {
         property: name.to_string(),
@@ -178,6 +219,21 @@ impl World {
         check_attribute_name(name).map_err(|e| invalid(name, e))?;
         check_attribute_value(&value).map_err(|e| invalid(name, e))?;
         let removing = matches!(value, Value::Nil);
+        let old_cost = self.attribute(id, name).map_or(0, |v| entry_cost(name, v));
+        let new_cost = if removing {
+            0
+        } else {
+            entry_cost(name, &value)
+        };
+        if !removing && self.extras_bytes - old_cost + new_cost > MAX_EXTRAS_BYTES {
+            return Err(invalid(
+                name,
+                format!(
+                    "the attribute data budget of a world is {} MiB",
+                    MAX_EXTRAS_BYTES >> 20
+                ),
+            ));
+        }
         let node = self.node_mut(id).ok_or(CoreError::InvalidInstance)?;
         if removing {
             let Some(extras) = node.extras.as_mut() else {
@@ -206,6 +262,7 @@ impl World {
             }
             extras.attributes.insert(name.to_string(), value);
         }
+        self.extras_bytes = self.extras_bytes - old_cost + new_cost;
         self.record(id);
         self.attribute_log.push(AttributeChange {
             id,
@@ -225,6 +282,40 @@ impl World {
             .and_then(|n| n.extras.as_ref())
             .into_iter()
             .flat_map(|e| e.attributes.iter().map(|(k, v)| (k.as_str(), v)))
+    }
+
+    /// Drops the attribute log entries every reader has already read: `readers` are the cursors
+    /// of all of them (cursors of other worlds are ignored); with none, nothing is dropped. The
+    /// script host calls this after it delivered a step, so the log only holds unread changes.
+    pub fn trim_attribute_log(&mut self, readers: &[AttributeCursor]) {
+        let uid = self.uid;
+        let oldest = readers
+            .iter()
+            .filter(|c| c.world == uid)
+            .map(|c| c.seq)
+            .min();
+        if let Some(seq) = oldest {
+            self.attribute_log.trim_to(seq);
+        }
+    }
+
+    /// How many bytes of attribute data the world holds, against [`MAX_EXTRAS_BYTES`].
+    pub fn extras_bytes(&self) -> usize {
+        self.extras_bytes
+    }
+
+    /// What the attributes of `id` and its descendants cost.
+    pub(super) fn subtree_extras_cost(&self, id: InstanceId) -> usize {
+        let mut total = 0;
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            let Some(node) = self.node(cur) else { continue };
+            if let Some(extras) = &node.extras {
+                total += extras_cost(extras);
+            }
+            stack.extend(node.children.iter().copied());
+        }
+        total
     }
 
     /// The current end of the attribute log.
@@ -318,11 +409,21 @@ impl World {
             return Err(CoreError::InvalidInstance);
         }
         check_tag(tag).map_err(|e| invalid(tag, e))?;
-        let node = self.node_mut(id).ok_or(CoreError::InvalidInstance)?;
-        let extras = node.extras.get_or_insert_with(Default::default);
-        if extras.tags.contains(tag) {
+        if self.has_tag(id, tag) {
             return Ok(());
         }
+        let cost = tag_cost(tag);
+        if self.extras_bytes + cost > MAX_EXTRAS_BYTES {
+            return Err(invalid(
+                tag,
+                format!(
+                    "the attribute and tag data budget of a world is {} MiB",
+                    MAX_EXTRAS_BYTES >> 20
+                ),
+            ));
+        }
+        let node = self.node_mut(id).ok_or(CoreError::InvalidInstance)?;
+        let extras = node.extras.get_or_insert_with(Default::default);
         if extras.tags.len() >= MAX_TAGS {
             if extras.is_empty() {
                 node.extras = None;
@@ -333,6 +434,7 @@ impl World {
             ));
         }
         extras.tags.insert(tag.to_string());
+        self.extras_bytes += cost;
         self.tag_index
             .entry(tag.to_string())
             .or_default()
@@ -362,6 +464,7 @@ impl World {
         if extras.is_empty() {
             node.extras = None;
         }
+        self.extras_bytes -= tag_cost(tag);
         if let Some(set) = self.tag_index.get_mut(tag) {
             set.remove(&id);
             if set.is_empty() {
@@ -431,6 +534,20 @@ impl World {
             }
         }
         false
+    }
+
+    /// Drops the tag log entries every reader has already read; see
+    /// [`World::trim_attribute_log`].
+    pub fn trim_tag_log(&mut self, readers: &[TagCursor]) {
+        let uid = self.uid;
+        let oldest = readers
+            .iter()
+            .filter(|c| c.world == uid)
+            .map(|c| c.seq)
+            .min();
+        if let Some(seq) = oldest {
+            self.tag_log.trim_to(seq);
+        }
     }
 
     /// The current end of the tag log.

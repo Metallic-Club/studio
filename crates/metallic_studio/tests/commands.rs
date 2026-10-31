@@ -371,6 +371,7 @@ fn tag_commands_undo_and_redo_with_names() {
         id: a,
         tag: "Lava".into(),
         on: true,
+        changed: false,
     };
     assert_eq!(add.name(&s.world), "Add tag Lava to A");
     s.apply(add).unwrap();
@@ -380,6 +381,7 @@ fn tag_commands_undo_and_redo_with_names() {
         id: a,
         tag: "Lava".into(),
         on: false,
+        changed: false,
     };
     assert_eq!(remove.name(&s.world), "Remove tag Lava from A");
     s.apply(remove).unwrap();
@@ -395,6 +397,7 @@ fn tag_commands_undo_and_redo_with_names() {
             id: a,
             tag: String::new(),
             on: true,
+            changed: false,
         })
         .is_err()
     );
@@ -409,6 +412,7 @@ fn tags_follow_delete_undo_and_duplicate() {
         id: a,
         tag: "Checkpoint".into(),
         on: true,
+        changed: false,
     })
     .unwrap();
     s.selection.select_only(a);
@@ -427,4 +431,82 @@ fn tags_follow_delete_undo_and_duplicate() {
     );
     s.undo();
     assert_eq!(s.world.tagged("Checkpoint").len(), 2, "undo puts it back");
+}
+
+#[test]
+fn dragging_a_number_attribute_is_one_undo_step() {
+    use metallic_studio::properties::Properties;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    s.apply(Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Nil,
+        new: Value::Number(1.0),
+    })
+    .unwrap();
+    let before = s.history.len();
+    let mut p = Properties::new();
+    for i in 1..=100 {
+        p.scrub_attribute(&mut s, a, "Speed", 1.0 + f64::from(i) * 0.1);
+        assert_eq!(
+            s.history.len(),
+            before,
+            "nothing is recorded during the drag"
+        );
+    }
+    // The world shows the live value.
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(11.0)));
+    p.end_attribute_scrub(&mut s);
+    assert_eq!(s.history.len(), before + 1, "one step for the whole drag");
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(1.0)));
+    s.redo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(11.0)));
+    // A drag that ends where it started records nothing; a second end does nothing.
+    let before = s.history.len();
+    p.scrub_attribute(&mut s, a, "Speed", 5.0);
+    p.scrub_attribute(&mut s, a, "Speed", 11.0);
+    p.end_attribute_scrub(&mut s);
+    p.end_attribute_scrub(&mut s);
+    assert_eq!(s.history.len(), before);
+}
+
+#[test]
+fn undoing_a_redundant_add_tag_keeps_the_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let tag = |on| Command::SetTag {
+        id: a,
+        tag: "Lava".into(),
+        on,
+        changed: false,
+    };
+    s.apply(tag(true)).unwrap();
+    assert!(s.world.has_tag(a, "Lava"));
+    // Adding it again changes nothing; undoing that second add must not remove the tag.
+    s.apply(tag(true)).unwrap();
+    s.undo();
+    assert!(
+        s.world.has_tag(a, "Lava"),
+        "the first add is still in effect"
+    );
+    s.redo();
+    assert!(s.world.has_tag(a, "Lava"));
+    s.undo();
+    s.undo();
+    assert!(!s.world.has_tag(a, "Lava"));
+    // The same for a redundant remove.
+    s.apply(tag(false)).unwrap();
+    s.undo();
+    assert!(
+        !s.world.has_tag(a, "Lava"),
+        "undoing a no-op remove adds nothing"
+    );
+    s.apply(tag(true)).unwrap();
+    s.apply(tag(false)).unwrap();
+    s.undo();
+    assert!(s.world.has_tag(a, "Lava"), "a real remove is still undone");
 }

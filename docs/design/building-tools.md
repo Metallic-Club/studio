@@ -723,8 +723,11 @@ Sandbox template). Two parts:
 | `colour-hue` | Colour changed on 3+ parts one at a time | "Select them together; Alt-drag the hue ring to recolour and keep each shade." |
 | `style` | First time the Look picker is used | "You can also give one object its own style: select it and press L." |
 
-- Rules: never during a drag, Play or camera flight; at most one hint per 3 minutes; Esc dismisses; Settings >
-  "Show tips" turns all off; "Reset tips" brings them back. State lives in user config `hints.ron`.
+- Rules: never during a drag, Play or camera flight; at most one hint per 3 minutes; Esc dismisses the card while
+  the pointer is on it or one of its buttons has focus (elsewhere Esc keeps its editor meaning: clear the selection,
+  cancel a drag), and "Got it" always does; Settings > "Show tips" turns all off; "Reset tips" brings them back.
+  State lives in user config `hints.ron`; an unreadable file is logged, moved aside to `hints.ron.bad` and the
+  hints start fresh.
 
 ### 14.2 Finding everything
 

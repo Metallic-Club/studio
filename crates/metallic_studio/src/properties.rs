@@ -33,6 +33,14 @@ fn fmt_drag(n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
     }
 }
 
+/// What a number attribute's drag asked for this frame.
+enum AttributeScrub {
+    /// The attribute now has this value (a frame of a drag).
+    Value(String, f64),
+    /// The drag ended.
+    End,
+}
+
 /// A short text for an attribute value the panel cannot edit.
 fn attribute_summary(value: &Value) -> String {
     match value {
@@ -84,8 +92,18 @@ pub struct Properties {
     /// The Attributes section: name and type (0 Bool, 1 Number, 2 String) of the attribute to add.
     attr_new_name: String,
     attr_new_kind: usize,
+    /// A number attribute being scrubbed: its first value, so the whole drag is one undo step.
+    attr_gesture: Option<AttrGesture>,
     /// The Tags section: the tag being typed.
     tag_new: String,
+}
+
+/// The open scrub of a number attribute.
+struct AttrGesture {
+    id: InstanceId,
+    name: String,
+    /// The value before the drag (`Nil` when it did not exist).
+    old: Value,
 }
 
 /// What a widget asked for this frame.
@@ -117,6 +135,58 @@ impl Properties {
         if self.gesture.take().is_some() {
             state.preview.cancel(&mut state.world);
             self.cancelled = true;
+        }
+    }
+
+    /// Live value of a number attribute while it is dragged: the world takes it at once and the
+    /// history gets nothing until [`Self::end_attribute_scrub`], which records the whole drag as
+    /// one step (from the value before the first call).
+    pub fn scrub_attribute(
+        &mut self,
+        state: &mut EditorState,
+        id: InstanceId,
+        name: &str,
+        value: f64,
+    ) {
+        if self
+            .attr_gesture
+            .as_ref()
+            .is_some_and(|g| g.id != id || g.name != name)
+        {
+            self.end_attribute_scrub(state);
+        }
+        if self.attr_gesture.is_none() {
+            let old = state
+                .world
+                .attribute(id, name)
+                .cloned()
+                .unwrap_or(Value::Nil);
+            self.attr_gesture = Some(AttrGesture {
+                id,
+                name: name.to_string(),
+                old,
+            });
+        }
+        let _ = state.world.set_attribute(id, name, Value::Number(value));
+    }
+
+    /// Ends the drag of a number attribute and records it as one undo step, if it changed.
+    pub fn end_attribute_scrub(&mut self, state: &mut EditorState) {
+        let Some(g) = self.attr_gesture.take() else {
+            return;
+        };
+        let new = state
+            .world
+            .attribute(g.id, &g.name)
+            .cloned()
+            .unwrap_or(Value::Nil);
+        if new != g.old {
+            state.record(Command::SetAttribute {
+                id: g.id,
+                name: g.name,
+                old: g.old,
+                new,
+            });
         }
     }
 
@@ -156,6 +226,7 @@ impl Properties {
         let pointer_down = ui.input(|i| i.pointer.primary_down());
         if !pointer_down {
             self.finish_gesture(state);
+            self.end_attribute_scrub(state);
             self.cancelled = false;
         } else if self.gesture.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.cancel_gesture(state);
@@ -205,6 +276,7 @@ impl Properties {
 
         let mut edits: Vec<Edit> = Vec::new();
         let mut attribute_edit: Option<Command> = None;
+        let mut attribute_scrub: Option<AttributeScrub> = None;
         // Inputs in the property column are 24 px rows (spec 4.3).
         ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT;
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -233,16 +305,25 @@ impl Properties {
                     });
                 }
                 if ids.len() == 1 {
-                    let attr = self.attributes_section(ui, state, active);
+                    let (attr, scrub) = self.attributes_section(ui, state, active);
                     let tag = self.tags_section(ui, state, active);
                     attribute_edit = attr.or(tag);
+                    attribute_scrub = scrub;
                 }
             });
 
         for e in edits {
             self.commit(state, &ids, e, pointer_down);
         }
+        match attribute_scrub {
+            Some(AttributeScrub::Value(name, value)) => {
+                self.scrub_attribute(state, active, &name, value);
+            }
+            Some(AttributeScrub::End) => self.end_attribute_scrub(state),
+            None => {}
+        }
         if let Some(cmd) = attribute_edit {
+            self.end_attribute_scrub(state);
             let _ = state.apply(cmd);
         }
     }
@@ -272,6 +353,7 @@ impl Properties {
                             id,
                             tag: tag.clone(),
                             on: false,
+                            changed: false,
                         });
                     }
                 });
@@ -294,7 +376,12 @@ impl Properties {
                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                     && problem.is_none();
                 if (add.clicked() || enter) && problem.is_none() {
-                    out = Some(Command::SetTag { id, tag, on: true });
+                    out = Some(Command::SetTag {
+                        id,
+                        tag,
+                        on: true,
+                        changed: false,
+                    });
                     self.tag_new.clear();
                 }
             });
@@ -309,8 +396,9 @@ impl Properties {
         ui: &mut egui::Ui,
         state: &EditorState,
         id: InstanceId,
-    ) -> Option<Command> {
+    ) -> (Option<Command>, Option<AttributeScrub>) {
         let mut out = None;
+        let mut scrub = None;
         let attributes: Vec<(String, Value)> = state
             .world
             .attributes(id)
@@ -341,8 +429,17 @@ impl Properties {
                         }
                         Value::Number(n) => {
                             let mut now = *n;
-                            if ui.add(egui::DragValue::new(&mut now).speed(0.1)).changed() {
-                                out = Some(set(name, value, Value::Number(now)));
+                            let response = ui.add(egui::DragValue::new(&mut now).speed(0.1));
+                            if response.changed() {
+                                if response.dragged() {
+                                    // Every frame of a drag: live, one undo step at the end.
+                                    scrub = Some(AttributeScrub::Value(name.clone(), now));
+                                } else {
+                                    out = Some(set(name, value, Value::Number(now)));
+                                }
+                            }
+                            if response.drag_stopped() {
+                                scrub = Some(AttributeScrub::End);
                             }
                         }
                         Value::String(text) => {
@@ -414,7 +511,7 @@ impl Properties {
                 }
             });
         });
-        out
+        (out, scrub)
     }
 
     fn row(

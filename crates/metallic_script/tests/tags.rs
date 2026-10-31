@@ -299,3 +299,65 @@ fn collection_service_is_a_service_scripts_cannot_create() {
         "print:CollectionService CollectionService CollectionService"
     );
 }
+
+#[test]
+fn signal_tags_are_validated_like_tags() {
+    let mut rig = Rig::new();
+    let lines = run(
+        &mut rig,
+        "local CS = game:GetService('CollectionService')
+         local function try(tag)
+             print(pcall(CS.GetInstanceAddedSignal, CS, tag))
+             print(pcall(CS.GetInstanceRemovedSignal, CS, tag))
+         end
+         try('')
+         try(string.rep('x', 5000))
+         try('bad\ttab')
+         try('Fine')",
+    );
+    let bad = lines
+        .iter()
+        .filter(|l| l.starts_with("print:false") && l.contains("invalid tag"))
+        .count();
+    assert_eq!(bad, 6, "{lines:?}");
+    assert_eq!(
+        lines.iter().filter(|l| l.starts_with("print:true")).count(),
+        2,
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn destroying_thousands_of_tagged_instances_fires_every_removal() {
+    let mut rig = Rig::new();
+    rig.server_script(
+        "Main",
+        "local CS = game:GetService('CollectionService')
+         local model = Instance.new('Model', workspace)
+         local parts = {}
+         for i = 1, 6000 do
+             local p = Instance.new('Part', model)
+             p:AddTag('Cleanup')
+             parts[i] = p
+         end
+         task.wait(0.5)
+         local removed = 0
+         CS:GetInstanceRemovedSignal('Cleanup'):Connect(function() removed += 1 end)
+         model:Destroy()
+         task.wait(3)
+         print('removed', removed)",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 400);
+    let lines = rig.lines();
+    assert!(
+        lines.contains(&"print:removed 6000".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("lost") || l.contains("dropped")),
+        "{lines:?}"
+    );
+}

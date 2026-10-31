@@ -60,7 +60,12 @@ Any instance (parts, models, services, scripts) can carry named values outside i
 - `inst.AttributeChanged:Connect(function(name) ... end)` and `inst:GetAttributeChangedSignal(name):Connect(function() ... end)`
   fire for a set, change or removal. Like the other signals they run in the next `step`, whoever made the change (this VM, the
   other VM or the editor); the handler reads the current value with `GetAttribute`, so two changes in one step fire twice and
-  both see the last value. A VM can make signals for at most 4096 different attribute names.
+  both see the last value. `GetAttributeChangedSignal(name)` checks the name like `SetAttribute` does, and a VM can make
+  signals for at most 4096 different attribute names. No event is dropped silently: the world keeps every change until each
+  VM has read it (hundreds of thousands fit), and handler calls that do not fit in a step's time budget wait for later steps
+  (a full queue warns).
+- Attribute data is outside the VM's memory cap, so a world holds at most 16 MiB of it (names, values and, with tags,
+  tags); beyond that `SetAttribute` and `Clone()` raise a budget error until something is removed or destroyed.
 - `Clone()` copies attributes; scene files store them (`attributes: [("Name", Value), ...]` per instance, written only when
   there are any, so older files and older Studios keep working); Studio shows them under **Attributes** in Properties (add,
   edit Bool/Number/String, remove; every change is one undo step).
@@ -81,7 +86,7 @@ Tags are text labels on instances (Roblox's `CollectionService`). `game:GetServi
   removed on an instance in the game, when a tagged instance enters the game (parented under a service) or leaves it
   (parented to nil), and, for removed, when a tagged instance is destroyed (the handler gets the destroyed instance). Like the
   other signals they run in the next `step`, whoever made the change; connecting does not replay existing instances, so also
-  loop over `GetTagged(tag)`. A VM can make signals for at most 4096 different tags.
+  loop over `GetTagged(tag)`. `GetInstanceAddedSignal` and `GetInstanceRemovedSignal` check the tag like `AddTag` does, and a VM can make signals for at most 4096 different tags. Every change is delivered (destroying thousands of tagged instances fires one removal each; the world keeps changes until every VM has read them, and handler calls that do not fit in a step's time budget wait for later steps, a full queue warns). Tags share the 16 MiB attribute data budget of a world.
 - A tag is 1 to 255 bytes without control characters; an instance holds at most 256 tags. Tagging twice or removing a missing
   tag does nothing. `Clone()` copies tags; scene files store them (`tags: ["A", "B"]` per instance, only when present, so older
   files and older Studios keep working); Studio shows them under **Tags** in Properties (add and remove, one undo step each).

@@ -38,8 +38,10 @@
 pub mod actions;
 pub mod app;
 pub mod camera;
+pub mod collisions;
 pub mod colour;
 pub mod commands;
+pub mod context_bar;
 pub mod data_dirs;
 pub mod editor;
 pub mod editor_ui;
@@ -48,6 +50,7 @@ pub mod explorer;
 pub mod expr;
 pub mod github_auth;
 pub mod gizmo;
+pub mod hints;
 pub mod icons;
 pub mod input_actions;
 pub mod keymap;
@@ -76,6 +79,7 @@ pub mod tools;
 pub mod transform;
 pub mod updater;
 pub mod viewport;
+pub mod viewport_header;
 pub mod widgets;
 
 pub use error::StudioError;

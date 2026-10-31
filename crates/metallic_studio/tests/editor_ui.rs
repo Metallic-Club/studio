@@ -586,3 +586,97 @@ fn ctrl_d_before_an_alt_drag_moves_keeps_the_selection_on_live_parts() {
         assert!(s.is_live(id), "selection on a live part");
     }
 }
+
+/// The viewport header never scrolls or cuts a control off: at 1280 and 1600 px every button in
+/// the strip lies inside it, and what does not fit is in the "»" menu (#226 review).
+#[test]
+fn the_viewport_header_fits_at_1280_and_1600() {
+    use egui_kittest::kittest::By;
+    for width in [1280.0_f32, 1600.0] {
+        let (ui, _, _) = editor();
+        let mut themed = false;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(width, 900.0))
+            .build_ui_state(
+                move |ui, editor: &mut EditorUi| {
+                    if install_theme(ui, &mut themed) {
+                        return;
+                    }
+                    editor.ui(ui, None);
+                },
+                ui,
+            );
+        // A few frames for the measured widths to settle.
+        h.run_steps(8);
+        let strip = h.state().header.rect();
+        assert!(strip.width() > 300.0, "{width}: header {strip:?}");
+        let mut inside = 0;
+        for node in h.query_all(By::new().role(egui::accesskit::Role::Button)) {
+            let r = node.rect();
+            if r.center().y < strip.top() || r.center().y > strip.bottom() {
+                continue;
+            }
+            assert!(
+                r.left() >= strip.left() - 0.5 && r.right() <= strip.right() + 0.5,
+                "{width} px: {:?} at {r:?} is outside the header {strip:?}",
+                format!("{node:?}").chars().take(160).collect::<String>()
+            );
+            inside += 1;
+        }
+        assert!(inside >= 8, "{width} px: only {inside} header buttons");
+        let overflow = h.state().header.overflow().to_vec();
+        if !overflow.is_empty() {
+            h.get_by_label("More header options");
+        }
+        if width <= 1280.0 {
+            assert!(!overflow.is_empty(), "1280 px should need the » menu");
+            assert!(!overflow.contains(&"snap.grid"), "Grid stays on the strip");
+        }
+    }
+}
+
+/// Ctrl+. focuses the contextual toolbar once; a click elsewhere takes the focus away for good, so
+/// shortcuts work again (#384 review).
+#[test]
+fn the_context_bar_lets_go_of_focus_after_an_outside_click() {
+    let (mut ui, _, part) = editor();
+    ui.state.selection.select_only(part);
+    ui.state.tool = Tool::Move;
+    let revision = ui.state.selection.revision();
+    ui.context_bar.arm(revision);
+    let mut themed = false;
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, editor: &mut EditorUi| {
+                if install_theme(ui, &mut themed) {
+                    return;
+                }
+                editor.ui(ui, None);
+            },
+            ui,
+        );
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Period);
+    h.run_steps(3);
+    assert!(h.state().context_bar.has_focus(), "Ctrl+. focuses the bar");
+    // Click the Explorer's filter field, then leave it with Esc.
+    h.hover_at(egui::pos2(140.0, 126.0));
+    h.run_steps(1);
+    press(&mut h, egui::pos2(140.0, 126.0), true);
+    press(&mut h, egui::pos2(140.0, 126.0), false);
+    h.run_steps(3);
+    assert!(
+        !h.state().context_bar.has_focus(),
+        "an outside click releases the bar"
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    // Viewport shortcuts work again: E picks Rotate.
+    h.hover_at(egui::pos2(640.0, 500.0));
+    h.run_steps(2);
+    h.key_press(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().state.tool, Tool::Rotate);
+}

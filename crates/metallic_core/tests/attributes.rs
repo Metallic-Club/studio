@@ -170,7 +170,9 @@ fn changes_are_logged_once_each_and_equal_writes_are_not() {
 fn the_log_is_bounded_and_overflows_old_cursors() {
     let (mut w, p) = world_with_part();
     let old = w.attribute_cursor();
-    for i in 0..10_000 {
+    // More unread changes than the log keeps (it is trimmed by its readers, so this only
+    // happens when nobody reads).
+    for i in 0..300_000 {
         w.set_attribute(p, "N", Value::Number(f64::from(i)))
             .unwrap();
     }
@@ -295,4 +297,92 @@ fn a_scene_with_a_reference_attribute_is_refused() {
     )
     .unwrap();
     assert!(matches!(load_scene(&path), Err(CoreError::Scene(_))));
+}
+
+#[test]
+fn attribute_data_is_budgeted_per_world() {
+    let (mut w, p) = world_with_part();
+    let q = w
+        .create("Part", Some(w.root("Workspace").unwrap()))
+        .unwrap();
+    assert_eq!(w.extras_bytes(), 0);
+    // Fill the budget with big strings spread over instances (each below the per-value cap).
+    let big = Value::String("x".repeat(MAX_ATTRIBUTE_STRING));
+    let mut stored = 0;
+    let err = loop {
+        let target = if stored % 2 == 0 { p } else { q };
+        match w.set_attribute(target, &format!("Big{stored}"), big.clone()) {
+            Ok(()) => stored += 1,
+            Err(e) => break e,
+        }
+        assert!(stored < 1000, "the budget never ran out");
+    };
+    assert!(
+        matches!(&err, CoreError::InvalidValue { reason, .. } if reason.contains("budget")),
+        "{err}"
+    );
+    assert!(w.extras_bytes() <= MAX_EXTRAS_BYTES);
+    assert!(stored * MAX_ATTRIBUTE_STRING <= MAX_EXTRAS_BYTES);
+    // Changing a value to a smaller one, or removing, frees budget; small attributes still fit.
+    w.set_attribute(p, "Big0", Value::Nil).unwrap();
+    w.set_attribute(p, "Small", Value::Bool(true)).unwrap();
+    // A clone needs budget for its attributes too.
+    assert!(w.clone_subtree(q).is_err(), "no room for a second copy");
+    // Destroying gives it all back.
+    w.destroy(p);
+    w.destroy(q);
+    assert_eq!(w.extras_bytes(), 0);
+    let (mut w, p) = world_with_part();
+    w.set_attribute(p, "A", Value::String("abc".into()))
+        .unwrap();
+    let used = w.extras_bytes();
+    assert!(used > 3);
+    w.set_attribute(p, "A", Value::String("abc".into()))
+        .unwrap();
+    assert_eq!(w.extras_bytes(), used, "an equal write costs nothing");
+    let copy = w.clone_subtree(p).unwrap();
+    assert_eq!(w.extras_bytes(), used * 2);
+    assert_eq!(w.deep_clone().extras_bytes(), used * 2);
+    w.set_attribute(copy, "A", Value::Nil).unwrap();
+    assert_eq!(w.extras_bytes(), used);
+}
+
+#[test]
+fn a_big_burst_of_changes_is_kept_and_a_trim_drops_only_what_was_read() {
+    let (mut w, p) = world_with_part();
+    let start = w.attribute_cursor();
+    for i in 0..10_000 {
+        w.set_attribute(p, "N", Value::Number(f64::from(i)))
+            .unwrap();
+    }
+    let AttributeChanges::Changes(all) = w.attribute_changes_since(start).0 else {
+        panic!("overflow: more than 4096 changes must be kept")
+    };
+    assert_eq!(all.len(), 10_000);
+    // A reader that has read up to `mid`, and one that is still at `start`: the slower decides.
+    let mid = w.attribute_cursor();
+    w.set_attribute(p, "N", Value::Number(-1.0)).unwrap();
+    w.trim_attribute_log(&[mid, start]);
+    assert!(matches!(
+        w.attribute_changes_since(start).0,
+        AttributeChanges::Changes(c) if c.len() == 10_001
+    ));
+    w.trim_attribute_log(&[mid]);
+    assert_eq!(
+        w.attribute_changes_since(start).0,
+        AttributeChanges::Overflow,
+        "start is behind the trim now"
+    );
+    assert!(matches!(
+        w.attribute_changes_since(mid).0,
+        AttributeChanges::Changes(c) if c.len() == 1
+    ));
+    // Cursors of another world and an empty reader list change nothing.
+    let other = World::new_with_services();
+    w.trim_attribute_log(&[other.attribute_cursor()]);
+    w.trim_attribute_log(&[]);
+    assert!(matches!(
+        w.attribute_changes_since(mid).0,
+        AttributeChanges::Changes(c) if c.len() == 1
+    ));
 }

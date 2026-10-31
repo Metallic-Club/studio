@@ -14,7 +14,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use metallic_core::{CoreError, TagChanges, TagCursor};
+use metallic_core::{CoreError, TagChanges, TagCursor, check_tag};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods,
     UserDataRef, Value,
@@ -259,6 +259,8 @@ impl UserData for LuaCollectionService {
 impl ApiState {
     /// The id of `tag` for instance signals, made on first use.
     fn tag_name_id(&self, tag: &str) -> mlua::Result<u32> {
+        // Validated like AddTag's argument, so no signal is made for a tag nothing can carry.
+        check_tag(tag).map_err(|e| lua_error(format!("invalid tag: {e}")))?;
         let mut names = self.tags.names.borrow_mut();
         if let Some(&id) = names.get(tag) {
             return Ok(id);
@@ -269,6 +271,11 @@ impl ApiState {
         let id = names.len() as u32 + 1;
         names.insert(tag.to_string(), id);
         Ok(id)
+    }
+
+    /// Where this VM has read the world's tag log up to.
+    pub(crate) fn tag_cursor(&self) -> TagCursor {
+        self.tags.cursor.get()
     }
 
     /// Fires the tag signals for what changed in the world since this VM last looked. Called
@@ -286,8 +293,13 @@ impl ApiState {
                 return;
             };
             match changes {
-                // Too many changes since the last step: the individual events are lost.
-                TagChanges::Overflow => return,
+                // The log is trimmed by its readers, so this needs hundreds of thousands of
+                // unread changes: say so instead of dropping the events silently.
+                TagChanges::Overflow => {
+                    self.sink
+                        .warn("tag events were lost: too many tag changes in one step");
+                    return;
+                }
                 TagChanges::Changes(list) => (list, carrier),
             }
         };

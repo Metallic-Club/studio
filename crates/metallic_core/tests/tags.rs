@@ -201,7 +201,8 @@ fn tag_changes_mark_the_instance_changed_and_the_log_is_bounded() {
     w.add_tag(p, "A").unwrap();
     assert_eq!(w.changes_since(journal).0, Changes::Ids(vec![p]));
     let old = w.tag_cursor();
-    for _ in 0..6000 {
+    // More unread entries than the log keeps (readers trim it, so only when nobody reads).
+    for _ in 0..140_000 {
         w.remove_tag(p, "A").unwrap();
         w.add_tag(p, "A").unwrap();
     }
@@ -309,4 +310,75 @@ fn many_instances_with_few_tagged_are_found_through_the_index() {
     }
     assert_eq!(w.tagged("Rare"), chosen);
     assert!(w.tagged("Absent").is_empty());
+}
+
+#[test]
+fn tags_count_against_the_world_data_budget_and_give_it_back() {
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").unwrap();
+    assert_eq!(w.extras_bytes(), 0);
+    let p = w.create("Part", Some(ws)).unwrap();
+    w.add_tag(p, "Lava").unwrap();
+    let one = w.extras_bytes();
+    assert!(one > 4);
+    w.add_tag(p, "Lava").unwrap();
+    assert_eq!(w.extras_bytes(), one, "a repeat costs nothing");
+    w.add_tag(p, "Other").unwrap();
+    w.remove_tag(p, "Other").unwrap();
+    assert_eq!(w.extras_bytes(), one);
+    let copy = w.clone_subtree(p).unwrap();
+    assert_eq!(w.extras_bytes(), one * 2);
+    w.destroy(copy);
+    w.destroy(p);
+    assert_eq!(w.extras_bytes(), 0);
+    // Many instances with long tags run into the budget with a clear error.
+    let long = "t".repeat(MAX_TAG);
+    let mut n = 0;
+    let err = loop {
+        let part = w.create("Part", Some(ws)).unwrap();
+        let mut failed = None;
+        for i in 0..MAX_TAGS {
+            if let Err(e) = w.add_tag(part, &format!("{i}{long}")[..MAX_TAG]) {
+                failed = Some(e);
+                break;
+            }
+        }
+        if let Some(e) = failed {
+            break e;
+        }
+        n += 1;
+        assert!(n < 1000, "the budget never ran out");
+    };
+    assert!(
+        matches!(&err, CoreError::InvalidValue { reason, .. } if reason.contains("budget")),
+        "{err}"
+    );
+    assert!(w.extras_bytes() <= MAX_EXTRAS_BYTES);
+}
+
+#[test]
+fn a_mass_destroy_logs_every_removal_and_trimming_keeps_unread_ones() {
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").unwrap();
+    let model = w.create("Model", Some(ws)).unwrap();
+    for _ in 0..20_000 {
+        let p = w.create("Part", Some(model)).unwrap();
+        w.add_tag(p, "T").unwrap();
+    }
+    let cursor = w.tag_cursor();
+    w.destroy(model);
+    let TagChanges::Changes(list) = w.tag_changes_since(cursor).0 else {
+        panic!("overflow: 20000 removals must fit in the log")
+    };
+    assert_eq!(list.len(), 20_000);
+    assert!(list.iter().all(|c| !c.added && c.tag == "T"));
+    // A reader at `cursor` and a faster one: the log keeps what the slower one has not read.
+    let fast = w.tag_cursor();
+    w.trim_tag_log(&[cursor, fast]);
+    assert!(matches!(
+        w.tag_changes_since(cursor).0,
+        TagChanges::Changes(c) if c.len() == 20_000
+    ));
+    w.trim_tag_log(&[fast]);
+    assert_eq!(w.tag_changes_since(cursor).0, TagChanges::Overflow);
 }

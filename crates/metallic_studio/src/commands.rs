@@ -92,6 +92,9 @@ pub enum Command {
         tag: String,
         /// True to add it, false to remove it.
         on: bool,
+        /// Filled by apply: whether the world changed. Undo does nothing when it did not (adding
+        /// a tag the instance already had must not remove it on undo).
+        changed: bool,
     },
     /// Many property changes as one undo step: (instance, property, old value, new value). A
     /// gesture's preview overlay turns into this on release.
@@ -216,7 +219,7 @@ impl Command {
                     format!("Set attribute {name} of {what}")
                 }
             }
-            Command::SetTag { id, tag, on } => {
+            Command::SetTag { id, tag, on, .. } => {
                 let what = world
                     .get_ref(*id, "Name")
                     .ok()
@@ -251,7 +254,13 @@ impl Command {
             Command::SetAttribute { id, name, new, .. } => {
                 Ok(world.set_attribute(*id, name, new.clone())?)
             }
-            Command::SetTag { id, tag, on } => {
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                *changed = world.has_tag(*id, tag) != *on;
                 if *on {
                     world.add_tag(*id, tag)?;
                 } else {
@@ -422,12 +431,19 @@ impl Command {
             Command::SetAttribute { id, name, old, .. } => {
                 let _ = world.set_attribute(*id, name, old.clone());
             }
-            Command::SetTag { id, tag, on } => {
-                let _ = if *on {
-                    world.remove_tag(*id, tag)
-                } else {
-                    world.add_tag(*id, tag)
-                };
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                if *changed {
+                    let _ = if *on {
+                        world.remove_tag(*id, tag)
+                    } else {
+                        world.add_tag(*id, tag)
+                    };
+                }
             }
             Command::SetProperties { changes, .. } => {
                 for (id, prop, old, _) in changes.iter().rev() {
@@ -550,7 +566,8 @@ pub fn placement(world: &World, id: InstanceId) -> Option<Placement> {
 
 /// Moves `id` under `parent` at `index` (clamped to the end).
 ///
-/// `World::set_parent` appends; the siblings that belong after `index` are re-appended in order.
+/// Uses `World::set_parent_at` (`set_parent` alone appends, and moving to the same parent is
+/// a no-op there).
 pub fn place(
     world: &mut World,
     id: InstanceId,
@@ -560,18 +577,7 @@ pub fn place(
     if placement(world, id).is_some_and(|p| p.parent == parent && p.index == index) {
         return Ok(());
     }
-    world.set_parent(id, parent)?;
-    let siblings: Vec<InstanceId> = match parent {
-        Some(p) => world.children(p).to_vec(),
-        None => world.roots().to_vec(),
-    };
-    let last = siblings.len().saturating_sub(1);
-    if index < last {
-        for &s in &siblings[index..last] {
-            world.set_parent(s, parent)?;
-        }
-    }
-    Ok(())
+    world.set_parent_at(id, parent, index)
 }
 
 fn park(
