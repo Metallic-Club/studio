@@ -51,7 +51,7 @@ After that unchanged-probe proof, independent review tightened only adapter-erro
 classification: default runs may skip `RenderError::NoAdapter`, but device setup
 errors always fail. The required-adapter proof already failed on either error.
 This policy-only delta changes the final Rust probe blob; numeric shader, fixture,
-oracle and tolerances remain unchanged. The four focused controls must pass again
+oracle and tolerances remain unchanged. All four focused controls passed again
 before the final-source workspace suite.
 
 The matrices cover both sides of every actual split, the beyond-last count sentinel,
@@ -99,6 +99,18 @@ PR359 touches no WGSL. PR428 adds a debug-cascade reciprocal consumer and was
 [notified after the executed proof](https://github.com/Metallic-Club/studio/pull/428#issuecomment-6546413405)
 to use the shared depth helper during integration. No owner branch was edited.
 
-Next: granted full workspace prebuild, serial tests, strict all-target Clippy,
-licenses and formatting, then PR and CI review. No milestone or multiplayer
-acceptance is implied, and studio_core must not merge its own PR.
+Full guarded workspace tests at `87c5c60073b160a75e59664866e442723188b93c` exited 0:
+2,019 passed, zero failed and eight upstream ignores across 147 summaries, with
+the required-adapter flag set. The prior workspace prebuild passed at `b2de67d`;
+the actual final-source command incorporated the policy correction. Source and
+command provenance are retained with the raw log. No new ignored test was added.
+
+After that run, one Windows CI step was added between Test and Clippy. It sets
+the required-adapter flag for only the two DX12 probes and logs their numeric
+observations/adapter. It reuses the existing job target/cache; Vulkan is not
+required on runners that lack it. This YAML/progress-only delta leaves Rust and
+shader source identical to the tested `87c5c60`; it is not a new local full-suite run.
+
+Next: strict all-target Clippy, final licenses/formatting, PR and exact-head CI
+review including required DX12 execution. No milestone or multiplayer acceptance
+is implied, and studio_core must not merge its own PR.
