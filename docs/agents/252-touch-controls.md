@@ -29,8 +29,6 @@ Player from `ShowOnTouch` actions, the touch input path through `InputRuntime`, 
   `TouchEnabled` true), real `WindowEvent::Touch` (px per dp = 0.6 x scale factor, zero insets on desktop), 140 ms fade
   (`--reduce-motion`: instant), `TouchImage` PNGs inside the project, draw-time log at the end of an emulated run.
   Headless `--emulate` routes finger lines of `--input-script` through the same controls.
-- Fixed on the way: `Overlay::draw` dropped egui's `TexturesDelta` without clearing it, which panics in debug builds
-  (`debug_assert` in epaint 0.37), so a debug windowed Player panicked on its first frame.
 
 ## Tests
 - `src/input/touch/tests.rs`: mockup positions (phone), tablet sizes, the rules over 3 presets x 2 orientations x 1-6
@@ -48,8 +46,8 @@ Player from `ShowOnTouch` actions, the touch input path through `InputRuntime`, 
   as 6 in all (primary + S1..S5); S6's slot is a spare. Raising `MAX_BUTTONS` to 7 is one constant.
 - The mockup's tablet primary sits 28 dp from the corner; the spec text says 24. Built as the spec says.
 - GUI hit-testing (a touch that lands on a GUI button) is not built: the Player GUI has no interactive buttons yet.
-- Stick mode (Fixed/Floating) and the opacity slider are fields (`DeviceProfile::stick_mode`, `OverlayStyle::opacity`)
-  for #254's settings page; no UI here.
+- Stick mode and opacity are saved in the player's overrides (`"touch": {"stick", "opacity"}`) and the overlay
+  reads them, but the Controls page has no Touch tab to change them yet.
 - Safe-area insets: winit 0.30 has no safe-area API, so desktop uses zero (emulation uses the presets).
 
 ## Commands that matter
@@ -78,3 +76,14 @@ Finger script lines: `20 touch0 Down pos 170 290`, `28 touch0 Move pos 215 245`,
 - Tests: title change keeps held fingers (unit and Luau e2e), a held button follows its action to another slot without
   pressing the action that takes its old control, a removed button cancels, stick finger over a button, Cancel on the
   stick, focus loss, non-finite Up, reused id, two pointer fingers.
+
+## Merge with #323 (Controls page)
+- Glyphs for `TouchButton1`..`7` (touch art); `glyph.rs`'s `unreachable!` for an empty slot now returns the unbound
+  glyph. `Control::is_touch` drives `control_device()` and the glyph folder.
+- The built-in `Metallic.System/Menu` has `ShowOnTouch`: phones get the menu button, and tapping it opens the Player
+  menu (test). While the menu is open, fingers (and the emulated mouse) work it like a mouse.
+- `PlayerOverrides::touch` (`TouchSettings`: stick mode, opacity 0.25 to 1) is read, written and reset with the other
+  overrides; `TouchOverlay::update` applies it each frame (test).
+- The in-play controls hint of #323 hides while the last device is touch (the overlay labels its own buttons).
+- Open: the menu button sits top centre as spec 7.2 says, which covers Parkour's top-centre banner a little
+  (`252-shots/phone-held.png`); the banner or the button's place may need a change.
