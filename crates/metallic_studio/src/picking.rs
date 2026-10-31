@@ -7,6 +7,8 @@ use std::collections::HashMap;
 
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value, World};
 
+use metallic_render::glam::DVec3;
+
 use crate::transform::{PartTransform, Ray};
 
 #[derive(Debug, Clone, Copy)]
@@ -120,6 +122,42 @@ impl PickCache {
         best
     }
 
+    /// The nearest part hit by `ray` for which `skip` is false, with the outward normal of the
+    /// face hit (sphere normal for Ball parts).
+    pub fn surface(&self, ray: &Ray, skip: &dyn Fn(InstanceId) -> bool) -> Option<(Hit, DVec3)> {
+        let mut best: Option<(Hit, DVec3)> = None;
+        for e in &self.entries {
+            if skip(e.id) {
+                continue;
+            }
+            let found = if e.ball {
+                e.transform.ray_hit_sphere(ray).map(|d| {
+                    let n = (ray.at(d) - e.transform.position).normalize_or(-ray.dir);
+                    (d, n)
+                })
+            } else {
+                e.transform.ray_hit_normal(ray)
+            };
+            if let Some((d, n)) = found
+                && best.is_none_or(|(b, _)| d < b.distance)
+            {
+                best = Some((
+                    Hit {
+                        id: e.id,
+                        distance: d,
+                    },
+                    n,
+                ));
+            }
+        }
+        best
+    }
+
+    /// Every cached part: id, transform and whether it is a Ball.
+    pub fn iter(&self) -> impl Iterator<Item = (InstanceId, &PartTransform, bool)> {
+        self.entries.iter().map(|e| (e.id, &e.transform, e.ball))
+    }
+
     /// Every part hit by `ray`, nearest first, written into `out` (cleared first).
     pub fn all(&self, ray: &Ray, out: &mut Vec<Hit>) {
         out.clear();
@@ -135,10 +173,7 @@ impl PickCache {
     }
 
     /// Parts whose centre passes `inside` (box selection in screen space).
-    pub fn filter_centres(
-        &self,
-        mut inside: impl FnMut(metallic_render::glam::DVec3) -> bool,
-    ) -> Vec<InstanceId> {
+    pub fn filter_centres(&self, mut inside: impl FnMut(DVec3) -> bool) -> Vec<InstanceId> {
         self.entries
             .iter()
             .filter(|e| inside(e.transform.position))
@@ -191,7 +226,6 @@ fn in_workspace(world: &World, id: InstanceId) -> bool {
 mod tests {
     use super::*;
     use metallic_core::Vec3;
-    use metallic_render::glam::DVec3;
 
     fn part(world: &mut World, pos: Vec3) -> InstanceId {
         let ws = world.root("Workspace").unwrap();
