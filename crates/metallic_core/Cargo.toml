@@ -13,6 +13,8 @@ thiserror = "2.0.21"
 
 [dev-dependencies]
 criterion.workspace = true
+# Per-test temporary folders (tests/common); MIT OR Apache-2.0, already in the lockfile.
+tempfile = "3"
 
 [[bench]]
 name = "world"
