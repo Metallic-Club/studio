@@ -195,3 +195,17 @@ new GUI queue alongside existing input/remotes. Add public role/GUI payload and 
 proposed-integration reds when granted, then apply narrow queue cleanup if reproduced. Preserve trusted
 roster ownership, aggregate/held deadlines, nil/multiple coroutine results and native protected-call behavior.
 No runtime driver, edit kernel, journal or dependency/schema work is included in this refresh.
+
+
+## Proposed current-main GUI regressions (not executed yet)
+
+Compatibility merge checkpoint: `26ac6006213158ab199185ea99274dd83c23a37f`. Three public tests now cover
+Combined/Server/Client routing with ordered button/pointer payloads; queued clicks across a no-op bind,
+actual rebind and local removal/rebind with fresh-input controls; and borrowed-World retry plus transferred
+GUI script ownership with a newly eligible positive control. The rebind case is expected to expose a
+proposed-integration queue leak; no executed red or new-main bug claim is made before a granted run.
+
+The minimal merge changes are complete, but queue behavior remains uncorrected for the test-only checkpoint.
+Do not start Cargo while compilation is held. When a slot/window is granted, compile first and distinguish
+fixture errors from actual behavior failures, retain the red result, then add GUI clearing at the same binding
+cleanup points as existing input/remotes. Production budgets, scheduler and protected-call APIs stay unchanged.

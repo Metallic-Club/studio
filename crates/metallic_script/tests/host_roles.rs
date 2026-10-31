@@ -3,7 +3,7 @@ mod common;
 
 use common::{Rig, TEST_RESUME_BUDGET};
 use metallic_core::{InstanceId, Value};
-use metallic_script::{ScriptHost, ScriptRole};
+use metallic_script::{GuiEvent, GuiEventKind, GuiPointer, ScriptHost, ScriptRole};
 
 fn rig(role: ScriptRole) -> Rig {
     let mut rig = Rig::new();
@@ -34,6 +34,194 @@ fn count(rig: &Rig, expected: &str) -> usize {
         .iter()
         .filter(|line| line.as_str() == expected)
         .count()
+}
+
+fn click(target: InstanceId) -> GuiEvent {
+    GuiEvent {
+        target,
+        kind: GuiEventKind::MouseButton1Click,
+        pointer: GuiPointer::Mouse,
+        position: [12.4, 30.6],
+    }
+}
+
+#[test]
+fn gui_events_preserve_role_routing_order_and_pointer_payloads() {
+    for role in [ScriptRole::Combined, ScriptRole::Server, ScriptRole::Client] {
+        let mut rig = rig(role);
+        let hud = rig.add("ScreenGui", "Hud", rig.root("Workspace"));
+        let button = rig.add("TextButton", "Go", hud);
+        rig.server_script("Server", "print('server-ready') workspace.Hud.Go.Activated:Connect(function() print('wrong-server-gui') end)");
+        rig.local_script(
+            "Ui",
+            r#"
+            local button = workspace.Hud.Go
+            button.MouseButton1Click:Connect(function(...)
+                print('click', select('#', ...), game.Players.LocalPlayer.Name)
+            end)
+            button.Activated:Connect(function(input, clicks)
+                print('activated', input.UserInputType.Name, input.UserInputState.Name, input.Position, clicks)
+            end)
+            button.InputChanged:Connect(function(input)
+                print('changed', input.UserInputType.Name, input.UserInputState.Name, input.Position)
+            end)
+            "#,
+        );
+        if role == ScriptRole::Client {
+            let local = player(&rig, "Bound");
+            rig.host.set_local_player(local).unwrap();
+        }
+        rig.host.start().unwrap();
+        rig.host.gui_event(click(button));
+        rig.host.gui_event(GuiEvent {
+            target: button,
+            kind: GuiEventKind::Activated,
+            pointer: GuiPointer::Touch,
+            position: [12.4, 30.6],
+        });
+        rig.host.gui_event(GuiEvent {
+            target: button,
+            kind: GuiEventKind::InputChanged,
+            pointer: GuiPointer::Mouse,
+            position: [12.4, 30.6],
+        });
+        rig.run(0.0, 2);
+        let mut expected = Vec::new();
+        if role != ScriptRole::Client {
+            expected.push("print:server-ready");
+        }
+        if role == ScriptRole::Combined {
+            expected.push("print:click 0 Player1");
+        } else if role == ScriptRole::Client {
+            expected.push("print:click 0 Bound");
+        }
+        if role != ScriptRole::Server {
+            expected.extend([
+                "print:activated Touch End 12, 31, 0 1",
+                "print:changed MouseMovement Change 12, 31, 0",
+            ]);
+        }
+        assert_eq!(rig.lines(), expected, "role={role:?}");
+    }
+}
+
+#[test]
+fn queued_gui_events_do_not_cross_client_binding_changes() {
+    let mut rig = rig(ScriptRole::Client);
+    let first = player(&rig, "First");
+    let second = player(&rig, "Second");
+    let hud = rig.add("ScreenGui", "Hud", rig.root("Workspace"));
+    let button = rig.add("TextButton", "Go", hud);
+    rig.local_script("Ui", "workspace.Hud.Go.MouseButton1Click:Connect(function() print('click',game.Players.LocalPlayer.Name) end)");
+    rig.host.add_player(first).unwrap();
+    rig.host.add_player(second).unwrap();
+    rig.host.set_local_player(first).unwrap();
+    rig.host.start().unwrap();
+    rig.host.gui_event(click(button));
+    let now = rig.run(0.0, 1);
+    assert_eq!(rig.lines(), ["print:click First"]);
+
+    rig.host.gui_event(click(button));
+    assert!(!rig.host.set_local_player(first).unwrap());
+    let now = rig.run(now, 1);
+    assert_eq!(
+        count(&rig, "print:click First"),
+        2,
+        "a no-op binding retains valid input"
+    );
+
+    rig.host.gui_event(click(button));
+    assert!(rig.host.set_local_player(second).unwrap());
+    let now = rig.run(now, 1);
+    assert_eq!(
+        count(&rig, "print:click Second"),
+        0,
+        "queued input belongs to the previous binding"
+    );
+    rig.host.gui_event(click(button));
+    let now = rig.run(now, 1);
+    assert_eq!(
+        count(&rig, "print:click Second"),
+        1,
+        "fresh GUI input must still work"
+    );
+
+    rig.host.gui_event(click(button));
+    assert!(rig.host.remove_player(second).unwrap());
+    rig.host.set_local_player(first).unwrap();
+    let now = rig.run(now, 1);
+    assert_eq!(count(&rig, "print:click First"), 2);
+    rig.host.gui_event(click(button));
+    rig.run(now, 1);
+    assert_eq!(count(&rig, "print:click First"), 3);
+    assert!(
+        rig.lines()
+            .iter()
+            .all(|line| line.starts_with("print:click "))
+    );
+}
+
+#[test]
+fn client_gui_dispatch_waits_for_world_scope_and_cancels_transferred_owners() {
+    let mut rig = rig(ScriptRole::Client);
+    let local = player(&rig, "Local");
+    let other = player(&rig, "Other");
+    let owned_gui = gui(&rig, local);
+    let button = rig.add("TextButton", "Go", owned_gui);
+    rig.add_script(
+        "LocalScript",
+        "Ui",
+        owned_gui,
+        "script.Parent.Go.MouseButton1Click:Connect(function() print('owned-click') end)",
+    );
+    rig.host.set_local_player(local).unwrap();
+    rig.host.start().unwrap();
+    rig.host.gui_event(click(button));
+    let now = rig.run(0.0, 1);
+    assert_eq!(count(&rig, "print:owned-click"), 1);
+
+    rig.host.gui_event(click(button));
+    {
+        let shared = rig.world.clone();
+        let _borrow = shared.borrow_mut();
+        rig.host.step(now + 1.0 / 60.0, 1.0 / 60.0);
+    }
+    assert_eq!(count(&rig, "print:owned-click"), 1);
+    let now = rig.run(now, 1);
+    assert_eq!(
+        count(&rig, "print:owned-click"),
+        2,
+        "valid queued GUI work survives a borrowed-World retry"
+    );
+
+    rig.host.gui_event(click(button));
+    rig.world
+        .borrow_mut()
+        .set_parent(owned_gui, Some(other))
+        .unwrap();
+    let now = rig.run(now, 1);
+    assert_eq!(
+        count(&rig, "print:owned-click"),
+        2,
+        "a transferred script cannot receive queued GUI input"
+    );
+    let fresh_gui = gui(&rig, local);
+    let fresh = rig.add("TextButton", "Go", fresh_gui);
+    rig.add_script(
+        "LocalScript",
+        "Fresh",
+        fresh_gui,
+        "script.Parent.Go.MouseButton1Click:Connect(function() print('fresh-click') end)",
+    );
+    let now = rig.run(now, 1);
+    rig.host.gui_event(click(fresh));
+    rig.run(now, 1);
+    assert_eq!(count(&rig, "print:fresh-click"), 1);
+    assert!(
+        rig.lines()
+            .iter()
+            .all(|line| line == "print:owned-click" || line == "print:fresh-click")
+    );
 }
 
 #[test]
