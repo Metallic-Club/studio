@@ -39,6 +39,8 @@ pub enum Scene {
     Error,
     /// The editor with the bundled Parkour template open (nothing is saved).
     Editor,
+    /// The same editor with Play running (the game drawn in the viewport).
+    Playing,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
     Colour,
     /// Every Studio widget in every state (design review).
@@ -68,7 +70,7 @@ pub struct Options {
 
 impl Options {
     /// Parses `--screenshot <path>`,
-    /// `--scene splash|start|firstrun|error|editor|colour|components|settings|licences|licences-crates`,
+    /// `--scene splash|start|firstrun|error|editor|playing|colour|components|settings|licences|licences-crates`,
     /// `--theme graphite|titanium|light|system`, `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -93,6 +95,7 @@ impl Options {
                         "firstrun" => Scene::FirstRun,
                         "error" => Scene::Error,
                         "editor" => Scene::Editor,
+                        "playing" => Scene::Playing,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
                         "settings" => Scene::Settings,
@@ -202,6 +205,12 @@ impl StudioApp {
             Scene::Components => Phase::Components,
             Scene::Editor if shot => EditorUi::demo(&templates_dir().join("parkour"))
                 .map_or(Phase::Start, |e| Phase::Opened(Box::new(e))),
+            Scene::Playing if shot => {
+                EditorUi::demo(&templates_dir().join("parkour")).map_or(Phase::Start, |mut e| {
+                    e.state.start_play("play.start");
+                    Phase::Opened(Box::new(e))
+                })
+            }
             // The capture shows the second step running, like the mockup.
             Scene::Splash if shot => Phase::Splash(Splash::held_at(1)),
             _ if shot => Phase::Start,
@@ -286,6 +295,13 @@ impl StudioApp {
 }
 
 impl eframe::App for StudioApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // While Play runs, Tab, Space and Enter go to the game before egui can use them.
+        if let Phase::Opened(editor) = &mut self.phase {
+            editor.raw_input_hook(raw_input);
+        }
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         if self.splash_window {
             [0.0; 4]

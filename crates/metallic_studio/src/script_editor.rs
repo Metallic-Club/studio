@@ -55,6 +55,11 @@ impl ScriptTabs {
         }
     }
 
+    /// Shows the Scene tab (Play starting).
+    pub fn show_scene(&mut self) {
+        self.current = None;
+    }
+
     /// Closes tabs whose script left the tree (deleted, or undone insert).
     pub fn prune(&mut self, state: &EditorState) {
         let before = self.open.len();
@@ -118,6 +123,8 @@ impl ScriptTabs {
             ui.fonts_mut(|f| f.layout_job(job))
         };
         let lines = s.buffer.lines().count().max(1);
+        // Read-only while playing: the edit world cannot change until Stop.
+        let editable = !state.play.is_playing();
         let mut lost_focus = false;
         egui::ScrollArea::both()
             .auto_shrink([false, false])
@@ -136,6 +143,7 @@ impl ScriptTabs {
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(30)
                                 .lock_focus(true)
+                                .interactive(editable)
                                 .layouter(&mut layouter),
                         )
                         .labelled_by(title.id);

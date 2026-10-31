@@ -115,6 +115,16 @@ impl ColourDock {
         self.popover.is_open()
     }
 
+    /// Closes the popover, dropping a colour drag in progress (Play starting).
+    pub fn close(&mut self, state: &mut EditorState) {
+        if self.popover.is_open() {
+            self.popover.close(&mut self.library);
+        }
+        if self.target.take().is_some() && state.preview.is_active() {
+            state.preview.cancel(&mut state.world);
+        }
+    }
+
     /// The popover (for tests: its colour and rectangle).
     pub fn popover(&self) -> &ColourPopover {
         &self.popover

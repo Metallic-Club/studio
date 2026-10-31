@@ -10,6 +10,13 @@
 //! The building tools ([`EditorTools`]), the Input Actions dock ([`InputActionsDock`]) and the
 //! colour popover ([`ColourDock`]) live in their own modules; this file only registers them,
 //! gives them their place in the layout and calls them once per frame.
+//!
+//! **While playing** Studio's keys are dispatched first each frame (Global and Play contexts:
+//! Esc and Shift+F5 stop; a disabled action leaves its key alone), then the rest of the keyboard,
+//! Tab, Space and Enter included, and the mouse over the viewport go to the game
+//! ([`PlayInput`]), then the session advances and the viewport draws it. #367's status bar shows
+//! "Playing" in `success`, the viewport has a `success` frame, Explorer shows the play world read-only,
+//! and Properties, Insert, the script editor and every editing action are off until Stop.
 use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
@@ -18,16 +25,18 @@ use crate::editor::{EditorState, Gesture, INSERTABLE, UiRequest};
 use crate::editor_colour::ColourDock;
 use crate::editor_input_actions::InputActionsDock;
 use crate::editor_tools::{EditorTools, ViewContext};
-use crate::explorer::Explorer;
+use crate::explorer::{Explorer, PlayTree};
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
 use crate::panel;
+use crate::play::input::PlayInput;
 use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
 use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::toolbar::{Toolbar, ToolbarLayout};
 use crate::viewport::Viewport;
+use crate::widgets::Plate;
 
 /// What the editor asks the app shell to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +88,10 @@ pub struct EditorUi {
     save_error: Option<String>,
     /// The creator asked for Settings; the app shows the dialog.
     settings_requested: bool,
+    /// Keyboard and mouse state of the running game's input.
+    play_input: PlayInput,
+    /// Explorer's read-only tree of the play world.
+    play_tree: PlayTree,
 }
 
 impl EditorUi {
@@ -105,6 +118,8 @@ impl EditorUi {
             confirm: None,
             save_error: None,
             settings_requested: false,
+            play_input: PlayInput::new(),
+            play_tree: PlayTree::new(),
         };
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
@@ -217,28 +232,47 @@ impl EditorUi {
     }
 
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
-        let typing = ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta();
+        let playing = self.state.play.is_playing();
+        // While playing, a focused button must not keep Esc from stopping: only text counts.
+        let typing = if playing {
+            ctx.text_edit_focused()
+        } else {
+            ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta()
+        };
         // A gesture (preview overlay, viewport drag, Properties scrub, brush stroke, lasso, array
         // handle) is open: no action runs until it ends. Esc cancels it where it lives; a tool
         // gesture's Esc is the keymap's `tool.cancel`.
-        let busy = self.state.gesture_active();
+        let busy = !playing && self.state.gesture_active();
         let fly = right_down;
-        let mut contexts: Vec<KeyContext> = Vec::with_capacity(4);
-        if !typing && !fly {
-            // The tools' contexts come first: their keys win over the same chord elsewhere.
-            if self.tools.popover_keys() {
-                contexts.push(KeyContext::Popover);
-            }
-            if self.tools.tool_keys(viewport_hovered) {
-                contexts.push(KeyContext::Tool);
-            }
-        }
+        // At most Popover, Tool, Global and Viewport (or Global and Play): no allocation.
+        let mut contexts = [KeyContext::Global; 4];
+        let mut active = 0;
+        let mut push = |c| {
+            contexts[active] = c;
+            active += 1;
+        };
         if !typing {
-            contexts.push(KeyContext::Global);
-            if viewport_hovered && !fly && !busy {
-                contexts.push(KeyContext::Viewport);
+            if playing {
+                push(KeyContext::Global);
+                // With the unsaved-changes prompt open, Esc belongs to the prompt.
+                if self.confirm.is_none() {
+                    push(KeyContext::Play);
+                }
+            } else {
+                // The tools' contexts come first: their keys win over the same chord elsewhere.
+                if !fly && self.tools.popover_keys() {
+                    push(KeyContext::Popover);
+                }
+                if !fly && self.tools.tool_keys(viewport_hovered) {
+                    push(KeyContext::Tool);
+                }
+                push(KeyContext::Global);
+                if viewport_hovered && !fly && !busy {
+                    push(KeyContext::Viewport);
+                }
             }
         }
+        let contexts = &contexts[..active];
         let mut pressed = std::mem::take(&mut self.pressed);
         if busy {
             pressed.clear();
@@ -251,13 +285,54 @@ impl EditorUi {
             self.keymap
                 .pressed(ctx, &[KeyContext::Global], &mut pressed);
             pressed.retain(|a| *a == "file.save" || a.starts_with("play."));
+        } else if playing {
+            // Studio keeps F5, Shift+F5, Esc and Ctrl+S; a disabled action leaves its key to the
+            // game.
+            let (actions, state) = (&self.actions, &self.state);
+            self.keymap
+                .pressed_where(ctx, contexts, &mut pressed, |id| {
+                    id.starts_with("play.") || actions.get(id).is_some_and(|a| a.is_enabled(state))
+                });
         } else {
-            self.keymap.pressed(ctx, &contexts, &mut pressed);
+            self.keymap.pressed(ctx, contexts, &mut pressed);
         }
         for &id in &pressed {
             self.run_action(id);
         }
         self.pressed = pressed;
+    }
+
+    /// Starts play mode `id` on what is on screen: open script tabs are committed and a gizmo or
+    /// Properties gesture ends first. On success the Scene tab shows and the game gets the
+    /// keyboard; on failure Output says why and editing goes on.
+    fn start_play(&mut self, ctx: &egui::Context, id: &'static str) {
+        self.scripts.flush(&mut self.state);
+        self.colour.close(&mut self.state);
+        self.properties.finish_gesture(&mut self.state);
+        self.viewport.cancel_drag(&mut self.state);
+        self.tools.cancel_gestures();
+        for g in [Gesture::Viewport, Gesture::Properties, Gesture::Tool] {
+            self.state.set_gesture(g, false);
+        }
+        if self.state.start_play(id) {
+            self.scripts.show_scene();
+            self.play_input = PlayInput::new();
+            self.play_tree = PlayTree::new();
+            ctx.memory_mut(|m| {
+                if let Some(focused) = m.focused() {
+                    m.surrender_focus(focused);
+                }
+            });
+        }
+    }
+
+    /// Call from the app's `raw_input_hook`, before egui sees the frame's input. While the game
+    /// has the keyboard, Tab, Space and Enter are taken out here, so egui can neither move focus
+    /// to a Studio widget nor press the focused one; the game gets them through [`PlayInput`].
+    pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        if self.state.play.view().is_some() && self.confirm.is_none() {
+            self.play_input.hold_game_keys(raw);
+        }
     }
 
     /// File > Close game and Ctrl+W: closes at once, or asks first when there are unsaved changes.
@@ -272,7 +347,7 @@ impl EditorUi {
         }
     }
 
-    fn requests(&mut self) -> Option<EditorExit> {
+    fn requests(&mut self, ctx: &egui::Context) -> Option<EditorExit> {
         let mut exit = None;
         for r in self.state.take_requests() {
             match r {
@@ -283,6 +358,7 @@ impl EditorUi {
                 UiRequest::OpenScript(id) => self.scripts.open(id, &self.state),
                 UiRequest::RunAction(id) => self.run_action(id),
                 UiRequest::OpenSettings => self.settings_requested = true,
+                UiRequest::StartPlay(id) => self.start_play(ctx, id),
                 UiRequest::CloseGame => exit = exit.or(self.close_game()),
             }
         }
@@ -297,8 +373,32 @@ impl EditorUi {
     ) -> EditorExit {
         let ctx = ui.ctx().clone();
         let dt = f64::from(ctx.input(|i| i.stable_dt));
+        if self.confirm.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            // Esc answers the unsaved-changes prompt (Cancel); it never stops Play then.
+            self.confirm = None;
+            self.save_error = None;
+        }
+        let played = self.state.play.is_playing();
+        let mut early = None;
+        if played {
+            // Studio keys first (Esc, Shift+F5, Ctrl+S); what is left belongs to the game.
+            self.keys(&ctx, false, false);
+            early = self.requests(&ctx);
+        }
+        let (rect, hovered) = (self.viewport.rect(), self.viewport.play_hovered());
+        let prompt = self.confirm.is_some();
+        if let Some(view) = self.state.play.view_mut() {
+            if prompt {
+                self.play_input.release(view);
+            } else {
+                self.play_input.feed(&ctx, view, rect, hovered);
+            }
+        }
         self.state.play.update(dt);
-        let mut exit = EditorExit::Stay;
+        let playing = self.state.play.is_playing();
+        let mut exit = early.unwrap_or(EditorExit::Stay);
 
         egui::Panel::top("menu")
             .frame(
@@ -442,7 +542,8 @@ impl EditorUi {
                     });
                     ui.menu_button("Insert", |ui| {
                         for &class in INSERTABLE {
-                            if ui.button(class).clicked() {
+                            if theme::add_enabled(ui, !playing, egui::Button::new(class)).clicked()
+                            {
                                 let parent = self
                                     .state
                                     .selection
@@ -508,14 +609,14 @@ impl EditorUi {
                     ui.label(small(self.state.tool.label().to_string()).color(theme::text_2()));
                     ui.label(small("·".into()).color(dim));
                     let (play, colour) = match self.state.play.status() {
-                        None => ("Editing".to_string(), theme::text_2()),
+                        None => ("Editing".into(), theme::text_2()),
                         Some(crate::play::PlayStatus::Starting) => {
-                            ("Starting…".to_string(), theme::success())
+                            ("Starting…".into(), theme::success())
                         }
                         Some(crate::play::PlayStatus::Running(t)) => (t, theme::success()),
                         Some(crate::play::PlayStatus::Ended(t)) => (t, theme::text_2()),
                     };
-                    ui.label(small(play).color(colour));
+                    ui.label(small(play.into_owned()).color(colour));
                     // The drag readout (spec 4.5): the amount, editable for a few seconds after
                     // release (accent), and what the drag snapped to.
                     if let Some(st) = self.viewport.status(&self.state) {
@@ -573,7 +674,18 @@ impl EditorUi {
                     ui,
                     "Explorer",
                     |_| {},
-                    |ui| self.explorer.ui(ui, &mut self.state),
+                    |ui| {
+                        if let Some(view) = self.state.play.view() {
+                            playing_banner(ui, "Play world, read-only. Stop returns to editing.");
+                            let tree = &mut self.play_tree;
+                            view.inspect_world(&mut |world| tree.ui(ui, world));
+                        } else if playing {
+                            playing_banner(ui, "Playing. Stop to edit.");
+                            ui.add_enabled_ui(false, |ui| self.explorer.ui(ui, &mut self.state));
+                        } else {
+                            self.explorer.ui(ui, &mut self.state);
+                        }
+                    },
                 );
             });
         egui::Panel::right("properties")
@@ -587,10 +699,17 @@ impl EditorUi {
                     "Properties",
                     |_| {},
                     |ui| {
-                        self.state.set_gesture(Gesture::Properties, false);
-                        self.properties.ui(ui, &mut self.state);
-                        self.state
-                            .set_gesture(Gesture::Properties, self.properties.is_busy());
+                        if playing {
+                            playing_banner(ui, "Edit values, read-only while playing.");
+                            ui.add_enabled_ui(false, |ui| self.properties.ui(ui, &mut self.state));
+                        } else {
+                            // The owner may edit during its own gesture; the flag is its state
+                            // after it ran (see EditorState::gesture_active).
+                            self.state.set_gesture(Gesture::Properties, false);
+                            self.properties.ui(ui, &mut self.state);
+                            self.state
+                                .set_gesture(Gesture::Properties, self.properties.is_busy());
+                        }
                     },
                 );
             });
@@ -658,10 +777,12 @@ impl EditorUi {
             .show(&ctx, &mut self.state, self.viewport.hovered());
         self.tools.ui(&ctx, &mut self.state);
 
-        let right_down = ctx.input(|i| i.pointer.secondary_down());
-        self.keys(&ctx, viewport_hovered, right_down);
-        self.state.set_gesture(Gesture::Tool, self.tools.gesture());
-        if let Some(done) = self.requests() {
+        if !played {
+            let right_down = ctx.input(|i| i.pointer.secondary_down());
+            self.keys(&ctx, viewport_hovered, right_down);
+            self.state.set_gesture(Gesture::Tool, self.tools.gesture());
+        }
+        if let Some(done) = self.requests(&ctx) {
             exit = done;
         }
 
@@ -708,6 +829,28 @@ impl EditorUi {
         }
         exit
     }
+}
+
+/// A full-width note at the top of a panel while playing.
+fn playing_banner(ui: &mut egui::Ui, text: &str) {
+    let width = ui.available_width();
+    let galley = ui.painter().layout(
+        text.to_string(),
+        ui_tokens().small(),
+        theme::success(),
+        width - 16.0,
+    );
+    let pad = egui::vec2(8.0, 4.0);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(width, galley.size().y + pad.y * 2.0),
+        egui::Sense::hover(),
+    );
+    Plate::panel()
+        .fill(theme::success_bg())
+        .paint(ui.painter(), rect);
+    ui.painter()
+        .galley(rect.min + pad, galley, theme::success());
+    ui.add_space(4.0);
 }
 
 fn fmt(v: f64) -> String {

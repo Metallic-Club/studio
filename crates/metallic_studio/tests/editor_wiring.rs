@@ -711,8 +711,8 @@ fn start_stroke(h: &mut Harness<'static, EditorUi>, sc: &Scene) -> Pos2 {
 }
 
 #[test]
-fn a_brush_stroke_cancelled_by_esc_tool_switch_or_focus_loss_never_commits() {
-    for how in ["esc", "tool", "focus"] {
+fn a_brush_stroke_cancelled_by_esc_tool_switch_focus_loss_or_play_never_commits() {
+    for how in ["esc", "tool", "focus", "play"] {
         let (ui, sc) = editor();
         let mut h = harness(ui);
         let before = snapshot(&h.state().state);
@@ -720,11 +720,18 @@ fn a_brush_stroke_cancelled_by_esc_tool_switch_or_focus_loss_never_commits() {
         match how {
             "esc" => h.key_press(egui::Key::Escape),
             "tool" => h.state_mut().run_action("tool.move"),
+            "play" => h.state_mut().run_action("play.start"),
             _ => h.input_mut().focused = false,
         }
         h.run_steps(2);
         h.input_mut().focused = true;
         button(&mut h, at, false, Modifiers::NONE);
+        if how == "play" {
+            assert!(h.state().state.play.is_playing(), "Play started");
+            h.state_mut().run_action("play.stop");
+            h.run_steps(3);
+            assert!(!h.state().state.play.is_playing());
+        }
         assert!(!h.state().tools.gesture(), "{how}: the stroke ended");
         // Turning the brush on again does not commit the old stroke either.
         if h.state().tools.state().modal != Some(Modal::Brush) {

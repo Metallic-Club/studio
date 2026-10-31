@@ -429,6 +429,15 @@ impl EditorTools {
         (t.modal.is_some() && viewport_hovered) || gesture_of(&t)
     }
 
+    /// Ends every tool gesture without its change (Play starting): the brush stroke is dropped,
+    /// the trail cleared, the array handle put back.
+    pub fn cancel_gestures(&self) {
+        let mut t = self.shared.borrow_mut();
+        t.brush.cancel_stroke();
+        t.select.cancel();
+        t.arrange.cancel_handle();
+    }
+
     /// True while a tool gesture is held: a brush stroke, a lasso or paint trail, an array
     /// handle drag.
     pub fn gesture(&self) -> bool {

@@ -13,13 +13,30 @@
 //! - **status**: [`PlaySession::status`] is polled each frame for the toolbar and status bar
 //!   ("Running · 3 players"); [`PlaySession::update`] gets the frame time.
 //! - **stop**: [`PlaySession::stop`] ends the session and releases its processes or threads.
+//! - **view** (optional): a session whose game runs inside Studio returns a [`PlayView`] from
+//!   [`PlaySession::view`]; the viewport then draws that game with its camera and GUI, sends it
+//!   keyboard and mouse input, and Explorer shows its world read-only. Sessions in other
+//!   processes (Team Test) return `None` and keep their own windows.
 //!
 //! Listeners added with [`PlayController::on_event`] hear [`PlayEvent`]s (started, stopped,
 //! failed), for example to clear Output on Play or to switch the Explorer to the play world.
 //! While a session runs, [`PlayController::is_playing`] is true and editing commands are disabled.
+//!
+//! [`LocalPlayMode`] is Play (#11, F5): a [`LocalPlaySession`] runs the real Game in this
+//! process, client and server combined like the Player, and is its own [`PlayView`].
+//! [`input::PlayInput`] turns the editor's egui input into the game's raw events.
+pub mod input;
+mod local;
+
+pub use local::{LocalPlayMode, LocalPlaySession, PLAY_TAG};
+
+use std::borrow::Cow;
 use std::path::Path;
 
+use eframe::egui;
 use metallic_core::World;
+use metallic_render::Renderer;
+use metallic_runtime::input::RawEvent;
 
 use crate::output::{Level, OutputSink, Tag};
 
@@ -38,10 +55,11 @@ pub struct PlayStart<'a> {
 pub enum PlayStatus {
     /// Still starting (processes launching, world loading).
     Starting,
-    /// Running; the text is shown next to Stop ("Running", "3 players").
-    Running(String),
+    /// Running; the text is shown in the status bar ("Playing", "3 players"). Borrowed text
+    /// costs nothing to poll each frame.
+    Running(Cow<'static, str>),
     /// The session ended on its own (a crash or the game closed); the text says why.
-    Ended(String),
+    Ended(Cow<'static, str>),
 }
 
 /// One way to run the game.
@@ -62,6 +80,36 @@ pub trait PlaySession {
     fn status(&self) -> PlayStatus;
     /// Ends the session.
     fn stop(self: Box<Self>) -> Result<(), String>;
+    /// The in-Studio game, for a session drawn in the viewport (`None` by default).
+    fn view(&self) -> Option<&dyn PlayView> {
+        None
+    }
+    /// The in-Studio game, mutably (to send it input).
+    fn view_mut(&mut self) -> Option<&mut dyn PlayView> {
+        None
+    }
+}
+
+/// A game that runs inside Studio: the viewport draws it and feeds it input.
+///
+/// Input is queued with [`PlayView::push_input`] and used by the next [`PlaySession::update`],
+/// so a frame is: push this frame's events, update, render.
+pub trait PlayView {
+    /// The input clock in seconds; raw events are stamped with it.
+    fn input_time(&self) -> f64;
+    /// Queues one raw input event (keyboard or mouse) for the next update.
+    fn push_input(&mut self, event: RawEvent);
+    /// Releases every held control at once (the viewport lost the keyboard or the window lost
+    /// focus), so no key stays stuck down.
+    fn release_input(&mut self);
+    /// Brings `renderer` up to date with the play world and draws it into `target` (`size` in
+    /// pixels) with the game camera.
+    fn render(&self, renderer: &mut Renderer, target: &wgpu::TextureView, size: (u32, u32));
+    /// Paints the local player's ScreenGuis into `painter`'s clip rectangle.
+    fn paint_gui(&self, painter: &egui::Painter);
+    /// Lends the play world read-only for the duration of `inspect` (Explorer's play tree). Does
+    /// nothing after Stop or while the world is borrowed.
+    fn inspect_world(&self, inspect: &mut dyn FnMut(&World));
 }
 
 /// Something that happened to play state.
@@ -136,6 +184,21 @@ impl PlayController {
     /// Status of the running session.
     pub fn status(&self) -> Option<PlayStatus> {
         self.running.as_ref().map(|(_, s)| s.status())
+    }
+
+    /// The running session's in-Studio game, if it has one.
+    pub fn view(&self) -> Option<&dyn PlayView> {
+        self.running.as_ref().and_then(|(_, s)| s.view())
+    }
+
+    /// The running session's in-Studio game, mutably.
+    pub fn view_mut(&mut self) -> Option<&mut dyn PlayView> {
+        self.running.as_mut().and_then(|(_, s)| s.view_mut())
+    }
+
+    /// True when a mode with `id` is registered.
+    pub fn has_mode(&self, id: &str) -> bool {
+        self.modes.iter().any(|m| m.id() == id)
     }
 
     /// Starts the mode `id`. Does nothing (returns false) when a session already runs or the mode
