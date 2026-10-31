@@ -39,7 +39,11 @@ All API tables are read-only.
   replacement-character behavior for lookup and errors.
 - Wrong property type: `invalid value for property Position: expected Vector3, got number`. Numbers and vectors must be finite.
 - The same instance is always the same Lua object (`a == b`, usable as a table key).
-- A destroyed instance errors on use: `Brick has been destroyed`. Services cannot be destroyed, cloned or reparented.
+- A destroyed instance stays readable, like in Roblox: `Name`, `ClassName` and its other properties keep their last
+  values, `Parent` is `nil`, `FindFirstChild` returns `nil`, `GetChildren`/`GetDescendants` return `{}` and `IsA`
+  still answers. Changing it errors: `The Parent property of Brick is locked: it has been destroyed`, `cannot set Name:
+  Brick has been destroyed`; so do `Clone`, `WaitForChild` and its events. `Destroy` again does nothing. Services
+  cannot be destroyed, cloned or reparented.
 - `WaitForChild` yields; `step` resumes it. With a timeout it returns nil afterwards. Without one it warns once after 5 s.
 
 ```lua
@@ -129,7 +133,7 @@ local cf, size = door:GetBoundingBox()
 |---|---|---|
 | `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
 | `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced); pairs with `Touched`. If the
-character part was destroyed by then, `hit` is the destroyed instance (its members can no longer be read) Part-to-part contacts report `Touched` only |
+character part was destroyed by then, `hit` is the destroyed instance, still readable (`hit.Name`; `hit.Parent` is nil). Part-to-part contacts report `Touched` only |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |

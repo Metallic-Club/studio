@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Most journal entries kept before the oldest half is dropped.
 const JOURNAL_LIMIT: usize = 16384;
+/// Most destroyed instances [`World::take_destroyed`] keeps between two takes; later ones are
+/// not kept, so a world nobody drains holds at most this many.
+pub const DESTROYED_LIMIT: usize = 16384;
 static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
 static NULL_REFERENCE: Value = Value::Ref(None);
 
@@ -80,6 +83,36 @@ const SERVICES: &[&str] = &[
     "RunService",
 ];
 
+/// What a destroyed instance was: its id, class and last property values (see
+/// [`World::keep_destroyed`]).
+#[derive(Debug, Clone)]
+pub struct DestroyedInstance {
+    id: InstanceId,
+    class: &'static str,
+    props: BTreeMap<String, Value>,
+}
+
+impl DestroyedInstance {
+    /// The id the instance had.
+    pub fn id(&self) -> InstanceId {
+        self.id
+    }
+
+    /// Its class name.
+    pub fn class_name(&self) -> &'static str {
+        self.class
+    }
+
+    /// The last value of `prop` (the class default if it was never set), `None` if the class
+    /// has no such property. References are returned as stored, live or not.
+    pub fn get(&self, prop: &str) -> Option<Value> {
+        match self.props.get(prop) {
+            Some(v) => Some(v.clone()),
+            None => default_value(self.class, prop),
+        }
+    }
+}
+
 /// A whole game tree: owns all instances, their properties and events.
 pub struct World {
     slots: Vec<Slot>,
@@ -93,6 +126,8 @@ pub struct World {
     journal: Vec<(u64, InstanceId)>,
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
+    /// Destroyed instances kept for [`World::take_destroyed`]; `None` keeps nothing.
+    destroyed: Option<Vec<DestroyedInstance>>,
 }
 
 impl World {
@@ -108,6 +143,26 @@ impl World {
             revision: 0,
             journal: Vec::new(),
             journal_floor: 0,
+            destroyed: None,
+        }
+    }
+
+    /// Whether [`World::destroy`] keeps what it destroys (id, class, property values) for
+    /// [`World::take_destroyed`]. Off by default; turning it off drops what was kept. The script
+    /// host turns it on so scripts can still read a destroyed instance, like Roblox.
+    pub fn keep_destroyed(&mut self, keep: bool) {
+        match (keep, self.destroyed.is_some()) {
+            (true, false) => self.destroyed = Some(Vec::new()),
+            (false, true) => self.destroyed = None,
+            _ => {}
+        }
+    }
+
+    /// Moves the instances destroyed since the last take into `out` (appended), at most
+    /// [`DESTROYED_LIMIT`] of them. Nothing while [`World::keep_destroyed`] is off.
+    pub fn take_destroyed(&mut self, out: &mut Vec<DestroyedInstance>) {
+        if let Some(kept) = &mut self.destroyed {
+            out.append(kept);
         }
     }
 
@@ -306,6 +361,15 @@ impl World {
                 stack.extend(node.children);
                 slot.generation += 1;
                 self.free.push(cur.index);
+                if let Some(kept) = &mut self.destroyed
+                    && kept.len() < DESTROYED_LIMIT
+                {
+                    kept.push(DestroyedInstance {
+                        id: cur,
+                        class: node.class,
+                        props: node.props,
+                    });
+                }
             }
         }
         // Keep only signals of live instances. Ids that never belonged to this world (out of range,
@@ -631,6 +695,7 @@ impl World {
             revision: 0,
             journal: Vec::new(),
             journal_floor: 0,
+            destroyed: None,
         }
     }
 }

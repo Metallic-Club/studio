@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use metallic_core::classes::{find_property, is_subclass};
 use metallic_core::transform;
-use metallic_core::{CoreError, InstanceId, Value as CoreValue};
+use metallic_core::{CFrame, CoreError, DestroyedInstance, InstanceId, Value as CoreValue};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, Table, Thread, UserData, UserDataFields,
     UserDataMethods, UserDataRef, Value,
@@ -84,6 +84,8 @@ pub(crate) struct LuaInstance {
     pub(crate) state: Rc<ApiState>,
     /// Last known name, so a destroyed instance can still be named in errors.
     name_hint: RefCell<String>,
+    /// What the instance was when it was destroyed: its last values stay readable.
+    snapshot: RefCell<Option<Rc<DestroyedInstance>>>,
 }
 
 fn core_error(e: CoreError) -> mlua::Error {
@@ -129,6 +131,33 @@ impl LuaInstance {
             _ => self.name_hint.borrow().clone(),
         }
     }
+
+    /// Whether the instance was destroyed. An error only if the host has the world borrowed.
+    fn is_destroyed(&self) -> mlua::Result<bool> {
+        Ok(!self.state.world()?.is_alive(self.id))
+    }
+
+    /// The last values of this destroyed instance, if they were kept.
+    fn snapshot(&self) -> Option<Rc<DestroyedInstance>> {
+        if let Some(s) = &*self.snapshot.borrow() {
+            return Some(s.clone());
+        }
+        let found = self.state.destroyed(self.id)?;
+        self.keep(found.clone());
+        Some(found)
+    }
+
+    /// Keeps `snapshot` as what this (destroyed) instance was.
+    fn keep(&self, snapshot: Rc<DestroyedInstance>) {
+        if let Some(CoreValue::String(name)) = snapshot.get("Name") {
+            *self.name_hint.borrow_mut() = name;
+        }
+        *self.snapshot.borrow_mut() = Some(snapshot);
+    }
+
+    fn destroyed_error(&self) -> mlua::Error {
+        lua_error(format!("{} has been destroyed", self.name_hint.borrow()))
+    }
 }
 
 fn not_a_member(member: &str, class: &str) -> mlua::Error {
@@ -140,22 +169,78 @@ impl ApiState {
     pub(crate) fn wrap(self: &Rc<Self>, lua: &Lua, id: InstanceId) -> mlua::Result<AnyUserData> {
         // Keyed by the slot index (exact in a Lua number); the stored id tells generations apart.
         let slot = (id.to_bits() & 0xffff_ffff) as f64;
-        if let Value::UserData(ud) = self.cache.get::<Value>(slot)?
-            && ud.borrow::<LuaInstance>().is_ok_and(|i| i.id == id)
-        {
-            return Ok(ud);
+        if let Value::UserData(ud) = self.cache.get::<Value>(slot)? {
+            match ud.borrow::<LuaInstance>() {
+                Ok(i) if i.id == id => return Ok(ud),
+                // The slot holds a new instance now: the old object keeps what it was.
+                Ok(old) if old.snapshot.borrow().is_none() => {
+                    if let Some(s) = self.destroyed(old.id) {
+                        old.keep(s);
+                    }
+                }
+                _ => {}
+            }
         }
-        let name = match self.world()?.get(id, "Name") {
-            Ok(CoreValue::String(s)) => s,
-            _ => String::new(),
+        let (alive, name) = {
+            let world = self.world()?;
+            match world.get(id, "Name") {
+                Ok(CoreValue::String(s)) => (true, s),
+                _ => (world.is_alive(id), String::new()),
+            }
         };
-        let ud = lua.create_userdata(LuaInstance {
+        let instance = LuaInstance {
             id,
             state: self.clone(),
             name_hint: RefCell::new(name),
-        })?;
+            snapshot: RefCell::new(None),
+        };
+        if !alive && let Some(s) = self.destroyed(id) {
+            instance.keep(s);
+        }
+        let ud = lua.create_userdata(instance)?;
         self.cache.set(slot, ud.clone())?;
         Ok(ud)
+    }
+
+    /// What the destroyed instance `id` was, if it was destroyed during this step (or the
+    /// world kept it since).
+    pub(crate) fn destroyed(&self, id: InstanceId) -> Option<Rc<DestroyedInstance>> {
+        self.take_destroyed();
+        self.shared.destroyed.borrow().get(&id).cloned()
+    }
+
+    /// Moves what the world kept of destroyed instances into the step's table.
+    fn take_destroyed(&self) {
+        let Ok(mut world) = self.world.try_borrow_mut() else {
+            return;
+        };
+        let mut taken = self.shared.taken.borrow_mut();
+        world.take_destroyed(&mut taken);
+        drop(world);
+        if taken.is_empty() {
+            return;
+        }
+        let mut destroyed = self.shared.destroyed.borrow_mut();
+        for d in taken.drain(..) {
+            destroyed.insert(d.id(), Rc::new(d));
+        }
+    }
+
+    /// End of a step: every live Luau object of an instance destroyed in it keeps what the
+    /// instance was. The caller then empties the step's table.
+    pub(crate) fn keep_destroyed(&self) -> mlua::Result<()> {
+        self.take_destroyed();
+        for (id, snapshot) in self.shared.destroyed.borrow().iter() {
+            let slot = (id.to_bits() & 0xffff_ffff) as f64;
+            if let Value::UserData(ud) = self.cache.get::<Value>(slot)?
+                && let Ok(i) = ud.borrow::<LuaInstance>()
+                && i.id == *id
+                && i.snapshot.borrow().is_none()
+            {
+                i.keep(snapshot.clone());
+            }
+        }
+        Ok(())
     }
 
     /// Like [`ApiState::wrap`], nil for `None`.
@@ -298,10 +383,67 @@ fn member_name(key: &Value) -> mlua::Result<MemberName> {
 #[cfg(test)]
 mod read_probe;
 
+/// Reading a destroyed instance, like Roblox: its last property values, `Parent` nil, no
+/// children; its read-only methods answer for an empty instance. Without kept values only
+/// `Name` and `Parent` read.
+fn destroyed_index(lua: &Lua, this: &LuaInstance, key: &str) -> mlua::Result<Value> {
+    if key == "Parent" {
+        return Ok(Value::Nil);
+    }
+    let Some(snapshot) = this.snapshot() else {
+        return match key {
+            "Name" => Ok(Value::String(lua.create_string(this.name())?)),
+            _ => Err(this.destroyed_error()),
+        };
+    };
+    let class = snapshot.class_name();
+    let state = &this.state;
+    match key {
+        "ClassName" => return Ok(Value::String(lua.create_string(class)?)),
+        "CFrame" if is_subclass(class, "BasePart") => {
+            let vec = |name| match snapshot.get(name) {
+                Some(CoreValue::Vector3(v)) => v,
+                _ => metallic_core::Vec3::new(0.0, 0.0, 0.0),
+            };
+            let cf = CFrame::from_position_orientation(vec("Position"), vec("Orientation"));
+            return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
+        }
+        _ => {}
+    }
+    if let Some(method) = state.methods.get(key) {
+        let mut owners = CLASS_METHODS
+            .iter()
+            .filter(|(name, _)| *name == key)
+            .peekable();
+        let allowed = owners.peek().is_none() || owners.any(|(_, owner)| is_subclass(class, owner));
+        if allowed {
+            return Ok(Value::Function(method.clone()));
+        }
+    }
+    if event_kind(class, key).is_some() {
+        return Err(lua_error(format!(
+            "{key} of {} is unavailable: it has been destroyed",
+            this.name()
+        )));
+    }
+    if find_property(class, key).is_some_and(|d| !d.hidden)
+        && let Some(value) = snapshot.get(key)
+    {
+        let value = match value {
+            CoreValue::Ref(Some(r)) if !state.world()?.is_alive(r) => CoreValue::Ref(None),
+            v => v,
+        };
+        return state.value_to_lua(lua, value);
+    }
+    Err(not_a_member(key, class))
+}
+
 fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
     let member = member_name(&key)?;
     let key = member.as_ref();
-    this.live()?;
+    if this.is_destroyed()? {
+        return destroyed_index(lua, this, key);
+    }
     let state = &this.state;
     let class = this.class()?;
     match key {
@@ -367,7 +509,16 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
 fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> {
     let member = member_name(&key)?;
     let key = member.as_ref();
-    this.live()?;
+    if this.is_destroyed()? {
+        return Err(lua_error(if key == "Parent" {
+            format!(
+                "The Parent property of {} is locked: it has been destroyed",
+                this.name()
+            )
+        } else {
+            format!("cannot set {key}: {} has been destroyed", this.name())
+        }));
+    }
     let class = this.class()?;
     match key {
         "ClassName" => Err(lua_error("ClassName is read-only")),
@@ -459,7 +610,10 @@ pub(crate) fn methods(
 ) -> mlua::Result<Vec<(&'static str, Function)>> {
     let find = lua.create_function(
         |lua, (this, name, recursive): (UserDataRef<LuaInstance>, String, Option<bool>)| {
-            this.live()?;
+            // A destroyed instance has no children.
+            if this.is_destroyed()? {
+                return Ok(Value::Nil);
+            }
             let world = this.state.world()?;
             let found = if recursive == Some(true) {
                 descendants(&world, this.id).into_iter().find(
@@ -473,12 +627,16 @@ pub(crate) fn methods(
         },
     )?;
     let children = lua.create_function(|lua, this: UserDataRef<LuaInstance>| {
-        this.live()?;
+        if this.is_destroyed()? {
+            return lua.create_table();
+        }
         let ids = this.state.world()?.children(this.id).to_vec();
         id_list(lua, &this.state, &ids)
     })?;
     let all_descendants = lua.create_function(|lua, this: UserDataRef<LuaInstance>| {
-        this.live()?;
+        if this.is_destroyed()? {
+            return lua.create_table();
+        }
         let ids = {
             let world = this.state.world()?;
             descendants(&world, this.id)
@@ -486,7 +644,15 @@ pub(crate) fn methods(
         id_list(lua, &this.state, &ids)
     })?;
     let is_a = lua.create_function(|_, (this, class): (UserDataRef<LuaInstance>, String)| {
-        this.live()?;
+        if this.is_destroyed()? {
+            let snapshot = this.snapshot().ok_or_else(|| this.destroyed_error())?;
+            let own = snapshot.class_name();
+            return Ok(if class == "PVInstance" {
+                is_subclass(own, "BasePart") || is_subclass(own, "Model")
+            } else {
+                is_subclass(own, &class)
+            });
+        }
         let world = this.state.world()?;
         Ok(if class == "PVInstance" {
             world.is_a(this.id, "BasePart") || world.is_a(this.id, "Model")
