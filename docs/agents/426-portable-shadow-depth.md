@@ -32,3 +32,9 @@ through public issue/review after actual proof, without editing the owner's bran
 
 Next: root review and focused GPU baseline/fix under the granted lane124 guard with
 four jobs and a disk check. Report before mandatory full gates; do not merge own PR.
+
+
+Root's source review caught a baseline typing mismatch before execution: the new
+cascade helper returns u32, while the existing shadow_filter layer parameter is i32.
+The baseline now explicitly casts the already-range-checked index at that call.
+This is a source correction before any compile/GPU result, not a runtime product red.

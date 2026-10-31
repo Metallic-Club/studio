@@ -230,7 +230,7 @@ fn shadow_factor(wp: vec3<f32>, n: vec3<f32>, view_depth: f32, frag: vec2<f32>) 
     let clip = g.cascade_vp[ci] * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
     let ref_depth = clip.z - 0.0004;
-    let lit = shadow_filter(uv, ci, ref_depth, frag);
+    let lit = shadow_filter(uv, i32(ci), ref_depth, frag);
     let last = g.cascade_splits[count - 1];
     let fade = smoothstep(0.85, 1.0, view_depth / last);
     return mix(lit, 1.0, fade);
