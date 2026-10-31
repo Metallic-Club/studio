@@ -417,7 +417,7 @@ fn combined_game_and_server_use_the_same_world_space_movement_kernel() {
 /// exercises what main added to Game's tick: a script-moved platform the character rides
 /// (#256, #382), a spinner, limb touch volumes from CPU bone poses (#370), a loose part, a death
 /// and the controller's respawn (#343, #346), and a script-destroyed character that respawns
-/// through the gone-without-dying timer (#273, #346).
+/// through the gone-without-dying timer (#273, #346), and part-part TouchEnded (#417).
 #[cfg(feature = "presentation")]
 mod game_parity {
     use super::*;
@@ -518,6 +518,26 @@ mod game_parity {
             at(2.0, 2.0, 2.0),
             false,
         );
+        // Part-part touches that start and end (#417): a script sweeps a sensor through a post.
+        let sweeper = part(
+            &mut world,
+            ws,
+            "Sweeper",
+            at(30.0, 10.0, 0.0),
+            at(2.0, 2.0, 2.0),
+            true,
+        );
+        world
+            .set(sweeper, "CanCollide", Value::Bool(false))
+            .unwrap();
+        part(
+            &mut world,
+            ws,
+            "Post",
+            at(36.0, 10.0, 0.0),
+            at(2.0, 2.0, 2.0),
+            true,
+        );
         let sss = world.root("ServerScriptService").unwrap();
         script(
             &mut world,
@@ -526,6 +546,9 @@ mod game_parity {
             r#"
 local mover, spinner, pad = workspace.Mover, workspace.Spinner, workspace.Pad
 local t, touches = 0, 0
+local sweeper = workspace.Sweeper
+sweeper.Touched:Connect(function(hit) print("sweep touch " .. hit.Name) end)
+sweeper.TouchEnded:Connect(function(hit) print("sweep end " .. hit.Name) end)
 pad.Touched:Connect(function(hit)
     touches += 1
     pad.Transparency = (touches % 100) / 100
@@ -535,6 +558,7 @@ game:GetService("RunService").Heartbeat:Connect(function(dt)
     t += dt
     mover.Position = Vector3.new(math.sin(t) * 4, 0.5, -14)
     spinner.Orientation = Vector3.new(0, (t * 90) % 360, 0)
+    sweeper.Position = Vector3.new(36 + math.sin(t * 2) * 6, 10, 0)
 end)
 task.delay(5, function()
     game:GetService("Players").Player1.Character.Humanoid.Health = 0
@@ -621,6 +645,12 @@ end)
         assert_eq!(*g, *s, "script output differs");
         assert!(g.iter().any(|l| l.starts_with("pad ")), "no touch: {g:?}");
         assert!(g.iter().any(|l| l == "killed"), "{g:?}");
+        let ends = g.iter().filter(|l| *l == "sweep end Post").count();
+        let starts = g.iter().filter(|l| *l == "sweep touch Post").count();
+        assert!(
+            ends >= 2 && starts >= ends,
+            "TouchEnded: {starts} touches, {ends} ends"
+        );
         assert!(g.iter().any(|l| l == "destroyed"), "{g:?}");
         assert!(!g.iter().any(|l| l.starts_with("error:")), "{g:?}");
         // The death and the destroy both respawned: three Models over the run, the last alive.
