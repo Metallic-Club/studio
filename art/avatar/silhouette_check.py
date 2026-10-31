@@ -2,10 +2,11 @@
 
     python art/avatar/silhouette_check.py
 
-Needs Pillow and numpy, and the clay renders from render_turnaround.py in art/avatar/out/raw/.
+Needs Pillow and numpy, and the clay renders from render_turnaround.py in art/avatar/out/raw/ (rest
+pose, open hands), or with --raw art/avatar/out/rawB those of render_phaseB.py (fists, as drawn).
 For each view the concept figure is cut out of the sheet (background flood-filled from the crop
 border), the render's alpha is scaled to the same height and bottom, and the horizontal offset with
-the best overlap is used. Output: art/avatar/renders/phaseA/silhouette_<view>.png
+the best overlap is used. Output: art/avatar/renders/v3/silhouette/silhouette_<view>.png
   grey   = both
   orange = concept only (we are missing volume here)
   blue   = render only (we have extra volume here)
@@ -20,7 +21,7 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONCEPT = os.path.join(HERE, "concept", "default-avatar-concept.png")
 RAW = os.path.join(HERE, "out", "raw")
-OUT = os.path.join(HERE, "renders", "phaseA")
+OUT = os.path.join(HERE, "renders", "v3", "silhouette")
 
 # Crop boxes around each body figure on the 1536 x 1024 concept sheet (x0, y0, x1, y1).
 CROPS = {
@@ -69,6 +70,10 @@ def trim(m):
 
 
 def main():
+    global RAW
+    if "--raw" in sys.argv:
+        # e.g. out/rawB: the rigged figure in its display pose (fists), from render_phaseB.py
+        RAW = os.path.abspath(sys.argv[sys.argv.index("--raw") + 1])
     os.makedirs(OUT, exist_ok=True)
     report = []
     for view, box in CROPS.items():

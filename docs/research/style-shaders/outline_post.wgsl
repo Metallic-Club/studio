@@ -1,8 +1,10 @@
 // Metallic style sample: post-process outlines from depth and normals.
 //
 // Research sample, not engine code. Runs as a full-screen pass after the opaque pass, before tonemapping.
-// Inputs: HDR colour, depth (single-sample or resolved), and the normal target written by surface.wgsl
-// (xyz: view normal * 0.5 + 0.5, w: per-material outline mask).
+// Inputs: 1x HDR colour, 1x depth, and 1x normal/mask (xyz: view normal * 0.5 + 0.5, w: material mask).
+// With scene MSAA > 1, depth and normals come from a separate 1x geometry prepass; only HDR colour resolves.
+// With MSAA off, stored opaque depth and its normal/mask MRT supply the inputs. Do not average normal masks.
+// All inputs share internal size/camera. See rendering-styles-vfx-animation.md section 4.3 (#109).
 // - Depth edges (silhouettes, creases between objects) darken the pixel on the NEAR side of the edge, so the
 //   line sits on the object in front. This keeps one-pixel lines clean for 3D pixel art.
 // - Normal edges (inner creases) without a depth edge lighten the pixel instead: a highlight line.

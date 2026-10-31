@@ -19,7 +19,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RAW = os.path.join(HERE, "out", "rawB")
-OUT = os.path.join(HERE, "renders", "phaseB")
+OUT = os.path.join(HERE, "renders", "v3")
 BLEND = os.path.join(HERE, "out", "default_avatar.blend")
 CONCEPT = os.path.join(HERE, "concept", "default-avatar-concept.png")
 
@@ -35,11 +35,11 @@ STUD = 0.28
 BODY = (520, 1000)
 # name: (action, frame, parts or None, target, ortho, azimuth, elevation, resolution)
 TURNAROUND = {
-    "body_front": ("test_display", 0, None, (0, 0, 0.80), 1.70, 0, 8, BODY),
-    "body_front34": ("test_display", 0, None, (0, 0, 0.80), 1.70, 30, 8, BODY),
-    "body_side": ("test_display", 0, None, (0, 0, 0.80), 1.70, 90, 8, BODY),
-    "body_back": ("test_display", 0, None, (0, 0, 0.80), 1.70, 180, 8, BODY),
-    "body_back34": ("test_display", 0, None, (0, 0, 0.80), 1.70, 225, 8, BODY),
+    "body_front": ("test_hand_fist", 0, None, (0, 0, 0.80), 1.70, 0, 8, BODY),
+    "body_front34": ("test_hand_fist", 0, None, (0, 0, 0.80), 1.70, 30, 8, BODY),
+    "body_side": ("test_hand_fist", 0, None, (0, 0, 0.80), 1.70, 90, 8, BODY),
+    "body_back": ("test_hand_fist", 0, None, (0, 0, 0.80), 1.70, 180, 8, BODY),
+    "body_back34": ("test_hand_fist", 0, None, (0, 0, 0.80), 1.70, 225, 8, BODY),
     "head_front": ("test_display", 0, ("Head", "Neck"), (0, 0.0, 1.33), 0.50, 0, 4, (480, 480)),
     "head_side": ("test_display", 0, ("Head", "Neck"), (0, 0.0, 1.33), 0.50, -90, 4, (480, 480)),
     "head_34": ("test_display", 0, ("Head", "Neck"), (0, 0.0, 1.33), 0.50, -45, 4, (480, 480)),
@@ -300,6 +300,17 @@ def blender_main(argv):
         mod.use_quality_normals = True
         mod.material_offset = 1
         mod.use_rim = False
+        # Thinner hull on the fingers and thumb: in a fist they touch, and a full-width hull pokes
+        # through the neighbouring finger as dark spikes.
+        vg = ob.vertex_groups.get("outline_weight")
+        if vg is None:
+            vg = ob.vertex_groups.new(name="outline_weight")
+            fingers = {g.index for g in ob.vertex_groups
+                       if g.name.startswith("part_") and g.name[5:-2] in ("Index", "Middle", "Ring", "Little", "Thumb")}
+            thin = [v.index for v in ob.data.vertices if any(g.group in fingers for g in v.groups)]
+            vg.add([v.index for v in ob.data.vertices], 1.0, "REPLACE")
+            vg.add(thin, 0.35, "REPLACE")
+        mod.vertex_group = vg.name
 
     def set_action(name, frame):
         act = bpy.data.actions[name]

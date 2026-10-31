@@ -1,0 +1,131 @@
+# Issue 173: task ownership, bookkeeping and duration coercion
+
+Goal: queued task threads cannot be resumed with foreign functions/arguments, internal scheduler markers do
+not escape through user coroutine calls, numeric string waits coerce, and nil delay means zero. Branch
+`studio/173-task-thread-boundaries`, worktree `173-task-thread-boundaries`, fresh base `69a10d3`.
+
+## Research and proposed design
+
+Read the pinned Luau 0.740 `VM/src/lcorolib.cpp`, the
+[Luau coroutine reference](https://luau.org/library/#coroutine-library) and
+[Roblox task reference](https://create.roblox.com/docs/reference/engine/libraries/task). Native resume preserves
+all yielded/returned values and error objects. Native wrap prefixes string-coercible errors, including numbers
+(`lua_isstring`), while tables/booleans/nil/userdata retain object behavior. The task reference confirms
+function-or-thread targets and default-zero wait; nil-delay compatibility follows this issue's explicit
+acceptance rather than a claim that the sparse documentation establishes it.
+
+Root approved a prototype with native pcall/xpcall unchanged and ordinary coroutine compatibility tests first.
+Proposed: a private weak thread-key registry, fresh opaque queue lease identities, bound task-created function
+and argument tuples, narrow resume/wrap admission adapters, and private recognition/consumption of exact
+SLEEP/OK/ERR markers. Adopted user threads must be queued correctly when they wait, release queued ownership
+for ordinary yields/returns, and retain arbitrary user error objects. Check task.spawn/delay(Thread) duplicate
+ownership too; stale or externally closed queue entries must not produce later non-resumable errors.
+
+Use typed Option<f64> for delay to retain existing numeric-string coercion and argument diagnostics while
+defaulting nil to zero. Wait normalization must use the same numeric policy and retain useful positioned
+errors. No new public task APIs, native pcall replacement, unsafe FFI or execution-budget relaxation.
+
+## Integration prerequisite
+
+PR #255 originally used nil task.delay duration as an invalid-argument formatter fixture. That conflicts with
+this issue's acceptance. In its own existing worktree, replaced it with `pcall(string.match, {}, 'x')`, a truly
+invalid typed string argument independent of task policy. All 16 formatter cases passed (0.14 s) after guarded
+cleanup and verified source compilation; normal appended commit `95a787b` is pushed and its CI passed.
+No pending PR #255 production code is imported here.
+
+## Tests first / next
+
+Eight original baseline tests cover delayed-function hijack, foreign wait elapsed values, user wait tag opacity
+and adoption, native-wrap bypass on an adopted thread, wait numeric-string coercion, nil-delay default,
+existing numeric-string delay compatibility, and an exact native coroutine result/error/frame snapshot.
+The snapshot includes nil/multiple values, ordinary yields, dead threads, string error levels, arbitrary error
+objects, numeric wrap errors and invalid arguments, and checks native pcall/xpcall remain C functions.
+
+Baseline on the original `69a10d3` source: six expected behavioral failures, while native coroutine snapshots
+and existing numeric-string delay coercion passed. Guarded cleanup removed 49.1 MiB of local package outputs;
+both core/script paths were verified. Compile 7.68 s; eight tests 0.05 s.
+
+The prototype is written and its first focused prebuild passed. Weak thread keys hold private Rust userdata state,
+with exact u64 owners, cancellation flags and fresh Rc lease identities (no wrapping ticket counter). State
+does not reference its thread or Lua. Normal coroutine values stay entirely in Lua so opaque error userdata
+are not reconstructed while crossing Rust. Private callbacks only admit/finish threads and queue waits.
+Binding task-created functions and full argument tuples happens at creation. Duration delay uses Option<f64>;
+wait captures native tonumber. Native pcall/xpcall are unchanged.
+
+The expanded matrix now includes ordinary later yields, guard-tag removal, opaque Rust error userdata identity,
+duplicate and closed queues, stale leases, exact high-u64 cancellation ownership, weak-key GC and retained-handle
+VM release. Rebased cleanly onto main `749316a`, preserving the new wave,
+avatar/runtime features and host-configurable resume_budget field/default/use. Unpublished prototype head
+`e67a11f`; focused lib/task_threads prebuild passed in 14.09 s after 91.8 MiB local-package cleanup, with both
+source paths verified.
+
+First actual run: the private cancellation/GC unit passed; fourteen of fifteen integration cases passed.
+The remaining failure was a fixture-only print separator assumption (space versus tab), not a product red.
+Changed that assertion to a single concatenated output argument. Corrected rerun: all fifteen integration
+cases passed in 0.13 s after a 7.04 s incremental compile, including the exact native coroutine/error/frame
+snapshot and opaque Rust error-userdata identity. No production change was needed for that correction.
+
+Independent source review then found a real prototype ownership bug: cleanup on `status != Resumable` also
+removed Running/Normal thread state after a failed self/parent resume. Separate regressions reproduced both
+cancellation escapes (`armed`, `escaped`, `control`), with the unrelated delayed control working correctly.
+Inspected the pinned mlua ThreadStatus enum and narrowed cleanup to terminal Finished/Error states only.
+After the fix, all three private ownership tests passed (including both cancellation cases), and all fifteen
+non-smoke integration cases passed again in 0.03 s. These two valid product reds are separate from the print
+fixture correction above.
+
+The precompiled 1,000-coroutine smoke then passed under the unchanged default 100 ms budget: 10.3084 ms for
+500 create/resume and 500 wrap coroutines, each yielding and returning nil/multiple values. This is one host
+observation with unmeasured background activity, not a speedup or universal latency claim.
+
+## Pinned-base full validation
+
+On main base `749316a`, source head `fc33f97`: guarded forced-clean workspace prebuild passed in 5m21s,
+removing 152.0 MiB of local package outputs and preserving third-party cache. All local crate paths in the
+compile log identify this worktree. Strict workspace all-target Clippy passed in 2m23s; licenses (`licenses ok`),
+format and diff checks passed. The actual serial workspace suite passed 653 tests, zero failures, three
+existing manual probes ignored, including all new coroutine/cancellation/lifetime cases and the default-budget
+smoke. Independent second read-only review found no additional actionable findings.
+
+Main then advanced to `9d0dc8e` with production avatar animation changes (#279). Rebased cleanly onto that
+advance as `cae0665`; it changes animation/state-machine/runtime files and Cargo.lock, without direct script
+changes. The 653-test result above is preserved as pinned-base evidence, not a claim that this newer main has
+been validated here. After root #185's serial suite and backend Clippy released a build slot, started the
+guarded forced-clean workspace prebuild on this newer base. The reset removed 2.7 GiB of local package
+outputs and retained third-party dependencies; compile paths identify this worktree. Coordinate the new-base
+serial suite after the other release-profile allocation run completes, then finish required gates and publish
+only after checks pass. No public task APIs added; do not merge.
+
+On the `9d0dc8e` base, the guarded prebuild passed in 2m51s and the serial workspace suite passed 659 tests,
+zero failures, three existing manual probes ignored. This includes all 19 new tests. Strict workspace
+all-target Clippy passed in 28.66 s; licenses (`licenses ok`), format and diff checks passed. Logs are
+`metallic173-9d-{prebuild,workspace,clippy,licenses}.log` in the local temporary directory.
+
+The pre-PR fetch found main `48b20dd` (#278 input actions), with broad core/runtime/player changes and no
+direct script-source changes. The unpublished branch must be rebased onto that advance and validated again;
+the 659-test result remains exact-base evidence rather than a claim about that newer integration.
+
+## Final pinned input-actions integration
+
+Rebased cleanly onto `48b20dd`, source head `45b7b6d`. The task implementation and regression test files are
+identical to the independently reviewed `fc33f97` source; no pending PR production code was imported.
+The guarded reset removed 2.7 GiB of local package outputs, retained third-party dependencies and rebuilt
+this worktree's local crates. Workspace prebuild passed in 2m34s. The actual serial workspace suite passed
+718 tests, zero failures, three existing manual probes ignored, including both Parkour routes, input actions,
+all Luau suites and all 19 new tests. Logs: `metallic173-48-{prebuild,workspace}.log` in the local temporary
+directory. This base is pinned for final checks and publication; CI will validate the PR merge result.
+
+Strict workspace all-target Clippy passed in 35.81 s. License (`licenses ok`), format and diff checks also
+passed on this base. The final Clippy log is `metallic173-48-clippy.log` in the local temporary directory.
+All required local checks are green. Publish this branch for review, verify CI against the final pushed
+commit and do not merge. No new public task APIs or relaxed budgets.
+
+Final commands use the owned target lane via `tools/cargo_lane.py`, with `--reset` before prebuilding:
+
+```text
+test --workspace --no-run -j 4
+test --workspace -j 4 -- --test-threads=1
+clippy --workspace --all-targets -j 4 -- -D warnings
+cargo deny check licenses
+cargo fmt --all -- --check
+git diff --check
+```

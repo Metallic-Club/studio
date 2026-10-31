@@ -96,7 +96,8 @@ fn setup_failed(e: Error) -> ScriptError {
 }
 
 /// Lua that bounds `string.rep` (results over 64 MB are rejected, also when the count is
-/// a numeric string). The pattern functions are bounded in `pattern.rs`.
+/// a numeric string) and `table.sort` (above 256 elements, comparisons that would stay in C go through a Lua
+/// closure so the deadline can interrupt, #274). The pattern functions are bounded in `pattern.rs`.
 const STRING_LIMITS: &str = r#"
 local string, type, error, tonumber, tostring = string, type, error, tonumber, tostring
 local rep = string.rep
@@ -107,6 +108,52 @@ string.rep = function(s, n)
         error("string.rep: result too large (limit 64 MB)", 2)
     end
     return rep(s, n)
+end
+
+-- #274: table.sort runs in C, where the time budget's interrupt cannot fire between
+-- comparisons (a C comparator such as rawequal, a C __lt, or long string compares never return
+-- to Lua). The sort runs in C only where its cost is bounded or the comparator is a Lua
+-- function (already interruptible): a table of at most NUM_C_SORT numbers, or any table with a
+-- Lua comparator. Everything else above SORT_VIA_LUA elements goes through a Lua closure per
+-- comparison, so each one crosses a Lua call and the deadline check runs. Ordering and
+-- "invalid order function" are Luau's own; a type error from the default comparison loses only
+-- the closure's position prefix.
+local table, rawlen, rawget, type, pcall, error = table, rawlen, rawget, type, pcall, error
+local info = debug.info
+local sort = table.sort
+local SORT_VIA_LUA = 256
+local NUM_C_SORT = 262144
+local PREFIX = "^%[engine%]:%d+: "
+local function finish(ok, ...)
+    if ok then return ... end
+    local e = ...
+    if type(e) == "string" then
+        local _, stop = e:find(PREFIX)
+        if stop then e = e:sub(stop + 1) end
+    end
+    error(e, 0)
+end
+local function all_numbers(t, n)
+    for i = 1, n do
+        if type(rawget(t, i)) ~= "number" then return false end
+    end
+    return true
+end
+table.sort = function(t, comp)
+    if type(t) == "table" then
+        local n = rawlen(t)
+        if n > SORT_VIA_LUA then
+            if comp == nil then
+                if n <= NUM_C_SORT and all_numbers(t, n) then
+                    return sort(t)
+                end
+                return finish(pcall(sort, t, function(a, b) return a < b end))
+            elseif type(comp) == "function" and info(comp, "s") == "[C]" then
+                return finish(pcall(sort, t, function(a, b) return comp(a, b) end))
+            end
+        end
+    end
+    return sort(t, comp)
 end
 "#;
 
@@ -332,6 +379,13 @@ impl ScriptVm {
     /// (`lua_callbacks`: `debugbreak`, `debugstep`) are separate and do not conflict.
     pub fn lua(&self) -> &Lua {
         &self.lua
+    }
+
+    /// Sets how long one resume may run before it times out ([`RESUME_BUDGET`] by default).
+    /// The budget is wall-clock time, so test rigs on loaded machines raise it; tests of the
+    /// timeout itself keep the default.
+    pub fn set_resume_budget(&self, budget: Duration) {
+        self.sched.resume_budget.set(budget);
     }
 
     /// Adds (or replaces) a global visible to every script of this VM, e.g. `game` or

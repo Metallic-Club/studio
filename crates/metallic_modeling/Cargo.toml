@@ -1,0 +1,27 @@
+[package]
+name = "metallic_modeling"
+description = "Metallic modeller core: editable polygon mesh with stable ids, selections, reversible modelling commands, UVs and glTF/OBJ export."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+glam = "0.30.10"
+serde_json = "1.0.140"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+criterion.workspace = true
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "wgpu", "wayland", "x11"] }
+egui_kittest = { version = "0.37.0", features = ["wgpu", "eframe"] }
+gltf = { version = "1.4.1", default-features = false, features = ["names"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+proptest = "1.11.0"
+
+[[bench]]
+name = "edit"
+harness = false
+
+[[example]]
+name = "modeling_demo"

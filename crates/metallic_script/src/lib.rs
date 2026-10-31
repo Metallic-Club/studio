@@ -5,10 +5,15 @@
 //! `os.clock` and `os.time`, `collectgarbage("count")` only, a 0.1 s execution budget per
 //! resume and a 256 MB memory cap. Scripts run as coroutines, so `task.wait`,
 //! `task.spawn` and `task.delay` work; the host drives them by calling [`ScriptVm::step`].
+//! Queued task threads reject manual coroutine resumes. User coroutines that call
+//! `task.wait` are adopted until the wait ends; ordinary yields and return/error values
+//! retain their coroutine semantics without exposing scheduler markers.
 //!
 //! [`ScriptHost`] sits on top: it runs a world's `Script`s and `LocalScript`s in a server
 //! and a client VM and gives them the Roblox-named API (`game`, `Instance`, services,
 //! signals, `RemoteEvent`; see `docs/luau-api.md`).
+//! [`ScriptHost::new_server`] selects only the server VM, without synthetic local-player
+//! setup or client-script execution. This scripting role adds no network or server process.
 
 #![warn(missing_docs)]
 
@@ -18,6 +23,10 @@ mod pattern;
 mod task_lib;
 mod vm;
 
+pub use api::{
+    BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
+    MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
+};
 pub use host::{LOCAL_PLAYER_NAME, ScriptHost};
 pub use vm::{
     Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,

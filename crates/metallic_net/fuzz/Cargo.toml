@@ -1,0 +1,37 @@
+[package]
+name = "metallic_net_fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "LicenseRef-Metallic-Proprietary"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+metallic_net = { path = ".." }
+
+# Its own workspace: cargo fuzz needs nightly and sanitizer flags, so this crate stays out of the root workspace.
+[workspace]
+
+[[bin]]
+name = "reliable_frame"
+path = "fuzz_targets/reliable_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_datagram"
+path = "fuzz_targets/snapshot_datagram.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "input_datagram"
+path = "fuzz_targets/input_datagram.rs"
+test = false
+doc = false
+bench = false
