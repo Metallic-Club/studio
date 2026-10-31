@@ -37,6 +37,8 @@ pub fn save_png(path: &Path, image: &ColorImage) -> Result<(), StudioError> {
 pub struct ScreenshotJob {
     path: PathBuf,
     frames: u32,
+    /// Frames to wait before capturing.
+    settle: u32,
     requested: bool,
     done: Option<Receiver<()>>,
 }
@@ -47,16 +49,23 @@ impl ScreenshotJob {
         Self {
             path,
             frames: 0,
+            settle: SETTLE_FRAMES,
             requested: false,
             done: None,
         }
+    }
+
+    /// Waits `frames` frames instead of the usual few (a scene that has to run a while first).
+    pub fn after(mut self, frames: u32) -> Self {
+        self.settle = frames.max(SETTLE_FRAMES);
+        self
     }
 
     /// Call once per frame. Returns true when the PNG is written and the window is closing.
     pub fn tick(&mut self, ctx: &egui::Context) -> bool {
         self.frames += 1;
         ctx.request_repaint();
-        if !self.requested && self.frames >= SETTLE_FRAMES {
+        if !self.requested && self.frames >= self.settle {
             let (tx, rx) = channel();
             let path = self.path.clone();
             ctx.request_screenshot(move |image| {

@@ -41,6 +41,7 @@ pub mod camera;
 pub mod colour;
 pub mod commands;
 pub mod data_dirs;
+pub mod debugger;
 pub mod editor;
 pub mod editor_ui;
 pub mod error;

@@ -17,6 +17,7 @@ use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
+use crate::debugger::ProfilerPanel;
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
 use crate::explorer::{Explorer, PlayTree};
 use crate::keymap::{KeyContext, Keymap};
@@ -77,6 +78,20 @@ pub struct EditorUi {
     play_input: PlayInput,
     /// Explorer's read-only tree of the play world.
     play_tree: PlayTree,
+    /// The Profiler tab of the bottom panel.
+    pub profiler: ProfilerPanel,
+    /// Which tab the bottom panel shows.
+    pub bottom: BottomTab,
+}
+
+/// The tabs of the bottom panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BottomTab {
+    /// Script and Studio messages.
+    #[default]
+    Output,
+    /// Frame times (#23).
+    Profiler,
 }
 
 impl EditorUi {
@@ -97,6 +112,8 @@ impl EditorUi {
             settings_requested: false,
             play_input: PlayInput::new(),
             play_tree: PlayTree::new(),
+            profiler: ProfilerPanel::new(),
+            bottom: BottomTab::Output,
         };
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
@@ -308,6 +325,7 @@ impl EditorUi {
                 UiRequest::OpenSettings => self.settings_requested = true,
                 UiRequest::StartPlay(id) => self.start_play(ctx, id),
                 UiRequest::CloseGame => exit = exit.or(self.close_game()),
+                UiRequest::ShowProfiler => self.bottom = BottomTab::Profiler,
             }
         }
         exit
@@ -447,7 +465,12 @@ impl EditorUi {
                     ui.menu_button("View", |ui| {
                         self.actions.menu_items(
                             ui,
-                            &["view.frame_selection", "view.frame_all", "snap.soft"],
+                            &[
+                                "view.frame_selection",
+                                "view.frame_all",
+                                "snap.soft",
+                                "view.profiler",
+                            ],
                             &mut self.state,
                             &self.keymap,
                         );
@@ -637,7 +660,23 @@ impl EditorUi {
             .resizable(true)
             .frame(panel::frame())
             .show(ui, |ui| {
-                panel::show(ui, "Output", |_| {}, |ui| self.output.ui(ui));
+                let bottom = &mut self.bottom;
+                panel::tab_strip(ui, |ui| {
+                    for (tab, name) in [
+                        (BottomTab::Output, "Output"),
+                        (BottomTab::Profiler, "Profiler"),
+                    ] {
+                        if panel::tab(ui, name, *bottom == tab, false, false).clicked {
+                            *bottom = tab;
+                        }
+                    }
+                });
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| match self.bottom {
+                        BottomTab::Output => self.output.ui(ui),
+                        BottomTab::Profiler => self.profiler.ui(ui, self.state.play.view()),
+                    });
             });
 
         self.drag_keys(&ctx);
