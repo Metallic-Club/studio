@@ -9,7 +9,7 @@ engine models.
 
 ## Pieces
 
-- `tools/lighting/make_refs.py` (numpy only; `python -I`, so install numpy in a venv from
+- `tools/lighting/make_refs.py` (numpy only; `python -I`, so install numpy 2.5.4 in a `.venv` from
   `tools/lighting/requirements.txt`; about 45 s). It imports `atmosphere.py` and `tonemap.py` from
   `docs/research/lighting-shaders/reference/` and mirrors the few lines of `render.py` it needs, because
   `render.py` imports Pillow. It writes `crates/metallic_render/tests/data/lighting_refs.json` (committed):
@@ -33,9 +33,12 @@ engine models.
 | Sky brightening or darkening between neighbouring elevations | CPU | same direction wherever the reference changes by more than 10% | all agree |
 | Moonlight between -1 and -2 degrees | CPU | under 1e-5 (the moon, not the sunset) | was 2.4e-4, now 1e-6 (fixed) |
 | `fog_depth` | GPU | 1e-3 relative (the shader's first-order branch below abs(k dy) = 1e-3 is good to 5e-4) | 4e-4 |
-| Tone curves | CPU `ToneCurve::map`, GPU `apply_curve` | 1e-3 absolute, display-linear | pass |
+| Sky profile between horizon, zenith and ground (9 directions) | GPU `sky_gradient` | 1e-4 relative to the documented smoothstep | 3e-6 |
+| Tone curves | CPU `ToneCurve::map`, GPU `apply_curve` | 0.2% relative + 1e-7, display-linear | worst 1.1% of the tolerance |
 
-A 1% error injected into `fog_depth` fails the GPU fog check. The moonlight check failed before the fix.
+A 1% error injected into `fog_depth` fails the GPU fog check, and a 1% error in the dark end of the Filmic curve
+(inputs under 0.01) fails the GPU curve check. A test also shows the curve tolerance rejects a 1% error at every
+one of the 306 dark reference values (0.05 down to 1.25e-5). The moonlight check failed before the fix.
 
 ## Deliberate differences (not tested beyond the claims above)
 

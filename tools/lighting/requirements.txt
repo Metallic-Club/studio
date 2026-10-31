@@ -1,3 +1,3 @@
 # make_refs.py needs numpy only (BSD-3-Clause). `python -I` ignores user site-packages, so install it
 # into a virtual environment: python -m venv .venv; .venv/Scripts/pip install -r tools/lighting/requirements.txt
-numpy>=1.26
+numpy==2.5.4

@@ -35,8 +35,15 @@ const HUE_MARGIN: f32 = 0.05;
 const STEP_MARGIN: f32 = 0.10;
 /// `fog_depth` falls back to the first-order integral below |k dy| = 1e-3 (error up to 5e-4).
 const FOG_REL: f32 = 1e-3;
-/// Tone curves, display-linear 0..1: f32 against f64.
-const CURVE_ABS: f32 = 1e-3;
+/// Tone curves, display-linear 0..1, f32 against f64: relative, so the dark end counts too, with a
+/// floor far below the first 8-bit sRGB step (3e-4 linear) for values that are nearly black.
+const CURVE_REL: f32 = 2e-3;
+const CURVE_FLOOR: f32 = 1e-7;
+
+/// Whether a tone curve output is within tolerance of the reference.
+fn curve_ok(got: f32, want: f32) -> bool {
+    (got - want).abs() <= CURVE_REL * want.abs() + CURVE_FLOOR
+}
 
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
@@ -67,6 +74,12 @@ fn rel(got: f32, want: f32) -> f32 {
 /// exposure the CPU folds into every light. Default lighting with Brightness, MoonBrightness 1,
 /// no colour shift, no clouds and the reference air colour, as the table was made.
 fn engine_sky(elevation: f32) -> [[f32; 3]; 3] {
+    let [zenith, horizon, sun, _] = engine_sky_and_ground(elevation);
+    [zenith, horizon, sun]
+}
+
+/// [`engine_sky`] plus the ground colour below the horizon.
+fn engine_sky_and_ground(elevation: f32) -> [[f32; 3]; 4] {
     let mut inp = LightingInputs {
         // At latitude 0 the sun's elevation is 90 degrees minus its hour angle.
         clock_time: 12.0 + (90.0 - elevation) / 15.0,
@@ -88,6 +101,7 @@ fn engine_sky(elevation: f32) -> [[f32; 3]; 3] {
         un(frame.sky.zenith),
         un(frame.sky.horizon),
         un(frame.sky.sun_color),
+        un(frame.sky.ground),
     ]
 }
 
@@ -446,6 +460,57 @@ fn gpu_sky_gradient_draws_the_table_colours() {
     }
 }
 
+/// `sky_gradient` between its end points follows the profile the engine documents (a smoothstep
+/// from the horizon to the zenith over 0..0.6 of the up component, and to the ground over
+/// 0..0.35 below), with the table's colours. The reference has no vertical profile in the table;
+/// this checks the WGSL draws the documented one.
+#[test]
+fn gpu_sky_gradient_follows_its_profile_between_the_ends() {
+    let _gpu = gpu();
+    let Some(probe) = Probe::new() else { return };
+    let smooth = |e0: f64, e1: f64, x: f64| {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let angles = [2.0f64, 8.0, 15.0, 25.0, 34.0, 50.0, -3.0, -10.0, -25.0];
+    let mut worst = 0f32;
+    for row in sky_rows().iter().filter(|r| r.table) {
+        let [zenith, horizon, _, ground] = engine_sky_and_ground(row.elevation);
+        let fill = [
+            ("sky_zenith", w(zenith)),
+            ("sky_horizon", w(horizon)),
+            ("sky_ground", w(ground)),
+        ];
+        let inputs: Vec<_> = angles
+            .iter()
+            .map(|a| {
+                let (y, x) = (a.to_radians().sin(), a.to_radians().cos());
+                [[x as f32, y as f32, 0.0, 0.0], [0.0; 4]]
+            })
+            .collect();
+        let out = probe.run(&fill, &inputs);
+        for (a, o) in angles.iter().zip(&out) {
+            let y = a.to_radians().sin();
+            let (to, t) = if y >= 0.0 {
+                (zenith, smooth(0.0, 0.6, y))
+            } else {
+                (ground, smooth(0.0, 0.35, -y))
+            };
+            for c in 0..3 {
+                let want = f64::from(horizon[c]) * (1.0 - t) + f64::from(to[c]) * t;
+                let e = rel(o[c], want as f32);
+                worst = worst.max(e);
+                assert!(
+                    e <= 1e-4,
+                    "sky_gradient at {a} degrees, sun {:+}: got {o:?}, want channel {c} = {want}",
+                    row.elevation
+                );
+            }
+        }
+    }
+    eprintln!("sky profile: worst {worst:.2e} relative");
+}
+
 #[test]
 fn gpu_fog_depth_matches_the_reference() {
     let _gpu = gpu();
@@ -513,6 +578,44 @@ fn curve_refs() -> (Vec<[f32; 3]>, Vec<CurveOutputs>) {
     (inputs, outputs)
 }
 
+/// Worst relative error (floor included) of `got` against `want`, asserting each value.
+fn check_curve(curve: ToneCurve, x: [f32; 3], got: [f32; 3], want: [f32; 3]) -> f32 {
+    let mut worst = 0f32;
+    for c in 0..3 {
+        worst = worst.max((got[c] - want[c]).abs() / (CURVE_REL * want[c].abs() + CURVE_FLOOR));
+        assert!(
+            curve_ok(got[c], want[c]),
+            "{curve:?} {x:?}: got {got:?}, reference {want:?}"
+        );
+    }
+    worst
+}
+
+#[test]
+fn curve_tolerance_catches_a_one_percent_error_in_the_dark_end() {
+    // Every reference output in the dark end (under 0.05 display-linear) and above 1.25e-5,
+    // where 1% exceeds the floor, must fail when 1% too bright or too dark.
+    let (_, outputs) = curve_refs();
+    let mut dark = 0;
+    for (curve, want) in outputs {
+        let mut per_curve = 0;
+        for v in want
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|v| *v > 1.25e-5 && *v < 0.05)
+        {
+            per_curve += 1;
+            for wrong in [v * 1.01, v * 0.99] {
+                assert!(!curve_ok(wrong, v), "{curve:?}: 1% off {v} passes");
+            }
+        }
+        assert!(per_curve >= 10, "{curve:?}: only {per_curve} dark values");
+        dark += per_curve;
+    }
+    eprintln!("{dark} dark values checked");
+}
+
 #[test]
 fn cpu_tone_curves_match_the_reference() {
     let (inputs, outputs) = curve_refs();
@@ -520,15 +623,12 @@ fn cpu_tone_curves_match_the_reference() {
     for (curve, want) in outputs {
         // `map` applies the curve's pre-scale first; the reference has none.
         let s = curve.prescale();
+        let mut worst = 0f32;
         for (x, w) in inputs.iter().zip(want) {
             let got = curve.map(x.map(|v| v / s));
-            for c in 0..3 {
-                assert!(
-                    (got[c] - w[c]).abs() <= CURVE_ABS,
-                    "{curve:?} {x:?}: got {got:?}, reference {w:?}"
-                );
-            }
+            worst = worst.max(check_curve(curve, *x, got, w));
         }
+        eprintln!("CPU {curve:?}: worst {worst:.3} of the tolerance");
     }
 }
 
@@ -544,13 +644,10 @@ fn gpu_tone_curves_match_the_reference() {
             .map(|x| [[x[0], x[1], x[2], k], [0.0, 0.0, 0.0, 2.0]])
             .collect();
         let out = probe.run(&[], &probes);
+        let mut worst = 0f32;
         for ((x, w), got) in inputs.iter().zip(want).zip(out) {
-            for c in 0..3 {
-                assert!(
-                    (got[c] - w[c]).abs() <= CURVE_ABS,
-                    "{curve:?} {x:?}: got {got:?}, reference {w:?}"
-                );
-            }
+            worst = worst.max(check_curve(curve, *x, [got[0], got[1], got[2]], w));
         }
+        eprintln!("GPU {curve:?}: worst {worst:.3} of the tolerance");
     }
 }
