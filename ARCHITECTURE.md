@@ -265,7 +265,7 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
   visual-language colours. `ContextActionService:GetButton` reads the placed buttons (`Game::set_touch_buttons`).
   The Controls page's Touch tab (#333: stick mode, opacity, size 0.8x to 1.5x, Large controls) drives the overlay;
   touch controls have their own glyphs. A held press whose action changes role is cancelled on reload. While touch
-  shows, `Game::set_gui_inset` moves the `ScreenGui` root below the menu button.
+  shows, `Game::set_gui_inset` moves the `ScreenGui` root below a top-placed menu button, eased with the fade.
 - **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, swap sides and Edit layout.
 
 ## Frame loop

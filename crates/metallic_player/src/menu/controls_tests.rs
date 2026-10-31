@@ -320,3 +320,99 @@ fn the_touch_tab_sets_stick_opacity_and_size() {
     assert!(p.overrides().is_empty());
     assert_eq!(p.toast().map(|t| t.text.as_str()), Some("Touch reset"));
 }
+
+/// The screen point at `fx` (0 left, 1 right) across the cell of `item`, as the painter places
+/// the content at `origin`.
+fn cell_point(p: &ControlsPage, item: &Item, fx: f32) -> egui::Pos2 {
+    let r = p
+        .rows()
+        .iter()
+        .flat_map(|row| row.cells.iter())
+        .find(|c| &c.item == item)
+        .unwrap_or_else(|| panic!("no cell {item:?}"))
+        .rect;
+    egui::pos2(
+        p.origin.x + r.left() + fx * r.width(),
+        p.origin.y + r.center().y - p.scroll,
+    )
+}
+
+/// #339 review: the Touch tab with the mouse only. A click picks the clicked segment (never
+/// toggles), sliders jump to the click, the switch flips.
+#[test]
+fn the_touch_tab_works_with_the_mouse() {
+    use metallic_runtime::input::touch::StickMode;
+    let mut p = page();
+    p.origin = egui::pos2(100.0, 50.0);
+    p.viewport_h = 2000.0;
+    let tab = egui::Rect::from_min_size(egui::pos2(500.0, 10.0), egui::vec2(80.0, 30.0));
+    p.tab_rects = vec![(tab, Tab::Touch)];
+    p.click(tab.center());
+    assert_eq!(p.tab(), Tab::Touch);
+    // The stick's segments sit in the cell minus 44 pt on the right: 1/4 is Floating, the
+    // middle of the second half (of the segments) is Fixed.
+    let seg = |p: &ControlsPage, i: f32| {
+        let r = segments_rect(
+            p.rows()
+                .iter()
+                .flat_map(|row| row.cells.iter())
+                .find(|c| c.item == Item::StickMode)
+                .unwrap()
+                .rect,
+        );
+        egui::pos2(
+            p.origin.x + r.left() + (i + 0.5) * r.width() / 2.0,
+            p.origin.y + r.center().y - p.scroll,
+        )
+    };
+    assert!(
+        !p.click(seg(&p, 0.0)).changed,
+        "Floating is already selected"
+    );
+    assert_eq!(p.touch().stick_mode, StickMode::Floating);
+    assert!(p.click(seg(&p, 1.0)).changed);
+    assert_eq!(p.touch().stick_mode, StickMode::Fixed);
+    assert!(!p.click(seg(&p, 1.0)).changed, "a second click keeps Fixed");
+    assert_eq!(p.touch().stick_mode, StickMode::Fixed);
+    // Opacity: a click at the left end is 25%, at the right end 100%.
+    let opacity = Item::Slider(SliderId::TouchOpacity);
+    assert!(p.click(cell_point(&p, &opacity, 0.0)).changed);
+    assert_eq!(p.touch().opacity, 0.25);
+    p.click(cell_point(&p, &opacity, 1.0));
+    assert_eq!(p.touch().opacity, 1.0);
+    // Button size: halfway is 115%.
+    p.click(cell_point(&p, &Item::Slider(SliderId::TouchSize), 0.5));
+    assert!((p.touch().size - 1.15).abs() < 1e-3, "{}", p.touch().size);
+    // Large controls.
+    let large = Item::Switch(SwitchId::LargeControls);
+    assert!(p.click(cell_point(&p, &large, 0.5)).changed);
+    assert!(p.touch().large_controls);
+    assert!(p.click(cell_point(&p, &large, 0.5)).changed);
+    assert!(!p.touch().large_controls);
+}
+
+/// #339 review: the glyph style's segments select too.
+#[test]
+fn a_click_selects_the_clicked_glyph_style() {
+    let mut p = page();
+    p.set_tab(Tab::Gamepad);
+    p.origin = egui::pos2(0.0, 0.0);
+    p.viewport_h = 5000.0;
+    let r = segments_rect(
+        p.rows()
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .find(|c| c.item == Item::GlyphStyle)
+            .unwrap()
+            .rect,
+    );
+    let at = |i: f32| egui::pos2(r.left() + (i + 0.5) * r.width() / 3.0, r.center().y);
+    assert!(!p.click(at(0.0)).changed, "Auto is already selected");
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Auto);
+    assert!(p.click(at(2.0)).changed);
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Positions);
+    assert!(!p.click(at(2.0)).changed);
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Positions);
+    assert!(p.click(at(1.0)).changed);
+    assert_eq!(p.glyph_pref(), GamepadGlyphPref::Letters);
+}

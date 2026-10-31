@@ -42,10 +42,19 @@ pub fn parse_emulation(name: &str) -> Option<DeviceProfile> {
     Some(if portrait { p.portrait() } else { p })
 }
 
-/// The GUI inset in points (#333): while the touch controls show, the ScreenGuis start below the
-/// menu button, with the usual 8 dp gap, so a top-centre game banner does not cover it.
-pub fn gui_inset(controls: &TouchControls, view: &Viewport, shown: bool, scale: f32) -> f32 {
-    let Some(menu) = controls.layout().menu.filter(|_| shown) else {
+/// The menu button moves the GUI down only when its top edge is in this top part of the screen.
+const MENU_TOP_BAND: f32 = 0.25;
+
+/// The GUI inset in points (#333) while the touch controls fully show: the ScreenGuis start below
+/// the menu button, with the usual 8 dp gap, so a top-centre game banner does not cover it. 0 when
+/// there is no menu button or a custom layout put it lower than the top band (spec 7.3).
+pub fn gui_inset(controls: &TouchControls, view: &Viewport, scale: f32) -> f32 {
+    let screen_h = controls.profile().size[1];
+    let Some(menu) = controls
+        .layout()
+        .menu
+        .filter(|m| m.center[1] - m.radius <= MENU_TOP_BAND * screen_h)
+    else {
         return 0.0;
     };
     let bottom_dp = menu.center[1] + menu.radius + 8.0;
@@ -353,7 +362,8 @@ impl TouchOverlay {
             self.controls.button_infos(shown, &mut self.infos);
             game.set_touch_buttons(&self.infos);
         }
-        game.set_gui_inset(gui_inset(&self.controls, &self.view, shown, scale));
+        // The GUI eases down and up with the controls' fade, not in one jump.
+        game.set_gui_inset(gui_inset(&self.controls, &self.view, scale) * self.alpha);
     }
 
     /// A finger event in dp (input scripts, emulation).
@@ -648,6 +658,58 @@ mod tests {
         let mut g = game();
         let mut desktop = TouchOverlay::new(std::path::Path::new("."), None, false);
         desktop.update(&mut rt, &mut g, (1280, 720), 1.0, 1.0, 0.016);
+        assert_eq!(g.gui_inset(), 0.0);
+        // A touch arrives: the GUI eases down with the 140 ms fade instead of jumping.
+        rt.set_forced_device(Some(DeviceKind::Touch));
+        let mut seen = Vec::new();
+        for i in 0..12 {
+            desktop.update(
+                &mut rt,
+                &mut g,
+                (1280, 720),
+                1.0,
+                0.1 + i as f64 * 0.016,
+                0.016,
+            );
+            seen.push(g.gui_inset());
+        }
+        let full = gui_inset(&desktop.controls, &desktop.view, 1.0);
+        assert!(full > 0.0);
+        assert!(seen[0] > 0.0 && seen[0] < full * 0.25, "{seen:?}");
+        assert!(seen.windows(2).all(|w| w[1] >= w[0]), "{seen:?}");
+        assert!((seen[11] - full).abs() < 1e-3, "{seen:?} vs {full}");
+    }
+
+    /// #339 review: a custom layout that puts the menu button at the bottom leaves the GUI alone.
+    #[test]
+    fn a_menu_button_at_the_bottom_leaves_the_gui_alone() {
+        use metallic_runtime::input::{InputConfig, Role, TouchPlacement};
+        let mut config = InputConfig::player_defaults();
+        let menu = config
+            .contexts
+            .iter_mut()
+            .flat_map(|c| c.actions.iter_mut())
+            .find(|a| a.role == Role::Menu)
+            .expect("the Menu action");
+        // Bottom centre of the safe area.
+        menu.touch_custom = Some(TouchPlacement {
+            position: [0.5, -24.0, 1.0, -64.0],
+            size: 48.0,
+        });
+        let mut rt = InputRuntime::new(&config);
+        let mut g = Game::from_world(
+            "t".into(),
+            metallic_core::World::new_with_services(),
+            std::rc::Rc::new(metallic_runtime::StdoutSink),
+        );
+        let mut phone = TouchOverlay::new(
+            std::path::Path::new("."),
+            Some(DeviceProfile::phone()),
+            false,
+        );
+        phone.update(&mut rt, &mut g, (1600, 739), 2.0, 1.0, 0.016);
+        let placed = phone.controls.layout().menu.expect("the menu button");
+        assert!(placed.center[1] > 300.0, "at the bottom: {placed:?}");
         assert_eq!(g.gui_inset(), 0.0);
     }
 

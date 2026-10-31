@@ -37,6 +37,30 @@ pub const SETTING_X: f32 = 360.0;
 /// Width of a setting's control.
 pub const SETTING_W: f32 = 292.0;
 const ROW_H: f32 = 48.0;
+/// The glyph styles in the order the segmented control shows them.
+const STYLE_ORDER: [GamepadGlyphPref; 3] = [
+    GamepadGlyphPref::Auto,
+    GamepadGlyphPref::Letters,
+    GamepadGlyphPref::Positions,
+];
+
+/// The segmented control inside a choice cell (glyph style, touch stick): the cell minus the
+/// space kept on the right for a preview.
+pub fn segments_rect(cell: Rect) -> Rect {
+    Rect::from_min_size(
+        cell.min,
+        vec2((cell.width() - 44.0).max(0.0), cell.height()),
+    )
+}
+
+/// Which of `n` segments of a choice cell is at `x`, if any.
+fn segment_at(cell: Rect, x: f32, n: usize) -> Option<usize> {
+    let r = segments_rect(cell);
+    if n == 0 || r.width() <= 0.0 || x < r.left() || x > r.right() {
+        return None;
+    }
+    Some((((x - r.left()) / r.width() * n as f32) as usize).min(n - 1))
+}
 const GROUP_H: f32 = 36.0;
 const SECTION_H: f32 = 44.0;
 const HEADER_H: f32 = 28.0;
@@ -1186,17 +1210,36 @@ impl ControlsPage {
     }
 
     fn cycle_style(&mut self, dir: i32) -> bool {
-        const ORDER: [GamepadGlyphPref; 3] = [
-            GamepadGlyphPref::Auto,
-            GamepadGlyphPref::Letters,
-            GamepadGlyphPref::Positions,
-        ];
-        let i = ORDER
+        let i = STYLE_ORDER
             .iter()
             .position(|p| *p == self.overrides.gamepad_glyphs)
             .unwrap_or(0) as i32;
-        self.overrides.gamepad_glyphs = ORDER[(i + dir).rem_euclid(3) as usize];
+        self.overrides.gamepad_glyphs = STYLE_ORDER[(i + dir).rem_euclid(3) as usize];
         true
+    }
+
+    /// A click on a segmented choice selects the clicked segment (never toggles). True when the
+    /// setting changed.
+    fn click_segment(&mut self, item: &Item, cell: Rect, x: f32) -> bool {
+        let changed = match item {
+            Item::GlyphStyle => match segment_at(cell, x, STYLE_ORDER.len()) {
+                Some(i) => {
+                    let changed = self.overrides.gamepad_glyphs != STYLE_ORDER[i];
+                    self.overrides.gamepad_glyphs = STYLE_ORDER[i];
+                    changed
+                }
+                None => false,
+            },
+            Item::StickMode => match segment_at(cell, x, 2) {
+                Some(i) => self.set_stick_mode(i == 1),
+                None => false,
+            },
+            _ => false,
+        };
+        if changed {
+            self.rebuild_keep_focus();
+        }
+        changed
     }
 
     fn clear_slot(&mut self, target: &SlotRef) -> bool {
@@ -1373,6 +1416,14 @@ impl ControlsPage {
                     let out = self.set_slider(id, lo + t * (hi - lo));
                     self.rebuild_keep_focus();
                     return out;
+                }
+                if matches!(cell.item, Item::GlyphStyle | Item::StickMode) {
+                    let (item, rect) = (cell.item.clone(), cell.rect);
+                    let x = self.content_pos(screen).x;
+                    return Outcome {
+                        changed: self.click_segment(&item, rect, x),
+                        back: false,
+                    };
                 }
                 self.nav(Nav::Accept)
             }

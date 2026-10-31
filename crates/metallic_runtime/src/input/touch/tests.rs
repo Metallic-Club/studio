@@ -1023,3 +1023,29 @@ fn touch_settings_are_saved_with_the_overrides() {
     p.reset_known();
     assert!(p.is_empty());
 }
+
+/// #339 review: a button size that is not a number (a hand-edited or damaged file, or one too
+/// big for f32) loads as the default 1x, and a profile holding NaN lays out at the standard sizes.
+#[test]
+fn a_nan_button_size_loads_as_the_default() {
+    use crate::input::PlayerOverrides;
+    use crate::input::overrides::TouchSettings;
+    for size in [r#""NaN""#, "1e300", "-1e300", "null"] {
+        let json = format!(r#"{{"version":1,"touch":{{"size":{size},"opacity":0.5}}}}"#);
+        let o = PlayerOverrides::from_json(&json).unwrap();
+        assert_eq!(o.touch.size, 1.0, "{size}");
+        assert_eq!(o.touch.opacity, 0.5, "{size}: the rest still loads");
+    }
+    let mut o = PlayerOverrides::default();
+    o.set_touch(TouchSettings {
+        size: f32::NAN,
+        ..TouchSettings::default()
+    });
+    assert_eq!(o.touch.size, 1.0);
+    assert_eq!(DeviceProfile::phone().with_scale(f32::NAN).scale, 1.0);
+    let nan = DeviceProfile {
+        scale: f32::NAN,
+        ..DeviceProfile::phone()
+    };
+    assert_eq!(sizes_for(&nan), sizes_for(&DeviceProfile::phone()));
+}

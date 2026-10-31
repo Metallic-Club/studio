@@ -2,7 +2,7 @@
 //! graphite, silver and restrained violet (focus ring, selected tab, the one primary choice).
 use super::controls::{
     CONTENT_W, CellArt, Choice, ControlsPage, HOLD_X, Item, Mode, ResetKind, Row, RowKind, SLOT_X,
-    SliderId, Tab,
+    SliderId, Tab, segments_rect,
 };
 use super::glyph_paint::{Ink, paint_control, paint_glyph};
 use super::{MainItem, theme};
@@ -906,7 +906,7 @@ fn paint_cell(
                 GamepadGlyphPref::Letters => 1,
                 GamepadGlyphPref::Positions => 2,
             };
-            let seg = Rect::from_min_size(r.min, vec2(r.width() - 44.0, r.height()));
+            let seg = segments_rect(r);
             segmented(p, seg, &["Auto", "Letters", "Positions"], sel);
             // A preview of the bottom face button in the style in use.
             let g = control_glyph(Control::ButtonA, page.style());
@@ -927,7 +927,7 @@ fn paint_cell(
         Item::StickMode => {
             let fixed = page.touch().stick_mode == StickMode::Fixed;
             let (labels, sel) = (["Floating", "Fixed"], usize::from(fixed));
-            let seg = Rect::from_min_size(r.min, vec2(r.width() - 44.0, r.height()));
+            let seg = segments_rect(r);
             segmented(p, seg, &labels, sel);
             if focused {
                 focus_ring(p, seg, theme::R_SM);
