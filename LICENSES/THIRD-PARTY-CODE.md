@@ -14,7 +14,7 @@ The Narkowicz ACES fit (`narkowicz`) is a published formula without a code licen
 ## Khronos PBR Neutral
 
 - Source: https://github.com/KhronosGroup/ToneMapping/tree/main/PBR_Neutral (`pbrNeutral.glsl`).
-- Copyright (c) The Khronos Group Inc. Licensed under the Apache License, Version 2.0; the full text is in
+- Copyright (c) 2024 The Khronos Group Inc. Licensed under the Apache License, Version 2.0; the full text is in
   `LICENSES/Apache-2.0.txt`.
 - Changes: ported from GLSL to WGSL and to Rust (CPU mirror for tests and tools); the constants and steps are
   unchanged. The result is pre-scaled by Metallic's curve normalisation in the caller.
