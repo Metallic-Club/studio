@@ -182,6 +182,26 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
+  and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
+  Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one
+  combined `play` tag (`PLAY_TAG`) because Game supplies one sink for both VMs. Snapshot copying is O(world);
+  callers through the current borrowed PlayStart/clean_world seam copy twice. Independent #92/#275 still tracks
+  recursive clone_subtree behavior reached by Game's StarterGui copying.
+  Play and Stop (#11): `EditorState::new` registers `play::LocalPlayMode` (`play.start`, F5; client and server in
+  one process like the Player). The session owns an `InputRuntime` and is a `play::PlayView`
+  (`PlaySession::view`): the viewport draws it every frame with the game camera, avatar and ScreenGuis,
+  `play::input::PlayInput` turns egui keys and mouse into `RawEvent`s, and Explorer shows its world read-only
+  (`explorer::PlayTree`, only visible rows drawn). Studio keys go first each frame (keymap context `Play`: Esc,
+  plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
+  `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
+  While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
+  Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
+  Properties and the script editor are read-only, the status bar shows the session's `PlayStatus` ("Playing", theme
+  `success`) and the viewport a `success` frame. Esc with the unsaved-changes prompt open answers the prompt. Exposure
+  adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
+  and Studio stays in edit mode.
   Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
   to the world so renderer and Properties need no change; commit gives one `Command::SetProperties`, cancel restores),
   `gizmo.rs` (handles for Move/Rotate/Scale/Transform, body drags over surfaces, axis locks, R/T turns, typed values,
