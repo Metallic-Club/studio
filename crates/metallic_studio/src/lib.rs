@@ -21,6 +21,9 @@
 //! [`colour`] holds the building colour popover, its colour maths and palette files; it also runs
 //! as a demo screen (`--scene colour`).
 //!
+//! [`tools`] holds the pure cores of the building tools (shared geometry, scatter, selection,
+//! measure, arrange) that the viewport drives. [`input_actions`] and [`data_dirs`] come from main.
+//!
 //! Library code returns [`StudioError`]; only `main.rs` decides what to show on failure.
 
 #![warn(missing_docs)]
@@ -30,6 +33,7 @@ pub mod app;
 pub mod camera;
 pub mod colour;
 pub mod commands;
+pub mod data_dirs;
 pub mod editor;
 pub mod editor_ui;
 pub mod error;
@@ -38,6 +42,7 @@ pub mod expr;
 pub mod github_auth;
 pub mod gizmo;
 pub mod icons;
+pub mod input_actions;
 pub mod keymap;
 pub mod output;
 pub mod picking;
@@ -52,6 +57,7 @@ pub mod start_screen;
 pub mod templates;
 pub mod theme;
 pub mod tokens;
+pub mod tools;
 pub mod transform;
 pub mod updater;
 pub mod viewport;

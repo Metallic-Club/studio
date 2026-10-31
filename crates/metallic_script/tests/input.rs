@@ -7,6 +7,7 @@ use common::Rig;
 use metallic_core::{InstanceId, Value};
 use metallic_script::{
     InputActionEvent, InputDevice, InputEventKind, InputValue, MAX_ACTION_EVENTS_PER_STEP,
+    TouchButtonInfo,
 };
 
 /// A rig with `ReplicatedStorage.Input.Gameplay.Dash` (an `InputAction`).
@@ -388,7 +389,11 @@ fn bind_action_change_state_and_touch_setters() {
         ),
         other => panic!("{other:?}"),
     }
-    assert_eq!(rig.lines(), ["print:nil"], "GetButton returns nil");
+    assert_eq!(
+        rig.lines(),
+        ["print:nil"],
+        "GetButton returns nil until the overlay places the button"
+    );
     rig.host.input_action_event(event(
         steer,
         InputEventKind::StateChanged,
@@ -871,5 +876,44 @@ fn unbinding_inside_a_handler_leaves_no_hidden_instances() {
         descendant_count(&rig),
         2,
         "only the player and its PlayerGui are left"
+    );
+}
+
+#[test]
+fn get_button_reads_the_overlay_placement() {
+    let mut rig = Rig::new();
+    rig.local_script(
+        "Client",
+        r#"
+        local CAS = game:GetService("ContextActionService")
+        CAS:BindAction("Dash", function() end, true, Enum.KeyCode.E)
+        task.wait(0.05)
+        local b = CAS:GetButton("Dash")
+        print(typeof(b), b.ClassName, b.Name, b.Text, b.Image, b.Visible)
+        print(b.AbsolutePosition.X, b.AbsolutePosition.Y, b.AbsoluteSize.X, b.Size.X.Offset)
+        print(pcall(function() return b.Nope end))
+        "#,
+    );
+    rig.host.start().unwrap();
+    let dash = bound_action(&rig, "Dash").expect("Dash action");
+    rig.host.set_touch_buttons(&[TouchButtonInfo {
+        action: dash,
+        position: [624.0, 282.0],
+        size: [56.0, 56.0],
+        title: "Dash".into(),
+        image: "ui/dash.png".into(),
+        visible: true,
+    }]);
+    rig.run(0.0, 10);
+    let lines = rig.lines();
+    assert_eq!(
+        lines[0],
+        "print:TouchButton TouchButton Dash Dash ui/dash.png true"
+    );
+    assert_eq!(lines[1], "print:624 282 56 56");
+    assert!(
+        lines[2].contains("Nope is not a valid member of TouchButton"),
+        "{}",
+        lines[2]
     );
 }

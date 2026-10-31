@@ -107,6 +107,8 @@ impl EditorUi {
     /// with unsaved changes it opens the Save / Don't save / Cancel prompt instead and returns
     /// false, and a later frame returns [`EditorExit::Quit`] if the user agrees.
     pub fn request_quit(&mut self) -> bool {
+        // Unsaved script text counts: put the open tabs into the world first.
+        self.scripts.flush(&mut self.state);
         if !self.state.is_dirty() {
             return true;
         }
@@ -213,6 +215,7 @@ impl EditorUi {
                         ui.close();
                     }
                     if ui.button("Close game").clicked() {
+                        self.scripts.flush(&mut self.state);
                         if self.state.is_dirty() {
                             self.confirm = Some(Leave::Close);
                             self.save_error = None;

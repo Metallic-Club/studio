@@ -519,3 +519,28 @@ fn api_tables_are_read_only() {
     assert!(lines[2].starts_with("print:false"), "{lines:?}");
     assert_eq!(lines[3], "print:Vector3 true 4 1");
 }
+
+#[test]
+fn lighting_values_from_scripts_stay_in_range() {
+    let mut rig = Rig::new();
+    rig.server_script(
+        "S",
+        r#"
+        local L = game:GetService("Lighting")
+        L.Brightness = 1e39
+        L.ExposureCompensation = -1e300
+        L.ClockTime = 26
+        L.Ambient = Color3.fromRGB(255, 0, 0)
+        print(L.Brightness, L.ExposureCompensation, L.ClockTime)
+        print(pcall(function() L.Brightness = math.huge end), L.Brightness)
+        print(pcall(function() L.Brightness = 0/0 end), L.Brightness)
+        "#,
+    );
+    start(&mut rig);
+    let lines = rig.lines();
+    assert_eq!(lines[0], "print:10 -4 2");
+    assert!(lines[1].starts_with("print:false"), "{}", lines[1]);
+    assert!(lines[1].ends_with(" 10"), "{}", lines[1]);
+    assert!(lines[2].starts_with("print:false"), "{}", lines[2]);
+    assert!(lines[2].ends_with(" 10"), "{}", lines[2]);
+}

@@ -19,6 +19,7 @@
 //! Scale moves one face (the opposite face stays put), with a 0.05 stud floor; Ball parts keep
 //! equal axes. The building tools (#214) add axis lock, typed values and pivots on top of this.
 use eframe::egui::{self, Color32, Pos2, Shape, Stroke};
+use metallic_core::transform::MAX_PART_SIZE;
 use metallic_core::{InstanceId, Value, World};
 use metallic_render::glam::{DQuat, DVec3};
 
@@ -32,7 +33,8 @@ use crate::transform::{PartTransform, Ray, from_d, quat_to_orientation, snap};
 pub const AXIS_PX: f64 = 90.0;
 /// Pointer distance (points) that still counts as on a handle.
 const HIT_PX: f64 = 8.0;
-/// Smallest part size in studs.
+/// Smallest size a resize handle gives, in studs (the move increment floor, spec 4.3). Core's
+/// limits ([`metallic_core::transform::MIN_PART_SIZE`] .. [`MAX_PART_SIZE`]) still apply.
 pub const MIN_SIZE: f64 = 0.05;
 /// Ring sample count.
 const RING_SEGMENTS: usize = 64;
@@ -503,13 +505,13 @@ fn resize_face(p: &DragPart, axis: DVec3, sign: f64, d: f64) -> PartTransform {
         .unwrap_or(0);
     if p.ball {
         let start = p.start.size.min_element();
-        let new = (start + d).max(MIN_SIZE);
+        let new = (start + d).clamp(MIN_SIZE, MAX_PART_SIZE);
         t.size = DVec3::splat(new);
         t.position = p.start.position + axis * (sign * (new - start) * 0.5);
         return t;
     }
     let start = p.start.size[local];
-    let new = (start + d).max(MIN_SIZE);
+    let new = (start + d).clamp(MIN_SIZE, MAX_PART_SIZE);
     t.size[local] = new;
     t.position = p.start.position + axis * (sign * (new - start) * 0.5);
     t
@@ -836,6 +838,13 @@ mod tests {
         )[0];
         assert!((cur.size.x - MIN_SIZE).abs() < 1e-9);
         assert!((cur.position.x - cur.size.x / 2.0 - -2.0).abs() < 1e-9);
+        // Core's largest part size caps the other end.
+        let cur = d.update(
+            &ray_down(5000.0, 0.0),
+            &Snapping::default(),
+            DragModifiers::default(),
+        )[0];
+        assert!((cur.size.x - MAX_PART_SIZE).abs() < 1e-9);
     }
 
     #[test]
