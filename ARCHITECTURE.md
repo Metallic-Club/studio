@@ -39,6 +39,13 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  Change journal (#59): each mutation (`create`, `destroy`, `set_parent` to a new parent, a `set_parent_at` reorder,
+  `set` with a new value, `clone_subtree`) appends the instance id to a per-world journal, bounded at 16,384 entries
+  (`JOURNAL_LIMIT`; the oldest half is dropped when it is full). `World::change_cursor()` marks a position, and
+  `changes_since(cursor)` returns `Changes::Ids` (deduplicated, in order of first change, destroyed ids included) plus
+  a new cursor, or `Changes::Overflow` when the journal no longer reaches back or the cursor is from another world:
+  then re-read everything. It needs only `&World`; the renderer's `Scene::sync`, physics re-sync, `LookOverrides`,
+  audio and input mirroring read it.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
