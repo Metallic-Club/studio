@@ -53,3 +53,23 @@ above the coordinator's 5 GiB pause threshold. Ownership cleanup reclaimed 6.2 G
 the anim-only baseline compiled in 11.39s; the legacy target compiled in 1.11s
 and its two tests passed.
 No migrated Rust execution result is claimed yet.
+
+
+## First migrated feedback and camera API update
+
+Initial candidate 3d87ca1 passed 125 animation/asset/meshgen checks, including the
+unchanged Mikk reference and both legacy fixtures, then the public interoperability
+and GPU upload tests. Render compilation exposed five deprecated camera-helper
+warnings; the initial private composition also identified example call sites.
+Those logs remain tied to the first candidate and are not strict final gates.
+
+A complete source sweep replaces deprecated `look_at_rh`, `perspective_rh` and
+`orthographic_rh` call paths in render, modeling examples, the existing shadow
+projection test, and the standalone renderer with recommended glam camera APIs.
+No assertion, input value, tolerance or golden is changed. Pinned glam 0.33.12
+sources confirm the new DirectX/WebGPU constructors use RH, Y-up and depth0..1;
+its Vulkan constructors would flip Y and are deliberately not used. Old/new
+constructors are separate implementations, not forwarding wrappers, and can
+rearrange floating arithmetic. A new exact domain test checks view direction,
+up direction, near/far mapping and orthographic corners without warning suppression.
+The candidate is refreshed before full/default/private CPU gates.

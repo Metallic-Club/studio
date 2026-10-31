@@ -39,7 +39,14 @@ API are documented in the [published MikkTSpace source](https://github.com/gltf-
 ## Compatibility checks
 
 Existing math, animation, asset, tangent-reference, upload-layout and movement
-tests and tolerances remain unchanged. The migration is not a claim of bit-exact
+assertions and tolerances remain unchanged. Deprecated camera constructor call
+paths are migrated to the recommended right-handed view and DirectX/WebGPU
+projection functions, including the existing shadow test call. These retain Y-up
+and zero-to-one depth; Vulkan-specific Y-down constructors are not substituted.
+The deprecated and new constructors have separate upstream implementations with
+some arithmetic rearrangement, so this is a convention-preservation claim, not
+bit-exact matrix equality. A new exact-dyadic camera-domain test checks the
+conventions without changing an existing tolerance. The migration is not a claim of bit-exact
 floating-point results for every operation: glam's [0.33.12 changelog](https://github.com/bitshifter/glam-rs/blob/0.33.12/CHANGELOG.md)
 includes SIMD rounding, inverse/determinant and fused multiply-add changes.
 

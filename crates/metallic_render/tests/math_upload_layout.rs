@@ -34,3 +34,27 @@ fn nonuniform_rotated_transform_keeps_column_order_and_instance_offsets() {
     assert_eq!(&floats[16..20], &instance.color);
     assert_eq!(&floats[20..], &instance.material);
 }
+
+#[test]
+fn replacement_camera_constructors_keep_right_handed_y_up_zero_to_one_depth() {
+    use metallic_render::glam::camera::rh::{proj::directx, view};
+    let eye = Vec3::new(2.0, 3.0, 4.0);
+    let target = eye - Vec3::Z;
+    let view = view::look_at_mat4(eye, target, Vec3::Y);
+    assert_eq!(view.transform_point3(eye), Vec3::ZERO);
+    assert_eq!(view.transform_point3(target), Vec3::NEG_Z);
+    assert_eq!(view.transform_vector3(Vec3::Y), Vec3::Y);
+    let perspective = directx::perspective(std::f32::consts::FRAC_PI_2, 2.0, 1.0, 2.0);
+    let near = perspective * Vec3::new(0.0, 0.0, -1.0).extend(1.0);
+    let far = perspective * Vec3::new(0.0, 0.0, -2.0).extend(1.0);
+    assert_eq!(near.z / near.w, 0.0);
+    assert_eq!(far.z / far.w, 1.0);
+    assert!((perspective * Vec3::new(0.0, 1.0, -1.0).extend(1.0)).y > 0.0);
+    let ortho = directx::orthographic(-2.0, 2.0, -4.0, 4.0, 0.0, 8.0);
+    assert_eq!(ortho.transform_point3(Vec3::ZERO).z, 0.0);
+    assert_eq!(ortho.transform_point3(Vec3::new(0.0, 0.0, -8.0)).z, 1.0);
+    assert_eq!(
+        ortho.transform_point3(Vec3::new(2.0, 4.0, 0.0)),
+        Vec3::new(1.0, 1.0, 0.0)
+    );
+}

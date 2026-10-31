@@ -30,12 +30,17 @@ impl Default for Camera {
 impl Camera {
     /// World to view matrix (right handed, +Y up).
     pub fn view(&self) -> Mat4 {
-        Mat4::look_at_rh(self.position, self.look_at, Vec3::Y)
+        glam::camera::rh::view::look_at_mat4(self.position, self.look_at, Vec3::Y)
     }
 
     /// Perspective matrix for the given width / height ratio, depth range 0..1.
     pub fn projection(&self, aspect: f32) -> Mat4 {
-        Mat4::perspective_rh(self.fov_deg.to_radians(), aspect.max(1e-3), NEAR, FAR)
+        glam::camera::rh::proj::directx::perspective(
+            self.fov_deg.to_radians(),
+            aspect.max(1e-3),
+            NEAR,
+            FAR,
+        )
     }
 
     /// Combined world to clip matrix.

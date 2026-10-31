@@ -195,8 +195,9 @@ impl Camera {
 
     fn view_proj(&self, rect: Rect) -> Mat4 {
         let aspect = (rect.width() / rect.height().max(1.0)).max(0.1);
-        let proj = Mat4::perspective_rh(40f32.to_radians(), aspect, 0.05, 500.0);
-        proj * Mat4::look_at_rh(self.eye(), self.target, Vec3::Y)
+        let proj =
+            glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, 0.05, 500.0);
+        proj * glam::camera::rh::view::look_at_mat4(self.eye(), self.target, Vec3::Y)
     }
 }
 
@@ -1377,7 +1378,7 @@ impl App {
         }
         // Axis gizmo.
         let origin = Pos2::new(rect.left() + 46.0, rect.bottom() - 46.0);
-        let view = Mat4::look_at_rh(proj.eye, self.camera.target, Vec3::Y);
+        let view = glam::camera::rh::view::look_at_mat4(proj.eye, self.camera.target, Vec3::Y);
         let mut axes = [
             (Vec3::X, AXIS_X, "X"),
             (Vec3::Y, AXIS_Y, "Y"),

@@ -280,8 +280,8 @@ fn render(gpu: &Gpu, look: &Look, out_dir: &std::path::Path) -> Result<(), Strin
     let (w, h) = look.size;
     let aspect = w as f32 / h as f32;
     let eye = Vec3::new(8.0, 6.0, 10.0);
-    let view = Mat4::look_at_rh(eye, Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
-    let proj = Mat4::perspective_rh(40f32.to_radians(), aspect, NEAR, FAR);
+    let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
+    let proj = glam::camera::rh::proj::directx::perspective(40f32.to_radians(), aspect, NEAR, FAR);
     let vp = proj * view;
     let sun = Vec3::new(0.45, 0.8, 0.35).normalize();
     let bands = if look.pixel { 2.0 } else { 3.0 };
