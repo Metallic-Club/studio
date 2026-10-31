@@ -752,7 +752,10 @@ fn evaluate_base(inp: &LightingInputs) -> LightingFrame {
         let s = scale(t.sun, inp.brightness.max(0.0));
         std::array::from_fn(|i| s[i] * (1.0 + top[i]))
     } else {
-        scale(t.sun, inp.moon_brightness.max(0.0))
+        // Below -2 degrees the table's light column is the moon; between -1 and -2 it would
+        // interpolate toward the setting sun (#155), so the moon holds its -2 degree value.
+        let moon = sky_at(elevation.min(-2.0)).sun;
+        scale(moon, inp.moon_brightness.max(0.0))
     };
     sun = scale(sun, (1.0 - cover).powf(1.5));
 
@@ -1001,6 +1004,30 @@ mod tests {
         assert!(l > 0.1 && l < 1.5, "moonlight {l}");
         assert!(f.finish.saturation < 0.0);
         assert!(f.uniform.light_flags[3] > 0.5, "stars visible");
+    }
+
+    #[test]
+    fn height_fog_uses_the_reference_density_and_extinction() {
+        // docs/research/lighting-shaders/reference/render.py: sigma0 = 0.012 Density^2,
+        // extinction 1 + 3 Absorption per channel (#155). Haze 1 is the reference atmosphere;
+        // the engine's Haze also thickens the fog, by (1 + 0.8 Haze) / 1.8.
+        let mut inp = LightingInputs::default();
+        let a = inp.atmosphere.as_mut().expect("default atmosphere");
+        a.density = 0.3;
+        a.haze = 1.0;
+        a.height_falloff = 0.02;
+        a.fog_height = 4.0;
+        a.offset = 0.0;
+        a.absorption = [0.0, 0.25, 1.0];
+        let u = evaluate(&inp).uniform;
+        let want = 0.012 * 0.3 * 0.3;
+        assert!(
+            (u.fog_params[0] - want).abs() < want * 1e-5,
+            "{:?}",
+            u.fog_params
+        );
+        assert_eq!(&u.fog_params[1..], &[0.02, 4.0, 1.0]);
+        assert_eq!(u.fog_extinction, [1.0, 1.75, 4.0, 1.0]);
     }
 
     #[test]

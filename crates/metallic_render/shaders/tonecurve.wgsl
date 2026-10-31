@@ -42,7 +42,7 @@ fn agx(c_in: vec3<f32>, punchy: bool) -> vec3<f32> {
 // ---- Khronos PBR Neutral ----
 // Ported from the Khronos PBR Neutral reference (pbrNeutral.glsl),
 // https://github.com/KhronosGroup/ToneMapping/tree/main/PBR_Neutral
-// Copyright (c) The Khronos Group Inc. Licensed under the Apache License, Version 2.0
+// Copyright (c) 2024 The Khronos Group Inc. Licensed under the Apache License, Version 2.0
 // (LICENSES/Apache-2.0.txt); notice and changes in LICENSES/THIRD-PARTY-CODE.md. Modified:
 // GLSL to WGSL.
 fn pbr_neutral(c_in: vec3<f32>) -> vec3<f32> {
