@@ -158,12 +158,27 @@ end
 
 -- #344: the remaining single C calls whose work grows with their input.
 -- table.concat joins ranges of more than CONCAT_CHUNK elements chunk by chunk (each chunk is one
--- C call of bounded size; the loop between chunks is interruptible). The result, the separator
--- placement and the "invalid value (at index k)" errors are those of one call.
+-- C call of bounded size; the loop between chunks is interruptible). Only integer ranges are
+-- chunked; NaN, infinite, fractional and 32-bit-overflowing bounds go to the C function as
+-- they are. Luau has no tail calls, so an error raised by the C function would carry this
+-- wrapper's position: every call therefore runs under pcall, and a failure is run once more
+-- inside a closure (which gives the C function the same call-site name) and re-raised at the
+-- caller's position, so text, index and position are those of the plain function.
 local concat = table.concat
 local CONCAT_CHUNK = 8192
+local function concat_failed(t, sep, i, j)
+    local ok, e = pcall(function() return concat(t, sep, i, j) end)
+    if ok then return e end
+    if type(e) == "string" then
+        local _, stop = e:find(PREFIX)
+        if stop then e = e:sub(stop + 1) end
+    end
+    error(e, 3) -- 1 = here, 2 = table.concat, 3 = its caller
+end
 table.concat = function(t, sep, i, j)
-    if type(t) == "table" and (i == nil or type(i) == "number") and (j == nil or type(j) == "number") then
+    if type(t) == "table"
+        and (i == nil or (type(i) == "number" and i % 1 == 0 and i >= -2147483648 and i <= 2147483647))
+        and (j == nil or (type(j) == "number" and j % 1 == 0 and j >= -2147483648 and j <= 2147483647)) then
         local first, last = i or 1, j or rawlen(t)
         if last - first >= CONCAT_CHUNK then
             local parts, count = {}, 0
@@ -171,35 +186,39 @@ table.concat = function(t, sep, i, j)
             while from <= last do
                 local to = from + CONCAT_CHUNK - 1
                 if to > last then to = last end
-                count = count + 1
                 local ok, piece = pcall(concat, t, sep, from, to)
                 if not ok then
-                    -- Re-raise as the caller's error, without this wrapper's own position.
-                    if type(piece) == "string" then
-                        local _, stop = piece:find(PREFIX)
-                        if stop then piece = piece:sub(stop + 1) end
-                    end
-                    error(piece, 2)
+                    if piece == "not enough memory" then error(piece, 0) end
+                    return concat_failed(t, sep, from, to)
                 end
+                count = count + 1
                 parts[count] = piece
                 from = to + 1
             end
             return concat(parts, sep)
         end
     end
-    return concat(t, sep, i, j)
+    local ok, r = pcall(concat, t, sep, i, j)
+    if ok then return r end
+    return concat_failed(t, sep, i, j)
 end
 
 -- string.pack / packsize / unpack walk their format string item by item: refuse formats over
--- MAX_FORMAT bytes (real formats are a few dozen). upper / lower / reverse / utf8.len make one
--- pass over the string at a few ns per byte: refuse strings over MAX_TEXT (32 MB).
+-- MAX_FORMAT bytes (real formats are a few dozen), and string.pack also refuses item sizes of
+-- 7 or more digits (`c200000000` pads that many bytes). upper / lower / reverse / utf8.len /
+-- utf8.offset make one pass over the string at 3 ns per byte: refuse strings over MAX_TEXT
+-- (16 MB). string.split makes one table slot per piece: refuse subjects over MAX_SPLIT (1 MB).
 local MAX_FORMAT = 65536
-local MAX_TEXT = 33554432
+local MAX_TEXT = 16777216
+local MAX_SPLIT = 1048576
 for _, name in { "pack", "packsize", "unpack" } do
     local f = string[name]
     string[name] = function(fmt, ...)
         if type(fmt) == "string" and #fmt > MAX_FORMAT then
             error("string." .. name .. ": format string too long (limit 65536)", 2)
+        end
+        if name == "pack" and type(fmt) == "string" and fmt:find("%d%d%d%d%d%d%d") then
+            error("string.pack: item size too large (limit 999999)", 2)
         end
         return f(fmt, ...)
     end
@@ -208,7 +227,7 @@ for _, name in { "upper", "lower", "reverse" } do
     local f = string[name]
     string[name] = function(s)
         if type(s) == "string" and #s > MAX_TEXT then
-            error("string." .. name .. ": string too long (limit 33554432 bytes)", 2)
+            error("string." .. name .. ": string too long (limit 16777216 bytes)", 2)
         end
         return f(s)
     end
@@ -216,40 +235,25 @@ end
 local utf8_len = utf8.len
 utf8.len = function(s, i, j, lax)
     if type(s) == "string" and #s > MAX_TEXT then
-        error("utf8.len: string too long (limit 33554432 bytes)", 2)
+        error("utf8.len: string too long (limit 16777216 bytes)", 2)
     end
     return utf8_len(s, i, j, lax)
 end
-
--- table.insert(t, pos, v) shifts the tail of the array in one C call (table.remove(t, pos) does
--- too, but it is a fast memmove-like loop: 26 ms for 8M elements, so it is left alone).
--- On tables of SHIFT_BIG or more elements the shift is done in SHIFT_CHUNK pieces, so the
--- deadline can fire between them. Only the positional form is wrapped; appends
--- (table.insert(t, v)) go straight to the C function. Out-of-range and
--- non-integer positions, frozen tables and everything else take the C function too, so results
--- and errors are its own.
-local select, insert, move, isfrozen = select, table.insert, table.move, table.isfrozen
-local rawset = rawset
-local SHIFT_BIG = 65536
-local SHIFT_CHUNK = 32768
-table.insert = function(t, ...)
-    if select('#', ...) == 2 and type(t) == "table" then
-        local pos, v = ...
-        local n = rawlen(t)
-        if n >= SHIFT_BIG and type(pos) == "number" and pos >= 1 and pos <= n and pos % 1 == 0
-            and not isfrozen(t) then
-            local top = n
-            while top >= pos do
-                local first = top - SHIFT_CHUNK + 1
-                if first < pos then first = pos end
-                move(t, first, top, first + 1)
-                top = first - 1
-            end
-            rawset(t, pos, v)
-            return
-        end
+local utf8_offset = utf8.offset
+utf8.offset = function(s, n, i)
+    if type(s) == "string" and #s > MAX_TEXT then
+        error("utf8.offset: string too long (limit 16777216 bytes)", 2)
     end
-    return insert(t, ...)
+    return utf8_offset(s, n, i)
+end
+local split = string.split
+if split then
+    string.split = function(s, sep)
+        if type(s) == "string" and #s > MAX_SPLIT then
+            error("string.split: string too long (limit 1048576 bytes)", 2)
+        end
+        return split(s, sep)
+    end
 end
 "#;
 

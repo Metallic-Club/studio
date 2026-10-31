@@ -4,32 +4,40 @@ Branch `studio/344-sandbox-audit`. Code: the `STRING_LIMITS` Lua chunk in `crate
 tests at the end of `crates/metallic_script/tests/vm_round2.rs`.
 
 ## Method
-Timed each C library call on worst-case input in a plain Luau state of this build (the C is built
-unoptimised in debug runs, so these numbers are about 3x a release build), memory capped at 256 MB.
+Timed each C library call on worst-case input in a plain Luau state of this build, memory capped at 256 MB.
+The vendored Luau is compiled with `opt-level = 2` also in dev builds (`Cargo.toml`, `[profile.dev.package.luau0-src]`),
+so these numbers are close to a release build.
+
+Strings: the largest string a script can hold is about 128 MB (`string.rep` makes 64 MB at most, and one
+`s .. s` doubles it; a second doubling runs out of the 256 MB memory limit). Every bound below was
+checked at that size, not at 64 MB.
 
 ## Fixed
 | Function | Worst case before | Fix |
 |---|---|---|
-| `table.insert(t, pos, v)` (8M elements) | 220 to 260 ms | on tables of 65536+ elements the positional form shifts in 32768-element `table.move` chunks; appends `table.insert(t, v)` and everything else call the C function directly |
-| `table.concat` (millions of elements) | 2.5 s | ranges over 8192 elements join chunk by chunk; the Lua loop between chunks is interruptible; same result and errors |
+| `table.concat` (millions of elements) | 2.5 s | ranges over 8192 elements join chunk by chunk; the Lua loop between chunks is interruptible. Results, errors (text, index, position) and odd `i`/`j` behave as the plain function (compared in a test); NaN, infinite, fractional and 32-bit-overflowing bounds go to the C function untouched. Peak memory is the parts plus the result, about what the C function's own buffer needs |
 | `string.pack`, `packsize`, `unpack` (64 MB format) | 0.2 to 0.65 s | format strings over 64 KB are refused |
-| `string.upper`, `lower`, `reverse`, `utf8.len` (64 MB) | 0.1 to 0.26 s | strings over 32 MB are refused |
+| `string.pack("c200000000", "")` | padding until memory ran out (0.13 s, then a memory error) | item sizes with 7 or more digits are refused by `string.pack` |
+| `string.upper`, `lower`, `reverse`, `utf8.len`, `utf8.offset` (128 MB) | 0.1 to 0.4 s (`upper`: 385 ms) | strings over 16 MB are refused (`upper` at 16 MB: about 50 ms) |
+| `string.split` (128 MB of `a,`) | 0.6 s and a memory error | subjects over 1 MB are refused (1M pieces: about 70 ms) |
 
-## Audited, left as is
-| Function | Why it is safe enough |
-|---|---|
-| `string.rep` | result capped at 64 MB; an empty string with a huge count returns at once (checked) |
-| `string.format` | width and precision are limited to 2 digits by Luau; a 64 MB format string of literals takes about 0.16 s, one memory pass, and cannot be larger than 64 MB (`string.rep` cap) |
-| `string.byte`, `char`, `table.unpack`, `select`, `utf8.codepoint`, `utf8.char` | bounded by the C stack limit (about 8000 values) |
-| `string.sub`, `len`, plain `find` | one pass or O(1); plain `find` is covered by #235 |
-| `tonumber` on a 64 MB digit string | one pass, about 0.1 s |
-| `utf8.offset`, `utf8.codes` | O(1) per call or per step |
-| `buffer.*` | one memset/memcpy of at most the buffer size (200 MB measured: 8 to 40 ms) |
-| `table.create`, `table.clone`, `table.freeze`, `table.find` | at most one pass over a table limited by the memory cap (12M elements: 65 ms; clone 8M: 23 ms; find 8M: 55 ms) |
-| `table.remove(t, pos)` | one shift: 8M elements took 19 to 26 ms, so it is left alone |
-| `table.move` | covered by #275 |
-| `string.find/match/gmatch/gsub` | Rust matcher with steps and deadline (#166, #171) |
-| `math.*`, `bit32.*`, `os.clock/time`, `type`, `rawequal`, ... | O(1) |
+Wrappers run the C function directly. An argument error of a wrapped function (for example
+`string.upper({})`) therefore reads `[engine]:N: ...` instead of the caller's position; `table.concat` is
+the exception (its errors are exact). Only misuse hits this.
 
-## Open
-- Nothing known.
+## Accepted bounds (measured, 128 MB string or 256 MB memory)
+| Function | Worst case | Why it is left |
+|---|---|---|
+| `table.insert(t, pos, v)` at the front of a table with millions of elements | about 0.25 s at 8M elements | one shift. A Lua wrapper made every `table.insert(t, v)` 2 to 2.5 times slower, and a shift in chunks is not atomic: a timeout between chunks leaves a duplicated value and loses `v`. So the C function is kept as it is |
+| `table.remove(t, pos)` | 19 to 26 ms at 8M elements | cheap |
+| `string.format('%q', s)` and a long literal format string | about 0.2 s per 64 MB, 0.4 s at 128 MB | wrapping `string.format` would slow every call of a hot function |
+| `tonumber(s)` and arithmetic coercion of a 128 MB digit string | about 0.2 s | `tonumber` is hot; coercion in `+` cannot be wrapped at all |
+| `string.rep` | 45 ms for 120 MB; an empty string with a huge count returns at once | result capped at 64 MB |
+| `buffer.*` | at most one memset or memcpy of the buffer (200 MB: 8 to 40 ms) | |
+| `table.create`, `table.clone`, `table.freeze`, `table.find` | 12M elements: 65 ms; clone 8M: 23 ms; find 8M: 55 ms | one pass over a table limited by the memory cap |
+| `string.byte`, `char`, `table.unpack`, `select`, `utf8.codepoint`, `utf8.char` | | bounded by the C stack limit (about 8000 values) |
+| `string.sub`, `len`, plain `find` | 22 ms for 64 MB | one pass; plain `find` is covered by #235 |
+| `utf8.codes` | | O(1) per step |
+| `table.move` | | covered by #275 |
+| `string.find/match/gmatch/gsub` | | Rust matcher with steps and deadline (#166, #171) |
+| `math.*`, `bit32.*`, `os.clock/time`, `type`, `rawequal`, ... | | O(1) |

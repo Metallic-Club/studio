@@ -422,8 +422,8 @@ fn sorting_200k_numbers_without_a_comparator_fits_the_default_budget() {
         .eval()
         .unwrap();
     vm.set_global("big", big).unwrap();
-    // The sort alone must fit a 1 s budget (the default is 0.1 s, but this crate's C is built
-    // unoptimised in debug runs): it runs in C for numbers, not through 3.4M Lua calls.
+    // The sort alone must fit a 1 s budget (the default is 0.1 s; loaded CI machines need slack):
+    // it runs in C for numbers, not through 3.4M Lua calls.
     vm.set_resume_budget(Duration::from_secs(1));
     let start = Instant::now();
     vm.run_script("T", "table.sort(big)").unwrap();
@@ -552,38 +552,137 @@ fn concat_of_millions_of_elements_is_interruptible() {
     );
 }
 
+/// `table.concat(t, ...)` for each argument list, as (ok, text) with the leading `chunk:line:`
+/// position of an error removed, run by the sandbox and by a plain Luau state (the raw C
+/// function).
+fn concat_outcomes(lua_calls: &[String], run: impl Fn(&str) -> String) -> Vec<String> {
+    lua_calls.iter().map(|c| run(c)).collect()
+}
+
 #[test]
-fn concat_chunks_give_the_same_result_as_one_call() {
+fn concat_behaves_exactly_like_the_raw_c_function() {
+    const SETUP: &str = "
+        local function strip(e) return (tostring(e):gsub('^[^:]*:%d+: ', '')) end
+        function show(...)
+            local ok, r = pcall(table.concat, ...)
+            return tostring(ok) .. '|' .. (ok and #r .. ':' .. r:sub(1, 20) .. r:sub(-20) or strip(r))
+        end
+        function raw(...)
+            local ok, r = pcall(table.concat, ...)
+            return tostring(ok) .. '|' .. tostring(#tostring(r) < 100 and r or #r)
+        end
+        function show_called(...)
+            local args = table.pack(...)
+            local ok, r = pcall(function() return table.concat(table.unpack(args, 1, args.n)) end)
+            return tostring(ok) .. '|' .. (ok and #r or strip(r))
+        end
+        function mk(n, holes)
+            local t = {}
+            for i = 1, n do t[i] = (i % 7) .. 'x' end
+            if holes then t[holes] = nil end
+            return t
+        end";
+    let sizes = ["0", "1", "8193", "50000"];
+    let bounds = [
+        "nil",
+        "0",
+        "2",
+        "1.5",
+        "-3",
+        "8193",
+        "20000",
+        "49999",
+        "50001",
+        "2^31",
+        "2^53",
+        "0/0",
+        "math.huge",
+        "-math.huge",
+        "'2'",
+        "true",
+    ];
+    let mut calls = Vec::new();
+    for n in sizes {
+        for hole in ["nil", "9000", "49999"] {
+            for sep in ["nil", "','"] {
+                for i in ["nil", "1.5", "-3", "0/0", "8193"] {
+                    for j in bounds {
+                        calls.push(format!("show(mk({n}, {hole}), {sep}, {i}, {j})"));
+                    }
+                }
+            }
+            for sep in ["5", "''", "{}"] {
+                calls.push(format!("show(mk({n}, {hole}), {sep})"));
+            }
+        }
+    }
+    // Errors raised under pcall(table.concat, ...) carry no position at all, exactly as before.
+    for n in ["3", "50000"] {
+        for hole in ["nil", "2", "30000"] {
+            for sep in ["nil", "','", "{}"] {
+                calls.push(format!("raw(mk({n}, {hole}), {sep})"));
+                calls.push(format!("raw(mk({n}, {hole}), {sep}, 1, 2)"));
+            }
+        }
+    }
+    calls.push("show_called(mk(50000, 30000), ',')".into());
+    calls.push("show_called(mk(50000), ',', 3, 49000)".into());
+    calls.push("show_called(mk(50000, 20000), ',', 3, 49000)".into());
+
+    // Raw C function: a plain Luau state.
+    let plain = mlua::Lua::new();
+    plain.load(SETUP).set_name("=setup").exec().unwrap();
+    let plain_run = |c: &str| plain.load(format!("return {c}")).eval::<String>().unwrap();
+    let want = concat_outcomes(&calls, plain_run);
+
+    let (mut vm, _) = vm();
+    vm.set_resume_budget(Duration::from_secs(120));
+    vm.lua().load(SETUP).set_name("=setup").exec().unwrap();
+    // `show` and `mk` are plain globals of the engine's Lua state; the sandboxed library is
+    // what `table.concat` resolves to there too.
+    let vm_run = |c: &str| {
+        vm.lua()
+            .load(format!("return {c}"))
+            .eval::<String>()
+            .unwrap()
+    };
+    let got = concat_outcomes(&calls, vm_run);
+    for (c, (w, g)) in calls.iter().zip(want.iter().zip(got.iter())) {
+        assert_eq!(w, g, "{c}");
+    }
+    // Called from a script, the error is positioned at the script's own line.
+    vm.set_resume_budget(Duration::from_secs(5));
+    let err = vm
+        .run_script(
+            "T",
+            "local t = {} for i = 1, 20000 do t[i] = 'x' end t[15000] = {}
+             table.concat(t, ',')",
+        )
+        .unwrap_err();
+    assert!(
+        err.message
+            .starts_with("T:2: invalid value (table) at index 15000"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn concat_chunk_boundaries_join_correctly() {
     let (mut vm, _) = vm();
     vm.set_resume_budget(Duration::from_secs(20));
     vm.run_script(
         "T",
         "for _, n in {0, 1, 2, 8191, 8192, 8193, 16384, 16385, 3 * 8192 + 7} do
-             local t, expect = {}, {}
+             local t = {}
              for i = 1, n do t[i] = i % 10 .. '' end
-             -- reference: join by hand
-             local acc = ''
-             for i = 1, n do acc = acc .. t[i] .. (i < n and ',' or '') end
-             assert(table.concat(t, ',') == acc, n)
-             assert(table.concat(t) == acc:gsub(',', ''), n)
-             if n > 2 then
-                 local sub = ''
-                 for i = 2, n - 1 do sub = sub .. t[i] .. (i < n - 1 and '-' or '') end
-                 assert(table.concat(t, '-', 2, n - 1) == sub, n)
-             end
-         end
-         -- Luau's own errors, with absolute indices
-         local t = {}
-         for i = 1, 20000 do t[i] = 'x' end
-         t[15000] = {}
-         local ok, e = pcall(table.concat, t, ',')
-         assert(not ok and e:find('invalid value %(table%) at index 15000') and not e:find('engine'), e)
-         -- called from a script, the error carries the script's own position
-         local ok3, e3 = pcall(function() return table.concat(t, ',') end)
-         assert(not ok3 and e3:find('^T:%d+: invalid value'), e3)
-         local ok2, e2 = pcall(table.concat, t, ',', 1, 30000)
-         assert(not ok2)
-         assert(table.concat({}, ',', 5, 1) == '')",
+             local acc = {}
+             for i = 1, n do acc[#acc + 1] = t[i] end
+             local expected = ''
+             for i = 1, n do expected = expected .. t[i] .. (i < n and ',' or '') end
+             assert(table.concat(t, ',') == expected, n)
+             assert(table.concat({}, ',', 5, 1) == '')
+         end",
     )
     .unwrap();
 }
@@ -611,6 +710,19 @@ fn huge_pack_formats_are_refused() {
         "{:?}",
         start.elapsed()
     );
+    // A short format with a huge item size: the padding would run until memory ran out.
+    for fmt in ["c200000000", "c1000000", "<i4 c99999999"] {
+        let err = vm
+            .run_script("T", &format!("string.pack('{fmt}', 1, '')"))
+            .unwrap_err();
+        assert!(
+            err.message.contains("item size too large"),
+            "{fmt}: {}",
+            err.message
+        );
+    }
+    vm.run_script("T", "assert(#string.pack('c999999', 'x') == 999999)")
+        .unwrap();
     vm.run_script(
         "T",
         "local p = string.pack('<i4 z s2', 7, 'hi', 'abc')
@@ -630,7 +742,7 @@ fn huge_strings_are_refused_by_whole_string_passes() {
     let start = Instant::now();
     vm.run_script(
         "T",
-        "local s = string.rep('a', 33554433)
+        "local s = string.rep('a', 16777217)
          for _, name in {'upper', 'lower', 'reverse'} do
              local ok, e = pcall(string[name], s)
              assert(not ok and e:find('string too long'), name)
@@ -638,7 +750,9 @@ fn huge_strings_are_refused_by_whole_string_passes() {
              assert(not ok2)
          end
          local ok, e = pcall(utf8.len, s)
-         assert(not ok and e:find('string too long'))",
+         assert(not ok and e:find('string too long'))
+         local ok3, e3 = pcall(utf8.offset, s, 5)
+         assert(not ok3 and e3:find('string too long'))",
     )
     .unwrap();
     assert!(
@@ -659,74 +773,27 @@ fn huge_strings_are_refused_by_whole_string_passes() {
 }
 
 #[test]
-fn front_insert_into_a_huge_table_is_interruptible() {
-    // One shift over 8M elements was a single uninterruptible C call (220 ms in a debug build).
-    assert_stops_early(
-        "return table.create(8000000, 0)",
-        "table.insert(big, 1, 5)",
-        Duration::from_millis(100),
-    );
-}
-
-#[test]
-fn positional_insert_and_remove_match_the_plain_functions() {
+fn huge_split_subjects_are_refused() {
     let (mut vm, _) = vm();
-    vm.set_resume_budget(Duration::from_secs(20));
-    vm.run_script(
-        "T",
-        "local function fresh(n) local t = table.create(n, 0) for i = 1, n do t[i] = i end return t end
-         for _, n in {65535, 65536, 65537, 100000} do
-             for _, pos in {1, 2, 32768, 32769, n - 1, n, n + 1} do
-                 local t = fresh(n)
-                 table.insert(t, pos, 'x')
-                 assert(#t == n + 1 and t[pos] == 'x', n)
-                 for i = 1, pos - 1 do assert(t[i] == i) end
-                 for i = pos + 1, n + 1 do assert(t[i] == i - 1) end
-             end
-             for _, pos in {1, 2, 32768, 32769, n - 1, n} do
-                 local t = fresh(n)
-                 local got = table.remove(t, pos)
-                 assert(got == pos and #t == n - 1)
-                 for i = 1, pos - 1 do assert(t[i] == i) end
-                 for i = pos, n - 1 do assert(t[i] == i + 1) end
-             end
-         end
-         -- errors and special cases are the C function's own
-         local t = fresh(70000)
-         pcall(table.insert, t, 70003, 1) -- out of range: the C function decides
-         pcall(table.insert, t, 1.5, 1)
-         local ok3, e3 = pcall(table.insert, t, 1, 2, 3)
-         assert(not ok3, 'four arguments are an error')
-         table.insert(t, 2, nil)
-         assert(#t >= 70000 and t[1] == 1)
-         local fr = table.freeze(fresh(70000))
-         local ok4, e4 = pcall(table.insert, fr, 1, 9)
-         assert(not ok4 and e4:find('readonly'), e4)
-         assert(table.remove(fresh(70000)) == 70000)
-         assert(table.remove({}) == nil)",
-    )
-    .unwrap();
-}
-
-#[test]
-fn appends_and_pops_stay_fast() {
-    let (mut vm, _) = vm();
-    vm.set_resume_budget(Duration::from_secs(10));
+    vm.set_resume_budget(Duration::from_secs(5));
     let start = Instant::now();
-    vm.run_script(
-        "T",
-        "local t = {}
-         for i = 1, 100000 do table.insert(t, i) end
-         for i = 1, 100000 do table.remove(t) end
-         assert(#t == 0)
-         local u = {}
-         for i = 1, 100000 do table.insert(u, #u + 1, i) end
-         assert(#u == 100000)",
-    )
-    .unwrap();
+    let err = vm
+        .run_script(
+            "T",
+            "local s = string.rep('a,', 2000000) string.split(s, ',')",
+        )
+        .unwrap_err();
+    assert!(err.message.contains("string too long"), "{}", err.message);
     assert!(
-        start.elapsed() < Duration::from_secs(2),
+        start.elapsed() < Duration::from_secs(5),
         "{:?}",
         start.elapsed()
     );
+    vm.run_script(
+        "T",
+        "local parts = string.split('a,b,,c', ',')
+         assert(#parts == 4 and parts[1] == 'a' and parts[3] == '' and parts[4] == 'c')
+         assert(#string.split(string.rep('x,', 400000), ',') == 400001)",
+    )
+    .unwrap();
 }
