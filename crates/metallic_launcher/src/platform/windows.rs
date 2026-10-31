@@ -559,15 +559,17 @@ fn connect(name: &str, user: &UserSid) -> Result<PipeSender, LauncherError> {
             "the pipe belongs to another user",
         ));
     }
-    // And it must be a Launcher: a link can hold a join ticket.
-    let own =
-        std::env::current_exe().map_err(|e| platform_error("could not find this program", e))?;
-    match image_of_process(pid) {
+    // And it must be this very program (full path): a link can hold a join ticket.
+    let canonical = |path: PathBuf| std::fs::canonicalize(&path).unwrap_or(path);
+    let own = canonical(
+        std::env::current_exe().map_err(|e| platform_error("could not find this program", e))?,
+    );
+    match image_of_process(pid).map(canonical) {
         Some(server) if metallic_launcher::same_program(&server, &own) => {}
         _ => {
             return Err(platform_error(
                 "refused to send",
-                "the pipe does not belong to a Launcher",
+                "the pipe belongs to another program (or another copy of the Launcher)",
             ));
         }
     }

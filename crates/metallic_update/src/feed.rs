@@ -26,7 +26,23 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = "metallic-studio-updater";
 const RELEASES_PER_PAGE: u32 = 50;
-const MAX_RELEASE_PAGES: u32 = 5;
+/// The most release pages one check reads (all apps and channels share the repo's list).
+const MAX_RELEASE_PAGES: u32 = 20;
+/// More releases than this of the app's own channel, newer than the installed version, and
+/// the history is not read further: the update is then required (#240).
+const MAX_NEWER_RELEASES: usize = 250;
+
+/// How much of the release history a check saw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum History {
+    /// Everything back to the installed version (or the end of the list).
+    Complete,
+    /// More than [`MAX_NEWER_RELEASES`] newer releases of this app and channel: too far behind
+    /// to read every skipped release.
+    TooFarBehind,
+    /// [`MAX_RELEASE_PAGES`] ran out first (mostly other apps' or channels' releases).
+    Unknown,
+}
 
 /// Update channel. Each release is tagged `<prefix>X.Y.Z-<channel>`. Written as `"dev"` or
 /// `"stable"` in settings files.
@@ -265,18 +281,16 @@ impl UpdateChecker {
 
     /// Asks GitHub for the newest release of the channel. `Ok(None)` means "up to date".
     ///
-    /// A history longer than the check reads (more than 250 releases behind) cannot prove that
-    /// no skipped release was required, so the newest version is then offered as required: the
-    /// client fails closed instead of reporting an update error forever (#240). Blocks for up
-    /// to a few requests; call it off the UI thread.
+    /// A client more than 250 releases of its own app and channel behind cannot read every
+    /// skipped release, so the newest version is then offered as required: it fails closed
+    /// instead of reporting an update error forever (#240). Releases of the other app or channel
+    /// do not count. Blocks for up to a few requests; call it off the UI thread.
     pub fn check(&self) -> Result<Option<UpdateInfo>, UpdateError> {
-        let (releases, complete) = self.fetch_releases()?;
+        let (releases, history) = self.fetch_releases()?;
         let update = self.pick_update(&releases);
-        if complete {
-            return Ok(update);
-        }
-        match update {
-            Some(update) => {
+        match (history, update) {
+            (History::Complete, update) => Ok(update),
+            (History::TooFarBehind, Some(update)) => {
                 log::warn!(
                     "release history is longer than the check reads; the update is required"
                 );
@@ -285,7 +299,7 @@ impl UpdateChecker {
                     ..update
                 }))
             }
-            None => Err(UpdateError::BadResponse(
+            _ => Err(UpdateError::BadResponse(
                 "release history exceeds the update-check limit; required status is incomplete"
                     .into(),
             )),
@@ -297,7 +311,7 @@ impl UpdateChecker {
     /// whose `digest` is missing or is not `sha256:<64 hex digits>` is refused with
     /// [`UpdateError::BadResponse`], because a download could not be checked.
     pub fn latest_asset(&self, file_name: &str) -> Result<Option<ReleaseAsset>, UpdateError> {
-        let (releases, complete) = self.fetch_releases()?;
+        let (releases, history) = self.fetch_releases()?;
         let mut candidates: Vec<(Version, &GithubRelease)> = releases
             .iter()
             .filter(|r| !r.draft)
@@ -330,7 +344,7 @@ impl UpdateChecker {
                 size: asset.size,
             }));
         }
-        if !complete {
+        if history != History::Complete {
             // The file may be in a release the check did not read.
             return Err(UpdateError::BadResponse(
                 "release history exceeds the update-check limit".into(),
@@ -339,9 +353,9 @@ impl UpdateChecker {
         Ok(None)
     }
 
-    /// The releases through the installed-version boundary, and whether that boundary (or the
-    /// end of the list) was reached within [`MAX_RELEASE_PAGES`].
-    fn fetch_releases(&self) -> Result<(Vec<GithubRelease>, bool), UpdateError> {
+    /// The releases through the installed-version boundary, and how much of the history that
+    /// is (see [`History`]).
+    fn fetch_releases(&self) -> Result<(Vec<GithubRelease>, History), UpdateError> {
         let token = self.tokens.token().ok_or(UpdateError::Unauthorized)?;
         let authorization = format!("Bearer {}", token.expose());
         let headers = [
@@ -353,6 +367,7 @@ impl UpdateChecker {
         // Our release process publishes increasing versions. Keep all pages through
         // the installed-version boundary so skipped required releases remain visible.
         let mut releases: Vec<GithubRelease> = Vec::new();
+        let mut newer = 0usize;
         for page in 1..=MAX_RELEASE_PAGES {
             let url = format!(
                 "{}/repos/{}/releases?per_page={RELEASES_PER_PAGE}&page={page}",
@@ -370,18 +385,26 @@ impl UpdateChecker {
             }
             let page_releases: Vec<GithubRelease> = serde_json::from_str(&response.body)
                 .map_err(|e| UpdateError::BadResponse(e.to_string()))?;
-            let reached_installed = page_releases
+            let ours: Vec<Version> = page_releases
                 .iter()
                 .filter(|release| !release.draft)
                 .filter_map(|release| version_from_tag(&release.tag_name, &self.feed, self.channel))
-                .any(|version| version <= self.current);
+                .collect();
+            let reached_installed = ours.iter().any(|version| *version <= self.current);
+            newer += ours
+                .iter()
+                .filter(|version| **version > self.current)
+                .count();
             let reached_end = page_releases.len() < RELEASES_PER_PAGE as usize;
             releases.extend(page_releases);
             if reached_installed || reached_end {
-                return Ok((releases, true));
+                return Ok((releases, History::Complete));
+            }
+            if newer >= MAX_NEWER_RELEASES {
+                return Ok((releases, History::TooFarBehind));
             }
         }
-        Ok((releases, false))
+        Ok((releases, History::Unknown))
     }
 
     /// Like [`check`](Self::check), but a failure is logged and answered with `None`, so a bad

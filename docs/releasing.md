@@ -54,10 +54,11 @@ runs). Prefer the workflow.
 - A release can be marked required (Studio then insists on restarting): add `--required` to the script, or put the line
   `required: true` in the release notes. Use it only for breaking changes (file format, protocol).
 - The check accumulates skipped releases through a published same-channel version at/below the installed version
-  or the end of the list. A required flag on an older skipped page still applies to the newest offer. The existing
-  maximum of five pages of 50 remains. A scan truncated before that boundary (more than 250 releases behind) fails
-  closed: the newest version is offered as required, so such a client updates instead of showing an update error
-  forever. With no newer version in the pages read, it is still an error. This relies on the release process above publishing increasing versions, not on GitHub
+  or the end of the list. A required flag on an older skipped page still applies to the newest offer. It reads at
+  most 20 pages of 50 (the list holds both apps and both channels). A client more than 250 releases of its own app and
+  channel behind fails closed: the newest version is offered as required, so it updates instead of showing an update
+  error forever. Other apps' and channels' releases never count toward the 250. When the 20 pages run out first, it
+  is an error. This relies on the release process above publishing increasing versions, not on GitHub
   sorting arbitrary version strings. Later-page failures also produce no partial offer.
 
 ## Protect the release tags (owner, one time)

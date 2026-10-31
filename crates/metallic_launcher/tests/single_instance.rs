@@ -50,17 +50,22 @@ fn oversized_handoff_rejected() {
     assert!(decode(&frame).is_ok());
 }
 
-/// #289: the pipe client sends only to a program named like this one (any folder, any case).
+/// #289, #376 F3: the pipe client sends only to this very program: the full image path must
+/// match (case aside); the same file name in another folder is not enough.
 #[test]
-fn the_pipe_server_must_be_a_launcher() {
+fn the_pipe_server_must_be_this_program() {
     use metallic_launcher::same_program;
     use std::path::Path;
     let own = Path::new(r"C:\Apps\MetallicLauncher\current\Metallic.exe");
+    assert!(same_program(own, own));
     assert!(same_program(
-        Path::new(r"D:\src\target\debug\metallic.EXE"),
+        Path::new(r"c:\apps\metalliclauncher\CURRENT\metallic.exe"),
         own
     ));
-    assert!(same_program(own, own));
+    assert!(!same_program(
+        Path::new(r"C:\Users\Public\Metallic.exe"),
+        own
+    ));
     assert!(!same_program(Path::new(r"C:\Tools\Other.exe"), own));
-    assert!(!same_program(Path::new(""), own));
+    assert!(!same_program(Path::new(""), Path::new("")));
 }

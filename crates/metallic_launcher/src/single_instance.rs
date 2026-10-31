@@ -99,14 +99,15 @@ pub enum Acquired {
     Secondary(Box<dyn HandoffSender>),
 }
 
-/// Whether the program at the other end of the pipe (`server`, its image path) is a Launcher
-/// like this one (`own`): the same file name, ignoring case. The pipe is already limited to
-/// this user; this also keeps a link (which may hold a join ticket) away from some other
-/// program of the user's that took the pipe name. An installed copy and a development build
-/// live in different folders, so only the name is compared.
+/// Whether the program at the other end of the pipe is this very program: `server`'s image
+/// path is `own`'s (this executable's), ignoring ASCII case as Windows does. Give both
+/// canonicalised when possible.
+///
+/// The pipe is already limited to this user (the SID check). This also keeps a link, which may
+/// hold a join ticket, away from any other program of the user's that took the pipe name: a
+/// file name alone (`Metallic.exe`) proves nothing, since any program can be called that. The
+/// cost: a second copy in another folder (a development build next to the installed one) does
+/// not hand over to it and reports that instead.
 pub fn same_program(server: &Path, own: &Path) -> bool {
-    match (server.file_name(), own.file_name()) {
-        (Some(server), Some(own)) => server.eq_ignore_ascii_case(own),
-        _ => false,
-    }
+    !own.as_os_str().is_empty() && server.as_os_str().eq_ignore_ascii_case(own.as_os_str())
 }

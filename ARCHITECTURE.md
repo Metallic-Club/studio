@@ -240,7 +240,7 @@ apps.
   `MetallicLauncher` (`--framework webview2`, channel `launcher-<channel>`, tag `launcher-v<version>-<channel>`; see
   `docs/releasing.md`). `play_limit.rs` (`PlayLimiter`, burst 3 then one per 2 s; `LaunchGate`) is one gate for every program start: Play and
   Studio links (pipe, protocol handler, page clicks, start argument), the bridge `play`/`openStudio` and the tray (the bridge has no limit of its own). The single-instance pipe client sends only
-  to a server of the same user whose image is named like its own (`same_program`). The GitHub sign-in page opens through the
+  to a server of the same user whose image is this very executable, full path (`same_program`; a copy in another folder does not hand over). The GitHub sign-in page opens through the
   same https-only browser opener as other links, after `github_auth::is_github_page`. `url_policy::remote_content_allowed`: if
   the WebView2 `FrameNavigationStarting` handler cannot be registered, iframes would be unpoliced, so the Launcher shows the bundled
   offline page and loads no remote page (fail closed). Own data folders (`data_dirs.rs`): `%LOCALAPPDATA%\MetallicLauncher\data` (`Downloads`, `WebView2`) and `%APPDATA%\MetallicLauncher` (settings), never under `Metallic\` (another app may own it); each holds a `.metallic-launcher` marker written when the Launcher creates it, and the uninstall hook deletes only marked folders. Keyring service `MetallicLauncher`, accounts `platform` and `github`
