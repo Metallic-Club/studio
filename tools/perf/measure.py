@@ -14,7 +14,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-WORKLOADS = {"reads": "metallic_perf_reads", "writes": "metallic_perf_writes", "clone": "metallic_perf_clone"}
+WORKLOADS = {
+    "reads": "metallic_perf_reads", "writes": "metallic_perf_writes", "clone": "metallic_perf_clone",
+    "create": "metallic_perf_create", "destroy": "metallic_perf_destroy",
+}
 
 
 def command(args: list[str]) -> str:
