@@ -46,6 +46,10 @@ enum HostEvent {
         part: InstanceId,
         hit: InstanceId,
     },
+    TouchEnded {
+        part: InstanceId,
+        hit: InstanceId,
+    },
     Died {
         humanoid: InstanceId,
     },
@@ -301,6 +305,12 @@ impl ScriptHost {
         self.inputs.push(HostEvent::Touched { part, hit });
     }
 
+    /// Queues `part.TouchEnded(hit)` for the next `step`. It fires while `part` exists, also
+    /// when `hit` has been destroyed by then.
+    pub fn touch_ended(&mut self, part: InstanceId, hit: InstanceId) {
+        self.inputs.push(HostEvent::TouchEnded { part, hit });
+    }
+
     /// Queues `Humanoid.Died` for the next `step`.
     pub fn humanoid_died(&mut self, humanoid: InstanceId) {
         self.inputs.push(HostEvent::Died { humanoid });
@@ -485,6 +495,12 @@ impl ScriptHost {
                 HostEvent::Touched { part, hit } => {
                     self.fire_instance_event(part, EventKind::Touched, Some(hit));
                 }
+                HostEvent::TouchEnded { part, hit } => {
+                    // The touching part may be gone already (its character was destroyed or
+                    // replaced before scripts ran): the surviving part still hears the end,
+                    // with the destroyed part as `hit`.
+                    self.fire_touch_ended(part, hit);
+                }
                 HostEvent::Died { humanoid } => {
                     self.fire_instance_event(humanoid, EventKind::Died, None);
                 }
@@ -521,6 +537,21 @@ impl ScriptHost {
             state.fire((source, event), &|lua| match arg {
                 Some(id) => Ok(vec![Value::UserData(state.wrap(lua, id)?)]),
                 None => Ok(Vec::new()),
+            });
+        }
+    }
+
+    /// Fires `part.TouchEnded(hit)` in active VMs while `part` exists, even when `hit` was
+    /// destroyed (scripts get the destroyed instance; reading its members errors).
+    fn fire_touch_ended(&self, part: InstanceId, hit: InstanceId) {
+        let alive = self.world.try_borrow().is_ok_and(|w| w.is_alive(part));
+        if !alive {
+            return;
+        }
+        for side in self.sides() {
+            let state = &side.state;
+            state.fire((part, EventKind::TouchEnded), &|lua| {
+                Ok(vec![Value::UserData(state.wrap(lua, hit)?)])
             });
         }
     }
