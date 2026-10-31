@@ -49,12 +49,16 @@ cargo fmt --all -- --check
 ## Open questions
 - None for #166.
 
-## #274: table.sort without a comparator
-- `STRING_LIMITS` in `vm.rs` also wraps `table.sort`: with no comparator and a raw length above
-  262144 (2^18, about 35 ms of C sort) it raises `table.sort: table too large to sort without a
-  comparator (limit 262144)`. With a comparator the sort runs Lua callbacks, so the interrupt still
-  fires. Luau's own sort, ordering and error texts are unchanged for everything else.
-- Why a cap and not a Rust sort: keeps Luau's exact semantics (`invalid order function`, error
-  wording). No change to property reads and writes, so the `instructions` gate is not affected.
-- Tests in `tests/vm_round2.rs`: `big_sort_without_comparator_is_refused_fast`,
-  `big_sort_with_a_comparator_stays_interruptible`, `normal_sorts_behave_as_before`.
+## #274: table.sort (review fix)
+- No refusal cap any more. `STRING_LIMITS` in `vm.rs` wraps `table.sort`: above 256 elements every
+  comparison goes through a Lua closure (`a < b`, or `comp(a, b)`), so each one crosses a Lua call
+  and the deadline interrupt fires, also for C comparators (`rawequal`), a C `__lt`, and long
+  string compares. The wrapper strips the closure's `[engine]:N:` prefix from default-comparison
+  type errors; "invalid order function" and comparator errors are Luau's own.
+- gsub's replacement loop charges one step per 16 bytes appended (`append`), `%1` back-reference
+  compares are charged per byte (`charge_bytes`), a `[...]` class is charged while it is read
+  (`class_end`) and before a class match (`match_bracket_class`).
+- Tests in `tests/vm_round2.rs`: `big_sort_*` (the `rawequal` one takes 8 s before the fix),
+  `normal_sorts_behave_as_before`, `gsub_replacement_loop_is_bounded`,
+  `back_reference_compares_are_charged`. Wall limits are 2 to 5 s.
+- Follow-up (not here): `string.pack`, `table.concat`.

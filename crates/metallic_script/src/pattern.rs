@@ -29,6 +29,8 @@ const MAX_RESULT: usize = 64 * 1024 * 1024;
 /// nothing extra, so ordinary patterns count exactly as before; a long class is charged in
 /// proportion to its length, so the step cap and the deadline check bound it.
 const CLASS_BYTES_PER_STEP: u64 = 16;
+/// Class bytes read between two charges while scanning a class.
+const CLASS_READ_CHUNK: usize = 4096;
 
 const CAP_UNFINISHED: isize = -1;
 const CAP_POSITION: isize = -2;
@@ -65,6 +67,8 @@ struct State<'a> {
     steps: u64,
     /// Charged work since the last deadline poll, retained across attempts.
     poll_steps: u64,
+    /// Bytes charged but not yet worth a step (see `charge_bytes`).
+    byte_acc: u64,
     deadline: Option<Instant>,
     depth: u32,
 }
@@ -98,6 +102,7 @@ impl<'a> State<'a> {
             caps: [(0, 0); MAX_CAPTURES],
             steps: 0,
             poll_steps: 0,
+            byte_acc: 0,
             deadline,
             depth: 0,
         }
@@ -126,6 +131,15 @@ impl<'a> State<'a> {
         Ok(())
     }
 
+    /// Charges one step per 16 bytes copied or compared outside the matching loop (replacement
+    /// text, back-references), so such loops are bounded by the step cap and the deadline.
+    fn charge_bytes(&mut self, bytes: usize) -> R<()> {
+        self.byte_acc += bytes as u64;
+        let steps = self.byte_acc / CLASS_BYTES_PER_STEP;
+        self.byte_acc %= CLASS_BYTES_PER_STEP;
+        if steps == 0 { Ok(()) } else { self.tick(steps) }
+    }
+
     /// Charges for reading `bytes` bytes of a `[...]` class.
     fn charge_class(&mut self, bytes: usize) -> R<()> {
         match bytes as u64 / CLASS_BYTES_PER_STEP {
@@ -149,6 +163,8 @@ impl<'a> State<'a> {
             if pat.get(p) == Some(&b'^') {
                 p += 1;
             }
+            // Charged while reading, so a huge class is stopped part way, not after the scan.
+            let mut charged = 0;
             loop {
                 if p >= pat.len() {
                     return Err(Stop::Msg("malformed pattern (missing ']')"));
@@ -158,11 +174,15 @@ impl<'a> State<'a> {
                 if cc == b'%' && p < pat.len() {
                     p += 1;
                 }
+                if p - start - charged >= CLASS_READ_CHUNK {
+                    self.charge_class(p - start - charged)?;
+                    charged = p - start;
+                }
                 if pat.get(p) == Some(&b']') {
                     break;
                 }
             }
-            self.charge_class(p - start)?;
+            self.charge_class(p - start - charged)?;
             return Ok(p + 1);
         }
         Ok(p)
@@ -170,9 +190,9 @@ impl<'a> State<'a> {
 
     /// `p` points at `[`, `ec` at the closing `]`. Charges for the class bytes read.
     fn match_bracket_class(&mut self, c: u8, p: usize, ec: usize) -> R<bool> {
-        let (res, end) = bracket_class(self.pat, c, p, ec);
-        self.charge_class(end - p)?;
-        Ok(res)
+        // Charged first, for the whole class: the read below is bounded by its length.
+        self.charge_class(ec - p)?;
+        Ok(bracket_class(self.pat, c, p, ec).0)
     }
 
     fn single_match(&mut self, c: u8, p: usize, ep: usize) -> R<bool> {
@@ -266,7 +286,7 @@ impl<'a> State<'a> {
         Ok(res)
     }
 
-    fn match_capture(&self, s: usize, digit: u8) -> R<Option<usize>> {
+    fn match_capture(&mut self, s: usize, digit: u8) -> R<Option<usize>> {
         let l = (digit as usize).wrapping_sub(b'1' as usize);
         if l >= self.level || self.caps[l].1 == CAP_UNFINISHED {
             return Err(Stop::Msg("invalid capture index"));
@@ -276,6 +296,7 @@ impl<'a> State<'a> {
             return Ok(None);
         }
         let len = len as usize;
+        self.charge_bytes(len)?;
         if self.src.len() - s >= len && self.src[init..init + len] == self.src[s..s + len] {
             Ok(Some(s + len))
         } else {
@@ -618,6 +639,20 @@ fn add_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// `add_bytes`, charging the appended bytes to the matcher's step budget so a long replacement
+/// loop is bounded by the step cap and the deadline.
+fn append(
+    st: &mut State<'_>,
+    lua: &Lua,
+    sched: &Scheduler,
+    out: &mut Vec<u8>,
+    bytes: &[u8],
+) -> Result<()> {
+    st.charge_bytes(bytes.len())
+        .map_err(|er| stop_error(lua, sched, er))?;
+    add_bytes(out, bytes)
+}
+
 fn value_bytes(lua: &Lua, v: &Value) -> Result<Vec<u8>> {
     match v {
         Value::String(s) => Ok(s.as_bytes().to_vec()),
@@ -679,7 +714,7 @@ fn gsub(
                     let mut i = 0;
                     while i < r.len() {
                         if r[i] != b'%' {
-                            add_bytes(&mut out, &r[i..=i])?;
+                            append(&mut st, lua, sched, &mut out, &r[i..=i])?;
                         } else {
                             i += 1;
                             match r.get(i) {
@@ -688,12 +723,12 @@ fn gsub(
                                         "invalid use of '%' in replacement string",
                                     ));
                                 }
-                                Some(b'0') => add_bytes(&mut out, &src[pos..e])?,
+                                Some(b'0') => append(&mut st, lua, sched, &mut out, &src[pos..e])?,
                                 Some(d) if d.is_ascii_digit() => {
                                     let v = st.one_capture(lua, usize::from(*d - b'1'), pos, e)?;
-                                    add_bytes(&mut out, &value_bytes(lua, &v)?)?;
+                                    append(&mut st, lua, sched, &mut out, &value_bytes(lua, &v)?)?;
                                 }
-                                Some(c) => add_bytes(&mut out, &[*c])?,
+                                Some(c) => append(&mut st, lua, sched, &mut out, &[*c])?,
                             }
                         }
                         i += 1;
@@ -714,8 +749,10 @@ fn gsub(
                         _ => Value::Nil,
                     };
                     match result {
-                        Value::Nil | Value::Boolean(false) => add_bytes(&mut out, &src[pos..e])?,
-                        v => add_bytes(&mut out, &value_bytes(lua, &v)?)?,
+                        Value::Nil | Value::Boolean(false) => {
+                            append(&mut st, lua, sched, &mut out, &src[pos..e])?
+                        }
+                        v => append(&mut st, lua, sched, &mut out, &value_bytes(lua, &v)?)?,
                     }
                 }
             }
@@ -723,7 +760,7 @@ fn gsub(
         match e {
             Some(e) if e > pos => pos = e,
             _ if pos < src.len() => {
-                add_bytes(&mut out, &src[pos..=pos])?;
+                append(&mut st, lua, sched, &mut out, &src[pos..=pos])?;
                 pos += 1;
             }
             _ => break,
@@ -733,7 +770,7 @@ fn gsub(
         }
     }
     if pos < src.len() {
-        add_bytes(&mut out, &src[pos..])?;
+        append(&mut st, lua, sched, &mut out, &src[pos..])?;
     }
     Ok(MultiValue::from_vec(vec![
         Value::String(lua.create_string(&out)?),

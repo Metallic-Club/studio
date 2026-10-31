@@ -96,8 +96,8 @@ fn setup_failed(e: Error) -> ScriptError {
 }
 
 /// Lua that bounds `string.rep` (results over 64 MB are rejected, also when the count is
-/// a numeric string) and `table.sort` without a comparator (tables over 2^18 elements are
-/// rejected, #274). The pattern functions are bounded in `pattern.rs`.
+/// a numeric string) and `table.sort` (comparisons of tables over 256 elements go through a Lua closure so
+/// the deadline can interrupt, #274). The pattern functions are bounded in `pattern.rs`.
 const STRING_LIMITS: &str = r#"
 local string, type, error, tonumber, tostring = string, type, error, tonumber, tostring
 local rep = string.rep
@@ -110,15 +110,31 @@ string.rep = function(s, n)
     return rep(s, n)
 end
 
--- #274: table.sort without a comparator runs entirely in C, where the time budget's interrupt
--- cannot fire. Tables over MAX_SORT must pass a comparator (a Lua function, so interruptible);
--- the sort itself and its error behaviour are Luau's own.
-local table, rawlen = table, rawlen
+-- #274: table.sort runs in C, where the time budget's interrupt cannot fire between
+-- comparisons (a C comparator such as rawequal, a C __lt, or long string compares never return
+-- to Lua). Above SORT_VIA_LUA elements every comparison goes through a Lua closure, so each one
+-- crosses a Lua call and the deadline check runs. Ordering and "invalid order function" are
+-- Luau's own; a type error from the default comparison loses only the closure's position prefix.
+local table, rawlen, type, pcall, error = table, rawlen, type, pcall, error
 local sort = table.sort
-local MAX_SORT = 262144
+local SORT_VIA_LUA = 256
+local PREFIX = "^%[engine%]:%d+: "
+local function finish(ok, ...)
+    if ok then return ... end
+    local e = ...
+    if type(e) == "string" then
+        local _, stop = e:find(PREFIX)
+        if stop then e = e:sub(stop + 1) end
+    end
+    error(e, 0)
+end
 table.sort = function(t, comp)
-    if comp == nil and type(t) == "table" and rawlen(t) > MAX_SORT then
-        error("table.sort: table too large to sort without a comparator (limit 262144)", 2)
+    if type(t) == "table" and rawlen(t) > SORT_VIA_LUA then
+        if comp == nil then
+            return finish(pcall(sort, t, function(a, b) return a < b end))
+        elseif type(comp) == "function" then
+            return finish(pcall(sort, t, function(a, b) return comp(a, b) end))
+        end
     end
     return sort(t, comp)
 end

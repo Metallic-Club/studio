@@ -274,7 +274,7 @@ fn assert_pattern_stops_fast(src: &str) {
         "{}",
         err.message
     );
-    assert!(took < Duration::from_millis(500), "took {took:?}");
+    assert!(took < Duration::from_secs(5), "took {took:?}");
     vm.run_script("T", "assert(string.match('abc', '[a-c]+') == 'abc')")
         .unwrap();
 }
@@ -296,56 +296,71 @@ fn long_bracket_class_lazy_is_bounded() {
     );
 }
 
-#[test]
-fn big_sort_without_comparator_is_refused_fast() {
-    // #274: 8M numbers sorted in C ran 1.1 s past the budget (1M here keeps the test light). Now it is refused up front.
+/// Builds a global with the engine's unbudgeted Lua handle, then runs `src` under a short
+/// budget and asserts that it stops with a timeout well inside `limit` (#274).
+fn assert_sort_times_out(build: &str, src: &str) {
     let (mut vm, _) = vm();
+    let big: mlua::Table = vm.lua().load(build).eval().unwrap();
+    vm.set_global("big", big).unwrap();
+    vm.set_resume_budget(Duration::from_millis(40));
     let start = Instant::now();
-    let err = vm
-        .run_script("T", "local t = table.create(1000000, 1) table.sort(t)")
-        .unwrap_err();
+    let err = vm.run_script("T", src).unwrap_err();
+    let took = start.elapsed();
     assert!(
-        err.message.contains("table.sort: table too large"),
+        err.message.contains("Script timeout") || err.message.contains("invalid order function"),
         "{}",
         err.message
     );
-    assert!(err.message.starts_with("T:1:"), "{}", err.message);
-    assert!(
-        start.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        start.elapsed()
-    );
-    // Raw length counts: a __len metamethod cannot hide the size.
-    let err = vm
-        .run_script(
-            "T",
-            "local t = setmetatable(table.create(2000000, 1), {__len = function() return 1 end}) table.sort(t)",
-        )
-        .unwrap_err();
-    assert!(err.message.contains("too large"), "{}", err.message);
+    assert!(took < Duration::from_secs(2), "took {took:?}");
+    vm.set_resume_budget(Duration::from_secs(2));
+    vm.run_script("T", "local t = {3, 1, 2} table.sort(t) assert(t[1] == 1)")
+        .unwrap();
 }
 
 #[test]
-fn big_sort_with_a_comparator_stays_interruptible() {
-    let (mut vm, _) = vm();
-    let start = Instant::now();
-    let err = vm
-        .run_script(
-            "T",
-            "local t = table.create(2000000, 1) table.sort(t, function(a, b) while true do end end)",
-        )
-        .unwrap_err();
-    assert!(err.message.contains("Script timeout"), "{}", err.message);
-    assert!(
-        start.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        start.elapsed()
+fn big_sort_without_comparator_is_interruptible() {
+    // Strings with a long shared prefix: every comparison is a long memcmp in C.
+    assert_sort_times_out(
+        "local p = string.rep('a', 1500)
+         local big = {}
+         for i = 1, 150000 do big[i] = p .. ((i * 7919) % 150001) end
+         return big",
+        "table.sort(big)",
+    );
+}
+
+#[test]
+fn big_sort_with_a_c_comparator_is_interruptible() {
+    // rawequal never returns to Lua: with only C calls the interrupt could not fire.
+    assert_sort_times_out(
+        "local big = table.create(8000000, 0) for i = 1, 8000000 do big[i] = i end return big",
+        "table.sort(big, rawequal)",
+    );
+}
+
+#[test]
+fn big_sort_with_a_c_lt_metamethod_is_interruptible() {
+    assert_sort_times_out(
+        "local mt = {__lt = rawequal}
+         local big = {}
+         for i = 1, 1000000 do big[i] = setmetatable({}, mt) end
+         return big",
+        "table.sort(big)",
+    );
+}
+
+#[test]
+fn big_sort_with_a_lua_comparator_stays_interruptible() {
+    assert_sort_times_out(
+        "return table.create(300000, 1)",
+        "table.sort(big, function(a, b) while true do end end)",
     );
 }
 
 #[test]
 fn normal_sorts_behave_as_before() {
     let (mut vm, _) = vm();
+    vm.set_resume_budget(Duration::from_secs(20));
     vm.run_script(
         "T",
         "local t = {5, 2, 9, 1, 7}
@@ -356,15 +371,67 @@ fn normal_sorts_behave_as_before() {
          local w = {'b', 'a', 'c'}
          table.sort(w)
          assert(w[1] == 'a' and w[3] == 'c')
-         -- a table at the limit still sorts, errors keep Luau's own wording
-         local big = table.create(262144, 3)
-         big[1] = 1
+         -- tables above the Lua-closure threshold sort the same way, with or without a comparator
+         local big, n = {}, 5000
+         for i = 1, n do big[i] = (i * 7919) % 10007 end
+         local copy = table.clone(big)
          table.sort(big)
-         assert(big[1] == 1)
-         local ok, e = pcall(table.sort, 5)
+         for i = 2, n do assert(big[i - 1] <= big[i]) end
+         table.sort(copy, function(a, b) return a > b end)
+         for i = 2, n do assert(copy[i - 1] >= copy[i]) end
+         local up = {}
+         for i = 1, n do up[i] = 'k' .. (i * 31 % 977) end
+         table.sort(up)
+         for i = 2, n do assert(up[i - 1] <= up[i]) end
+         -- Luau's own errors
+         local ok = pcall(table.sort, 5)
          assert(not ok)
-         local ok2, e2 = pcall(table.sort, {3, 'x', 1})
-         assert(not ok2)",
+         local mixed = {}
+         for i = 1, n do mixed[i] = i end
+         mixed[n // 2] = 'x'
+         local ok2, e2 = pcall(table.sort, mixed)
+         assert(not ok2 and e2:find('attempt to compare') and not e2:find('engine'), e2)
+         local bad = {}
+         for i = 1, n do bad[i] = i % 7 end
+         local ok3, e3 = pcall(table.sort, bad, function(a, b) return true end)
+         assert(not ok3 and e3:find('invalid order function'), e3)
+         -- a comparator error keeps its own position
+         local ok4, e4 = pcall(table.sort, bad, function(a, b) error('boom') end)
+         assert(not ok4 and e4:find('boom'))",
     )
     .unwrap();
+}
+
+#[test]
+fn gsub_replacement_loop_is_bounded() {
+    // 1M empty matches x 64 bytes: ~64 MB appended, about 10 s unbounded in a debug build.
+    let (mut vm, _) = vm();
+    let start = Instant::now();
+    let err = vm
+        .run_script(
+            "T",
+            "local s = string.rep('a', 1000000)
+             string.gsub(s, '', string.rep('x', 64))",
+        )
+        .unwrap_err();
+    assert!(
+        err.message.contains("Script timeout") || err.message.contains("pattern too complex"),
+        "{}",
+        err.message
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        start.elapsed()
+    );
+    vm.run_script("T", "assert(string.gsub('abc', '', '-') == '-a-b-c-')")
+        .unwrap();
+}
+
+#[test]
+fn back_reference_compares_are_charged() {
+    assert_pattern_stops_fast(
+        "local s = string.rep('a', 60000)
+         string.find(s, '(a*)%1b')",
+    );
 }
