@@ -496,6 +496,7 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 SHA-256 compatibility fingerprint of ordered class names, inheritance, effective properties, types, defaults,
 allowed values and policy. Its versioned encoding uses explicit lengths and little-endian numeric bits. Peers
 must agree on this fingerprint before using property indices; it is neither a credential nor a scene hash.
+It returns `Result<[u8; 32], SchemaError>` (no panics): a malformed registry is a typed error and the peer refuses to connect. The test `registry_hash_is_pinned` holds the golden value; any class or property change must update it on purpose (the `registry_hash` example prints the new value). `classes::class_index` / `class_at` give the wire class index, and `metallic_core::{orientation_to_quat, quat_to_orientation}` (moved from physics) convert `Orientation` for the wire.
 
 `replication::{instance_visible, property_visible, property_value}` implement the play-client filter. They hide
 ServerStorage/ServerScriptService subtrees and server Script.Source, restrict private PlayerGui/PlayerScripts

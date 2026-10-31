@@ -24,7 +24,7 @@ fn indices_cover_inheritance_and_resolve_back_to_the_same_definition() {
     assert!(classes::property_index("Missing", "Name").is_none());
     assert_eq!(classes::property_index("Part", "Name"), Some(0));
     assert_eq!(registry_hash(), registry_hash());
-    assert_ne!(registry_hash(), [0; 32]);
+    assert_ne!(registry_hash().unwrap(), [0; 32]);
 }
 
 #[test]
@@ -272,4 +272,22 @@ fn gui_class_prefix_and_normalized_look_values_match_current_main() {
     assert!(property_visible(&world, gui, "Active", None));
     assert!(property_visible(&world, gui, "ZIndex", None));
     assert!(property_visible(&world, gui, "AutoButtonColor", None));
+}
+
+/// The golden schema fingerprint. New classes and properties replicate by default, so this is the
+/// tripwire: any change to a class, a property (name, type, default, order, range, allowed values,
+/// `hidden`, `repl`, normalizer contract) or the class order changes the hash and fails here.
+///
+/// To update it on purpose: run `cargo run -p metallic_core --example registry_hash`, paste the
+/// printed hex below, and say in the PR which schema change moved it (old and new peers then
+/// refuse each other with `UpdateRequired`). If the change was not intended, fix the registry.
+#[test]
+fn registry_hash_is_pinned() {
+    const GOLDEN: &str = "6699764a6ca5e949b9070b4f21f11dd23848220de244f1eb52eac44366697392";
+    let hash = registry_hash().expect("the built-in registry is well formed");
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        hex, GOLDEN,
+        "the class registry changed; if intended, update GOLDEN (see this test's doc comment)"
+    );
 }

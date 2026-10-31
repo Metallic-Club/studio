@@ -17,9 +17,50 @@ use std::sync::LazyLock;
 ///
 /// Protocol peers must compare this hash before interpreting class-relative property indices.
 /// It is a compatibility fingerprint, not an authentication credential or a world-state hash.
-pub fn registry_hash() -> [u8; 32] {
-    static HASH: LazyLock<[u8; 32]> = LazyLock::new(|| hash_schema(classes::registry_classes()));
+///
+/// Computed once. Errors: a [`SchemaError`] when the built-in registry is malformed (an unknown
+/// superclass, an inheritance cycle, too many properties, or a normalizer without its contract
+/// id). The test `registry_hash_is_pinned` keeps the built-in registry valid; a peer that still
+/// gets an error must refuse to connect rather than guess.
+pub fn registry_hash() -> Result<[u8; 32], SchemaError> {
+    static HASH: LazyLock<Result<[u8; 32], SchemaError>> =
+        LazyLock::new(|| hash_schema(classes::registry_classes()));
     *HASH
+}
+
+/// Why a class registry has no fingerprint. Each variant names the class (and property) at fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SchemaError {
+    /// A class names a superclass that is not in the registry.
+    #[error("class {class} names unregistered superclass {superclass}")]
+    UnknownSuperclass {
+        /// The class with the bad superclass.
+        class: &'static str,
+        /// The missing superclass name.
+        superclass: &'static str,
+    },
+    /// Following superclasses from this class never reaches a root.
+    #[error("class {0} has an inheritance cycle")]
+    InheritanceCycle(&'static str),
+    /// The class has more properties (inherited ones included) than a `u16` index can address.
+    #[error("class {0} has more than 65,536 properties")]
+    PropertyIndexOverflow(&'static str),
+    /// A property has a normalizer without a contract id, or a contract id without a normalizer.
+    #[error("property {class}.{property} must declare normalize and normalize_schema_id together")]
+    UnpairedNormalizer {
+        /// The class declaring the property.
+        class: &'static str,
+        /// The property.
+        property: &'static str,
+    },
+    /// A property's normalization contract id is empty.
+    #[error("property {class}.{property} has an empty normalization schema id")]
+    EmptyNormalizationId {
+        /// The class declaring the property.
+        class: &'static str,
+        /// The property.
+        property: &'static str,
+    },
 }
 
 fn field(hash: &mut Sha256, bytes: &[u8]) {
@@ -65,7 +106,7 @@ fn hash_value(hash: &mut Sha256, value: &Value) {
     }
 }
 
-fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
+fn hash_schema(classes: &[ClassDef]) -> Result<[u8; 32], SchemaError> {
     let mut hash = Sha256::new();
     hash.update(b"metallic-registry-v4\0");
     hash.update((classes.len() as u64).to_le_bytes());
@@ -78,21 +119,30 @@ fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
         let mut chain = vec![class];
         let mut parent = class.superclass;
         while let Some(name) = parent {
-            let next = classes
-                .iter()
-                .find(|c| c.name == name)
-                .expect("registered superclass");
-            assert!(chain.len() < classes.len(), "registry inheritance cycle");
+            let next =
+                classes
+                    .iter()
+                    .find(|c| c.name == name)
+                    .ok_or(SchemaError::UnknownSuperclass {
+                        class: class.name,
+                        superclass: name,
+                    })?;
+            if chain.len() >= classes.len() {
+                return Err(SchemaError::InheritanceCycle(class.name));
+            }
             chain.push(next);
             parent = next.superclass;
         }
-        let properties: Vec<&PropDef> = chain.iter().rev().flat_map(|c| c.props).collect();
-        assert!(
-            properties.len() <= usize::from(u16::MAX) + 1,
-            "property index overflow"
-        );
+        let properties: Vec<(&ClassDef, &PropDef)> = chain
+            .iter()
+            .rev()
+            .flat_map(|c| c.props.iter().map(move |p| (*c, p)))
+            .collect();
+        if properties.len() > usize::from(u16::MAX) + 1 {
+            return Err(SchemaError::PropertyIndexOverflow(class.name));
+        }
         hash.update((properties.len() as u64).to_le_bytes());
-        for property in properties {
+        for (owner, property) in properties {
             field(&mut hash, property.name.as_bytes());
             field(&mut hash, property.ty.name().as_bytes());
             hash.update([match property.repl {
@@ -108,12 +158,22 @@ fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
             }
             match (property.normalize.is_some(), property.normalize_schema_id) {
                 (false, None) => hash.update([0]),
+                (true, Some("")) => {
+                    return Err(SchemaError::EmptyNormalizationId {
+                        class: owner.name,
+                        property: property.name,
+                    });
+                }
                 (true, Some(id)) => {
-                    assert!(!id.is_empty(), "empty normalization schema id");
                     hash.update([1]);
                     field(&mut hash, id.as_bytes());
                 }
-                _ => panic!("normalizer and schema id must be declared together"),
+                _ => {
+                    return Err(SchemaError::UnpairedNormalizer {
+                        class: owner.name,
+                        property: property.name,
+                    });
+                }
             }
             hash.update([u8::from(property.allowed.is_some())]);
             if let Some(values) = property.allowed {
@@ -130,7 +190,7 @@ fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
             hash_value(&mut hash, &value);
         }
     }
-    hash.finalize().into()
+    Ok(hash.finalize().into())
 }
 
 fn owner_of(world: &World, container: InstanceId) -> Option<InstanceId> {
@@ -238,6 +298,10 @@ mod tests {
     use super::*;
     use crate::ValueType;
 
+    fn ok_hash(classes: &[ClassDef]) -> [u8; 32] {
+        hash_schema(classes).unwrap()
+    }
+
     fn base(prop: PropDef) -> ClassDef {
         ClassDef {
             name: "Fixture",
@@ -262,8 +326,8 @@ mod tests {
 
     #[test]
     fn fingerprint_covers_property_metadata_defaults_order_and_class_identity() {
-        let original = hash_schema(&[base(prop())]);
-        assert_eq!(original, hash_schema(&[base(prop())]));
+        let original = ok_hash(&[base(prop())]);
+        assert_eq!(original, ok_hash(&[base(prop())]));
         // Independent Python SHA-256 fixture for version 4's explicit byte encoding.
         assert_eq!(
             original,
@@ -275,25 +339,25 @@ mod tests {
         );
         let mut changed = prop();
         changed.repl = Repl::ServerOnly;
-        assert_ne!(original, hash_schema(&[base(changed)]));
+        assert_ne!(original, ok_hash(&[base(changed)]));
         let mut changed = prop();
         changed.hidden = true;
-        assert_ne!(original, hash_schema(&[base(changed)]));
+        assert_ne!(original, ok_hash(&[base(changed)]));
         let mut changed = prop();
         changed.default = || Value::Bool(true);
-        assert_ne!(original, hash_schema(&[base(changed)]));
+        assert_ne!(original, ok_hash(&[base(changed)]));
         let mut changed = prop();
         changed.ty = ValueType::String;
-        assert_ne!(original, hash_schema(&[base(changed)]));
+        assert_ne!(original, ok_hash(&[base(changed)]));
         let mut changed = prop();
         changed.allowed = Some(&["A", "B"]);
-        assert_ne!(original, hash_schema(&[base(changed)]));
+        assert_ne!(original, ok_hash(&[base(changed)]));
         let mut changed = prop();
         changed.name = "Other";
-        assert_ne!(original, hash_schema(&[base(changed)]));
+        assert_ne!(original, ok_hash(&[base(changed)]));
         assert_ne!(
             original,
-            hash_schema(&[
+            ok_hash(&[
                 base(prop()),
                 ClassDef {
                     name: "Added",
@@ -304,7 +368,7 @@ mod tests {
         );
         let mut changed = base(prop());
         changed.name = "Changed";
-        assert_ne!(original, hash_schema(&[changed]));
+        assert_ne!(original, ok_hash(&[changed]));
     }
 
     #[test]
@@ -318,7 +382,7 @@ mod tests {
             definition.default = || Value::String("stored".into());
             definition.normalize = id.map(|_| callback as fn(&str) -> Option<&'static str>);
             definition.normalize_schema_id = id;
-            hash_schema(&[base(definition)])
+            ok_hash(&[base(definition)])
         };
         let v1 = schema(Some("fixture-normalization/v1"));
         assert_eq!(v1, schema(Some("fixture-normalization/v1")));
@@ -335,28 +399,73 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "normalizer and schema id must be declared together")]
     fn unversioned_normalizer_fails_closed() {
         let mut definition = prop();
         definition.normalize = Some(|_| Some("stored"));
-        hash_schema(&[base(definition)]);
+        assert_eq!(
+            hash_schema(&[base(definition)]),
+            Err(SchemaError::UnpairedNormalizer {
+                class: "Fixture",
+                property: "Flag"
+            })
+        );
     }
 
     #[test]
-    #[should_panic(expected = "normalizer and schema id must be declared together")]
     fn orphan_normalization_id_fails_closed() {
         let mut definition = prop();
         definition.normalize_schema_id = Some("orphan/v1");
-        hash_schema(&[base(definition)]);
+        assert_eq!(
+            hash_schema(&[base(definition)]),
+            Err(SchemaError::UnpairedNormalizer {
+                class: "Fixture",
+                property: "Flag"
+            })
+        );
     }
 
     #[test]
-    #[should_panic(expected = "empty normalization schema id")]
     fn empty_normalization_id_fails_closed() {
         let mut definition = prop();
         definition.normalize = Some(|_| Some("stored"));
         definition.normalize_schema_id = Some("");
-        hash_schema(&[base(definition)]);
+        assert_eq!(
+            hash_schema(&[base(definition)]),
+            Err(SchemaError::EmptyNormalizationId {
+                class: "Fixture",
+                property: "Flag"
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_inheritance_is_an_error_not_a_panic() {
+        let orphan = ClassDef {
+            name: "Orphan",
+            superclass: Some("Missing"),
+            props: &[],
+        };
+        assert_eq!(
+            hash_schema(&[orphan]),
+            Err(SchemaError::UnknownSuperclass {
+                class: "Orphan",
+                superclass: "Missing"
+            })
+        );
+        let a = ClassDef {
+            name: "A",
+            superclass: Some("B"),
+            props: &[],
+        };
+        let b = ClassDef {
+            name: "B",
+            superclass: Some("A"),
+            props: &[],
+        };
+        assert_eq!(
+            hash_schema(&[a, b]),
+            Err(SchemaError::InheritanceCycle("A"))
+        );
     }
 
     #[test]
@@ -367,7 +476,7 @@ mod tests {
             definition.ty = ValueType::Number;
             definition.default = || Value::Number(0.0);
             definition.range = range;
-            hash_schema(&[base(definition)])
+            ok_hash(&[base(definition)])
         };
         let range = NumRange {
             min: -1.0,
@@ -443,7 +552,7 @@ mod tests {
 
     #[test]
     fn adding_or_reordering_properties_and_changing_inheritance_changes_hash() {
-        let single = hash_schema(&[base(prop())]);
+        let single = ok_hash(&[base(prop())]);
         let mut extra = prop();
         extra.name = "Extra";
         let pair = ClassDef {
@@ -451,7 +560,7 @@ mod tests {
             superclass: None,
             props: Box::leak(vec![prop(), extra].into_boxed_slice()),
         };
-        let pair_hash = hash_schema(&[pair]);
+        let pair_hash = ok_hash(&[pair]);
         assert_ne!(single, pair_hash);
         let mut extra = prop();
         extra.name = "Extra";
@@ -460,7 +569,7 @@ mod tests {
             superclass: None,
             props: Box::leak(vec![extra, prop()].into_boxed_slice()),
         };
-        assert_ne!(pair_hash, hash_schema(&[reversed]));
+        assert_ne!(pair_hash, ok_hash(&[reversed]));
         let schema = |parent| {
             [
                 base(prop()),
@@ -476,9 +585,6 @@ mod tests {
                 },
             ]
         };
-        assert_ne!(
-            hash_schema(&schema("Fixture")),
-            hash_schema(&schema("OtherBase"))
-        );
+        assert_ne!(ok_hash(&schema("Fixture")), ok_hash(&schema("OtherBase")));
     }
 }

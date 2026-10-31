@@ -171,3 +171,11 @@ recorded separately and was not an actual test failure.
 All local publication gates are now complete. The final append records evidence only; executable source stays
 identical to 52a187e. Normal push, current-source PR body and exact-head CI follow. The owner/lead retains merge
 authority. No live multiplayer, Team Create or broader milestone acceptance is claimed.
+
+## Superseding PR (studio/293-replication-supersede, 2026-10-31)
+
+Codex's branch was idle; this branch merges it unchanged and fixes the lead's FIX-FIRST items:
+- `hash_schema`/`registry_hash` return `Result<_, SchemaError>`; no `expect`/`assert!`/`panic!` outside tests.
+- `tests/replication.rs::registry_hash_is_pinned` pins `6699764a...97392`; update it with the `registry_hash` example.
+- Added `classes::class_index`/`class_at` and core `orientation_to_quat`/`quat_to_orientation` (physics re-exports them).
+- Follow-ups: attributes (#391) and tags (#395) are not in the schema hash; the spec does not require them yet.

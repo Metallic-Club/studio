@@ -760,7 +760,25 @@ static CLASSES: &[ClassDef] = &[
 /// added (CI instructions gate, PR #278). Keep the indices in `CLASSES` order; the test
 /// `class_def_matches_the_registry` fails if they drift.
 pub fn class_def(name: &str) -> Option<&'static ClassDef> {
-    let index = match name {
+    CLASSES.get(class_slot(name)?)
+}
+
+/// The class's position in the registry (`CLASSES` order), the wire class index.
+///
+/// Indices are meaningful only between peers with an equal
+/// [`registry_hash`](crate::replication::registry_hash). [`class_at`] is the inverse.
+pub fn class_index(name: &str) -> Option<u16> {
+    u16::try_from(class_slot(name)?).ok()
+}
+
+/// The class at a registry index (see [`class_index`]), or `None` past the end.
+pub fn class_at(index: u16) -> Option<&'static ClassDef> {
+    CLASSES.get(usize::from(index))
+}
+
+#[inline]
+fn class_slot(name: &str) -> Option<usize> {
+    Some(match name {
         "Instance" => 0,
         "Workspace" => 1,
         "Players" => 2,
@@ -805,8 +823,7 @@ pub fn class_def(name: &str) -> Option<&'static ClassDef> {
         "UnreliableRemoteEvent" => 40,
         "PlayerScripts" => 41,
         _ => return None,
-    };
-    CLASSES.get(index)
+    })
 }
 
 /// True when `class` is `of` or inherits from it.
@@ -935,6 +952,13 @@ mod tests {
             );
         }
         assert!(class_def("NotAClass").is_none());
+        for (i, c) in CLASSES.iter().enumerate() {
+            let index = u16::try_from(i).unwrap();
+            assert_eq!(class_index(c.name), Some(index));
+            assert!(std::ptr::eq(class_at(index).unwrap(), c));
+        }
+        assert!(class_index("NotAClass").is_none());
+        assert!(class_at(u16::try_from(CLASSES.len()).unwrap()).is_none());
         assert!(class_def("part").is_none());
     }
 
