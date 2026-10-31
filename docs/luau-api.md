@@ -42,9 +42,13 @@ host each run a module once. Rules, as in Roblox:
 - only a `ModuleScript` instance is accepted: anything else raises `Attempted to call require with invalid argument(s).`;
 - the cached value is kept for the life of the VM; changing `Source` afterwards has no effect until the VM restarts.
 
-A timeout or script stop inside a module that is still loading leaves it marked as loading in that VM (a second require then
-reports the cycle error); the next play session starts with a fresh cache.
-All API tables are read-only.
+A second script that requires a module while another thread is still loading it (the module yielded, for example in
+`task.wait`) **waits** for it and gets the same value; it is a cycle only when the requiring thread is the loading thread or
+the loader is itself waiting on a module the requiring thread is loading. A script that is stopped while loading a module
+releases it, so the next `require` loads it afresh. If the thread loading a module dies without reporting (a timeout outside
+the module's own error handling), the module is marked failed with `<Full.Name>: Requested module experienced an error while
+loading`, and every later `require` raises that. A client VM cannot require a ModuleScript under `ServerScriptService` or
+`ServerStorage`: it raises `Attempted to require a ModuleScript that is only available on the server`.
 
 ## Instance
 - `Instance.new(class, parent?)`. Services cannot be created; an unknown class errors.

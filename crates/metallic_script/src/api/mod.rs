@@ -79,6 +79,8 @@ pub(crate) struct ApiState {
     bind_wrapper: Function,
     /// `UserInputService` and `ContextActionService`.
     input_services: input::InputServices,
+    /// Which thread is loading which ModuleScript, and who waits for it.
+    pub(crate) require: require::RequireState,
 }
 
 impl ApiState {
@@ -167,6 +169,7 @@ fn build(
         pending_destroy: RefCell::new(Vec::new()),
         bind_wrapper,
         input_services: input::InputServices::new(),
+        require: require::RequireState::default(),
     });
     input::install_services(lua, &state)?;
 

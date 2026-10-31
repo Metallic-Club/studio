@@ -365,3 +365,203 @@ fn module_scripts_do_not_run_by_themselves() {
     rig.run(0.0, 3);
     assert!(rig.lines().is_empty(), "{:?}", rig.lines());
 }
+
+#[test]
+fn a_second_caller_waits_for_a_module_that_yields_while_loading() {
+    let mut rig = Rig::new();
+    module(
+        &rig,
+        "Slow",
+        "print('slow start') task.wait(0.5) print('slow done') return { v = 1 }",
+    );
+    rig.server_script(
+        "A",
+        "local m = require(game.ReplicatedStorage.Slow) print('A got', m.v)",
+    );
+    rig.server_script(
+        "B",
+        "local m = require(game.ReplicatedStorage.Slow) print('B got', m.v)",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 90);
+    let lines = rig.lines();
+    assert_eq!(
+        lines.iter().filter(|l| *l == "print:slow start").count(),
+        1,
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"print:A got 1".to_string()), "{lines:?}");
+    assert!(lines.contains(&"print:B got 1".to_string()), "{lines:?}");
+    assert!(
+        errors(&rig).is_empty(),
+        "no false cycle: {:?}",
+        errors(&rig)
+    );
+}
+
+#[test]
+fn the_waiting_caller_gets_the_same_table() {
+    let mut rig = Rig::new();
+    module(&rig, "Slow", "task.wait(0.2) return {}");
+    rig.server_script(
+        "Main",
+        "local R = game.ReplicatedStorage
+         local first
+         task.spawn(function() first = require(R.Slow) end)
+         local second = require(R.Slow)
+         task.wait(0.1)
+         print(first == second)",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 60);
+    assert!(
+        rig.lines().contains(&"print:true".to_string()),
+        "{:?}",
+        rig.lines()
+    );
+}
+
+#[test]
+fn a_cycle_across_two_yielding_threads_is_detected() {
+    let mut rig = Rig::new();
+    module(&rig, "X", "task.wait(0.1) return require(script.Parent.Y)");
+    module(&rig, "Y", "return require(script.Parent.X)");
+    rig.server_script(
+        "One",
+        "print('one', pcall(require, game.ReplicatedStorage.X))",
+    );
+    rig.server_script(
+        "Two",
+        "print('two', pcall(require, game.ReplicatedStorage.Y))",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 90);
+    let lines = rig.lines();
+    for who in ["one", "two"] {
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with(&format!("print:{who} false"))
+                    && l.contains("required recursively")),
+            "{who} must fail with the cycle error: {lines:?}"
+        );
+    }
+}
+
+#[test]
+fn a_stopped_script_releases_the_module_it_was_loading() {
+    let mut rig = Rig::new();
+    let m = module(&rig, "Hang", "task.wait(1000) return 'never'");
+    let hanging = rig.server_script("Hanging", "require(game.ReplicatedStorage.Hang)");
+    rig.host.start().unwrap();
+    let t = rig.run(0.0, 5);
+    // The script is destroyed: the host stops it; the module is not stuck loading.
+    rig.world.borrow_mut().destroy(hanging);
+    let t = rig.run(t, 5);
+    rig.world
+        .borrow_mut()
+        .set(m, "Source", Value::String("return 'fresh'".into()))
+        .unwrap();
+    rig.server_script(
+        "Next",
+        "print('next got', require(game.ReplicatedStorage.Hang))",
+    );
+    rig.run(t, 10);
+    assert!(
+        rig.lines().contains(&"print:next got fresh".to_string()),
+        "{:?}",
+        rig.lines()
+    );
+}
+
+#[test]
+fn a_waiter_whose_loader_was_stopped_loads_the_module_itself() {
+    let mut rig = Rig::new();
+    let m = module(&rig, "Hang", "task.wait(1000) return 'never'");
+    let loader = rig.server_script("Loader", "require(game.ReplicatedStorage.Hang)");
+    rig.server_script(
+        "Waiter",
+        "task.wait(0.1) print('waiter got', require(game.ReplicatedStorage.Hang))",
+    );
+    rig.host.start().unwrap();
+    let t = rig.run(0.0, 20);
+    rig.world
+        .borrow_mut()
+        .set(m, "Source", Value::String("return 'second try'".into()))
+        .unwrap();
+    rig.world.borrow_mut().destroy(loader);
+    rig.run(t, 30);
+    assert!(
+        rig.lines()
+            .contains(&"print:waiter got second try".to_string()),
+        "{:?}",
+        rig.lines()
+    );
+}
+
+#[test]
+fn a_timeout_while_loading_is_cached_like_any_error() {
+    let mut rig = Rig::new();
+    rig.host
+        .set_resume_budget(std::time::Duration::from_millis(200));
+    module(&rig, "Spin", "print('spin ran') while true do end");
+    rig.server_script("First", "require(game.ReplicatedStorage.Spin)");
+    rig.host.start().unwrap();
+    let t = rig.run(0.0, 3);
+    rig.server_script(
+        "Second",
+        "local ok, e = pcall(require, game.ReplicatedStorage.Spin) print('second', ok, e)",
+    );
+    rig.run(t, 3);
+    let lines = rig.lines();
+    assert_eq!(
+        lines.iter().filter(|l| *l == "print:spin ran").count(),
+        1,
+        "the module does not run again: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with("print:second false")
+            && l.contains("ReplicatedStorage.Spin: Requested module experienced an error")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_client_cannot_require_modules_under_server_script_service() {
+    let mut rig = Rig::new();
+    rig.add_script(
+        "ModuleScript",
+        "Secret",
+        rig.root("ServerScriptService"),
+        "return 'secret'",
+    );
+    module(&rig, "Shared", "return 'shared'");
+    rig.local_script(
+        "Client",
+        "local ok, e = pcall(require, game.ServerScriptService.Secret)
+         print('client secret', ok, e)
+         print('client shared', require(game.ReplicatedStorage.Shared))",
+    );
+    rig.server_script(
+        "Server",
+        "print('server secret', require(game.ServerScriptService.Secret))",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 4);
+    let lines = rig.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("print:client secret false")
+                && l.contains("only available on the server")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"print:client shared shared".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"print:server secret secret".to_string()),
+        "{lines:?}"
+    );
+}
