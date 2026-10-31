@@ -189,7 +189,20 @@ impl EditorUi {
         self.pressed = pressed;
     }
 
-    fn requests(&mut self) {
+    /// File > Close game and Ctrl+W: closes at once, or asks first when there are unsaved changes.
+    fn close_game(&mut self) -> Option<EditorExit> {
+        self.scripts.flush(&mut self.state);
+        if self.state.is_dirty() {
+            self.confirm = Some(Leave::Close);
+            self.save_error = None;
+            None
+        } else {
+            Some(EditorExit::Close)
+        }
+    }
+
+    fn requests(&mut self) -> Option<EditorExit> {
+        let mut exit = None;
         for r in self.state.take_requests() {
             match r {
                 UiRequest::FrameSelection | UiRequest::FrameAll => {
@@ -199,8 +212,10 @@ impl EditorUi {
                 UiRequest::OpenScript(id) => self.scripts.open(id, &self.state),
                 UiRequest::RunAction(id) => self.run_action(id),
                 UiRequest::OpenSettings => self.settings_requested = true,
+                UiRequest::CloseGame => exit = exit.or(self.close_game()),
             }
         }
+        exit
     }
 
     /// Draws one frame. `render_state` is eframe's wgpu state (None without a GPU).
@@ -239,13 +254,15 @@ impl EditorUi {
                             &mut self.state,
                             &self.keymap,
                         );
-                        if ui.button("Close game").clicked() {
-                            self.scripts.flush(&mut self.state);
-                            if self.state.is_dirty() {
-                                self.confirm = Some(Leave::Close);
-                                self.save_error = None;
-                            } else {
-                                exit = EditorExit::Close;
+                        if ui
+                            .add(
+                                egui::Button::new("Close game")
+                                    .shortcut_text(self.keymap.label("file.close")),
+                            )
+                            .clicked()
+                        {
+                            if let Some(done) = self.close_game() {
+                                exit = done;
                             }
                             ui.close();
                         }
@@ -473,7 +490,9 @@ impl EditorUi {
 
         let right_down = ctx.input(|i| i.pointer.secondary_down());
         self.keys(&ctx, viewport_hovered, right_down);
-        self.requests();
+        if let Some(done) = self.requests() {
+            exit = done;
+        }
 
         if let Some(leave) = self.confirm {
             let done = match leave {
