@@ -42,7 +42,9 @@ apps.
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
-  either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  either world getter. Existing non-default property writes reuse the BTreeMap key; first insertion,
+  owned value clones/defaults and temporary signal-lookup keys may still allocate. Name lookup and dotted
+  paths use borrowed reads. Also `deep_clone()` used by Play.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
