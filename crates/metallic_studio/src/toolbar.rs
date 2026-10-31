@@ -1,5 +1,7 @@
-//! The editor toolbar: the [`ToolbarGroup`]s of the [`ActionRegistry`] left to right, with an
-//! overflow menu for narrow windows.
+//! The editor's top toolbar: the Edit, Play, View and Build [`ToolbarGroup`]s of the
+//! [`ActionRegistry`] left to right, with an overflow menu for narrow windows. Tools, Settings
+//! and Snap live in the viewport header ([`crate::viewport_header`]), so they are not drawn
+//! twice.
 //!
 //! Groups are drawn in [`ORDER`]. Each frame [`Toolbar::show`] measures every group it draws
 //! (separator included). When the groups do not all fit, the ones that fit are kept in
@@ -19,10 +21,7 @@ use crate::keymap::Keymap;
 use crate::widgets::button::Button;
 
 /// Toolbar groups, left to right.
-pub const ORDER: [ToolbarGroup; 7] = [
-    ToolbarGroup::Tools,
-    ToolbarGroup::Settings,
-    ToolbarGroup::Snap,
+pub const ORDER: [ToolbarGroup; 4] = [
     ToolbarGroup::Edit,
     ToolbarGroup::Play,
     ToolbarGroup::View,
@@ -30,14 +29,11 @@ pub const ORDER: [ToolbarGroup; 7] = [
 ];
 
 /// Most important first: the groups at the end collapse into the overflow menu first.
-pub const PRIORITY: [ToolbarGroup; 7] = [
-    ToolbarGroup::Tools,
+pub const PRIORITY: [ToolbarGroup; 4] = [
     ToolbarGroup::Play,
     ToolbarGroup::Edit,
-    ToolbarGroup::Settings,
-    ToolbarGroup::Snap,
-    ToolbarGroup::View,
     ToolbarGroup::Build,
+    ToolbarGroup::View,
 ];
 
 /// Accessible name and tooltip of the overflow button.
@@ -152,11 +148,7 @@ impl Toolbar {
                     if !first {
                         ui.separator();
                     }
-                    if group == ToolbarGroup::Snap {
-                        actions.chips(ui, group, state, keymap);
-                    } else {
-                        actions.toolbar(ui, group, state, keymap);
-                    }
+                    actions.toolbar(ui, group, state, keymap);
                 })
                 .response
                 .rect;
@@ -198,9 +190,9 @@ mod tests {
 
     #[test]
     fn everything_fits_or_the_lowest_priority_collapses_first() {
-        // Tools, Settings, Snap, Edit, Play, View, Build.
-        let w = [500.0, 300.0, 350.0, 80.0, 250.0, 40.0, 260.0];
-        let groups = |keep: [bool; 7]| -> Vec<ToolbarGroup> {
+        // Edit, Play, View, Build.
+        let w = [80.0, 250.0, 100.0, 200.0];
+        let groups = |keep: [bool; 4]| -> Vec<ToolbarGroup> {
             ORDER
                 .iter()
                 .zip(keep)
@@ -208,19 +200,14 @@ mod tests {
                 .collect()
         };
         assert_eq!(groups(fit(&w, 36.0, 2000.0)), ORDER.to_vec());
-        let narrow = groups(fit(&w, 36.0, 1300.0));
+        let narrow = groups(fit(&w, 36.0, 600.0));
         assert_eq!(
             narrow,
-            vec![
-                ToolbarGroup::Tools,
-                ToolbarGroup::Settings,
-                ToolbarGroup::Edit,
-                ToolbarGroup::Play
-            ]
+            vec![ToolbarGroup::Edit, ToolbarGroup::Play, ToolbarGroup::Build]
         );
-        let tiny = groups(fit(&w, 36.0, 800.0));
-        assert_eq!(tiny, vec![ToolbarGroup::Tools, ToolbarGroup::Play]);
+        let tiny = groups(fit(&w, 36.0, 300.0));
+        assert_eq!(tiny, vec![ToolbarGroup::Play]);
         let used: f32 = tiny.iter().map(|g| w[slot(*g)]).sum();
-        assert!(used + 36.0 <= 800.0);
+        assert!(used + 36.0 <= 300.0);
     }
 }

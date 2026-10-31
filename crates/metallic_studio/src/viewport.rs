@@ -156,6 +156,23 @@ struct LastDrag {
     editing: Option<String>,
 }
 
+/// What a drag that made an undo step did, for the first-time hints (spec 14.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinishedDrag {
+    /// The axis of an axis-handle move.
+    pub axis: Option<usize>,
+    /// A body drag (not a handle).
+    pub body: bool,
+    /// Grid snapping was off.
+    pub snapping_off: bool,
+    /// The moved parts' box does not start on the move increment.
+    pub off_grid: bool,
+    /// A moved corner ended near (within 0.2 studs) but not on another part's corner.
+    pub near_corner: bool,
+    /// The one part moved, with its new height, when the drag moved a single part.
+    pub one: Option<(InstanceId, f64)>,
+}
+
 /// How long the delta of the last drag stays editable.
 pub const EDIT_DELTA_TIME: Duration = Duration::from_secs(5);
 
@@ -191,6 +208,11 @@ pub struct Viewport {
     /// Set by the host each frame: a building tool owns left clicks and drags (no selection,
     /// no gizmo).
     pub capture_pointer: bool,
+    /// The camera is being flown, panned or orbited this frame.
+    navigating: bool,
+    finished: Option<FinishedDrag>,
+    /// Collisions for the current drag (built when it starts).
+    guard: Option<crate::collisions::Guard>,
 }
 
 type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
@@ -236,6 +258,9 @@ impl Viewport {
             showing_play: false,
             delta_rect: None,
             capture_pointer: false,
+            navigating: false,
+            finished: None,
+            guard: None,
         }
     }
 
@@ -284,6 +309,17 @@ impl Viewport {
     /// True while a gizmo or body drag is held.
     pub fn is_dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    /// The last drag that made an undo step, once (for the hints).
+    pub fn take_finished(&mut self) -> Option<FinishedDrag> {
+        self.finished.take()
+    }
+
+    /// True during a drag, a box selection or camera flight: floating UI (the contextual toolbar,
+    /// hints) stays out of the way.
+    pub fn is_busy(&self) -> bool {
+        self.drag.is_some() || matches!(self.press, Press::Box { .. }) || self.navigating
     }
 
     /// True while the last drag's delta field takes typing.
@@ -857,9 +893,13 @@ impl Viewport {
             )
         });
         let over = response.hovered() || response.dragged() || response.is_pointer_button_down_on();
+        self.navigating = false;
         if !over {
             return;
         }
+        self.navigating = (secondary && self.drag.is_none())
+            || middle
+            || (alt && primary && self.drag.is_none() && matches!(self.press, Press::Alt { .. }));
         let (dx, dy) = (f64::from(delta.x), f64::from(delta.y));
         if secondary && self.drag.is_none() {
             self.camera.rotate(dx, dy);
@@ -1182,6 +1222,23 @@ impl Viewport {
                 onto_surface: vertex && mods.shift,
             };
             drag.update(&input);
+            if state.snapping.collisions {
+                if self
+                    .guard
+                    .as_ref()
+                    .is_none_or(|g| g.serial() != drag.serial())
+                {
+                    self.guard = Some(crate::collisions::Guard::for_drag(&drag, &state.picks));
+                }
+                if let Some(guard) = &mut self.guard {
+                    drag.limit(|moved| guard.blocked(moved));
+                    if guard.overloaded() {
+                        state.note(
+                            "Collisions: too many parts nearby to check; the drag is held".into(),
+                        );
+                    }
+                }
+            }
             drag.apply(&mut state.world, &mut state.preview);
         }
         if released {
@@ -1192,8 +1249,11 @@ impl Viewport {
     }
 
     fn end(&mut self, drag: GizmoDrag, state: &mut EditorState) {
+        self.guard = None;
         let keep = drag.accepts_typing().then(|| drag.clone());
+        let summary = summarise(&drag, state);
         let recorded = state.finish_drag(drag);
+        self.finished = recorded.then_some(summary);
         if !recorded && let Some(sel) = self.before_duplicate.take() {
             state.selection.set(sel);
         }
@@ -1525,5 +1585,60 @@ fn box_corners(
                 painter.line_segment([sc, e], stroke);
             }
         }
+    }
+}
+
+/// The hint-relevant facts of a drag that is about to end.
+fn summarise(drag: &GizmoDrag, state: &EditorState) -> FinishedDrag {
+    let moved = drag.current();
+    let step = state.snapping.move_step.max(1e-6);
+    let mut lo = DVec3::splat(f64::INFINITY);
+    for m in moved {
+        for c in m.corners() {
+            lo = lo.min(c);
+        }
+    }
+    let mut near_corner = false;
+    let mut tested = 0usize;
+    'outer: for m in moved.iter().take(8) {
+        for (id, other, _) in state.picks.iter() {
+            if drag.moving().contains(&id) {
+                continue;
+            }
+            tested += 1;
+            if tested > 2000 {
+                break 'outer;
+            }
+            let reach = (m.size.length() + other.size.length()) * 0.5 + 0.2;
+            if m.position.distance_squared(other.position) > reach * reach {
+                continue;
+            }
+            for a in m.corners() {
+                for b in other.corners() {
+                    let d = a.distance(b);
+                    if d > 1e-3 && d <= 0.2 {
+                        near_corner = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    let off = |v: f64| (v - (v / step).round() * step).abs() > 1e-4;
+    let mut ids = drag.part_ids();
+    let one = match (ids.next(), ids.next(), moved) {
+        (Some(id), None, [t]) => Some((id, t.position.y)),
+        _ => None,
+    };
+    FinishedDrag {
+        axis: match drag.handle {
+            crate::gizmo::Handle::Axis(a) => Some(a),
+            _ => None,
+        },
+        body: drag.handle == crate::gizmo::Handle::Body,
+        snapping_off: !state.snapping.grid,
+        off_grid: lo.is_finite() && (off(lo.x) || off(lo.y) || off(lo.z)),
+        near_corner,
+        one,
     }
 }

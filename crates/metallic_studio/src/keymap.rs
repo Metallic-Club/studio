@@ -82,10 +82,10 @@ impl KeyChord {
         if self.shift {
             s.push_str("Shift+");
         }
-        s.push_str(if self.key == Key::Comma {
-            ","
-        } else {
-            self.key.name()
+        s.push_str(match self.key {
+            Key::Comma => ",",
+            Key::Period => ".",
+            key => key.name(),
         });
         s
     }
@@ -143,6 +143,7 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("hold.summon", "Space", KeyContext::Viewport),
     ("view.frame_selection", "F", KeyContext::Viewport),
     ("view.frame_all", "Home", KeyContext::Viewport),
+    ("view.focus_context_bar", "Ctrl+.", KeyContext::Global),
     // Building tools (building-tools spec, shortcut table) and the colour popover.
     ("tool.brush", "B", KeyContext::Viewport),
     ("tool.measure", "Shift+M", KeyContext::Viewport),

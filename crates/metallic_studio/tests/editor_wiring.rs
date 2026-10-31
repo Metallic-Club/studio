@@ -550,15 +550,26 @@ fn selection_modes_select_similar_and_measure_from_the_viewport() {
 
 #[test]
 fn a_narrow_toolbar_collapses_whole_groups_into_the_more_menu() {
-    for width in [1280.0, 1600.0, 2600.0] {
+    for width in [520.0, 1280.0, 1600.0] {
         let (ui, sc) = editor();
         let mut h = harness_sized(ui, egui::vec2(width, 800.0));
         h.state_mut().state.selection.set([sc.a, sc.b]);
         h.run_steps(4);
         let layout = h.state().toolbar_layout().clone();
         let shown: Vec<ToolbarGroup> = layout.shown.iter().map(|(g, _)| *g).collect();
-        // Core tools and Play never collapse at these widths.
-        assert!(shown.contains(&ToolbarGroup::Tools), "{width}: {shown:?}");
+        // The top bar holds Edit, Play, View and Build only: Tools, Settings and Snap are in the
+        // viewport header (#384), never twice.
+        for g in [
+            ToolbarGroup::Tools,
+            ToolbarGroup::Settings,
+            ToolbarGroup::Snap,
+        ] {
+            assert!(
+                !shown.contains(&g) && !layout.overflow.contains(&g),
+                "{width}: {g:?}"
+            );
+        }
+        // Play never collapses.
         assert!(shown.contains(&ToolbarGroup::Play), "{width}: {shown:?}");
         // Nothing drawn is cut by the window edge: every group and the chevron end inside.
         let right = layout.available.max.x + 0.5;
@@ -569,14 +580,14 @@ fn a_narrow_toolbar_collapses_whole_groups_into_the_more_menu() {
                 r.max.x
             );
         }
-        if width >= 2600.0 {
+        if width >= 1280.0 {
             assert!(layout.overflow.is_empty(), "{width}: {:?}", layout.overflow);
             assert!(layout.chevron.is_none());
             continue;
         }
         assert!(
             layout.overflow.contains(&ToolbarGroup::Build),
-            "{width}: Build collapses first: {:?}",
+            "{width}: Build collapses: {:?}",
             layout.overflow
         );
         let chevron = layout.chevron.expect("a More button");
@@ -822,4 +833,151 @@ fn a_viewport_drag_still_ends_when_a_tool_takes_the_pointer_mid_drag() {
     h.key_press(egui::Key::E);
     h.run_steps(2);
     assert_eq!(h.state().state.tool, Tool::Rotate);
+}
+
+// --- #384 merge: contextual toolbar, hint card and key claiming.
+
+/// A point near the viewport's top-right corner, clear of the popovers (top left), the
+/// contextual toolbar (by the selection) and the hint card (bottom left).
+fn viewport_top(h: &Harness<'static, EditorUi>) -> Pos2 {
+    let vp = h.state().viewport.rect();
+    Pos2::new(vp.right() - 100.0, vp.top() + 80.0)
+}
+
+#[test]
+fn the_context_bar_lists_the_building_actions_and_hides_while_a_tool_has_the_pointer() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.tool = Tool::Move;
+    h.state_mut().state.selection.set([sc.a, sc.b]);
+    let revision = h.state().state.selection.revision();
+    h.state_mut().context_bar.arm(revision);
+    h.run_steps(4);
+    assert!(h.state().context_bar.last_rect.is_some(), "the bar shows");
+    let shown: Vec<_> = h.state().context_bar.shown_actions().collect();
+    for id in ["colour.open", "build.align", "build.mirror", "build.array"] {
+        assert!(shown.contains(&id), "{id} in {shown:?}");
+    }
+    // The brush has the pointer: the bar steps aside, and comes back when it is off.
+    h.state_mut().run_action("tool.brush");
+    h.run_steps(3);
+    assert!(
+        h.state().context_bar.last_rect.is_none(),
+        "hidden for the brush"
+    );
+    h.state_mut().run_action("tool.brush");
+    h.state_mut().run_action("select.mode_lasso");
+    h.run_steps(3);
+    assert!(
+        h.state().context_bar.last_rect.is_none(),
+        "hidden for the lasso"
+    );
+    h.state_mut().run_action("select.mode_box");
+    h.state_mut().state.tool = Tool::Move;
+    h.run_steps(3);
+    assert!(h.state().context_bar.last_rect.is_some(), "back");
+}
+
+#[test]
+fn esc_closes_a_tool_popover_before_the_context_bar_lets_go() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.tool = Tool::Move;
+    h.state_mut().state.selection.set([sc.a, sc.b]);
+    let revision = h.state().state.selection.revision();
+    h.state_mut().context_bar.arm(revision);
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Period);
+    h.run_steps(3);
+    assert!(h.state().context_bar.has_focus(), "Ctrl+. focuses the bar");
+    h.state_mut().run_action("build.align");
+    h.run_steps(3);
+    assert_eq!(h.state().tools.state().popover, Some(Popover::Align));
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().tools.state().popover,
+        None,
+        "Esc closed Align first"
+    );
+    assert!(h.state().context_bar.has_focus(), "the bar keeps focus");
+    assert_eq!(h.state().state.selection.len(), 2);
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().context_bar.has_focus(), "then the bar lets go");
+    assert_eq!(h.state().state.selection.len(), 2, "the selection stays");
+}
+
+#[test]
+fn an_open_tool_claims_only_the_keys_it_handles() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.set([sc.a, sc.b]);
+    h.state_mut().run_action("build.align");
+    assert_eq!(h.state().tools.state().popover, Some(Popover::Align));
+    h.run_steps(3);
+    let at = viewport_top(&h);
+    h.hover_at(at);
+    h.run_steps(3);
+    // Align is open: T, P and C keep their viewport meaning (they are Select similar letters).
+    h.key_press(egui::Key::T);
+    h.run_steps(2);
+    assert_eq!(h.state().state.tool, Tool::Transform, "T picked Transform");
+    assert_eq!(
+        h.state().tools.state().popover,
+        Some(Popover::Align),
+        "after T"
+    );
+    h.key_press(egui::Key::C);
+    h.run_steps(3);
+    assert!(h.state().colour.is_open(), "C opened the colour popover");
+    assert_eq!(
+        h.state().tools.state().popover,
+        Some(Popover::Align),
+        "after C"
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().colour.is_open());
+    assert_eq!(h.state().tools.state().popover, Some(Popover::Align));
+    // Enter is Array's; with Align open it makes nothing.
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().state.history.is_empty());
+
+    // Measure is on: [ and ] are the brush's, so they still step the move increment.
+    h.state_mut().run_action("popover.close");
+    h.state_mut().run_action("tool.measure");
+    h.hover_at(at);
+    h.run_steps(2);
+    let before = h.state().state.snapping.move_step;
+    h.key_press(egui::Key::CloseBracket);
+    h.run_steps(2);
+    assert!(
+        h.state().state.snapping.move_step > before,
+        "] stepped the increment up"
+    );
+}
+
+#[test]
+fn the_hint_card_waits_for_a_gesture() {
+    let (ui, sc) = editor();
+    let mut h = harness(ui);
+    let got_it = |h: &Harness<'static, EditorUi>| h.query_by_label("Got it").is_some();
+    h.state_mut().state.selection.set([sc.c]);
+    h.run_steps(4);
+    assert!(
+        h.state().hints.current().is_some(),
+        "the first selection fires a hint"
+    );
+    assert!(got_it(&h), "the card shows");
+    let at = start_stroke(&mut h, &sc);
+    assert!(h.state().state.gesture_active());
+    assert!(!got_it(&h), "no card during the stroke");
+    button(&mut h, at, false, Modifiers::NONE);
+    h.run_steps(3);
+    assert!(!h.state().state.gesture_active());
+    assert!(got_it(&h), "the card is back");
 }

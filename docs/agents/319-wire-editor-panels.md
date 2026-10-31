@@ -26,4 +26,10 @@ between gestures, so a release always ends its drag. Also: brush dab prefilter (
 paint/lasso trail cap and bounds prefilter, no per-frame plan/selection/toolbar allocations, overflow-menu
 accessories disabled with their action. Tests in `tests/editor_wiring.rs`.
 
+Merge with #384: the top bar keeps Edit, Play, View and Build (the header has Tools, Settings, Snap); the contextual
+toolbar hides while a building tool has the pointer, lists Colour/Align/Mirror/Array and disables disabled actions.
+Tool keys run in their own pass (`EditorUi::tool_keys`, `pressed_where`, a key is claimed only when its action is
+enabled) before the contextual toolbar and hint card see Esc; the hint card waits for `gesture_active()`.
+`register` applies the play lock to every action outside `PLAY_SAFE`.
+
 Brush ownership means "inside `<parent>/<set>` folder" until tags (#78) exist.
