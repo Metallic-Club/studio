@@ -3,3 +3,6 @@ name = "Baseplate"
 description = "An empty grey floor and a spawn point. Build anything from scratch."
 preview = "preview.png"
 order = 0
+kind = "empty"
+facts = "3D, a floor and a spawn"
+inside = "a grey baseplate, a spawn point and default lighting."

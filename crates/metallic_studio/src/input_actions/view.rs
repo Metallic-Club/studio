@@ -817,8 +817,7 @@ impl InputActionsPanel {
                 } else {
                     "No scene action has a role this preset covers".into()
                 };
-                if ui
-                    .add_enabled(enabled, egui::Button::new(p.label()))
+                if crate::theme::add_enabled(ui, enabled, egui::Button::new(p.label()))
                     .on_hover_text(tip)
                     .on_disabled_hover_text(
                         "Add CharacterControls to the scene, or give actions a Role",

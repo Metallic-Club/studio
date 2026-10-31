@@ -71,7 +71,11 @@ impl KeyChord {
         if self.shift {
             s.push_str("Shift+");
         }
-        s.push_str(self.key.name());
+        s.push_str(if self.key == Key::Comma {
+            ","
+        } else {
+            self.key.name()
+        });
         s
     }
 }
@@ -98,6 +102,7 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("edit.rename", "F2", KeyContext::Global),
     ("edit.select_all", "Ctrl+A", KeyContext::Global),
     ("file.save", "Ctrl+S", KeyContext::Global),
+    ("settings.open", "Ctrl+,", KeyContext::Global),
     ("tool.select", "Q", KeyContext::Viewport),
     ("tool.move", "W", KeyContext::Viewport),
     ("tool.rotate", "E", KeyContext::Viewport),

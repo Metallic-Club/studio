@@ -157,7 +157,8 @@ fn tree_ops(c: &mut Criterion) {
 fn scene_files(c: &mut Criterion) {
     let mut g = c.benchmark_group("scene");
     g.sample_size(20);
-    let dir = std::env::temp_dir().join("metallic_core_bench");
+    // One folder per process, so two benchmark runs at once do not write the same file.
+    let dir = std::env::temp_dir().join(format!("metallic_core_bench-{}", std::process::id()));
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -168,6 +169,7 @@ fn scene_files(c: &mut Criterion) {
         g.bench_function("load_5000", |b| b.iter(|| black_box(load_scene(&path))));
     }
     g.finish();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 criterion_group!(benches, property_access, frame_read, tree_ops, scene_files);

@@ -16,6 +16,7 @@ use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
 use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
+use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::viewport::Viewport;
 
@@ -59,6 +60,8 @@ pub struct EditorUi {
     confirm: Option<Leave>,
     /// Why the last Save from the prompt failed (shown in the prompt).
     save_error: Option<String>,
+    /// The creator asked for Settings; the app shows the dialog.
+    settings_requested: bool,
 }
 
 impl EditorUi {
@@ -76,6 +79,7 @@ impl EditorUi {
             pressed: Vec::new(),
             confirm: None,
             save_error: None,
+            settings_requested: false,
         };
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
@@ -138,6 +142,12 @@ impl EditorUi {
         }
         self.confirm = Some(Leave::Quit);
         false
+    }
+
+    /// True once after the creator asked for Settings (Ctrl+, or File > Settings); the app shows
+    /// the dialog over the editor.
+    pub fn take_settings_request(&mut self) -> bool {
+        std::mem::take(&mut self.settings_requested)
     }
 
     /// True while the unsaved-changes prompt is open.
@@ -211,6 +221,7 @@ impl EditorUi {
                 UiRequest::Rename(id) => self.explorer.rename(id, &self.state),
                 UiRequest::OpenScript(id) => self.scripts.open(id, &self.state),
                 UiRequest::RunAction(id) => self.run_action(id),
+                UiRequest::OpenSettings => self.settings_requested = true,
             }
         }
     }
@@ -238,6 +249,8 @@ impl EditorUi {
                         self.run_action("file.save");
                         ui.close();
                     }
+                    self.actions
+                        .menu_items(ui, &["settings.open"], &mut self.state, &self.keymap);
                     if ui.button("Close game").clicked() {
                         self.scripts.flush(&mut self.state);
                         if self.state.is_dirty() {
@@ -256,12 +269,12 @@ impl EditorUi {
                     let r = redo.map_or("Redo".to_string(), |n| format!("Redo {n}"));
                     if let Some(a) = self.actions.get("edit.undo") {
                         let enabled = a.is_enabled(&self.state);
-                        if ui
-                            .add_enabled(
-                                enabled,
-                                egui::Button::new(u).shortcut_text(self.keymap.label("edit.undo")),
-                            )
-                            .clicked()
+                        if theme::add_enabled(
+                            ui,
+                            enabled,
+                            egui::Button::new(u).shortcut_text(self.keymap.label("edit.undo")),
+                        )
+                        .clicked()
                         {
                             self.run_action("edit.undo");
                             ui.close();
@@ -269,12 +282,12 @@ impl EditorUi {
                     }
                     if let Some(a) = self.actions.get("edit.redo") {
                         let enabled = a.is_enabled(&self.state);
-                        if ui
-                            .add_enabled(
-                                enabled,
-                                egui::Button::new(r).shortcut_text(self.keymap.label("edit.redo")),
-                            )
-                            .clicked()
+                        if theme::add_enabled(
+                            ui,
+                            enabled,
+                            egui::Button::new(r).shortcut_text(self.keymap.label("edit.redo")),
+                        )
+                        .clicked()
                         {
                             self.run_action("edit.redo");
                             ui.close();
