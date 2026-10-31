@@ -20,6 +20,18 @@ use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
 use metallic_core::transform::clamp_part_size;
 
+/// Formats a number field like egui does, but never as "-0" (a negative zero or a tiny negative
+/// value that rounds to zero shows as "0").
+fn fmt_drag(n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
+    let text = egui::emath::format_with_decimals_in_range(n, decimals.clone());
+    match text.strip_prefix('-') {
+        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => {
+            egui::emath::format_with_decimals_in_range(0.0, decimals)
+        }
+        _ => text,
+    }
+}
+
 /// Section of a property, in display order.
 fn section(prop: &str) -> usize {
     match prop {
@@ -149,6 +161,9 @@ impl Properties {
         props.retain(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter));
 
         let mut edits: Vec<Edit> = Vec::new();
+        // Inputs in the property column are 24 px rows (spec 4.3).
+        ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT;
+        ui.spacing_mut().item_spacing.y = 2.0;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -161,13 +176,17 @@ impl Properties {
                     if in_section.is_empty() {
                         continue;
                     }
-                    egui::CollapsingHeader::new(RichText::new(*title).strong())
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            for p in in_section {
-                                self.row(ui, state, &ids, active, p, &mut edits);
-                            }
-                        });
+                    egui::CollapsingHeader::new(
+                        RichText::new(*title)
+                            .font(crate::theme::fonts::strong())
+                            .color(crate::theme::text_2()),
+                    )
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for p in in_section {
+                            self.row(ui, state, &ids, active, p, &mut edits);
+                        }
+                    });
                 }
             });
 
@@ -191,169 +210,212 @@ impl Properties {
         let mixed = ids
             .iter()
             .any(|&id| state.world.get_ref(id, p.name).ok() != Some(&value));
-        ui.horizontal(|ui| {
-            let label = ui.add_sized(
-                [ui_tokens().label_width, 20.0],
-                egui::Label::new(RichText::new(p.name).color(ui_tokens().text_dim)).truncate(),
+        let playing = state.play.is_playing();
+        let hover_bg = ui.painter().add(egui::Shape::Noop);
+        let numeric = matches!(
+            value,
+            Value::Number(_) | Value::Vector3(_) | Value::CFrame(_) | Value::UDim2(_)
+        );
+        let row = ui.horizontal(|ui| {
+            ui.set_min_height(crate::theme::ROW_HEIGHT);
+            // Names sit left aligned in a fixed column (about 40 % of the default panel).
+            let label_w = ui_tokens().label_width;
+            ui.allocate_ui_with_layout(
+                egui::vec2(label_w, crate::theme::ROW_HEIGHT),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_size(egui::vec2(label_w, crate::theme::ROW_HEIGHT));
+                    let label = ui.add(
+                        egui::Label::new(RichText::new(p.name).color(crate::theme::text_2()))
+                            .truncate(),
+                    );
+                    label.on_hover_text(format!(
+                        "{}.{}",
+                        state.world.class_name(active).unwrap_or(""),
+                        p.name
+                    ));
+                },
             );
-            label.on_hover_text(format!(
-                "{}.{}",
-                state.world.class_name(active).unwrap_or(""),
-                p.name
-            ));
             if mixed {
                 ui.label(RichText::new("Mixed").color(ui_tokens().text_dim).italics());
             }
             let name = p.name.to_string();
-            match (&value, p.allowed) {
-                (Value::Bool(b), _) => {
-                    let mut v = *b;
-                    if ui.checkbox(&mut v, "").changed() {
-                        edits.push(Edit::Set(name, Value::Bool(v)));
-                    }
+            // While playing, values are read-only and drawn disabled.
+            ui.add_enabled_ui(!playing, |ui| {
+                if numeric {
+                    ui.style_mut()
+                        .text_styles
+                        .insert(egui::TextStyle::Button, ui_tokens().mono());
                 }
-                (Value::Number(n), _) => {
-                    let mut v = *n;
-                    let cur = *n;
-                    let r = ui.add(
-                        egui::DragValue::new(&mut v)
-                            .speed(drag_speed(p.name))
-                            .max_decimals(3)
-                            .custom_parser(move |s| eval_relative(s, cur)),
-                    );
-                    if r.changed() {
-                        edits.push(Edit::Set(name, Value::Number(v)));
-                    }
-                }
-                (Value::String(s), Some(allowed)) => {
-                    let mut chosen = s.clone();
-                    egui::ComboBox::from_id_salt(p.name)
-                        .selected_text(&chosen)
-                        .show_ui(ui, |ui| {
-                            for &a in allowed {
-                                ui.selectable_value(&mut chosen, a.to_string(), a);
-                            }
-                        });
-                    if &chosen != s {
-                        edits.push(Edit::Set(name, Value::String(chosen)));
-                    }
-                }
-                (Value::String(s), None) if p.name == "Source" => {
-                    let lines = s.lines().count();
-                    if ui.button(format!("Edit script ({lines} lines)")).clicked() {
-                        state.request(UiRequest::OpenScript(active));
-                    }
-                }
-                (Value::String(s), None) => {
-                    let buf = self.text.entry(name.clone()).or_insert_with(|| s.clone());
-                    let r = ui.add(egui::TextEdit::singleline(buf).desired_width(f32::INFINITY));
-                    if r.lost_focus() {
-                        if buf != s {
-                            edits.push(Edit::Set(name.clone(), Value::String(buf.clone())));
+                match (&value, p.allowed) {
+                    (Value::Bool(b), _) => {
+                        let mut v = *b;
+                        if ui.checkbox(&mut v, "").changed() {
+                            edits.push(Edit::Set(name, Value::Bool(v)));
                         }
-                        self.text.remove(&name);
-                    } else if !r.has_focus() {
-                        *buf = s.clone();
                     }
-                }
-                (Value::Vector3(v), _) => {
-                    let comps = [v.x, v.y, v.z];
-                    for (axis, &c) in comps.iter().enumerate() {
-                        ui.label(
-                            RichText::new(["X", "Y", "Z"][axis])
-                                .color(ui_tokens().axis[axis])
-                                .strong(),
-                        );
-                        let mut x = c;
+                    (Value::Number(n), _) => {
+                        let mut v = *n;
+                        let cur = *n;
                         let r = ui.add(
-                            egui::DragValue::new(&mut x)
+                            egui::DragValue::new(&mut v)
                                 .speed(drag_speed(p.name))
                                 .max_decimals(3)
-                                .custom_parser(move |s| eval_relative(s, c)),
+                                .custom_formatter(fmt_drag)
+                                .custom_parser(move |s| eval_relative(s, cur)),
                         );
                         if r.changed() {
-                            edits.push(Edit::Component(name.clone(), axis, x));
+                            edits.push(Edit::Set(name, Value::Number(v)));
                         }
                     }
-                }
-                (Value::CFrame(cf), _) => {
-                    // Shown and edited as position plus orientation (degrees, Y then X then Z).
-                    let o = cf.orientation_degrees();
-                    let rows = [
-                        ("Position", [cf.position.x, cf.position.y, cf.position.z], 0),
-                        ("Rotation", [o.x, o.y, o.z], 3),
-                    ];
-                    ui.vertical(|ui| {
-                        for (label, comps, base) in rows {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(label).color(ui_tokens().text_dim));
-                                for (axis, &c) in comps.iter().enumerate() {
-                                    ui.label(
-                                        RichText::new(["X", "Y", "Z"][axis])
-                                            .color(ui_tokens().axis[axis])
-                                            .strong(),
-                                    );
-                                    let mut x = c;
-                                    let r = ui.add(
-                                        egui::DragValue::new(&mut x)
-                                            .speed(if base == 0 { 0.1 } else { 1.0 })
-                                            .max_decimals(3)
-                                            .custom_parser(move |s| eval_relative(s, c)),
-                                    );
-                                    if r.changed() {
-                                        edits.push(Edit::Component(name.clone(), base + axis, x));
-                                    }
+                    (Value::String(s), Some(allowed)) => {
+                        let mut chosen = s.clone();
+                        egui::ComboBox::from_id_salt(p.name)
+                            .selected_text(&chosen)
+                            .show_ui(ui, |ui| {
+                                for &a in allowed {
+                                    ui.selectable_value(&mut chosen, a.to_string(), a);
                                 }
                             });
+                        if &chosen != s {
+                            edits.push(Edit::Set(name, Value::String(chosen)));
                         }
-                    });
-                }
-                (Value::Color3(c), _) => {
-                    let mut rgb = [to_u8(c.r), to_u8(c.g), to_u8(c.b)];
-                    if ui.color_edit_button_srgb(&mut rgb).changed() {
-                        edits.push(Edit::Set(
-                            name,
-                            Value::Color3(Color3::new(
-                                f64::from(rgb[0]),
-                                f64::from(rgb[1]),
-                                f64::from(rgb[2]),
-                            )),
-                        ));
                     }
-                    ui.label(
-                        RichText::new(format!("{}, {}, {}", rgb[0], rgb[1], rgb[2]))
-                            .monospace()
-                            .color(ui_tokens().text_dim),
-                    );
-                }
-                (Value::UDim2(u), _) => {
-                    let comps = [u.x_scale, u.x_offset, u.y_scale, u.y_offset];
-                    for (i, &c) in comps.iter().enumerate() {
-                        let mut x = c;
-                        let speed = if i % 2 == 0 { 0.01 } else { 1.0 };
-                        let r = ui.add(
-                            egui::DragValue::new(&mut x)
-                                .speed(speed)
-                                .max_decimals(3)
-                                .custom_parser(move |s| eval_relative(s, c)),
+                    (Value::String(s), None) if p.name == "Source" => {
+                        let lines = s.lines().count();
+                        if ui.button(format!("Edit script ({lines} lines)")).clicked() {
+                            state.request(UiRequest::OpenScript(active));
+                        }
+                    }
+                    (Value::String(s), None) => {
+                        let buf = self.text.entry(name.clone()).or_insert_with(|| s.clone());
+                        let r =
+                            ui.add(egui::TextEdit::singleline(buf).desired_width(f32::INFINITY));
+                        if r.lost_focus() {
+                            if buf != s {
+                                edits.push(Edit::Set(name.clone(), Value::String(buf.clone())));
+                            }
+                            self.text.remove(&name);
+                        } else if !r.has_focus() {
+                            *buf = s.clone();
+                        }
+                    }
+                    (Value::Vector3(v), _) => {
+                        let comps = [v.x, v.y, v.z];
+                        for (axis, &c) in comps.iter().enumerate() {
+                            ui.label(
+                                RichText::new(["X", "Y", "Z"][axis])
+                                    .color(ui_tokens().axis[axis])
+                                    .strong(),
+                            );
+                            let mut x = c;
+                            let r = ui.add(
+                                egui::DragValue::new(&mut x)
+                                    .speed(drag_speed(p.name))
+                                    .max_decimals(3)
+                                    .custom_formatter(fmt_drag)
+                                    .custom_parser(move |s| eval_relative(s, c)),
+                            );
+                            if r.changed() {
+                                edits.push(Edit::Component(name.clone(), axis, x));
+                            }
+                        }
+                    }
+                    (Value::CFrame(cf), _) => {
+                        // Shown and edited as position plus orientation (degrees, Y then X then Z).
+                        let o = cf.orientation_degrees();
+                        let rows = [
+                            ("Position", [cf.position.x, cf.position.y, cf.position.z], 0),
+                            ("Rotation", [o.x, o.y, o.z], 3),
+                        ];
+                        ui.vertical(|ui| {
+                            for (label, comps, base) in rows {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(label).color(ui_tokens().text_dim));
+                                    for (axis, &c) in comps.iter().enumerate() {
+                                        ui.label(
+                                            RichText::new(["X", "Y", "Z"][axis])
+                                                .color(ui_tokens().axis[axis])
+                                                .strong(),
+                                        );
+                                        let mut x = c;
+                                        let r = ui.add(
+                                            egui::DragValue::new(&mut x)
+                                                .speed(if base == 0 { 0.1 } else { 1.0 })
+                                                .max_decimals(3)
+                                                .custom_formatter(fmt_drag)
+                                                .custom_parser(move |s| eval_relative(s, c)),
+                                        );
+                                        if r.changed() {
+                                            edits.push(Edit::Component(
+                                                name.clone(),
+                                                base + axis,
+                                                x,
+                                            ));
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    }
+                    (Value::Color3(c), _) => {
+                        let mut rgb = [to_u8(c.r), to_u8(c.g), to_u8(c.b)];
+                        if ui.color_edit_button_srgb(&mut rgb).changed() {
+                            edits.push(Edit::Set(
+                                name,
+                                Value::Color3(Color3::new(
+                                    f64::from(rgb[0]),
+                                    f64::from(rgb[1]),
+                                    f64::from(rgb[2]),
+                                )),
+                            ));
+                        }
+                        ui.label(
+                            RichText::new(format!("{}, {}, {}", rgb[0], rgb[1], rgb[2]))
+                                .monospace()
+                                .color(ui_tokens().text_dim),
                         );
-                        if r.changed() {
-                            edits.push(Edit::Component(name.clone(), i, x));
+                    }
+                    (Value::UDim2(u), _) => {
+                        let comps = [u.x_scale, u.x_offset, u.y_scale, u.y_offset];
+                        for (i, &c) in comps.iter().enumerate() {
+                            let mut x = c;
+                            let speed = if i % 2 == 0 { 0.01 } else { 1.0 };
+                            let r = ui.add(
+                                egui::DragValue::new(&mut x)
+                                    .speed(speed)
+                                    .max_decimals(3)
+                                    .custom_formatter(fmt_drag)
+                                    .custom_parser(move |s| eval_relative(s, c)),
+                            );
+                            if r.changed() {
+                                edits.push(Edit::Component(name.clone(), i, x));
+                            }
                         }
                     }
+                    (Value::Ref(r), _) => {
+                        let text = match r {
+                            Some(id) if state.world.is_alive(*id) => state.display_name(*id),
+                            _ => "None".to_string(),
+                        };
+                        ui.label(RichText::new(text).color(ui_tokens().text_dim));
+                    }
+                    (Value::Nil, _) => {
+                        ui.label(RichText::new("nil").color(ui_tokens().text_dim));
+                    }
                 }
-                (Value::Ref(r), _) => {
-                    let text = match r {
-                        Some(id) if state.world.is_alive(*id) => state.display_name(*id),
-                        _ => "None".to_string(),
-                    };
-                    ui.label(RichText::new(text).color(ui_tokens().text_dim));
-                }
-                (Value::Nil, _) => {
-                    ui.label(RichText::new("nil").color(ui_tokens().text_dim));
-                }
-            }
+            });
         });
+        if !playing && ui.rect_contains_pointer(row.response.rect) {
+            ui.painter().set(
+                hover_bg,
+                egui::Shape::rect_filled(
+                    row.response.rect.expand2(egui::vec2(4.0, 1.0)),
+                    egui::CornerRadius::same(crate::theme::R_XS),
+                    crate::theme::bg_hover(),
+                ),
+            );
+        }
     }
 
     fn commit(&mut self, state: &mut EditorState, ids: &[InstanceId], edit: Edit, live: bool) {
@@ -498,5 +560,14 @@ mod tests {
         assert_eq!(section("Position"), section("Size"));
         assert_eq!(SECTION_NAMES[section("Anchored")], "Physics");
         assert_eq!(SECTION_NAMES[section("Name")], "Data");
+    }
+
+    #[test]
+    fn negative_zero_shows_as_zero() {
+        assert_eq!(fmt_drag(-0.0, 0..=3), "0");
+        assert_eq!(fmt_drag(-0.0001, 0..=3), "0");
+        assert_eq!(fmt_drag(-0.5, 0..=3), "-0.5");
+        assert_eq!(fmt_drag(8.0, 1..=3), "8.0");
+        assert_eq!(fmt_drag(-22.0, 1..=3), "-22.0");
     }
 }

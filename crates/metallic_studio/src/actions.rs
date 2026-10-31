@@ -23,10 +23,11 @@
 use eframe::egui::{self, RichText};
 
 use crate::editor::{EditorState, Space, Tool, UiRequest};
-use crate::icons::{self, Icon};
+use crate::icons::Icon;
 use crate::keymap::Keymap;
 use crate::theme;
 use crate::tokens::ui_tokens;
+use crate::widgets::button::Button;
 
 /// Where an action appears on the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,26 +175,40 @@ impl ActionRegistry {
             let enabled = a.is_enabled(state);
             let checked = a.is_checked(state);
             let shortcut = keymap.label(a.id);
-            let tip = if shortcut.is_empty() {
+            let mut tip = if shortcut.is_empty() {
                 a.label.clone()
             } else {
                 format!("{} ({shortcut})", a.label)
             };
-            let button = egui::Button::new("")
-                .selected(checked)
-                .min_size(egui::vec2(28.0, 26.0));
-            let resp = theme::add_enabled(ui, enabled, button)
-                .on_hover_text(&tip)
-                .on_disabled_hover_text(&tip);
-            let colour = if !enabled {
-                theme::text_off()
-            } else if a.id == "play.start" || (a.group == ToolbarGroup::Play && a.id != "play.stop")
-            {
-                ui_tokens().success
+            if a.id == "play.start" && !enabled && !state.play.is_playing() {
+                tip.push_str(
+                    "\nPlay is not connected yet: no play mode is registered in this build.",
+                );
+            }
+            // Tools, Play and Stop show their key as a cap; the rest are icon buttons whose
+            // tooltip names the key.
+            let labelled = matches!(a.group, ToolbarGroup::Tools | ToolbarGroup::Play);
+            let key = shortcut.as_str();
+            let name = a.label.as_str();
+            let mut button = if a.id == "play.start" {
+                Button::primary(name)
+            } else if a.group == ToolbarGroup::Play {
+                Button::secondary(name)
             } else {
-                ui_tokens().text
+                Button::ghost(if labelled { name } else { "" })
             };
-            icons::paint(ui.painter(), resp.rect, a.icon, colour);
+            button = button.compact().glyph(a.icon).selected(checked);
+            if !labelled {
+                button = button.alt(&tip);
+            }
+            if labelled && !key.is_empty() {
+                button = button.keycap(key);
+            }
+            let mut resp = ui.add_enabled(enabled, button);
+            if labelled {
+                resp = resp.on_hover_text(&tip);
+            }
+            let resp = resp.on_disabled_hover_text(&tip);
             if resp.clicked() {
                 clicked = Some(a.id);
             }
