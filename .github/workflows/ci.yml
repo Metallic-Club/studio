@@ -64,7 +64,7 @@ jobs:
           python -I tools/test_simulation_graph.py
           python -I tools/check_simulation_graph.py
       - name: Test graphics-free simulation and finite runner
-        run: cargo test -p metallic_runtime --no-default-features --lib --bin metallic-sim --test simulation --test sim_runner --test simulation_touches -j 4 -- --test-threads=1
+        run: cargo test -p metallic_runtime --no-default-features --lib --bin metallic-sim --test simulation --test sim_runner --test simulation_touches --test local_input -j 4 -- --test-threads=1
       - name: Check all graphics-free targets
         run: cargo clippy -p metallic_runtime --no-default-features --all-targets -j 4 -- -D warnings
 

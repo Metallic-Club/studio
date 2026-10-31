@@ -411,3 +411,222 @@ fn combined_game_and_server_use_the_same_world_space_movement_kernel() {
     assert_eq!(game.time(), server.time());
     assert!(output.0.borrow().is_empty());
 }
+
+/// Game (presentation) and a server-mode Simulation stepped side by side from identical worlds
+/// must keep identical worlds: the Simulation's tick is Game's tick minus rendering. The scene
+/// exercises what main added to Game's tick: a script-moved platform the character rides
+/// (#256, #382), a spinner, limb touch volumes from CPU bone poses (#370), a loose part, a death
+/// and the controller's respawn (#343, #346), and a script-destroyed character that respawns
+/// through the gone-without-dying timer (#273, #346).
+#[cfg(feature = "presentation")]
+mod game_parity {
+    use super::*;
+    use metallic_core::classes;
+    use metallic_runtime::{CameraController, FrameInput, Game};
+    use std::collections::{HashMap, HashSet};
+
+    const TICKS: usize = 1200;
+
+    struct Fnv(u64);
+    impl Fnv {
+        fn eat(&mut self, bytes: &[u8]) {
+            for &b in bytes {
+                self.0 ^= u64::from(b);
+                self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+    }
+
+    /// FNV-1a over the whole tree in pre-order: class, parent position and every registry
+    /// property. A Ref hashes as its target's tree position, so the worlds' ids may differ.
+    fn world_hash(world: &World) -> u64 {
+        let mut order = Vec::new();
+        let mut stack: Vec<InstanceId> = world.roots().iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            order.push(id);
+            stack.extend(world.children(id).iter().rev().copied());
+        }
+        let index: HashMap<InstanceId, u64> = order
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i as u64))
+            .collect();
+        let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+        for &id in &order {
+            let class = world.class_name(id).unwrap();
+            h.eat(class.as_bytes());
+            h.eat(
+                &world
+                    .parent(id)
+                    .map_or(u64::MAX, |p| index[&p])
+                    .to_le_bytes(),
+            );
+            for def in classes::all_properties(class) {
+                h.eat(def.name.as_bytes());
+                match world.get(id, def.name) {
+                    Ok(Value::Ref(target)) => {
+                        let at = target
+                            .map_or(u64::MAX, |t| index.get(&t).copied().unwrap_or(u64::MAX - 1));
+                        h.eat(&at.to_le_bytes());
+                    }
+                    // Debug prints every f64 in its exact shortest round-trip form.
+                    Ok(value) => h.eat(format!("{value:?}").as_bytes()),
+                    Err(_) => h.eat(&[0xff]),
+                }
+            }
+        }
+        h.0
+    }
+
+    /// The shared scene. Scripts only change existing instances, so instance order is the same
+    /// whether the character spawns before (server) or after (Game) the scripts start.
+    fn scene() -> World {
+        let mut world = World::new_with_services();
+        floor(&mut world);
+        let ws = world.root("Workspace").unwrap();
+        let at = |x, y, z| Vec3::new(x, y, z);
+        part(
+            &mut world,
+            ws,
+            "Mover",
+            at(0.0, 0.5, -14.0),
+            at(8.0, 1.0, 8.0),
+            true,
+        );
+        part(
+            &mut world,
+            ws,
+            "Spinner",
+            at(12.0, 0.5, -6.0),
+            at(6.0, 1.0, 6.0),
+            true,
+        );
+        let pad = part(
+            &mut world,
+            ws,
+            "Pad",
+            at(0.0, 0.6, -6.0),
+            at(4.0, 0.2, 4.0),
+            true,
+        );
+        world.set(pad, "CanCollide", Value::Bool(false)).unwrap();
+        part(
+            &mut world,
+            ws,
+            "Crate",
+            at(3.0, 6.0, -3.0),
+            at(2.0, 2.0, 2.0),
+            false,
+        );
+        let sss = world.root("ServerScriptService").unwrap();
+        script(
+            &mut world,
+            "Script",
+            sss,
+            r#"
+local mover, spinner, pad = workspace.Mover, workspace.Spinner, workspace.Pad
+local t, touches = 0, 0
+pad.Touched:Connect(function(hit)
+    touches += 1
+    pad.Transparency = (touches % 100) / 100
+    print("pad " .. hit.Name)
+end)
+game:GetService("RunService").Heartbeat:Connect(function(dt)
+    t += dt
+    mover.Position = Vector3.new(math.sin(t) * 4, 0.5, -14)
+    spinner.Orientation = Vector3.new(0, (t * 90) % 360, 0)
+end)
+task.delay(5, function()
+    game:GetService("Players").Player1.Character.Humanoid.Health = 0
+    print("killed")
+end)
+task.delay(12, function()
+    game:GetService("Players").Player1.Character:Destroy()
+    print("destroyed")
+end)
+"#,
+        );
+        world
+    }
+
+    /// Movement for tick `i`: walk forward onto the mover, jump, ride, then strafe and run.
+    fn frame_input(i: usize) -> FrameInput {
+        let (movement, jump, run) = match i {
+            0..=40 => ([0.0, 1.0], false, false),
+            41..=44 => ([0.0, 1.0], true, false),
+            45..=200 => ([0.0, 0.0], false, false),
+            201..=400 => ([0.7, 0.7], false, true),
+            401..=420 => ([-1.0, 0.0], true, false),
+            _ => ([0.3, -1.0], i % 90 < 3, i % 200 > 100),
+        };
+        FrameInput {
+            movement,
+            jump,
+            run,
+            ..FrameInput::default()
+        }
+    }
+
+    #[test]
+    fn game_and_server_simulation_keep_identical_world_hashes() {
+        let game_out = Rc::new(Capture::default());
+        let mut game = Game::from_world("Parity".into(), scene(), game_out.clone());
+        game.start().unwrap();
+
+        let mut server_world = scene();
+        let players = server_world.root("Players").unwrap();
+        let player = server_world.create("Player", Some(players)).unwrap();
+        server_world
+            .set(player, "Name", Value::String("Player1".into()))
+            .unwrap();
+        server_world.create("PlayerGui", Some(player)).unwrap();
+        spawn_character(&mut server_world, player).unwrap();
+        let (mut server, server_out) = simulation(server_world);
+        let shared = server.world();
+        assert_eq!(
+            world_hash(&game.world().borrow()),
+            world_hash(&shared.borrow()),
+            "worlds differ after start"
+        );
+
+        // Game turns camera-relative movement into world space with its camera; do the same.
+        let mut camera = CameraController::new();
+        let mut characters = HashSet::new();
+        for i in 0..TICKS {
+            let input = frame_input(i);
+            camera.apply_input(&input);
+            let sample = PlayerInput {
+                player,
+                input: MoveInput {
+                    dir: camera.move_direction(input.movement),
+                    jump: input.jump,
+                    run: input.run,
+                },
+            };
+            assert_eq!(game.frame(&input, TICK).ticks, 1, "tick {i}");
+            assert_eq!(server.advance(TICK, &[sample]), 1, "tick {i}");
+            let game_hash = world_hash(&game.world().borrow());
+            assert_eq!(
+                game_hash,
+                world_hash(&shared.borrow()),
+                "world hashes differ after tick {i}"
+            );
+            if let Ok(Value::Ref(Some(model))) = shared.borrow().get(player, "Character") {
+                characters.insert(model);
+            }
+        }
+        assert_eq!(game.time(), server.time());
+        assert_eq!(server.tick_count(), TICKS as u64);
+        let (g, s) = (game_out.0.borrow(), server_out.0.borrow());
+        assert_eq!(*g, *s, "script output differs");
+        assert!(g.iter().any(|l| l.starts_with("pad ")), "no touch: {g:?}");
+        assert!(g.iter().any(|l| l == "killed"), "{g:?}");
+        assert!(g.iter().any(|l| l == "destroyed"), "{g:?}");
+        assert!(!g.iter().any(|l| l.starts_with("error:")), "{g:?}");
+        // The death and the destroy both respawned: three Models over the run, the last alive.
+        assert_eq!(characters.len(), 3, "characters seen: {characters:?}");
+        let world = shared.borrow();
+        let last = character(&world, player);
+        assert!(world.is_alive(last) && world.find_first_child(last, "HumanoidRootPart").is_some());
+    }
+}

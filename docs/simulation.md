@@ -50,8 +50,12 @@ remains separate.
   touch volumes for every stepped character, using renderer-free animation/asset crates.
   No drawing or GUI work executes in the server kernel. Combined restart replaces only
   its prior StarterGui copies and retains runtime-created GUI; missing local characters
-  use the upstream respawn delay. These local-player policies do not add server admission
-  or automatic recovery for arbitrary server-owned Players.
+  use the upstream respawn delay. Server mode applies the same gone-without-dying respawn
+  timer to every Player that has had a Character (destroyed, out of the Workspace, no
+  root part, or `Character` cleared), in `Players` child order, so it matches Game; a Player
+  that never had a Character gets none from here (admission and first spawn are #336).
+  The test `game_and_server_simulation_keep_identical_world_hashes` runs Game and a server
+  Simulation side by side and compares a hash of the whole World every tick.
 - Pointer hit testing, shading, GUI inset and input capture stay in Game. GUI events are
   forwarded to its persistent Combined ScriptHost before simulation advancement; they
   remain queued until a fixed tick executes. Stop/start resets pointer capture.

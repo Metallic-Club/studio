@@ -9,7 +9,7 @@ use metallic_physics::{
 };
 pub use metallic_physics::{MoveInput, RUN_MULTIPLIER};
 use metallic_script::{LOCAL_PLAYER_NAME, OutputSink, ScriptHost};
-use std::{cell::RefCell, path::Path, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc};
 
 /// Simulation ticks per second (physics, characters and scripts).
 pub const TICK_RATE: f64 = 60.0;
@@ -72,6 +72,9 @@ pub struct Simulation {
     bodies: CharacterBodies,
     gui_copies: Vec<InstanceId>,
     character_gone: f64,
+    /// Server mode: the gone-without-dying respawn timer of each Player that has had a
+    /// Character (the same timer Combined mode keeps in `character_gone`).
+    server_gone: HashMap<InstanceId, f64>,
 }
 
 impl Simulation {
@@ -150,6 +153,7 @@ impl Simulation {
             bodies: CharacterBodies::default(),
             gui_copies: Vec::new(),
             character_gone: 0.0,
+            server_gone: HashMap::new(),
         }
     }
 
@@ -203,6 +207,7 @@ impl Simulation {
         self.accumulator = 0.0;
         self.ticks = 0;
         self.character_gone = 0.0;
+        self.server_gone.clear();
         self.running = true;
         Ok(())
     }
@@ -267,11 +272,9 @@ impl Simulation {
     }
 
     fn tick(&mut self, inputs: &[PlayerInput]) -> bool {
-        let next_tick = self
-            .ticks
-            .checked_add(1)
-            .expect("simulation tick counter exhausted");
-        let respawned;
+        // 2^64 ticks at 60 Hz is about 9.7 billion years; saturate rather than panic.
+        let next_tick = self.ticks.saturating_add(1);
+        let mut respawned = Vec::new();
         {
             let Ok(mut world) = self.world.try_borrow_mut() else {
                 return false;
@@ -315,15 +318,27 @@ impl Simulation {
                 }
             }
             self.physics.step(&mut world, TICK);
-            respawned = respawn_if_gone(
-                &mut world,
-                &self.characters,
-                self.player,
-                &mut self.character_gone,
-            );
+            if self.combined {
+                if let (Some(player), Some(character)) = (
+                    self.player,
+                    respawn_if_gone(
+                        &mut world,
+                        &self.characters,
+                        self.player,
+                        &mut self.character_gone,
+                    ),
+                ) {
+                    respawned.push((player, character));
+                }
+            } else {
+                respawned =
+                    respawn_server_players(&mut world, &self.characters, &mut self.server_gone);
+            }
         }
-        if let (Some(player), Some(character)) = (self.player, respawned) {
-            self.character = Some(character);
+        for (player, character) in respawned {
+            if Some(player) == self.player {
+                self.character = Some(character);
+            }
             self.sync_physics_now();
             self.scripts.character_added(player, character);
         }
@@ -436,6 +451,40 @@ fn respawn_if_gone(
     }
     *gone = 0.0;
     spawn_character(world, player).ok()
+}
+
+/// Server mode's [`respawn_if_gone`]: the same timer for every Player under `Players`, visited
+/// in child order. Only Players that have had a Character are tracked, so a Player a server has
+/// not spawned yet gets no character from here. Timers of Players that are gone are dropped.
+fn respawn_server_players(
+    world: &mut World,
+    controller: &CharacterController,
+    timers: &mut HashMap<InstanceId, f64>,
+) -> Vec<(InstanceId, InstanceId)> {
+    let mut respawned = Vec::new();
+    let Some(players) = world.root("Players") else {
+        timers.clear();
+        return respawned;
+    };
+    let count = world.children(players).len();
+    for index in 0..count {
+        let Some(&player) = world.children(players).get(index) else {
+            continue;
+        };
+        if !world.is_a(player, "Player") {
+            continue;
+        }
+        let has_character = matches!(world.get_ref(player, "Character"), Ok(Value::Ref(Some(_))));
+        if !has_character && !timers.contains_key(&player) {
+            continue;
+        }
+        let gone = timers.entry(player).or_insert(0.0);
+        if let Some(character) = respawn_if_gone(world, controller, Some(player), gone) {
+            respawned.push((player, character));
+        }
+    }
+    timers.retain(|&player, _| world.is_alive(player) && world.parent(player) == Some(players));
+    respawned
 }
 
 /// True when `id` is a descendant of the Workspace.
