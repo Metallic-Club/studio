@@ -90,11 +90,15 @@ impl Sim {
     }
 
     fn frame(&mut self, input: MoveInput) {
+        self.frame_dt(input, DT);
+    }
+
+    fn frame_dt(&mut self, input: MoveInput, dt: f64) {
         let character = self.character();
         self.controller
-            .step(&mut self.world, &self.physics, character, input, DT);
+            .step(&mut self.world, &self.physics, character, input, dt);
         self.controller.drain_events();
-        self.physics.step(&mut self.world, DT);
+        self.physics.step(&mut self.world, dt);
     }
 
     fn stop(&mut self) {
@@ -289,7 +293,10 @@ fn explicit_movement_keeps_world_direction_and_facing() {
 }
 
 #[test]
-fn small_tilts_use_the_foot_contact_lever_arm_and_keep_the_capsule_upright() {
+fn small_tilts_carry_the_bottom_sphere_and_keep_the_capsule_upright() {
+    // Root 3 studs above the surface; the bottom-sphere centre is 1.02 above it and the foot
+    // contact on it. The pivot (part origin) is 1 stud below the surface.
+    let anchor_lever = 2.02;
     for sign in [1.0, -1.0] {
         let mut sim = Sim::new();
         let initial = sim.position();
@@ -301,23 +308,32 @@ fn small_tilts_use_the_foot_contact_lever_arm_and_keep_the_capsule_upright() {
             );
             sim.assert_standing();
             if frame == 2 {
-                // The support contact is one stud above the part origin. The root
-                // is four studs above it and would produce the wrong lever arm.
+                let w = rate.to_radians();
+                // The root moves with the bottom-sphere centre...
                 assert!(
-                    (sim.velocity().x + rate.to_radians()).abs() < 0.15,
-                    "contact velocity {:?}",
+                    (sim.velocity().x + w * anchor_lever).abs() < 0.15,
+                    "root velocity {:?}",
                     sim.velocity()
                 );
+                // ...while the velocity a jump would keep uses the foot contact lever arm.
+                let character = sim.character();
+                let carried = sim.velocity() - sim.controller.relative_velocity(character).unwrap();
+                assert!((carried.x + w).abs() < 0.15, "contact velocity {carried:?}");
             }
         }
         sim.stop();
         let (sine, cosine) = rate.to_radians().sin_cos();
+        let up = ROOT_HEIGHT - (anchor_lever - 1.0);
         let expected = Vec3::new(
-            initial.x * cosine - sine,
-            initial.y - 1.0 + initial.x * sine + cosine,
+            initial.x * cosine - anchor_lever * sine,
+            -1.0 + initial.x * sine + anchor_lever * cosine + up,
             initial.z,
         );
-        assert!((sim.position() - expected).magnitude() < 1.0);
+        assert!(
+            (sim.position() - expected).magnitude() < 0.05,
+            "rider {:?}, expected {expected:?}",
+            sim.position()
+        );
         let orientation = sim.vector("Orientation");
         assert_eq!(orientation.x, 0.0);
         assert_eq!(orientation.z, 0.0);
@@ -423,4 +439,97 @@ fn falling_dynamic_support_keeps_its_rider_when_stopped_by_a_floor() {
         );
         sim.assert_standing();
     }
+}
+
+fn radius(point: Vec3) -> f64 {
+    point.x.hypot(point.z)
+}
+
+/// Review finding 1 on #256: a tilted support spinning around world up must not let the rider
+/// drift in or out. The foot contact sits beside the root on a tilt, so carrying the contact
+/// moved the root by the wrong amount every frame (radius 6.19 after 10 s at 20 degrees).
+#[test]
+fn tilted_spinning_support_keeps_rider_radius() {
+    for tilt in [8.0, 20.0] {
+        let mut sim = Sim::new();
+        // Tilt over half a second around the X axis; the rider stands on the hinge line.
+        for frame in 1..=30 {
+            sim.rotate(
+                Vec3::new(tilt * frame as f64 / 30.0, 0.0, 0.0),
+                MoveInput::default(),
+            );
+        }
+        sim.stop();
+        sim.assert_standing();
+        let start = sim.position();
+        let start_radius = radius(start);
+        let mut worst: f64 = 0.0;
+        for frame in 1..=600 {
+            let t = frame as f64 * DT;
+            sim.rotate(Vec3::new(tilt, 30.0 * t, 0.0), MoveInput::default());
+            sim.assert_standing();
+            worst = worst.max((radius(sim.position()) - start_radius).abs());
+            assert!(
+                (sim.position().y - start.y).abs() < 0.02,
+                "tilt {tilt}, frame {frame}: height {}",
+                sim.position().y
+            );
+        }
+        sim.stop();
+        worst = worst.max((radius(sim.position()) - start_radius).abs());
+        assert!(
+            worst < 0.02,
+            "tilt {tilt}: radius error {worst} (start {start_radius})"
+        );
+        // 10 s at 30 deg/s is 300 degrees around the axis.
+        let expected = rotate_y(start, 300.0);
+        assert!(
+            (sim.position() - expected).magnitude() < 0.05,
+            "tilt {tilt}: rider {:?}, expected {expected:?}",
+            sim.position()
+        );
+        assert!(yaw_error(sim.vector("Orientation").y, 300.0) < 0.05);
+    }
+}
+
+/// Review finding 2 on #256: facing comes from the same support pose change as position, so the
+/// two agree even when frame lengths vary (facing used to add `w.y * this frame's dt` while
+/// position followed the previous physics step).
+#[test]
+fn facing_and_position_agree_under_variable_dt() {
+    let mut sim = Sim::new();
+    let start = sim.position();
+    let rate = 60.0;
+    let steps = [1.0 / 30.0, 1.0 / 90.0, 1.0 / 60.0, 1.0 / 45.0, 1.0 / 120.0];
+    let polar = |p: Vec3| (-p.z).atan2(p.x).to_degrees();
+    let mut time = 0.0;
+    for frame in 0..300 {
+        let dt = steps[frame % steps.len()];
+        time += dt;
+        sim.world
+            .set(
+                sim.platform,
+                "Orientation",
+                Value::Vector3(Vec3::new(0.0, rate * time, 0.0)),
+            )
+            .unwrap();
+        sim.frame_dt(MoveInput::default(), dt);
+        sim.assert_standing();
+        let position = sim.position();
+        let facing = sim.vector("Orientation").y;
+        assert!(
+            yaw_error(facing, polar(position)) < 0.01,
+            "frame {frame}: facing {facing}, around the axis {}",
+            polar(position)
+        );
+        assert!((radius(position) - radius(start)).abs() < 0.01);
+    }
+    sim.stop();
+    let expected = rotate_y(start, rate * time);
+    assert!(
+        (sim.position() - expected).magnitude() < 0.05,
+        "rider {:?}, expected {expected:?}",
+        sim.position()
+    );
+    assert!(yaw_error(sim.vector("Orientation").y, rate * time) < 0.01);
 }

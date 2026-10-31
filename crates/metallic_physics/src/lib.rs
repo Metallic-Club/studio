@@ -30,8 +30,8 @@ mod touched;
 pub use avatar::VIOLET;
 pub use character::{
     CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT,
-    MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, WORLD_LIMIT, place_character,
-    spawn_character,
+    MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, SupportContact, WORLD_LIMIT,
+    place_character, spawn_character,
 };
 pub use sync::{MaterialProps, material_props};
 

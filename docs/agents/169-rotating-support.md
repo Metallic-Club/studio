@@ -72,6 +72,23 @@ yaw, while movement input stays in world space and airborne momentum stays stabl
   zero rates can differ from the completed pose delta. The real falling/landing test
   passes without changing that gate; it does not prove every dynamic stop configuration.
 
+## Review follow-up (2026-10-30)
+
+- Merged `origin/main` (#343 Humanoid clamps / out-of-world kill / `in_world`, #331 quantised
+  `LocalInput`, #348 test temp dirs, M2a `CharacterState`). Only ARCHITECTURE.md conflicted;
+  `CharacterState` gained `support: Option<SupportContact>` so save/restore replays keep the carry.
+  #53 (teleport rule) is still open and not merged.
+- Finding 1: carry the bottom-sphere centre (straight below the root) instead of the foot contact;
+  the contact is kept only as the jump lever arm. The carry is swept first, ignoring the support
+  itself, then pushes apply: sweeping/pushing against the already rotated support caused a
+  tangential lag of about 0.9 deg per 10 s at 20 deg tilt. Test `tilted_spinning_support_keeps_rider_radius`
+  (8 and 20 deg, 30 deg/s, 10 s): radius error under 0.02 stud (measured 8e-6 and 2e-5); was 0.74 at 8 deg.
+- Finding 2: facing turns by the twist around +Y of the support's pose change, not `w.y * dt`.
+  Test `facing_and_position_agree_under_variable_dt` failed before (0.67 deg off on frame 1).
+- #273 "mover lags one tick": not fixed. With a Heartbeat script moving a platform at 4 studs/s, the
+  rider stays a constant 2 ticks (0.133 stud) behind the drawn platform, without drift. The cause is
+  the tick order (characters, physics, scripts), which the M2 spec keeps.
+
 ## Review and next
 
 - Core independently reviewed the support/probe geometry. Root reviewed the overall
