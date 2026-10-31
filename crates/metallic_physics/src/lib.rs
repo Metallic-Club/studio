@@ -486,4 +486,12 @@ impl PhysicsWorld {
     pub fn drain_touched(&mut self) -> Vec<(InstanceId, InstanceId)> {
         self.touches.drain()
     }
+
+    /// Returns the part pairs that stopped touching since the last call: one entry for each pair
+    /// that [`Self::drain_touched`] reported, when its parts separate (the runtime fires
+    /// `TouchEnded` on both). Pairs with a part that was removed are not reported, and neither
+    /// are pairs involving a character part (see [`CharacterEvent::TouchEnded`]).
+    pub fn drain_touch_ended(&mut self) -> Vec<(InstanceId, InstanceId)> {
+        self.touches.drain_ended()
+    }
 }
