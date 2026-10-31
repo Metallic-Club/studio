@@ -73,7 +73,7 @@ pub fn paint_art(
     match art {
         Art::Image(tex) => {
             // A plate under the image keeps the clipped edges clean.
-            cut::fill(painter, rect, radius, cut_size, theme::BG_RAISED);
+            cut::fill(painter, rect, radius, cut_size, theme::bg_raised());
             let uv = cover_uv(tex.size_vec2(), rect.size());
             cut::paint_image(
                 painter,
@@ -160,7 +160,7 @@ impl Widget for Card<'_> {
         let hover = ui.ctx().animate_bool_with_time(
             response.id.with("hover"),
             response.hovered(),
-            theme::T_FAST,
+            theme::t_fast(),
         );
         let painter = ui.painter();
         let radius = CornerRadius::same(theme::R_MD);
@@ -172,16 +172,16 @@ impl Widget for Card<'_> {
                 rect.expand(FRAME),
                 CornerRadius::same(theme::R_MD + FRAME as u8),
                 outer_cut,
-                theme::ACCENT,
+                theme::accent(),
             );
             cut::inset_cut(outer_cut, FRAME)
         } else {
             0.0
         };
         let fill = if self.selected {
-            theme::BG_RAISED
+            theme::bg_raised()
         } else {
-            theme::BG_PANEL.lerp_to_gamma(theme::BG_RAISED, hover)
+            theme::bg_panel().lerp_to_gamma(theme::bg_raised(), hover)
         };
         cut::fill(painter, rect, radius, plate_cut, fill);
 
@@ -205,28 +205,28 @@ impl Widget for Card<'_> {
                 Align2::LEFT_CENTER,
                 icons::CHECK_CIRCLE,
                 fonts::icon_fill(14.0),
-                theme::ACCENT,
+                theme::accent(),
             );
             name_x += 14.0 + 6.0;
         }
         let text_w = rect.right() - 12.0 - name_x;
-        let name = truncated(painter, self.name, fonts::strong(), theme::TEXT_1, text_w);
+        let name = truncated(painter, self.name, fonts::strong(), theme::text_1(), text_w);
         painter.galley(
             egui::pos2(name_x, label_top + 9.0 - name.size().y / 2.0),
             name,
-            theme::TEXT_1,
+            theme::text_1(),
         );
         let facts = truncated(
             painter,
             self.facts,
             fonts::small(),
-            theme::TEXT_3,
+            theme::text_3(),
             rect.right() - 12.0 - label_left,
         );
         painter.galley(
             egui::pos2(label_left, label_top + 18.0 + 8.0 - facts.size().y / 2.0),
             facts,
-            theme::TEXT_3,
+            theme::text_3(),
         );
 
         if response.has_focus() {
@@ -251,7 +251,7 @@ fn focus_frame(painter: &egui::Painter, rect: Rect, selected: bool) {
         rect.expand(out),
         radius,
         cut_size,
-        Stroke::new(2.0, theme::FOCUS),
+        Stroke::new(2.0, theme::focus()),
     );
 }
 

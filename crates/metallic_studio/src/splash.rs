@@ -108,7 +108,7 @@ impl Splash {
         let since = *self.since.get_or_insert_with(Instant::now);
         if !self.hold {
             // Arrive: fade in over `t-splash`, easing out.
-            let t = (since.elapsed().as_secs_f32() / theme::T_SPLASH).min(1.0);
+            let t = (since.elapsed().as_secs_f32() / theme::t_splash()).min(1.0);
             if t < 1.0 {
                 ui.multiply_opacity(egui::emath::easing::cubic_out(t));
                 ui.ctx().request_repaint();
@@ -117,7 +117,7 @@ impl Splash {
         let rect = Rect::from_center_size(ui.max_rect().center(), SIZE);
         let painter = ui.painter();
         let radius = CornerRadius::same(theme::R_LG);
-        cut::fill(painter, rect, radius, theme::CUT_LG, theme::BG_BASE);
+        cut::fill(painter, rect, radius, theme::CUT_LG, theme::bg_base());
 
         // The titanium plate: one flat field of light metal, so the dark emblem reads.
         let plate = Rect::from_min_size(rect.min, vec2(PLATE_WIDTH, rect.height()));
@@ -141,7 +141,7 @@ impl Splash {
         painter.hline(
             plate.right()..=rect.right() - theme::CUT_LG,
             rect.top() + 0.5,
-            Stroke::new(1.0, theme::HIGHLIGHT),
+            Stroke::new(1.0, theme::highlight()),
         );
         if let Some(emblem) = emblem {
             let at = Rect::from_center_size(plate.center(), Vec2::splat(EMBLEM));
@@ -155,8 +155,8 @@ impl Splash {
         let painter = ui.painter();
         let mut y = body.top();
         for (text, light, color) in [
-            ("Metallic", false, theme::TEXT_1),
-            ("Studio", true, theme::TEXT_2),
+            ("Metallic", false, theme::text_1()),
+            ("Studio", true, theme::text_2()),
         ] {
             let galley = painter.layout_job(wordmark_line(text, light, color));
             painter.galley(egui::pos2(body.left(), y), galley, color);
@@ -167,7 +167,7 @@ impl Splash {
             Align2::LEFT_TOP,
             version_line(),
             fonts::small(),
-            theme::TEXT_3,
+            theme::text_3(),
         );
 
         // Status: step name and count above a 2 px track; the fill eases to the done share.
@@ -183,27 +183,27 @@ impl Splash {
             Align2::LEFT_CENTER,
             label,
             fonts::body(),
-            theme::TEXT_2,
+            theme::text_2(),
         );
         painter.text(
             egui::pos2(body.right(), line),
             Align2::RIGHT_CENTER,
             count,
             fonts::small(),
-            theme::TEXT_3,
+            theme::text_3(),
         );
-        painter.rect_filled(track, 1.0, theme::BG_ACTIVE);
+        painter.rect_filled(track, 1.0, theme::bg_active());
         let shown = ui.ctx().animate_value_with_time(
             egui::Id::unique("splash-progress"),
             self.progress(),
-            theme::T_PANEL,
+            theme::t_panel(),
         );
         if shown > 0.0 {
             let fill = Rect::from_min_size(
                 track.min,
                 vec2(track.width() * shown.clamp(0.0, 1.0), track.height()),
             );
-            painter.rect_filled(fill, 1.0, theme::ACCENT);
+            painter.rect_filled(fill, 1.0, theme::accent());
         }
     }
 }

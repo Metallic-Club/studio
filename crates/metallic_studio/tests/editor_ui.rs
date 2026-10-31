@@ -319,3 +319,14 @@ fn closing_with_unsaved_script_text_asks_first() {
         Value::String("print(1)".into())
     );
 }
+
+#[test]
+fn ctrl_comma_asks_for_the_settings_dialog() {
+    let (ui, _, _) = editor();
+    let mut h = harness(ui);
+    assert!(!h.state_mut().take_settings_request());
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Comma);
+    h.run_steps(3);
+    assert!(h.state_mut().take_settings_request());
+    assert!(!h.state_mut().take_settings_request(), "asked once");
+}

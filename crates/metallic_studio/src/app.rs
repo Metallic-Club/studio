@@ -10,6 +10,8 @@ use crate::editor_ui::{EditorExit, EditorUi};
 use crate::png_image::{RgbaImage, decode_png};
 use crate::recent::RecentProjects;
 use crate::screenshot::ScreenshotJob;
+use crate::settings::{self, SettingsStore, ThemeChoice};
+use crate::settings_ui;
 use crate::splash::{self, Splash};
 use crate::start_screen::{self, StartAction, StartScreen};
 use crate::templates::{TemplateInfo, list_templates, templates_dir};
@@ -40,6 +42,8 @@ pub enum Scene {
     Colour,
     /// Every Studio widget in every state (design review).
     Components,
+    /// The start screen with the Settings dialog open.
+    Settings,
 }
 
 /// Command-line options (all for design review; creators start Studio without any).
@@ -53,11 +57,14 @@ pub struct Options {
     pub location: Option<PathBuf>,
     /// Window size in points (`--size 1440x900`), to compare captures with the mockups.
     pub size: Option<[f32; 2]>,
+    /// Theme for a capture (`--theme graphite|titanium|light|system`); the saved setting is not read.
+    pub theme: Option<ThemeChoice>,
 }
 
 impl Options {
-    /// Parses `--screenshot <path>`, `--scene splash|start|firstrun|error|editor|colour|components`,
-    /// `--location <dir>` and `--size <width>x<height>`.
+    /// Parses `--screenshot <path>`,
+    /// `--scene splash|start|firstrun|error|editor|colour|components|settings`,
+    /// `--theme graphite|titanium|light|system`, `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut opts = Self::default();
@@ -68,6 +75,12 @@ impl Options {
                 "--screenshot" => opts.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--location" => opts.location = Some(PathBuf::from(value("--location")?)),
                 "--size" => opts.size = Some(parse_size(&value("--size")?)?),
+                "--theme" => {
+                    let name = value("--theme")?;
+                    opts.theme = Some(
+                        ThemeChoice::parse(&name).ok_or_else(|| format!("unknown theme {name}"))?,
+                    );
+                }
                 "--scene" => {
                     opts.scene = match value("--scene")?.as_str() {
                         "splash" => Scene::Splash,
@@ -77,6 +90,7 @@ impl Options {
                         "editor" => Scene::Editor,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
+                        "settings" => Scene::Settings,
                         other => return Err(format!("unknown scene {other}")),
                     }
                 }
@@ -126,6 +140,10 @@ pub struct StudioApp {
     splash_window: bool,
     /// The user agreed to quit from the unsaved-changes prompt; the next close is let through.
     quit_confirmed: bool,
+    /// Theme, interface size and reduced motion.
+    settings: SettingsStore,
+    /// The Settings dialog is showing.
+    settings_open: bool,
 }
 
 /// Decodes the embedded brand icon.
@@ -145,7 +163,18 @@ impl StudioApp {
     /// Builds the app and applies the theme. On a normal start the rest of the startup work runs
     /// one step per frame behind the splash; captures run it all here.
     pub fn new(ctx: &egui::Context, options: Options) -> Self {
-        theme::apply(ctx);
+        // The splash is always Graphite at full size; the saved settings are read behind it and
+        // take effect when the start screen appears (no theme flash).
+        let shot = options.screenshot.is_some();
+        let mut settings = SettingsStore::default();
+        if shot {
+            // A capture never reads or writes the real config folder.
+            settings.settings.theme = options.theme.unwrap_or_default();
+        }
+        theme::apply(ctx, theme::ThemeId::Graphite);
+        if !options.shows_splash() {
+            settings::apply_settings(ctx, &settings.settings);
+        }
         let icon = icon_image().ok().map(|img| {
             let color = egui::ColorImage::from_rgba_unmultiplied(
                 [img.width as usize, img.height as usize],
@@ -153,7 +182,6 @@ impl StudioApp {
             );
             ctx.load_texture("brand-icon", color, egui::TextureOptions::LINEAR)
         });
-        let shot = options.screenshot.is_some();
         let phase = match options.scene {
             Scene::Colour => {
                 let mut demo = ColourDemo::new(!shot);
@@ -176,6 +204,8 @@ impl StudioApp {
             start: None,
             splash_window: options.shows_splash(),
             quit_confirmed: false,
+            settings,
+            settings_open: options.scene == Scene::Settings && shot,
             screenshot: options.screenshot.clone().map(ScreenshotJob::new),
             options,
             icon,
@@ -192,7 +222,14 @@ impl StudioApp {
     fn run_step(&mut self, ctx: &egui::Context, step: usize) {
         match step {
             // Fonts were installed in `new` and are built for the first frame; read settings.
-            0 => self.boot.recent = Some(recent_projects(self.options.screenshot.is_some())),
+            0 => {
+                self.boot.recent = Some(recent_projects(self.options.screenshot.is_some()));
+                if self.options.screenshot.is_none() {
+                    self.settings = SettingsStore::load_default();
+                    // The rest of the splash already honours reduced motion.
+                    theme::set_reduce_motion(self.settings.settings.reduce_motion);
+                }
+            }
             // Nothing to call: this step ends once the first frame has been drawn and presented,
             // which is when it runs (one step per frame, after painting).
             1 => {}
@@ -202,11 +239,12 @@ impl StudioApp {
                 let recent = self.boot.recent.take().unwrap_or_default();
                 let shot = self.options.screenshot.is_some();
                 let scene = self.options.scene;
-                let recent = if shot && matches!(scene, Scene::Start | Scene::Error) {
-                    start_screen::demo_recent(&templates_dir())
-                } else {
-                    recent
-                };
+                let recent =
+                    if shot && matches!(scene, Scene::Start | Scene::Error | Scene::Settings) {
+                        start_screen::demo_recent(&templates_dir())
+                    } else {
+                        recent
+                    };
                 let mut start = StartScreen::new(templates, recent);
                 if shot {
                     // Display only: nothing is written, and no real path or user name can end up
@@ -235,12 +273,16 @@ impl eframe::App for StudioApp {
         if self.splash_window {
             [0.0; 4]
         } else {
-            theme::BG_BASE.to_normalized_gamma_f32()
+            theme::bg_base().to_normalized_gamma_f32()
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if !self.splash_window {
+            // Cheap when nothing changed; follows the system theme while "System" is chosen.
+            settings::apply_settings(&ctx, &self.settings.settings);
+        }
         match &mut self.phase {
             Phase::Colour(demo) => {
                 if demo.show(ui) {
@@ -260,6 +302,7 @@ impl eframe::App for StudioApp {
                 } else if splash.finished() {
                     splash::become_main_window(&ctx);
                     self.splash_window = false;
+                    settings::apply_settings(&ctx, &self.settings.settings);
                     self.phase = Phase::Start;
                     ctx.request_repaint();
                 } else {
@@ -267,16 +310,19 @@ impl eframe::App for StudioApp {
                 }
             }
             Phase::Start => {
-                if let Some(start) = &mut self.start
-                    && let Some(StartAction::OpenProject { name, path }) = start.show(ui)
-                {
-                    match EditorUi::open(&path) {
+                let action = self.start.as_mut().and_then(|start| start.show(ui));
+                match action {
+                    Some(StartAction::OpenProject { name, path }) => match EditorUi::open(&path) {
                         Ok(editor) => self.phase = Phase::Opened(Box::new(editor)),
                         Err(e) => {
                             log::warn!("could not open {name}: {e}");
-                            start.open_failed(&name, &e);
+                            if let Some(start) = &mut self.start {
+                                start.open_failed(&name, &e);
+                            }
                         }
-                    }
+                    },
+                    Some(StartAction::OpenSettings) => self.settings_open = true,
+                    None => {}
                 }
             }
             Phase::Components => widgets::components::show(ui, self.icon.as_ref()),
@@ -288,7 +334,11 @@ impl eframe::App for StudioApp {
                 {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 }
-                match editor.ui(ui, frame.wgpu_render_state()) {
+                let exit = editor.ui(ui, frame.wgpu_render_state());
+                if editor.take_settings_request() {
+                    self.settings_open = true;
+                }
+                match exit {
                     EditorExit::Stay => {}
                     EditorExit::Close => self.phase = Phase::Start,
                     EditorExit::Quit => {
@@ -296,6 +346,18 @@ impl eframe::App for StudioApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 }
+            }
+        }
+        if self.settings_open {
+            let out = settings_ui::show(&ctx, &mut self.settings.settings);
+            if out.changed {
+                // Repaint in the new look at once, then remember it.
+                settings::apply_settings(&ctx, &self.settings.settings);
+                self.settings.save();
+                ctx.request_repaint();
+            }
+            if out.close {
+                self.settings_open = false;
             }
         }
         if let Some(job) = &mut self.screenshot {
@@ -331,6 +393,16 @@ mod tests {
         assert_eq!(opts.size, Some([1440.0, 900.0]));
         assert!(Options::parse(["--size", "big"].map(str::to_owned)).is_err());
         assert!(Options::parse(["--size", "10x10"].map(str::to_owned)).is_err());
+    }
+
+    #[test]
+    fn settings_scene_and_theme_are_parsed() {
+        let args = ["--scene", "settings", "--theme", "Titanium"].map(str::to_owned);
+        let opts = Options::parse(args).unwrap();
+        assert_eq!(opts.scene, Scene::Settings);
+        assert_eq!(opts.theme, Some(ThemeChoice::Titanium));
+        assert!(Options::parse(["--theme", "neon"].map(str::to_owned)).is_err());
+        assert!(Options::parse(["--theme".to_owned()]).is_err());
     }
 
     #[test]

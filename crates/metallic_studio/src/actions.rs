@@ -186,7 +186,7 @@ impl ActionRegistry {
                 .on_hover_text(&tip)
                 .on_disabled_hover_text(&tip);
             let colour = if !enabled {
-                theme::TEXT_OFF
+                theme::text_off()
             } else if a.id == "play.start" || (a.group == ToolbarGroup::Play && a.id != "play.stop")
             {
                 ui_tokens().success
@@ -390,6 +390,13 @@ pub fn default_actions() -> ActionRegistry {
         },
     ));
     r.register(Action::new(
+        "settings.open",
+        "Settings",
+        Icon::Text(","),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::OpenSettings),
+    ));
+    r.register(Action::new(
         "view.frame_selection",
         "Frame selection",
         Icon::Text("F"),
@@ -444,6 +451,24 @@ mod tests {
             }
             assert!(r.get(b.action).is_some(), "no action for {}", b.action);
         }
+    }
+
+    #[test]
+    fn settings_open_is_bound_to_ctrl_comma_and_asks_the_ui() {
+        let keymap = Keymap::metallic();
+        let chord = keymap.chord("settings.open").expect("bound");
+        assert_eq!(
+            chord,
+            crate::keymap::KeyChord::parse("Ctrl+,").expect("parses")
+        );
+        assert_eq!(keymap.label("settings.open"), "Ctrl+,");
+        let mut r = default_actions();
+        let mut s = state();
+        assert!(r.run("settings.open", &mut s));
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::OpenSettings]
+        ));
     }
 
     #[test]

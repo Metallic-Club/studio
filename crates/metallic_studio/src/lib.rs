@@ -56,6 +56,8 @@ pub mod recent;
 pub mod screenshot;
 pub mod script_editor;
 pub mod selection;
+pub mod settings;
+pub mod settings_ui;
 pub mod splash;
 pub mod start_screen;
 pub mod templates;
