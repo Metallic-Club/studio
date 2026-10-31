@@ -50,12 +50,23 @@ pub struct PlayerInput {
 }
 
 /// What `workspace:Raycast` asks: the simulation's physics.
-struct PhysicsQuery(Rc<RefCell<PhysicsWorld>>);
+struct PhysicsQuery {
+    physics: Rc<RefCell<PhysicsWorld>>,
+    world: Rc<RefCell<World>>,
+    sync: Rc<RefCell<PhysicsSyncCache>>,
+}
 
 impl metallic_script::SceneQuery for PhysicsQuery {
     fn raycast(&self, ray: &metallic_script::SceneRay) -> Option<metallic_script::SceneHit> {
-        // The physics is only borrowed by the simulation between script steps.
-        let physics = self.0.try_borrow().ok()?;
+        // Parts a script made or reshaped since the last sync are hit at once, as in Roblox.
+        if let (Ok(world), Ok(mut physics), Ok(mut sync)) = (
+            self.world.try_borrow(),
+            self.physics.try_borrow_mut(),
+            self.sync.try_borrow_mut(),
+        ) {
+            sync.synchronize(&mut physics, &world, false);
+        }
+        let physics = self.physics.try_borrow().ok()?;
         let hit = physics.raycast_filtered(
             ray.origin,
             ray.direction,
@@ -91,7 +102,7 @@ pub struct Simulation {
     pub(crate) character: Option<InstanceId>,
     pub(crate) time: f64,
     accumulator: f64,
-    physics_sync: PhysicsSyncCache,
+    physics_sync: Rc<RefCell<PhysicsSyncCache>>,
     pub(crate) running: bool,
     combined: bool,
     ticks: u64,
@@ -163,7 +174,12 @@ impl Simulation {
             ScriptHost::new_server(world.clone(), output)
         };
         let physics = Rc::new(RefCell::new(PhysicsWorld::new()));
-        scripts.set_scene_query(Rc::new(PhysicsQuery(physics.clone())));
+        let physics_sync = Rc::new(RefCell::new(PhysicsSyncCache::default()));
+        scripts.set_scene_query(Rc::new(PhysicsQuery {
+            physics: physics.clone(),
+            world: world.clone(),
+            sync: physics_sync.clone(),
+        }));
         Self {
             name,
             world,
@@ -174,7 +190,7 @@ impl Simulation {
             character: None,
             time: 0.0,
             accumulator: 0.0,
-            physics_sync: PhysicsSyncCache::default(),
+            physics_sync,
             running: false,
             combined,
             ticks: 0,
@@ -409,12 +425,15 @@ impl Simulation {
                 CharacterEvent::CheckpointReached { .. } => {}
             }
         }
-        for (a, b) in self.physics.borrow_mut().drain_touched() {
+        // Drained first: the physics borrow must not be held while handlers run (they may Raycast).
+        let touched = self.physics.borrow_mut().drain_touched();
+        for (a, b) in touched {
             self.scripts.touched(a, b);
             self.scripts.touched(b, a);
         }
         // Drained every tick (#417): undrained part-part TouchEnded pairs would pile up on a server.
-        for (a, b) in self.physics.borrow_mut().drain_touch_ended() {
+        let ended = self.physics.borrow_mut().drain_touch_ended();
+        for (a, b) in ended {
             self.scripts.touch_ended(a, b);
             self.scripts.touch_ended(b, a);
         }
@@ -423,8 +442,11 @@ impl Simulation {
     /// Re-syncs changed part signatures and character membership; pose-only changes need no sync.
     fn sync_physics_if_changed(&mut self) {
         if let Ok(world) = self.world.try_borrow() {
-            self.physics_sync
-                .synchronize(&mut self.physics.borrow_mut(), &world, false);
+            self.physics_sync.borrow_mut().synchronize(
+                &mut self.physics.borrow_mut(),
+                &world,
+                false,
+            );
         }
     }
 
@@ -434,6 +456,7 @@ impl Simulation {
             return;
         };
         self.physics_sync
+            .borrow_mut()
             .synchronize(&mut self.physics.borrow_mut(), &world, true);
     }
 }

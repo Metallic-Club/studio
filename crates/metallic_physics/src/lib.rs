@@ -78,9 +78,6 @@ pub struct RayHit {
     pub distance: f64,
 }
 
-/// How many parts a ray may start inside before [`PhysicsWorld::raycast_filtered`] gives up.
-const MAX_INSIDE_SKIPS: usize = 16;
-
 /// Which parts a filtered ray can hit; see [`PhysicsWorld::raycast_filtered`].
 #[derive(Debug, Clone, Copy)]
 pub struct RayQuery<'a> {
@@ -561,8 +558,9 @@ impl PhysicsWorld {
             .filter_map(|id| self.entries.get(id).map(|e| e.collider))
             .collect();
         // Parts the ray starts inside are skipped: they have no entry surface to report.
-        let mut inside: Vec<ColliderHandle> = Vec::new();
-        for _ in 0..MAX_INSIDE_SKIPS {
+        // Each pass adds one collider, so the loop ends.
+        let mut inside: HashSet<ColliderHandle> = HashSet::new();
+        loop {
             let predicate = |h: ColliderHandle, _: &rapier3d::prelude::Collider| {
                 listed.contains(&h) == query.include && !inside.contains(&h)
             };
@@ -576,7 +574,7 @@ impl PhysicsWorld {
             let normal = from_vector(hit.normal);
             if normal.magnitude() < 0.5 {
                 // Started inside this collider (distance 0, no normal): look past it.
-                inside.push(handle);
+                inside.insert(handle);
                 continue;
             }
             let instance = *self.owners.get(&handle)?;
@@ -588,7 +586,6 @@ impl PhysicsWorld {
                 distance,
             });
         }
-        None
     }
 
     /// The collider of a synced part.
