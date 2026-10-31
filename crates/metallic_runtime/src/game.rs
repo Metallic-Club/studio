@@ -242,15 +242,19 @@ impl Game {
     /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`crate::TICK`]
     /// (an accumulator carries the remainder; `dt` is clamped to [`MAX_FRAME_DT`], a negative or
     /// non-finite `dt` counts as 0). Each tick, in order:
-    /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches);
-    /// 2. physics step (movers, loose parts);
+    /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches),
+    ///    then the character's CPU body animation, whose pose the touch volumes use next tick;
+    /// 2. physics step (movers, loose parts); then a character that was destroyed or taken out
+    ///    of the Workspace respawns after [`metallic_physics::RESPAWN_DELAY`];
     /// 3. events fed to the scripts: part-part touches both ways, character touches as
-    ///    `part.Touched(HumanoidRootPart)`, `Humanoid.Died`, `CharacterAdded` on respawn;
+    ///    `part.Touched(hit)` and `part.TouchEnded(hit)` with the touching body part (`LeftHand`,
+    ///    ...) or the `HumanoidRootPart`, `Humanoid.Died`, `CharacterAdded` on respawn;
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
     /// Then the skinned avatar follows the character (pose, smoothed facing, animation over `dt`)
-    /// and the camera follows too. Draw with [`Game::render`] and [`crate::gui::paint`].
+    /// and the camera follows too. (The touch volumes follow the tick-rate body animation of
+    /// step 1, which the avatar's animation matches.) Draw with [`Game::render`] and [`crate::gui::paint`].
     pub fn frame(&mut self, input: &FrameInput, dt: f64) -> FrameOutput {
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_FRAME_DT)
@@ -351,7 +355,7 @@ impl Game {
         self.gui_inset
     }
 
-    /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
+    /// Draws the local player's GUI with `painter`, shaded by hover and press (see [`crate::gui`]).
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.simulation.world.try_borrow() {
             let input = &self.gui_input;
