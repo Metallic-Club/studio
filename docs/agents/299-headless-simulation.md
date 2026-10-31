@@ -124,8 +124,41 @@ No stubs, copied unmerged branches, registry changes or feature removals were us
 The full runtime Role/NetDriver/client-Game work remains issue 336, blocked on the
 separate foundations; this does not complete A3 or accept M2.
 
-Slot two is explicitly granted for CPU-only and default runtime no-run prebuilds
-and graph-policy checks, with four build jobs and guarded lane121 ownership.
-Report each compile result; no actual Lua until a separately released window.
-Old 893ff3e green results do not validate this merged tree. No own-PR merge or
-remote machine changes.
+The compatibility source is pinned at merge commit
+`3d67ed509b439acf8499d107e883132c67d24a6c` with parents 893ff3e and d1eecce.
+No later main changes are included. Fresh guarded lane121 checks use four build
+jobs; actual Lua suites run serially in separately coordinated windows.
+
+- CPU-only prebuild passed in 28.74s; default runtime prebuild passed in 40.61s.
+- Full workspace no-run prebuild passed in 5m21s. Strict workspace all-target
+  Clippy passed in 1m11s.
+- `cargo test --workspace --locked -j 4 -- --test-threads=1` exited zero:
+  1,234 passed, zero failed, six existing ignored tests across 112 result groups,
+  including doc tests. Both complete Parkour routes, the seven Simulation cases,
+  both runner cases, four input allocation cases, five input script cases and six
+  physics membership cases passed. The six ignores remain three window-opening
+  tests, two manual property-getter probes and one manual real-budget pattern probe.
+- After the default workspace run, the CPU configuration was explicitly refreshed
+  with a no-run check (6.13s), then all 18 selected library/CLI/runner/Simulation
+  cases passed, with zero failures or ignores. The managed actual Lua window was
+  exclusive; no concurrent managed benchmark or Lua suite ran.
+- Both Python graph-policy cases passed. The actual CPU-only normal/build graph
+  contains 86 packages and excludes the renderer, wgpu, winit, egui and gilrs.
+- CPU-only strict all-target Clippy passed in 10.19s. Final license, format and
+  whitespace checks passed. The root worker coordinator reviewed the automatic
+  merge/source preservation without an actionable blocker.
+
+Saved compatibility logs in the local temporary directory:
+`metallic-299-compat-cpu-prebuild.log`,
+`metallic-299-compat-default-prebuild.log`,
+`metallic-299-compat-workspace-prebuild.log`,
+`metallic-299-compat-clippy-final.log`,
+`metallic-299-compat-workspace-final.log`,
+`metallic-299-compat-cpu-refresh.log`,
+`metallic-299-compat-cpu-final.log`,
+`metallic-299-compat-cpu-clippy-final.log` and
+`metallic-299-compat-licenses-final.log`.
+The append-only publication changes this evidence note after the tested merge;
+production sources remain exactly 3d67ed5. Old 893ff3e results are historical;
+the checks above validate the merged source. Exact-head remote CI is checked
+after publication. No own-PR merge or remote machine changes were performed.
