@@ -9,7 +9,7 @@
 //! Replication (#305) will treat an attribute as a property-like value of its instance; the
 //! registry there must list the allowed [`Value`] types the same way [`check_attribute`] does.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::{InstanceId, World};
 use crate::CoreError;
@@ -28,11 +28,12 @@ const LOG_LIMIT: usize = 4096;
 #[derive(Clone, Default)]
 pub(super) struct Extras {
     pub(super) attributes: BTreeMap<String, Value>,
+    pub(super) tags: BTreeSet<String>,
 }
 
 impl Extras {
     fn is_empty(&self) -> bool {
-        self.attributes.is_empty()
+        self.attributes.is_empty() && self.tags.is_empty()
     }
 }
 
@@ -62,17 +63,26 @@ pub enum AttributeChanges {
     Overflow,
 }
 
-/// The bounded log of attribute changes.
-#[derive(Default)]
-pub(super) struct AttributeLog {
-    entries: VecDeque<(u64, AttributeChange)>,
+/// A bounded log of changes with sequence numbers, read by cursors.
+pub(super) struct ChangeLog<T> {
+    entries: VecDeque<(u64, T)>,
     seq: u64,
     /// Entries with a sequence number up to this were dropped.
     floor: u64,
 }
 
-impl AttributeLog {
-    fn push(&mut self, change: AttributeChange) {
+impl<T> Default for ChangeLog<T> {
+    fn default() -> Self {
+        ChangeLog {
+            entries: VecDeque::new(),
+            seq: 0,
+            floor: 0,
+        }
+    }
+}
+
+impl<T: Clone> ChangeLog<T> {
+    fn push(&mut self, change: T) {
         self.seq += 1;
         self.entries.push_back((self.seq, change));
         if self.entries.len() > LOG_LIMIT {
@@ -81,7 +91,25 @@ impl AttributeLog {
             self.entries.drain(..cut);
         }
     }
+
+    /// The entries after sequence number `seq`, or `None` when the log was cut past it.
+    fn since(&self, seq: u64) -> Option<Vec<T>> {
+        if seq < self.floor {
+            return None;
+        }
+        let start = self.entries.partition_point(|(s, _)| *s <= seq);
+        Some(
+            self.entries
+                .iter()
+                .skip(start)
+                .map(|(_, c)| c.clone())
+                .collect(),
+        )
+    }
 }
+
+pub(super) type AttributeLog = ChangeLog<AttributeChange>;
+pub(super) type TagLog = ChangeLog<TagChange>;
 
 /// Whether `name` is a valid attribute name: 1 to [`MAX_ATTRIBUTE_NAME`] bytes of ASCII letters,
 /// digits and underscores, and not starting with `RBX` (reserved, any case).
@@ -216,12 +244,267 @@ impl World {
         cursor: AttributeCursor,
     ) -> (AttributeChanges, AttributeCursor) {
         let now = self.attribute_cursor();
-        if cursor.world != self.uid || cursor.seq < self.attribute_log.floor {
+        if cursor.world != self.uid {
             return (AttributeChanges::Overflow, now);
         }
-        let log = &self.attribute_log.entries;
-        let start = log.partition_point(|(seq, _)| *seq <= cursor.seq);
-        let changes = log.iter().skip(start).map(|(_, c)| c.clone()).collect();
-        (AttributeChanges::Changes(changes), now)
+        match self.attribute_log.since(cursor.seq) {
+            Some(changes) => (AttributeChanges::Changes(changes), now),
+            None => (AttributeChanges::Overflow, now),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tags
+
+/// Longest tag, in bytes.
+pub const MAX_TAG: usize = 255;
+/// Most tags one instance can hold.
+pub const MAX_TAGS: usize = 256;
+
+/// Whether `tag` can be used: 1 to [`MAX_TAG`] bytes, no control characters.
+pub fn check_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("tags cannot be empty".into());
+    }
+    if tag.len() > MAX_TAG {
+        return Err(format!("tags are at most {MAX_TAG} bytes"));
+    }
+    if tag.chars().any(char::is_control) {
+        return Err("tags cannot contain control characters".into());
+    }
+    Ok(())
+}
+
+/// A position in a world's tag log; see [`World::tag_changes_since`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TagCursor {
+    world: u64,
+    seq: u64,
+}
+
+/// One tag that became (or stopped being) active on an instance in the game tree.
+///
+/// "Active" is Roblox's rule: the instance carries the tag and descends from a service (it is
+/// not detached). So a notice is logged when a tag is added or removed on an instance in the
+/// tree, when a tagged subtree enters the tree (reparented under a service) or leaves it
+/// (reparented to nothing or destroyed). Read [`World::has_tag`] for the current state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagChange {
+    /// The instance (it may be destroyed by now).
+    pub id: InstanceId,
+    /// The tag.
+    pub tag: String,
+    /// True when the tag became active, false when it stopped.
+    pub added: bool,
+}
+
+/// Tag changes since a [`TagCursor`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagChanges {
+    /// In order.
+    Changes(Vec<TagChange>),
+    /// The log no longer reaches the cursor (or it is from another world): reread everything.
+    Overflow,
+}
+
+impl World {
+    /// Tags `id` with `tag`. Tagging twice is fine and records nothing.
+    ///
+    /// Errors: [`CoreError::InvalidInstance`]; [`CoreError::InvalidValue`] for a bad tag (see
+    /// [`check_tag`]) or an instance that already holds [`MAX_TAGS`] tags.
+    pub fn add_tag(&mut self, id: InstanceId, tag: &str) -> Result<(), CoreError> {
+        if self.node(id).is_none() {
+            return Err(CoreError::InvalidInstance);
+        }
+        check_tag(tag).map_err(|e| invalid(tag, e))?;
+        let node = self.node_mut(id).ok_or(CoreError::InvalidInstance)?;
+        let extras = node.extras.get_or_insert_with(Default::default);
+        if extras.tags.contains(tag) {
+            return Ok(());
+        }
+        if extras.tags.len() >= MAX_TAGS {
+            if extras.is_empty() {
+                node.extras = None;
+            }
+            return Err(invalid(
+                tag,
+                format!("an instance holds at most {MAX_TAGS} tags"),
+            ));
+        }
+        extras.tags.insert(tag.to_string());
+        self.tag_index
+            .entry(tag.to_string())
+            .or_default()
+            .insert(id);
+        self.record(id);
+        if self.is_in_tree(id) {
+            self.tag_log.push(TagChange {
+                id,
+                tag: tag.to_string(),
+                added: true,
+            });
+        }
+        Ok(())
+    }
+
+    /// Removes `tag` from `id`. Removing a tag that is not there is fine.
+    ///
+    /// Errors: [`CoreError::InvalidInstance`].
+    pub fn remove_tag(&mut self, id: InstanceId, tag: &str) -> Result<(), CoreError> {
+        let node = self.node_mut(id).ok_or(CoreError::InvalidInstance)?;
+        let Some(extras) = node.extras.as_mut() else {
+            return Ok(());
+        };
+        if !extras.tags.remove(tag) {
+            return Ok(());
+        }
+        if extras.is_empty() {
+            node.extras = None;
+        }
+        if let Some(set) = self.tag_index.get_mut(tag) {
+            set.remove(&id);
+            if set.is_empty() {
+                self.tag_index.remove(tag);
+            }
+        }
+        self.record(id);
+        if self.is_in_tree(id) {
+            self.tag_log.push(TagChange {
+                id,
+                tag: tag.to_string(),
+                added: false,
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether `id` carries `tag`.
+    pub fn has_tag(&self, id: InstanceId, tag: &str) -> bool {
+        self.node(id)
+            .and_then(|n| n.extras.as_ref())
+            .is_some_and(|e| e.tags.contains(tag))
+    }
+
+    /// The tags of `id`, sorted; empty for an instance without any.
+    pub fn tags(&self, id: InstanceId) -> impl Iterator<Item = &str> {
+        self.node(id)
+            .and_then(|n| n.extras.as_ref())
+            .into_iter()
+            .flat_map(|e| e.tags.iter().map(String::as_str))
+    }
+
+    /// The instances in the game tree that carry `tag`, in id order. Looked up in an index, not
+    /// found by scanning the tree: the cost follows the number of instances with the tag.
+    pub fn tagged(&self, tag: &str) -> Vec<InstanceId> {
+        self.tag_index
+            .get(tag)
+            .map(|set| {
+                set.iter()
+                    .copied()
+                    .filter(|&id| self.is_in_tree(id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Every tag some instance carries, sorted (detached instances included).
+    pub fn all_tags(&self) -> Vec<&str> {
+        let mut all: Vec<&str> = self.tag_index.keys().map(String::as_str).collect();
+        all.sort_unstable();
+        all
+    }
+
+    /// True when `id` descends from a service (a built-in root), that is, it is part of the game
+    /// rather than a detached tree (a fresh clone, or an instance with no parent).
+    pub fn is_in_tree(&self, id: InstanceId) -> bool {
+        let mut cur = id;
+        // The depth is bounded by the number of slots; the loop cannot cycle (reparenting
+        // refuses cycles), the bound only guards against a corrupted tree.
+        for _ in 0..=self.slots.len() {
+            match self.node(cur) {
+                None => return false,
+                Some(n) => match n.parent {
+                    Some(p) => cur = p,
+                    None => return n.builtin,
+                },
+            }
+        }
+        false
+    }
+
+    /// The current end of the tag log.
+    pub fn tag_cursor(&self) -> TagCursor {
+        TagCursor {
+            world: self.uid,
+            seq: self.tag_log.seq,
+        }
+    }
+
+    /// Tag changes since `cursor` plus a cursor to continue from; like
+    /// [`World::attribute_changes_since`], every reader keeps its own cursor and the log is
+    /// bounded ([`TagChanges::Overflow`] when it no longer reaches back).
+    pub fn tag_changes_since(&self, cursor: TagCursor) -> (TagChanges, TagCursor) {
+        let now = self.tag_cursor();
+        if cursor.world != self.uid {
+            return (TagChanges::Overflow, now);
+        }
+        match self.tag_log.since(cursor.seq) {
+            Some(changes) => (TagChanges::Changes(changes), now),
+            None => (TagChanges::Overflow, now),
+        }
+    }
+
+    /// Logs every tag of the tagged instances in the subtree of `id` as active or not. Called
+    /// when the subtree enters or leaves the game tree.
+    pub(super) fn log_subtree_tags(&mut self, id: InstanceId, added: bool) {
+        let mut stack = vec![id];
+        let mut out = Vec::new();
+        while let Some(cur) = stack.pop() {
+            let Some(node) = self.node(cur) else { continue };
+            if let Some(extras) = &node.extras {
+                for tag in &extras.tags {
+                    out.push(TagChange {
+                        id: cur,
+                        tag: tag.clone(),
+                        added,
+                    });
+                }
+            }
+            stack.extend(node.children.iter().rev().copied());
+        }
+        for change in out {
+            self.tag_log.push(change);
+        }
+    }
+
+    /// Drops the tags of the subtree of `id` from the index (it is being destroyed).
+    pub(super) fn forget_subtree_tags(&mut self, id: InstanceId) {
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            let Some(node) = self.node(cur) else { continue };
+            let tags: Vec<String> = node
+                .extras
+                .as_ref()
+                .map(|e| e.tags.iter().cloned().collect())
+                .unwrap_or_default();
+            stack.extend(node.children.iter().copied());
+            for tag in tags {
+                if let Some(set) = self.tag_index.get_mut(&tag) {
+                    set.remove(&cur);
+                    if set.is_empty() {
+                        self.tag_index.remove(&tag);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Adds the tags of a freshly cloned instance to the index.
+    pub(super) fn index_tags_of(&mut self, id: InstanceId) {
+        let tags: Vec<String> = self.tags(id).map(str::to_string).collect();
+        for tag in tags {
+            self.tag_index.entry(tag).or_default().insert(id);
+        }
     }
 }

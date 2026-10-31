@@ -195,6 +195,7 @@ impl ScriptHost {
         self.deliver_input_actions();
         for side in self.sides() {
             side.state.deliver_attribute_changes();
+            side.state.deliver_tag_changes();
         }
 
         let run_service = self

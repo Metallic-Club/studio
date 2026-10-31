@@ -361,3 +361,70 @@ fn attributes_follow_delete_undo_and_duplicate() {
         Some(&Value::String("Red".into()))
     );
 }
+
+#[test]
+fn tag_commands_undo_and_redo_with_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let add = Command::SetTag {
+        id: a,
+        tag: "Lava".into(),
+        on: true,
+    };
+    assert_eq!(add.name(&s.world), "Add tag Lava to A");
+    s.apply(add).unwrap();
+    assert!(s.world.has_tag(a, "Lava"));
+    assert_eq!(s.world.tagged("Lava"), [a]);
+    let remove = Command::SetTag {
+        id: a,
+        tag: "Lava".into(),
+        on: false,
+    };
+    assert_eq!(remove.name(&s.world), "Remove tag Lava from A");
+    s.apply(remove).unwrap();
+    assert!(!s.world.has_tag(a, "Lava"));
+    s.undo();
+    assert!(s.world.has_tag(a, "Lava"));
+    s.undo();
+    assert!(!s.world.has_tag(a, "Lava"));
+    s.redo();
+    assert!(s.world.has_tag(a, "Lava"));
+    assert!(
+        s.apply(Command::SetTag {
+            id: a,
+            tag: String::new(),
+            on: true,
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn tags_follow_delete_undo_and_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    s.apply(Command::SetTag {
+        id: a,
+        tag: "Checkpoint".into(),
+        on: true,
+    })
+    .unwrap();
+    s.selection.select_only(a);
+    s.duplicate_selection();
+    assert_eq!(
+        s.world.tagged("Checkpoint").len(),
+        2,
+        "the copy is tagged too"
+    );
+    s.selection.select_only(a);
+    s.delete_selection();
+    assert_eq!(
+        s.world.tagged("Checkpoint").len(),
+        1,
+        "deleting takes it out"
+    );
+    s.undo();
+    assert_eq!(s.world.tagged("Checkpoint").len(), 2, "undo puts it back");
+}
