@@ -24,6 +24,8 @@ use super::instance::LuaInstance;
 use super::signals::{EventKind, LuaSignal};
 use super::{ApiState, errors, lua_error};
 
+/// Changes read from the world's log at a time.
+const PAGE: usize = 256;
 /// Most distinct tags one VM makes signals for.
 const MAX_SIGNAL_TAGS: usize = 4096;
 
@@ -281,44 +283,62 @@ impl ApiState {
     /// Fires the tag signals for what changed in the world since this VM last looked. Called
     /// once per `step`.
     pub(crate) fn deliver_tag_changes(self: &Rc<Self>) {
-        let (list, carrier) = {
-            let Ok(world) = self.world() else { return };
-            let cursor = self.tags.cursor.get();
-            if cursor == world.tag_cursor() {
-                return;
-            }
-            let (changes, next) = world.tag_changes_since(cursor);
-            self.tags.cursor.set(next);
-            let Some(carrier) = world.root("RunService") else {
-                return;
-            };
-            match changes {
-                // The log is trimmed by its readers, so this needs hundreds of thousands of
-                // unread changes: say so instead of dropping the events silently.
-                TagChanges::Overflow => {
-                    self.sink
-                        .warn("tag events were lost: too many tag changes in one step");
+        // Only what was logged before this step: changes that handlers make wait for the next.
+        let Ok(until) = self.world().map(|w| w.tag_cursor()) else {
+            return;
+        };
+        loop {
+            let (page, cursor, carrier) = {
+                let Ok(world) = self.world() else { return };
+                let cursor = self.tags.cursor.get();
+                let left = cursor.changes_until(until);
+                if left == 0 {
                     return;
                 }
-                TagChanges::Changes(list) => (list, carrier),
-            }
-        };
-        for change in list {
-            let named = self.tags.names.borrow().get(&change.tag).copied();
-            let Some(name) = named else { continue };
-            let kind = if change.added {
-                EventKind::TagAdded(name)
-            } else {
-                EventKind::TagRemoved(name)
+                let Some(carrier) = world.root("RunService") else {
+                    return;
+                };
+                match world.tag_changes_page(cursor, left.min(PAGE)) {
+                    // The log is trimmed by its readers, so this needs hundreds of thousands of
+                    // unread changes: say so instead of dropping the events silently.
+                    TagChanges::Overflow => {
+                        self.tags.cursor.set(world.tag_cursor());
+                        self.sink
+                            .warn("tag events were lost: too many tag changes in one step");
+                        return;
+                    }
+                    TagChanges::Changes(page) => (page, cursor, carrier),
+                }
             };
-            // A removal is delivered with the destroyed instance too; an addition only while
-            // the instance still exists.
-            if change.added && !self.world().is_ok_and(|w| w.is_alive(change.id)) {
-                continue;
+            let mut handled = 0;
+            for change in &page {
+                let named = self.tags.names.borrow().get(&change.tag).copied();
+                if let Some(name) = named {
+                    let kind = if change.added {
+                        EventKind::TagAdded(name)
+                    } else {
+                        EventKind::TagRemoved(name)
+                    };
+                    let key = (carrier, kind);
+                    if !self.lifecycle_room(self.handler_count(key)) {
+                        break;
+                    }
+                    // A removal is delivered with the destroyed instance too; an addition only
+                    // while the instance still exists.
+                    let skip = change.added && !self.world().is_ok_and(|w| w.is_alive(change.id));
+                    if !skip && self.handler_count(key) > 0 {
+                        self.fire(key, &|lua| {
+                            Ok(vec![Value::UserData(self.wrap(lua, change.id)?)])
+                        });
+                    }
+                }
+                handled += 1;
             }
-            self.fire((carrier, kind), &|lua| {
-                Ok(vec![Value::UserData(self.wrap(lua, change.id)?)])
-            });
+            self.tags.cursor.set(cursor.after(handled));
+            if handled < page.len() {
+                // Out of time or queue room: the rest is delivered in the next steps, in order.
+                return;
+            }
         }
     }
 }

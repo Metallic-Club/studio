@@ -386,3 +386,68 @@ fn a_big_burst_of_changes_is_kept_and_a_trim_drops_only_what_was_read() {
         AttributeChanges::Changes(c) if c.len() == 1
     ));
 }
+
+#[test]
+fn pages_follow_the_cursor_and_a_burst_gives_its_memory_back() {
+    let (mut w, p) = world_with_part();
+    let start = w.attribute_cursor();
+    for i in 0..200_000 {
+        w.set_attribute(p, "N", Value::Number(f64::from(i)))
+            .unwrap();
+    }
+    let grown = w.change_log_capacity();
+    assert!(grown >= 200_000, "the burst needed room: {grown}");
+    // Pages come oldest first, and a reader that handled n of them continues at `after(n)`.
+    let AttributeChanges::Changes(first) = w.attribute_changes_page(start, 3) else {
+        panic!("overflow")
+    };
+    assert_eq!(first.len(), 3);
+    assert_eq!(start.changes_until(w.attribute_cursor()), 200_000);
+    let next = start.after(3);
+    let AttributeChanges::Changes(second) = w.attribute_changes_page(next, 5) else {
+        panic!("overflow")
+    };
+    assert_eq!(second.len(), 5);
+    let AttributeChanges::Changes(rest) = w.attribute_changes_page(next, usize::MAX) else {
+        panic!("overflow")
+    };
+    assert_eq!(rest.len(), 200_000 - 3);
+    // Everyone read everything: the entries go and so does the room.
+    let now = w.attribute_cursor();
+    w.trim_attribute_log(&[now]);
+    w.set_attribute(p, "N", Value::Number(-1.0)).unwrap();
+    let now = w.attribute_cursor();
+    w.trim_attribute_log(&[now]);
+    assert!(
+        w.change_log_capacity() < 10_000,
+        "capacity after the trim: {}",
+        w.change_log_capacity()
+    );
+    // The log still works afterwards.
+    let c = w.attribute_cursor();
+    w.set_attribute(p, "N", Value::Number(-2.0)).unwrap();
+    assert!(matches!(
+        w.attribute_changes_since(c).0,
+        AttributeChanges::Changes(l) if l.len() == 1
+    ));
+}
+
+#[test]
+fn clear_change_logs_empties_both_logs() {
+    let (mut w, p) = world_with_part();
+    let a = w.attribute_cursor();
+    let t = w.tag_cursor();
+    for i in 0..1000 {
+        w.set_attribute(p, "N", Value::Number(f64::from(i)))
+            .unwrap();
+    }
+    w.add_tag(p, "T").unwrap();
+    w.clear_change_logs();
+    assert_eq!(w.attribute_changes_since(a).0, AttributeChanges::Overflow);
+    assert_eq!(w.tag_changes_since(t).0, TagChanges::Overflow);
+    let a = w.attribute_cursor();
+    assert!(matches!(
+        w.attribute_changes_since(a).0,
+        AttributeChanges::Changes(l) if l.is_empty()
+    ));
+}

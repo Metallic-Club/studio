@@ -510,3 +510,42 @@ fn undoing_a_redundant_add_tag_keeps_the_tag() {
     s.undo();
     assert!(s.world.has_tag(a, "Lava"), "a real remove is still undone");
 }
+
+#[test]
+fn the_edit_world_does_not_keep_attribute_and_tag_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let start = s.world.attribute_cursor();
+    let tags = s.world.tag_cursor();
+    for i in 0..300 {
+        s.apply(Command::SetAttribute {
+            id: a,
+            name: "N".into(),
+            old: if i == 0 {
+                Value::Nil
+            } else {
+                Value::Number(f64::from(i - 1))
+            },
+            new: Value::Number(f64::from(i)),
+        })
+        .unwrap();
+    }
+    s.apply(Command::SetTag {
+        id: a,
+        tag: "T".into(),
+        on: true,
+        changed: false,
+    })
+    .unwrap();
+    assert_eq!(
+        s.world.attribute_changes_since(start).0,
+        metallic_core::AttributeChanges::Overflow,
+        "nothing reads the log, so the edits were not kept"
+    );
+    assert_eq!(
+        s.world.tag_changes_since(tags).0,
+        metallic_core::TagChanges::Overflow
+    );
+    assert!(s.world.change_log_capacity() < 10_000);
+}

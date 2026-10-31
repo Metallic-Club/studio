@@ -26,6 +26,8 @@ use super::instance::LuaInstance;
 use super::signals::{EventKind, LuaSignal};
 use super::{ApiState, errors, lua_error};
 
+/// Changes read from the world's log at a time.
+const PAGE: usize = 256;
 /// Most distinct attribute names one VM makes signals for.
 const MAX_SIGNAL_NAMES: usize = 4096;
 
@@ -169,38 +171,55 @@ impl ApiState {
     /// Fires `AttributeChanged` and `GetAttributeChangedSignal` handlers for what changed in the
     /// world since this VM last looked. Called once per `step`.
     pub(crate) fn deliver_attribute_changes(self: &Rc<Self>) {
-        let list = {
-            let Ok(world) = self.world() else { return };
-            let cursor = self.attributes.cursor.get();
-            if cursor == world.attribute_cursor() {
-                return;
-            }
-            let (changes, next) = world.attribute_changes_since(cursor);
-            self.attributes.cursor.set(next);
-            match changes {
-                // The log is trimmed by its readers, so this needs hundreds of thousands of
-                // unread changes: say so instead of dropping the events silently.
-                AttributeChanges::Overflow => {
-                    self.sink.warn(
-                        "attribute change events were lost: too many attribute changes in one step",
-                    );
+        // Only what was logged before this step: changes that handlers make wait for the next.
+        let Ok(until) = self.world().map(|w| w.attribute_cursor()) else {
+            return;
+        };
+        loop {
+            let (page, cursor) = {
+                let Ok(world) = self.world() else { return };
+                let cursor = self.attributes.cursor.get();
+                let left = cursor.changes_until(until);
+                if left == 0 {
                     return;
                 }
-                AttributeChanges::Changes(list) => list
-                    .into_iter()
-                    .filter(|c| world.is_alive(c.id))
-                    .collect::<Vec<_>>(),
+                match world.attribute_changes_page(cursor, left.min(PAGE)) {
+                    // The log is trimmed by its readers, so this needs hundreds of thousands of
+                    // unread changes: say so instead of dropping the events silently.
+                    AttributeChanges::Overflow => {
+                        self.attributes.cursor.set(world.attribute_cursor());
+                        self.sink.warn(
+                            "attribute change events were lost: too many attribute changes in one step",
+                        );
+                        return;
+                    }
+                    AttributeChanges::Changes(page) => (page, cursor),
+                }
+            };
+            let mut handled = 0;
+            for change in &page {
+                let named = self.attributes.names.borrow().get(&change.name).copied();
+                let any = (change.id, EventKind::AttributeChanged(0));
+                let specific = named.map(|id| (change.id, EventKind::AttributeChanged(id)));
+                let handlers =
+                    self.handler_count(any) + specific.map_or(0, |k| self.handler_count(k));
+                if !self.lifecycle_room(handlers) {
+                    break;
+                }
+                if handlers > 0 && self.world().is_ok_and(|w| w.is_alive(change.id)) {
+                    self.fire(any, &|lua| {
+                        Ok(vec![Value::String(lua.create_string(&change.name)?)])
+                    });
+                    if let Some(key) = specific {
+                        self.fire(key, &|_| Ok(Vec::new()));
+                    }
+                }
+                handled += 1;
             }
-        };
-        for change in list {
-            self.fire((change.id, EventKind::AttributeChanged(0)), &|lua| {
-                Ok(vec![Value::String(lua.create_string(&change.name)?)])
-            });
-            let named = self.attributes.names.borrow().get(&change.name).copied();
-            if let Some(id) = named {
-                self.fire((change.id, EventKind::AttributeChanged(id)), &|_| {
-                    Ok(Vec::new())
-                });
+            self.attributes.cursor.set(cursor.after(handled));
+            if handled < page.len() {
+                // Out of time or queue room: the rest is delivered in the next steps, in order.
+                return;
             }
         }
     }
