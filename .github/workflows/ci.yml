@@ -18,6 +18,11 @@ jobs:
           python-version: '3.12'
       - name: Build lane guard tests (POSIX lock and symlinks)
         run: python -I tools/test_cargo_lane.py
+      # The Launcher pages' WOFF2 fonts must match Studio's TTFs (same versions as the committed output).
+      - name: Web fonts are up to date
+        run: |
+          python -m pip install --disable-pip-version-check fonttools==4.68.0 brotli==1.2.1
+          python -I tools/gen_web_fonts.py --check
 
   check:
     runs-on: windows-latest

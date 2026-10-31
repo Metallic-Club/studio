@@ -11,7 +11,8 @@
 //!
 //! Character reach, for tuning: walking 16 studs/s and jumping 50 studs/s gives 0.51 s in the air
 //! and about 8 studs of horizontal travel on the flat (12 when running); the jump apex is 6.4
-//! studs. Gaps here are 3 to 7 studs edge to edge and steps up at most 1.5 studs.
+//! studs. Gaps here are 3 to 7 studs edge to edge and steps up at most 3 studs (the tower; 2 elsewhere).
+//! Every walkable top is a whole stud, so 1-stud slabs have their faces on the grid (spec 2.2).
 mod level;
 mod scripts;
 

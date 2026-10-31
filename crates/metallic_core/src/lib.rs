@@ -16,6 +16,7 @@ pub mod classes;
 mod instance;
 pub mod lighting;
 pub mod look_override;
+pub mod replication;
 mod scene_file;
 mod signal;
 pub mod transform;
@@ -30,7 +31,7 @@ pub use instance::{
 };
 pub use scene_file::{load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
-pub use value::{Color3, UDim2, Value, ValueType, Vec3};
+pub use value::{Color3, UDim2, Value, ValueType, Vec3, orientation_to_quat, quat_to_orientation};
 
 /// Errors returned by the core crate.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
