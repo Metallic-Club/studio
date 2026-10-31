@@ -31,6 +31,13 @@ pub enum Changes {
 }
 
 /// Stable handle to an instance. Generational: a destroyed instance's id never becomes valid again.
+///
+/// An id is local to the [`World`] that made it: an index and a generation, with no record of
+/// which world it came from. Two independent worlds hand out the same ids in the same order, so an
+/// id from one world can equal a live id in another and then refers to that world's instance.
+/// [`World::deep_clone`] keeps ids on purpose. An id that does not resolve in a world (never
+/// allocated there, destroyed or stale) is inert there: reads fail with
+/// [`CoreError::InvalidInstance`](crate::CoreError::InvalidInstance) and its signals never fire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct InstanceId {
     index: u32,
@@ -456,8 +463,8 @@ impl World {
     /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`],
     /// [`CoreError::TypeMismatch`] (wrong value type), [`CoreError::InvalidValue`] (e.g. unknown
     /// material or a non-finite Number/Vector3/Color3/UDim2 component). Rejected writes change
-    /// neither properties, the change journal, nor signals. Numeric ranges remain defined by
-    /// existing registry constraints. Fires `property_changed` when an accepted value changes.
+    /// neither properties, the change journal, nor signals. Properties with a registry range
+    /// ([`crate::classes::NumRange`]) are clamped (or wrapped) into it. Fires `property_changed` when an accepted value changes.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
         let class = self.node(id).ok_or(CoreError::InvalidInstance)?.class;
         let def = find_property(class, prop).ok_or_else(|| CoreError::UnknownProperty {
@@ -477,6 +484,12 @@ impl World {
                 reason: "all numeric components must be finite".into(),
             });
         }
+        // Lighting and effect numbers are brought into their sane range (1e39 would overflow
+        // the renderer's f32 math).
+        let value = match def.range {
+            Some(range) => range.apply(value),
+            None => value,
+        };
         if let (Some(allowed), Value::String(s)) = (def.allowed, &value)
             && !allowed.contains(&s.as_str())
         {
@@ -508,8 +521,10 @@ impl World {
 
     /// The signal fired with the new value when `prop` of `id` changes (created on first use).
     ///
-    /// `id` and `prop` are not validated: for a destroyed, stale or foreign id the signal never
-    /// fires and is discarded by the next [`World::destroy`].
+    /// `id` and `prop` are not validated. If `id` does not resolve in this world (never allocated
+    /// here, destroyed or stale), the signal never fires and is discarded by the next
+    /// [`World::destroy`]. Ids are world-local ([`InstanceId`]), so an id taken from another world
+    /// that equals a live id here connects to this world's instance, and the signal fires for it.
     pub fn property_changed(&mut self, id: InstanceId, prop: &str) -> &mut Signal<Value> {
         self.prop_signals.entry((id, prop.to_string())).or_default()
     }

@@ -1,4 +1,4 @@
-//! The Roblox-named Luau API: `game`, `workspace`, `Instance`, the datatypes, services,
+//! The Roblox-named Luau API: `game`, `workspace`, `Instance`, the datatypes (with `CFrame`), services,
 //! signals and `RemoteEvent`.
 //!
 //! Every VM gets one [`ApiState`] that the userdata and functions of this module share. It
@@ -6,10 +6,12 @@
 //! keeps a `World` borrow while Lua code runs: handlers may change the world, so the host
 //! collects what to call, releases the borrow and only then calls into Lua.
 
+mod cframe;
 mod datatypes;
 mod errors;
 mod input;
 mod instance;
+mod pivot;
 mod remote;
 mod services;
 mod signals;
@@ -25,7 +27,7 @@ use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error
 
 pub use input::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
-    MAX_ACTION_EVENTS_PER_STEP, USER_INPUT_TYPES,
+    MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
 };
 pub(crate) use remote::{QueuedRemote, RemoteTarget};
 pub(crate) use signals::{EventKind, Hub, Pacing};
@@ -130,6 +132,7 @@ fn build(
     let mut raw = instance::methods(lua, &waiters, &now)?;
     raw.extend(services::methods(lua)?);
     raw.extend(remote::methods(lua)?);
+    raw.extend(pivot::methods(lua)?);
     raw.extend(input::action_methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
@@ -173,6 +176,7 @@ fn build(
         mlua::Value::Table(instance::constructor(lua, &state)?),
     )
     .map_err(to_err)?;
+    set("CFrame", mlua::Value::Table(cframe::constructor(lua)?)).map_err(to_err)?;
     for (name, table) in datatypes::constructors(lua)? {
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }

@@ -1,10 +1,7 @@
 use metallic_core::*;
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join("metallic_core_tests");
-    std::fs::create_dir_all(&d).unwrap();
-    d.join(name)
-}
+mod common;
+use common::TestDir;
 
 fn sample() -> (World, InstanceId) {
     let mut w = World::new_with_services();
@@ -35,9 +32,10 @@ fn sample() -> (World, InstanceId) {
 
 #[test]
 fn scene_round_trip_is_equal() {
+    let dir = TestDir::new("scene_round_trip_is_equal");
     let (w, _) = sample();
-    let a = tmp("rt_a.ron");
-    let b = tmp("rt_b.ron");
+    let a = dir.file("rt_a.ron");
+    let b = dir.file("rt_b.ron");
     save_scene(&w, &a).unwrap();
     let w2 = load_scene(&a).unwrap();
     save_scene(&w2, &b).unwrap();
@@ -64,9 +62,10 @@ fn scene_round_trip_is_equal() {
 
 #[test]
 fn scene_file_is_diff_friendly() {
+    let dir = TestDir::new("scene_file_is_diff_friendly");
     let (mut w, p) = sample();
-    let a = tmp("df_a.ron");
-    let b = tmp("df_b.ron");
+    let a = dir.file("df_a.ron");
+    let b = dir.file("df_b.ron");
     save_scene(&w, &a).unwrap();
     w.set(p, "Position", Value::Vector3(Vec3::new(9.0, 2.5, -3.0)))
         .unwrap();
@@ -83,20 +82,22 @@ fn scene_file_is_diff_friendly() {
 
 #[test]
 fn load_errors_are_reported() {
-    let f = tmp("bad.ron");
+    let dir = TestDir::new("load_errors_are_reported");
+    let f = dir.file("bad.ron");
     std::fs::write(&f, "(version: 1, roots: [(class: \"Nope\")])").unwrap();
     assert!(load_scene(&f).is_err());
     std::fs::write(&f, "garbage").unwrap();
     assert!(matches!(load_scene(&f), Err(CoreError::Scene(_))));
     assert!(matches!(
-        load_scene(&tmp("missing_zzz.ron")),
+        load_scene(&dir.file("missing_zzz.ron")),
         Err(CoreError::Io(_))
     ));
 }
 
 #[test]
 fn load_refuses_non_builtin_services_and_abstract_classes() {
-    let f = tmp("plain_service.ron");
+    let dir = TestDir::new("load_refuses_non_builtin_services");
+    let f = dir.file("plain_service.ron");
     for class in ["Workspace", "Instance", "BasePart"] {
         std::fs::write(&f, format!("(version: 1, roots: [(class: \"{class}\")])")).unwrap();
         assert_eq!(
@@ -105,4 +106,32 @@ fn load_refuses_non_builtin_services_and_abstract_classes() {
             "{class}"
         );
     }
+}
+
+#[test]
+fn pivots_and_scale_survive_a_save() {
+    let dir = TestDir::new("pivots_and_scale_survive_a_save");
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").unwrap();
+    let m = w.create("Model", Some(ws)).unwrap();
+    let p = w.create("Part", Some(m)).unwrap();
+    let offset =
+        CFrame::from_position(Vec3::new(0.0, -1.0, 0.0)) * CFrame::from_euler_xyz(0.1, 0.2, 0.3);
+    w.set(p, "PivotOffset", Value::CFrame(Box::new(offset)))
+        .unwrap();
+    w.set(m, "PrimaryPart", Value::Ref(Some(p))).unwrap();
+    transform::set_world_pivot(&mut w, m, CFrame::from_position(Vec3::new(4.0, 5.0, 6.0))).unwrap();
+    transform::scale_to(&mut w, m, 2.0).unwrap();
+    let path = dir.file("pivots.ron");
+    save_scene(&w, &path).unwrap();
+    let w2 = load_scene(&path).unwrap();
+    let m2 = w2.children(w2.root("Workspace").unwrap())[0];
+    let p2 = w2.children(m2)[0];
+    assert_eq!(transform::get_pivot(&w2, m2), transform::get_pivot(&w, m));
+    assert_eq!(
+        transform::world_pivot(&w2, m2),
+        transform::world_pivot(&w, m)
+    );
+    assert_eq!(transform::model_scale(&w2, m2), 2.0);
+    assert_eq!(w2.get(m2, "PrimaryPart").unwrap(), Value::Ref(Some(p2)));
 }

@@ -448,3 +448,31 @@ fn rotating_anchored_platform_carries_rider() {
     let turned = (-p.z).atan2(p.x).to_degrees();
     assert!(turned > 45.0, "rider turned {turned} deg, at {p:?}");
 }
+
+#[test]
+fn replica_physics_never_moves_loose_parts() {
+    let mut world = World::new_with_services();
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 20.0, 0.0),
+        Vec3::new(4.0, 1.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new_replica();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 1.0);
+    assert_eq!(pos(&world, p), Vec3::new(0.0, 20.0, 0.0));
+    let hit = phys
+        .raycast(Vec3::new(0.0, 30.0, 0.0), Vec3::new(0.0, -30.0, 0.0), &[])
+        .expect("ray hits the loose part");
+    assert_eq!(hit.instance, p);
+    // It follows the World when the replication layer moves it.
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(50.0, 20.0, 0.0)))
+        .unwrap();
+    run(&mut phys, &mut world, 0.1);
+    assert!(
+        phys.raycast(Vec3::new(50.0, 30.0, 0.0), Vec3::new(0.0, -30.0, 0.0), &[])
+            .is_some()
+    );
+}

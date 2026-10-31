@@ -82,10 +82,15 @@
   --cut-md: 10px;
   --cut-lg: 14px;
 
+  --h-row: 24px;
+  --h-control: 32px;
+  --h-control-lg: 36px;
+
   --font: 'Archivo', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
 
   --shadow-pop: 0px 8px 24px 0px rgba(0,0,0,0.45);
+  --shadow-modal: 0px 16px 48px 0px rgba(0,0,0,0.55);
 
   --t-fast: 90ms;
   --t-base: 140ms;
