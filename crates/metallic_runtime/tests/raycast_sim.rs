@@ -43,6 +43,7 @@ fn run(mut world: World, source: &str, ticks: usize) -> Vec<String> {
     for _ in 0..ticks {
         sim.tick_once(&[]);
     }
+    #[allow(clippy::let_and_return)] // the Ref must drop before `output`
     let lines = output.0.borrow().clone();
     lines
 }
