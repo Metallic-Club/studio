@@ -44,6 +44,8 @@ pub(crate) enum EventKind {
     CharacterAdded,
     /// `Players.PlayerAdded(player)`
     PlayerAdded,
+    /// `Players.PlayerRemoving(player)`
+    PlayerRemoving,
     /// `RunService.Heartbeat(dt)`
     Heartbeat,
     /// `RemoteEvent.OnServerEvent(player, ...)`
@@ -172,7 +174,31 @@ pub(crate) struct Pacing {
     args_built: Cell<u64>,
 }
 
+/// Ends only a dispatch budget established by its own external lifecycle call.
+pub(crate) struct DispatchBudget<'a> {
+    state: &'a ApiState,
+    owned: bool,
+}
+
+impl Drop for DispatchBudget<'_> {
+    fn drop(&mut self) {
+        if self.owned {
+            self.state.end_step();
+        }
+    }
+}
+
 impl ApiState {
+    /// Uses an active/held frame deadline, or establishes the ordinary aggregate deadline
+    /// for a call outside step. Dropping the guard never clears a caller-owned deadline.
+    pub(crate) fn dispatch_budget(&self) -> DispatchBudget<'_> {
+        let owned = self.pacing.deadline.get().is_none();
+        if owned {
+            self.restart_step();
+        }
+        DispatchBudget { state: self, owned }
+    }
+
     /// Starts the time budget of one `step`.
     pub(crate) fn begin_step(&self) {
         if self.pacing.keep_deadline.replace(false) {
