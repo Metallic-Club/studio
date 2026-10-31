@@ -30,7 +30,9 @@ After binding, the next step runs enabled LocalScripts under the existing
 StarterPlayerScripts path, the local Player's PlayerGui, or its current Character.
 Another Player's private GUI and server Scripts do not run in this Client VM.
 Rebinding cancels old client-owned tasks/connections and reruns eligible scripts in the
-new context. Character-reference or ownership changes recheck eligibility without
+new context. Pending action and GUI input from the old binding is discarded; assigning
+the same valid binding is a no-op and retains its queued input. Local removal or an
+invalidated binding also clears pending GUI input. Character-reference or ownership changes recheck eligibility without
 restarting unrelated starter/GUI scripts. This is execution policy over a trusted World,
 not authentication or replication filtering.
 Client input/lifecycle dispatch also prunes invalid owners before executing handlers.

@@ -100,7 +100,9 @@ apps.
   running-script bookkeeping. This adds no transport, player admission, server executable or M2 acceptance.
   `with_role` also selects Client-only execution with deferred trusted local-Player binding. Client eligibility
   follows its own PlayerGui/current Character plus the existing starter-script path; rebinding cancels old owned
-  work. Explicit `add_player`/`remove_player` manage the host roster and Added/Removing events with normal budgets.
+  work and clears pending action/GUI input from the previous binding; a same-binding no-op retains valid input.
+  Local removal or binding invalidation also clears queued GUI events. Explicit `add_player`/`remove_player`
+  manage the host roster and Added/Removing events with normal budgets.
   World-local handles are validated; the caller owns Player/Character destruction after Removing and before the
   next step. Stop/restart recreates VM/session work and validates retained registrations/binding without name-based revival.
   The host exposes the Roblox-named API
