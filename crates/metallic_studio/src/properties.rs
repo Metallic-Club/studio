@@ -4,15 +4,16 @@
 //! Behaviour. Values that differ across a multi-selection show "Mixed". Number fields scrub on
 //! drag and accept expressions (`3*4`, `+2` adds to the current value, see [`crate::expr`]).
 //!
-//! **One gesture, one undo step:** while the pointer is held (scrubbing a number, dragging in the
-//! colour picker) changes write the world directly as a live preview, and the first value of each
-//! touched property is remembered. When the pointer is released the whole gesture is recorded as
-//! one step. Typed values and toggles apply at once as one step each.
+//! **One gesture, one undo step:** while the pointer is held (scrubbing a number) changes write
+//! the world directly as a live preview, and the first value of each touched property is
+//! remembered. When the pointer is released the whole gesture is recorded as one step. Typed
+//! values and toggles apply at once as one step each. A Color3 row's swatch opens the colour
+//! popover ([`crate::editor_colour`]), which previews and commits the same way.
 use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
 use metallic_core::classes::{PropDef, all_properties, find_property};
-use metallic_core::{CFrame, Color3, InstanceId, UDim2, Value, Vec3};
+use metallic_core::{CFrame, InstanceId, UDim2, Value, Vec3};
 
 use crate::commands::Command;
 use crate::editor::{EditorState, UiRequest};
@@ -50,6 +51,8 @@ pub struct Properties {
     gesture: Vec<(InstanceId, String, Value)>,
     /// Text being typed into a string field, by property name.
     text: HashMap<String, String>,
+    /// A Color3 row was clicked: the property and the swatch's rectangle.
+    colour_request: Option<(String, egui::Rect)>,
 }
 
 /// What a widget asked for this frame.
@@ -64,6 +67,12 @@ impl Properties {
     /// An empty panel.
     pub fn new() -> Properties {
         Properties::default()
+    }
+
+    /// The Color3 row clicked this frame, if any: the editor opens the colour popover
+    /// ([`crate::editor_colour`]) next to `rect` for that property.
+    pub fn take_colour_request(&mut self) -> Option<(String, egui::Rect)> {
+        self.colour_request.take()
     }
 
     /// True while a live-preview gesture is open.
@@ -309,16 +318,18 @@ impl Properties {
                     });
                 }
                 (Value::Color3(c), _) => {
-                    let mut rgb = [to_u8(c.r), to_u8(c.g), to_u8(c.b)];
-                    if ui.color_edit_button_srgb(&mut rgb).changed() {
-                        edits.push(Edit::Set(
-                            name,
-                            Value::Color3(Color3::new(
-                                f64::from(rgb[0]),
-                                f64::from(rgb[1]),
-                                f64::from(rgb[2]),
-                            )),
-                        ));
+                    let rgb = [to_u8(c.r), to_u8(c.g), to_u8(c.b)];
+                    // The swatch shows the property's own colour; a click opens the colour popover.
+                    let swatch = egui::Button::new("")
+                        .fill(egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+                        .min_size(egui::vec2(36.0, 18.0));
+                    let r = ui
+                        .add(swatch)
+                        .on_hover_text(format!("Edit {name} in the colour popover"));
+                    let label = format!("{name} swatch");
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                    if r.clicked() && !state.play.is_playing() {
+                        self.colour_request = Some((name.clone(), r.rect));
                     }
                     ui.label(
                         RichText::new(format!("{}, {}, {}", rgb[0], rgb[1], rgb[2]))

@@ -6,11 +6,18 @@
 //! keymap to actions: global keys always (except while typing in a text field, where only Save
 //! and Play keys work), viewport keys only while the pointer is over the 3D view and the right
 //! button is up (so WASD flies the camera while it is held).
+//!
+//! The building tools ([`EditorTools`]), the Input Actions dock ([`InputActionsDock`]) and the
+//! colour popover ([`ColourDock`]) live in their own modules; this file only registers them,
+//! gives them their place in the layout and calls them once per frame.
 use eframe::egui::{self, RichText};
 use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
+use crate::editor_colour::ColourDock;
+use crate::editor_input_actions::InputActionsDock;
+use crate::editor_tools::{EditorTools, ViewContext};
 use crate::explorer::Explorer;
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
@@ -52,6 +59,12 @@ pub struct EditorUi {
     pub output: OutputPanel,
     /// 3D view.
     pub viewport: Viewport,
+    /// Building tools (align, mirror, array, brush, selection modes, measure).
+    pub tools: EditorTools,
+    /// The Input Actions panel, docked on the right when open.
+    pub input_actions: InputActionsDock,
+    /// The colour popover for Color3 properties.
+    pub colour: ColourDock,
     explorer: Explorer,
     properties: Properties,
     scripts: ScriptTabs,
@@ -67,12 +80,19 @@ pub struct EditorUi {
 impl EditorUi {
     /// Builds the editor around `state`, whose Output sink must come from `output`.
     pub fn new(state: EditorState, output: OutputPanel) -> EditorUi {
+        let mut actions = default_actions();
+        let tools = EditorTools::new(&mut actions);
+        let input_actions = InputActionsDock::new(&state.world, &mut actions);
+        let colour = ColourDock::new(&state, &mut actions);
         let mut ui = EditorUi {
             state,
-            actions: default_actions(),
+            actions,
             keymap: Keymap::metallic(),
             output,
             viewport: Viewport::new(),
+            tools,
+            input_actions,
+            colour,
             explorer: Explorer::new(),
             properties: Properties::new(),
             scripts: ScriptTabs::new(),
@@ -282,14 +302,49 @@ impl EditorUi {
                         &mut self.state,
                         &self.keymap,
                     );
+                    ui.separator();
+                    self.actions.menu_items(
+                        ui,
+                        &[
+                            "select.similar",
+                            "select.mode_box",
+                            "select.mode_lasso",
+                            "select.mode_paint",
+                            "colour.open",
+                        ],
+                        &mut self.state,
+                        &self.keymap,
+                    );
                 });
                 ui.menu_button("View", |ui| {
                     self.actions.menu_items(
                         ui,
-                        &["view.frame_selection", "view.frame_all"],
+                        &[
+                            "view.frame_selection",
+                            "view.frame_all",
+                            crate::editor_input_actions::TOGGLE_ID,
+                        ],
                         &mut self.state,
                         &self.keymap,
                     );
+                });
+                ui.menu_button("Build", |ui| {
+                    self.actions.menu_items(
+                        ui,
+                        &[
+                            "build.align",
+                            "build.distribute",
+                            "build.mirror",
+                            "build.mirror_copy",
+                            "build.array",
+                            "tool.brush",
+                            "tool.measure",
+                        ],
+                        &mut self.state,
+                        &self.keymap,
+                    );
+                    ui.separator();
+                    self.tools.mirror_axis_menu(ui);
                 });
                 ui.menu_button("Insert", |ui| {
                     for &class in INSERTABLE {
@@ -333,6 +388,12 @@ impl EditorUi {
                 ui.separator();
                 self.actions
                     .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
+                ui.separator();
+                self.actions
+                    .toolbar(ui, ToolbarGroup::Build, &mut self.state, &self.keymap);
+                ui.separator();
+                self.actions
+                    .toolbar(ui, ToolbarGroup::View, &mut self.state, &self.keymap);
                 ui.separator();
                 self.actions
                     .toolbar(ui, ToolbarGroup::Play, &mut self.state, &self.keymap);
@@ -402,6 +463,18 @@ impl EditorUi {
                 ui.label(RichText::new("Properties").strong());
                 self.properties.ui(ui, &mut self.state);
             });
+        if let Some((prop, at)) = self.properties.take_colour_request() {
+            let pos = at.left_top() - egui::vec2(crate::colour::popover::WIDTH + 12.0, 120.0);
+            self.colour.open(&self.state, &prop, pos);
+        }
+        if self.input_actions.is_open() {
+            egui::Panel::right("input_actions")
+                .default_size(560.0)
+                .resizable(true)
+                .show(ui, |ui| self.input_actions.ui(ui, &mut self.state));
+        } else {
+            self.input_actions.follow_history(&mut self.state);
+        }
         egui::Panel::bottom("output")
             .default_size(200.0)
             .resizable(true)
@@ -416,12 +489,25 @@ impl EditorUi {
             let scene = self.scripts.tab_strip(ui, &mut self.state);
             if scene {
                 let before = ui.available_rect_before_wrap();
+                self.viewport.capture_pointer = self.tools.captures_pointer(&self.state);
                 self.viewport.ui(ui, &mut self.state, render_state);
                 viewport_hovered = ui.rect_contains_pointer(before);
+                let cx = ViewContext {
+                    rect: self.viewport.rect(),
+                    view: self.viewport.view(),
+                    picks: self.viewport.picks(),
+                    pointer: ui.ctx().pointer_latest_pos().filter(|_| viewport_hovered),
+                    hovered: self.viewport.hovered(),
+                };
+                self.tools.viewport(ui, &mut self.state, &cx);
             } else {
                 self.scripts.editor(ui, &mut self.state);
             }
         });
+
+        self.tools.ui(&ctx, &mut self.state);
+        self.colour
+            .show(&ctx, &mut self.state, self.viewport.hovered());
 
         let right_down = ctx.input(|i| i.pointer.secondary_down());
         self.keys(&ctx, viewport_hovered, right_down);

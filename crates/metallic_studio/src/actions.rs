@@ -39,6 +39,10 @@ pub enum ToolbarGroup {
     Settings,
     /// Undo, redo.
     Edit,
+    /// Building operations on the selection: align, mirror, array, select similar.
+    Build,
+    /// Panels that open and close (Input actions).
+    View,
     /// Play cluster (centred): play modes and Stop.
     Play,
 }
@@ -444,7 +448,9 @@ mod tests {
 
     #[test]
     fn every_bound_key_has_an_action() {
-        let r = default_actions();
+        // The editor's registry: the built-in actions plus the building tools and panels.
+        let ui = crate::editor_ui::EditorUi::new(state(), crate::output::OutputPanel::new());
+        let r = &ui.actions;
         for b in Keymap::metallic().bindings() {
             if b.action.starts_with("drag.") || b.action.starts_with("output.") {
                 continue; // handled by the viewport drag and the Output panel

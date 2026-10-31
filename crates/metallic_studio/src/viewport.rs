@@ -9,6 +9,10 @@
 //! - **Gizmos** ([`crate::gizmo`]): the active tool's handles sit at the selection's pivot. A drag
 //!   previews live by writing the world and records one undo step on release; Esc or a right
 //!   click during the drag cancels it.
+//! - **Tools that own the pointer** (brush, measure, lasso and paint select; see
+//!   [`crate::editor_tools`]) set [`Viewport::capture_pointer`] before the frame: the viewport
+//!   then still renders and navigates but leaves clicks and drags to the tool, which reads
+//!   [`Viewport::view`] and [`Viewport::picks`] and paints its overlay on top.
 use std::sync::Arc;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
@@ -123,6 +127,9 @@ pub struct Viewport {
     /// Ray pick under the pointer, reused while pointer, world and camera are unchanged, so an
     /// idle pointer does not scan every part each frame.
     hover_pick: Option<(HoverKey, Option<Hit>)>,
+    /// Set by the host each frame: a building tool owns left clicks and drags (no selection,
+    /// no gizmo).
+    pub capture_pointer: bool,
 }
 
 type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
@@ -151,7 +158,21 @@ impl Viewport {
             gpu_missing_logged: false,
             last_rect: Rect::NOTHING,
             hover_pick: None,
+            capture_pointer: false,
         }
+    }
+
+    /// The camera's projection for last frame's rectangle (screen points are relative to
+    /// [`Viewport::rect`]'s top-left corner).
+    pub fn view(&self) -> ViewProjection {
+        let r = self.last_rect;
+        self.camera
+            .view((f64::from(r.width()), f64::from(r.height())))
+    }
+
+    /// The part picker (ray casts against every part in Workspace).
+    pub fn picks(&self) -> &PickCache {
+        &self.picks
     }
 
     /// The part under the cursor last frame.
@@ -259,7 +280,11 @@ impl Viewport {
 
         let pointer = response.hover_pos();
         let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
-        let frame = self.gizmo_frame(state, &view);
+        let frame = if self.capture_pointer {
+            None
+        } else {
+            self.gizmo_frame(state, &view)
+        };
 
         // Hover: gizmo handles first, then parts.
         if self.drag.is_none() {
@@ -294,7 +319,11 @@ impl Viewport {
             state.insert_point = from_d(at);
         }
 
-        self.pointer_buttons(ui, &response, rect, &view, frame, state);
+        if self.capture_pointer {
+            self.press = Press::None;
+        } else {
+            self.pointer_buttons(ui, &response, rect, &view, frame, state);
+        }
 
         // Outlines, then the gizmo on top.
         self.paint_outlines(&painter, rect.min, &view, state);
