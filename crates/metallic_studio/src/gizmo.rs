@@ -428,6 +428,8 @@ pub struct GizmoDrag {
     resizes: bool,
     names: [PropName; 6],
     buf: Vec<SnapCandidate>,
+    /// The last frame Collisions accepted: transforms, motion and shown value.
+    held: (Vec<PartTransform>, Rigid, f64),
 }
 
 fn read_parts(world: &World, ids: &[InstanceId]) -> Vec<DragPart> {
@@ -486,6 +488,7 @@ impl GizmoDrag {
                 "WorldPivotSet".into(),
             ],
             buf: Vec::new(),
+            held: (Vec::new(), Rigid::IDENTITY, 0.0),
         }
     }
 
@@ -654,6 +657,41 @@ impl GizmoDrag {
     /// True when the drag carries a pending command (Alt-drag's duplicate).
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
+    }
+
+    /// This frame's transforms of the moved parts.
+    pub fn current(&self) -> &[PartTransform] {
+        &self.current
+    }
+
+    /// The ids of the moved parts.
+    pub fn moving(&self) -> &HashSet<InstanceId> {
+        &self.ids
+    }
+
+    /// Collisions (spec 3.1), after [`GizmoDrag::update`]: with `blocked` the drag goes back to the
+    /// last frame that was accepted (the start at first); otherwise this frame is accepted. No
+    /// allocation once the buffer has grown.
+    pub fn hold_if(&mut self, blocked: bool) {
+        let (held, motion, shown) = &mut self.held;
+        if blocked {
+            if held.len() == self.current.len() {
+                self.current.copy_from_slice(held);
+                self.motion = *motion;
+                self.shown = *shown;
+            } else {
+                for (c, p) in self.current.iter_mut().zip(&self.parts) {
+                    *c = p.start;
+                }
+                self.motion = Rigid::IDENTITY;
+                self.shown = 0.0;
+            }
+        } else {
+            held.clear();
+            held.extend_from_slice(&self.current);
+            *motion = self.motion;
+            *shown = self.shown;
+        }
     }
 
     /// The parts this drag moves.

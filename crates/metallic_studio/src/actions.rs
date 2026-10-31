@@ -201,7 +201,11 @@ impl ActionRegistry {
             } else {
                 Button::ghost(if labelled { name } else { "" })
             };
-            button = button.compact().glyph(a.icon).selected(checked);
+            button = button.compact().selected(checked);
+            // A text placeholder icon says nothing the accessory label does not (Pivot/Centre).
+            if a.accessory.is_none() || !matches!(a.icon, Icon::Text(_)) {
+                button = button.glyph(a.icon);
+            }
             if !labelled {
                 button = button.alt(&tip);
             }
@@ -221,6 +225,63 @@ impl ActionRegistry {
             }
         }
         if let Some(id) = clicked {
+            self.run(id, state);
+        }
+    }
+
+    /// Draws the actions of `group` as icon buttons with their key as a cap (the viewport
+    /// header's tools); the name is the tooltip and the accessible name.
+    pub fn icon_keys(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: ToolbarGroup,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for a in self.actions.iter().filter(|a| a.group == group) {
+            let key = keymap.label(a.id);
+            let tip = if key.is_empty() {
+                a.label.clone()
+            } else {
+                format!("{} ({key})", a.label)
+            };
+            let mut button = Button::ghost("")
+                .compact()
+                .glyph(a.icon)
+                .selected(a.is_checked(state))
+                .alt(&tip);
+            if !key.is_empty() {
+                button = button.keycap(&key);
+            }
+            if ui.add_enabled(a.is_enabled(state), button).clicked() {
+                clicked = Some(a.id);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+        }
+    }
+
+    /// Draws one action as a text toggle chip (Collisions at the header's right end).
+    pub fn chip(&mut self, ui: &mut egui::Ui, id: &str, state: &mut EditorState, keymap: &Keymap) {
+        let Some(a) = self.actions.iter().find(|a| a.id == id) else {
+            return;
+        };
+        let shortcut = keymap.label(a.id);
+        let tip = if shortcut.is_empty() {
+            a.label.clone()
+        } else {
+            format!("{} ({shortcut})", a.label)
+        };
+        let button = Button::ghost(&a.label)
+            .compact()
+            .selected(a.is_checked(state));
+        let resp = ui
+            .add_enabled(a.is_enabled(state), button)
+            .on_hover_text(&tip);
+        if resp.clicked() {
+            let id = a.id;
             self.run(id, state);
         }
     }
@@ -290,7 +351,8 @@ fn short_label(label: &str) -> &str {
 }
 
 /// An increment without trailing zeros ("0.25", "1", "11.25").
-fn fmt_step(v: f64) -> String {
+/// An increment as shown on a chip: "1", "0.25", "11.25".
+pub fn fmt_step(v: f64) -> String {
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
@@ -329,38 +391,6 @@ pub fn default_actions() -> ActionRegistry {
         )
         .checked(|s| s.snapping.grid)
         .accessory(move |ui, s| {
-            ui.menu_button(format!("{} stud", fmt_step(s.snapping.move_step)), |ui| {
-                for &step in MOVE_STEPS {
-                    if ui
-                        .selectable_label(
-                            s.snapping.move_step == step,
-                            format!("{} stud", fmt_step(step)),
-                        )
-                        .clicked()
-                    {
-                        s.snapping.move_step = step;
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Move and scale increment ([ and ])");
-            ui.menu_button(format!("{}°", fmt_step(s.snapping.rotate_step)), |ui| {
-                for &step in ROTATE_STEPS {
-                    if ui
-                        .selectable_label(
-                            s.snapping.rotate_step == step,
-                            format!("{}°", fmt_step(step)),
-                        )
-                        .clicked()
-                    {
-                        s.snapping.rotate_step = step;
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Rotate increment (Shift+[ and Shift+])");
             // Off-grid check, recomputed only when the world, selection or increments change.
             let key = (
                 s.world.change_cursor(),
@@ -420,6 +450,24 @@ pub fn default_actions() -> ActionRegistry {
     ] {
         r.register(Action::new(id, label, Icon::Snap, ToolbarGroup::Snap, flip).checked(get));
     }
+    r.register(Action::new(
+        "view.focus_context_bar",
+        "Focus the contextual toolbar",
+        Icon::Text("."),
+        ToolbarGroup::Hidden,
+        // The editor window moves the focus (it owns the bar); see `EditorUi::run_action`.
+        |_| {},
+    ));
+    r.register(
+        Action::new(
+            "snap.collisions",
+            "Collisions",
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            |s| s.snapping.collisions = !s.snapping.collisions,
+        )
+        .checked(|s| s.snapping.collisions),
+    );
     r.register(
         Action::new(
             "snap.soft",
@@ -704,6 +752,54 @@ pub fn default_actions() -> ActionRegistry {
         .enabled(|s| s.play.is_playing()),
     );
     r
+}
+
+/// A ghost chip showing an increment; a click opens the list of `steps`, the mouse wheel over it
+/// steps through them. Returns the chip and the picked step.
+pub fn step_chip(
+    ui: &mut egui::Ui,
+    text: &str,
+    tip: &str,
+    steps: &[f64],
+    unit: &str,
+    value: f64,
+) -> (egui::Response, Option<f64>) {
+    let mut picked = None;
+    let r = ui.add(Button::ghost(text).compact()).on_hover_text(tip);
+    egui::Popup::menu(&r).show(|ui| {
+        for &step in steps {
+            if ui
+                .selectable_label(value == step, format!("{}{unit}", fmt_step(step)))
+                .clicked()
+            {
+                picked = Some(step);
+                ui.close();
+            }
+        }
+    });
+    if r.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll != 0.0 {
+            picked = Some(crate::editor::next_step(steps, value, scroll > 0.0));
+        }
+    }
+    (r, picked)
+}
+
+/// The increment chips of the viewport header (spec 3.1): "1 stud" and "15°".
+pub fn increment_chips(ui: &mut egui::Ui, s: &mut EditorState) {
+    let text = format!("{} stud", fmt_step(s.snapping.move_step));
+    let tip = "Move and scale increment ([ and ]; scroll to step)";
+    let value = s.snapping.move_step;
+    if let (_, Some(step)) = step_chip(ui, &text, tip, MOVE_STEPS, " stud", value) {
+        s.snapping.move_step = step;
+    }
+    let text = format!("{}°", fmt_step(s.snapping.rotate_step));
+    let tip = "Rotate increment (Shift+[ and Shift+]; scroll to step)";
+    let value = s.snapping.rotate_step;
+    if let (_, Some(step)) = step_chip(ui, &text, tip, ROTATE_STEPS, "°", value) {
+        s.snapping.rotate_step = step;
+    }
 }
 
 #[cfg(test)]

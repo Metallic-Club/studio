@@ -1,0 +1,28 @@
+# #226 Building surfaces: header, contextual toolbar, status line, hints
+
+Branch `studio/226-building-surfaces`, from main after #337.
+
+## Done
+- Viewport header (spec 3.1): a 36 px strip over the viewport with the tools, the increment chips ("1 stud", "15°",
+  click for the list, scroll to step), World/Local, Pivot/Centre, Grid/Surface/Vertex/Edge/Align chips and
+  Collisions at the right. The top bar keeps Edit and Play.
+- Collisions (`snap.collisions`, off by default): `collisions::blocked` tests moved parts against the pick cache
+  (sphere reject, then 15-axis box test, 0.01 stud touch tolerance); `GizmoDrag::hold_if` returns the drag to the
+  last accepted frame without allocating.
+- Contextual toolbar (spec 3.2) in `context_bar.rs`: placement above / below / docked, never over the selection or
+  gizmo (test with 20 seeded camera poses), 200 ms still-pointer delay after a selection change, hidden during drags,
+  box select, camera flight and Play, 90 ms fade (`theme::motion`), Ctrl+. focus with Left/Right/Esc, View menu
+  toggle. Items: tool (cycles), increment, colour swatch (split when mixed), Align, Mirror, Array when registered,
+  More (Anchored, CanCollide, Group).
+- Status line (spec 3.3): drag readout moved to the right side next to count and size, in mono.
+- Hints (spec 14.1) in `hints.rs`: 8 hints, detectors fed by `EditorUi::watch_hints`, rules tested; card bottom-left
+  with keycap, sentence, "Show me", "Got it"; Esc dismisses; `hints.ron`; Settings "Show tips" and "Reset tips".
+
+## Coordination with #380 (`studio/wire-editor-panels`)
+The bar looks actions up by id (`colour.open`, `build.align`, `build.mirror`, `build.array`, later `material.open`,
+`style.open`) and skips missing ones; it registers none of them. Whichever of #380 and this PR merges second
+resolves the toolbar hunk in `editor_ui.rs` (this PR moved Tools/Settings/Snap into the viewport header).
+
+## Open
+- Style hint: `HintEvent::LookPicker` exists but nothing sends it until the Look picker lands.
+- Collisions in Properties edits and keyboard nudges is not covered (drags only, as the spec says).

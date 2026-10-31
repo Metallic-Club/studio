@@ -313,7 +313,10 @@ impl eframe::App for StudioApp {
                 let action = self.start.as_mut().and_then(|start| start.show(ui));
                 match action {
                     Some(StartAction::OpenProject { name, path }) => match EditorUi::open(&path) {
-                        Ok(editor) => self.phase = Phase::Opened(Box::new(editor)),
+                        Ok(mut editor) => {
+                            editor.hints = crate::hints::Hints::load_default();
+                            self.phase = Phase::Opened(Box::new(editor));
+                        }
                         Err(e) => {
                             log::warn!("could not open {name}: {e}");
                             if let Some(start) = &mut self.start {
@@ -334,6 +337,7 @@ impl eframe::App for StudioApp {
                 {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 }
+                editor.hints.show_tips = self.settings.settings.show_tips;
                 let exit = editor.ui(ui, frame.wgpu_render_state());
                 if editor.take_settings_request() {
                     self.settings_open = true;
@@ -355,6 +359,12 @@ impl eframe::App for StudioApp {
                 settings::apply_settings(&ctx, &self.settings.settings);
                 self.settings.save();
                 ctx.request_repaint();
+            }
+            if out.reset_tips {
+                match &mut self.phase {
+                    Phase::Opened(editor) => editor.hints.reset(),
+                    _ => crate::hints::Hints::load_default().reset(),
+                }
             }
             if out.close {
                 self.settings_open = false;

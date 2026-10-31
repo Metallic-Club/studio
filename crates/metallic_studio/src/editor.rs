@@ -111,6 +111,8 @@ pub struct Snapping {
     pub soft: bool,
     /// Align to surface: a body drag turns the selection's up axis to the surface normal.
     pub align: bool,
+    /// Collisions chip: a drag stops where a moved part would overlap another (off by default).
+    pub collisions: bool,
     /// Move and scale increment in studs.
     pub move_step: f64,
     /// Rotate increment in degrees.
@@ -126,6 +128,7 @@ impl Default for Snapping {
             edge: false,
             soft: true,
             align: false,
+            collisions: false,
             move_step: 1.0,
             rotate_step: 15.0,
         }

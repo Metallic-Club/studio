@@ -9,9 +9,11 @@
 use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
-use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
+use crate::actions::{ActionRegistry, ToolbarGroup, default_actions, increment_chips};
+use crate::context_bar::ContextBar;
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
 use crate::explorer::Explorer;
+use crate::hints::{HintEvent, Hints};
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
 use crate::panel;
@@ -41,6 +43,23 @@ enum Leave {
     Quit,
 }
 
+/// The part whose Color the step `c` changed, when it changed exactly one part's Color.
+fn recoloured_one(c: &crate::commands::Command) -> Option<metallic_core::InstanceId> {
+    use crate::commands::Command;
+    match c {
+        Command::SetProperty { id, prop, .. } if prop == "Color" => Some(*id),
+        Command::SetProperties { changes, .. } => match changes.as_slice() {
+            [(id, prop, _, _)] if &**prop == "Color" => Some(*id),
+            _ => None,
+        },
+        Command::Batch { commands, .. } if commands.len() == 1 => recoloured_one(&commands[0]),
+        _ => None,
+    }
+}
+
+/// Height of the viewport header in px (spec 3.1).
+pub const HEADER_HEIGHT: f32 = 36.0;
+
 /// The editor window for one open game.
 pub struct EditorUi {
     /// Data and edit entry points.
@@ -54,6 +73,12 @@ pub struct EditorUi {
     /// 3D view.
     pub viewport: Viewport,
     explorer: Explorer,
+    /// The floating toolbar over the selection (spec 3.2).
+    pub context_bar: ContextBar,
+    /// First-time hints (spec 14.1); in memory until the app loads the saved ones.
+    pub hints: Hints,
+    /// Selection and history revisions the hints last looked at.
+    hint_seen: (u64, u64),
     /// Properties panel.
     pub properties: Properties,
     scripts: ScriptTabs,
@@ -77,6 +102,9 @@ impl EditorUi {
             viewport: Viewport::new(),
             explorer: Explorer::new(),
             properties: Properties::new(),
+            context_bar: ContextBar::new(),
+            hints: Hints::in_memory(),
+            hint_seen: (u64::MAX, 0),
             scripts: ScriptTabs::new(),
             pressed: Vec::new(),
             confirm: None,
@@ -130,6 +158,8 @@ impl EditorUi {
         editor.viewport.frame_selection(&editor.state);
         let back = -editor.viewport.camera.forward();
         editor.viewport.camera.dolly(back, 6.0);
+        // Show the contextual toolbar at once (no pointer to wait for in a capture).
+        editor.context_bar.arm(editor.state.selection.revision());
         Some(editor)
     }
 
@@ -181,6 +211,13 @@ impl EditorUi {
         if id == "file.save" {
             self.scripts.flush(&mut self.state);
         }
+        if id == "edit.duplicate" {
+            self.hint(HintEvent::Duplicated);
+        }
+        if id == "view.focus_context_bar" {
+            self.context_bar.focus();
+            return;
+        }
         if id == "output.clear" {
             self.output.log.clear();
             return;
@@ -189,7 +226,9 @@ impl EditorUi {
     }
 
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
-        let typing = ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta();
+        let typing = ctx.egui_wants_keyboard_input()
+            || self.viewport.is_editing_delta()
+            || self.context_bar.has_focus();
         // A gesture holds values in the preview overlay: no global action runs until it ends
         // (Esc cancels it in the viewport or in Properties).
         let busy = self.viewport.is_dragging() || self.properties.is_busy();
@@ -215,6 +254,89 @@ impl EditorUi {
             self.run_action(id);
         }
         self.pressed = pressed;
+    }
+
+    fn hint(&mut self, event: HintEvent) {
+        let blocked = self.viewport.is_busy() || self.state.play.is_playing();
+        self.hints.note(&event, std::time::Instant::now(), blocked);
+    }
+
+    /// Turns what happened this frame into hint events (selection, drags, recolouring).
+    fn watch_hints(&mut self) {
+        let revision = self.state.selection.revision();
+        if revision != self.hint_seen.0 {
+            self.hint_seen.0 = revision;
+            let parts = !self.state.selection.parts(&self.state.world).is_empty();
+            self.hint(HintEvent::Selected { parts });
+        }
+        if let Some(d) = self.viewport.take_finished() {
+            self.hint(HintEvent::DragEnded {
+                axis: d.axis,
+                body: d.body,
+                snapping_off: d.snapping_off,
+                off_grid: d.off_grid,
+                near_corner: d.near_corner,
+            });
+            self.hint(HintEvent::MovedSelection);
+            if let Some((id, y)) = d.one {
+                self.hint(HintEvent::MovedOne { id, y });
+            }
+        }
+        let history = self.state.history.revision();
+        if history != self.hint_seen.1 {
+            self.hint_seen.1 = history;
+            if let Some(id) = self.state.history.peek_undo().and_then(recoloured_one) {
+                self.hint(HintEvent::RecolouredOne(id));
+            }
+        }
+    }
+
+    /// The viewport header (spec 3.1), 36 px over the viewport: tools Q/W/E/R/T, the increments,
+    /// World/Local and Pivot/Centre, the snap chips and, at the right, Collisions.
+    fn viewport_header(&mut self, ui: &mut egui::Ui) {
+        let width = ui.available_width();
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(width, HEADER_HEIGHT), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, theme::bg_panel());
+        let inner = rect.shrink2(egui::vec2(8.0, 4.0));
+        // Collisions first, at the right end, so the rest never pushes it out.
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        right.spacing_mut().interact_size.y = 28.0;
+        self.actions
+            .chip(&mut right, "snap.collisions", &mut self.state, &self.keymap);
+        let used = right.min_rect().width() + 8.0;
+        let mut left_rect = inner;
+        left_rect.set_right(inner.right() - used);
+        let mut left = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(left_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        left.set_clip_rect(left_rect);
+        // A narrow viewport scrolls the header sideways (wheel or drag) rather than hiding chips.
+        egui::ScrollArea::horizontal()
+            .id_salt("viewport-header")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(&mut left, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().interact_size.y = 28.0;
+                    self.actions
+                        .icon_keys(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
+                    ui.separator();
+                    increment_chips(ui, &mut self.state);
+                    ui.separator();
+                    self.actions
+                        .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
+                    ui.separator();
+                    self.actions
+                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
+                });
+            });
     }
 
     fn requests(&mut self) {
@@ -343,6 +465,8 @@ impl EditorUi {
                             &mut self.state,
                             &self.keymap,
                         );
+                        ui.separator();
+                        ui.checkbox(&mut self.context_bar.enabled, "Contextual toolbar");
                     });
                     ui.menu_button("Insert", |ui| {
                         for &class in INSERTABLE {
@@ -393,15 +517,6 @@ impl EditorUi {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.spacing_mut().interact_size.y = 28.0;
                     self.actions
-                        .toolbar(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
                         .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
                     ui.separator();
                     self.actions
@@ -431,20 +546,6 @@ impl EditorUi {
                         Some(crate::play::PlayStatus::Ended(t)) => (t, theme::text_2()),
                     };
                     ui.label(small(play).color(colour));
-                    // The drag readout (spec 4.5): the amount, editable for a few seconds after
-                    // release (accent), and what the drag snapped to.
-                    if let Some(st) = self.viewport.status(&self.state) {
-                        ui.label(small("·".into()).color(dim));
-                        let colour = if st.editing {
-                            theme::accent()
-                        } else {
-                            theme::text_1()
-                        };
-                        ui.label(small(st.text).monospace().color(colour));
-                        if let Some(snap) = st.snap {
-                            ui.label(small(snap).color(dim));
-                        }
-                    }
                     if let Some(note) = self.state.current_note() {
                         ui.label(small("·".into()).color(dim));
                         ui.label(small(note.to_string()).color(theme::text_1()));
@@ -474,6 +575,20 @@ impl EditorUi {
                             ));
                         }
                         ui.label(small(text).monospace().color(theme::text_2()));
+                        // The drag readout (spec 3.3 and 4.5): the amount, editable for a few
+                        // seconds after release (accent), and what the drag snapped to.
+                        if let Some(st) = self.viewport.status(&self.state) {
+                            ui.label(small("·".into()).color(dim));
+                            if let Some(snap) = st.snap {
+                                ui.label(small(snap).color(dim));
+                            }
+                            let colour = if st.editing {
+                                theme::accent()
+                            } else {
+                                theme::text_1()
+                            };
+                            ui.label(small(st.text).monospace().color(colour));
+                        }
                     });
                 });
             });
@@ -522,6 +637,7 @@ impl EditorUi {
                 self.scripts.prune(&self.state);
                 let scene = self.scripts.tab_strip(ui, &mut self.state);
                 if scene {
+                    self.viewport_header(ui);
                     let before = ui.available_rect_before_wrap();
                     self.viewport.ui(ui, &mut self.state, render_state);
                     viewport_hovered = ui.rect_contains_pointer(before);
@@ -529,6 +645,20 @@ impl EditorUi {
                     self.scripts.editor(ui, &mut self.state);
                 }
             });
+
+        let top = self.viewport.rect().top();
+        self.context_bar.ui(
+            &ctx,
+            &mut self.state,
+            &self.viewport,
+            &mut self.actions,
+            &self.keymap,
+            top,
+        );
+
+        self.watch_hints();
+        let blocked = self.viewport.is_busy() || self.state.play.is_playing();
+        self.hints.ui(&ctx, self.viewport.rect(), blocked);
 
         let right_down = ctx.input(|i| i.pointer.secondary_down());
         self.keys(&ctx, viewport_hovered, right_down);

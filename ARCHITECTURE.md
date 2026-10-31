@@ -170,6 +170,12 @@ apps.
   and glyphs, `Surface` placement in the hit part's grid, virtual surface, soft snap), `pivot.rs` (`Pivot`, `Rigid`,
   27 pivot snap points; pivots are core properties, `PivotOffset` and `WorldPivot`
   plus hidden `WorldPivotSet`, written through the preview overlay as one `SetProperties`, so they are undoable and saved). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
+  Building surfaces (#226): the viewport header in `editor_ui.rs` (tools, increment chips, space, pivot, snap chips,
+  Collisions), `collisions.rs` (oriented-box overlap test; with Collisions on, `GizmoDrag::hold_if` keeps the last
+  frame that did not overlap), `context_bar.rs` (the floating bar over the selection: pure `place()` above, below or
+  docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
+  `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
+  drag, Play or camera flight; shown ids in `hints.ron` in the config folder; Settings "Show tips"/"Reset tips").
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
