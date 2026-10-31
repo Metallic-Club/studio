@@ -12,6 +12,7 @@
 //!   "sticks": { "Thumbstick2": { "sensitivity": 1.25, "invertY": true, "deadzone": 0.1 } },
 //!   "assist": { "toggleAll": false, "replaceHolds": true, "holdTimeScale": 1.5 },
 //!   "glyphs": { "gamepadStyle": "Letters" },
+//!   "touch": { "stick": "Fixed", "opacity": 0.75 },
 //!   "updated": "2026-10-30T12:00:00Z"
 //! }
 //! ```
@@ -22,7 +23,7 @@
 //!   keep the creator's. Entries are slots in order (Primary, Alternate); `"key": "None"` keeps an
 //!   empty slot in its place. Composites name `up`, `down`, `left` and `right`.
 //! - Unknown keys, at any level this module reads, are kept and written back (a newer Player may
-//!   use them; the touch settings of #252 live beside these). A wrong value for one field is
+//!   use them). A wrong value for one field is
 //!   ignored without losing the rest of the file.
 //! - [`OverrideStore`] reads a missing or damaged file as "no overrides" (a damaged file is moved
 //!   aside, not deleted) and writes atomically: a temporary file, then a rename. An empty set of
@@ -32,6 +33,7 @@ use super::config::{
     Role, STICK_ORBIT_SPEED, Trigger, ZOOM_PER_NOTCH,
 };
 use super::control::{Control, ControlKind, DeviceKind};
+use super::touch::StickMode;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -101,10 +103,7 @@ impl Slot {
 pub fn control_device(c: Control) -> DeviceKind {
     if c.is_gamepad() {
         DeviceKind::Gamepad
-    } else if matches!(
-        c,
-        Control::TouchStick | Control::TouchLook | Control::TouchButton
-    ) {
+    } else if c.is_touch() {
         DeviceKind::Touch
     } else {
         DeviceKind::KeyboardMouse
@@ -275,6 +274,27 @@ impl Default for AssistSettings {
     }
 }
 
+/// The touch overlay's settings (spec 7.4): floating or fixed stick, and its opacity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TouchSettings {
+    /// Floating (the base appears under the thumb, the default) or fixed.
+    pub stick_mode: StickMode,
+    /// Opacity of every touch control: 0.25 to 1.
+    pub opacity: f32,
+}
+
+/// The range of [`TouchSettings::opacity`].
+pub const TOUCH_OPACITY_RANGE: (f32, f32) = (0.25, 1.0);
+
+impl Default for TouchSettings {
+    fn default() -> Self {
+        Self {
+            stick_mode: StickMode::Floating,
+            opacity: 1.0,
+        }
+    }
+}
+
 /// Which face-button art the gamepad glyphs use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GamepadGlyphPref {
@@ -316,6 +336,8 @@ pub struct PlayerOverrides {
     pub assist: AssistSettings,
     /// Face-button art.
     pub gamepad_glyphs: GamepadGlyphPref,
+    /// The touch overlay: stick mode and opacity (opacity clamped on read).
+    pub touch: TouchSettings,
     /// When the file was last written (UTC, RFC 3339), as read.
     pub updated: Option<String>,
     /// Unknown keys: top level, and inside `sticks`, `assist` and `glyphs`.
@@ -324,6 +346,7 @@ pub struct PlayerOverrides {
     stick_extra: [Map<String, Value>; 3],
     assist_extra: Map<String, Value>,
     glyphs_extra: Map<String, Value>,
+    touch_extra: Map<String, Value>,
 }
 
 impl PlayerOverrides {
@@ -343,6 +366,12 @@ impl PlayerOverrides {
             s.deadzone = None;
         }
         self.sticks[stick.index()] = s;
+    }
+
+    /// Sets the touch settings; the opacity is clamped to [`TOUCH_OPACITY_RANGE`].
+    pub fn set_touch(&mut self, mut t: TouchSettings) {
+        t.opacity = clamp_or(t.opacity, TOUCH_OPACITY_RANGE, 1.0);
+        self.touch = t;
     }
 
     /// The override of one action, if the player changed it.
@@ -368,11 +397,13 @@ impl PlayerOverrides {
             && self.sticks == [StickSettings::default(); 3]
             && self.assist == AssistSettings::default()
             && self.gamepad_glyphs == GamepadGlyphPref::Auto
+            && self.touch == TouchSettings::default()
             && self.extra.is_empty()
             && self.sticks_extra.is_empty()
             && self.stick_extra.iter().all(Map::is_empty)
             && self.assist_extra.is_empty()
             && self.glyphs_extra.is_empty()
+            && self.touch_extra.is_empty()
     }
 
     /// Resets what the player can change; unknown keys are kept.
@@ -385,6 +416,7 @@ impl PlayerOverrides {
         self.sticks = [StickSettings::default(); 3];
         self.assist = AssistSettings::default();
         self.gamepad_glyphs = GamepadGlyphPref::Auto;
+        self.touch = TouchSettings::default();
     }
 
     // -----------------------------------------------------------------------------------------
@@ -484,6 +516,28 @@ impl PlayerOverrides {
                 }
             }
         }
+        if let Some(v) = root.remove("touch") {
+            match v {
+                Value::Object(mut map) => {
+                    let mode = match map.get("stick").and_then(Value::as_str) {
+                        Some("Fixed") => Some(StickMode::Fixed),
+                        Some("Floating") => Some(StickMode::Floating),
+                        _ => None,
+                    };
+                    if let Some(mode) = mode {
+                        o.touch.stick_mode = mode;
+                        map.remove("stick");
+                    }
+                    if let Some(x) = take_num(&mut map, "opacity") {
+                        o.touch.opacity = clamp_or(x, TOUCH_OPACITY_RANGE, 1.0);
+                    }
+                    o.touch_extra = map;
+                }
+                other => {
+                    root.insert("touch".into(), other);
+                }
+            }
+        }
         o.extra = root;
         Ok(o)
     }
@@ -537,6 +591,16 @@ impl PlayerOverrides {
         }
         if !glyphs.is_empty() {
             root.insert("glyphs".into(), Value::Object(glyphs));
+        }
+        let mut touch = self.touch_extra.clone();
+        if self.touch.stick_mode != StickMode::Floating {
+            touch.insert("stick".into(), Value::String("Fixed".into()));
+        }
+        if self.touch.opacity != TouchSettings::default().opacity {
+            touch.insert("opacity".into(), num(self.touch.opacity));
+        }
+        if !touch.is_empty() {
+            root.insert("touch".into(), Value::Object(touch));
         }
         for (k, v) in &self.extra {
             root.entry(k.clone()).or_insert_with(|| v.clone());

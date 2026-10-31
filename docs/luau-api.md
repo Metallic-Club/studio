@@ -236,7 +236,11 @@ The value is the action's value as the runtime reported it. On the server any of
   unbound or its context disabled while pressed). `inputObject` has `KeyCode` (`Unknown`), `UserInputType`, `UserInputState`,
   `Position`, `Delta`. Return `Enum.ContextActionResult.Pass` to let lower consumers see the event; anything else sinks.
 - `UnbindAction(name)`, `SetTitle(name, text)`, `SetImage(name, image)`, `SetPosition(name, udim2)` (set `TouchLabel`,
-  `TouchImage`, and `TouchLayout = Custom` with `TouchPosition`). `GetButton(name)` returns nil until the touch overlay exists.
+  `TouchImage`, and `TouchLayout = Custom` with `TouchPosition`). `GetButton(name)` returns the touch overlay's button of an
+  action bound with `createTouchButton`, or nil when there is none or the overlay did not place it. It is a read-only
+  `TouchButton` object (the overlay is drawn by the Player, not by GUI instances): `Name`, `ClassName`, `Text`, `Image`,
+  `Visible`, `AbsolutePosition` and `AbsoluteSize` (`Vector2`, dp from the top-left of the screen), `Position` and `Size`
+  (`UDim2` offsets in dp).
 
 ### UserInputService (last input only)
 `GetLastInputType()`, `LastInputTypeChanged(type)`, `PreferredInput`, `TouchEnabled`, `KeyboardEnabled`, `GamepadEnabled`.
