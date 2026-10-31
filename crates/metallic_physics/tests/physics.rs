@@ -98,6 +98,62 @@ fn touched_fires_once_per_contact() {
 }
 
 #[test]
+fn touch_ended_fires_once_per_separation() {
+    let mut world = World::new_with_services();
+    let base = baseplate(&mut world);
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 6.0, 0.0),
+        Vec3::new(4.0, 1.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 2.0);
+    assert_eq!(phys.drain_touched().len(), 1);
+    assert!(phys.drain_touch_ended().is_empty(), "still touching");
+    run(&mut phys, &mut world, 1.0);
+    assert!(phys.drain_touch_ended().is_empty());
+    // lift the part off the baseplate: one stop, for the pair that was reported
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(0.0, 12.0, 0.0)))
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    let ended = phys.drain_touch_ended();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert!(ended[0] == (p, base) || ended[0] == (base, p));
+    assert!(phys.drain_touch_ended().is_empty(), "reported once");
+    // touching again reports Touched and, after the next separation, TouchEnded again
+    run(&mut phys, &mut world, 2.0);
+    assert_eq!(phys.drain_touched().len(), 1);
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(0.0, 12.0, 0.0)))
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    assert_eq!(phys.drain_touch_ended().len(), 1);
+}
+
+#[test]
+fn removed_parts_do_not_report_touch_ended() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 6.0, 0.0),
+        Vec3::new(4.0, 1.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 2.0);
+    assert_eq!(phys.drain_touched().len(), 1);
+    world.destroy(p);
+    phys.sync_from(&world);
+    phys.step(&mut world, 1.0 / 60.0);
+    assert!(phys.drain_touch_ended().is_empty());
+}
+
+#[test]
 fn can_collide_false_is_touched_but_not_solid() {
     let mut world = World::new_with_services();
     let zone = part(
