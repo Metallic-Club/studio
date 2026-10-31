@@ -9,6 +9,10 @@
 //! ([`save_scene`], [`load_scene`]).
 //! [`World::set`] rejects non-finite numeric components before changing state, recording a
 //! journal entry, or dispatching a property-change signal.
+//! [`World::changes_since`] reports deduplicated instance invalidations;
+//! [`World::changes_since_detailed`] shares its cursor/history and reports ordered [`ChangeKind`]
+//! notices with static property tokens. Neither reader consumes the journal. Detailed notices
+//! retain no historic values and do not replace a durable editing operation log.
 #![warn(missing_docs)]
 
 mod cframe;
@@ -22,7 +26,7 @@ pub mod transform;
 mod value;
 
 pub use cframe::{CFrame, RotationOrder};
-pub use instance::{ChangeCursor, Changes, InstanceId, World};
+pub use instance::{Change, ChangeCursor, ChangeKind, Changes, DetailedChanges, InstanceId, World};
 pub use scene_file::{load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
 pub use value::{Color3, UDim2, Value, ValueType, Vec3};

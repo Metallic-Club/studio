@@ -70,6 +70,52 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+#[test]
+fn warmed_detailed_journal_adds_no_per_record_property_string_allocation() {
+    let mut world = World::new_empty();
+    let part = world.create("Part", None).unwrap();
+    // Warm defaults, property storage and journal capacity, including existing history eviction.
+    for index in 0..40_000 {
+        world
+            .set(
+                part,
+                "Transparency",
+                Value::Number((index % 7) as f64 / 10.0 + 0.01),
+            )
+            .unwrap();
+    }
+    let before = world.change_cursor();
+    let (_, counts) = measure(|| {
+        for index in 0..1_000 {
+            world
+                .set(
+                    part,
+                    "Transparency",
+                    Value::Number((index % 7) as f64 / 10.0 + 0.02),
+                )
+                .unwrap();
+        }
+    });
+    // Existing World::set may allocate one property-map key per write. Journal metadata must
+    // not add another string allocation. Lower counts remain valid if storage improves later.
+    assert!(counts.allocations <= 1_000, "{counts:?}");
+    assert!(
+        counts.allocated <= 1_000 * "Transparency".len(),
+        "{counts:?}"
+    );
+    let metallic_core::DetailedChanges::Changes(changes) = world.changes_since_detailed(before).0
+    else {
+        panic!("unexpected overflow");
+    };
+    assert_eq!(changes.len(), 1_000);
+    assert!(
+        changes
+            .iter()
+            .all(|change| change.kind == metallic_core::ChangeKind::Property("Transparency"))
+    );
+    eprintln!("warmed scalar writes with detailed journal, 1000 records: {counts:?}");
+}
+
 fn measure<T>(operation: impl FnOnce() -> T) -> (T, Counts) {
     COUNTS.set(Counts::default());
     ENABLED.set(true);
