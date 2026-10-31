@@ -33,6 +33,10 @@ apps.
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
+  attributes (`instance/extras.rs`: a boxed side record per node, so instances without any pay one pointer and the
+  property paths never look at them; changes go to the change journal and to a bounded attribute log read with
+  `attribute_changes_since`) and tags (same record, plus a tag-to-instances index so `tagged` never scans the tree, and a
+  tag log for the instance-added/removed signals; reparent and destroy only walk a subtree while some tag exists);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
@@ -69,7 +73,7 @@ apps.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
+  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
   R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
@@ -126,6 +130,14 @@ apps.
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
   vignette, sRGB encode, dither). Add a pass with `renderer.post_mut().push(Box::new(pass))`; a pass that returns
   `reads_depth` gets the scene depth (multisampled when MSAA is on).
+  Post stack v1 (#65, `docs/agents/65-post-stack.md`): a pass that returns `reads_geometry` makes the renderer run a
+  1x geometry prepass (`shaders/prepass.wgsl`; world normal + linear view depth in one `Rgba16Float` target, negative
+  depth for hull-outlined toon skinned meshes) and gets it as `PostContext::geometry`. The `edges` HDR pass
+  (`edges.rs`, `EdgePass`, off by default) draws silhouette and crease lines from it and skips hull-outlined surfaces,
+  so toon characters keep one outline. The `mlaa` LDR pass (`mlaa.rs`, `MlaaPass`) is MLAA-style edge AA using SMAA's
+  local contrast test, on while MSAA is off. `Renderer::set_lut(Option<&Lut3d>, strength)` (`lut.rs`, `.cube` parsing) grades display colour in the
+  finish pass. GPU frame timing: `enable_gpu_timing` / `read_gpu_time_ms` (timestamp queries where the adapter has
+  them).
   Lighting (#149, `lighting.rs`, `shaders/lighting.wgsl`): `sync` also reads the `Lighting` service and its children
   (`LightingInputs::read`) and `evaluate`s them into the sky, the finish settings, a lighting block in the globals
   uniform (ambient, fog, shadow filter, sun / moon discs, stars) and the `bloom` post pass (`bloom.rs`).
@@ -144,6 +156,15 @@ apps.
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
   parts. The level of detail is picked from the projected height in pixels (LOD1 below 220 px, LOD2 below 80 px).
+  Shading models (#63, `shading.rs`): one surface shader (`fs_main` in `scene.wgsl`) switches on the model id in a
+  row of the material table, a 96-row uniform buffer (8 style slots x 12 rows of 64 B: the 10 materials, the
+  Character row, one reserved). `ShadingModel` is Lit, Toon, Unlit or Flat; `ModelParams` holds the look-spec
+  parameters (wrap, roughness floor, bands, softness, shade tint, flatten, highlight, rim, light steps). A `Shading`
+  is a default model plus material overrides and the Character row; `Renderer::set_shading` sets style slot 0 (the
+  place Look), `set_style_shading` the per-part slots, and the table uploads only when a slot changed.
+  `InstanceRaw.material` is four u32: [0] row, [1] flags (reserved for hull, vertex snap, affine, nearest and the
+  style slot), [2] material id for procedural detail, [3] reserved. Standard skinned meshes use the Character row
+  with their slot's own roughness and metalness; `SkinStyle::Toon` (#320) keeps its own pipeline.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
@@ -245,22 +266,37 @@ apps.
   docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
   `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
   drag, Play or camera flight; shown ids in `hints.ron` in the config folder; Settings "Show tips"/"Reset tips").
-  Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
+  Arrange core (#217, #218): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
-  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; #10's
-  `History` and #213's preview turn a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
+  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; `editor_tools` turns a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
+  Editor wiring (#319): `editor_tools/` registers the building tools as actions and keys (Build menu and toolbar:
+  align A, distribute, mirror Ctrl+M / Ctrl+Shift+M, array Ctrl+Shift+D with ghosts, a drag handle and Ctrl+wheel count, scatter brush
+  B, measure Shift+M, select similar Shift+G, lasso/paint select modes on Q). Each op reads
+  `tools::geom::snapshot` and commits one `History` step (`editor_tools/commit.rs`); errors go to Output. Overlays
+  paint over the viewport (`viewport.capture_pointer` hands the pointer to a modal tool). `editor_colour.rs` opens the
+  colour popover from a Properties Color3 swatch or C: live preview, one step on commit, Esc restores.
+  `editor_input_actions.rs` docks the Input Actions panel (View > Input actions): its `EditStep`s become
+  `Command::Step` in the editor's history, and `History::take_remaps()` feeds every rebuilt-id map to
+  `InputActionsPanel::follow_remap`. `toolbar.rs` draws the top bar's Edit, Play, View and Build groups (Tools, Settings and Snap are in #384's viewport header) in order and collapses whole groups that
+  do not fit into a "»" overflow menu, lowest priority first (`PRIORITY`); a new action only needs a `ToolbarGroup`.
+  `ActionRegistry::register` locks every action outside `PLAY_SAFE` while playing, whoever registers it. The
+  contextual toolbar hides while a building tool has the pointer; the hint card waits for `gesture_active()`.
+  One gesture flag: `EditorState::gesture_active()` (preview overlay, or a `Gesture` reported by the viewport,
+  Properties or a tool) makes Save, Play, Undo, `apply` and tool commits (`edit_refusal()`) wait. Tool keys are keymap
+  rows in `KeyContext::Popover` and `KeyContext::Tool`, checked before Global and Viewport, so Esc reaches the
+  colour popover, then a building popover, then the tool, then the selection.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
-  Input Actions panel (#253): `input_actions/` is self-contained until the editor shell (#10) exists. It edits
+  Input Actions panel (#253): `input_actions/` (docked by `editor_input_actions.rs`, see above). It edits
   `InputContext` > `InputAction` > `InputBinding` instances; every change is one `EditStep` (built by `StepBuilder`,
-  handed to a `CommandSink`; `History` is the stand-in undo stack). Logic modules: `capture`, `checks`, `presets`,
+  handed to a `CommandSink`; its own `History` is used only by the standalone demo). Logic modules: `capture`, `checks`, `presets`,
   `touch` (device presets, automatic touch layout, custom `TouchPosition`), `preview`. View: `InputActionsPanel::show`
   or `show_with_sink`. Demo: `cargo run -p metallic_studio --example input_actions`.
   Colour (#221): `colour/` holds `ColourPopover` (ring + square, Hex/RGB/HSV, eyedropper hook, recent, palettes,
   OKLCh harmonies). It returns `ColourEvent`s (preview, commit with undo name, cancel) and never edits the scene;
-  the Properties panel and preview overlay will consume them (#10, #213). Recent colours live in the user config
+  `editor_colour.rs` consumes them for the editor. Recent colours live in the user config
   (`recent-colours.toml`), saved palettes in the project (`palettes/<name>.palette.ron`). Demo: `--scene colour`.
 - **metallic_update** (Launcher L1 Task 1): no UI. `http.rs` (`HttpClient`, `UreqClient`, redacting `Token`; `get_to_writer` streams a download and drops `Authorization` when a redirect leaves the host), `feed.rs`
   (`ReleaseFeed`, `STUDIO_FEED`, `LAUNCHER_FEED`, `UpdateChecker::check/check_quietly/download/apply_and_restart/apply_after_exit`,
@@ -425,7 +461,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills). A
    character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
-3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
+3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`, and every
+   `drain_touch_ended` pair as `touch_ended(a, b)` and `touch_ended(b, a)`; a character
    touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
    touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model
    (`TouchEnded` still fires on the touched part when the character was destroyed first, with the destroyed limb);
@@ -477,7 +514,8 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
 - **A material:** the material list in `classes.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
-  procedural detail), and density/friction in `metallic_physics`. Test `material_table_has_every_registry_material`
+  procedural detail), and density/friction in `metallic_physics`. The material table has one spare row per style
+  (`ROWS_PER_STYLE` in `shading.rs`, and `CHARACTER_ROW` in `scene.wgsl`, moves up by one). Test `material_table_has_every_registry_material`
   must still pass.
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
@@ -501,3 +539,40 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - Benchmarks: criterion benches live in `crates/<crate>/benches/` (`cargo bench -p metallic_core --bench world` exists;
   render sync, physics step and script step follow). Budgets, bench names and the perf-CI plan are in
   `docs/research/2026-10-30-performance-and-scale.md`; record numbers in `docs/agents/`.
+
+
+### Core replication schema and visibility (issue 293)
+
+`metallic_core::classes` defines registry-level `Repl` eligibility and class-relative `property_index` /
+`property_by_index` lookups in base-first declaration order. `replication::registry_hash()` returns a cached
+SHA-256 compatibility fingerprint of ordered class names, inheritance, effective properties, types, defaults,
+allowed values and policy. Its versioned encoding uses explicit lengths and little-endian numeric bits. Peers
+must agree on this fingerprint before using property indices; it is neither a credential nor a scene hash.
+It returns `Result<[u8; 32], SchemaError>` (no panics): a malformed registry is a typed error and the peer refuses to connect. The test `registry_hash_is_pinned` holds the golden value; any class or property change must update it on purpose (the `registry_hash` example prints the new value). `classes::class_index` / `class_at` give the wire class index, and `metallic_core::{orientation_to_quat, quat_to_orientation}` (moved from physics) convert `Orientation` for the wire.
+
+`replication::{instance_visible, property_visible, property_value}` implement the play-client filter. They hide
+ServerStorage/ServerScriptService subtrees and server Script.Source, restrict private PlayerGui/PlayerScripts
+subtrees to their owning trusted Player, and turn references to invisible instances into Ref(None). Queries are
+uncached and reflect reparenting immediately. The caller supplies a Player from its authenticated, same-world
+roster; these functions do not authenticate it or send any data. Authorized edit sessions need their own snapshot
+policy. Combined-mode client/server VMs still share one World until the runtime split and transport are integrated.
+
+Core definitions now include ServerStorage (a standard service), ModuleScript, RemoteFunction,
+UnreliableRemoteEvent and PlayerScripts. Registration does not implement require or the new classes' Luau remote
+methods. Existing class order is retained by appending definitions. The small `registry_hash` core example prints
+only the fingerprint for comparing separate processes, without loading creator content.
+
+The replication registry fingerprint's v2 encoding includes hidden-property metadata and boxed CFrame defaults
+as 12 row-major little-endian f64 bit patterns. Allocation addresses are excluded. PropDef.hidden hides engine
+bookkeeping from Luau/Properties UI; it does not suppress replication. Confidentiality uses Repl plus instance,
+server-source and player-owner visibility. This lets client-side transform helpers receive the registered state.
+
+Fingerprint encoding v3 additionally includes each numeric range's presence, min/max bits and clamp/wrap mode.
+Encoding v4 adds a declared string-normalization contract id. `PropDef.normalize_schema_id` must be nonempty
+exactly when a normalizer exists; malformed declarations fail closed during fingerprint construction. The
+fingerprint never executes callbacks or encodes their addresses. Authors must bump the contract id when accepted
+aliases or normalization rules change; the hash describes that declared contract, not the implementation's code.
+Current-main GUI classes retain indices 34..36; the five replication classes append at 37..41. These preview
+indices are usable only after an equal fingerprint is negotiated.
+Lighting properties and class ordering from main are retained; replication-only classes append after those classes.
+Numeric normalization belongs to World::set; outgoing replication observes that authoritative normalized value.
