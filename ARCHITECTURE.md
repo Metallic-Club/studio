@@ -77,7 +77,10 @@ apps.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Anchored parts that
+  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Before the
+  first step `sync_from` runs Rapier's collision pipeline (raycasts and touches work at once; the first step builds the
+  islands); after it, only the query tree (`BroadPhaseBvh::set_aabb`), since that pipeline leaves bodies inserted after a
+  step out of the islands in Rapier 0.36.1 (#423); their contacts start in the next step. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
   R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
@@ -243,6 +246,16 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  Command palette (#128): `palette.rs` (`CommandPalette`) searches objects (one row per name and class, Enter
+  selects all), game-folder files, every registered action with its keymap shortcut plus "Insert <class>", guides
+  given with `set_guides`, and an always-last "Ask Litha" row. It returns a `palette::Choice` that `EditorUi`
+  carries out through actions and `EditorState::insert`, so undo is unchanged. Actions `palette.open` (Ctrl+K),
+  `palette.commands` (Ctrl+Shift+P, opens with `>`) and `insert.at_cursor` (Shift+A over the viewport, an Insert
+  list at the cursor that places at `EditorState::insert_point`). Entry points for the title bar and Litha:
+  `EditorUi::open_command_palette`, `open_command_palette_with`, `take_litha_question`. Grid snap moved from Ctrl+K
+  to G (viewport). Objects parked for undo are skipped. `palette::Matcher` scores many texts in one pass each with
+  no allocation (`fuzzy_score` is the one-off form); the file index is built on a background thread and reused
+  for `ASSET_INDEX_AGE` (`is_indexing`, `poll_index`).
   `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
   and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
   Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one
@@ -402,6 +415,10 @@ apps.
   `QuicServer`/`QuicClient` (quinn on a background tokio thread, TLS 1.3 with a pinned self-signed certificate, ALPN
   `metallic/1`), `MemoryNet` (manual clock, deterministic) and `LinkConditioner` (latency, jitter, loss; on QUIC it
   wraps the server's UDP socket). The server side enforces spec 7.3's transport limits (`transport::limits`).
+  `Connection::poll_bounded` limits events and payload bytes appended in one call; it retains an atomic event
+  that does not fit and reports its byte requirement. Memory uses a FIFO deque; QUIC holds at most one deferred
+  event outside its channel. The existing unrestricted `poll` remains available. These are delivery/dequeue
+  bounds, not a wall-clock, background-network or shared-clock maintenance bound; see [transport polling](docs/transport-polling.md).
   `wire` is the byte format on top: `ClientMsg`/`ServerMsg` in reliable frames (`[kind][source][varint len][postcard
   body]`, `encode_*`/`decode_*`, unknown kinds decode as `Decoded::UnknownKind`), `NetId` (services 1-10, dynamic from
   64), `NetValue` (every `Value` type plus `Vector2` and tables, `from_value`/`to_value`), the join snapshot body
