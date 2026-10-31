@@ -26,6 +26,7 @@ pub mod sky;
 pub mod tonemap;
 
 mod context;
+mod gpu_timer;
 mod renderer;
 
 pub use camera::Camera;

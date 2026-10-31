@@ -44,6 +44,7 @@ fn main() -> eframe::Result {
         viewport,
         renderer: eframe::Renderer::Wgpu,
         centered: true,
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     eframe::run_native(
@@ -51,4 +52,19 @@ fn main() -> eframe::Result {
         native,
         Box::new(move |cc| Ok(Box::new(StudioApp::new(&cc.egui_ctx, options.clone())))),
     )
+}
+
+/// eframe's wgpu setup, with GPU timestamps for the profiler where the adapter has them.
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut options = eframe::egui_wgpu::WgpuConfiguration::default();
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_setup {
+        let base = create.device_descriptor.clone();
+        create.device_descriptor = std::sync::Arc::new(move |adapter| {
+            let mut descriptor = base(adapter);
+            descriptor.required_features |=
+                adapter.features() & eframe::wgpu::Features::TIMESTAMP_QUERY;
+            descriptor
+        });
+    }
+    options
 }

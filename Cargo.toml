@@ -27,6 +27,7 @@ log = "0.4"
 metallic_ui_theme = { path = "crates/metallic_ui_theme" }
 metallic_audio = { path = "crates/metallic_audio" }
 metallic_net = { path = "crates/metallic_net" }
+metallic_profiler = { path = "crates/metallic_profiler" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 egui = { version = "0.37.0", default-features = false }
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "accesskit", "wayland", "x11"] }

@@ -110,6 +110,8 @@ impl RenderContext {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("metallic device"),
+                // GPU stage timing for the profiler, where the adapter has it.
+                required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 ..Default::default()
             })
             .await

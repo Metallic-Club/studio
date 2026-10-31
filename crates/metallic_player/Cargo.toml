@@ -10,6 +10,7 @@ name = "metallic-player"
 path = "src/main.rs"
 
 [dependencies]
+metallic_profiler.workspace = true
 metallic_runtime.workspace = true
 metallic_core.workspace = true
 metallic_render.workspace = true

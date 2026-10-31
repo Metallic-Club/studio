@@ -1,0 +1,8 @@
+[package]
+name = "metallic_profiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

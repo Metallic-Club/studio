@@ -311,6 +311,9 @@ impl eframe::App for StudioApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // A profiled Studio frame runs from one `ui` call to the next, so it includes the
+        // viewport's paint callback (rendering) and the wait for the next frame.
+        metallic_profiler::Profiler::begin_frame();
         let ctx = ui.ctx().clone();
         if !self.splash_window {
             // Cheap when nothing changed; follows the system theme while "System" is chosen.
