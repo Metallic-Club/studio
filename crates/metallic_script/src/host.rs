@@ -339,6 +339,13 @@ impl ScriptHost {
         self.sides().iter().map(|s| s.state.args_built()).sum()
     }
 
+    /// How many threads wait in `signal:Wait()` right now (both VMs). A test hook that shows
+    /// stopped scripts and destroyed instances leave no waiter behind.
+    #[doc(hidden)]
+    pub fn signal_waiters(&self) -> usize {
+        self.sides().iter().map(|s| s.state.signal_waiters()).sum()
+    }
+
     fn sides(&self) -> Vec<&Side> {
         self.server.iter().chain(self.client.iter()).collect()
     }

@@ -125,6 +125,15 @@ local cf, size = door:GetBoundingBox()
 `signal:Connect(fn)` returns a connection with `:Disconnect()` and `.Connected`. Handlers run in their own thread (they may
 `task.wait`). A `Connect` made inside a handler does not run in the same dispatch; `Disconnect` inside a handler is safe.
 
+- `signal:Once(fn)` is a `Connect` that disconnects itself just before its first call (`.Connected` is already false
+  inside `fn`). It returns a normal `RBXScriptConnection`; `:Disconnect()` before the signal fires means `fn` never runs.
+- `signal:Wait()` yields the calling thread until the signal next fires and returns that fire's arguments (the same
+  values a `Connect` handler gets). Every thread waiting on a signal resumes on the same fire, after the handlers, each
+  under the normal 0.1 s resume budget. A `Wait()` started during a fire (for example inside a handler of the same
+  signal) resumes on the next fire. A wait ends without resuming when its script stops or is destroyed, or when the
+  signal's instance is destroyed. Outside a yieldable thread (inside a metamethod, for example) it fails with the same
+  error as `task.wait`. Both work on every signal, `RemoteEvent`, input and GUI events included.
+
 | Signal | Arguments | Fired when |
 |---|---|---|
 | `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
@@ -140,6 +149,10 @@ workspace.Lava.Touched:Connect(function(hit)
     local hum = hit.Parent:FindFirstChild("Humanoid")
     if hum then hum:TakeDamage(25) end
 end)
+
+local player = game:GetService("Players").PlayerAdded:Wait()
+local dt = game:GetService("RunService").Heartbeat:Wait()   -- wait one frame
+workspace.Door.Touched:Once(function(hit) print("first touch:", hit.Name) end)
 ```
 
 ## Services
