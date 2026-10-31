@@ -28,8 +28,8 @@
 //! [`tools`] holds the pure cores of the building tools (shared geometry, scatter, selection,
 //! measure, arrange) that the viewport drives. [`input_actions`] and [`data_dirs`] come from main.
 //!
-//! [`splash`] is the startup window; [`widgets`] holds Studio's own buttons, plates, cards,
-//! toasts and the cut.
+//! [`splash`] is the startup window; [`title_bar`] is the window's own title bar on Windows;
+//! [`widgets`] holds Studio's own buttons, plates, cards, toasts and the cut.
 //!
 //! Library code returns [`StudioError`]; only `main.rs` decides what to show on failure.
 
@@ -71,6 +71,7 @@ pub mod splash;
 pub mod start_screen;
 pub mod templates;
 pub mod theme;
+pub mod title_bar;
 pub mod tokens;
 pub mod tools;
 pub mod transform;
