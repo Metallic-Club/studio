@@ -234,7 +234,6 @@ impl BodyRig {
     /// The pose of every body part relative to `root` (studs), from the skinning matrices
     /// `joints` (model rest space to world studs). `model` is the avatar's own model matrix,
     /// used for parts without a bone or when `joints` is short.
-    #[cfg(feature = "presentation")]
     pub fn pose(&self, joints: &[Mat4], model: Mat4, root: Vec3) -> BodyPose {
         // The rest frame faces -Z, the model faces +Z: a half turn between them.
         let half_turn = Quat::from_rotation_y(PI);
