@@ -476,8 +476,12 @@ impl World {
         // A stored CFrame keeps a right-handed orthonormal rotation (`CFrame::inverse` relies on
         // it): scaled or skewed matrices are fixed, degenerate ones refused.
         let value = match value {
-            Value::CFrame(cf) => match cf.try_orthonormalize() {
-                Some(fixed) => Value::CFrame(Box::new(fixed)),
+            Value::CFrame(mut cf) => match cf.try_orthonormalize() {
+                // Reuse the incoming box: no extra allocation per CFrame write.
+                Some(fixed) => {
+                    *cf = fixed;
+                    Value::CFrame(cf)
+                }
                 None => {
                     return Err(CoreError::InvalidValue {
                         property: prop.to_string(),
