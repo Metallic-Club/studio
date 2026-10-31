@@ -78,6 +78,8 @@ apps.
   `PhysicsWorld::scripted_pose` is the pose the next step gives a part; the controller adds the step from an
   anchored support's body pose to it as a final lead, so riders trail a Heartbeat-moved platform by one tick, not
   two (#374). `relative_velocity` is measured against the support's motion at the bottom-sphere centre.
+  `sync_from` refreshes contacts with a zero-length physics step, never Rapier's collision-only `detect_collisions`,
+  which leaves contacts that already touch at insert time out of the persistent islands (#405).
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_ui_theme** (S8): the render-free egui theme shared by Studio, `metallic_anim_editor` and `metallic_vfx_editor`:
