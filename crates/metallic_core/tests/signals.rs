@@ -159,8 +159,12 @@ fn set_parent_to_the_current_parent_changes_nothing() {
     let roots = world.roots().to_vec();
     world.set_parent(loose, None).unwrap();
     assert_eq!(world.roots(), roots.as_slice());
+    // A built-in service root is locked (#93): refused, and still nothing changes.
     let first_root = roots[0];
-    world.set_parent(first_root, None).unwrap();
+    assert!(matches!(
+        world.set_parent(first_root, None),
+        Err(metallic_core::CoreError::Locked(_))
+    ));
     assert_eq!(world.roots(), roots.as_slice());
 
     let (changes, _) = world.changes_since(cursor);

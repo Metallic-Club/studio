@@ -313,10 +313,11 @@ fn combined_output_preserves_server_client_and_error_text_without_false_attribut
 #[test]
 fn failed_start_and_trait_adapter_keep_lifecycle_explicit() {
     let mut log = OutputLog::new(64);
-    let (mut broken, _) = scene(
-        "print('before startup failure'); task.delay(0.5, function() print('failed late') end)",
+    let (broken, _) = scene(
+        "print('before startup failure'); task.delay(0.5, function() print('failed late') end); game:GetService('Players').Player1:Destroy()",
     );
-    broken.destroy(broken.root("Workspace").unwrap());
+    // Services cannot be destroyed (#93), so the script removes the local player instead: the
+    // character cannot spawn and the game fails to start after script initialization.
     let result = LocalPlaySession::start("Broken", &broken, log.sink());
     assert!(result.is_err());
     assert_eq!(
