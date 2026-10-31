@@ -33,24 +33,10 @@ pub struct RecentProjects {
     items: Vec<RecentProject>,
 }
 
-/// Where Studio keeps its settings: env `METALLIC_STUDIO_CONFIG_DIR`, else `%APPDATA%\Metallic\Studio`,
-/// else `$XDG_CONFIG_HOME/metallic/studio` or `~/.config/metallic/studio`. `None` if nothing is known.
+/// Where Studio keeps its settings: see [`crate::data_dirs::resolve_config_dir`]
+/// (`%APPDATA%\MetallicStudio` on Windows).
 pub fn config_dir() -> Option<PathBuf> {
-    let var = |name: &str| {
-        std::env::var_os(name)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    if let Some(dir) = var("METALLIC_STUDIO_CONFIG_DIR") {
-        return Some(dir);
-    }
-    if let Some(appdata) = var("APPDATA") {
-        return Some(appdata.join("Metallic").join("Studio"));
-    }
-    if let Some(xdg) = var("XDG_CONFIG_HOME") {
-        return Some(xdg.join("metallic").join("studio"));
-    }
-    var("HOME").map(|home| home.join(".config").join("metallic").join("studio"))
+    crate::data_dirs::resolve_config_dir(&|name| std::env::var_os(name))
 }
 
 impl RecentProjects {
@@ -109,7 +95,7 @@ impl RecentProjects {
             .map_err(|e| e.to_string())
             .and_then(|text| {
                 if let Some(parent) = file.parent() {
-                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                    crate::data_dirs::create_owned(parent).map_err(|e| e.to_string())?;
                 }
                 fs::write(file, text).map_err(|e| e.to_string())
             });

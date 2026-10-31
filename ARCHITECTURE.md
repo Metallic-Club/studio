@@ -24,7 +24,7 @@ apps.
 
 ## Crates
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
-  `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref); a class registry (`classes.rs`) with typed
+  `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
@@ -34,7 +34,10 @@ apps.
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
-  look-at, inverse, lerp); it is not a stored `Value` type. `BasePart.CFrame` in Luau maps onto Position/Orientation.
+  look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
+  `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
+  (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
+  `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
@@ -94,9 +97,14 @@ apps.
   snapshots for ordinary property/pose ticks, and falls back to cache reconciliation on lost history or a new world.
   The physics wrapper retains its own synchronization/reset contract; no physics API is added by this cache.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
-  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F]`; winit window, wgpu surface, egui-wgpu for the GUI pass,
-  gilrs for gamepads, headless mode for smoke tests (no window, no GPU). `devices.rs` holds the winit key and mouse
-  mapping and the gilrs `GamepadSource` (the mapping table of spec 4.2); both produce `RawEvent`s for the runtime.
+  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F] [--no-overrides] [--menu PAGE]`; winit window, wgpu
+  surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless mode for smoke tests (no window, no GPU).
+  `devices.rs` holds the winit key and mouse mapping and the gilrs `GamepadSource` (the mapping table of spec 4.2); both
+  produce `RawEvent`s for the runtime. `menu/` is the Player menu (#254): Resume, Controls, Leave game. The Controls
+  page (`menu/controls.rs` state, `menu/paint.rs` drawing in a separate egui pass `menu/layer.rs`, glyph art in
+  `menu/glyph_paint.rs`, the in-play hint in `menu/hud.rs`) takes raw events while open, so it works with keyboard,
+  mouse or gamepad alone. `controls_store.rs` and `data_dir.rs` load and save the overrides per game in the Player's
+  own data folder (`%APPDATA%\MetallicPlayer`, `METALLIC_PLAYER_DATA_DIR` overrides it).
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -194,6 +202,11 @@ apps.
   as an interface only), `Op` + `MeshCommand` + `History`, `triangulate` to a local `MeshData` (switches to
   `metallic_meshgen`'s once merged), `uv` (box/planar, LSCM), `export` (GLB/glTF/OBJ). Demo:
   `cargo run -p metallic_modeling --example modeling_demo`.
+- **metallic_net** (M2a, #297 transport; more modules land with tasks A6-A12): `transport` has the `Connection` and
+  `Listener` traits (non-blocking, polled once per tick), channels `Control`/`World`/`Remote`/`Bulk` plus datagrams,
+  `QuicServer`/`QuicClient` (quinn on a background tokio thread, TLS 1.3 with a pinned self-signed certificate, ALPN
+  `metallic/1`), `MemoryNet` (manual clock, deterministic) and `LinkConditioner` (latency, jitter, loss; on QUIC it
+  wraps the server's UDP socket). The server side enforces spec 7.3's transport limits (`transport::limits`).
 
 ## Input flow
 Games listen to actions, never to raw keys (design: `docs/design/input-actions.md`; phase 1 is implemented: spec
@@ -223,8 +236,16 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
 - **Headless.** `InputRuntime::push(RawEvent)` is the only entry. `ScriptedSource` replays `--input-script` files
   (`frame device control state [values]`). The Parkour route test sends its moves as raw events, records them as a
   script and replays the script.
-- **Not yet** (later phases, spec section 15): Luau API (#251), touch controls (#252), Studio panel (#253), rebinding
-  files, glyphs, toggles (#254).
+- **Player overrides (#254, spec 8 and 11).** `InputRuntime` keeps the creator's config (`base_config`) and compiles
+  `PlayerOverrides::apply(base)`; `set_overrides` recompiles (menu changes only, never per frame). Overrides are
+  stored per game as JSON (`OverrideStore`: `<data>/input/<game>/local.json`, atomic write, unknown keys kept, a
+  corrupt file is moved to `.json.corrupt` and the creator's controls apply). `rebind.rs` holds slots, conflicts
+  (`RebindGroup`; the built-in `Metallic.System` context with `Menu` on Escape and Start is in group `System`, which
+  meets every group) and Swap/Replace. Accessibility: per-action toggle, toggle every hold action, hold to press,
+  hold-time scale, per-stick sensitivity, dead zone and invert. `glyph.rs` maps controls to drawn glyphs (keycaps,
+  mouse, Letters and Positions face buttons; no brand art); `InputRuntime::glyph(s)` caches them per action and
+  device, and `glyph_changes()` counts changes of device, binding or style.
+- **Not yet** (later phases, spec section 15): touch controls (#252), Studio panel (#253), Luau glyph API.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
@@ -326,3 +347,8 @@ Core definitions now include ServerStorage (a standard service), ModuleScript, R
 UnreliableRemoteEvent and PlayerScripts. Registration does not implement require or the new classes' Luau remote
 methods. Existing class order is retained by appending definitions. The small `registry_hash` core example prints
 only the fingerprint for comparing separate processes, without loading creator content.
+
+The replication registry fingerprint's v2 encoding includes hidden-property metadata and boxed CFrame defaults
+as 12 row-major little-endian f64 bit patterns. Allocation addresses are excluded. PropDef.hidden hides engine
+bookkeeping from Luau/Properties UI; it does not suppress replication. Confidentiality uses Repl plus instance,
+server-source and player-owner visibility. This lets client-side transform helpers receive the registered state.

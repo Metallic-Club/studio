@@ -23,7 +23,7 @@ these filters must be used by the future replicator before any data is sent.
 - Visibility queries are uncached so reparenting changes the result immediately. Only trusted standard public
   roots are eligible. PlayerGui/PlayerScripts require the authenticated viewer's owner at every private boundary.
   The caller must derive that viewer from a trusted same-world connection roster; this library authenticates nobody.
-- Outgoing properties are owned copies; hidden properties return None and invisible/dead references become Ref(None).
+- Outgoing properties are owned copies; properties excluded by replication/instance visibility return None and invisible/dead references become Ref(None).
   Authoritative values remain intact. An example prints only the registry hash for peer diagnostics.
 
 ## Validation plan and evidence
@@ -52,3 +52,17 @@ No running backend/server changes, credentials, public exposure, capacity guaran
 
 Publish one PR and move this issue to review; monitor CI and address review findings. Owner/lead merges only.
 After all four foundation branches are ready, validate a private composition before planning a live-play claim.
+
+## Current main compatibility refresh (not yet pushed)
+
+Normal merged cb26593, then exact d1eecce. The latter really introduces boxed Value::CFrame and PropDef.hidden
+through the pivot APIs. Earlier abef7fc CFrame math alone did not do so; those source observations are distinct.
+The prior 1,004-test/CI evidence above remains historical and is not relabelled as this new-base gate.
+
+The version-2 fingerprint encodes all 12 row-major CFrame components as little-endian numeric bits and includes
+hidden bookkeeping metadata. Hidden is UI/Luau presentation metadata, not confidentiality: eligible bookkeeping
+must still reach a play replica. Repl, server container/source and owner visibility remain the disclosure policy.
+Both class constructors retain the independent Repl and hidden fields; default and enum constructors are preserved.
+Independent Python SHA-256 fixtures, all-component/signed-zero sensitivity and owned outgoing CFrame/hidden-state
+regressions were added. Independent source review found the encoding/constructor/policy logic coherent; it caught
+and prompted correction of an ambiguous documentation phrase. Fresh core/workspace/Clippy gates remain pending.

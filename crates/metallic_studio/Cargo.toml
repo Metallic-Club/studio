@@ -15,6 +15,8 @@ path = "src/main.rs"
 
 [dependencies]
 metallic_runtime.workspace = true
+# Read-only: tools::geom::snapshot reads part placement from the World.
+metallic_core.workspace = true
 # Same wgpu major as metallic_render (30); Task 10 shares one device with the viewport.
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts"] }
 rfd = "0.17.2"
@@ -23,10 +25,13 @@ ron = "0.12.3"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 png = "0.18.1"
+# Double-precision maths for the building-tool cores (src/tools); same version as metallic_render.
+glam = "0.30.10"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 metallic_update.workspace = true
 velopack = "1.3.39-g8d2844f"
 
 [dev-dependencies]
+metallic_core.workspace = true
 tempfile = "3"

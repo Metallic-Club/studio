@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 /// Fingerprint of class order, inheritance, effective property order/types/defaults, enums and
-/// replication metadata. All lengths and numeric bits have an explicit little-endian encoding.
+/// replication/hidden metadata. Version 2 encodes boxed CFrames by their 12 row-major
+/// components, never their allocation address. All lengths and numeric bits use little endian.
 ///
 /// Protocol peers must compare this hash before interpreting class-relative property indices.
 /// It is a compatibility fingerprint, not an authentication credential or a world-state hash.
@@ -49,6 +50,11 @@ fn hash_value(hash: &mut Sha256, value: &Value) {
             number(v.y_scale);
             number(v.y_offset);
         }
+        Value::CFrame(frame) => {
+            for component in frame.components() {
+                number(component);
+            }
+        }
         Value::Ref(v) => {
             hash.update([u8::from(v.is_some())]);
             if let Some(id) = v {
@@ -60,7 +66,7 @@ fn hash_value(hash: &mut Sha256, value: &Value) {
 
 fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"metallic-registry-v1\0");
+    hash.update(b"metallic-registry-v2\0");
     hash.update((classes.len() as u64).to_le_bytes());
     for class in classes {
         field(&mut hash, class.name.as_bytes());
@@ -92,6 +98,7 @@ fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
                 Repl::Replicated => 0,
                 Repl::ServerOnly => 1,
             }]);
+            hash.update([u8::from(property.hidden)]);
             hash.update([u8::from(property.allowed.is_some())]);
             if let Some(values) = property.allowed {
                 hash.update((values.len() as u64).to_le_bytes());
@@ -192,7 +199,7 @@ pub fn property_visible(
     classes::find_property(class, property).is_some_and(|def| property_allowed(class, def))
 }
 
-/// Copies one outgoing property after applying visibility. Hidden properties return None;
+/// Copies one outgoing property after applying visibility. Properties excluded by replication/instance visibility return None;
 /// references to invisible/destroyed targets become Ref(None). This does not mutate the world.
 pub fn property_value(
     world: &World,
@@ -230,6 +237,7 @@ mod tests {
             default: || Value::Bool(false),
             allowed: None,
             repl: Repl::Replicated,
+            hidden: false,
         }
     }
 
@@ -241,13 +249,16 @@ mod tests {
         assert_eq!(
             original,
             [
-                0x01, 0x59, 0x9e, 0xc3, 0xed, 0xb2, 0x6b, 0xc2, 0x83, 0xe0, 0xfe, 0x31, 0xdd, 0xd0,
-                0xe8, 0x45, 0x76, 0x89, 0x7b, 0x6e, 0x36, 0xc3, 0x83, 0x61, 0x68, 0xdf, 0x41, 0x72,
-                0xeb, 0xf0, 0x95, 0x75
+                0x6c, 0xd1, 0xb0, 0x03, 0xb2, 0x74, 0x25, 0x55, 0x78, 0x15, 0xbe, 0x76, 0xec, 0xf1,
+                0x15, 0x41, 0x7f, 0x19, 0xdf, 0xe2, 0xe8, 0xfe, 0xd1, 0x12, 0xbe, 0x80, 0x64, 0x95,
+                0x5d, 0x39, 0xc3, 0xf9
             ]
         );
         let mut changed = prop();
         changed.repl = Repl::ServerOnly;
+        assert_ne!(original, hash_schema(&[base(changed)]));
+        let mut changed = prop();
+        changed.hidden = true;
         assert_ne!(original, hash_schema(&[base(changed)]));
         let mut changed = prop();
         changed.default = || Value::Bool(true);
@@ -278,11 +289,53 @@ mod tests {
     }
 
     #[test]
+    fn boxed_cframe_hash_covers_all_components_and_numeric_bits() {
+        use crate::{CFrame, Vec3};
+        let digest = |frame: CFrame| -> [u8; 32] {
+            let mut hash = Sha256::new();
+            hash_value(&mut hash, &Value::CFrame(Box::new(frame)));
+            hash.finalize().into()
+        };
+        let frame = CFrame::from_parts(
+            Vec3::new(1.25, -2.5, 3.75),
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        );
+        // Independent Python SHA-256 over type tag plus 12 row-major LE doubles.
+        assert_eq!(
+            digest(frame),
+            [
+                0xde, 0x81, 0x8e, 0x00, 0xee, 0x3e, 0x96, 0xe8, 0x1f, 0x1b, 0x70, 0xc4, 0x27, 0x96,
+                0xd2, 0x4a, 0x76, 0xb9, 0xcb, 0x0b, 0xcb, 0x7f, 0x0f, 0xf0, 0x7e, 0x42, 0x38, 0xfe,
+                0xb8, 0x83, 0xac, 0x79
+            ]
+        );
+        for index in 0..12 {
+            let mut components = frame.components();
+            components[index] += 0.25;
+            let changed = CFrame::from_parts(
+                Vec3::new(components[0], components[1], components[2]),
+                [
+                    [components[3], components[4], components[5]],
+                    [components[6], components[7], components[8]],
+                    [components[9], components[10], components[11]],
+                ],
+            );
+            assert_ne!(digest(frame), digest(changed), "component {index}");
+        }
+        let mut negative_zero = CFrame::IDENTITY;
+        negative_zero.position.x = -0.0;
+        assert_ne!(digest(CFrame::IDENTITY), digest(negative_zero));
+    }
+
+    #[test]
     fn server_only_metadata_is_enforced_before_source_special_cases() {
         let mut def = prop();
         def.repl = Repl::ServerOnly;
         assert!(!property_allowed("Part", &def));
         assert!(!property_allowed("LocalScript", &def));
+        def.repl = Repl::Replicated;
+        def.hidden = true;
+        assert!(property_allowed("Part", &def)); // UI/Luau hidden is not confidential.
     }
 
     #[test]

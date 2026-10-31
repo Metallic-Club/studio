@@ -126,6 +126,34 @@ impl Harness {
         }
         self.frame(events);
     }
+
+    /// Like [`Self::pointer`], with keyboard modifiers held (sent as egui receives them).
+    fn pointer_with(&mut self, pos: Pos2, pressed: Option<bool>, modifiers: Modifiers) {
+        let mut events = vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)];
+        if let Some(pressed) = pressed {
+            events.push(Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            });
+        }
+        self.frame(events);
+    }
+
+    /// Screen rectangle of the AccessKit node whose label starts with `prefix`.
+    fn node_rect(&self, prefix: &str) -> Option<Rect> {
+        let u = self.last_accesskit.as_ref()?;
+        u.nodes.iter().find_map(|(_, n)| {
+            let b = n
+                .bounds()
+                .filter(|_| n.label().is_some_and(|l| l.starts_with(prefix)))?;
+            Some(Rect::from_min_max(
+                pos2(b.x0 as f32, b.y0 as f32),
+                pos2(b.x1 as f32, b.y1 as f32),
+            ))
+        })
+    }
 }
 
 #[test]
@@ -386,6 +414,133 @@ fn the_popover_has_the_spec_size() {
     let size = h.popover.rect().size();
     assert_eq!(size.x, popover::WIDTH, "{size:?}");
     assert!((size.y - popover::HEIGHT).abs() <= 1.0, "{size:?}");
+}
+
+#[test]
+fn alt_press_without_movement_adds_no_undo_step() {
+    let mut h = Harness::open(Rgb8::from_u32(0x336699), 3);
+    let before = h.popover.colour();
+    let c = h.popover.wheel_centre();
+    let r = RING / 2.0 - RING_THICKNESS / 2.0;
+    // Press on the band away from the marker, hold Alt, release on the same spot.
+    let spot = c + vec2(r, 0.0);
+    h.pointer_with(spot, None, Modifiers::ALT);
+    h.pointer_with(spot, Some(true), Modifiers::ALT);
+    h.pointer_with(spot, None, Modifiers::ALT);
+    h.pointer_with(spot, Some(false), Modifiers::ALT);
+    h.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    let edits: Vec<_> = h
+        .events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                ColourEvent::Commit { .. } | ColourEvent::CommitHueShift { .. }
+            )
+        })
+        .collect();
+    assert!(edits.is_empty(), "{edits:?}");
+    assert_eq!(
+        h.popover.colour(),
+        before,
+        "the press alone must not jump the hue"
+    );
+}
+
+#[test]
+fn alt_drag_shifts_hue_by_the_pointer_turn() {
+    let mut h = Harness::open(Rgb8::from_u32(0x336699), 3);
+    let start_hue = h.popover.hsv().h;
+    let c = h.popover.wheel_centre();
+    let r = RING / 2.0 - RING_THICKNESS / 2.0;
+    let at = |deg: f32| {
+        let a = (deg - 90.0).to_radians();
+        c + vec2(a.cos(), a.sin()) * r
+    };
+    h.pointer_with(at(90.0), None, Modifiers::ALT);
+    h.pointer_with(at(90.0), Some(true), Modifiers::ALT);
+    for step in 1..=4 {
+        h.pointer_with(at(90.0 + step as f32 * 10.0), None, Modifiers::ALT);
+    }
+    h.pointer_with(at(130.0), Some(false), Modifiers::ALT);
+    h.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    let shifts: Vec<_> = h
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            ColourEvent::CommitHueShift { degrees, undo_name } => {
+                Some((*degrees, undo_name.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shifts.len(), 1, "{:?}", h.events);
+    assert!((shifts[0].0 - 40.0).abs() < 0.5, "{shifts:?}");
+    assert_eq!(shifts[0].1, "Hue shift: +40° (3 parts)");
+    assert!((h.popover.hsv().h - (start_hue + 40.0)).abs() < 0.5);
+    assert!(
+        h.commits().is_empty(),
+        "a hue shift is not a set-colour step"
+    );
+}
+
+#[test]
+fn dragging_a_palette_swatch_drops_it_on_the_nearest_slot() {
+    let mut h = Harness::open(Rgb8::from_u32(0x336699), 1);
+    let colours: Vec<Rgb8> = [0x111111, 0x222222, 0x333333, 0x444444]
+        .map(Rgb8::from_u32)
+        .to_vec();
+    h.library.palettes = PaletteStore::in_memory(vec![Palette {
+        name: "Test".into(),
+        colours: colours.clone(),
+        read_only: false,
+    }]);
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    // Only the row's tab stop (the first swatch) reports bounds; swatches are 16 px, 4 px apart.
+    let from = h.node_rect("#111111").expect("first swatch");
+    let to = from.translate(vec2(2.0 * 20.0, 0.0));
+    // Drop a little below the row: the nearest slot by x and y is still the third.
+    let drop = to.center() + vec2(1.0, 6.0);
+    h.pointer(from.center(), None);
+    h.pointer(from.center(), Some(true));
+    for i in 1..=6 {
+        h.pointer(
+            from.center() + (drop - from.center()) * (i as f32 / 6.0),
+            None,
+        );
+    }
+    h.pointer(drop, Some(false));
+    h.frame(Vec::new());
+    let order: Vec<u32> = h.library.palettes.palettes()[0]
+        .colours
+        .iter()
+        .map(|c| u32::from(c.r))
+        .collect();
+    assert_eq!(order, [0x22, 0x33, 0x11, 0x44]);
+}
+
+#[test]
+fn nearest_slot_works_in_wrapped_and_grid_layouts() {
+    let slot = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), vec2(16.0, 16.0));
+    // Two rows of three, as a wrapped palette would lay out.
+    let grid = [
+        slot(0.0, 0.0),
+        slot(20.0, 0.0),
+        slot(40.0, 0.0),
+        slot(0.0, 20.0),
+        slot(20.0, 20.0),
+        slot(40.0, 20.0),
+    ];
+    // Same x as slot 1, but on the second row: x alone would pick slot 1.
+    assert_eq!(popover::nearest_slot(&grid, pos2(28.0, 29.0)), Some(4));
+    assert_eq!(popover::nearest_slot(&grid, pos2(2.0, 25.0)), Some(3));
+    assert_eq!(popover::nearest_slot(&grid, pos2(46.0, 3.0)), Some(2));
+    // Past the end of the second row: the last slot.
+    assert_eq!(popover::nearest_slot(&grid, pos2(90.0, 30.0)), Some(5));
+    // Above the grid: the top row.
+    assert_eq!(popover::nearest_slot(&grid, pos2(22.0, -30.0)), Some(1));
+    assert_eq!(popover::nearest_slot(&[], pos2(0.0, 0.0)), None);
 }
 
 use popover::{RING, RING_THICKNESS, SQUARE};

@@ -183,3 +183,34 @@ fn invalid_viewers_and_unknown_properties_fail_closed() {
         .is_some_and(|fake| instance_visible(&world, fake, None));
     assert!(!exposed);
 }
+#[test]
+fn boxed_pivot_values_and_hidden_bookkeeping_are_replicated_as_owned_data() {
+    use metallic_core::{CFrame, Vec3};
+    let mut world = World::new_with_services();
+    let workspace = world.root("Workspace").unwrap();
+    let part = world.create("Part", Some(workspace)).unwrap();
+    let frame = CFrame::from_position(Vec3::new(1.0, 2.0, 3.0));
+    world
+        .set(part, "PivotOffset", Value::CFrame(Box::new(frame)))
+        .unwrap();
+    let Some(Value::CFrame(mut outgoing)) = property_value(&world, part, "PivotOffset", None)
+    else {
+        panic!("visible pivot value");
+    };
+    assert_eq!(*outgoing, frame);
+    outgoing.position.x = 999.0;
+    assert_eq!(
+        world.get(part, "PivotOffset").unwrap(),
+        Value::CFrame(Box::new(frame))
+    );
+    let model = world.create("Model", Some(workspace)).unwrap();
+    let bookkeeping = metallic_core::classes::all_properties("Model")
+        .into_iter()
+        .find(|property| property.hidden)
+        .unwrap();
+    assert!(property_visible(&world, model, bookkeeping.name, None));
+    assert_eq!(
+        property_value(&world, model, bookkeeping.name, None),
+        world.get(model, bookkeeping.name).ok()
+    );
+}
