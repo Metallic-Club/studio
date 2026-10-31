@@ -246,3 +246,24 @@ fn style_open_is_locked_while_playing_and_needs_a_selection() {
     assert!(h.state_mut().state.start_play("play.start"));
     assert!(!enabled(&h), "locked while playing");
 }
+
+#[test]
+fn play_during_a_hover_preview_closes_the_picker_and_starts_on_the_unchanged_world() {
+    let (ui, sc) = editor();
+    let (mut h, _) = harness(ui);
+    h.state_mut().state.selection.select_only(sc.model);
+    h.run_steps(2);
+    open(&mut h);
+    h.run_steps(2);
+    h.get_by_label(RETRO).hover();
+    h.run_steps(1);
+    std::thread::sleep(Duration::from_millis(170));
+    h.run_steps(2);
+    assert!(h.state().state.gesture_active(), "a preview is a gesture");
+    h.state_mut().run_action("play.start");
+    h.run_steps(3);
+    assert!(h.state().state.play.is_playing(), "Play started");
+    assert!(!h.state().style_picker.is_open());
+    assert_eq!(look(&h, sc.model), "inherit", "the preview was cancelled");
+    assert!(h.state().state.history.is_empty());
+}
