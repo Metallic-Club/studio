@@ -528,6 +528,12 @@ impl ScriptVm {
         Ok(lib)
     }
 
+    /// The tables every script environment is made from (`lib` and `_G`), for code that loads
+    /// chunks itself (`require`).
+    pub(crate) fn env_parts(&self) -> (Table, Table) {
+        (self.lib.clone(), self.shared_g.clone())
+    }
+
     /// Which side this VM runs on.
     pub fn context(&self) -> Context {
         self.context
@@ -616,14 +622,7 @@ impl ScriptVm {
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),
         };
-        let env = self.lua.create_table().map_err(to_err)?;
-        let meta = self.lua.create_table().map_err(to_err)?;
-        meta.set("__index", self.lib.clone()).map_err(to_err)?;
-        env.set_metatable(Some(meta)).map_err(to_err)?;
-        env.set("_G", self.shared_g.clone()).map_err(to_err)?;
-        for (name, value) in globals {
-            env.set(name, value).map_err(to_err)?;
-        }
+        let env = script_env(&self.lua, &self.lib, &self.shared_g, globals).map_err(to_err)?;
         let function = self
             .lua
             .load(source)
@@ -656,6 +655,25 @@ impl ScriptVm {
     pub fn shutdown(self) {
         self.sched.clear();
     }
+}
+
+/// A script environment: an empty table that reads through to the library, with the shared `_G`
+/// and `globals` (for example `script`) set in it.
+pub(crate) fn script_env(
+    lua: &Lua,
+    lib: &Table,
+    shared_g: &Table,
+    globals: Vec<(&str, Value)>,
+) -> mlua::Result<Table> {
+    let env = lua.create_table()?;
+    let meta = lua.create_table()?;
+    meta.set("__index", lib.clone())?;
+    env.set_metatable(Some(meta))?;
+    env.set("_G", shared_g.clone())?;
+    for (name, value) in globals {
+        env.set(name, value)?;
+    }
+    Ok(env)
 }
 
 /// `"<chunk>:<line>: "` of the nearest script frame at or above stack `level`, skipping C

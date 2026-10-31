@@ -208,7 +208,7 @@ pub fn paint_class(painter: &egui::Painter, rect: Rect, class: &str, c: Color32)
                 painter.circle_filled(o, 2.0, ui_tokens().icon_hole);
             }
         }
-        "Script" | "LocalScript" => {
+        "Script" | "LocalScript" | "ModuleScript" => {
             let page = Rect::from_center_size(o, vec2(10.0, 12.0));
             painter.rect_stroke(page, 1.0, s, egui::StrokeKind::Middle);
             for i in 0..3 {
@@ -226,7 +226,7 @@ pub fn paint_class(painter: &egui::Painter, rect: Rect, class: &str, c: Color32)
             painter.line_segment([o + vec2(6.0, 3.0), o + vec2(-5.0, 3.0)], s);
             head(painter, o + vec2(-6.0, 3.0), vec2(-1.0, 0.0), c);
         }
-        "ScreenGui" | "Frame" | "TextLabel" => {
+        "ScreenGui" | "Frame" | "TextLabel" | "TextButton" | "ImageButton" => {
             painter.rect_stroke(
                 Rect::from_center_size(o, vec2(13.0, 9.0)),
                 1.5,

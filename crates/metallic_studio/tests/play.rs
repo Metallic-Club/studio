@@ -516,8 +516,8 @@ fn tab_space_and_enter_go_to_the_game_not_to_a_focused_button() {
     assert!(top > standing + 0.2, "Space jumps: {standing} -> {top}");
 }
 
-#[test]
-fn escape_answers_the_close_prompt_and_play_goes_on() {
+/// An edit world with one unsaved change, in the harness.
+fn dirty_harness() -> Harness<'static, EditorUi> {
     let output = OutputPanel::new();
     let (world, part) = world("");
     let mut state = EditorState::new(
@@ -536,20 +536,40 @@ fn escape_answers_the_close_prompt_and_play_goes_on() {
             Value::Number(0.5),
         ))
         .unwrap();
-    let mut h = harness(state, output);
+    harness(state, output)
+}
+
+#[test]
+fn quitting_while_playing_stops_the_game_before_the_prompt() {
+    let mut h = dirty_harness();
     h.key_press(egui::Key::F5);
     h.run_steps(2);
     assert!(h.state().state.play.is_playing());
     assert!(!h.state_mut().request_quit(), "unsaved changes ask first");
+    assert!(!h.state().state.play.is_playing(), "the game stops first");
     h.run_steps(2);
     assert!(h.state().is_confirming());
+    // Esc answers the prompt (Cancel); the editor stays open in edit mode.
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(!h.state().is_confirming(), "Esc closes the prompt");
-    assert!(h.state().state.play.is_playing(), "Esc did not stop Play");
-    h.key_press(egui::Key::Escape);
+    assert!(!h.state().state.play.is_playing());
+    assert!(h.state().state.is_dirty(), "nothing was saved or dropped");
+}
+
+#[test]
+fn ctrl_w_while_playing_stops_play_then_asks() {
+    let mut h = dirty_harness();
+    h.key_press(egui::Key::F5);
     h.run_steps(2);
-    assert!(!h.state().state.play.is_playing(), "a second Esc stops");
+    assert!(h.state().state.play.is_playing());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(2);
+    assert!(!h.state().state.play.is_playing(), "Ctrl+W stops Play");
+    assert!(
+        h.state().is_confirming(),
+        "then the unsaved-changes guard asks"
+    );
 }
 
 /// Nothing from the building UI draws over the running game (#384): the contextual toolbar and the
@@ -601,4 +621,49 @@ fn no_floating_toolbar_header_chip_or_hint_card_over_the_game() {
             "a Studio button over the game at {r:?}"
         );
     }
+}
+
+/// Every action the editor registers (built-ins, building tools, panels, colour), except the
+/// few in `PLAY_SAFE`, is disabled while playing, including those registered after
+/// `default_actions()` (#380 re-registers the tool actions).
+#[test]
+fn every_action_outside_play_safe_is_locked_while_playing() {
+    let output = OutputPanel::new();
+    let (mut state, part) = editor("", &output.log);
+    state.selection.select_only(part);
+    let mut ui = EditorUi::new(state, output);
+    assert!(
+        ui.actions
+            .get("tool.move")
+            .is_some_and(|a| a.is_enabled(&ui.state))
+    );
+    assert!(ui.state.start_play("play.start"));
+    let mut checked = 0;
+    for a in ui.actions.iter() {
+        if metallic_studio::actions::PLAY_SAFE.contains(&a.id) {
+            continue;
+        }
+        assert!(
+            !a.is_enabled(&ui.state),
+            "{} is enabled while playing",
+            a.id
+        );
+        checked += 1;
+    }
+    assert!(checked > 40, "the whole registry was checked ({checked})");
+    for id in [
+        "tool.select",
+        "tool.move",
+        "build.align",
+        "colour.open",
+        "view.input_actions",
+    ] {
+        assert!(ui.actions.get(id).is_some(), "{id} is registered");
+    }
+    ui.state.stop_play();
+    assert!(
+        ui.actions
+            .get("tool.move")
+            .is_some_and(|a| a.is_enabled(&ui.state))
+    );
 }
