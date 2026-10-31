@@ -362,7 +362,7 @@ fn bundled_settings_page_can_change_everything_and_see_everything() {
     let value = set(json!({"developerMode": true, "devUrl": "http://127.0.0.1:5173"}));
     assert_eq!(
         value,
-        json!({"ok": {"closeToTray": true, "developerMode": true, "devUrl": "http://127.0.0.1:5173", "channel": "dev"}})
+        json!({"ok": {"closeToTray": true, "developerMode": true, "devUrl": "http://127.0.0.1:5173", "channel": "dev", "theme": "graphite"}})
     );
     // null clears the address; a bad address changes nothing.
     let value = set(json!({"devUrl": null}));
@@ -372,6 +372,13 @@ fn bundled_settings_page_can_change_everything_and_see_everything() {
     let value = set(json!({"devUrl": "https://metallic.example/with/path", "closeToTray": false}));
     assert_eq!(value, json!({"error": "badRequest"}));
     assert!(host.settings.lock().unwrap().close_to_tray);
+    // The page theme: the four words are accepted, anything else is a bad request.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(set(json!({"theme": "light"}))["ok"]["theme"], "light");
+    assert_eq!(
+        set(json!({"theme": "neon"})),
+        json!({"error": "badRequest"})
+    );
 }
 
 #[test]
@@ -410,25 +417,35 @@ fn play_rejects_non_play_links() {
     assert!(host.calls().is_empty());
 }
 
+/// #289: the bridge has no Play limit of its own; the shell's launch gate (one for links, the
+/// bridge and the tray) is the limit, and its `busy` reaches the page.
 #[test]
-fn play_is_rate_limited() {
+fn play_rate_limit_is_the_hosts() {
     let (bridge, host) = (bridge(), FakeHost::default());
     let body = json!({"id": 1, "cmd": "play", "args": {"launchUri": PLAY}}).to_string();
-    assert_eq!(
-        answer(&call(&bridge, &host, SITE, &body).unwrap()),
-        json!({"ok": {}})
-    );
+    for _ in 0..2 {
+        assert_eq!(
+            answer(&call(&bridge, &host, SITE, &body).unwrap()),
+            json!({"ok": {}})
+        );
+    }
+    assert_eq!(host.calls(), ["play", "play"]);
+    *host.play_error.lock().unwrap() = Some(BridgeErrorCode::Busy);
     assert_eq!(error_of(call(&bridge, &host, SITE, &body)), "busy");
-    assert_eq!(host.calls(), ["play"]);
-    // A refused (bad) link does not use up the slot of a later good one.
-    let (bridge, host) = (self::bridge(), FakeHost::default());
+    // A bad link never reaches the host.
     let bad =
         json!({"id": 1, "cmd": "play", "args": {"launchUri": "metallic://install"}}).to_string();
     assert_eq!(error_of(call(&bridge, &host, SITE, &bad)), "badLink");
-    assert_eq!(
-        answer(&call(&bridge, &host, SITE, &body).unwrap()),
-        json!({"ok": {}})
-    );
+    assert_eq!(host.calls().len(), 3);
+}
+
+/// #289: `getInfo.channel` is the channel the Launcher runs on.
+#[test]
+fn launcher_info_reports_the_running_channel() {
+    let info = LauncherInfo::running(metallic_update::Channel::Stable, false);
+    assert_eq!(info.channel, "stable");
+    assert_eq!(info.bridge_version, BRIDGE_VERSION);
+    assert_eq!(info.launcher_version, env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
@@ -826,6 +843,7 @@ fn site_cannot_set_local_only_settings() {
         json!({"closeToTray": true, "developerMode": true, "devUrl": null}),
         json!({"channel": "stable"}),
         json!({"closeToTray": true, "channel": "dev"}),
+        json!({"theme": "light"}),
     ] {
         for page in [SITE, DEV] {
             let body = json!({"id": 1, "cmd": "setSettings", "args": {"patch": patch}}).to_string();

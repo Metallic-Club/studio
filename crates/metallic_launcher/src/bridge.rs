@@ -47,7 +47,7 @@
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -56,6 +56,7 @@ use url::Url;
 use crate::deep_link::{DeepLink, PlaceId};
 use crate::settings::{LauncherSettings, SettingsPatch};
 use crate::url_policy::{PageOrigin, UrlPolicy};
+use metallic_update::Channel;
 
 /// The version of the message format. The site checks it before using the bridge.
 pub const BRIDGE_VERSION: u32 = 1;
@@ -65,8 +66,6 @@ pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 /// while the host works on it: an answer that waits to be delivered holds no place, and long
 /// work (an install, a download) is done in the background, so it holds none either.
 pub const MAX_IN_FLIGHT: usize = 32;
-/// The shortest time between two Player starts.
-const PLAY_INTERVAL: Duration = Duration::from_secs(2);
 /// How many messages a page may send: a steady rate and a burst (more are answered `busy`).
 const MESSAGES_PER_SECOND: f64 = 20.0;
 const MESSAGE_BURST: f64 = 40.0;
@@ -159,8 +158,8 @@ pub fn allowed(origin: PageOrigin, cmd: &BridgeCommand) -> bool {
         PageOrigin::Other => false,
         PageOrigin::Site => match cmd {
             BridgeCommand::GithubSignIn | BridgeCommand::RetrySite => false,
-            // Developer mode, the development address and the update channel are for the
-            // Launcher's own settings page.
+            // Developer mode, the development address, the update channel and the page theme are
+            // for the Launcher's own settings page.
             // Listed field by field with no `..`: a new setting does not compile until it is
             // put on one side or the other, so it can never default to "the site may set it".
             BridgeCommand::SetSettings { patch } => {
@@ -169,6 +168,7 @@ pub fn allowed(origin: PageOrigin, cmd: &BridgeCommand) -> bool {
                     developer_mode: None,
                     dev_url: None,
                     channel: None,
+                    theme: None,
                 } = patch
                 else {
                     return false;
@@ -221,10 +221,25 @@ pub struct LauncherInfo {
     pub bridge_version: u32,
     /// The operating system, `"windows"`.
     pub platform: &'static str,
-    /// The update channel.
+    /// The update channel this Launcher runs on (chosen at start; a changed setting applies
+    /// from the next start).
     pub channel: String,
     /// True in developer mode.
     pub dev_mode: bool,
+}
+
+impl LauncherInfo {
+    /// The info of this build running on `channel` (the channel it started with, not the
+    /// saved setting).
+    pub fn running(channel: Channel, dev_mode: bool) -> Self {
+        LauncherInfo {
+            launcher_version: env!("CARGO_PKG_VERSION").to_string(),
+            bridge_version: BRIDGE_VERSION,
+            platform: "windows",
+            channel: channel.as_str().to_string(),
+            dev_mode,
+        }
+    }
 }
 
 /// The things the bridge can do. The shell implements this; tests use a recording fake.
@@ -344,7 +359,6 @@ impl fmt::Debug for PendingReply {
 pub struct Bridge {
     policy: UrlPolicy,
     in_flight: Arc<AtomicUsize>,
-    last_play: Mutex<Option<Instant>>,
     /// Budget for all messages: about 20 a second, bursts of 40.
     budget: Mutex<Bucket>,
     /// Budget for commands that write to disk (`setSettings`): 2 a second.
@@ -472,6 +486,7 @@ fn settings_view(origin: PageOrigin, settings: &LauncherSettings) -> Value {
             "developerMode": settings.developer_mode,
             "devUrl": settings.dev_url,
             "channel": settings.channel.as_str(),
+            "theme": settings.theme.as_str(),
         })
     } else {
         json!({ "closeToTray": settings.close_to_tray })
@@ -492,7 +507,6 @@ impl Bridge {
         Bridge {
             policy,
             in_flight: Arc::new(AtomicUsize::new(0)),
-            last_play: Mutex::new(None),
             budget: Mutex::new(Bucket::new(MESSAGES_PER_SECOND, MESSAGE_BURST)),
             write_budget: Mutex::new(Bucket::new(WRITES_PER_SECOND, WRITES_PER_SECOND)),
         }
@@ -628,7 +642,7 @@ impl Bridge {
                     Ok(link @ DeepLink::Play { .. }) => link,
                     _ => return Err(BridgeErrorCode::BadLink),
                 };
-                self.take_play_slot()?;
+                // The rate limit is the shell's launch gate, shared by every way of starting.
                 done(host.play(link))
             }
             BridgeCommand::InstallStatus => Ok(host.install_status()),
@@ -658,17 +672,6 @@ impl Bridge {
             }
             BridgeCommand::RestartToUpdate => done(host.restart_to_update()),
         }
-    }
-
-    /// Allows one Player start per [`PLAY_INTERVAL`]; `Busy` otherwise.
-    fn take_play_slot(&self) -> Result<(), BridgeErrorCode> {
-        let mut last = self.last_play.lock().map_err(|_| BridgeErrorCode::Failed)?;
-        let now = Instant::now();
-        if last.is_some_and(|before| now.duration_since(before) < PLAY_INTERVAL) {
-            return Err(BridgeErrorCode::Busy);
-        }
-        *last = Some(now);
-        Ok(())
     }
 
     /// The script that gives `reply` to the page now showing at `current_page_url`, or `None`

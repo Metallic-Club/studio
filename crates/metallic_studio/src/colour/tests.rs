@@ -19,7 +19,7 @@ struct Harness {
 impl Harness {
     fn open(colour: Rgb8, targets: usize) -> Self {
         let ctx = egui::Context::default();
-        crate::theme::apply(&ctx);
+        crate::theme::apply(&ctx, crate::theme::ThemeId::Graphite);
         ctx.enable_accesskit();
         let mut popover = ColourPopover::new("test");
         popover.open(colour, targets, false, pos2(40.0, 40.0));

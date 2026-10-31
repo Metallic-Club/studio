@@ -2,11 +2,12 @@
 use crate::{MAX_FRAME_DT, PlayerInput, RuntimeError, Simulation, StdoutSink};
 const ROOT_PART: &str = "HumanoidRootPart";
 use crate::avatar::{Avatar, default_model};
+use crate::body_pose::locomotion_input;
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
+use crate::gui_input::{GuiInput, PointerId, PointerPhase};
 use crate::input::{
     ActionEvent, ActionEventKind, ActionId, ActionValue, DeviceKind, FrameInput, InputRuntime,
 };
-use crate::locomotion::{LocomotionInput, Support};
 use metallic_core::{InstanceId, Value, Vec3, World};
 use metallic_physics::{HumanoidState, MoveInput};
 use metallic_render::glam::Vec3 as GVec3;
@@ -45,6 +46,7 @@ pub struct Game {
     input_device_changes: Option<u64>,
     /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
     gui_inset: f32,
+    gui_input: GuiInput,
 }
 
 impl Game {
@@ -85,6 +87,7 @@ impl Game {
             avatar: None,
             input_device_changes: None,
             gui_inset: 0.0,
+            gui_input: GuiInput::new(),
         }
     }
 
@@ -124,7 +127,8 @@ impl Game {
     }
 
     /// Starts the game: runs the scripts (which creates the local player `Player1`), copies the
-    /// contents of `StarterGui` into the player's `PlayerGui` (once; M1 has no ResetOnSpawn),
+    /// contents of `StarterGui` into the player's `PlayerGui` (once per start; a restart replaces
+    /// the previous copies, while retaining runtime-created GUI),
     /// spawns the character on the first `SpawnLocation` and fires `CharacterAdded`.
     /// Calling it again while running does nothing.
     ///
@@ -135,12 +139,14 @@ impl Game {
         }
         self.simulation.start()?;
         self.focus = self.root_position().unwrap_or_default();
+        self.gui_input.reset();
         Ok(())
     }
 
     /// Stops the scripts, retaining the last World state.
     pub fn stop(&mut self) {
         self.simulation.stop();
+        self.gui_input.reset();
     }
 
     /// Evaluates the player's input for one frame and connects it to the scripts; call it before
@@ -252,6 +258,9 @@ impl Game {
             0.0
         };
         self.camera.apply_input(input);
+        for event in self.gui_input.drain_events() {
+            self.simulation.scripts.gui_event(event);
+        }
         let sample = self.simulation.player.map(|player| PlayerInput {
             player,
             input: MoveInput {
@@ -265,7 +274,7 @@ impl Game {
             .simulation
             .character
             .and_then(|c| self.simulation.characters.state(c));
-        self.update_avatar(state, dt as f32);
+        self.update_avatar(dt as f32);
         if state != Some(HumanoidState::Dead)
             && let Some(root) = self.root_position()
         {
@@ -345,13 +354,44 @@ impl Game {
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.simulation.world.try_borrow() {
-            crate::gui::paint(&world, painter, self.gui_inset);
+            let input = &self.gui_input;
+            crate::gui::paint_shaded(&world, painter, self.gui_inset, &|id| input.shade(id));
+        }
+    }
+
+    /// Gives a pointer event to the GUI before the game's input: the left mouse button and
+    /// position, or a finger, at `at` GUI points (window pixels over the scale factor) on a
+    /// `screen` of width x height points. Returns true when the GUI took it; the caller must
+    /// then not pass it (nor that press's moves and release) to the [`InputRuntime`], so a
+    /// click on a button never also drives the camera or a jump. The events reach the client
+    /// scripts in the next [`Game::frame`]'s first tick. Does nothing (false) while stopped.
+    pub fn gui_pointer(
+        &mut self,
+        pointer: PointerId,
+        phase: PointerPhase,
+        at: [f32; 2],
+        screen: [f32; 2],
+    ) -> bool {
+        if !self.simulation.running {
+            return false;
+        }
+        let Ok(world) = self.simulation.world.try_borrow() else {
+            return false;
+        };
+        self.gui_input
+            .pointer(&world, screen, self.gui_inset, pointer, phase, at)
+    }
+
+    /// The mouse left the window: the GUI elements under it get `MouseLeave`.
+    pub fn gui_mouse_left(&mut self, at: [f32; 2]) {
+        if self.simulation.running {
+            self.gui_input.mouse_left(at);
         }
     }
 
     /// Moves and animates the local character's avatar; a new character (after a respawn) gets a
     /// fresh one.
-    fn update_avatar(&mut self, state: Option<HumanoidState>, dt: f32) {
+    fn update_avatar(&mut self, dt: f32) {
         let (Some(character), Some((root, yaw))) = (self.simulation.character, self.root_pose())
         else {
             self.avatar = None;
@@ -365,22 +405,7 @@ impl Game {
         let Some((_, avatar)) = self.avatar.as_mut() else {
             return;
         };
-        let support = match state {
-            Some(HumanoidState::Running) | None => Support::Grounded,
-            Some(HumanoidState::Jumping) => Support::Rising,
-            Some(HumanoidState::Freefall) => Support::Falling,
-            Some(HumanoidState::Dead) => Support::Frozen,
-        };
-        let v = self
-            .simulation
-            .characters
-            .relative_velocity(character)
-            .unwrap_or_default();
-        let speed = (v.x * v.x + v.z * v.z).sqrt() as f32;
-        let input = LocomotionInput {
-            vertical: v.y as f32,
-            ..LocomotionInput::new(speed, support)
-        };
+        let input = locomotion_input(&self.simulation.characters, character);
         avatar.update(root, yaw, input, dt);
     }
 
@@ -442,6 +467,7 @@ fn input_value(v: ActionValue) -> InputValue {
 mod tests {
     use super::*;
     use crate::{TICK, locomotion::state};
+    use metallic_physics::RESPAWN_DELAY;
 
     struct Silent;
     impl OutputSink for Silent {
@@ -545,5 +571,109 @@ mod tests {
         assert_eq!(seen, [state::JUMP, state::FALL, state::LAND]);
         run(&mut g, FrameInput::default(), 0.6);
         assert_eq!(avatar(&g).locomotion().state(), state::GROUND);
+    }
+    /// #273: a Died handler that takes the body out of the Workspace (without destroying it)
+    /// gets exactly one new character, and `Player.Character` is that one.
+    #[test]
+    fn a_body_removed_on_death_respawns_once() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.2);
+        let player = g.player().unwrap();
+        let old = g.character().unwrap();
+        {
+            let mut w = g.simulation.world.borrow_mut();
+            let humanoid = w.find_first_child(old, "Humanoid").unwrap();
+            w.set(humanoid, "Health", Value::Number(0.0)).unwrap();
+        }
+        g.frame(&FrameInput::default(), TICK);
+        // What the Died handler does.
+        g.simulation
+            .world
+            .borrow_mut()
+            .set_parent(old, None)
+            .unwrap();
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY + 1.0);
+        let w = g.simulation.world.borrow();
+        let ws = w.root("Workspace").unwrap();
+        let models: Vec<_> = w
+            .children(ws)
+            .iter()
+            .copied()
+            .filter(|&c| w.is_a(c, "Model"))
+            .collect();
+        assert_eq!(models.len(), 1, "one character: {models:?}");
+        assert_eq!(g.character(), Some(models[0]));
+        assert_eq!(
+            w.get(player, "Character").unwrap(),
+            Value::Ref(Some(models[0]))
+        );
+    }
+
+    fn screen_guis(g: &Game) -> usize {
+        let w = g.simulation.world.borrow();
+        let Some(gui) = crate::gui::local_player_gui(&w) else {
+            return 0;
+        };
+        w.children(gui)
+            .iter()
+            .filter(|&&c| w.is_a(c, "ScreenGui"))
+            .count()
+    }
+
+    /// #273: stop then start again gives one copy of the StarterGui, not two.
+    #[test]
+    fn a_restart_does_not_duplicate_the_hud() {
+        let mut w = World::new_with_services();
+        let starter = w.root("StarterGui").unwrap();
+        let hud = w.create("ScreenGui", Some(starter)).unwrap();
+        w.set(hud, "Name", Value::String("HUD".into())).unwrap();
+        let mut g = Game::from_world("test".into(), w, Rc::new(Silent));
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 1);
+        g.stop();
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 1, "one HUD after a restart");
+        // A GUI a script made at run time is not ours to remove.
+        {
+            let mut w = g.simulation.world.borrow_mut();
+            let gui = crate::gui::local_player_gui(&w).unwrap();
+            w.create("ScreenGui", Some(gui)).unwrap();
+        }
+        g.stop();
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 2);
+    }
+
+    /// #273: a script that destroys the character gets a new one after the respawn delay.
+    #[test]
+    fn a_destroyed_character_respawns_after_the_delay() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.2);
+        let old = g.character().unwrap();
+        g.simulation.world.borrow_mut().destroy(old);
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY - 0.5);
+        assert_eq!(g.character(), Some(old), "not before the delay");
+        run(&mut g, FrameInput::default(), 1.0);
+        let new = g.character().unwrap();
+        assert_ne!(new, old);
+        assert!(g.simulation.world.borrow().is_alive(new));
+        assert!(g.root_position().is_some());
+        let player = g.player().unwrap();
+        assert_eq!(
+            g.simulation
+                .world
+                .borrow()
+                .get(player, "Character")
+                .unwrap(),
+            Value::Ref(Some(new))
+        );
+        // Removed from the Workspace without being destroyed counts too.
+        g.simulation
+            .world
+            .borrow_mut()
+            .set_parent(new, None)
+            .unwrap();
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY + 0.5);
+        assert_ne!(g.character(), Some(new));
     }
 }

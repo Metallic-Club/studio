@@ -1,8 +1,12 @@
 //! CPU fixed-step orchestration shared by the server simulation and presentation Game.
+use crate::body_pose::CharacterBodies;
 use crate::physics_sync::PhysicsSyncCache;
 use crate::{ProjectConfig, RuntimeError};
 use metallic_core::{InstanceId, Value, World, load_scene};
-use metallic_physics::{CharacterController, CharacterEvent, PhysicsWorld, spawn_character};
+use metallic_physics::{
+    CharacterController, CharacterEvent, HumanoidState, PhysicsWorld, RESPAWN_DELAY,
+    spawn_character,
+};
 pub use metallic_physics::{MoveInput, RUN_MULTIPLIER};
 use metallic_script::{LOCAL_PLAYER_NAME, OutputSink, ScriptHost};
 use std::{cell::RefCell, path::Path, rc::Rc};
@@ -45,7 +49,8 @@ pub struct PlayerInput {
     pub input: MoveInput,
 }
 
-/// World, physics, characters and scripts without camera, avatar, GUI or rendering.
+/// World, physics, characters and scripts without camera, GUI or rendering.
+/// CPU skeletal animation drives limb touch volumes independently of the drawn avatar.
 /// Public constructors select server-only scripts and never create a synthetic player.
 /// The default presentation Game uses a private Combined constructor over this same kernel.
 /// The trusted World must give each Player a distinct live Character reference: sharing
@@ -64,6 +69,9 @@ pub struct Simulation {
     pub(crate) running: bool,
     combined: bool,
     ticks: u64,
+    bodies: CharacterBodies,
+    gui_copies: Vec<InstanceId>,
+    character_gone: f64,
 }
 
 impl Simulation {
@@ -139,6 +147,9 @@ impl Simulation {
             running: false,
             combined,
             ticks: 0,
+            bodies: CharacterBodies::default(),
+            gui_copies: Vec::new(),
+            character_gone: 0.0,
         }
     }
 
@@ -191,6 +202,7 @@ impl Simulation {
         self.time = 0.0;
         self.accumulator = 0.0;
         self.ticks = 0;
+        self.character_gone = 0.0;
         self.running = true;
         Ok(())
     }
@@ -205,7 +217,10 @@ impl Simulation {
             .root("Players")
             .and_then(|p| world.find_first_child(p, LOCAL_PLAYER_NAME))
             .ok_or_else(|| RuntimeError::Start("no local player".into()))?;
-        copy_starter_gui(&mut world, player);
+        for old in self.gui_copies.drain(..) {
+            world.destroy(old);
+        }
+        self.gui_copies = copy_starter_gui(&mut world, player);
         let model = spawn_character(&mut world, player)
             .map_err(|e| RuntimeError::Start(format!("cannot spawn the character: {e}")))?;
         Ok((player, model))
@@ -256,6 +271,7 @@ impl Simulation {
             .ticks
             .checked_add(1)
             .expect("simulation tick counter exhausted");
+        let respawned;
         {
             let Ok(mut world) = self.world.try_borrow_mut() else {
                 return false;
@@ -269,6 +285,8 @@ impl Simulation {
                         input_for(inputs, player),
                         TICK,
                     );
+                    self.bodies
+                        .animate(&mut self.characters, &world, character, TICK as f32);
                 }
             } else if let Some(players) = world.root("Players") {
                 // Controller steps may replace a Character under Workspace, but do not mutate
@@ -292,9 +310,22 @@ impl Simulation {
                         input_for(inputs, player),
                         TICK,
                     );
+                    self.bodies
+                        .animate(&mut self.characters, &world, character, TICK as f32);
                 }
             }
             self.physics.step(&mut world, TICK);
+            respawned = respawn_if_gone(
+                &mut world,
+                &self.characters,
+                self.player,
+                &mut self.character_gone,
+            );
+        }
+        if let (Some(player), Some(character)) = (self.player, respawned) {
+            self.character = Some(character);
+            self.sync_physics_now();
+            self.scripts.character_added(player, character);
         }
         self.feed_events();
         self.time += TICK;
@@ -308,20 +339,22 @@ impl Simulation {
     fn feed_events(&mut self) {
         for event in self.characters.drain_events() {
             match event {
-                CharacterEvent::Touched { character, part } => {
-                    let hit = self
-                        .world
-                        .try_borrow()
-                        .ok()
-                        .and_then(|w| w.find_first_child(character, ROOT_PART));
-                    if let Some(hit) = hit {
-                        self.scripts.touched(part, hit);
-                    }
+                CharacterEvent::Touched { part, hit, .. } => {
+                    self.scripts.touched(part, hit);
+                    self.scripts.touched(hit, part);
+                }
+                CharacterEvent::TouchEnded { part, hit, .. } => {
+                    self.scripts.touch_ended(part, hit);
+                    self.scripts.touch_ended(hit, part);
                 }
                 CharacterEvent::Died { humanoid, .. } => self.scripts.humanoid_died(humanoid),
                 CharacterEvent::Respawned {
                     player, character, ..
                 } => {
+                    let alive = self.world.try_borrow().is_ok_and(|w| w.is_alive(character));
+                    if !alive {
+                        continue;
+                    }
                     if Some(player) == self.player {
                         self.character = Some(character);
                     }
@@ -363,10 +396,68 @@ fn input_for(inputs: &[PlayerInput], player: InstanceId) -> MoveInput {
         .map_or_else(MoveInput::default, |sample| sample.input)
 }
 
-/// Copies every child of `StarterGui` into the player's `PlayerGui`.
-fn copy_starter_gui(world: &mut World, player: InstanceId) {
+/// The one respawn timer for a character that is gone without dying (#273): a Model a script
+/// destroyed, took out of the Workspace or stripped of its `HumanoidRootPart`. `gone` counts
+/// the seconds; after [`RESPAWN_DELAY`] a new character spawns.
+///
+/// The player's `Character` property is read each tick (never a cached id), so a respawn that
+/// already happened (the controller's after a death, or a script's) cancels this timer, and a
+/// dead character is left to the controller's own timer: one character ever spawns.
+fn respawn_if_gone(
+    world: &mut World,
+    controller: &CharacterController,
+    player: Option<InstanceId>,
+    gone: &mut f64,
+) -> Option<InstanceId> {
+    let player = player.filter(|&p| world.is_alive(p))?;
+    let character = match world.get(player, "Character") {
+        Ok(Value::Ref(c)) => c,
+        _ => None,
+    };
+    let present = character.is_some_and(|c| {
+        world.is_alive(c)
+            && in_workspace(world, c)
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    // The controller respawns a dead character it can still step (Humanoid and root present).
+    let dying = character.is_some_and(|c| {
+        world.is_alive(c)
+            && controller.state(c) == Some(HumanoidState::Dead)
+            && world.find_first_child(c, "Humanoid").is_some()
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    if present || dying {
+        *gone = 0.0;
+        return None;
+    }
+    *gone += TICK;
+    if *gone < RESPAWN_DELAY {
+        return None;
+    }
+    *gone = 0.0;
+    spawn_character(world, player).ok()
+}
+
+/// True when `id` is a descendant of the Workspace.
+fn in_workspace(world: &World, id: InstanceId) -> bool {
+    let Some(ws) = world.root("Workspace") else {
+        return false;
+    };
+    let mut at = world.parent(id);
+    while let Some(p) = at {
+        if p == ws {
+            return true;
+        }
+        at = world.parent(p);
+    }
+    false
+}
+
+/// Copies every child of `StarterGui` into the player's `PlayerGui` and returns the copies.
+fn copy_starter_gui(world: &mut World, player: InstanceId) -> Vec<InstanceId> {
+    let mut copies = Vec::new();
     let Some(starter) = world.root("StarterGui") else {
-        return;
+        return copies;
     };
     let Some(gui) = world
         .children(player)
@@ -374,13 +465,96 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
         .copied()
         .find(|&c| world.is_a(c, "PlayerGui"))
     else {
-        return;
+        return copies;
     };
     for child in world.children(starter).to_vec() {
-        if let Ok(copy) = world.clone_subtree(child)
-            && world.set_parent(copy, Some(gui)).is_err()
-        {
-            world.destroy(copy);
+        if let Ok(copy) = world.clone_subtree(child) {
+            if world.set_parent(copy, Some(gui)).is_ok() {
+                copies.push(copy);
+            } else {
+                world.destroy(copy);
+            }
         }
+    }
+    copies
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use metallic_core::Vec3;
+    use metallic_physics::BodyPart;
+
+    struct Quiet;
+    impl OutputSink for Quiet {
+        fn print(&self, _: &str) {}
+        fn warn(&self, line: &str) {
+            panic!("{line}");
+        }
+        fn error(&self, line: &str) {
+            panic!("{line}");
+        }
+    }
+
+    #[test]
+    fn server_ticks_animate_each_players_body_without_presentation() {
+        let mut world = World::new_with_services();
+        let ws = world.root("Workspace").unwrap();
+        let floor = world.create("Part", Some(ws)).unwrap();
+        world
+            .set(
+                floor,
+                "Size",
+                Value::Vector3(Vec3::new(1000.0, 1.0, 1000.0)),
+            )
+            .unwrap();
+        world
+            .set(floor, "Position", Value::Vector3(Vec3::new(0.0, -0.5, 0.0)))
+            .unwrap();
+        world.set(floor, "Anchored", Value::Bool(true)).unwrap();
+        let players = world.root("Players").unwrap();
+        let mut ids = Vec::new();
+        for x in [0.0, 100.0] {
+            let player = world.create("Player", Some(players)).unwrap();
+            let character = spawn_character(&mut world, player).unwrap();
+            let root = world.find_first_child(character, ROOT_PART).unwrap();
+            world
+                .set(root, "Position", Value::Vector3(Vec3::new(x, 3.0, 0.0)))
+                .unwrap();
+            ids.push((player, character));
+        }
+        let mut sim = Simulation::from_world("body animation".into(), world, Rc::new(Quiet));
+        sim.start().unwrap();
+        let inputs: Vec<_> = ids
+            .iter()
+            .map(|&(player, _)| PlayerInput {
+                player,
+                input: MoveInput {
+                    dir: Vec3::new(0.0, 0.0, -1.0),
+                    run: true,
+                    ..MoveInput::default()
+                },
+            })
+            .collect();
+        let mut lo = [f64::MAX; 2];
+        let mut hi = [f64::MIN; 2];
+        for _ in 0..120 {
+            assert!(sim.tick_once(&inputs));
+            for (i, &(_, character)) in ids.iter().enumerate() {
+                let pose = sim.characters.body_pose(character);
+                assert!(pose.is_finite());
+                let hand = pose.parts[BodyPart::RightHand.index()].position.z;
+                lo[i] = lo[i].min(hand);
+                hi[i] = hi[i].max(hand);
+            }
+        }
+        for i in 0..2 {
+            assert!(
+                hi[i] - lo[i] > 0.8,
+                "player {i}: running hand must swing, {:?}",
+                (lo[i], hi[i])
+            );
+        }
+        assert_eq!(sim.world.borrow().children(players).len(), 2);
     }
 }

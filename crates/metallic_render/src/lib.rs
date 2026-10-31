@@ -14,6 +14,7 @@
 
 pub mod bloom;
 pub mod camera;
+pub mod exposure;
 pub mod lighting;
 pub mod materials;
 pub mod meshes;
@@ -29,10 +30,11 @@ mod renderer;
 
 pub use camera::Camera;
 pub use context::{RenderContext, RenderError};
+pub use exposure::{AutoExposure, ExposureMode, ExposureState};
 pub use glam;
 pub use lighting::LightingInputs;
 pub use metallic_asset;
 pub use post::{FullscreenPass, PostChain, PostContext, PostDraw, PostPass, PostSlot};
 pub use renderer::{Quality, RenderSettings, Renderer};
 pub use skinned::{SkinStyle, SkinnedInstance};
-pub use tonemap::{FinishSettings, ToneCurve};
+pub use tonemap::{FinishSettings, LookTone, ToneCurve};

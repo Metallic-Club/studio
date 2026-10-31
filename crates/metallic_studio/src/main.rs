@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 use metallic_studio::app::{Options, StudioApp, WINDOW_TITLE, icon_image};
+use metallic_studio::splash;
 
 fn main() -> eframe::Result {
     // Must run first: when the installer or an update starts Studio with a hook argument,
@@ -14,16 +15,21 @@ fn main() -> eframe::Result {
         Ok(o) => o,
         Err(message) => {
             eprintln!(
-                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|error|editor|colour --location <dir>]"
+                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|firstrun|error|editor|playing|colour|components|settings --theme graphite|titanium|light --location <dir> --size <w>x<h>]"
             );
             std::process::exit(2);
         }
     };
 
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title(WINDOW_TITLE)
-        .with_inner_size([1280.0, 800.0])
-        .with_min_inner_size([960.0, 600.0]);
+    let mut viewport = egui::ViewportBuilder::default().with_title(WINDOW_TITLE);
+    viewport = if options.shows_splash() {
+        // The first window is the splash; it becomes the main window when startup is done.
+        splash::viewport(viewport)
+    } else {
+        viewport
+            .with_inner_size(options.size.unwrap_or(splash::MAIN_SIZE.into()))
+            .with_min_inner_size(splash::MAIN_MIN_SIZE)
+    };
     match icon_image() {
         Ok(img) => {
             viewport = viewport.with_icon(Arc::new(egui::IconData {
@@ -37,6 +43,7 @@ fn main() -> eframe::Result {
     let native = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
+        centered: true,
         ..Default::default()
     };
     eframe::run_native(

@@ -263,3 +263,27 @@ Saved logs use local temporary prefix `metallic-299-5c-`: `workspace-prebuild.lo
 The final evidence-only append commit preserves production source 632b47e.
 Exact-head CI is inspected after publication; no own-PR merge or remote-machine
 action was performed.
+
+
+## Current compatibility refresh: main a0bb1bf
+
+The previous 5c84cf7/632b47e results above are historical. Current upstream is
+pinned to a0bb1bfc0e84ffd637fe8d1759f4822322601cd8. Object-only merge analysis
+confirmed conflicts in Game, runtime manifest/lib and ARCHITECTURE. The normal
+append-only merge preserves clickable GUI pointer events/shading and renderer
+setup serialization. Shared Simulation now owns upstream CPU body animation,
+local missing-character respawn and prior-StarterGui-copy cleanup; Game forwards
+GUI events to that same Combined ScriptHost. Server-owned Players keep their
+existing lifecycle contract; no new admission or automatic missing-body recovery
+policy is added. The renderer implementation is upstream-identical.
+
+Animation/asset/glam are renderer-free CPU dependencies. Body animation and
+locomotion compile without presentation, while GUI input and the new upstream
+Game integration test targets remain presentation-gated. CPU tests retain rig,
+locomotion and allocation checks; only comparisons with the drawn Avatar require
+presentation. New regressions exercise two distinct server Players' animated hand
+sweeps, public CPU body-part Touched/TouchEnded on both sides, and Game GUI events
+across zero-tick/borrowed-world frames. Upstream restart/respawn/GUI/Parkour tests
+remain in the default suite. Graph policy currently passes: 93 normal/build
+packages, no renderer/wgpu/window/egui/gilrs dependencies. Both policy unit tests
+pass. Heavy compilation and actual Lua/GPU runs are not yet recorded for this pin.

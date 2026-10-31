@@ -1,7 +1,7 @@
 # CPU simulation and the default Game
 
 `metallic_runtime::Simulation` owns the World, physics, character controller, scripts,
-physics-membership cache and simulation clock. Public constructors select server-only
+physics-membership cache, CPU skeletal body animation and simulation clock. Public constructors select server-only
 scripts: no client VM, synthetic player, PlayerGui or synthetic PlayerAdded. Existing
 World instances remain intact. Default `Game` uses the same kernel in Combined mode
 and retains its local player, camera-relative controls, avatar, GUI and rendering.
@@ -42,12 +42,19 @@ remains separate.
 - `tick_once(inputs)` executes one exact fixed tick while running, or returns false
   while stopped/borrowed. It does not consume fractional time already buffered by
   `advance`; callers choosing explicit ticks normally use that method consistently.
-- Each tick preserves the existing order: character controller, physics, character/
+- Each tick preserves the existing order: character controller, CPU body animation, physics, character/
   touch events, clock advancement, script Heartbeat/waits, then physics synchronization
   for signature/membership changes. World borrows are released before running scripts.
 - Game keeps input-action delivery and Sink/Pass handling before movement, and camera/
-  avatar updates after the shared advancement. No render, avatar or GUI work executes
-  in the server kernel.
+  avatar updates after the shared advancement. CPU body animation drives animated limb
+  touch volumes for every stepped character, using renderer-free animation/asset crates.
+  No drawing or GUI work executes in the server kernel. Combined restart replaces only
+  its prior StarterGui copies and retains runtime-created GUI; missing local characters
+  use the upstream respawn delay. These local-player policies do not add server admission
+  or automatic recovery for arbitrary server-owned Players.
+- Pointer hit testing, shading, GUI inset and input capture stay in Game. GUI events are
+  forwarded to its persistent Combined ScriptHost before simulation advancement; they
+  remain queued until a fixed tick executes. Stop/start resets pointer capture.
 
 ## Trusted player inputs
 

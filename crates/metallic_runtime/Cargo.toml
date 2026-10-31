@@ -7,10 +7,12 @@ publish.workspace = true
 
 [features]
 default = ["presentation"]
-presentation = ["dep:metallic_anim", "dep:metallic_render", "dep:egui", "dep:wgpu"]
+presentation = ["dep:metallic_render", "dep:egui", "dep:wgpu"]
 
 [dependencies]
-metallic_anim = { path = "../metallic_anim", optional = true }
+metallic_anim = { path = "../metallic_anim" }
+metallic_asset.workspace = true
+glam = "0.30.10"
 metallic_core.workspace = true
 metallic_physics.workspace = true
 metallic_script.workspace = true
