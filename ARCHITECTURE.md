@@ -69,7 +69,10 @@ apps.
   broad-phase lookup per step, at most `MAX_TOUCH_CANDIDATES` parts (existing contacts first, then the nearest; the rest
   are counted in `TouchQueryCost`), nothing allocated once warm. They report `CharacterEvent::Touched`/`TouchEnded
   { part, hit }` per body part, including when a character is destroyed or replaced; the movement capsule reports as
-  the root. Nothing is matched by name, so NPC Models keep their own physics. The controller records its support contact
+  the root. Nothing is matched by name, so NPC Models keep their own physics. Characters the controller steps leave
+  each other out of their scene queries and meet in `limbs.rs`: capsule against capsule (16 volumes each), each contact
+  stored once per pair of characters and reported once, at most `MAX_CHARACTER_PAIRS` overlapping characters per step
+  (touching ones first), counted in `TouchQueryCost`; characters it does not step stay ordinary scene parts. The controller records its support contact
   (`SupportContact`, part of `CharacterState`) in body-local coordinates and carries the capsule's bottom-sphere
   centre through the support's next observed pose change, so riders keep their radius on tilted spinners. Idle
   facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum

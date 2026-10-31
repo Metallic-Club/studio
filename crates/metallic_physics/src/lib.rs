@@ -31,6 +31,7 @@ mod alloc_count;
 mod avatar;
 mod body;
 mod character;
+mod limbs;
 mod sync;
 mod touched;
 
@@ -41,6 +42,7 @@ pub use character::{
     MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, SupportContact, WORLD_LIMIT,
     place_character, spawn_character,
 };
+pub use limbs::MAX_CHARACTER_PAIRS;
 pub use sync::{MaterialProps, material_props};
 
 use metallic_core::{InstanceId, Value, Vec3, World};
