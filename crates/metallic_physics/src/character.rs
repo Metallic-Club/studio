@@ -46,7 +46,9 @@
 //! limits), resets a non-finite movement state to rest, ignores a non-finite move direction, and
 //! never writes a non-finite pose.
 use crate::avatar::{self, PartIds, ROOT_PART, VIOLET};
-use crate::body::{BodyPart, BodyPose, Contact, ROOT_HIT, TOUCH_MARGIN, TouchVolumes};
+use crate::body::{
+    BodyPart, BodyPose, Contact, ROOT_HIT, TOUCH_MARGIN, TouchQueryCost, TouchVolumes,
+};
 use crate::{GRAVITY, PhysicsWorld, from_vector, to_vector};
 use metallic_core::classes::{MAX_JUMP_POWER, MAX_SLOPE_ANGLE, MAX_WALK_SPEED};
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
@@ -362,17 +364,41 @@ fn player_of(world: &World, character: InstanceId) -> Option<InstanceId> {
         .find(|&p| ref_prop(world, p, "Character") == Some(character))
 }
 
-/// All BaseParts inside `model`.
-fn parts_of(world: &World, model: InstanceId) -> Vec<InstanceId> {
-    let mut out = Vec::new();
-    let mut stack = vec![model];
+/// Fills `out` with the colliders of every BasePart inside `model`; `stack` is scratch space.
+fn colliders_of(
+    world: &World,
+    physics: &PhysicsWorld,
+    model: InstanceId,
+    stack: &mut Vec<InstanceId>,
+    out: &mut Vec<ColliderHandle>,
+) {
+    out.clear();
+    stack.clear();
+    stack.push(model);
     while let Some(id) = stack.pop() {
-        if world.is_a(id, "BasePart") {
-            out.push(id);
+        if world.is_a(id, "BasePart")
+            && let Some(h) = physics.collider_of(id)
+        {
+            out.push(h);
         }
         stack.extend(world.children(id).iter().copied());
     }
-    out
+}
+
+/// Reports [`CharacterEvent::TouchEnded`] for every contact of a character that is being
+/// forgotten (destroyed, replaced or respawned), skipping touched parts that are gone.
+fn end_all(events: &mut Vec<CharacterEvent>, world: &World, character: InstanceId, body: &Body) {
+    for &c in &body.volumes.touching {
+        if world.is_alive(c.part)
+            && let Some(hit) = hit_of(&body.ids, c)
+        {
+            events.push(CharacterEvent::TouchEnded {
+                character,
+                part: c.part,
+                hit,
+            });
+        }
+    }
 }
 
 fn capsule() -> Capsule {
@@ -401,6 +427,10 @@ pub struct CharacterController {
     started: Vec<InstanceId>,
     /// Contacts that ended in the current step (reused).
     ended: Vec<Contact>,
+    /// The character's own colliders (reused).
+    own: Vec<ColliderHandle>,
+    /// Scratch stack for walking the character Model (reused).
+    walk: Vec<InstanceId>,
 }
 
 impl CharacterController {
@@ -413,6 +443,11 @@ impl CharacterController {
     /// longer exists.
     pub fn state(&self, character: InstanceId) -> Option<HumanoidState> {
         self.motions.get(&character).map(|m| m.state)
+    }
+
+    /// The character's facing after its last step, degrees around +Y (0 looks along -Z).
+    pub fn yaw(&self, character: InstanceId) -> Option<f64> {
+        self.motions.get(&character).map(|m| m.yaw)
     }
 
     /// The character's velocity during its last step in studs per second (own motion plus the
@@ -469,12 +504,18 @@ impl CharacterController {
         })
     }
 
-    /// Parts the character's touch query looked at and narrow-phase tests it ran in its last
-    /// step. At most [`crate::MAX_TOUCH_CANDIDATES`] parts and 16 tests per part.
-    pub fn touch_query_cost(&self, character: InstanceId) -> (usize, usize) {
+    /// What the character's last touch query cost: parts tested (at most
+    /// [`crate::MAX_TOUCH_CANDIDATES`]), narrow-phase tests (at most 16 per part), parts left out
+    /// at the cap, and how many queries so far reached the cap.
+    pub fn touch_query_cost(&self, character: InstanceId) -> TouchQueryCost {
         self.bodies
             .get(&character)
-            .map_or((0, 0), |b| (b.volumes.candidates, b.volumes.tests))
+            .map_or_else(TouchQueryCost::default, |b| TouchQueryCost {
+                parts: b.volumes.tested_parts,
+                tests: b.volumes.tests,
+                dropped: b.volumes.dropped,
+                capped_queries: b.volumes.capped_queries,
+            })
     }
 
     /// The character's movement state and root position, to rewind to later. A character that
@@ -549,7 +590,15 @@ impl CharacterController {
         dt: f64,
     ) {
         self.motions.retain(|&id, _| world.is_alive(id));
-        self.bodies.retain(|&id, _| world.is_alive(id));
+        // A character destroyed or replaced without dying still ends its contacts.
+        let events = &mut self.events;
+        self.bodies.retain(|&id, body| {
+            let alive = world.is_alive(id);
+            if !alive {
+                end_all(events, world, id, body);
+            }
+            alive
+        });
         let (Some(humanoid), Some(root)) = (
             world.find_first_child(character, "Humanoid"),
             world.find_first_child(character, ROOT_PART),
@@ -578,7 +627,9 @@ impl CharacterController {
                 && let Ok(new) = spawn_character(world, player)
             {
                 self.motions.remove(&character);
-                self.bodies.remove(&character);
+                if let Some(body) = self.bodies.remove(&character) {
+                    end_all(&mut self.events, world, character, &body);
+                }
                 self.events.push(CharacterEvent::Respawned {
                     player,
                     old: character,
@@ -607,10 +658,8 @@ impl CharacterController {
             max_slope: hum("MaxSlopeAngle", 89.0, MAX_SLOPE_ANGLE),
         };
 
-        let own: Vec<ColliderHandle> = parts_of(world, character)
-            .into_iter()
-            .filter_map(|p| physics.collider_of(p))
-            .collect();
+        let mut own = std::mem::take(&mut self.own);
+        colliders_of(world, physics, character, &mut self.walk, &mut own);
         // A root far outside the world (huge or non-finite) is not swept through the scene:
         // the character is already dead and waits to respawn where it is.
         let lost = !in_world(root_pos, f64::NEG_INFINITY);
@@ -639,6 +688,7 @@ impl CharacterController {
         let pose = body.volumes.pose(m.yaw);
         avatar::place_pose(world, &body.ids, new_root, m.yaw, &pose);
         let ids = body.ids;
+        let capped_before = body.volumes.capped_queries;
         let mut started = std::mem::take(&mut self.started);
         let mut ended = std::mem::take(&mut self.ended);
         started.clear();
@@ -664,6 +714,13 @@ impl CharacterController {
         } else {
             body.volumes.clear(on_end);
         }
+        if capped_before == 0 && body.volumes.capped_queries > 0 {
+            eprintln!(
+                "warning: character {character:?} touches more than {} parts; the farthest are \
+                 ignored until others leave",
+                crate::MAX_TOUCH_CANDIDATES
+            );
+        }
         for &c in &ended {
             if let Some(hit) = hit_of(&ids, c)
                 && world.is_alive(c.part)
@@ -680,6 +737,7 @@ impl CharacterController {
         self.reach_checkpoints(world, character, &started);
         self.started = started;
         self.ended = ended;
+        self.own = own;
         self.motions.insert(character, m);
     }
 

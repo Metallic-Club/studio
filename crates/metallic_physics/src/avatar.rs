@@ -2,11 +2,11 @@
 //! they give scripts the familiar part names (`hit.Parent`, `Head`, `LeftHand`), while the runtime
 //! draws the skinned default avatar in their place.
 //!
-//! - `HumanoidRootPart`: 2 x 2 x 1 at the root, CanCollide. It is the only character part with a
-//!   Rapier body, so it is what loose parts bump into.
-//! - The body parts ([`BodyPart`]): CanCollide off and no Rapier body. They are the boxes around
-//!   the bone-attached touch volumes (see [`crate::body`]), moved every step to the pose the
-//!   touches were found with.
+//! - `HumanoidRootPart`: 2 x 2 x 1 at the root, CanCollide. It is the character part loose parts
+//!   bump into.
+//! - The body parts ([`BodyPart`]): CanCollide off, so the physics keeps them as sensors that
+//!   never push or block. They are the boxes around the bone-attached touch volumes (see
+//!   [`crate::body`]), moved every step to the pose the touches were found with.
 //!
 //! All parts are Anchored (the [`crate::CharacterController`] moves them) with Transparency 1.
 use crate::body::{BodyPart, BodyPose};
@@ -108,11 +108,6 @@ pub(crate) fn place(world: &mut World, model: InstanceId, root: Vec3, yaw: f64) 
     place_pose(world, &ids, root, yaw, &BodyPose::rest(yaw));
 }
 
-/// True for a body part directly inside a character Model: it gets no Rapier body.
-pub(crate) fn is_body_part(world: &World, id: InstanceId) -> bool {
-    matches!(world.get_ref(id, "Name"), Ok(Value::String(n)) if BodyPart::from_name(n).is_some())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,13 +120,12 @@ mod tests {
         build(&mut world, model, Vec3::new(0.0, 3.0, 0.0)).unwrap();
         assert_eq!(world.children(model).len(), 16);
         let hand = world.find_first_child(model, "LeftHand").unwrap();
-        assert!(is_body_part(&world, hand));
         assert_eq!(
             world.get(hand, "Size").unwrap(),
             Value::Vector3(BodyPart::LeftHand.size())
         );
         assert_eq!(world.get(hand, "CanCollide").unwrap(), Value::Bool(false));
         let root = world.find_first_child(model, ROOT_PART).unwrap();
-        assert!(!is_body_part(&world, root));
+        assert_eq!(world.get(root, "CanCollide").unwrap(), Value::Bool(true));
     }
 }

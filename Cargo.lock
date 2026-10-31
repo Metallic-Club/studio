@@ -3577,7 +3577,9 @@ version = "0.1.1"
 dependencies = [
  "criterion",
  "egui",
+ "glam 0.30.10",
  "metallic_anim",
+ "metallic_asset",
  "metallic_core",
  "metallic_physics",
  "metallic_render",

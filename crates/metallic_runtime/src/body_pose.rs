@@ -1,15 +1,190 @@
-//! Turns the animated avatar's bones into the character's touch volume pose.
+//! The character's body animation on the CPU, and the touch volume pose it gives.
+//!
+//! [`BodyAnimator`] runs the built-in locomotion over the default avatar's skeleton: clip
+//! sampling, blending and the joint hierarchy, with no renderer. The simulation runs one per
+//! character every tick and hands [`BodyAnimator::body_pose`] to
+//! [`metallic_physics::CharacterController::set_body_pose`], so a headless server computes the
+//! same limb poses as a client. The drawn [`crate::avatar::Avatar`] uses the same animator.
 //!
 //! Each body part's touch capsule (see [`metallic_physics::BodyPart`]) is carried rigidly by one
 //! bone: the part's rest frame is skinned with that bone's matrix, exactly like a mesh vertex
-//! weighted 100% to it. [`BodyRig::pose`] does this for the 15 parts from the joint matrices the
-//! renderer draws, so the volumes are where the limbs are on screen. It allocates nothing.
-use crate::avatar::STUD_METRES;
-use metallic_core::{CFrame, Vec3 as CVec3};
-use metallic_physics::{BODY_PART_COUNT, BodyPart, BodyPose, ROOT_HEIGHT};
-use metallic_render::glam::{Mat4, Quat, Vec3};
-use metallic_render::metallic_asset::Skeleton;
-use std::f32::consts::PI;
+//! weighted 100% to it ([`BodyRig::pose`]). Nothing here allocates once warm.
+use crate::locomotion::{Locomotion, LocomotionInput, Support};
+use glam::{Mat4, Quat, Vec3};
+use metallic_asset::{Pose, Skeleton, SkinnedModel};
+use metallic_core::{CFrame, InstanceId, Vec3 as CVec3, World};
+use metallic_physics::{
+    BODY_PART_COUNT, BodyPart, BodyPose, CharacterController, HumanoidState, ROOT_HEIGHT,
+};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::f32::consts::{PI, TAU};
+use std::sync::{Arc, OnceLock};
+
+/// Length of one stud in metres (the avatar is authored in metres; 1.54 m = 5.5 studs).
+pub(crate) const STUD_METRES: f32 = 0.28;
+/// Time constant of the turn toward the move direction, in seconds: after this long the avatar
+/// has turned 63% of the way, after three times as long 95%.
+const TURN_TIME: f32 = 0.06;
+
+const DEFAULT_AVATAR: &[u8] = include_bytes!("../../../art/avatar/out/default_avatar.glb");
+
+/// The default avatar model, imported on first use. `None` (with a warning) if the built-in file
+/// does not import, which the tests rule out.
+pub(crate) fn default_model() -> Option<Arc<SkinnedModel>> {
+    static MODEL: OnceLock<Option<Arc<SkinnedModel>>> = OnceLock::new();
+    MODEL
+        .get_or_init(|| match SkinnedModel::from_glb(DEFAULT_AVATAR) {
+            Ok(m) => Some(Arc::new(m)),
+            Err(e) => {
+                eprintln!("warning: the default avatar could not be loaded ({e}); characters are invisible");
+                None
+            }
+        })
+        .clone()
+}
+
+/// The avatar's model matrix: feet at `feet` (studs), facing `yaw` radians (0 looks along -Z,
+/// like `Orientation.Y`; the model itself faces +Z, hence the half turn), metres to studs.
+pub(crate) fn model_matrix(feet: Vec3, yaw: f32) -> Mat4 {
+    Mat4::from_translation(feet)
+        * Mat4::from_rotation_y(yaw + PI)
+        * Mat4::from_scale(Vec3::splat(1.0 / STUD_METRES))
+}
+
+/// One character's body animation: locomotion state, pose and smoothed facing.
+pub(crate) struct BodyAnimator {
+    model: Arc<SkinnedModel>,
+    locomotion: Locomotion,
+    pose: Pose,
+    /// Facing, radians around +Y (0 looks along -Z, like `Orientation.Y`).
+    yaw: f32,
+    rig: BodyRig,
+    /// Skinning matrices relative to the root (reused).
+    joints: Vec<Mat4>,
+}
+
+impl BodyAnimator {
+    /// Standing idle, facing `yaw` radians.
+    pub fn new(model: Arc<SkinnedModel>, yaw: f32) -> BodyAnimator {
+        BodyAnimator {
+            locomotion: Locomotion::new(&model),
+            pose: Pose::rest(&model.skeleton),
+            rig: BodyRig::new(&model.skeleton),
+            joints: Vec::with_capacity(model.skeleton.len()),
+            yaw: if yaw.is_finite() { yaw } else { 0.0 },
+            model,
+        }
+    }
+
+    /// Advances by `dt` seconds: turns toward `target_yaw` radians and animates from `input`
+    /// (its `turn_rate` is set here from the turn).
+    pub fn update(&mut self, target_yaw: f32, mut input: LocomotionInput, dt: f32) {
+        let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        input.turn_rate = 0.0;
+        if target_yaw.is_finite() {
+            let diff = (target_yaw - self.yaw + PI).rem_euclid(TAU) - PI;
+            let step = diff * (1.0 - (-dt / TURN_TIME).exp());
+            self.yaw = (self.yaw + step).rem_euclid(TAU);
+            if dt > 0.0 {
+                input.turn_rate = step / dt;
+            }
+        }
+        self.locomotion
+            .update(&self.model, input, dt, &mut self.pose);
+    }
+
+    /// The touch volume pose: every body part relative to the root centre.
+    pub fn body_pose(&mut self) -> BodyPose {
+        let model = model_matrix(Vec3::new(0.0, -(ROOT_HEIGHT as f32), 0.0), self.yaw);
+        self.pose
+            .skin_matrices(&self.model.skeleton, model, &mut self.joints);
+        self.rig.pose(&self.joints, model, Vec3::ZERO)
+    }
+
+    /// Facing, in radians.
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
+    /// The current local joint transforms.
+    pub fn pose(&self) -> &Pose {
+        &self.pose
+    }
+
+    /// The model animated.
+    pub fn model(&self) -> &Arc<SkinnedModel> {
+        &self.model
+    }
+
+    /// Which bone carries each body part.
+    #[cfg(test)]
+    pub fn rig(&self) -> &BodyRig {
+        &self.rig
+    }
+
+    /// The animation controller (for tests and diagnostics).
+    #[cfg(test)]
+    pub fn locomotion(&self) -> &Locomotion {
+        &self.locomotion
+    }
+}
+
+/// What the locomotion reads for `character` after its last step: its own speed, vertical speed
+/// and ground state.
+pub(crate) fn locomotion_input(
+    controller: &CharacterController,
+    character: InstanceId,
+) -> LocomotionInput {
+    let support = match controller.state(character) {
+        Some(HumanoidState::Running) | None => Support::Grounded,
+        Some(HumanoidState::Jumping) => Support::Rising,
+        Some(HumanoidState::Freefall) => Support::Falling,
+        Some(HumanoidState::Dead) => Support::Frozen,
+    };
+    let v = controller.relative_velocity(character).unwrap_or_default();
+    let speed = (v.x * v.x + v.z * v.z).sqrt() as f32;
+    LocomotionInput {
+        vertical: v.y as f32,
+        ..LocomotionInput::new(speed, support)
+    }
+}
+
+/// The body animators of the characters a simulation steps.
+#[derive(Default)]
+pub(crate) struct CharacterBodies {
+    animators: HashMap<InstanceId, BodyAnimator>,
+}
+
+impl CharacterBodies {
+    /// Call after `controller` stepped `character` by `dt` seconds: advances its body animation
+    /// and sets the touch volume pose its next step uses. Animators of destroyed characters are
+    /// dropped; nothing is allocated once a character has its animator.
+    pub fn animate(
+        &mut self,
+        controller: &mut CharacterController,
+        world: &World,
+        character: InstanceId,
+        dt: f32,
+    ) {
+        self.animators.retain(|&id, _| world.is_alive(id));
+        let Some(yaw) = controller.yaw(character) else {
+            return;
+        };
+        let yaw = (yaw as f32).to_radians();
+        let animator = match self.animators.entry(character) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let Some(model) = default_model() else {
+                    return;
+                };
+                e.insert(BodyAnimator::new(model, yaw))
+            }
+        };
+        animator.update(yaw, locomotion_input(controller, character), dt);
+        controller.set_body_pose(character, &animator.body_pose());
+    }
+}
 
 /// The bone that carries each body part, best first; the first name the skeleton has wins.
 const BONES: [&[&str]; BODY_PART_COUNT] = [
@@ -32,7 +207,7 @@ const BONES: [&[&str]; BODY_PART_COUNT] = [
 
 /// A body-frame point (studs from the root centre, facing -Z) in the model's rest space (metres
 /// from the feet, facing +Z).
-pub(crate) fn to_model(p: CVec3) -> Vec3 {
+fn to_model(p: CVec3) -> Vec3 {
     Vec3::new(-p.x as f32, (p.y + ROOT_HEIGHT) as f32, -p.z as f32) * STUD_METRES
 }
 
@@ -80,9 +255,8 @@ impl BodyRig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::avatar::{Avatar, default_model};
-    use crate::locomotion::{LocomotionInput, Support};
-    use metallic_core::{InstanceId, Value, World};
+    use crate::avatar::Avatar;
+    use metallic_core::Value;
     use metallic_physics::{
         CharacterController, CharacterEvent, MoveInput, PhysicsWorld, spawn_character,
     };
@@ -236,24 +410,59 @@ mod tests {
     }
 
     #[test]
-    fn computing_the_pose_does_not_allocate() {
+    fn animating_and_computing_the_pose_do_not_allocate() {
+        // Per frame, in every locomotion state. (A state change inside `metallic_anim`'s state
+        // machine may allocate once; that is outside the per-frame path measured here.)
         let model = default_model().unwrap();
-        let root = Vec3::new(0.0, 3.0, 0.0);
-        let avatar = Avatar::new(model, root, 0.3);
-        let (pose, allocations) = crate::alloc_count::count(|| {
-            let mut last = avatar.body_pose(root);
-            for _ in 0..600 {
-                last = avatar.body_pose(root);
+        let mut anim = BodyAnimator::new(model, 0.3);
+        for input in [
+            LocomotionInput::new(0.0, Support::Grounded),
+            LocomotionInput::new(24.0, Support::Grounded),
+            LocomotionInput::new(0.0, Support::Rising),
+            LocomotionInput::new(8.0, Support::Falling),
+        ] {
+            for _ in 0..90 {
+                anim.update(0.5, input, DT);
+                anim.body_pose();
             }
-            last
-        });
-        assert!(pose.is_finite());
-        assert_eq!(allocations, 0);
+            let (pose, allocations) = crate::alloc_count::count(|| {
+                let mut last = anim.body_pose();
+                for _ in 0..300 {
+                    anim.update(0.5, input, DT);
+                    last = anim.body_pose();
+                }
+                last
+            });
+            assert!(pose.is_finite());
+            assert_eq!(allocations, 0, "{input:?}");
+        }
     }
 
-    /// Drives a standing character through `seconds` with its avatar animated by `input`
-    /// (the character itself does not move), handing the bones to the touch volumes each
-    /// frame like `Game::frame` does. Returns the names of the parts that touched `target` and
+    #[test]
+    fn the_headless_animator_poses_the_body_like_the_drawn_avatar() {
+        let model = default_model().unwrap();
+        let root = Vec3::new(3.0, 7.0, -1.0);
+        let mut avatar = Avatar::new(model.clone(), root, 0.4);
+        let mut anim = BodyAnimator::new(model, 0.4);
+        for k in 0..240 {
+            let input = if k < 120 {
+                LocomotionInput::new(24.0, Support::Grounded)
+            } else {
+                LocomotionInput::new(0.0, Support::Rising)
+            };
+            avatar.update(root, 1.2, input, DT);
+            anim.update(1.2, input, DT);
+            let (drawn, headless) = (avatar.body_pose(root), anim.body_pose());
+            for p in BodyPart::ALL {
+                let (a, b) = (drawn.parts[p.index()], headless.parts[p.index()]);
+                assert!(close(a.position, b.position, 1e-3), "{p:?} at frame {k}");
+            }
+        }
+    }
+
+    /// Drives a standing character through `seconds` with its body animated by `input` (the
+    /// character itself does not move) on the headless animator, handing the pose to the touch
+    /// volumes each tick. Returns the names of the parts that touched `target` and
     /// how many TouchEnded events it got.
     fn animate_beside(
         sim: &mut StandingSim,
@@ -263,8 +472,8 @@ mod tests {
     ) -> (Vec<String>, usize) {
         let (mut hits, mut ended) = (Vec::new(), 0);
         for _ in 0..(seconds / DT) as usize {
-            sim.avatar.update(sim.root, 0.0, input, DT);
-            let pose = sim.avatar.body_pose(sim.root);
+            sim.anim.update(0.0, input, DT);
+            let pose = sim.anim.body_pose();
             sim.ctl.set_body_pose(sim.character, &pose);
             sim.ctl.step(
                 &mut sim.world,
@@ -294,8 +503,7 @@ mod tests {
         phys: PhysicsWorld,
         ctl: CharacterController,
         character: InstanceId,
-        avatar: Avatar,
-        root: Vec3,
+        anim: BodyAnimator,
     }
 
     /// A character standing at the origin on a baseplate, and a small sensor at `at`.
@@ -321,15 +529,13 @@ mod tests {
         let character = spawn_character(&mut world, player).unwrap();
         let mut phys = PhysicsWorld::new();
         phys.sync_from(&world);
-        let root = Vec3::new(0.0, 3.0, 0.0);
-        let avatar = Avatar::new(default_model().unwrap(), root, 0.0);
+        let anim = BodyAnimator::new(default_model().unwrap(), 0.0);
         let sim = StandingSim {
             world,
             phys,
             ctl: CharacterController::new(),
             character,
-            avatar,
-            root,
+            anim,
         };
         (sim, target)
     }

@@ -1102,9 +1102,10 @@ fn touch_query_cost_is_bounded() {
     let mut sim = Sim::start(world);
     sim.run(0.25, idle());
     let ch = sim.character();
-    let (looked, tests) = sim.ctl.touch_query_cost(ch);
-    assert!(looked <= 2, "far parts were looked at: {looked}");
-    assert!(tests <= 32, "{tests}");
+    let cost = sim.ctl.touch_query_cost(ch);
+    assert!(cost.parts <= 2, "far parts were looked at: {cost:?}");
+    assert!(cost.tests <= 32, "{cost:?}");
+    assert_eq!(cost.capped_queries, 0);
     for i in 0..1000 {
         let f = i as f64;
         let at = Vec3::new(
@@ -1117,9 +1118,145 @@ fn touch_query_cost_is_bounded() {
     }
     sim.phys.sync_from(&sim.world);
     sim.run(0.1, idle());
-    let (looked, tests) = sim.ctl.touch_query_cost(ch);
-    assert_eq!(looked, MAX_TOUCH_CANDIDATES);
-    assert!(tests <= MAX_TOUCH_CANDIDATES * 16, "{tests}");
+    let cost = sim.ctl.touch_query_cost(ch);
+    assert_eq!(cost.parts, MAX_TOUCH_CANDIDATES);
+    assert!(cost.tests <= MAX_TOUCH_CANDIDATES * 16, "{cost:?}");
+    assert!(cost.dropped > 0 && cost.capped_queries > 0, "{cost:?}");
+}
+
+#[test]
+fn contacts_survive_the_cap_and_the_nearest_parts_win() {
+    let mut world = World::new_with_services();
+    let floor = baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    assert!(sim.touched_count(floor) == 1, "standing on the floor");
+    let root = sim.root_pos();
+    // 1200 specks in the corners of the body's bounds: inside the broad-phase box, touching
+    // nothing, and created before the part that matters.
+    for i in 0..1200 {
+        let f = i as f64;
+        let (sx, sz) = [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)][i % 4];
+        let at = root + Vec3::new(sx, -2.8 + (f / 1200.0) * 5.3, sz);
+        let id = part(&mut sim.world, "Part", at, Vec3::new(0.05, 0.05, 0.05));
+        sim.world.set(id, "CanCollide", Value::Bool(false)).unwrap();
+    }
+    // Then a sensor at the chest.
+    let target = part(
+        &mut sim.world,
+        "Part",
+        root + Vec3::new(0.0, 0.3, -0.3),
+        Vec3::new(0.2, 0.2, 0.2),
+    );
+    sim.world
+        .set(target, "CanCollide", Value::Bool(false))
+        .unwrap();
+    sim.phys.sync_from(&sim.world);
+    sim.run(0.5, idle());
+    let cost = sim.ctl.touch_query_cost(sim.character());
+    assert!(cost.dropped > 0, "the cap was reached: {cost:?}");
+    assert!(!sim.hits(target).is_empty(), "the nearest part was tested");
+    for h in sim.hits(floor) {
+        assert_eq!(sim.ended_by(floor, &h), 0, "{h} lost the floor at the cap");
+    }
+}
+
+#[test]
+fn destroyed_or_replaced_characters_end_their_contacts() {
+    let mut world = World::new_with_services();
+    let floor = baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let first = sim.character();
+    let touching = sim.hits(floor);
+    assert!(!touching.is_empty());
+    // Replaced without dying: a new character for the same player.
+    let second = spawn_character(&mut sim.world, sim.player).unwrap();
+    sim.phys.sync_from(&sim.world);
+    sim.run(0.5, idle());
+    let ended = |sim: &Sim, character: InstanceId| {
+        sim.events
+            .iter()
+            .filter(|e| {
+                matches!(e, CharacterEvent::TouchEnded { character: c, part, .. }
+                    if *c == character && *part == floor)
+            })
+            .count()
+    };
+    let touched = |sim: &Sim, character: InstanceId| {
+        sim.events
+            .iter()
+            .filter(|e| {
+                matches!(e, CharacterEvent::Touched { character: c, part, .. }
+                    if *c == character && *part == floor)
+            })
+            .count()
+    };
+    assert_eq!(ended(&sim, first), touched(&sim, first), "replaced");
+    assert!(touched(&sim, second) > 0);
+    // Destroyed outright: the next step of any character ends its contacts.
+    sim.world.destroy(second);
+    sim.ctl.step(&mut sim.world, &sim.phys, second, idle(), DT);
+    sim.events.extend(sim.ctl.drain_events());
+    assert_eq!(ended(&sim, second), touched(&sim, second), "destroyed");
+}
+
+#[test]
+fn npc_with_r15_named_parts_keeps_solid_physics() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let ws = world.root("Workspace").unwrap();
+    let npc = world.create("Model", Some(ws)).unwrap();
+    world.create("Humanoid", Some(npc)).unwrap();
+    let mut solid = |name: &str, pos: Vec3, size: Vec3| {
+        let id = world.create("Part", Some(npc)).unwrap();
+        world.set(id, "Name", Value::String(name.into())).unwrap();
+        world.set(id, "Position", Value::Vector3(pos)).unwrap();
+        world.set(id, "Size", Value::Vector3(size)).unwrap();
+        world.set(id, "Anchored", Value::Bool(true)).unwrap();
+        id
+    };
+    let torso = solid(
+        "UpperTorso",
+        Vec3::new(20.0, 3.0, 0.0),
+        Vec3::new(2.0, 2.0, 1.0),
+    );
+    let head = solid("Head", Vec3::new(20.0, 4.5, 0.0), Vec3::new(1.0, 1.0, 1.0));
+    // A loose ball dropped on the NPC's head.
+    let ball = part(
+        &mut world,
+        "Part",
+        Vec3::new(20.0, 8.0, 0.0),
+        Vec3::new(1.0, 1.0, 1.0),
+    );
+    world.set(ball, "Anchored", Value::Bool(false)).unwrap();
+    let mut sim = Sim::start(world);
+    sim.run(1.5, idle());
+    let y = v3(&sim.world, ball, "Position").y;
+    assert!((y - 5.5).abs() < 0.1, "the ball rests on the head, at {y}");
+    let ray = sim
+        .phys
+        .raycast(Vec3::new(30.0, 3.0, 0.0), Vec3::new(-20.0, 0.0, 0.0), &[]);
+    assert_eq!(
+        ray.map(|h| h.instance),
+        Some(torso),
+        "rays hit the NPC torso"
+    );
+    // Renaming changes nothing: there is no name-based rule to flip.
+    sim.world
+        .set(head, "Name", Value::String("Hat".into()))
+        .unwrap();
+    sim.world
+        .set(torso, "Name", Value::String("LeftHand".into()))
+        .unwrap();
+    sim.phys.sync_from(&sim.world);
+    sim.run(0.5, idle());
+    let y = v3(&sim.world, ball, "Position").y;
+    assert!((y - 5.5).abs() < 0.1, "still resting, at {y}");
+    let ray = sim
+        .phys
+        .raycast(Vec3::new(30.0, 3.0, 0.0), Vec3::new(-20.0, 0.0, 0.0), &[]);
+    assert_eq!(ray.map(|h| h.instance), Some(torso));
 }
 
 // ---- Sanitising Humanoid tuning and the controller state (#172, #272) ----

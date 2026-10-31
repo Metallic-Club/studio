@@ -50,12 +50,14 @@ apps.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here. A character is a `HumanoidRootPart` (the only
-  character part with a Rapier body) plus the 15 R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`).
-  Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every frame with
-  `CharacterController::set_body_pose` (else `BodyPose::rest`). The capsules are queries only: one broad-phase lookup
-  per step, at most `MAX_TOUCH_CANDIDATES` parts, nothing allocated once warm. They report
-  `CharacterEvent::Touched`/`TouchEnded { part, hit }` per body part; the movement capsule reports as the root.
+  and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
+  R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
+  that never push. Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every
+  tick with `CharacterController::set_body_pose` (else `BodyPose::rest`). The capsules are controller queries: one
+  broad-phase lookup per step, at most `MAX_TOUCH_CANDIDATES` parts (existing contacts first, then the nearest; the rest
+  are counted in `TouchQueryCost`), nothing allocated once warm. They report `CharacterEvent::Touched`/`TouchEnded
+  { part, hit }` per body part, including when a character is destroyed or replaced; the movement capsule reports as
+  the root. Nothing is matched by name, so NPC Models keep their own physics.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_vfx_editor** (#41, implemented): egui widgets for `metallic_vfx`: module stack, node canvas, curve and gradient editors, timeline and a live preview. Not wired into Studio yet.
@@ -109,8 +111,10 @@ apps.
   The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
-  avatar's posed bones become the character's touch volumes (`body_pose.rs`: each body part's capsule is skinned
-  rigidly by one VRM bone) and go to `CharacterController::set_body_pose` after every frame. `locomotion.rs` is a small built-in controller
+  avatar is animated by a `BodyAnimator` (`body_pose.rs`), which needs only `metallic_asset` and `metallic_anim` (no
+  renderer). The tick loop runs one per stepped character (`CharacterBodies`) and hands its pose to
+  `CharacterController::set_body_pose`, so a headless server computes the same limb touch volumes; each body part's
+  capsule is skinned rigidly by one VRM bone. `locomotion.rs` is a small built-in controller
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
@@ -326,8 +330,9 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills).
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
-   touch as `touched(part, hit)` and its end as `touch_ended(part, hit)`, with `hit` the touching body part (or the
-   `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
+   touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
+   touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model;
+   `Died` -> `humanoid_died`;
    `Respawned` -> `physics.sync_from` and `character_added(player, model)`.
 4. **script step** (`ScriptHost::step`: new scripts, remotes, the inputs above, `RunService.Heartbeat`, resumed waits).
 5. **physics re-sync** when the change journal shows a BasePart under Workspace was created, destroyed, reparented or

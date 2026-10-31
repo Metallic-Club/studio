@@ -2,16 +2,19 @@
 //!
 //! Each [`BodyPart`] is a capsule (a segment with a radius) fixed in its part's frame. A
 //! [`BodyPose`] places every part's frame relative to the `HumanoidRootPart` centre. The runtime
-//! fills it from the skinned avatar's bones each frame
-//! ([`crate::CharacterController::set_body_pose`]). Without one, for example on a server with
-//! no avatar or before the first frame, the controller uses [`BodyPose::rest`], the avatar's rest
-//! pose turned to the character's facing.
+//! evaluates the avatar's animation on the CPU each tick (no renderer needed, so a headless
+//! server computes the same limbs) and hands the result to
+//! [`crate::CharacterController::set_body_pose`]. Without one, for example before the first
+//! tick, the controller uses [`BodyPose::rest`], the avatar's rest pose turned to the
+//! character's facing.
 //!
-//! The volumes are queries only. They have no Rapier body, so they never collide with or push
-//! anything. After each move, [`TouchVolumes::query`] does one broad-phase lookup around the whole
-//! body, keeps at most [`MAX_TOUCH_CANDIDATES`] parts, and tests each of them against the
-//! movement capsule and the 15 capsules. The cost per character per step is therefore bounded,
-//! and once the buffers are warm nothing is allocated.
+//! The volumes are queries of the controller. The body part instances that hold them have
+//! CanCollide off, so they are sensors and never collide with or push anything. After each move,
+//! [`TouchVolumes::query`] does one broad-phase lookup around the whole body and tests at most
+//! [`MAX_TOUCH_CANDIDATES`] parts against the movement capsule and the 15 capsules: first the
+//! parts already touching, then the nearest others. Parts beyond the cap are counted
+//! ([`crate::TouchQueryCost`]). The narrow-phase cost per character per step is therefore
+//! bounded, and once the buffers are warm nothing is allocated.
 //!
 //! Rest layout (studs, relative to the root centre, facing -Z, so a character's left is -X).
 //! These are the default avatar's joints from `art/avatar/out/default_avatar.glb`: 1 stud is
@@ -43,6 +46,20 @@ pub const BODY_PART_COUNT: usize = 15;
 /// Most parts one character's touch query looks at in a step. Parts beyond this in a dense
 /// pile are ignored until others leave, which keeps the cost per step bounded.
 pub const MAX_TOUCH_CANDIDATES: usize = 256;
+/// What a character's last touch query cost (see
+/// [`crate::CharacterController::touch_query_cost`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TouchQueryCost {
+    /// Parts tested, at most [`MAX_TOUCH_CANDIDATES`].
+    pub parts: usize,
+    /// Narrow-phase shape tests, at most 16 per part.
+    pub tests: usize,
+    /// Parts left out because the cap was reached (the farthest from the root).
+    pub dropped: usize,
+    /// Queries of this character so far that reached the cap.
+    pub capped_queries: u64,
+}
+
 /// How much the touch query grows the movement capsule and every body volume, in studs.
 pub(crate) const TOUCH_MARGIN: f64 = 0.1;
 
@@ -237,6 +254,16 @@ pub(crate) struct Contact {
     pub part: InstanceId,
 }
 
+/// A part the touch query will test, and how far its bounds are from the root.
+#[derive(Debug, Clone, Copy)]
+struct Candidate {
+    /// Squared distance from the root centre to the part's bounding box (0 for parts that
+    /// already touch, so they are kept first).
+    distance: f32,
+    handle: ColliderHandle,
+    part: InstanceId,
+}
+
 /// One character's touch volumes, their current contacts and reusable buffers.
 pub(crate) struct TouchVolumes {
     /// The pose from the animated avatar, if the runtime supplied one.
@@ -245,10 +272,17 @@ pub(crate) struct TouchVolumes {
     pub touching: Vec<Contact>,
     /// Contacts of the query in progress (swapped with `touching`).
     next: Vec<Contact>,
-    /// Parts the last query looked at (at most [`MAX_TOUCH_CANDIDATES`]).
-    pub candidates: usize,
+    /// Parts already touching, sorted (for the query in progress).
+    kept: Vec<InstanceId>,
+    candidates: Vec<Candidate>,
+    /// Parts the last query tested (at most [`MAX_TOUCH_CANDIDATES`]).
+    pub tested_parts: usize,
     /// Narrow-phase shape tests done by the last query.
     pub tests: usize,
+    /// Parts the last query left out because the cap was reached (the farthest ones).
+    pub dropped: usize,
+    /// Queries so far that hit the cap.
+    pub capped_queries: u64,
 }
 
 impl Default for TouchVolumes {
@@ -257,10 +291,20 @@ impl Default for TouchVolumes {
             animated: None,
             touching: Vec::with_capacity(32),
             next: Vec::with_capacity(32),
-            candidates: 0,
+            kept: Vec::with_capacity(32),
+            candidates: Vec::with_capacity(MAX_TOUCH_CANDIDATES),
+            tested_parts: 0,
             tests: 0,
+            dropped: 0,
+            capped_queries: 0,
         }
     }
+}
+
+/// Squared distance from `p` to the box `b` (0 inside).
+fn distance_sq(b: &Aabb, p: Vector) -> f32 {
+    let d = (b.mins - p).max(Vector::ZERO).max(p - b.maxs);
+    d.length_squared()
 }
 
 impl TouchVolumes {
@@ -272,6 +316,10 @@ impl TouchVolumes {
     /// Finds what the movement capsule (`probe` at `probe_pose`) and every volume of `pose`
     /// placed at `root` touch, each grown by [`TOUCH_MARGIN`]; sensors included, the
     /// character's own colliders (`own`) skipped. The result goes to `self.next`.
+    ///
+    /// At most [`MAX_TOUCH_CANDIDATES`] parts are tested. Parts that already touch come first,
+    /// so a crowd around the character never ends a contact that still holds; the remaining
+    /// slots go to the parts nearest the root. Parts left out are counted in `dropped`.
     pub fn query(
         &mut self,
         physics: &PhysicsWorld,
@@ -282,8 +330,11 @@ impl TouchVolumes {
         root: Vec3,
     ) {
         self.next.clear();
-        self.candidates = 0;
+        self.candidates.clear();
+        self.kept.clear();
+        self.tested_parts = 0;
         self.tests = 0;
+        self.dropped = 0;
         let margin = TOUCH_MARGIN as f32;
         let volumes: [Capsule; BODY_PART_COUNT] = BodyPart::ALL.map(|p| {
             let (a, b) = pose.world_ends(p, root);
@@ -300,17 +351,68 @@ impl TouchVolumes {
         }
         let skip = |h: ColliderHandle, _: &rapier3d::prelude::Collider| !own.contains(&h);
         let queries = physics.queries(QueryFilter::default().predicate(&skip));
-        let probe_box = probe.compute_aabb(probe_pose);
-        let mut tests = 0;
-        let mut candidates = 0;
+
+        // 1. Parts that touch already.
+        self.kept.extend(self.touching.iter().map(|c| c.part));
+        self.kept.sort_unstable();
+        self.kept.dedup();
+        for &part in &self.kept {
+            if self.candidates.len() == MAX_TOUCH_CANDIDATES {
+                break;
+            }
+            if let Some(handle) = physics.collider_of(part)
+                && !own.contains(&handle)
+            {
+                self.candidates.push(Candidate {
+                    distance: 0.0,
+                    handle,
+                    part,
+                });
+            }
+        }
+        // 2. The nearest of the others. `farthest` indexes the farthest new candidate once the
+        // list is full.
+        let first_new = self.candidates.len();
+        let centre = to_vector(root);
+        let mut farthest: Option<usize> = None;
         for (handle, collider) in queries.intersect_aabb_conservative(bounds) {
             let Some(part) = physics.owner_of(handle) else {
                 continue;
             };
-            if candidates == MAX_TOUCH_CANDIDATES {
-                break;
+            if self.kept.binary_search(&part).is_ok() {
+                continue;
             }
-            candidates += 1;
+            let c = Candidate {
+                distance: distance_sq(&collider.compute_aabb(), centre),
+                handle,
+                part,
+            };
+            if self.candidates.len() < MAX_TOUCH_CANDIDATES {
+                self.candidates.push(c);
+                continue;
+            }
+            self.dropped += 1;
+            if first_new == self.candidates.len() {
+                continue;
+            }
+            let far = *farthest
+                .get_or_insert_with(|| farthest_of(&self.candidates[first_new..]) + first_new);
+            if c.distance < self.candidates[far].distance {
+                self.candidates[far] = c;
+                farthest = Some(farthest_of(&self.candidates[first_new..]) + first_new);
+            }
+        }
+        if self.dropped > 0 {
+            self.capped_queries += 1;
+        }
+
+        // 3. Narrow phase.
+        let probe_box = probe.compute_aabb(probe_pose);
+        let mut tests = 0;
+        for c in &self.candidates {
+            let Some(collider) = queries.colliders.get(c.handle) else {
+                continue;
+            };
             let other = collider.compute_aabb();
             let mut touches = |shape: &dyn Shape, pose: &Pose| {
                 tests += 1;
@@ -323,19 +425,19 @@ impl TouchVolumes {
             if probe_box.intersects(&other) && touches(probe, probe_pose) {
                 self.next.push(Contact {
                     hit: ROOT_HIT,
-                    part,
+                    part: c.part,
                 });
             }
             for (i, capsule) in volumes.iter().enumerate() {
                 if boxes[i].intersects(&other) && touches(capsule, &identity) {
                     self.next.push(Contact {
                         hit: i as Hit,
-                        part,
+                        part: c.part,
                     });
                 }
             }
         }
-        self.candidates = candidates;
+        self.tested_parts = self.candidates.len();
         self.tests = tests;
         self.next.sort_unstable();
     }
@@ -347,11 +449,22 @@ impl TouchVolumes {
         std::mem::swap(&mut self.touching, &mut self.next);
     }
 
-    /// Ends every contact (the character died): calls `ended` for each.
+    /// Ends every contact (the character died or is gone): calls `ended` for each.
     pub fn clear(&mut self, ended: impl FnMut(Contact)) {
         self.next.clear();
         self.commit(|_| {}, ended);
     }
+}
+
+/// Index of the candidate with the largest distance (`list` is not empty).
+fn farthest_of(list: &[Candidate]) -> usize {
+    let mut best = 0;
+    for (i, c) in list.iter().enumerate() {
+        if c.distance > list[best].distance {
+            best = i;
+        }
+    }
+    best
 }
 
 fn finite(b: &Aabb) -> bool {
