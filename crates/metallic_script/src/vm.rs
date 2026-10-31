@@ -118,7 +118,7 @@ end
 -- comparison, so each one crosses a Lua call and the deadline check runs. Ordering and
 -- "invalid order function" are Luau's own; a type error from the default comparison loses only
 -- the closure's position prefix.
-local table, rawlen, rawget, type, pcall, error = table, rawlen, rawget, type, pcall, error
+local table, string, utf8, rawlen, rawget, type, pcall, error = table, string, utf8, rawlen, rawget, type, pcall, error
 local info = debug.info
 local sort = table.sort
 local SORT_VIA_LUA = 256
@@ -154,6 +154,71 @@ table.sort = function(t, comp)
         end
     end
     return sort(t, comp)
+end
+
+-- #344: the remaining single C calls whose work grows with their input.
+-- table.concat joins ranges of more than CONCAT_CHUNK elements chunk by chunk (each chunk is one
+-- C call of bounded size; the loop between chunks is interruptible). The result, the separator
+-- placement and the "invalid value (at index k)" errors are those of one call.
+local concat = table.concat
+local CONCAT_CHUNK = 8192
+table.concat = function(t, sep, i, j)
+    if type(t) == "table" and (i == nil or type(i) == "number") and (j == nil or type(j) == "number") then
+        local first, last = i or 1, j or rawlen(t)
+        if last - first >= CONCAT_CHUNK then
+            local parts, count = {}, 0
+            local from = first
+            while from <= last do
+                local to = from + CONCAT_CHUNK - 1
+                if to > last then to = last end
+                count = count + 1
+                local ok, piece = pcall(concat, t, sep, from, to)
+                if not ok then
+                    -- Re-raise as the caller's error, without this wrapper's own position.
+                    if type(piece) == "string" then
+                        local _, stop = piece:find(PREFIX)
+                        if stop then piece = piece:sub(stop + 1) end
+                    end
+                    error(piece, 2)
+                end
+                parts[count] = piece
+                from = to + 1
+            end
+            return concat(parts, sep)
+        end
+    end
+    return concat(t, sep, i, j)
+end
+
+-- string.pack / packsize / unpack walk their format string item by item: refuse formats over
+-- MAX_FORMAT bytes (real formats are a few dozen). upper / lower / reverse / utf8.len make one
+-- pass over the string at a few ns per byte: refuse strings over MAX_TEXT (32 MB).
+local MAX_FORMAT = 65536
+local MAX_TEXT = 33554432
+for _, name in { "pack", "packsize", "unpack" } do
+    local f = string[name]
+    string[name] = function(fmt, ...)
+        if type(fmt) == "string" and #fmt > MAX_FORMAT then
+            error("string." .. name .. ": format string too long (limit 65536)", 2)
+        end
+        return f(fmt, ...)
+    end
+end
+for _, name in { "upper", "lower", "reverse" } do
+    local f = string[name]
+    string[name] = function(s)
+        if type(s) == "string" and #s > MAX_TEXT then
+            error("string." .. name .. ": string too long (limit 33554432 bytes)", 2)
+        end
+        return f(s)
+    end
+end
+local utf8_len = utf8.len
+utf8.len = function(s, i, j, lax)
+    if type(s) == "string" and #s > MAX_TEXT then
+        error("utf8.len: string too long (limit 33554432 bytes)", 2)
+    end
+    return utf8_len(s, i, j, lax)
 end
 "#;
 

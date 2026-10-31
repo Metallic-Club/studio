@@ -303,7 +303,8 @@ fn plain_luau_time(build: &str, src: &str) -> Duration {
     let big: mlua::Table = lua.load(build).eval().unwrap();
     lua.globals().set("big", big).unwrap();
     let start = Instant::now();
-    lua.load(src).exec().unwrap();
+    // The plain state may end in a memory error; only the time it ran matters.
+    let _ = lua.load(src).exec();
     start.elapsed()
 }
 
@@ -311,7 +312,7 @@ fn plain_luau_time(build: &str, src: &str) -> Duration {
 /// how long the C sort needs (at least `min_plain`, so the workload means something), and the
 /// budgeted run must stop with a timeout in less than half of that (#274). On the old code the
 /// sort could not be interrupted and took the full time.
-fn assert_sort_stops_early(build: &str, src: &str, min_plain: Duration) {
+fn assert_stops_early(build: &str, src: &str, min_plain: Duration) {
     let plain = plain_luau_time(build, src);
     assert!(
         plain >= min_plain,
@@ -337,7 +338,7 @@ fn assert_sort_stops_early(build: &str, src: &str, min_plain: Duration) {
 #[test]
 fn big_string_sort_with_shared_prefix_is_interruptible() {
     // Every comparison is a long memcmp in C.
-    assert_sort_stops_early(
+    assert_stops_early(
         "local p = string.rep('a', 1500)
          local big = {}
          for i = 1, 150000 do big[i] = p .. ((i * 7919) % 150001) end
@@ -350,7 +351,7 @@ fn big_string_sort_with_shared_prefix_is_interruptible() {
 #[test]
 fn big_sort_with_a_c_comparator_is_interruptible() {
     // rawequal never returns to Lua: with only C calls the interrupt could not fire.
-    assert_sort_stops_early(
+    assert_stops_early(
         "local big = table.create(8000000, 0) for i = 1, 8000000 do big[i] = i end return big",
         "table.sort(big, rawequal)",
         Duration::from_secs(1),
@@ -359,7 +360,7 @@ fn big_sort_with_a_c_comparator_is_interruptible() {
 
 #[test]
 fn big_sort_with_a_c_lt_metamethod_is_interruptible() {
-    assert_sort_stops_early(
+    assert_stops_early(
         "local mt = {__lt = rawequal}
          local big = {}
          for i = 1, 1000000 do big[i] = setmetatable({}, mt) end
@@ -538,4 +539,120 @@ fn gsub_charges_replacement_bytes_scanned_not_only_appended() {
         "{:?}",
         start.elapsed()
     );
+}
+
+// ---- #344: the remaining unbounded C calls ----
+
+#[test]
+fn concat_of_millions_of_elements_is_interruptible() {
+    assert_stops_early(
+        "local t = table.create(5000000, 0) for i = 1, 5000000 do t[i] = i end return t",
+        "table.concat(big)",
+        Duration::from_millis(400),
+    );
+}
+
+#[test]
+fn concat_chunks_give_the_same_result_as_one_call() {
+    let (mut vm, _) = vm();
+    vm.set_resume_budget(Duration::from_secs(20));
+    vm.run_script(
+        "T",
+        "for _, n in {0, 1, 2, 8191, 8192, 8193, 16384, 16385, 3 * 8192 + 7} do
+             local t, expect = {}, {}
+             for i = 1, n do t[i] = i % 10 .. '' end
+             -- reference: join by hand
+             local acc = ''
+             for i = 1, n do acc = acc .. t[i] .. (i < n and ',' or '') end
+             assert(table.concat(t, ',') == acc, n)
+             assert(table.concat(t) == acc:gsub(',', ''), n)
+             if n > 2 then
+                 local sub = ''
+                 for i = 2, n - 1 do sub = sub .. t[i] .. (i < n - 1 and '-' or '') end
+                 assert(table.concat(t, '-', 2, n - 1) == sub, n)
+             end
+         end
+         -- Luau's own errors, with absolute indices
+         local t = {}
+         for i = 1, 20000 do t[i] = 'x' end
+         t[15000] = {}
+         local ok, e = pcall(table.concat, t, ',')
+         assert(not ok and e:find('invalid value %(table%) at index 15000') and not e:find('engine'), e)
+         -- called from a script, the error carries the script's own position
+         local ok3, e3 = pcall(function() return table.concat(t, ',') end)
+         assert(not ok3 and e3:find('^T:%d+: invalid value'), e3)
+         local ok2, e2 = pcall(table.concat, t, ',', 1, 30000)
+         assert(not ok2)
+         assert(table.concat({}, ',', 5, 1) == '')",
+    )
+    .unwrap();
+}
+
+#[test]
+fn huge_pack_formats_are_refused() {
+    let (mut vm, _) = vm();
+    let start = Instant::now();
+    for call in ["pack(f)", "packsize(f)", "unpack(f, 'abc')"] {
+        let err = vm
+            .run_script(
+                "T",
+                &format!("local f = string.rep('x', 64 * 1024 * 1024) string.{call}"),
+            )
+            .unwrap_err();
+        assert!(
+            err.message.contains("format string too long"),
+            "{call}: {}",
+            err.message
+        );
+    }
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        start.elapsed()
+    );
+    vm.run_script(
+        "T",
+        "local p = string.pack('<i4 z s2', 7, 'hi', 'abc')
+         local a, b, c = string.unpack('<i4 z s2', p)
+         assert(a == 7 and b == 'hi' and c == 'abc')
+         assert(string.packsize('<i4 i8') == 12)
+         local big = string.rep('i1', 30000)
+         assert(string.packsize(big) == 30000)",
+    )
+    .unwrap();
+}
+
+#[test]
+fn huge_strings_are_refused_by_whole_string_passes() {
+    let (mut vm, _) = vm();
+    vm.set_resume_budget(Duration::from_secs(5));
+    let start = Instant::now();
+    vm.run_script(
+        "T",
+        "local s = string.rep('a', 33554433)
+         for _, name in {'upper', 'lower', 'reverse'} do
+             local ok, e = pcall(string[name], s)
+             assert(not ok and e:find('string too long'), name)
+             local ok2, e2 = pcall(function() return s[name](s) end)
+             assert(not ok2)
+         end
+         local ok, e = pcall(utf8.len, s)
+         assert(not ok and e:find('string too long'))",
+    )
+    .unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        start.elapsed()
+    );
+    vm.run_script(
+        "T",
+        "local s = string.rep('aB', 1000)
+         assert(s:upper() == string.rep('AB', 1000) and s:lower() == string.rep('ab', 1000))
+         assert(s:reverse() == string.rep('Ba', 1000))
+         assert(utf8.len('h\u{e9}llo') == 5 and utf8.len('abc', 2) == 2)
+         assert(utf8.len('\\xff') == nil)
+         assert(string.upper(5) == '5')",
+    )
+    .unwrap();
 }
