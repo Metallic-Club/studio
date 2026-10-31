@@ -60,6 +60,14 @@ pub(crate) enum EventKind {
     StateChanged,
     /// `UserInputService.LastInputTypeChanged(type)`
     LastInputTypeChanged,
+    /// `Instance.AttributeChanged(name)` for id 0, `GetAttributeChangedSignal(name)` for the
+    /// interned name id of that attribute (no arguments).
+    AttributeChanged(u32),
+    /// `CollectionService:GetInstanceAddedSignal(tag)`: the interned tag id; the instance is the
+    /// argument.
+    TagAdded(u32),
+    /// `CollectionService:GetInstanceRemovedSignal(tag)`.
+    TagRemoved(u32),
     /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
     Gui(super::gui::GuiEventKind),
 }
