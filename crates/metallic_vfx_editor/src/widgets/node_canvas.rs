@@ -148,7 +148,7 @@ pub fn node_canvas(
         Sense::click_and_drag(),
     );
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, color::BG_BASE);
+    painter.rect_filled(rect, 0.0, color::bg_base());
 
     // Zoom about the pointer.
     if bg.hovered() || ui.rect_contains_pointer(rect) {
@@ -180,7 +180,7 @@ pub fn node_canvas(
         while y < rect.max.y {
             let mut x = start.x;
             while x < rect.max.x {
-                painter.circle_filled(Pos2::new(x, y), 1.0, color::LINE);
+                painter.circle_filled(Pos2::new(x, y), 1.0, color::line());
                 x += step;
             }
             y += step;
@@ -205,8 +205,8 @@ pub fn node_canvas(
             painter.rect(
                 sr,
                 CornerRadius::same(theme::R_LG),
-                color::SELECT_WEAK.gamma_multiply(0.35),
-                Stroke::new(1.0, color::LINE_STRONG),
+                color::select_weak().gamma_multiply(0.35),
+                Stroke::new(1.0, color::line_strong()),
                 StrokeKind::Inside,
             );
             painter.text(
@@ -214,7 +214,7 @@ pub fn node_canvas(
                 egui::Align2::LEFT_TOP,
                 &g.title,
                 theme::semibold(12.0 * z),
-                color::TEXT_2,
+                color::text_2(),
             );
         }
     }
@@ -229,9 +229,9 @@ pub fn node_canvas(
         let path = route(pa, w.from.1, pb, w.to.1, 8.0 * z);
         let selected = a.selected || b.selected;
         let c = if selected {
-            color::ACCENT
+            color::accent()
         } else {
-            color::ICON.gamma_multiply(0.7)
+            color::icon().gamma_multiply(0.7)
         };
         painter.add(egui::Shape::line(path, Stroke::new(1.5 * z.max(0.7), c)));
         painter.circle_filled(pa, 3.0 * z, c);
@@ -263,13 +263,13 @@ pub fn node_canvas(
         painter.rect(
             r,
             CornerRadius::same(theme::R_MD),
-            color::BG_RAISED,
+            color::bg_raised(),
             Stroke::new(
                 if n.selected { 1.5 } else { 1.0 },
                 if n.selected {
-                    color::ACCENT
+                    color::accent()
                 } else {
-                    color::LINE_STRONG
+                    color::line_strong()
                 },
             ),
             StrokeKind::Inside,
@@ -279,21 +279,21 @@ pub fn node_canvas(
                 Pos2::new(r.min.x + 1.0, header.max.y),
                 Pos2::new(r.max.x - 1.0, header.max.y),
             ],
-            Stroke::new(1.0, color::LINE_STRONG),
+            Stroke::new(1.0, color::line_strong()),
         );
         painter.text(
             header.left_center() + Vec2::new(10.0 * z, 0.0),
             egui::Align2::LEFT_CENTER,
             &n.title,
             theme::semibold(13.0 * z),
-            color::TEXT,
+            color::text(),
         );
         painter.text(
             header.right_center() - Vec2::new(10.0 * z, 0.0),
             egui::Align2::RIGHT_CENTER,
             &n.subtitle,
             FontId::proportional(11.0 * z),
-            color::TEXT_3,
+            color::text_3(),
         );
         for (ri, row) in n.rows.iter().enumerate() {
             let rr = Rect::from_min_size(
@@ -320,22 +320,22 @@ pub fn node_canvas(
                 }
             }
             let fill = if row.selected {
-                color::SELECT
+                color::select()
             } else if resp.hovered() {
-                color::BG_HOVER
+                color::bg_hover()
             } else {
                 Color32::TRANSPARENT
             };
             painter.rect_filled(rr, CornerRadius::same(theme::R_SM), fill);
             if row.enabled {
-                painter.circle_filled(dot, 3.5 * z, color::ICON);
+                painter.circle_filled(dot, 3.5 * z, color::icon());
             } else {
-                painter.circle_stroke(dot, 3.5 * z, Stroke::new(1.0, color::TEXT_3));
+                painter.circle_stroke(dot, 3.5 * z, Stroke::new(1.0, color::text_3()));
             }
             let text_color = if row.enabled {
-                color::TEXT
+                color::text()
             } else {
-                color::TEXT_3
+                color::text_3()
             };
             painter.text(
                 Pos2::new(rr.min.x + 22.0 * z, rr.center().y),
@@ -349,7 +349,7 @@ pub fn node_canvas(
                 egui::Align2::RIGHT_CENTER,
                 &row.detail,
                 FontId::proportional(11.0 * z),
-                color::TEXT_3,
+                color::text_3(),
             );
         }
     }

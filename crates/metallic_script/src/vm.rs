@@ -96,7 +96,8 @@ fn setup_failed(e: Error) -> ScriptError {
 }
 
 /// Lua that bounds `string.rep` (results over 64 MB are rejected, also when the count is
-/// a numeric string). The pattern functions are bounded in `pattern.rs`.
+/// a numeric string) and `table.sort` (above 256 elements, comparisons that would stay in C go through a Lua
+/// closure so the deadline can interrupt, #274). The pattern functions are bounded in `pattern.rs`.
 const STRING_LIMITS: &str = r#"
 local string, type, error, tonumber, tostring = string, type, error, tonumber, tostring
 local rep = string.rep
@@ -107,6 +108,182 @@ string.rep = function(s, n)
         error("string.rep: result too large (limit 64 MB)", 2)
     end
     return rep(s, n)
+end
+
+-- #274: table.sort runs in C, where the time budget's interrupt cannot fire between
+-- comparisons (a C comparator such as rawequal, a C __lt, or long string compares never return
+-- to Lua). The sort runs in C only where its cost is bounded or the comparator is a Lua
+-- function (already interruptible): a table of at most NUM_C_SORT numbers, or any table with a
+-- Lua comparator. Everything else above SORT_VIA_LUA elements goes through a Lua closure per
+-- comparison, so each one crosses a Lua call and the deadline check runs. Ordering and
+-- "invalid order function" are Luau's own; a type error from the default comparison loses only
+-- the closure's position prefix.
+local table, string, utf8, rawlen, rawget, type, pcall, error = table, string, utf8, rawlen, rawget, type, pcall, error
+local info = debug.info
+local sort = table.sort
+local SORT_VIA_LUA = 256
+local NUM_C_SORT = 262144
+local PREFIX = "^%[engine%]:%d+: "
+local function finish(ok, ...)
+    if ok then return ... end
+    local e = ...
+    if type(e) == "string" then
+        local _, stop = e:find(PREFIX)
+        if stop then e = e:sub(stop + 1) end
+    end
+    error(e, 0)
+end
+local function all_numbers(t, n)
+    for i = 1, n do
+        if type(rawget(t, i)) ~= "number" then return false end
+    end
+    return true
+end
+table.sort = function(t, comp)
+    if type(t) == "table" then
+        local n = rawlen(t)
+        if n > SORT_VIA_LUA then
+            if comp == nil then
+                if n <= NUM_C_SORT and all_numbers(t, n) then
+                    return sort(t)
+                end
+                return finish(pcall(sort, t, function(a, b) return a < b end))
+            elseif type(comp) == "function" and info(comp, "s") == "[C]" then
+                return finish(pcall(sort, t, function(a, b) return comp(a, b) end))
+            end
+        end
+    end
+    return sort(t, comp)
+end
+
+-- #344: the remaining single C calls whose work grows with their input.
+-- table.concat joins ranges of more than CONCAT_CHUNK elements chunk by chunk (each chunk is one
+-- C call of bounded size; the loop between chunks is interruptible). The chunking follows the
+-- range the C function would walk: bounds are read as it reads them (numbers and numeric
+-- strings truncated toward zero), so a fractional bound is chunked too. A bound that overflows
+-- 32 bits, or is NaN or infinite, is converted by the platform, so the C function is asked
+-- which integer it reads (`c_int`) and the range is chunked from that. Luau has no tail calls, so an error raised by the C function would carry this
+-- wrapper's position: every call therefore runs under pcall, and a failure is run once more
+-- inside a closure (which gives the C function the same call-site name) and re-raised at the
+-- caller's position, so text, index and position are those of the plain function.
+local concat = table.concat
+local CONCAT_CHUNK = 8192
+local function concat_failed(t, sep, i, j)
+    local ok, e = pcall(function() return concat(t, sep, i, j) end)
+    if ok then return e end
+    if type(e) == "string" then
+        local _, stop = e:find(PREFIX)
+        if stop then e = e:sub(stop + 1) end
+    end
+    error(e, 3) -- 1 = here, 2 = table.concat, 3 = its caller
+end
+local floor, ceil, tonumber = math.floor, math.ceil, tonumber
+-- Asks the C function which integer it reads for a bound that is NaN, infinite or outside 32
+-- bits (the conversion is up to the platform: x86 gives the smallest integer, ARM saturates
+-- and turns NaN into 0). A one-element range [x, x] over a table with a value at 0 and 1 and
+-- nothing elsewhere answers: "0" or "1", or an error that names the index it read.
+local PROBE = { [0] = "0", "1" }
+local function c_int(x)
+    local ok, r = pcall(concat, PROBE, "", x, x)
+    if ok then return r == "0" and 0 or 1 end
+    return type(r) == "string" and tonumber(r:match("at index (-?%d+)")) or nil
+end
+-- The integer the C function reads for a bound (numbers and numeric strings, truncated toward
+-- zero), or nil when it is not a number and the C function is to report it.
+local function bound_int(x)
+    local n = x
+    if type(n) == "string" then n = tonumber(n) end
+    if type(n) ~= "number" then return nil end
+    if n ~= n or n >= 2147483648 or n <= -2147483649 then return c_int(x) end
+    if n >= 0 then return floor(n) end
+    return ceil(n)
+end
+table.concat = function(t, sep, i, j)
+    if type(t) == "table" then
+        local first = i == nil and 1 or bound_int(i)
+        local last = j == nil and rawlen(t) or bound_int(j)
+        if first and last and last - first >= CONCAT_CHUNK then
+            local parts, count = {}, 0
+            local from = first
+            while from <= last do
+                local to = from + CONCAT_CHUNK - 1
+                if to > last then to = last end
+                local ok, piece = pcall(concat, t, sep, from, to)
+                if not ok then
+                    if piece == "not enough memory" then error(piece, 0) end
+                    return concat_failed(t, sep, from, to)
+                end
+                count = count + 1
+                parts[count] = piece
+                from = to + 1
+            end
+            return concat(parts, sep)
+        end
+    end
+    local ok, r = pcall(concat, t, sep, i, j)
+    if ok then return r end
+    return concat_failed(t, sep, i, j)
+end
+
+-- string.pack / packsize / unpack walk their format string item by item: refuse formats over
+-- MAX_FORMAT bytes (real formats are a few dozen), and string.pack also refuses a format whose
+-- `c<n>` items add up to more than MAX_PACK bytes (`c200000000`, or 300 x `c999999`: each pads
+-- n bytes). Every other item is at most 16 bytes, so 64 KB of format cannot reach MAX_PACK. upper / lower / reverse / utf8.len /
+-- utf8.offset make one pass over the string at 3 ns per byte: refuse strings over MAX_TEXT
+-- (16 MB). string.split makes one table slot per piece: refuse subjects over MAX_SPLIT (4 MB).
+local MAX_FORMAT = 65536
+local MAX_TEXT = 16777216
+local MAX_SPLIT = 4194304
+local MAX_PACK = 16777216
+for _, name in { "pack", "packsize", "unpack" } do
+    local f = string[name]
+    string[name] = function(fmt, ...)
+        if type(fmt) == "string" and #fmt > MAX_FORMAT then
+            error("string." .. name .. ": format string too long (limit 65536)", 2)
+        end
+        if name == "pack" and type(fmt) == "string" and fmt:find("c%d") then
+            local total = 0
+            for digits in fmt:gmatch("c(%d+)") do
+                total = total + tonumber(digits)
+            end
+            if total > MAX_PACK then
+                error("string.pack: result too large (limit 16777216 bytes)", 2)
+            end
+        end
+        return f(fmt, ...)
+    end
+end
+for _, name in { "upper", "lower", "reverse" } do
+    local f = string[name]
+    string[name] = function(s)
+        if type(s) == "string" and #s > MAX_TEXT then
+            error("string." .. name .. ": string too long (limit 16777216 bytes)", 2)
+        end
+        return f(s)
+    end
+end
+local utf8_len = utf8.len
+utf8.len = function(s, i, j, lax)
+    if type(s) == "string" and #s > MAX_TEXT then
+        error("utf8.len: string too long (limit 16777216 bytes)", 2)
+    end
+    return utf8_len(s, i, j, lax)
+end
+local utf8_offset = utf8.offset
+utf8.offset = function(s, n, i)
+    if type(s) == "string" and #s > MAX_TEXT then
+        error("utf8.offset: string too long (limit 16777216 bytes)", 2)
+    end
+    return utf8_offset(s, n, i)
+end
+local split = string.split
+if split then
+    string.split = function(s, sep)
+        if type(s) == "string" and #s > MAX_SPLIT then
+            error("string.split: string too long (limit 4194304 bytes)", 2)
+        end
+        return split(s, sep)
+    end
 end
 "#;
 

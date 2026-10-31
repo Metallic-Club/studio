@@ -127,7 +127,9 @@ local cf, size = door:GetBoundingBox()
 
 | Signal | Arguments | Fired when |
 |---|---|---|
-| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is its `HumanoidRootPart` (so `hit.Parent` is the character Model) |
+| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
+| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced); pairs with `Touched`. If the
+character part was destroyed by then, `hit` is the destroyed instance (its members can no longer be read) Part-to-part contacts report `Touched` only |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |
@@ -149,6 +151,10 @@ StarterGui, Lighting, RunService, UserInputService, ContextActionService. Others
 - Player: `UserId`, `Character`, `CharacterAdded`. Combined startup creates a `PlayerGui` for its local player;
   server-only startup adds no player or GUI.
 - `Humanoid:TakeDamage(n)` only lowers `Health` (not below 0). Death is detected by the character controller.
+- Humanoid tuning is clamped on write: `Health` and `MaxHealth` to 0..1e9, `WalkSpeed` and `JumpPower` to 0..1000,
+  `MaxSlopeAngle` to 0..89. Setting a NaN or infinite number raises an error and keeps the old value. A character
+  dies when `Health` is 0, when it falls below `Workspace.FallenPartsDestroyHeight`, or when its root goes more than
+  1,000,000 studs from the origin on any axis.
 - `RunService:IsServer()`, `RunService:IsClient()`, `RunService.Heartbeat`.
 
 ```lua
@@ -172,6 +178,36 @@ end)
   release queued ownership so manual resumes work again, preserving nil/multiple values and native errors.
 - Native `pcall` and `xpcall` are unchanged. Ordinary coroutine creation, yielding, status and close behavior
   remain available; internally tagged results are consumed by the scheduler/admission helpers.
+
+## GUI and buttons
+The local player's `PlayerGui` (copied from `StarterGui` at start) is drawn over the 3D view: `ScreenGui` (`Enabled`,
+`DisplayOrder`), `Frame` (`Position`, `Size`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`, `ZIndex`, `Active`,
+`ClipsDescendants`), `TextLabel` (`Text`, `TextColor3`, `TextSize`) and the buttons `TextButton` (`Text`, `TextColor3`,
+`TextSize`) and `ImageButton` (`Image`, `ImageColor3`, `ImageTransparency`; the image is not drawn yet). Both buttons
+are `GuiButton`s (`AutoButtonColor`), which are `Frame`s here (Roblox's GuiObject).
+
+- Order: ScreenGuis by `DisplayOrder`, then each element above its parent and siblings by `ZIndex` (Roblox's default
+  `ZIndexBehavior.Sibling`); ties keep tree order. `ClipsDescendants` cuts its descendants to its rectangle, for drawing
+  and clicks.
+- A press goes to the front-most element under the pointer that takes clicks: a button, or an element with
+  `Active = true`. Other elements let it through. A press taken by the GUI never reaches the game (camera, jump,
+  `ContextActionService`).
+- Button events: `MouseButton1Down(x, y)`, then on release over the same button `MouseButton1Up(x, y)`,
+  `MouseButton1Click()` and `Activated(inputObject, clickCount)`. A finger tap fires the same events. `AutoButtonColor`
+  darkens the background while hovered or pressed.
+- Every Frame: `MouseEnter(x, y)` and `MouseLeave(x, y)` (mouse only), `InputBegan(input)`, `InputChanged(input)` (mouse
+  movement, at most once per frame) and `InputEnded(input)` for the elements under the pointer down to the first that
+  takes clicks. `input` has `UserInputType` (`MouseButton1`, `MouseMovement` or `Touch`), `UserInputState`, `Position`
+  (Vector3, GUI points), `Delta` and `KeyCode`.
+- Events reach LocalScripts at the next step; at most 256 wait at once. Not yet: gamepad selection, `Modal`,
+  `MouseButton2` events, double-click counts, `ZIndexBehavior.Global`.
+
+```lua
+local button = script.Parent.Play
+button.Activated:Connect(function(input)
+    print("play pressed with", input.UserInputType.Name)
+end)
+```
 
 ## RemoteEvent
 `FireServer(...)` (client only), `FireClient(player, ...)` and `FireAllClients(...)` (server only), `OnServerEvent(player, ...)`
@@ -236,7 +272,11 @@ The value is the action's value as the runtime reported it. On the server any of
   unbound or its context disabled while pressed). `inputObject` has `KeyCode` (`Unknown`), `UserInputType`, `UserInputState`,
   `Position`, `Delta`. Return `Enum.ContextActionResult.Pass` to let lower consumers see the event; anything else sinks.
 - `UnbindAction(name)`, `SetTitle(name, text)`, `SetImage(name, image)`, `SetPosition(name, udim2)` (set `TouchLabel`,
-  `TouchImage`, and `TouchLayout = Custom` with `TouchPosition`). `GetButton(name)` returns nil until the touch overlay exists.
+  `TouchImage`, and `TouchLayout = Custom` with `TouchPosition`). `GetButton(name)` returns the touch overlay's button of an
+  action bound with `createTouchButton`, or nil when there is none or the overlay did not place it. It is a read-only
+  `TouchButton` object (the overlay is drawn by the Player, not by GUI instances): `Name`, `ClassName`, `Text`, `Image`,
+  `Visible`, `AbsolutePosition` and `AbsoluteSize` (`Vector2`, dp from the top-left of the screen), `Position` and `Size`
+  (`UDim2` offsets in dp).
 
 ### UserInputService (last input only)
 `GetLastInputType()`, `LastInputTypeChanged(type)`, `PreferredInput`, `TouchEnabled`, `KeyboardEnabled`, `GamepadEnabled`.

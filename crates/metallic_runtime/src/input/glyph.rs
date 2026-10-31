@@ -311,6 +311,13 @@ pub fn control_glyph(c: Control, style: GamepadStyle) -> ControlGlyph {
         C::TouchStick => art(G::Touch, "Touch Stick"),
         C::TouchLook => art(G::Touch, "Touch Look"),
         C::TouchButton => art(G::Touch, "Tap"),
+        C::TouchButton1 => art(G::Touch, "Touch Button 1"),
+        C::TouchButton2 => art(G::Touch, "Touch Button 2"),
+        C::TouchButton3 => art(G::Touch, "Touch Button 3"),
+        C::TouchButton4 => art(G::Touch, "Touch Button 4"),
+        C::TouchButton5 => art(G::Touch, "Touch Button 5"),
+        C::TouchButton6 => art(G::Touch, "Touch Button 6"),
+        C::TouchButton7 => art(G::Touch, "Touch Menu"),
     }
 }
 
@@ -375,7 +382,7 @@ fn image_folder(c: Control, style: GamepadStyle) -> &'static str {
         | C::MouseWheel
         | C::MouseDelta
         | C::MousePosition => "mouse",
-        C::TouchStick | C::TouchLook | C::TouchButton => "touch",
+        c if c.is_touch() => "touch",
         _ => "keyboard",
     }
 }
@@ -422,7 +429,8 @@ pub fn slot_glyph(slot: &Slot, device: DeviceKind, style: GamepadStyle) -> Glyph
             g.text.push_str(control_glyph(*c, style).text);
             g.image = image_id(*c, style);
         }
-        Slot::Single(None) => unreachable!("empty slots return above"),
+        // Empty slots return above; should one get here, it reads as unbound.
+        Slot::Single(None) => return Glyph::unbound(device),
         Slot::Composite(parts) => {
             g.count = 4;
             g.image.push_str("metallic://glyph/composite/");

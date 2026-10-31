@@ -1,4 +1,5 @@
-// Shared by the sky and scene shaders: frame uniforms, sky gradient and output encoding.
+// Shared by the sky and scene shaders: frame uniforms and the sky gradient. Both write linear
+// HDR light; `finish.wgsl` tone maps and encodes it.
 struct Globals {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -11,8 +12,23 @@ struct Globals {
     sky_zenith: vec4<f32>,
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
-    params: vec4<f32>,       // x: cascades, y: 1 if the target encodes sRGB itself, z: exposure, w: shadow map size
+    params: vec4<f32>,       // x: cascades, y: tone curve index, z: exposure incl. curve pre-scale, w: shadow map size
     viewport: vec4<f32>,     // x, y: target size in pixels; z, w: their reciprocals
+    // Lighting block (`LightingUniform` in src/lighting.rs; used by lighting.wgsl).
+    light_ambient: vec4<f32>,  // rgb: Ambient, w: EnvironmentDiffuseScale
+    light_outdoor: vec4<f32>,  // rgb: OutdoorAmbient, w: EnvironmentSpecularScale
+    light_bounce: vec4<f32>,   // rgb: ground bounce tint, w: shadow filter radius (texels)
+    light_flags: vec4<f32>,    // x: shadows on, y: diffuse wrap, z: star density, w: star brightness
+    fog_params: vec4<f32>,     // x: density, y: height falloff, z: fog height, w: max opacity
+    fog_toward: vec4<f32>,     // rgb: fog toward the sun, w: anisotropy g
+    fog_away: vec4<f32>,       // rgb: fog away from the sun, w: glare strength
+    fog_extinction: vec4<f32>, // rgb: extinction per channel, w: height fog on
+    legacy_fog: vec4<f32>,     // rgb: FogColor, w: distance fog on
+    legacy_range: vec4<f32>,   // x: FogStart, y: FogEnd
+    sun_disc: vec4<f32>,       // xyz: toward the sun, w: cos(disc radius)
+    moon_disc: vec4<f32>,      // xyz: toward the moon, w: cos(disc radius)
+    celestial: vec4<f32>,      // x: sun disc scale, y: moon radiance, z: bodies shown, w: night
+    light_toon: vec4<f32>,     // x: toon light of the default lighting (reference), y: auto exposure
 }
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -29,41 +45,13 @@ fn sky_gradient(d: vec3<f32>) -> vec3<f32> {
     return select(above, below, up < 0.0);
 }
 
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    let lo = c * 12.92;
-    let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(hi, lo, c <= vec3<f32>(0.0031308));
-}
-
-fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
-    let lo = c / 12.92;
-    let hi = pow((max(c, vec3<f32>(0.0)) + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(hi, lo, c <= vec3<f32>(0.04045));
-}
-
-fn hash12(p: vec2<f32>) -> f32 {
-    var q = fract(vec3<f32>(p.xyx) * 0.1031);
-    q = q + dot(q, q.yzx + 33.33);
-    return fract((q.x + q.y) * q.z);
-}
-
-// Tone maps linear light, encodes it for the target and adds a little dither against banding.
-// The scene colour that `finish` maps to the display-linear colour `y` (0..1): the inverse of its
-// tone curve and exposure. Toon shading picks display colours directly and goes through this.
+// The scene colour that the finish pass maps to the display-linear colour `y` (0..1), before
+// grading: the inverse of the tone curve and exposure. Toon shading picks display colours
+// directly and goes through this, so it lands in the HDR target like any other light.
 fn unfinish(y: vec3<f32>) -> vec3<f32> {
-    let t = clamp(y, vec3<f32>(0.0), vec3<f32>(0.98));
-    let a = 2.51 - 2.43 * t;
-    let b = 0.03 - 0.59 * t;
-    let c = -0.14 * t;
-    return (-b + sqrt(b * b - 4.0 * a * c)) / (2.0 * a) / max(g.params.z, 1e-4);
-}
-
-fn finish(c: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
-    let x = max(c, vec3<f32>(0.0)) * g.params.z;
-    let mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-    let encoded = linear_to_srgb(mapped) + (hash12(frag) - 0.5) / 255.0;
-    if (g.params.y > 0.5) {
-        return srgb_to_linear(clamp(encoded, vec3<f32>(0.0), vec3<f32>(1.0)));
+    var m = g.light_toon.y;
+    if (!(m > 0.0 && m < 1e30)) {
+        m = 1.0;
     }
-    return encoded;
+    return invert_curve(y, u32(g.params.y + 0.5)) / max(g.params.z * m, 1e-6);
 }

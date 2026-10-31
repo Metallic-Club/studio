@@ -33,6 +33,13 @@ pub enum Changes {
 }
 
 /// Stable handle to an instance. Generational: a destroyed instance's id never becomes valid again.
+///
+/// An id is local to the [`World`] that made it: an index and a generation, with no record of
+/// which world it came from. Two independent worlds hand out the same ids in the same order, so an
+/// id from one world can equal a live id in another and then refers to that world's instance.
+/// [`World::deep_clone`] keeps ids on purpose. An id that does not resolve in a world (never
+/// allocated there, destroyed or stale) is inert there: reads fail with
+/// [`CoreError::InvalidInstance`](crate::CoreError::InvalidInstance) and its signals never fire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct InstanceId {
     index: u32,
@@ -330,7 +337,9 @@ impl World {
     /// Moves an instance under a new parent (or makes it a root with `None`), as the last child.
     ///
     /// Errors: [`CoreError::InvalidInstance`] if either id is destroyed, [`CoreError::Cycle`] if
-    /// `parent` is the instance itself or one of its descendants. Fires `child_added`.
+    /// `parent` is the instance itself or one of its descendants. Fires `child_added`. Moving an
+    /// instance to the parent it already has (or a root to `None`) is a no-op, as in Roblox: no
+    /// signal, no change of order, nothing journaled (#97).
     pub fn set_parent(
         &mut self,
         id: InstanceId,
@@ -351,6 +360,9 @@ impl World {
                 cur = self.parent(c);
             }
         }
+        if self.parent(id) == parent {
+            return Ok(());
+        }
         self.detach(id);
         if let Some(n) = self.node_mut(id) {
             n.parent = parent;
@@ -363,6 +375,45 @@ impl World {
             None => self.roots.push(id),
         }
         self.record_subtree(id);
+        Ok(())
+    }
+
+    /// Like [`World::set_parent`], then puts `id` at position `index` among its siblings (the
+    /// roots for `None`); an `index` past the end means last. This is how an editor restores
+    /// an order (undo) or reorders within one parent, which `set_parent` never does.
+    ///
+    /// `child_added` fires only when the parent changes. A move to the place it already has is
+    /// a no-op; a reorder within the same parent fires nothing and journals `id` and the parent.
+    pub fn set_parent_at(
+        &mut self,
+        id: InstanceId,
+        parent: Option<InstanceId>,
+        index: usize,
+    ) -> Result<(), CoreError> {
+        let moved = self.parent(id) != parent;
+        self.set_parent(id, parent)?;
+        let siblings = match parent {
+            Some(p) => match self.node_mut(p) {
+                Some(n) => &mut n.children,
+                None => return Ok(()),
+            },
+            None => &mut self.roots,
+        };
+        let Some(from) = siblings.iter().position(|&c| c == id) else {
+            return Ok(());
+        };
+        let to = index.min(siblings.len() - 1);
+        if from == to {
+            return Ok(());
+        }
+        let child = siblings.remove(from);
+        siblings.insert(to, child);
+        if !moved {
+            self.record(id);
+            if let Some(p) = parent {
+                self.record(p);
+            }
+        }
         Ok(())
     }
 
@@ -444,8 +495,8 @@ impl World {
     /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`],
     /// [`CoreError::TypeMismatch`] (wrong value type), [`CoreError::InvalidValue`] (e.g. unknown
     /// material or a non-finite Number/Vector3/Color3/UDim2 component). Rejected writes change
-    /// neither properties, the change journal, nor signals. Numeric ranges remain defined by
-    /// existing registry constraints. Fires `property_changed` when an accepted value changes.
+    /// neither properties, the change journal, nor signals. Properties with a registry range
+    /// ([`crate::classes::NumRange`]) are clamped (or wrapped) into it. Fires `property_changed` when an accepted value changes.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
         let class = self.node(id).ok_or(CoreError::InvalidInstance)?.class;
         let def = find_property(class, prop).ok_or_else(|| CoreError::UnknownProperty {
@@ -465,13 +516,25 @@ impl World {
                 reason: "all numeric components must be finite".into(),
             });
         }
+        // Lighting and effect numbers are brought into their sane range (1e39 would overflow
+        // the renderer's f32 math).
+        let mut value = match def.range {
+            Some(range) => range.apply(value),
+            None => value,
+        };
         if let (Some(allowed), Value::String(s)) = (def.allowed, &value)
             && !allowed.contains(&s.as_str())
         {
-            return Err(CoreError::InvalidValue {
-                property: prop.to_string(),
-                reason: format!("`{s}` is not one of {allowed:?}"),
-            });
+            // A display name (`"Retro / PS1"`) is stored as its id.
+            match def.normalize.and_then(|f| f(s)) {
+                Some(stored) => value = Value::String(stored.to_string()),
+                None => {
+                    return Err(CoreError::InvalidValue {
+                        property: prop.to_string(),
+                        reason: format!("`{s}` is not one of {allowed:?}"),
+                    });
+                }
+            }
         }
         let old = self.get(id, prop)?;
         let is_default = default_value(class, prop).as_ref() == Some(&value);
@@ -496,8 +559,10 @@ impl World {
 
     /// The signal fired with the new value when `prop` of `id` changes (created on first use).
     ///
-    /// `id` and `prop` are not validated: for a destroyed, stale or foreign id the signal never
-    /// fires and is discarded by the next [`World::destroy`].
+    /// `id` and `prop` are not validated. If `id` does not resolve in this world (never allocated
+    /// here, destroyed or stale), the signal never fires and is discarded by the next
+    /// [`World::destroy`]. Ids are world-local ([`InstanceId`]), so an id taken from another world
+    /// that equals a live id here connects to this world's instance, and the signal fires for it.
     pub fn property_changed(&mut self, id: InstanceId, prop: &str) -> &mut Signal<Value> {
         self.prop_signals.entry((id, prop.to_string())).or_default()
     }

@@ -1,11 +1,13 @@
 //! Command-line arguments.
 use metallic_render::Quality;
+use metallic_runtime::input::touch::DeviceProfile;
 use std::path::PathBuf;
 
 /// Usage text printed for bad arguments.
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
 [--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
-[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist]";
+[--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist|touch] \
+[--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]";
 
 /// Parsed arguments.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +41,13 @@ pub struct Args {
     /// Start with the Player menu open: `main`, or a Controls tab (`keyboard`, `gamepad`,
     /// `assist`).
     pub menu: Option<String>,
+    /// `--emulate`: play as this touch device (window in its shape, the mouse is a finger,
+    /// the touch overlay always shows).
+    pub emulate: Option<DeviceProfile>,
+    /// `--reduce-motion`: the touch overlay appears and disappears without a fade.
+    pub reduce_motion: bool,
+    /// `--minimised`: the window starts minimised (for checking CPU use while minimised).
+    pub minimised: bool,
 }
 
 impl Args {
@@ -58,6 +67,9 @@ impl Args {
             input_script: None,
             no_overrides: false,
             menu: None,
+            emulate: None,
+            reduce_motion: false,
+            minimised: false,
         };
         while let Some(a) = it.next() {
             let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
@@ -67,13 +79,24 @@ impl Args {
                 "--input-script" => {
                     args.input_script = Some(PathBuf::from(value("--input-script")?))
                 }
+                "--emulate" => {
+                    let v = value("--emulate")?;
+                    args.emulate = Some(crate::touch_overlay::parse_emulation(&v).ok_or(
+                        format!("unknown device `{v}` (phone, tablet or small-phone, optionally -portrait)"),
+                    )?);
+                }
+                "--reduce-motion" => args.reduce_motion = true,
+                "--minimised" => args.minimised = true,
                 "--fps" => args.fps = true,
                 "--no-overrides" => args.no_overrides = true,
                 "--menu" => {
                     let v = value("--menu")?;
-                    if !matches!(v.as_str(), "main" | "keyboard" | "gamepad" | "assist") {
+                    if !matches!(
+                        v.as_str(),
+                        "main" | "keyboard" | "gamepad" | "assist" | "touch"
+                    ) {
                         return Err(format!(
-                            "unknown menu page `{v}` (main, keyboard, gamepad or assist)"
+                            "unknown menu page `{v}` (main, keyboard, gamepad, assist or touch)"
                         ));
                     }
                     args.menu = Some(v);
@@ -163,6 +186,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_emulate_option() {
+        let a = parse("p --emulate phone --capture 60:shot.png").unwrap();
+        assert_eq!(a.emulate, Some(DeviceProfile::phone()));
+        assert!(parse("p --minimised").unwrap().minimised);
+        assert!(!parse("p").unwrap().minimised);
+        let a = parse("p --emulate tablet-portrait --reduce-motion").unwrap();
+        assert_eq!(a.emulate.map(|p| p.size), Some([820.0, 1180.0]));
+        assert!(a.reduce_motion);
+        assert!(parse("p --emulate watch").is_err());
+        assert!(parse("p --emulate").is_err());
+        assert_eq!(parse("p").unwrap().emulate, None);
+    }
+
+    #[test]
     fn capture_view_takes_six_numbers() {
         let a = parse("p --capture-view 1,2,3,4,5,-6").unwrap();
         assert_eq!(a.capture_view, Some([1.0, 2.0, 3.0, 4.0, 5.0, -6.0]));
@@ -175,6 +212,10 @@ mod tests {
         assert_eq!(a.menu.as_deref(), Some("gamepad"));
         assert!(a.no_overrides);
         assert!(parse("p --menu shop").is_err());
+        assert_eq!(
+            parse("p --menu touch").unwrap().menu.as_deref(),
+            Some("touch")
+        );
         assert_eq!(parse("p").unwrap().menu, None);
     }
 

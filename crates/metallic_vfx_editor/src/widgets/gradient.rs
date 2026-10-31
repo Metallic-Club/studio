@@ -43,7 +43,7 @@ pub fn gradient_edit(
     painter.rect_stroke(
         bar,
         theme::R_SM,
-        Stroke::new(1.0, color::LINE_STRONG),
+        Stroke::new(1.0, color::line_strong()),
         StrokeKind::Outside,
     );
 
@@ -103,7 +103,7 @@ pub fn gradient_edit(
             Pos2::new(p.x + 5.5, p.y + 4.0),
             Pos2::new(p.x - 5.5, p.y + 4.0),
         ];
-        let outline = if sel { color::ACCENT } else { color::ICON };
+        let outline = if sel { color::accent() } else { color::icon() };
         painter.add(egui::Shape::convex_polygon(
             tri,
             to_color32(k.c),
@@ -120,7 +120,7 @@ pub fn gradient_edit(
             changed |= crate::widgets::color_button(ui, &mut k.c);
             ui.label(
                 egui::RichText::new(format!("{} at {:.0}%", k.c.to_hex_string(), k.t * 100.0))
-                    .color(color::TEXT_3),
+                    .color(color::text_3()),
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
