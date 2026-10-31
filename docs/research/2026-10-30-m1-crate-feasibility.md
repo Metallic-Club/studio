@@ -45,9 +45,9 @@ Where this document disagrees with one of them, it says so.
 
 ## Summary
 
-- **Core value left: Tasks 15 and 16.** Every planned debugger feature looks feasible through raw `mlua::ffi`. mlua's
-  safe API has no line hooks under Luau and treats `LUA_BREAK` as an error, so pausing has to be a yield from the
-  debug hook. The merged VM already fits that design: handlers run as threads, and unknown yields park the thread.
+- **Core value left: Tasks 15 and 16.** Raw `mlua::ffi` exposes debugger primitives, but pause/resume integration
+  still needs prototypes. Safe mlua has no Luau line hooks and treats `LUA_BREAK` as an error; neither a raw-resume
+  adapter nor a yield-based hook has been validated here. A debugger must explicitly retain paused threads.
   For the profiler, `puffin_egui` is pinned to egui 0.33, so Studio needs its own timeline view.
 - **Task 13 is implemented**, with a GitHub App instead of the plan's OAuth app. Three findings remain in this snapshot:
   - ~~The download path still uses Velopack's `GithubSource`, which reads only the 10 newest releases.~~ Fixed
@@ -325,6 +325,10 @@ Studio [R2].
 
 ## 4. Task 15: Luau debugger (planned)
 
+Publication audit: the hook/pause conclusions below were checked against mlua v0.12.2 at
+`a186d461c7772aed4cb0a9fa1d1899121c6450e7`, Luau 0.740 at `c0e346edd89066b44dca174c9f54ce84c746a540`,
+and Metallic's scheduler at `5c84cf7` [R23]. This is source analysis; no debugger prototype ran.
+
 ### Observations (sourced)
 
 **Versions.**
@@ -349,23 +353,30 @@ Studio [R2].
 
 **Luau 0.740 behaviour.**
 - **Breakpoints.** `lua_breakpoint` moves to the next line with code and patches that line's first instruction to
-  `LOP_BREAK` in the Proto and every nested Proto. Native (JIT) code ignores breakpoints [L13].
+  `LOP_BREAK` in the Proto and every nested Proto. Native execution does not implement interpreter breakpoints;
+  installing one can invoke the registered callback that disables native execution for the affected code [L13].
 - **Hitting one.** `LOP_BREAK` calls `debugbreak`, which may put the thread into error or yield state, with
   `savedpc` at the current instruction [L14]. Inference, untested: on resume the same BREAK fires again.
 - **Breaking.** `lua_break` errors across a metamethod or C-call boundary; `lua_resume` returns `LUA_BREAK` (6)
   [L15].
 - **Stepping.** `lua_singlestep` is per thread and inherited by new threads. `debugstep` runs before each
-  instruction [L14][L16].
+  instruction except `PREPVARARGS` and `BREAK` [L14][L16].
 - **Errors.** `debugprotectederror` runs only when the thread is yieldable and "is only allowed to break" [L15].
 - **Callbacks.** They are shared by all coroutines, and only `interrupt` may change while code runs [L12].
 - **mlua and `LUA_BREAK`.** mlua handles only `OK` and `YIELD`. A thread that returns `LUA_BREAK` takes the error
-  path and later reports `CoroutineUnresumable` [L6][L8]. A yield from a hook looks like a normal yield [L4].
+  path and later reports `CoroutineUnresumable` [L6][L8]. A hook returning `LUA_YIELD` takes mlua's ordinary yield
+  status path; this establishes neither payload preservation nor safe debugger pause/resume integration [L4][L6][L14].
+- **Hook stack.** `luau_callhook` restores the pre-hook stack top after invoking the callback [L14]. Source-derived
+  inference: a hook-pushed pause tag is not a supported way to return ordinary yielded values. Out-of-band pause
+  state plus a zero-result yield is a candidate to prototype, not an established safe integration.
 
 **What the merged VM gives the debugger** [R15]:
 - `ScriptVm::lua()` exposes the `Lua` "for ... the debugger (task 15), which reaches the raw `lua_State` through
   `mlua::ffi`".
 - Every event handler runs in its own guarded thread [R16].
-- `task.wait` yields a `SLEEP` tag. "Any other yield parks the thread; its owner resumes it later" [R17].
+- `task.wait` yields a `SLEEP` tag. Other yields leave resumption to their owner [R17]. The current scheduler's
+  unknown-yield path and weak-key thread-state registry do not retain a strong `Thread` reference; a debugger
+  must hold that reference explicitly while paused [R23].
 - Each resume gets a fresh deadline, checked in the `set_interrupt` callback. The default is 0.1 s, and since #270
   `ScriptVm::set_resume_budget` changes it per VM [R15][R17].
 - No `Compiler` is set anywhere, so scripts compile at debug level 1 [R15].
@@ -389,16 +400,22 @@ Studio [R2].
 | Set local | `lua_setlocal` | No |
 | Break on error | `debugprotectederror` (handled); post-mortem frames of the dead thread (unhandled) | No |
 
+These are API candidates. In particular, protected-error pausing needs an unresolved adapter: Luau permits
+`lua_break` there, while ordinary mlua resume rejects `LUA_BREAK`. A yield-based breakpoint prototype would not
+establish break-on-error support [L6][L15].
+
 ### Recommendations (judgment)
 
-1. **Pause by yielding, never block.** `Lua` is `!Send` here, `ScriptHost` holds `Rc<RefCell<World>>`, and egui runs
+1. **Prototype nonblocking pause.** `Lua` is `!Send` here, `ScriptHost` holds `Rc<RefCell<World>>`, and egui runs
    on the main thread, so a blocked hook would freeze Studio.
-   - `debugbreak`/`debugstep` yield a `DEBUG_PAUSE` tag.
-   - The scheduler's existing "park on unknown yield" path already keeps the thread. The debugger records it in a
-     paused slot and resumes it on Continue through `Budget::resume`, which gives it a fresh deadline.
+   - Candidate: `debugbreak`/`debugstep` write out-of-band pause state, then yield zero results. Do not rely on
+     hook-pushed return tags surviving the hook wrapper.
+   - The debugger must retain a strong paused `Thread` handle before the resume caller releases its handle.
+     Prototype Continue through `Budget::resume`, including garbage collection while paused and a fresh deadline.
    - While anything is paused, the runtime skips scripts, physics and character but still renders. That is the
      plan's "game freezes, Studio works".
-2. **Prototype `lua_break` + raw `ffi::lua_resume` as the alternative**, and pick by scheduler cost.
+2. **Prototype `lua_break` + raw `ffi::lua_resume` as the alternative.** Prove compatibility with mlua's thread
+   status/stack bookkeeping and the budget scheduler before comparing cost. Test protected-error pausing separately.
 3. **Contain the unsafe code.**
    - Use one module, `metallic_script::debug::ffi`, with `// SAFETY:` comments and `catch_unwind` in every callback.
    - Never overwrite `lua_Callbacks::userdata`; reach state through `get_or_init_from_ptr` + `app_data`.
@@ -407,8 +424,8 @@ Studio [R2].
    1 for Studio Play, and keep level 1 in `metallic-player`. Never use `luau-jit` while debugging.
 5. **Server and client** VMs compile separately, so set each breakpoint in every VM that loaded the script, with a
    "Trigger At" filter.
-6. **Non-yieldable sites** (metamethods, `table.sort` comparators, Luau called from Rust) cannot pause. Skip them with
-   an Output warning and document the limit.
+6. **Non-yieldable sites.** Define an explicit unsupported-pause result and test metamethods, `table.sort`
+   comparators and Luau called from Rust. Document which contexts the chosen prototype supports.
 7. **Inherited stepping.** Clear the single-step flag on new threads in mlua's thread-create callback.
 8. **Budget.** Pausing ends the resume, so Continue starts a fresh budget. Allow a larger budget while stepping;
    `ScriptVm::set_resume_budget` already exists [R15]. Evaluation gets its own short budget and suppresses
@@ -417,12 +434,12 @@ Studio [R2].
    `mlua::ffi` [R10]. Luau allows setting `interrupt` from another thread [L12], but mlua's `set_interrupt` owns that
    slot [L4]. Whichever lands first, the debugger must not depend on the interrupt being present.
 10. **Prototype order** (throwaway `#[test]`s on the merged VM):
-    1. Breakpoint, yield, `lua_getinfo`/`lua_getlocal` and the re-hit check.
+    1. Breakpoint, zero-result yield, strong-thread retention through GC, locals inspection and the re-hit check.
     2. The same with `lua_break`.
     3. Step over, into and out.
     4. A breakpoint in a metamethod and in a Rust-called handler.
     5. `endless_loop_still_times_out_when_not_paused`.
-    6. Breakpoints and locals under `sandbox(true)`.
+    6. Breakpoints and locals under `sandbox(true)`, and a separate protected-error pause/resume case.
 
 ---
 
@@ -591,6 +608,8 @@ All accessed 2026-10-30. Crate versions, dates and licences come from the crates
 - [R20] `docs/superpowers/plans/2026-10-30-launcher-l1.md` (architecture line, decisions table, Task 1)
 - [R21] `crates/metallic_runtime/Cargo.toml`, `crates/metallic_player/Cargo.toml`, `LICENSES/THIRD-PARTY-FONTS.md`, `docs/agents/8-runtime-parkour.md`, commit `cc68340`, `docs/CONDUCTOR.md`, issue #44 (rulings list)
 - [R22] `crates/metallic_player/src/window.rs` (`impl ApplicationHandler for App`), `crates/metallic_player/src/overlay.rs` (`egui_wgpu::Renderer`)
+- [R23] Publication source at `5c84cf7566901c73bd9de3621ab6ad384add8030`: `crates/metallic_script/src/task_lib.rs`,
+  `crates/metallic_studio/src/commands.rs`, `crates/metallic_update/src/feed.rs`, `crates/metallic_update/src/feed/tagged.rs`.
 
 **Studio stack**
 - [E1] https://crates.io/api/v1/crates/egui-wgpu

@@ -8,7 +8,7 @@ interface change.
 ## Done
 - Research doc written against `origin/main` at `96aceb0` (waves 1-2, Task 8, #266, #270 and the Launcher plan merged). It has sections for Studio
   (9-11), Task 13, Tasks 14/16, Task 15, Tasks 6-7 vs merged code, and Task 5 (dropped: implemented by the lead). It
-  also has the licence/version table, findings and risks, owner decisions, follow-up issue titles and 93 sources.
+  also has the licence/version table, findings and risks, owner decisions, follow-up issue titles and an indexed source list.
 - Sourced inputs: four local research notes (not in git) in
   `S:/Projects/Active/Metallic/research_notes/Metallic M1 crate feasibility/`. Extra crates.io API checks and local
   crate-source reads (velopack 1.3.39, keyring 3.6.3) were made 2026-10-30.
@@ -46,4 +46,16 @@ without asserting that no owner ever approved the policy. No dependencies or pub
 
 The original source index is preserved. Selected primary API pages for mlua 0.12.2, Velopack 1.2.161 and puffin
 were checked again during the publication pass; this is not a new audit of every historical citation or an update
-of every candidate version. Fresh mandatory checks and independent review are pending before publication.
+of every candidate version. Fresh workspace prebuild, strict all-target Clippy, licenses, format and task-range
+whitespace checks passed. The full actual workspace suite is queued in the shared Lua window before publication.
+
+The source-label integrity check found 97 defined entries, with no missing references or duplicate definitions.
+This checks document structure only; it does not establish that every historical external page is unchanged.
+
+An independent bounded primary-source debugger audit corrected the original pause design: hook-pushed return
+tags do not survive Luau's hook stack restoration, the scheduler does not strongly retain unknown-yield threads,
+and protected-error pauses need a separate adapter for LUA_BREAK. The document now labels out-of-band state plus
+zero-result yield as an unexecuted candidate, adds GC/error prototype cases and records immutable source pins.
+A final read-only review found no substantive contradiction; its ordinary-yield-status wording clarification was
+applied. No debugger behavior or new performance result is claimed. The tested crates tree is
+0178bb34d1e58cb44cfd78b01c26f438b252d6e5, exactly equal to main 5c84cf7; all task changes are documentation.
