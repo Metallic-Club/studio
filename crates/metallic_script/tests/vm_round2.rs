@@ -296,65 +296,142 @@ fn long_bracket_class_lazy_is_bounded() {
     );
 }
 
-/// Builds a global with the engine's unbudgeted Lua handle, then runs `src` under a short
-/// budget and asserts that it stops with a timeout well inside `limit` (#274).
-fn assert_sort_times_out(build: &str, src: &str) {
+/// Runs `src` on data built by `build` in a plain, unbudgeted Luau state, like the old
+/// `table.sort`, and returns how long it took.
+fn plain_luau_time(build: &str, src: &str) -> Duration {
+    let lua = mlua::Lua::new();
+    let big: mlua::Table = lua.load(build).eval().unwrap();
+    lua.globals().set("big", big).unwrap();
+    let start = Instant::now();
+    lua.load(src).exec().unwrap();
+    start.elapsed()
+}
+
+/// Builds the data once for the sandbox and once for a plain Luau state; the plain state shows
+/// how long the C sort needs (at least `min_plain`, so the workload means something), and the
+/// budgeted run must stop with a timeout in less than half of that (#274). On the old code the
+/// sort could not be interrupted and took the full time.
+fn assert_sort_stops_early(build: &str, src: &str, min_plain: Duration) {
+    let plain = plain_luau_time(build, src);
+    assert!(
+        plain >= min_plain,
+        "workload too small: plain sort took {plain:?}"
+    );
     let (mut vm, _) = vm();
     let big: mlua::Table = vm.lua().load(build).eval().unwrap();
     vm.set_global("big", big).unwrap();
-    vm.set_resume_budget(Duration::from_millis(40));
+    vm.set_resume_budget(Duration::from_millis(10));
     let start = Instant::now();
     let err = vm.run_script("T", src).unwrap_err();
     let took = start.elapsed();
+    assert!(err.message.contains("Script timeout"), "{}", err.message);
     assert!(
-        err.message.contains("Script timeout") || err.message.contains("invalid order function"),
-        "{}",
-        err.message
+        took < plain / 2,
+        "stopped after {took:?}, a plain C sort takes {plain:?}"
     );
-    assert!(took < Duration::from_secs(2), "took {took:?}");
     vm.set_resume_budget(Duration::from_secs(2));
     vm.run_script("T", "local t = {3, 1, 2} table.sort(t) assert(t[1] == 1)")
         .unwrap();
 }
 
 #[test]
-fn big_sort_without_comparator_is_interruptible() {
-    // Strings with a long shared prefix: every comparison is a long memcmp in C.
-    assert_sort_times_out(
+fn big_string_sort_with_shared_prefix_is_interruptible() {
+    // Every comparison is a long memcmp in C.
+    assert_sort_stops_early(
         "local p = string.rep('a', 1500)
          local big = {}
          for i = 1, 150000 do big[i] = p .. ((i * 7919) % 150001) end
          return big",
         "table.sort(big)",
+        Duration::from_millis(150),
     );
 }
 
 #[test]
 fn big_sort_with_a_c_comparator_is_interruptible() {
     // rawequal never returns to Lua: with only C calls the interrupt could not fire.
-    assert_sort_times_out(
+    assert_sort_stops_early(
         "local big = table.create(8000000, 0) for i = 1, 8000000 do big[i] = i end return big",
         "table.sort(big, rawequal)",
+        Duration::from_secs(1),
     );
 }
 
 #[test]
 fn big_sort_with_a_c_lt_metamethod_is_interruptible() {
-    assert_sort_times_out(
+    assert_sort_stops_early(
         "local mt = {__lt = rawequal}
          local big = {}
          for i = 1, 1000000 do big[i] = setmetatable({}, mt) end
          return big",
         "table.sort(big)",
+        Duration::from_millis(150),
+    );
+}
+
+#[test]
+fn huge_number_sort_without_comparator_is_interruptible() {
+    // Above the C-sort cap numbers also go through the Lua closure.
+    let (mut vm, _) = vm();
+    let big: mlua::Table = vm
+        .lua()
+        .load("local big = table.create(2000000, 0) for i = 1, 2000000 do big[i] = (i * 7919) % 2000003 end return big")
+        .eval()
+        .unwrap();
+    vm.set_global("big", big).unwrap();
+    vm.set_resume_budget(Duration::from_millis(40));
+    let start = Instant::now();
+    let err = vm.run_script("T", "table.sort(big)").unwrap_err();
+    assert!(err.message.contains("Script timeout"), "{}", err.message);
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
     );
 }
 
 #[test]
 fn big_sort_with_a_lua_comparator_stays_interruptible() {
-    assert_sort_times_out(
-        "return table.create(300000, 1)",
-        "table.sort(big, function(a, b) while true do end end)",
+    let (mut vm, _) = vm();
+    let big: mlua::Table = vm
+        .lua()
+        .load("return table.create(300000, 1)")
+        .eval()
+        .unwrap();
+    vm.set_global("big", big).unwrap();
+    vm.set_resume_budget(Duration::from_millis(40));
+    let start = Instant::now();
+    let err = vm
+        .run_script("T", "table.sort(big, function(a, b) while true do end end)")
+        .unwrap_err();
+    assert!(err.message.contains("Script timeout"), "{}", err.message);
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
     );
+}
+
+#[test]
+fn sorting_200k_numbers_without_a_comparator_fits_the_default_budget() {
+    let (mut vm, _) = vm();
+    let big: mlua::Table = vm
+        .lua()
+        .load("local t = table.create(200000, 0) for i = 1, 200000 do t[i] = (i * 7919) % 200003 end return t")
+        .eval()
+        .unwrap();
+    vm.set_global("big", big).unwrap();
+    // The default 0.1 s budget: the sort alone must fit (it runs in C for numbers).
+    let start = Instant::now();
+    vm.run_script("T", "table.sort(big)").unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        start.elapsed()
+    );
+    vm.set_resume_budget(Duration::from_secs(5));
+    vm.run_script("T", "for i = 2, 200000 do assert(big[i - 1] <= big[i]) end")
+        .unwrap();
 }
 
 #[test]
@@ -433,5 +510,30 @@ fn back_reference_compares_are_charged() {
     assert_pattern_stops_fast(
         "local s = string.rep('a', 60000)
          string.find(s, '(a*)%1b')",
+    );
+}
+
+#[test]
+fn gsub_charges_replacement_bytes_scanned_not_only_appended() {
+    // '%0' on matches that are all empty appends nothing, yet the 64 MB replacement is walked
+    // for every match: 20 matches x 64M bytes.
+    let (mut vm, _) = vm();
+    let start = Instant::now();
+    let err = vm
+        .run_script(
+            "T",
+            "local r = string.rep('%0', 32000000)
+             string.gsub(string.rep('a', 20), '', r)",
+        )
+        .unwrap_err();
+    assert!(
+        err.message.contains("Script timeout") || err.message.contains("pattern too complex"),
+        "{}",
+        err.message
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
     );
 }

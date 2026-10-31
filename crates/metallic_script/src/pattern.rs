@@ -131,6 +131,10 @@ impl<'a> State<'a> {
         Ok(())
     }
 
+    fn charge_steps(&mut self, n: u64) -> R<()> {
+        self.tick(n)
+    }
+
     /// Charges one step per 16 bytes copied or compared outside the matching loop (replacement
     /// text, back-references), so such loops are bounded by the step cap and the deadline.
     fn charge_bytes(&mut self, bytes: usize) -> R<()> {
@@ -712,7 +716,14 @@ fn gsub(
             match &repl_str {
                 Some(r) => {
                     let mut i = 0;
+                    // One step per match, even an empty one that appends nothing.
+                    st.charge_steps(1)
+                        .map_err(|er| stop_error(lua, sched, er))?;
                     while i < r.len() {
+                        // And per replacement byte scanned: `%0` over empty matches appends
+                        // nothing, but a huge replacement is still walked for every match.
+                        st.charge_bytes(1)
+                            .map_err(|er| stop_error(lua, sched, er))?;
                         if r[i] != b'%' {
                             append(&mut st, lua, sched, &mut out, &r[i..=i])?;
                         } else {

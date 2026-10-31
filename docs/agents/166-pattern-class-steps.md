@@ -62,3 +62,11 @@ cargo fmt --all -- --check
   `normal_sorts_behave_as_before`, `gsub_replacement_loop_is_bounded`,
   `back_reference_compares_are_charged`. Wall limits are 2 to 5 s.
 - Follow-up (not here): `string.pack`, `table.concat`.
+
+## Re-check fixes (#341)
+- gsub charges one step per match and one per 16 replacement bytes scanned (`%0` over empty matches
+  too). `table.sort` wrapper: Lua comparators run directly (already interruptible); C comparators
+  are wrapped; with no comparator a table of at most 524288 numbers uses the C sort after one
+  O(n) type scan, anything else goes through the Lua closure. C comparators are found with
+  `debug.info(f, "s") == "[C]"`.
+- Sort tests compare against a plain Luau state's sort time and fail on the old code.

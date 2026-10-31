@@ -96,8 +96,8 @@ fn setup_failed(e: Error) -> ScriptError {
 }
 
 /// Lua that bounds `string.rep` (results over 64 MB are rejected, also when the count is
-/// a numeric string) and `table.sort` (comparisons of tables over 256 elements go through a Lua closure so
-/// the deadline can interrupt, #274). The pattern functions are bounded in `pattern.rs`.
+/// a numeric string) and `table.sort` (above 256 elements, comparisons that would stay in C go through a Lua
+/// closure so the deadline can interrupt, #274). The pattern functions are bounded in `pattern.rs`.
 const STRING_LIMITS: &str = r#"
 local string, type, error, tonumber, tostring = string, type, error, tonumber, tostring
 local rep = string.rep
@@ -112,12 +112,17 @@ end
 
 -- #274: table.sort runs in C, where the time budget's interrupt cannot fire between
 -- comparisons (a C comparator such as rawequal, a C __lt, or long string compares never return
--- to Lua). Above SORT_VIA_LUA elements every comparison goes through a Lua closure, so each one
--- crosses a Lua call and the deadline check runs. Ordering and "invalid order function" are
--- Luau's own; a type error from the default comparison loses only the closure's position prefix.
+-- to Lua). The sort runs in C only where its cost is bounded or the comparator is a Lua
+-- function (already interruptible): a table of at most NUM_C_SORT numbers, or any table with a
+-- Lua comparator. Everything else above SORT_VIA_LUA elements goes through a Lua closure per
+-- comparison, so each one crosses a Lua call and the deadline check runs. Ordering and
+-- "invalid order function" are Luau's own; a type error from the default comparison loses only
+-- the closure's position prefix.
 local table, rawlen, type, pcall, error = table, rawlen, type, pcall, error
+local info = debug.info
 local sort = table.sort
 local SORT_VIA_LUA = 256
+local NUM_C_SORT = 524288
 local PREFIX = "^%[engine%]:%d+: "
 local function finish(ok, ...)
     if ok then return ... end
@@ -128,12 +133,24 @@ local function finish(ok, ...)
     end
     error(e, 0)
 end
+local function all_numbers(t, n)
+    for i = 1, n do
+        if type(t[i]) ~= "number" then return false end
+    end
+    return true
+end
 table.sort = function(t, comp)
-    if type(t) == "table" and rawlen(t) > SORT_VIA_LUA then
-        if comp == nil then
-            return finish(pcall(sort, t, function(a, b) return a < b end))
-        elseif type(comp) == "function" then
-            return finish(pcall(sort, t, function(a, b) return comp(a, b) end))
+    if type(t) == "table" then
+        local n = rawlen(t)
+        if n > SORT_VIA_LUA then
+            if comp == nil then
+                if n <= NUM_C_SORT and all_numbers(t, n) then
+                    return sort(t)
+                end
+                return finish(pcall(sort, t, function(a, b) return a < b end))
+            elseif type(comp) == "function" and info(comp, "s") == "[C]" then
+                return finish(pcall(sort, t, function(a, b) return comp(a, b) end))
+            end
         end
     end
     return sort(t, comp)
