@@ -1,11 +1,12 @@
 # Issue 311: explicit ScriptHost roles and player lifecycle
 
-Status: refreshed by Codex studio_core onto exact main `a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`.
-Normal merge and the narrow GUI-binding queue correction are committed; fixed source `ad3ded1` passed all
-29 focused role/GUI/server controls. The test-only baseline reproduced one stale-click rebind failure, with
-22 other executed checks passing. Full mandatory gates remain pending; new Cargo is held after a shared-disk
-exhaustion event until the conductor reassigns build slots. Earlier broad results below remain historical,
-not checks of the current source. The focused actual window was released immediately after verified exit.
+Status: refreshed source `01ca571debe1e5c14770e19376c76e887eb4d52d` on pinned main
+`a0bb1bfc0e84ffd637fe8d1759f4822322601cd8` passed all required local gates. The full locked serial
+workspace command exited zero: 1,868 passed, zero failed, eight upstream ignored across 138 summaries.
+Focused GUI/role/server controls passed 29 cases after a retained one-failure test-only baseline. The actual
+window/lane122 were released directly to root's combined CPU check. Append-only publication to existing
+PR #335 and exact-head CI remain next; no own merge, force push or new-main chase.
+Earlier results below remain source-specific history, rather than relabeled current-main results.
 
 Branch `studio/311-script-player-lifecycle`, initial main
 `e20f0828454d21ae2325b671add29f9bf5c3a7c3`. This user-prioritized remaining A3
@@ -243,3 +244,25 @@ window was explicitly released to #309. Root subsequently held all Cargo because
 prebuild; this branch has no active compiler or test. Do not start broad gates until a slot is reassigned.
 The old root lane114/debug has no binary-retention requirement from this task; named benchmark/release domains
 remain protected. No new-main bug, multiplayer acceptance, authentication or direct PR/main merge is claimed.
+
+
+## Final current-main mandatory gates
+
+Frozen source `01ca571` on exact main `a0bb1bfc` passed the guarded workspace no-run (2m39s) and strict
+workspace/all-target Clippy (34.23s), both locked and four build jobs. Licenses (`licenses ok`), formatting
+and whitespace passed. Disk remained above the five-GB threshold after root's coordinated cleanup; no
+named benchmark/release artifacts were overwritten or copied. All local packages came from this worktree.
+
+After verified #318 completion, the reserved normal guarded command
+`test --workspace --locked -j 4 -- --test-threads=1` exited zero: **1,868 passed, zero failed, eight upstream
+ignored cases across 138 summaries**, including GUI/role, Lua, Parkour and renderer groups. No failure was
+retried, removed or newly ignored, and no production budget or scheduler constant changed. The eight ignores
+are three upstream window-opening tests, a GPU stress case, two getter diagnostics, the manual large-pattern
+acceptance probe and an existing Studio documentation example. This refresh adds no ignore.
+
+The actual window was released immediately after verified exit to root's private combined CPU check.
+`integration-evidence/335-main-refresh/manifest-before-full.json`, raw workspace log and `workspace-result.json`
+retain exact source/tree/blobs and checksums; focused baseline/green logs remain separate. Historical 1,242-test
+and other earlier results above keep their original bases. The final commit records validation prose only.
+Push append-only to the existing branch/PR, return #311 to review, and inspect current-head CI. No aggregate
+PR, main merge, authentication, admission, complete runtime-driver or live multiplayer acceptance is claimed.
