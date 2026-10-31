@@ -260,6 +260,20 @@ impl InputActionsPanel {
         }
     }
 
+    /// The selected scene instance (context, action or binding), if one is selected.
+    pub fn selected_instance(&self) -> Option<InstanceId> {
+        match &self.selection {
+            Some(Selection::Instance(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// True when finished steps go to the panel's own history ([`Self::show`]); false while a
+    /// host's sink owns undo ([`Self::show_with_sink`]).
+    pub fn owns_history(&self) -> bool {
+        self.history_is_own()
+    }
+
     /// The scene was saved: from now on renames are measured against the saved names.
     pub fn mark_saved(&mut self, world: &World) {
         self.baseline = NameBaseline::capture(world);
