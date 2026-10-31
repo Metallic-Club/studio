@@ -210,10 +210,11 @@ apps.
   plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
   `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
   While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
-  Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
-  Properties and the script editor are read-only, the status bar shows the session's `PlayStatus` ("Playing", theme
-  `success`) and the viewport a `success` frame. Esc with the unsaved-changes prompt open answers the prompt. Exposure
-  adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  Stop, Save, Close game, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout
+  are off, Properties and the script editor are read-only, the status bar shows the session's `PlayStatus`
+  ("Playing", theme `success`) and the viewport a `success` frame. Quit and Close game (Ctrl+W) stop Play before
+  the unsaved-changes prompt opens; Esc answers the prompt. Exposure adaptation resets when Play starts and after
+  Stop. Play is asked for with `UiRequest::StartPlay`, so open script
   tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
   and Studio stays in edit mode.
   Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
