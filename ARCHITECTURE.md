@@ -94,8 +94,13 @@ apps.
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
-  PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
-  Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the
+  PBR materials, cascaded shadows (every part below Transparency 1 casts one, as in Roblox), sky, fog. `render` draws
+  with `Camera::sanitized` (a non-finite eye or field of view falls back to a finite one). `RenderContext` is built for a
+  window (player) or from eframe (Studio). Uploads (#105): `sync` re-reads only journalled instances; `render` writes
+  only the changed ranges of each instance buffer (a CPU mirror is diffed), and blended parts draw as one instanced
+  draw per run of same-shape neighbours in the far-to-near list (`first_instance` ranges).
+  Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it: 4x on
+  High, lowered to the highest count the target and depth formats support, see `msaa_samples`), then the
   post chain (`post.rs`: `PostChain` of `PostPass`es in an `Hdr` and an `Ldr` slot, run in list order; most passes
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
   vignette, sRGB encode, dither). Add a pass with `renderer.post_mut().push(Box::new(pass))`; a pass that returns
