@@ -41,7 +41,26 @@ Focused command (guarded owned lane122):
 `cargo test --locked -p metallic_physics2d --test rebuild_touching -j 4 -- --test-threads=1`.
 Red: 0 passed / 2 failed. Green: 7 passed / 0 failed in 0.14s. Original cold/warm dependency compile evidence is
 retained; package dev-dependencies include GUI libraries even though these tests perform no UI/GPU execution.
-The full 2D package, workspace, strict Clippy and license gates remain pending. Use four jobs, respect the
+At that checkpoint, the full 2D package, workspace, strict Clippy and license gates were pending. Use four jobs, respect the
 coordinator's actual Lua/GPU timing windows and pause for disk below 5 GB. Preserve historical evidence and
 benchmark domains. After all gates and independent review, publish a review PR with exact-head CI; no own merge,
 performance result, upstream fix or milestone acceptance is claimed.
+
+
+## Final local validation
+
+All checks passed at reviewed source `e15963cca9521fe551b631e0f91fcfc765b939ec` on exact pinned main above:
+
+- Full 2D package: **50 passed, zero failed, zero ignored**, including all seven new regressions.
+- Full workspace prebuild: passed in 5m10s.
+- Strict full workspace/all-target Clippy: passed in 1m36s with `--locked -j 4 -- -D warnings`.
+- `cargo deny check licenses`, `cargo fmt --all -- --check`, task whitespace: passed.
+- `cargo test --locked --workspace -j 4 -- --test-threads=1` in guarded lane122:
+  **1,912 passed, zero failed, eight existing upstream ignores across 141 summaries**.
+  No failure was retried, excluded or weakened. Actual Lua/GPU execution used the reserved quiet window.
+
+The coordinator independently reviewed the production helper and seven tests with no actionable concern.
+After verified exit zero, lane122 and the sole actual window were explicitly released for the next task.
+The final validation note changes documentation only; exact executable-source equality is recorded with the
+full logs in external `integration-evidence/408-physics2d-islands`. Publish the review PR and watch its exact
+head CI; do not call local checks CI or owner acceptance. No own merge, performance claim or 3D source change.
