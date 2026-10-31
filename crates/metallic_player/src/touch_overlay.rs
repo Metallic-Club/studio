@@ -414,6 +414,19 @@ impl TouchOverlay {
         true
     }
 
+    /// True when a finger at window pixel `px` lands on (or next to) one of the overlay's
+    /// buttons, which then take it before the game's GUI below them.
+    pub fn has_button_at(&self, px: [f32; 2]) -> bool {
+        let at = self.view.to_dp(px);
+        let layout = self.controls.layout();
+        layout.button_at(at).is_some() || layout.near_button(at)
+    }
+
+    /// The window pixel of the cursor (as last reported to [`TouchOverlay::cursor_moved`]).
+    pub fn cursor(&self) -> [f32; 2] {
+        self.cursor
+    }
+
     /// The cursor moved to window pixel `px`; returns true in emulation (the event was used).
     pub fn cursor_moved(&mut self, rt: &mut InputRuntime, px: [f32; 2], time: f64) -> bool {
         self.cursor = px;

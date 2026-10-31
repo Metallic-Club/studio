@@ -6,6 +6,8 @@
 //! the text, never more than [`MAX_HANDOFF_BYTES`], and is checked before the body is read.
 //! The first Launcher parses every link again with `DeepLink::parse`; nothing here trusts it.
 
+use std::path::Path;
+
 use crate::error::LauncherError;
 
 /// The longest message body (tag and text) a Launcher will read.
@@ -95,4 +97,17 @@ pub enum Acquired {
     Primary(Box<dyn HandoffListener>),
     /// Another Launcher of this user runs; hand it the request.
     Secondary(Box<dyn HandoffSender>),
+}
+
+/// Whether the program at the other end of the pipe is this very program: `server`'s image
+/// path is `own`'s (this executable's), ignoring ASCII case as Windows does. Give both
+/// canonicalised when possible.
+///
+/// The pipe is already limited to this user (the SID check). This also keeps a link, which may
+/// hold a join ticket, away from any other program of the user's that took the pipe name: a
+/// file name alone (`Metallic.exe`) proves nothing, since any program can be called that. The
+/// cost: a second copy in another folder (a development build next to the installed one) does
+/// not hand over to it and reports that instead.
+pub fn same_program(server: &Path, own: &Path) -> bool {
+    !own.as_os_str().is_empty() && server.as_os_str().eq_ignore_ascii_case(own.as_os_str())
 }

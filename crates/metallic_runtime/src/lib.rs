@@ -23,10 +23,14 @@
 //! part poses do not trigger physics synchronization. Lost history rebuilds the runtime cache.
 #![warn(missing_docs)]
 
+#[cfg(test)]
+mod alloc_count;
 mod avatar;
+mod body_pose;
 mod camera_controller;
 mod game;
 pub mod gui;
+pub mod gui_input;
 pub mod input;
 mod local_input;
 mod locomotion;
