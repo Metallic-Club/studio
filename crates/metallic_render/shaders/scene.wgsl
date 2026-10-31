@@ -201,8 +201,8 @@ fn detail(id: i32, p: vec3<f32>, n: vec3<f32>, px: f32) -> vec4<f32> {
 
 // Shared by production shading and the numerical GPU regression probe.
 fn fragment_view_depth(in: VOut) -> f32 {
-    // Baseline checkpoint retains the original calculation for executed red evidence.
-    return 1.0 / in.clip.w;
+    // Explicit perspective interpolation avoids backend differences in fragment position.w.
+    return in.view_depth;
 }
 
 // Returns the cascade count when the surface is beyond every cascade.
