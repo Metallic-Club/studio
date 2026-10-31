@@ -265,6 +265,41 @@ impl ActionRegistry {
         }
     }
 
+    /// The overflow menu of the toolbar ([`crate::toolbar`]): every action of `groups`, a
+    /// separator between groups, each with its label, shortcut, checked state and accessory.
+    pub fn overflow_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        groups: &[ToolbarGroup],
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for (n, &group) in groups.iter().enumerate() {
+            if n > 0 {
+                ui.separator();
+            }
+            for a in self.actions.iter_mut().filter(|a| a.group == group) {
+                let button = egui::Button::new(a.label.as_str())
+                    .shortcut_text(keymap.label(a.id))
+                    .selected(a.is_checked(state));
+                let enabled = a.is_enabled(state);
+                ui.horizontal(|ui| {
+                    if theme::add_enabled(ui, enabled, button).clicked() {
+                        clicked = Some(a.id);
+                    }
+                    if let Some(acc) = &mut a.accessory {
+                        acc(ui, state);
+                    }
+                });
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+            ui.close();
+        }
+    }
+
     /// Draws menu entries for `ids` (label and shortcut).
     pub fn menu_items(
         &mut self,

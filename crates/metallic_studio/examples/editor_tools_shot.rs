@@ -4,7 +4,7 @@
 //! overlays (array ghosts and the drag handle) are drawn over it.
 //!
 //! ```text
-//! cargo run -p metallic_studio --example editor_tools_shot -- <out.png>
+//! cargo run -p metallic_studio --example editor_tools_shot -- <out.png> [width]
 //! ```
 
 use std::path::PathBuf;
@@ -18,13 +18,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = std::env::args()
         .nth(1)
         .map(PathBuf::from)
-        .ok_or("usage: editor_tools_shot <out.png>")?;
+        .ok_or("usage: editor_tools_shot <out.png> [width]")?;
+    let width: f32 = std::env::args()
+        .nth(2)
+        .and_then(|w| w.parse().ok())
+        .unwrap_or(1600.0);
     let template = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/parkour");
     let editor = EditorUi::demo(&template).ok_or("the Parkour template did not open")?;
     editor.input_actions.set_open(true);
     let mut themed = false;
     let mut harness = Harness::builder()
-        .with_size(egui::vec2(1600.0, 900.0))
+        .with_size(egui::vec2(width, 900.0))
         .with_pixels_per_point(1.0)
         // A picture only; the panels' own tests cover their labels.
         .with_accessibility_check(false)

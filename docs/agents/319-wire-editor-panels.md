@@ -16,6 +16,7 @@ Done:
 After merging main (#337): the colour popover previews through `EditorState::preview` and commits its
 `SetProperties`; tool commits put their property changes in one `SetProperties` too.
 
-Next: the toolbar overflows below about 1900 px wide (Build icons are cut off; the Build menu and keys still work).
-Mouse-wheel array count is not wired.
+Review fixes: the toolbar (`toolbar.rs`) collapses whole groups that do not fit into a "»" menu, lowest priority
+first (Build, View, Snap, Settings, Edit; Tools and Play last), tested at 1280, 1600 and 2600 px. Ctrl+wheel over
+the viewport changes the array count (linear, radial, path; clamped; the commit is still one step).
 Brush ownership means "inside `<parent>/<set>` folder" until tags (#78) exist.

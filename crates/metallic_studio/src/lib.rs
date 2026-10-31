@@ -77,6 +77,7 @@ pub mod start_screen;
 pub mod templates;
 pub mod theme;
 pub mod tokens;
+pub mod toolbar;
 pub mod tools;
 pub mod transform;
 pub mod updater;

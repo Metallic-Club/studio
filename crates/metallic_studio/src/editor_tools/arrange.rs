@@ -21,8 +21,8 @@ use super::{Popover, ViewContext, overlay, report};
 use crate::editor::EditorState;
 use crate::theme;
 use crate::tools::arrange::array::{
-    AngleField, count_from_drag, default_linear_offset, drag_along, handle_position, linear_step,
-    parse_angle, parse_count,
+    AngleField, MAX_COPIES, count_from_drag, default_linear_offset, drag_along, handle_position,
+    linear_step, parse_angle, parse_count,
 };
 use crate::tools::arrange::scene::{selection_bounds_in, selection_pivot};
 use crate::tools::arrange::{
@@ -506,6 +506,46 @@ pub fn array_window(
     }
 }
 
+/// Ctrl+wheel over the viewport while the array preview shows: `notches` (up is +1) change the
+/// count by one each, clamped to the mode's range (linear and path 1, radial 2, up to
+/// [`MAX_COPIES`]). Grid has three counts and ignores the wheel. Returns whether the count changed.
+/// Nothing is committed: the preview follows, and "Make N copies" is still the one undo step.
+pub fn wheel_count(s: &mut ArrangeSettings, notches: i32) -> bool {
+    if notches == 0 {
+        return false;
+    }
+    let step = |n: usize, min: usize| -> usize {
+        let next = n as i64 + i64::from(notches);
+        next.clamp(min as i64, MAX_COPIES as i64) as usize
+    };
+    let (before, after) = match s.mode {
+        ArrayMode::Linear => {
+            let b = s.linear.count;
+            s.linear.count = step(b, 1);
+            (b, s.linear.count)
+        }
+        ArrayMode::Radial => {
+            let b = s.radial.count;
+            s.radial.count = step(b, 2);
+            (b, s.radial.count)
+        }
+        ArrayMode::Path => match &mut s.path.fill {
+            PathFill::Count(n) => {
+                let b = *n;
+                *n = step(b, 1);
+                (b, *n)
+            }
+            _ => return false,
+        },
+        ArrayMode::Grid => return false,
+    };
+    if before == after {
+        return false;
+    }
+    s.count_text = after.to_string();
+    true
+}
+
 fn count_field(ui: &mut egui::Ui, s: &mut ArrangeSettings, label: &str) -> Option<usize> {
     let mut out = None;
     ui.horizontal(|ui| {
@@ -550,7 +590,7 @@ fn linear_fields(ui: &mut egui::Ui, s: &mut ArrangeSettings) {
         );
     });
     ui.label(
-        egui::RichText::new("Drag the ring past the last ghost to add copies")
+        egui::RichText::new("Drag the ring past the last ghost, or Ctrl+wheel, to add copies")
             .small()
             .color(theme::text_3()),
     );
@@ -673,6 +713,24 @@ pub fn array_viewport(
             i.pointer.primary_released(),
         )
     });
+    // Ctrl+wheel changes the count. egui turns Ctrl+wheel into zoom, so the camera does not
+    // dolly at the same time; read the raw wheel events, one notch per event.
+    if cx.pointer.is_some() {
+        let notches: i32 = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::MouseWheel {
+                        delta, modifiers, ..
+                    } if modifiers.command && delta.y != 0.0 => Some(delta.y.signum() as i32),
+                    _ => None,
+                })
+                .sum()
+        });
+        if wheel_count(s, notches) {
+            ui.ctx().request_repaint();
+        }
+    }
     match s.mode {
         ArrayMode::Linear => linear_handle(state, cx, painter, s, pressed, down),
         ArrayMode::Path => {
@@ -769,6 +827,29 @@ fn linear_handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_wheel_steps_the_count_within_its_range() {
+        let mut s = ArrangeSettings::default();
+        s.mode = ArrayMode::Linear;
+        s.linear.count = 1;
+        assert!(!wheel_count(&mut s, -1), "linear stops at 1");
+        assert!(wheel_count(&mut s, 3));
+        assert_eq!((s.linear.count, s.count_text.as_str()), (4, "4"));
+        s.linear.count = MAX_COPIES - 1;
+        assert!(wheel_count(&mut s, 5));
+        assert_eq!(s.linear.count, MAX_COPIES);
+        s.mode = ArrayMode::Radial;
+        s.radial.count = 3;
+        assert!(wheel_count(&mut s, -4));
+        assert_eq!(s.radial.count, 2, "radial keeps two");
+        s.mode = ArrayMode::Path;
+        s.path.fill = PathFill::Count(5);
+        assert!(wheel_count(&mut s, 1));
+        assert!(matches!(s.path.fill, PathFill::Count(6)));
+        s.mode = ArrayMode::Grid;
+        assert!(!wheel_count(&mut s, 1));
+    }
 
     #[test]
     fn requests_follow_the_mode() {

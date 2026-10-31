@@ -26,6 +26,7 @@ use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
 use crate::theme;
 use crate::tokens::ui_tokens;
+use crate::toolbar::{Toolbar, ToolbarLayout};
 use crate::viewport::Viewport;
 
 /// What the editor asks the app shell to do.
@@ -66,6 +67,7 @@ pub struct EditorUi {
     pub input_actions: InputActionsDock,
     /// The colour popover for Color3 properties.
     pub colour: ColourDock,
+    toolbar: Toolbar,
     explorer: Explorer,
     /// Properties panel.
     pub properties: Properties,
@@ -95,6 +97,7 @@ impl EditorUi {
             tools,
             input_actions,
             colour,
+            toolbar: Toolbar::new(),
             explorer: Explorer::new(),
             properties: Properties::new(),
             scripts: ScriptTabs::new(),
@@ -106,6 +109,11 @@ impl EditorUi {
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
         ui
+    }
+
+    /// Where last frame's toolbar put its groups and which collapsed into the "»" menu.
+    pub fn toolbar_layout(&self) -> &ToolbarLayout {
+        self.toolbar.layout()
     }
 
     /// Copies the held keys (V, Space) from the keymap into the viewport.
@@ -448,28 +456,9 @@ impl EditorUi {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.spacing_mut().interact_size.y = 28.0;
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Play, &mut self.state, &self.keymap);
-                    // After Play, so Play and Stop stay visible on narrow windows; the View
-                    // and Build menus have every one of these too.
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::View, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Build, &mut self.state, &self.keymap);
+                    // Groups that do not fit collapse into the "»" menu (crate::toolbar).
+                    self.toolbar
+                        .show(ui, &mut self.actions, &mut self.state, &self.keymap);
                 });
             });
 

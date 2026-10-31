@@ -6,12 +6,14 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use metallic_core::{InstanceId, Value, Vec3, World};
 use metallic_render::glam::DVec3;
+use metallic_studio::actions::ToolbarGroup;
 use metallic_studio::commands::Command;
 use metallic_studio::editor::{EditorState, Tool};
 use metallic_studio::editor_tools::arrange::{ArrangeSettings, ArrayMode, run_align, run_array};
 use metallic_studio::editor_tools::{Modal, Popover};
 use metallic_studio::editor_ui::EditorUi;
 use metallic_studio::output::OutputPanel;
+use metallic_studio::toolbar::MORE_LABEL;
 use metallic_studio::tools::arrange::{Axis, Edge};
 use metallic_studio::tools::select::SelectMode;
 
@@ -80,24 +82,23 @@ fn editor() -> (EditorUi, Scene) {
 /// The panels use the bundled font families, which the theme installs for the next pass: the
 /// first pass only installs them.
 fn harness(ui: EditorUi) -> Harness<'static, EditorUi> {
+    harness_sized(ui, egui::vec2(1600.0, 900.0))
+}
+
+fn harness_sized(ui: EditorUi, size: egui::Vec2) -> Harness<'static, EditorUi> {
     let mut themed = false;
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1600.0, 900.0))
-        .build_ui_state(
-            move |ui, editor: &mut EditorUi| {
-                if !themed {
-                    metallic_studio::theme::apply(
-                        ui.ctx(),
-                        metallic_studio::theme::ThemeId::Graphite,
-                    );
-                    themed = true;
-                    ui.ctx().request_repaint();
-                    return;
-                }
-                editor.ui(ui, None);
-            },
-            ui,
-        );
+    let mut h = Harness::builder().with_size(size).build_ui_state(
+        move |ui, editor: &mut EditorUi| {
+            if !themed {
+                metallic_studio::theme::apply(ui.ctx(), metallic_studio::theme::ThemeId::Graphite);
+                themed = true;
+                ui.ctx().request_repaint();
+                return;
+            }
+            editor.ui(ui, None);
+        },
+        ui,
+    );
     h.run_steps(3);
     h
 }
@@ -545,4 +546,55 @@ fn selection_modes_select_similar_and_measure_from_the_viewport() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert_eq!(h.state().tools.state().measure.measurements().len(), 0);
+}
+
+#[test]
+fn a_narrow_toolbar_collapses_whole_groups_into_the_more_menu() {
+    for width in [1280.0, 1600.0, 2600.0] {
+        let (ui, sc) = editor();
+        let mut h = harness_sized(ui, egui::vec2(width, 800.0));
+        h.state_mut().state.selection.set([sc.a, sc.b]);
+        h.run_steps(4);
+        let layout = h.state().toolbar_layout().clone();
+        let shown: Vec<ToolbarGroup> = layout.shown.iter().map(|(g, _)| *g).collect();
+        // Core tools and Play never collapse at these widths.
+        assert!(shown.contains(&ToolbarGroup::Tools), "{width}: {shown:?}");
+        assert!(shown.contains(&ToolbarGroup::Play), "{width}: {shown:?}");
+        // Nothing drawn is cut by the window edge: every group and the chevron end inside.
+        let right = layout.available.max.x + 0.5;
+        for (g, r) in &layout.shown {
+            assert!(
+                r.max.x <= right,
+                "{width}: {g:?} ends at {} > {right}",
+                r.max.x
+            );
+        }
+        if width >= 2600.0 {
+            assert!(layout.overflow.is_empty(), "{width}: {:?}", layout.overflow);
+            assert!(layout.chevron.is_none());
+            continue;
+        }
+        assert!(
+            layout.overflow.contains(&ToolbarGroup::Build),
+            "{width}: Build collapses first: {:?}",
+            layout.overflow
+        );
+        let chevron = layout.chevron.expect("a More button");
+        assert!(
+            chevron.max.x <= right,
+            "{width}: chevron at {}",
+            chevron.max.x
+        );
+
+        // The menu lists the collapsed actions with label and shortcut, and runs them.
+        h.get_by_label(MORE_LABEL).click();
+        h.run_steps(3);
+        h.get_by_label("Align A").click();
+        h.run_steps(3);
+        assert_eq!(
+            h.state().tools.state().popover,
+            Some(Popover::Align),
+            "{width}: Align ran from the menu"
+        );
+    }
 }

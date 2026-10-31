@@ -170,14 +170,15 @@ apps.
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
   "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; `editor_tools` turns a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
   Editor wiring (#319): `editor_tools/` registers the building tools as actions and keys (Build menu and toolbar:
-  align A, distribute, mirror Ctrl+M / Ctrl+Shift+M, array Ctrl+Shift+D with ghosts and a drag handle, scatter brush
+  align A, distribute, mirror Ctrl+M / Ctrl+Shift+M, array Ctrl+Shift+D with ghosts, a drag handle and Ctrl+wheel count, scatter brush
   B, measure Shift+M, select similar Shift+G, lasso/paint select modes on Q). Each op reads
   `tools::geom::snapshot` and commits one `History` step (`editor_tools/commit.rs`); errors go to Output. Overlays
   paint over the viewport (`viewport.capture_pointer` hands the pointer to a modal tool). `editor_colour.rs` opens the
   colour popover from a Properties Color3 swatch or C: live preview, one step on commit, Esc restores.
   `editor_input_actions.rs` docks the Input Actions panel (View > Input actions): its `EditStep`s become
   `Command::Step` in the editor's history, and `History::take_remaps()` feeds every rebuilt-id map to
-  `InputActionsPanel::follow_remap`.
+  `InputActionsPanel::follow_remap`. `toolbar.rs` draws the toolbar groups in order and collapses whole groups that
+  do not fit into a "»" overflow menu, lowest priority first (`PRIORITY`); a new action only needs a `ToolbarGroup`.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
