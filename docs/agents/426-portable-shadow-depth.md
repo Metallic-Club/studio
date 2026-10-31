@@ -38,3 +38,12 @@ Root's source review caught a baseline typing mismatch before execution: the new
 cascade helper returns u32, while the existing shadow_filter layer parameter is i32.
 The baseline now explicitly casts the already-range-checked index at that call.
 This is a source correction before any compile/GPU result, not a runtime product red.
+
+The first numeric probe executed at b3505a5 on DX12 with an NVIDIA GeForce RTX
+3060 Ti. The actual production vs_main route produced depth 0.01888068 and cascade
+0 at expected view depth 52.96419 and cascade 1. Coverage passed; the depth assertion
+failed, and the focused command exited 101 after a successful build. The raw log,
+source fingerprints and result receipt are retained outside the repository under
+integration-evidence/426-portable-shadow-depth. This establishes the constant-depth
+part regression on that adapter only. The probe owner is expanding skinned, split,
+far and sloped controls before the shader fix; Vulkan is not yet executed.
