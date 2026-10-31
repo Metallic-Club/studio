@@ -111,6 +111,12 @@ observations/adapter. It reuses the existing job target/cache; Vulkan is not
 required on runners that lack it. This YAML/progress-only delta leaves Rust and
 shader source identical to the tested `87c5c60`; it is not a new local full-suite run.
 
-Next: strict all-target Clippy, final licenses/formatting, PR and exact-head CI
-review including required DX12 execution. No milestone or multiplayer acceptance
-is implied, and studio_core must not merge its own PR.
+Strict guarded `cargo clippy --workspace --all-targets --locked -j 4 -- -D warnings`
+passed at `6c8466f` in 43.78 seconds. Final `cargo deny check licenses`,
+`cargo fmt --all -- --check` and `git diff --check` passed. This later head differs
+from the successful full-suite source only in CI/progress documentation; Rust,
+shader and manifest trees are unchanged. No timing improvement is claimed.
+
+Next: PR and exact-head CI review, including the required DX12 execution log.
+No milestone or multiplayer acceptance is implied. studio_core must not merge
+its own PR.
