@@ -235,3 +235,45 @@ fn gpu_time_lands_on_its_frame_late() {
         assert_eq!(frames.latest().expect("newest").gpu(), None);
     });
 }
+
+#[test]
+fn any_profiler_call_works_inside_with_frames() {
+    Profiler::set_enabled(true);
+    Profiler::begin_frame();
+    let first = Profiler::current_frame().expect("recording");
+    Profiler::end_frame();
+    let seen = Profiler::with_frames(|frames| {
+        // Everything a host or a panel might do while it reads the history.
+        Profiler::begin_frame();
+        {
+            let _s = Profiler::scope(Subsystem::Render, "inside");
+            Profiler::charge_script(9, 10);
+        }
+        Profiler::end_frame();
+        Profiler::record_gpu(
+            first,
+            &[GpuPass {
+                name: "scene",
+                ns: 1,
+            }],
+        );
+        assert_eq!(Profiler::latest().map(|f| f.index()), Some(first));
+        Profiler::with_frames(|again| assert_eq!(again.len(), frames.len()));
+        Profiler::set_enabled(true);
+        frames.len()
+    });
+    assert_eq!(seen, 1);
+    // The frame that ended inside the read joined the history afterwards.
+    let latest = Profiler::latest().expect("frames");
+    assert_eq!(latest.index(), first + 1);
+    assert_eq!(latest.scopes()[0].name, "inside");
+    assert_eq!(latest.scripts()[0].script, 9);
+    assert_eq!(Profiler::with_frames(|f| f.len()), 2);
+
+    // A clear inside a read applies after it.
+    Profiler::with_frames(|_| Profiler::clear());
+    assert!(Profiler::with_frames(RingBuffer::is_empty));
+    Profiler::begin_frame();
+    Profiler::end_frame();
+    assert_eq!(Profiler::with_frames(|f| f.len()), 1);
+}

@@ -55,13 +55,14 @@ apps.
   profiler per thread (the game thread): `Profiler::scope(Subsystem, name)` returns a guard (scopes nest; a parent's
   exclusive time excludes its children), `Profiler::frame()` / `begin_frame` / `end_frame` mark host frames,
   `charge_script(id, ns)` adds a script's time, `record_gpu(frame, passes)` adds GPU stage times that arrive late, and
-  `with_frames` reads the last `HISTORY` (600) `FrameRecord`s in a `RingBuffer`. Off by default and then a scope is
+  `with_frames` reads the last `HISTORY` (600) `FrameRecord`s in a `RingBuffer` (kept apart from the recording state, so
+  the reader may call any profiler function; a frame that ends meanwhile joins the history after the read). Off by default and then a scope is
   one thread-local flag read; enabling reserves the history once (about 3 MB) and recording never allocates.
   A frame keeps up to 128 scopes, 16 deep, 32 scripts and 8 GPU passes; the rest are counted, not stored.
   `metallic_script` charges script time where code runs under a script's owner (`Scheduler::as_owner`: resumes and
   event handlers), less nested scripts' time. `metallic_render` times its stages (shadows, scene, exposure, post)
   with timestamp queries written by empty compute passes, read back through three small buffers without waiting
-  (`gpu_timer.rs`); devices request `TIMESTAMP_QUERY` where the adapter has it (headless/player in `context.rs`,
+  (`gpu_timer.rs`; a `GpuFrame` guard aborts a frame's timing on every early return); devices request `TIMESTAMP_QUERY` where the adapter has it (headless/player in `context.rs`,
   Studio in `main.rs`), and without it GPU time stays `None`. `Game` scopes its tick stages and render sync; the
   player marks one frame per redraw and Studio one per `ui` call. No network work runs per frame yet, so
   `Subsystem::Net` has no scopes. Codex's #210 (`metallic_profiling`, bounded budget scopes passed by reference) is

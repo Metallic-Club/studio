@@ -20,6 +20,15 @@ Status: in progress, split into three PRs (all branches from main).
 - Cost when off: a scope reads one thread-local flag; the frame marks read one more. No clock reads, no queries,
   no allocation. `metallic_core` (the `instructions` gate's benchmark) is unchanged.
 
+## Review fixes (#401 FIX-FIRST)
+
+- `with_frames` no longer holds the recording state: the history is a separate thread-local, and a frame that ends
+  inside a read is held and joins after it (test `any_profiler_call_works_inside_with_frames`).
+- `GpuFrame` (RAII) ends the GPU timer's frame on every return path, so an early return can no longer leave the
+  timer active for a later, unprofiled frame (test `a_frame_that_returns_early_is_never_read_back`).
+- Ruling: #401 is the profiler of record for #23; #210 is not merged. Follow-ups from #210 that #401 lacks: budget
+  tables and checks per subsystem, opt-in simulation profile reports on `Game`, puffin/Tracy export.
+
 ## Decisions
 
 - **Not built on #210.** Codex's open #210 adds `metallic_profiling`, whose `Frame` is borrowed from a

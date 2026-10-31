@@ -130,6 +130,26 @@ impl GpuTimer {
             });
     }
 
+    /// Forgets the frame being timed (it will not be submitted).
+    fn abort(&mut self) {
+        self.active = None;
+    }
+
+    /// True while a frame is being timed.
+    #[cfg(test)]
+    fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// Readback buffers waiting for the GPU.
+    #[cfg(test)]
+    fn in_flight(&self) -> usize {
+        self.slots
+            .iter()
+            .filter(|s| s.state.load(Ordering::Acquire) == MAPPING)
+            .count()
+    }
+
     /// Reads every buffer the GPU has finished with (never waits).
     fn collect(&mut self, device: &wgpu::Device) {
         let mapping = self
@@ -166,6 +186,77 @@ impl GpuTimer {
     }
 }
 
+/// The timing of one drawn frame. Ends the timer's frame on every way out: a frame that is not
+/// [`GpuFrame::submitted`] (an early return) is aborted when this drops, so its timestamps can
+/// never be read back as another frame's.
+pub(crate) struct GpuFrame<'a> {
+    timer: Option<&'a mut GpuTimer>,
+    timed: bool,
+    done: bool,
+}
+
+impl<'a> GpuFrame<'a> {
+    /// Starts timing `frame` (a profiler frame number; `None` times nothing). Anything left
+    /// over from an earlier frame is forgotten first.
+    pub(crate) fn start(
+        timer: Option<&'a mut GpuTimer>,
+        device: &wgpu::Device,
+        frame: Option<u64>,
+    ) -> GpuFrame<'a> {
+        let mut timed = false;
+        let mut timer = timer;
+        if let Some(t) = timer.as_deref_mut() {
+            t.abort();
+            if let Some(frame) = frame {
+                timed = t.begin(device, frame);
+            }
+        }
+        GpuFrame {
+            timer,
+            timed,
+            done: false,
+        }
+    }
+
+    /// True when this frame writes timestamps.
+    #[cfg(test)]
+    pub(crate) fn is_timed(&self) -> bool {
+        self.timed
+    }
+
+    /// Writes timestamp `index` (see [`GpuTimer::mark`]).
+    pub(crate) fn mark(&self, encoder: &mut wgpu::CommandEncoder, index: u32) {
+        if let (true, Some(t)) = (self.timed, self.timer.as_deref()) {
+            t.mark(encoder, index);
+        }
+    }
+
+    /// Copies the timestamps toward the readback buffer (before the encoder finishes).
+    pub(crate) fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let (true, Some(t)) = (self.timed, self.timer.as_deref()) {
+            t.resolve(encoder);
+        }
+    }
+
+    /// The frame's commands were submitted: read its timestamps back.
+    pub(crate) fn submitted(mut self) {
+        if let (true, Some(t)) = (self.timed, self.timer.as_deref_mut()) {
+            t.submitted();
+        }
+        self.done = true;
+    }
+}
+
+impl Drop for GpuFrame<'_> {
+    fn drop(&mut self) {
+        if !self.done
+            && let Some(t) = self.timer.as_deref_mut()
+        {
+            t.abort();
+        }
+    }
+}
+
 /// The time of each stage from the timestamps around it (`period_ns` per tick). A stage whose
 /// end reads earlier than its start (a driver reordering timestamps) counts as 0.
 pub(crate) fn stage_times(
@@ -186,6 +277,52 @@ pub(crate) fn stage_times(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RenderContext;
+
+    #[test]
+    fn a_frame_that_returns_early_is_never_read_back() {
+        let Ok(ctx) = RenderContext::new_headless() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let Some(mut timer) = GpuTimer::new(&ctx.device, &ctx.queue) else {
+            eprintln!("no timestamp queries; skipping");
+            return;
+        };
+        {
+            // Begun for frame 7, then the renderer returns before submitting.
+            let frame = GpuFrame::start(Some(&mut timer), &ctx.device, Some(7));
+            assert!(frame.is_timed());
+        }
+        assert!(!timer.is_active(), "an aborted frame stayed active");
+
+        // The next frame is not profiled: it must write and read back nothing.
+        let frame = GpuFrame::start(Some(&mut timer), &ctx.device, None);
+        assert!(!frame.is_timed());
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        frame.mark(&mut encoder, 0);
+        frame.resolve(&mut encoder);
+        ctx.queue.submit(Some(encoder.finish()));
+        frame.submitted();
+        assert_eq!(timer.in_flight(), 0, "an unprofiled frame was read back");
+
+        // A profiled frame that is submitted is read back as its own frame.
+        let frame = GpuFrame::start(Some(&mut timer), &ctx.device, Some(9));
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        for i in 0..MARKS {
+            frame.mark(&mut encoder, i);
+        }
+        frame.resolve(&mut encoder);
+        ctx.queue.submit(Some(encoder.finish()));
+        frame.submitted();
+        assert_eq!(timer.in_flight(), 1);
+        assert!(timer.slots.iter().any(|s| s.frame == 9));
+        assert!(!timer.is_active());
+    }
 
     #[test]
     fn stages_are_the_gaps_between_timestamps() {
