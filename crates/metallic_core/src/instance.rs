@@ -253,6 +253,8 @@ impl World {
     }
 
     /// True for instances created by [`World::new_with_services`]; scene files do not recreate them.
+    /// Built-ins are locked in place: [`World::set_parent`] and [`World::clone_subtree`] refuse them
+    /// with [`CoreError::Locked`] and [`World::destroy`] ignores them.
     pub fn is_builtin(&self, id: InstanceId) -> bool {
         self.node(id).is_some_and(|n| n.builtin)
     }
@@ -264,7 +266,9 @@ impl World {
 
     /// Creates an instance of `class` (appended as the last child of `parent`, if any).
     ///
-    /// Errors: [`CoreError::UnknownClass`], or [`CoreError::InvalidInstance`] if `parent` does not exist.
+    /// Errors: [`CoreError::UnknownClass`], [`CoreError::NotCreatable`] for services and abstract
+    /// classes such as `Workspace`, `Instance` or `BasePart` (see `ClassDef::creatable`), or
+    /// [`CoreError::InvalidInstance`] if `parent` does not exist.
     /// Fires `child_added` when a parent is given.
     pub fn create(
         &mut self,
@@ -272,6 +276,9 @@ impl World {
         parent: Option<InstanceId>,
     ) -> Result<InstanceId, CoreError> {
         let def = class_def(class).ok_or_else(|| CoreError::UnknownClass(class.to_string()))?;
+        if !def.creatable {
+            return Err(CoreError::NotCreatable(def.name.to_string()));
+        }
         if let Some(p) = parent
             && !self.is_alive(p)
         {
@@ -289,9 +296,10 @@ impl World {
         Ok(id)
     }
 
-    /// Destroys an instance and all its descendants; their ids become invalid. Unknown ids are ignored.
+    /// Destroys an instance and all its descendants; their ids become invalid. Unknown ids are ignored,
+    /// and so are built-in services (see [`World::is_builtin`]): destroying one is a silent no-op.
     pub fn destroy(&mut self, id: InstanceId) {
-        if !self.is_alive(id) {
+        if !self.is_alive(id) || self.is_builtin(id) {
             return;
         }
         self.detach(id);
@@ -335,7 +343,8 @@ impl World {
     /// Moves an instance under a new parent (or makes it a root with `None`), as the last child.
     ///
     /// Errors: [`CoreError::InvalidInstance`] if either id is destroyed, [`CoreError::Cycle`] if
-    /// `parent` is the instance itself or one of its descendants. Fires `child_added`. Moving an
+    /// `parent` is the instance itself or one of its descendants, [`CoreError::Locked`] if `id` is a
+    /// built-in service (even when `parent` is its current parent). Fires `child_added`. Moving an
     /// instance to the parent it already has (or a root to `None`) is a no-op, as in Roblox: no
     /// signal, no change of order, nothing journaled (#97).
     pub fn set_parent(
@@ -345,6 +354,11 @@ impl World {
     ) -> Result<(), CoreError> {
         if !self.is_alive(id) {
             return Err(CoreError::InvalidInstance);
+        }
+        if let Some(n) = self.node(id)
+            && n.builtin
+        {
+            return Err(CoreError::Locked(n.class.to_string()));
         }
         if let Some(p) = parent {
             if !self.is_alive(p) {
@@ -574,13 +588,37 @@ impl World {
     /// Copies an instance and its descendants into a new parentless subtree and returns its root.
     /// Refs that point inside the copied subtree point to the copies. The copy is never built-in.
     ///
-    /// Errors: [`CoreError::InvalidInstance`] if `id` is destroyed or unknown.
+    /// Errors: [`CoreError::InvalidInstance`] if `id` is destroyed or unknown, [`CoreError::Locked`]
+    /// if `id` is a built-in service (like Roblox, services cannot be cloned).
     pub fn clone_subtree(&mut self, id: InstanceId) -> Result<InstanceId, CoreError> {
         if !self.is_alive(id) {
             return Err(CoreError::InvalidInstance);
         }
+        if let Some(n) = self.node(id)
+            && n.builtin
+        {
+            return Err(CoreError::Locked(n.class.to_string()));
+        }
         let mut map = HashMap::new();
-        let root = self.clone_rec(id, None, &mut map);
+        // Explicit stack instead of recursion so deep trees cannot overflow the call stack.
+        // Pre-order with children pushed in reverse: same allocation and child order as a
+        // recursive walk.
+        let mut stack = vec![(id, None)];
+        while let Some((orig, parent)) = stack.pop() {
+            let (class, props, kids) = match self.node(orig) {
+                Some(n) => (n.class, n.props.clone(), n.children.clone()),
+                None => continue,
+            };
+            let copy = self.alloc(class, parent, props, false);
+            map.insert(orig, copy);
+            if let Some(p) = parent {
+                self.link_child(p, copy);
+            }
+            stack.extend(kids.into_iter().rev().map(|k| (k, Some(copy))));
+        }
+        let Some(&root) = map.get(&id) else {
+            return Err(CoreError::InvalidInstance);
+        };
         self.roots.push(root);
         let copies: Vec<InstanceId> = map.values().copied().collect();
         for copy in copies {
@@ -598,25 +636,6 @@ impl World {
             }
         }
         Ok(root)
-    }
-
-    fn clone_rec(
-        &mut self,
-        id: InstanceId,
-        parent: Option<InstanceId>,
-        map: &mut HashMap<InstanceId, InstanceId>,
-    ) -> InstanceId {
-        let (class, props, kids) = match self.node(id) {
-            Some(n) => (n.class, n.props.clone(), n.children.clone()),
-            None => return id,
-        };
-        let copy = self.alloc(class, parent, props, false);
-        map.insert(id, copy);
-        for k in kids {
-            let kc = self.clone_rec(k, Some(copy), map);
-            self.link_child(copy, kc);
-        }
-        copy
     }
 
     /// An independent copy of the whole world with the same ids. Signal connections are not copied.

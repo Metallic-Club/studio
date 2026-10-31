@@ -287,6 +287,37 @@ if split then
 end
 "#;
 
+/// Lua that bounds `table.move`, whose element loop runs in C where the time budget's
+/// interrupt cannot fire (#164): moves of more than 2^24 elements (also a numeric-string,
+/// fractional, huge or NaN range) are rejected before the C loop starts. Arguments it
+/// cannot read as numbers go to the original, which raises its usual error.
+const TABLE_LIMITS: &str = r#"
+local table, error, tonumber, floor, ceil = table, error, tonumber, math.floor, math.ceil
+local move = table.move
+local MAX_MOVE = 16777216
+local function trunc(x)
+    if x >= 0 then return floor(x) end
+    return ceil(x)
+end
+table.move = function(a1, f, e, t, a2)
+    local nf, ne = tonumber(f), tonumber(e)
+    if nf ~= nil and ne ~= nil and not (trunc(ne) - trunc(nf) < MAX_MOVE) then
+        error("table.move: too many elements to move (limit 16777216)", 2)
+    end
+    return move(a1, f, e, t, a2)
+end
+"#;
+
+/// Sets process-wide Luau flags once, before the first VM exists.
+fn init_luau_flags() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        // Makes `table.move` over a sparse range cost the size of the tables, not of the
+        // range (off by default in luau740). Best effort: `TABLE_LIMITS` bounds it anyway.
+        let _ = Lua::set_fflag("LuauTableMoveTimeoutFix", true);
+    });
+}
+
 /// A cloneable handle for running Lua functions under the VM's execution budget (see
 /// [`ScriptVm::budget`]). It holds the Lua state weakly, so closures registered on the VM
 /// may capture it without keeping the VM alive; once the VM is gone its methods return an
@@ -390,6 +421,7 @@ impl ScriptVm {
         context: Context,
         output: Rc<dyn OutputSink>,
     ) -> Result<ScriptVm, ScriptError> {
+        init_luau_flags();
         let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).map_err(setup_failed)?;
         let sched = Rc::new(Scheduler::new(output));
         let lib = Self::setup(&lua, &sched).map_err(setup_failed)?;
@@ -411,6 +443,7 @@ impl ScriptVm {
         task_lib::install(lua, sched)?;
         crate::pattern::install(lua, sched)?;
         lua.load(STRING_LIMITS).set_name("=[engine]").exec()?;
+        lua.load(TABLE_LIMITS).set_name("=[engine]").exec()?;
 
         // Remove everything the sandbox forbids.
         for name in [

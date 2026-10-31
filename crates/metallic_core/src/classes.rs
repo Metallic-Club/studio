@@ -149,6 +149,10 @@ pub struct ClassDef {
     pub superclass: Option<&'static str>,
     /// Properties declared by this class (not inherited ones).
     pub props: &'static [PropDef],
+    /// False for services and abstract classes: [`World::create`](crate::World::create) refuses
+    /// them, like Roblox's `Instance.new`. Services exist only as the built-ins made by
+    /// [`World::new_with_services`](crate::World::new_with_services).
+    pub creatable: bool,
 }
 
 const fn p(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef {
@@ -185,6 +189,15 @@ const fn class(
         name,
         superclass: Some(superclass),
         props,
+        creatable: true,
+    }
+}
+
+/// Marks a class as not creatable: a service or an abstract class.
+const fn not_creatable(def: ClassDef) -> ClassDef {
+    ClassDef {
+        creatable: false,
+        ..def
     }
 }
 
@@ -237,25 +250,26 @@ static CLASSES: &[ClassDef] = &[
             ValueType::String,
             || Value::String(String::new()),
         )],
+        creatable: false,
     },
-    class(
+    not_creatable(class(
         "Workspace",
         "Instance",
         &[p("FallenPartsDestroyHeight", ValueType::Number, || {
             Value::Number(-500.0)
         })],
-    ),
-    class("Players", "Instance", &[]),
+    )),
+    not_creatable(class("Players", "Instance", &[])),
     // Child of each Player; the player's GUI and LocalScripts live here.
     class("PlayerGui", "Instance", &[]),
-    class("ReplicatedStorage", "Instance", &[]),
-    class("ServerScriptService", "Instance", &[]),
-    class("StarterPlayer", "Instance", &[]),
-    class("StarterPlayerScripts", "Instance", &[]),
-    class("StarterGui", "Instance", &[]),
+    not_creatable(class("ReplicatedStorage", "Instance", &[])),
+    not_creatable(class("ServerScriptService", "Instance", &[])),
+    not_creatable(class("StarterPlayer", "Instance", &[])),
+    not_creatable(class("StarterPlayerScripts", "Instance", &[])),
+    not_creatable(class("StarterGui", "Instance", &[])),
     // Lighting service and its effect children: Roblox names, Metallic defaults and meanings
     // (docs/research/2026-10-30-lighting.md section 5). Presets: `crate::lighting`.
-    class(
+    not_creatable(class(
         "Lighting",
         "Instance",
         &[
@@ -302,8 +316,8 @@ static CLASSES: &[ClassDef] = &[
             // EV added only while metering, so a look can match with auto exposure on and off.
             num("AutoExposureBias", || Value::Number(0.0), -5.0, 5.0),
         ],
-    ),
-    class("RunService", "Instance", &[]),
+    )),
+    not_creatable(class("RunService", "Instance", &[])),
     class("Folder", "Instance", &[]),
     // Pivots and scale (docs/design/building-tools.md section 4.4, `metallic_core::transform`).
     class(
@@ -321,7 +335,7 @@ static CLASSES: &[ClassDef] = &[
             look_override(),
         ],
     ),
-    class(
+    not_creatable(class(
         "BasePart",
         "Instance",
         &[
@@ -362,7 +376,7 @@ static CLASSES: &[ClassDef] = &[
             }),
             look_override(),
         ],
-    ),
+    )),
     class("Part", "BasePart", &[]),
     class("SpawnLocation", "Part", &[]),
     class(

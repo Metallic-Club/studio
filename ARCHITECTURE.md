@@ -38,7 +38,10 @@ apps.
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
-  either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play. Built-in
+  services are locked like Roblox's: `set_parent` and `clone_subtree` refuse them with `CoreError::Locked`, `destroy`
+  ignores them. Classes with `ClassDef::creatable == false` (services, abstract `Instance`/`BasePart`) are refused
+  by `create` with `CoreError::NotCreatable`.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules

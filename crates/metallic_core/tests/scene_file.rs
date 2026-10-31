@@ -95,6 +95,20 @@ fn load_errors_are_reported() {
 }
 
 #[test]
+fn load_refuses_non_builtin_services_and_abstract_classes() {
+    let dir = TestDir::new("load_refuses_non_builtin_services");
+    let f = dir.file("plain_service.ron");
+    for class in ["Workspace", "Instance", "BasePart"] {
+        std::fs::write(&f, format!("(version: 1, roots: [(class: \"{class}\")])")).unwrap();
+        assert_eq!(
+            load_scene(&f).err(),
+            Some(CoreError::NotCreatable(class.to_string())),
+            "{class}"
+        );
+    }
+}
+
+#[test]
 fn pivots_and_scale_survive_a_save() {
     let dir = TestDir::new("pivots_and_scale_survive_a_save");
     let mut w = World::new_with_services();
