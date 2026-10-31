@@ -67,9 +67,69 @@ A complete source sweep replaces deprecated `look_at_rh`, `perspective_rh` and
 `orthographic_rh` call paths in render, modeling examples, the existing shadow
 projection test, and the standalone renderer with recommended glam camera APIs.
 No assertion, input value, tolerance or golden is changed. Pinned glam 0.33.12
-sources confirm the new DirectX/WebGPU constructors use RH, Y-up and depth0..1;
+sources confirm the new DirectX/WebGPU constructors use RH, Y-up and depth 0..1;
 its Vulkan constructors would flip Y and are deliberately not used. Old/new
 constructors are separate implementations, not forwarding wrappers, and can
 rearrange floating arithmetic. A new exact domain test checks view direction,
 up direction, near/far mapping and orthographic corners without warning suppression.
 The candidate is refreshed before full/default/private CPU gates.
+
+
+## Completed main-based gates
+
+Final tested executable source: `36f350e6d16d15ccb764efb55983e9b51f90131e`, pinned
+main a0bb1bfc0e84ffd637fe8d1759f4822322601cd8. Final publication appends prose/evidence
+only. Backend independently reviewed both the original migration/provenance and
+camera-call follow-up without an actionable concern. No source changed during
+these final gates.
+
+- Full workspace no-run: passed in 3m21s. Strict full all-target Clippy: passed in
+  1m14s. The dev-only nalgebra 0.26.2 future-compatibility note remains visible;
+  strict Clippy success is not a claim that all dependency notices are absent.
+- Full locked workspace serial test command: 1,852 passed, zero failed, eight
+  upstream ignores across 140 result groups including doc tests. All three full
+  Parkour routes passed, including keyboard, gamepad and touch. New legacy-file,
+  public math interoperability and upload/camera regressions passed. No existing
+  assertion, tolerance or lighting golden was changed; only the deprecated
+  constructor call in the shadow test was modernized.
+- Initial focused animation/asset/meshgen target passed 125 cases, including the
+  unchanged Mikk reference. The public interop case passed, and corrected
+  camera/upload target passed both cases without first-party warnings.
+- Standalone shader checker: guarded `check --bins --locked -j 4` passed in 49.17s
+  under its explicit separate workspace owner. Its manifest and lock use 0.33.12;
+  no standalone GPU rendering was executed. Its pre-existing compact formatting
+  produces differences in an additional non-required standalone rustfmt check;
+  it was preserved. The required workspace format check passes.
+- Eight Python policy cases pass. Real workspace normal/build, workspace dev,
+  and standalone active graphs each have only glam 0.33.12. CPU is explicitly
+  unavailable on this main-based source; actual strict `--require-cpu` exits 1 as
+  intended, not a CPU-only pass.
+- Licenses, workspace format and pinned-base whitespace checks pass. All builds
+  used guarded lane116 and four jobs. Actual Lua/GPU execution used its assigned
+  sole window. The lane is now idle and released, with no retained performance
+  binary requirement.
+
+The exact future-compatibility report was inspected and retained. nalgebra 0.26.2
+has trailing semicolons in expression-position macros in base/construction.rs
+(lines 888, 891, 894, 897, 900, expanded by transpose_array/componentwise_constructors_impl),
+linked to Rust issue 79813. It is accepted by pinned Rust 1.99.1 but may become a
+hard error later. No blanket warning allowance or vendored dependency patch was
+added. This documented dev-reference tradeoff does not affect the normal runtime
+graph; it is not an unqualified future-toolchain compatibility claim.
+
+Raw logs, old generator/fixtures and SHA-256 provenance are kept separately under
+external `integration-evidence/106-shared-glam`, using temporary log prefix
+`metallic-106-`. The offline lock resolution first found an uncached `paste`
+package; normal online resolution added only the six required backend packages,
+removed glam 0.15 and did not update unrelated existing versions.
+
+## Separately identified CPU compatibility composition
+
+Root's private composition `b44db1675998d6c22af1e4c04dcf466a8496f74f` contains this candidate and the
+pending engine foundations, including PR 309's real presentation/Simulation split.
+Its strict four-graph policy passes (including a real CPU-only graph), existing
+CPU presentation policy passes, full/CPU prebuilds and strict Clippy pass. This is
+separate supporting evidence; it does not deliver CPU mode in the main-based PR.
+Actual combined execution is pending at publication. Update only PR/external
+metadata when those results arrive, keeping this source and prior evidence fixed.
+No own merge, force push, main push or remote-machine action was performed.

@@ -36,6 +36,14 @@ single nalgebra version, and it does not replace the production tangent algorith
 or weaken the reference comparison. The upstream backend and array-based Geometry
 API are documented in the [published MikkTSpace source](https://github.com/gltf-rs/mikktspace/tree/c1e6f163ec0ac9e77bffcf6144c9b09ab75dc412).
 
+Cargo also records a future-compatibility diagnostic for that dev-only nalgebra
+0.26.2 dependency: `trailing semicolon in macro used in expression position` in
+its `transpose_array`/`componentwise_constructors_impl` expansion. The pinned
+compiler accepts it and strict first-party Clippy passes, but a future Rust
+compiler can reject it. See [Rust issue79813](https://github.com/rust-lang/rust/issues/79813).
+`cargo report future-incompatibilities --package nalgebra@0.26.2` gives the full
+report. No dependency patch or first-party warning suppression is included.
+
 ## Compatibility checks
 
 Existing math, animation, asset, tangent-reference, upload-layout and movement
