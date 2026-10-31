@@ -145,6 +145,13 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
+  and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
+  Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one
+  combined Local Play tag because Game supplies one sink for both VMs. Snapshot copying is O(world); callers
+  through the current borrowed PlayStart/clean_world seam copy twice. No mode is registered, no rendering/raw
+  input/Explorer integration is added, and Task #11's manual acceptance remains open. Independent #92/#275 still
+  tracks recursive clone_subtree behavior reached by Game's StarterGui copying.
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional

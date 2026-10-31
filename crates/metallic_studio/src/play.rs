@@ -17,6 +17,13 @@
 //! Listeners added with [`PlayController::on_event`] hear [`PlayEvent`]s (started, stopped,
 //! failed), for example to clear Output on Play or to switch the Explorer to the play world.
 //! While a session runs, [`PlayController::is_playing`] is true and editing commands are disabled.
+//!
+//! [`LocalPlaySession`] supplies the nonvisual real-Game lifecycle. It is not registered as a
+//! mode here; viewport, input and Explorer integration remain Task #11 work.
+mod local;
+
+pub use local::LocalPlaySession;
+
 use std::path::Path;
 
 use metallic_core::World;
