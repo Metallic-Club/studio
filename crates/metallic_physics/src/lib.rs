@@ -13,25 +13,33 @@
 //! linear and angular velocity derived from the move, so parts standing on it are carried along
 //! and parts in its way are pushed, by rotating movers too.
 //!
-//! Characters: [`spawn_character`] builds a Roblox-style character Model (invisible body parts
-//! that the runtime draws the skinned avatar over) for a Player and
-//! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
+//! Characters: [`spawn_character`] builds a Roblox-style character Model (a `HumanoidRootPart`
+//! and 15 invisible R15 body parts that the runtime draws the skinned avatar over) for a Player
+//! and [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
 //! death and respawn, checkpoints, touches). Character parts are anchored, so the physics moves
-//! them as kinematic bodies (they push loose parts) but never reports their touches:
-//! [`PhysicsWorld::drain_touched`] skips every pair involving a character part, and the runtime
-//! gets character touches from [`CharacterEvent::Touched`] instead.
+//! them as kinematic bodies. The `HumanoidRootPart` is solid (it pushes loose parts); the body
+//! parts have CanCollide off, so they are sensors that never collide with or push anything. They
+//! hold the bone-attached touch volumes ([`BodyPart`], [`BodyPose`]), which are queries of the
+//! [`CharacterController`]. Nothing is special-cased by name: an NPC Model with R15-named solid
+//! parts keeps its collisions. [`PhysicsWorld::drain_touched`]
+//! skips every pair involving a character part, and the runtime gets character touches from
+//! [`CharacterEvent::Touched`] and [`CharacterEvent::TouchEnded`] instead.
 #![warn(missing_docs)]
 
+#[cfg(test)]
+mod alloc_count;
 mod avatar;
+mod body;
 mod character;
 mod sync;
 mod touched;
 
 pub use avatar::VIOLET;
+pub use body::{BODY_PART_COUNT, BodyPart, BodyPose, MAX_TOUCH_CANDIDATES, TouchQueryCost};
 pub use character::{
     CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT,
-    MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, WORLD_LIMIT, place_character,
-    spawn_character,
+    MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, SupportContact, WORLD_LIMIT,
+    place_character, spawn_character,
 };
 pub use sync::{MaterialProps, material_props};
 
@@ -189,7 +197,7 @@ impl PhysicsWorld {
             .copied()
             .collect();
         for id in gone {
-            self.remove_entry(id);
+            self.remove_entry(id, touched::Removed::Gone);
         }
         for (id, character) in parts {
             let Some(state) = sync::read_part(world, id) else {
@@ -200,7 +208,7 @@ impl PhysicsWorld {
                 .get(&id)
                 .is_some_and(|e| e.signature != state.signature(character));
             if stale {
-                self.remove_entry(id);
+                self.remove_entry(id, touched::Removed::Rebuilt);
             }
             if !self.entries.contains_key(&id) {
                 self.add_entry(id, &state, character);
@@ -262,11 +270,11 @@ impl PhysicsWorld {
         }
     }
 
-    fn remove_entry(&mut self, id: InstanceId) {
+    fn remove_entry(&mut self, id: InstanceId, why: touched::Removed) {
         if let Some(e) = self.entries.remove(&id) {
             self.owners.remove(&e.collider);
             self.rapier.remove_body(e.body);
-            self.touches.forget(id);
+            self.touches.forget(id, why);
             self.characters.remove(&id);
         }
     }
@@ -392,6 +400,8 @@ impl PhysicsWorld {
             }
         }
         self.collect_touches();
+        // Rebuilt parts' pairs that did not touch again in this step end now.
+        self.touches.settle();
     }
 
     /// Current velocity of a part in studs per second: the body velocity for unanchored parts,
@@ -419,6 +429,51 @@ impl PhysicsWorld {
         } else {
             e.derived_angular_velocity
         })
+    }
+
+    /// The pose (`Position`, `Orientation`) the next [`Self::step`] gives a part. For an anchored
+    /// part (every part in a replica world) that is its pose in `world` now, which a script may
+    /// have changed since the last step; for a simulated part it is the current body pose. `None`
+    /// for unknown parts. The character controller carries riders by the difference between this
+    /// and the body pose, so a rider stays at most one tick behind a part a script moves every
+    /// tick (#374). A future teleport rule (#34) has to apply here as well as in `step`.
+    pub fn scripted_pose(&self, world: &World, id: InstanceId) -> Option<(Vec3, Vec3)> {
+        let e = self.entries.get(&id)?;
+        let body = self.rapier.bodies.get(e.body)?;
+        if !(e.signature.anchored || self.replica) {
+            let q = body.rotation();
+            let o = sync::orientation_from_quat([
+                f64::from(q.x),
+                f64::from(q.y),
+                f64::from(q.z),
+                f64::from(q.w),
+            ]);
+            return Some((from_vector(body.translation()), o));
+        }
+        Some(match sync::read_part(world, id) {
+            // The same test `step` uses to decide whether the part moved.
+            Some(state)
+                if !close(state.position, e.last_position)
+                    || !close(state.orientation, e.last_orientation) =>
+            {
+                (state.position, state.orientation)
+            }
+            _ => (e.last_position, e.last_orientation),
+        })
+    }
+
+    /// [`Self::scripted_pose`] as a body pose: exactly the current body pose when the part will
+    /// not move, so a still support never shifts its rider.
+    pub(crate) fn scripted_body_pose(&self, world: &World, id: InstanceId) -> Option<Pose> {
+        let e = self.entries.get(&id)?;
+        let body = self.rapier.bodies.get(e.body)?;
+        let (position, orientation) = self.scripted_pose(world, id)?;
+        if !(e.signature.anchored || self.replica)
+            || (close(position, e.last_position) && close(orientation, e.last_orientation))
+        {
+            return Some(*body.position());
+        }
+        Some(to_pose(position, orientation))
     }
 
     /// Casts a ray and returns the nearest solid (CanCollide) part hit, skipping `ignore`.
@@ -476,5 +531,17 @@ impl PhysicsWorld {
     /// [`CharacterEvent::Touched`].
     pub fn drain_touched(&mut self) -> Vec<(InstanceId, InstanceId)> {
         self.touches.drain()
+    }
+
+    /// Returns the part pairs that stopped touching since the last call: one entry for each pair
+    /// that [`Self::drain_touched`] reported, when its parts separate or one of them is removed
+    /// (destroyed, or out of the Workspace; the runtime fires `TouchEnded` on both, which reaches
+    /// scripts on the part that still exists). A part rebuilt in place (Size, Shape or
+    /// CanCollide changed) that still touches reports neither an end nor a new start. Pairs
+    /// involving a character part are never reported (see [`CharacterEvent::TouchEnded`]).
+    /// Drain [`Self::drain_touched`] first: a pair that started and stopped since the last
+    /// drain is in both.
+    pub fn drain_touch_ended(&mut self) -> Vec<(InstanceId, InstanceId)> {
+        self.touches.drain_ended()
     }
 }

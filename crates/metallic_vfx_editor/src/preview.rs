@@ -104,7 +104,7 @@ impl Preview {
             };
         }
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, color::BG_BASE);
+        painter.rect_filled(rect, 0.0, color::bg_base());
         let camera = self.camera(style);
         if self.grid {
             draw_ground(&painter, rect, &camera, style);
@@ -184,7 +184,7 @@ fn draw_ground(painter: &egui::Painter, rect: Rect, camera: &Camera, style: ArtS
         ) {
             painter.line_segment(
                 [Pos2::new(a[0], a[1]) + off, Pos2::new(b[0], b[1]) + off],
-                Stroke::new(1.0, color::LINE_STRONG),
+                Stroke::new(1.0, color::line_strong()),
             );
         }
         return;
@@ -218,11 +218,11 @@ fn draw_ground(painter: &egui::Painter, rect: Rect, camera: &Camera, style: ArtS
                     continue;
                 };
                 let base = if major {
-                    color::LINE_STRONG
+                    color::line_strong()
                 } else {
-                    color::LINE
+                    color::line()
                 };
-                let c = lerp_color(color::BG_BASE, base, fade);
+                let c = lerp_color(color::bg_base(), base, fade);
                 painter.line_segment(
                     [Pos2::new(s0[0], s0[1]) + off, Pos2::new(s1[0], s1[1]) + off],
                     Stroke::new(1.0, c),

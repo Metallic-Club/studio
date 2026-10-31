@@ -588,7 +588,7 @@ impl ApiState {
         Ok(())
     }
 
-    fn enum_value(&self, enum_name: &str, name: &str) -> Value {
+    pub(crate) fn enum_value(&self, enum_name: &str, name: &str) -> Value {
         self.enums.item(enum_name, name)
     }
 

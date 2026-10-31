@@ -22,7 +22,9 @@ pub fn segmented<T: PartialEq + Copy>(
     let painter = ui.painter();
     let galleys: Vec<_> = options
         .iter()
-        .map(|(_, label)| painter.layout_no_wrap((*label).to_owned(), font.clone(), theme::TEXT_2))
+        .map(|(_, label)| {
+            painter.layout_no_wrap((*label).to_owned(), font.clone(), theme::text_2())
+        })
         .collect();
     let widths: Vec<f32> = galleys
         .iter()
@@ -34,8 +36,8 @@ pub fn segmented<T: PartialEq + Copy>(
     ui.painter().rect(
         track,
         radius,
-        theme::BG_DEEP,
-        Stroke::new(1.0, theme::LINE),
+        theme::bg_deep(),
+        Stroke::new(1.0, theme::line()),
         StrokeKind::Inside,
     );
 
@@ -53,23 +55,23 @@ pub fn segmented<T: PartialEq + Copy>(
             *current = *value;
             response.mark_changed();
         }
-        let hover = ui
-            .ctx()
-            .animate_bool_with_time(id.with("hover"), seg.hovered(), theme::T_FAST);
+        let hover =
+            ui.ctx()
+                .animate_bool_with_time(id.with("hover"), seg.hovered(), theme::t_fast());
         let on = ui
             .ctx()
-            .animate_bool_with_time(id.with("on"), selected, theme::T_FAST);
+            .animate_bool_with_time(id.with("on"), selected, theme::t_fast());
         let painter = ui.painter();
         let seg_radius = CornerRadius::same(theme::R_XS);
         if on > 0.0 {
-            painter.rect_filled(rect, seg_radius, theme::BG_ACTIVE.gamma_multiply(on));
+            painter.rect_filled(rect, seg_radius, theme::bg_active().gamma_multiply(on));
             painter.hline(
                 rect.left() + 3.0..=rect.right() - 3.0,
                 rect.top() + 0.5,
-                Stroke::new(1.0, theme::HIGHLIGHT.gamma_multiply(on)),
+                Stroke::new(1.0, theme::highlight().gamma_multiply(on)),
             );
         }
-        let ink = theme::TEXT_2.lerp_to_gamma(theme::TEXT_1, hover.max(on));
+        let ink = theme::text_2().lerp_to_gamma(theme::text_1(), hover.max(on));
         let pos = rect.center() - galley.size() / 2.0;
         painter.galley_with_override_text_color(pos, galley, ink);
         if seg.has_focus() {
@@ -78,7 +80,7 @@ pub fn segmented<T: PartialEq + Copy>(
                 rect,
                 seg_radius,
                 0.0,
-                Stroke::new(2.0, theme::FOCUS),
+                Stroke::new(2.0, theme::focus()),
             );
         }
     }
@@ -92,7 +94,7 @@ mod tests {
     #[test]
     fn clicking_a_segment_selects_it() {
         let ctx = egui::Context::default();
-        crate::theme::apply(&ctx);
+        crate::theme::apply(&ctx, crate::theme::ThemeId::Graphite);
         let mut value = 0;
         let run = |ctx: &egui::Context, events, value: &mut i32| {
             let input = egui::RawInput {

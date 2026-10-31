@@ -2,11 +2,12 @@
 //!
 //! Every editor module (viewport, gizmos, Explorer, Properties, Output, script tabs, toolbar
 //! icons) calls [`ui_tokens`] instead of naming colours or sizes itself. Today the values come from
-//! [`crate::theme`] plus a few editor-only additions; when the theme moves to `metallic_tokens`
-//! (S2), only this file changes.
+//! [`crate::theme`] (the active theme's palette) plus a few editor-only additions.
 use eframe::egui::{Color32, FontId};
 
-use crate::theme;
+use std::sync::OnceLock;
+
+use crate::theme::{self, ThemeId};
 
 /// Colours, font sizes and metrics used by the editor panels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,48 +85,71 @@ impl UiTokens {
     }
 }
 
-const TOKENS: UiTokens = UiTokens {
-    deep: theme::DEEP,
-    panel: theme::PANEL,
-    hover: theme::HOVER,
-    accent: theme::ACCENT,
-    text: theme::TEXT,
-    text_dim: theme::TEXT_DIM,
-    error: theme::ERROR,
-    warning: Color32::from_rgb(0xe0, 0xc0, 0x7a),
-    error_bg: Color32::from_rgb(0x3a, 0x22, 0x26),
-    success: Color32::from_rgb(0x8f, 0xc9, 0x9a),
-    axis: [
-        Color32::from_rgb(0xe0, 0x6c, 0x6c),
-        Color32::from_rgb(0x84, 0xc9, 0x6a),
-        Color32::from_rgb(0x6c, 0x9c, 0xe8),
-    ],
-    icon: Color32::from_rgb(0xc4, 0xc6, 0xcc),
-    icon_hole: theme::BASE,
-    clients: [
-        Color32::from_rgb(0x7f, 0xb0, 0xd8),
-        Color32::from_rgb(0xd8, 0xb0, 0x6f),
-        Color32::from_rgb(0x8f, 0xc9, 0x9a),
-        Color32::from_rgb(0xd8, 0x8f, 0xb8),
-    ],
-    other_tag: Color32::from_rgb(0xb8, 0xb4, 0xc2),
-    syntax_keyword: Color32::from_rgb(0xb3, 0x9d, 0xe6),
-    syntax_string: Color32::from_rgb(0x9f, 0xc9, 0x8f),
-    syntax_number: Color32::from_rgb(0xe0, 0xb4, 0x7a),
-    syntax_comment: Color32::from_rgb(0x8e, 0x8a, 0x97),
-    body_size: 13.0,
-    small_size: 11.0,
-    mono_size: 12.0,
-    title_size: 14.0,
-    row_height: 24.0,
-    indent: 18.0,
-    label_width: 104.0,
-    icon_size: 16.0,
-};
+/// The editor's tokens for `id`. Roles the theme names come from its palette; the editor-only
+/// colours (axes, tags, Luau syntax) are tuned per theme for contrast on `bg-deep`.
+fn build(id: ThemeId) -> UiTokens {
+    let p = theme::palette_of(id);
+    let light = !id.is_dark();
+    let pick = |dark: [u8; 3], light_value: [u8; 3]| {
+        let [r, g, b] = if light { light_value } else { dark };
+        Color32::from_rgb(r, g, b)
+    };
+    UiTokens {
+        deep: p.bg_deep,
+        panel: p.bg_panel,
+        hover: p.bg_hover,
+        accent: p.accent,
+        text: p.text_1,
+        text_dim: p.text_2,
+        error: p.error,
+        warning: if light {
+            p.warning
+        } else {
+            Color32::from_rgb(0xe0, 0xc0, 0x7a)
+        },
+        error_bg: p.error_bg,
+        success: if light {
+            p.success
+        } else {
+            Color32::from_rgb(0x8f, 0xc9, 0x9a)
+        },
+        axis: [
+            pick([0xe0, 0x6c, 0x6c], [0xb3, 0x26, 0x1e]),
+            pick([0x84, 0xc9, 0x6a], [0x2c, 0x7a, 0x1e]),
+            pick([0x6c, 0x9c, 0xe8], [0x1f, 0x5c, 0xb0]),
+        ],
+        icon: if light {
+            p.icon
+        } else {
+            Color32::from_rgb(0xc4, 0xc6, 0xcc)
+        },
+        icon_hole: p.bg_base,
+        clients: [
+            pick([0x7f, 0xb0, 0xd8], [0x1f, 0x5c, 0x9e]),
+            pick([0xd8, 0xb0, 0x6f], [0x7a, 0x52, 0x00]),
+            pick([0x8f, 0xc9, 0x9a], [0x1d, 0x70, 0x48]),
+            pick([0xd8, 0x8f, 0xb8], [0x9a, 0x2f, 0x6e]),
+        ],
+        other_tag: pick([0xb8, 0xb4, 0xc2], [0x57, 0x53, 0x5f]),
+        syntax_keyword: pick([0xb3, 0x9d, 0xe6], [0x58, 0x49, 0x93]),
+        syntax_string: pick([0x9f, 0xc9, 0x8f], [0x1d, 0x70, 0x48]),
+        syntax_number: pick([0xe0, 0xb4, 0x7a], [0x8a, 0x4b, 0x00]),
+        syntax_comment: p.text_3,
+        body_size: 13.0,
+        small_size: 11.0,
+        mono_size: 12.0,
+        title_size: 14.0,
+        row_height: theme::ROW_HEIGHT,
+        indent: 18.0,
+        label_width: 104.0,
+        icon_size: theme::ICON_BOX,
+    }
+}
 
-/// The editor's tokens.
+/// The editor's tokens in the active theme (see [`theme::apply`]).
 pub fn ui_tokens() -> &'static UiTokens {
-    &TOKENS
+    static TOKENS: OnceLock<[UiTokens; 3]> = OnceLock::new();
+    &TOKENS.get_or_init(|| ThemeId::ALL.map(build))[theme::active() as usize]
 }
 
 #[cfg(test)]

@@ -124,3 +124,11 @@ fn launcher_pages_use_only_defined_tokens() {
     }
     assert!(used > 20, "no token use found");
 }
+
+#[test]
+fn reduced_motion_overrides_are_readable() {
+    let set = metallic_tokens::parse(metallic_tokens::TOKENS_JSON).expect("tokens parse");
+    let reduced = set.reduced_motion();
+    assert!(reduced.iter().any(|(n, v)| n == "t-fast" && v == "0ms"));
+    assert!(reduced.iter().any(|(n, v)| n == "t-splash" && v == "80ms"));
+}

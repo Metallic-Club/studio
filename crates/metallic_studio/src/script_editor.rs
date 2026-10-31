@@ -55,6 +55,11 @@ impl ScriptTabs {
         }
     }
 
+    /// Shows the Scene tab (Play starting).
+    pub fn show_scene(&mut self) {
+        self.current = None;
+    }
+
     /// Closes tabs whose script left the tree (deleted, or undone insert).
     pub fn prune(&mut self, state: &EditorState) {
         let before = self.open.len();
@@ -67,11 +72,9 @@ impl ScriptTabs {
     /// Draws the tab strip. Returns true when the scene tab is shown.
     pub fn tab_strip(&mut self, ui: &mut egui::Ui, state: &mut EditorState) -> bool {
         let mut close = None;
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(self.current.is_none(), "Scene")
-                .clicked()
-            {
+        crate::panel::tab_strip(ui, |ui| {
+            let r = crate::panel::tab(ui, "Scene", self.current.is_none(), false, false);
+            if r.clicked {
                 self.current = None;
             }
             for (i, s) in self.open.iter().enumerate() {
@@ -80,11 +83,11 @@ impl ScriptTabs {
                     Ok(Value::String(src)) => src != &s.buffer,
                     _ => false,
                 };
-                let text = if dirty { format!("{label} •") } else { label };
-                if ui.selectable_label(self.current == Some(i), text).clicked() {
+                let r = crate::panel::tab(ui, &label, self.current == Some(i), dirty, true);
+                if r.clicked {
                     self.current = Some(i);
                 }
-                if ui.small_button("×").on_hover_text("Close").clicked() {
+                if r.closed {
                     close = Some(i);
                 }
             }
@@ -120,6 +123,8 @@ impl ScriptTabs {
             ui.fonts_mut(|f| f.layout_job(job))
         };
         let lines = s.buffer.lines().count().max(1);
+        // Read-only while playing: the edit world cannot change until Stop.
+        let editable = !state.play.is_playing();
         let mut lost_focus = false;
         egui::ScrollArea::both()
             .auto_shrink([false, false])
@@ -138,6 +143,7 @@ impl ScriptTabs {
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(30)
                                 .lock_focus(true)
+                                .interactive(editable)
                                 .layouter(&mut layouter),
                         )
                         .labelled_by(title.id);

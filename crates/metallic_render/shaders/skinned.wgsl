@@ -14,7 +14,11 @@ fn vs_skinned(v: SkinIn) -> VOut {
     out.local_p = v.pos * skin.params.x;
     out.local_n = v.normal;
     out.color = skin.slot_color[s];
-    out.material = skin.slot_material[s];
+    let sm = skin.slot_material[s];
+    // The place Look's Character row picks the shading model; the slot keeps its own surface.
+    out.material = vec4<u32>(CHARACTER_ROW, 0u, u32(sm.z + 0.5), 0u);
+    out.surf = sm.xy;
+    out.unlit = unlit_colour(CHARACTER_ROW, out.color.rgb);
     return out;
 }
 
@@ -68,7 +72,8 @@ fn fs_toon(in: VOut) -> @location(0) vec4<f32> {
     let rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * (1.0 - lit);
     tone = mix(tone, base * TOON_SHADE * 1.18, 0.5 * rim);
     let c = unfinish(tone * toon_light());
-    return vec4<f32>(toon_fog(c, in.world_pos), 1.0);
+    // Alpha 0 marks toon pixels: the exposure meter must not read them back.
+    return vec4<f32>(toon_fog(c, in.world_pos), 0.0);
 }
 
 struct OutlineOut {
@@ -107,5 +112,6 @@ fn vs_outline(v: SkinIn) -> OutlineOut {
 @fragment
 fn fs_outline(in: OutlineOut) -> @location(0) vec4<f32> {
     let c = unfinish(TOON_INK * min(toon_light(), vec3<f32>(1.0)));
-    return vec4<f32>(toon_fog(c, in.world_pos), 1.0);
+    // Alpha 0 marks toon pixels: the exposure meter must not read them back.
+    return vec4<f32>(toon_fog(c, in.world_pos), 0.0);
 }

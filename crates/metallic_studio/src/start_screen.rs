@@ -55,6 +55,10 @@ pub enum StartAction {
         /// The game folder.
         path: PathBuf,
     },
+    /// Open the Settings dialog (the rail's Settings button, or Ctrl+,).
+    OpenSettings,
+    /// Open the Third-party licences screen (the rail footer's link).
+    OpenLicences,
 }
 
 /// The starting-points filter.
@@ -381,14 +385,14 @@ impl StartScreen {
             .exact_size(RAIL_WIDTH)
             .resizable(false)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(theme::BG_PANEL))
+            .frame(egui::Frame::new().fill(theme::bg_panel()))
             .show(ui, |ui| {
                 if let Some(a) = self.rail(ui) {
                     action = Some(a);
                 }
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::BG_BASE))
+            .frame(egui::Frame::new().fill(theme::bg_base()))
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -416,13 +420,17 @@ impl StartScreen {
     }
 
     fn shortcuts(&mut self, ui: &mut Ui, action: &mut Option<StartAction>) {
-        let (new, open, esc) = ui.input_mut(|i| {
+        let (new, open, settings, esc) = ui.input_mut(|i| {
             (
                 i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::N)),
                 i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::O)),
+                i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma)),
                 i.key_pressed(Key::Escape),
             )
         });
+        if settings {
+            *action = Some(StartAction::OpenSettings);
+        }
         if new {
             self.new_game();
         }
@@ -450,7 +458,7 @@ impl StartScreen {
         ui.painter().vline(
             full.right() - 0.5,
             full.y_range(),
-            Stroke::new(1.0, theme::LINE),
+            Stroke::new(1.0, theme::line()),
         );
         ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
         let width = RAIL_WIDTH - 32.0;
@@ -489,7 +497,7 @@ impl StartScreen {
                         ui.label(
                             RichText::new(self.recent.items().len().to_string())
                                 .font(fonts::caption())
-                                .color(theme::TEXT_3),
+                                .color(theme::text_3()),
                         );
                     }
                 });
@@ -527,7 +535,12 @@ impl StartScreen {
             egui::pos2(full.left(), full.bottom() - FOOTER_HEIGHT),
             egui::pos2(full.right() - 1.0, full.bottom()),
         );
-        ui.scope_builder(UiBuilder::new().max_rect(footer), rail_footer);
+        if let Some(a) = ui
+            .scope_builder(UiBuilder::new().max_rect(footer), rail_footer)
+            .inner
+        {
+            action = Some(a);
+        }
         action
     }
 
@@ -554,12 +567,12 @@ impl StartScreen {
             let hover = ui.ctx().animate_bool_with_time(
                 resp.id.with("hover"),
                 resp.hovered(),
-                theme::T_FAST,
+                theme::t_fast(),
             );
             let radius = CornerRadius::same(theme::R_MD);
             if hover > 0.0 {
                 ui.painter()
-                    .rect_filled(rect, radius, theme::BG_HOVER.gamma_multiply(hover));
+                    .rect_filled(rect, radius, theme::bg_hover().gamma_multiply(hover));
             }
             let thumb_rect = Rect::from_min_size(rect.min + vec2(8.0, 8.0), THUMB);
             let thumb_radius = CornerRadius::same(theme::R_XS);
@@ -573,7 +586,7 @@ impl StartScreen {
                 ui.painter().rect_stroke(
                     thumb_rect,
                     thumb_radius,
-                    Stroke::new(1.0, theme::LINE_STRONG),
+                    Stroke::new(1.0, theme::line_strong()),
                     StrokeKind::Inside,
                 );
                 ui.painter().text(
@@ -581,18 +594,24 @@ impl StartScreen {
                     Align2::CENTER_CENTER,
                     icons::FOLDER_OPEN,
                     fonts::icon(16.0),
-                    theme::TEXT_3,
+                    theme::text_3(),
                 );
             }
             let painter = ui.painter();
             let text_left = thumb_rect.right() + 12.0;
             let text_w = rect.right() - 8.0 - text_left;
             let top = rect.top() + (ROW_HEIGHT - 34.0) / 2.0;
-            let name = truncated(painter, &item.name, fonts::strong(), theme::TEXT_1, text_w);
+            let name = truncated(
+                painter,
+                &item.name,
+                fonts::strong(),
+                theme::text_1(),
+                text_w,
+            );
             painter.galley(
                 egui::pos2(text_left, top + 9.0 - name.size().y / 2.0),
                 name,
-                theme::TEXT_1,
+                theme::text_1(),
             );
             let meta_y = top + 18.0 + 8.0;
             if present {
@@ -606,11 +625,11 @@ impl StartScreen {
                     (None, Some(w)) => w,
                     (None, None) => String::new(),
                 };
-                let meta = truncated(painter, &meta, fonts::small(), theme::TEXT_3, text_w);
+                let meta = truncated(painter, &meta, fonts::small(), theme::text_3(), text_w);
                 painter.galley(
                     egui::pos2(text_left, meta_y - meta.size().y / 2.0),
                     meta,
-                    theme::TEXT_3,
+                    theme::text_3(),
                 );
             } else {
                 painter.text(
@@ -618,23 +637,23 @@ impl StartScreen {
                     Align2::LEFT_CENTER,
                     icons::WARNING,
                     fonts::icon(14.0),
-                    theme::WARNING,
+                    theme::warning(),
                 );
                 let warn = truncated(
                     painter,
                     "Folder moved or deleted",
                     fonts::small(),
-                    theme::WARNING,
+                    theme::warning(),
                     text_w - 18.0,
                 );
                 painter.galley(
                     egui::pos2(text_left + 18.0, meta_y - warn.size().y / 2.0),
                     warn,
-                    theme::WARNING,
+                    theme::warning(),
                 );
             }
             if resp.has_focus() {
-                cut::frame(painter, rect, radius, 0.0, Stroke::new(2.0, theme::FOCUS));
+                cut::frame(painter, rect, radius, 0.0, Stroke::new(2.0, theme::focus()));
             }
             if resp.clicked() {
                 if present {
@@ -655,7 +674,11 @@ impl StartScreen {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let text = |ui: &mut Ui, s: &str| {
-                ui.label(RichText::new(s).font(fonts::body_lg()).color(theme::TEXT_2));
+                ui.label(
+                    RichText::new(s)
+                        .font(fonts::body_lg())
+                        .color(theme::text_2()),
+                );
             };
             text(ui, "Every template opens ready to play. Press ");
             keycap(ui, "F5");
@@ -683,13 +706,13 @@ impl StartScreen {
             rect,
             CornerRadius::same(theme::R_LG),
             theme::CUT_LG,
-            theme::BG_PANEL,
+            theme::bg_panel(),
         );
         let art_rect = Rect::from_min_size(rect.min, vec2(width - FORM_WIDTH, height));
         painter.hline(
             art_rect.right()..=rect.right() - theme::CUT_LG,
             rect.top() + 0.5,
-            Stroke::new(1.0, theme::HIGHLIGHT),
+            Stroke::new(1.0, theme::highlight()),
         );
         let art = match &texture {
             Some(tex) => Art::Image(tex),
@@ -719,7 +742,7 @@ impl StartScreen {
             about.label(
                 RichText::new(&template.facts)
                     .font(fonts::small())
-                    .color(theme::TEXT_3),
+                    .color(theme::text_3()),
             );
         }
         about.add_space(16.0);
@@ -728,7 +751,7 @@ impl StartScreen {
                 RichText::new(&template.description)
                     .font(fonts::body_lg())
                     .line_height(Some(21.0))
-                    .color(theme::TEXT_1),
+                    .color(theme::text_1()),
             )
             .wrap(),
         );
@@ -736,11 +759,11 @@ impl StartScreen {
             about.add_space(10.0);
             let mut job = egui::text::LayoutJob::default();
             let strong = egui::FontId::new(fonts::small().size, fonts::strong().family);
-            job.append("Inside: ", 0.0, text_format(strong, theme::TEXT_1));
+            job.append("Inside: ", 0.0, text_format(strong, theme::text_1()));
             job.append(
                 &template.inside,
                 0.0,
-                text_format(fonts::small(), theme::TEXT_2),
+                text_format(fonts::small(), theme::text_2()),
             );
             job.wrap.max_width = form_rect.width();
             about.label(job);
@@ -752,13 +775,13 @@ impl StartScreen {
     fn form(&mut self, ui: &mut Ui, rect: Rect) -> Option<StartAction> {
         let help_w = rect.width();
         let (help_text, help_colour, indent) = match &self.error {
-            Some((message, _)) => (message.clone(), theme::ERROR, 20.0),
+            Some((message, _)) => (message.clone(), theme::error(), 20.0),
             None => (
                 format!(
                     "Studio creates {}. It must be new or empty.",
                     self.target().display()
                 ),
-                theme::TEXT_3,
+                theme::text_3(),
                 0.0,
             ),
         };
@@ -837,7 +860,7 @@ impl StartScreen {
                 Align2::LEFT_TOP,
                 icons::WARNING_CIRCLE,
                 fonts::icon_fill(14.0),
-                theme::ERROR,
+                theme::error(),
             );
         }
         ui.painter()
@@ -858,7 +881,7 @@ impl StartScreen {
             ui.painter().rect_stroke(
                 resp.rect,
                 theme::R_SM,
-                Stroke::new(1.0, theme::ERROR),
+                Stroke::new(1.0, theme::error()),
                 StrokeKind::Inside,
             );
         }
@@ -958,7 +981,7 @@ fn field_label(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(egui::FontId::new(12.0, fonts::strong().family))
-            .color(theme::TEXT_2),
+            .color(theme::text_2()),
     );
     ui.add_space(6.0);
 }
@@ -988,7 +1011,7 @@ fn chips(ui: &Ui, art: Rect, template: &TemplateInfo) {
         );
         let w = 9.0 + 14.0 + 6.0 + text.size().x + 9.0;
         let chip = Rect::from_min_max(egui::pos2(x, bottom - 26.0), egui::pos2(x + w, bottom));
-        painter.rect_filled(chip, theme::R_SM, theme::ART_SCRIM);
+        painter.rect_filled(chip, theme::R_SM, theme::art_scrim());
         painter.text(
             egui::pos2(chip.left() + 9.0, chip.center().y),
             Align2::LEFT_CENTER,
@@ -1008,7 +1031,7 @@ fn chips(ui: &Ui, art: Rect, template: &TemplateInfo) {
 /// An empty-state plate in place of a list: the fact, then the cause and what fills it.
 fn empty_plate(ui: &mut Ui, title: &str, body: &str) {
     let shown = egui::Frame::new()
-        .fill(theme::BG_RAISED)
+        .fill(theme::bg_raised())
         .corner_radius(CornerRadius::same(theme::R_MD))
         .inner_margin(16.0)
         .show(ui, |ui| {
@@ -1019,7 +1042,7 @@ fn empty_plate(ui: &mut Ui, title: &str, body: &str) {
                 egui::Label::new(
                     RichText::new(body)
                         .line_height(Some(18.0))
-                        .color(theme::TEXT_2),
+                        .color(theme::text_2()),
                 )
                 .wrap(),
             );
@@ -1029,16 +1052,39 @@ fn empty_plate(ui: &mut Ui, title: &str, body: &str) {
     ui.painter().hline(
         r.left() + inset..=r.right() - inset,
         r.top() + 0.5,
-        Stroke::new(1.0, theme::HIGHLIGHT),
+        Stroke::new(1.0, theme::highlight()),
     );
 }
 
-fn rail_footer(ui: &mut Ui) {
+/// A small underlined-on-hover text link; true when clicked.
+fn footer_link(ui: &mut Ui, text: &str) -> bool {
+    let link = ui.add(
+        egui::Label::new(
+            RichText::new(text)
+                .font(fonts::small())
+                .color(theme::text_3()),
+        )
+        .sense(Sense::click()),
+    );
+    if link.hovered() || link.has_focus() {
+        let r = link.rect;
+        ui.painter().hline(
+            r.x_range(),
+            r.bottom() + 1.0,
+            Stroke::new(1.0, theme::text_1()),
+        );
+    }
+    link.clicked()
+}
+
+/// Draws the rail's footer; returns the action its Settings button or licences link asked for.
+fn rail_footer(ui: &mut Ui) -> Option<StartAction> {
+    let mut action = None;
     let rect = ui.max_rect();
     ui.painter().hline(
         rect.x_range(),
         rect.top() + 0.5,
-        Stroke::new(1.0, theme::LINE),
+        Stroke::new(1.0, theme::line()),
     );
     egui::Frame::new()
         .inner_margin(Margin {
@@ -1056,31 +1102,37 @@ fn rail_footer(ui: &mut Ui) {
                     updater::Channel::default().as_str()
                 ))
                 .font(fonts::small())
-                .color(theme::TEXT_2),
+                .color(theme::text_2()),
             );
-            let link = ui.add(
-                egui::Label::new(
-                    RichText::new("Release notes")
-                        .font(fonts::small())
-                        .color(theme::TEXT_3),
-                )
-                .sense(Sense::click()),
-            );
-            if link.hovered() || link.has_focus() {
-                let r = link.rect;
-                ui.painter().hline(
-                    r.x_range(),
-                    r.bottom() + 1.0,
-                    Stroke::new(1.0, theme::TEXT_1),
-                );
-            }
-            if link.clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
-                    "https://github.com/{}/releases",
-                    updater::STUDIO_FEED.repo
-                )));
-            }
+            ui.horizontal(|ui| {
+                if footer_link(ui, "Release notes") {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
+                        "https://github.com/{}/releases",
+                        updater::STUDIO_FEED.repo
+                    )));
+                }
+                if footer_link(ui, "Licences") {
+                    action = Some(StartAction::OpenLicences);
+                }
+            });
         });
+    // Bottom right, beside the "Release notes" line, clear of the version line above it.
+    let button = Rect::from_min_max(
+        egui::pos2(rect.left() + 16.0, rect.top() + 31.0),
+        egui::pos2(rect.right() - 16.0, rect.top() + 59.0),
+    );
+    ui.scope_builder(
+        UiBuilder::new()
+            .max_rect(button)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        |ui| {
+            ui.add(Button::ghost("Settings").icon(icons::GEAR_SIX).compact())
+                .clicked()
+        },
+    )
+    .inner
+    .then_some(StartAction::OpenSettings)
+    .or(action)
 }
 
 /// The default game name offered for a template.
@@ -1348,7 +1400,7 @@ mod tests {
     fn keyboard_path_new_game_then_enter_creates_and_esc_clears() {
         let out = tempfile::tempdir().expect("tmp");
         let ctx = egui::Context::default();
-        theme::apply(&ctx);
+        theme::apply(&ctx, theme::ThemeId::Graphite);
         let mut screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
         screen.set_location(out.path());
         frame(&ctx, &mut screen, vec![]);
@@ -1380,9 +1432,69 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_comma_opens_settings() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, theme::ThemeId::Graphite);
+        let mut screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
+        frame(&ctx, &mut screen, vec![]);
+        let action = frame(&ctx, &mut screen, vec![key(Key::Comma, Modifiers::COMMAND)]);
+        assert_eq!(action, Some(StartAction::OpenSettings));
+    }
+
+    #[test]
+    fn the_rail_settings_button_opens_settings() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
+        let mut harness = Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            // The name and folder fields have no accessible names yet (not part of this test).
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, state: &mut (StartScreen, Option<StartAction>)| {
+                    theme::apply(&ui.ctx().clone(), theme::ThemeId::Graphite);
+                    if let Some(a) = state.0.show(ui) {
+                        state.1 = Some(a);
+                    }
+                },
+                (screen, None),
+            );
+        harness.run_steps(3);
+        assert!(harness.state().1.is_none());
+        harness.get_by_label("Settings").click();
+        harness.run_steps(3);
+        assert_eq!(harness.state().1, Some(StartAction::OpenSettings));
+    }
+
+    #[test]
+    fn the_footer_licences_link_opens_licences() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
+        let mut harness = Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, state: &mut (StartScreen, Option<StartAction>)| {
+                    theme::apply(&ui.ctx().clone(), theme::ThemeId::Graphite);
+                    if let Some(a) = state.0.show(ui) {
+                        state.1 = Some(a);
+                    }
+                },
+                (screen, None),
+            );
+        harness.run_steps(3);
+        harness.get_by_label("Licences").click();
+        harness.run_steps(3);
+        assert_eq!(harness.state().1, Some(StartAction::OpenLicences));
+    }
+
+    #[test]
     fn esc_closes_the_newest_toast_before_the_error() {
         let ctx = egui::Context::default();
-        theme::apply(&ctx);
+        theme::apply(&ctx, theme::ThemeId::Graphite);
         let mut screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
         screen.set_error("Folder problem");
         screen.toast(Tone::Info, "note");
