@@ -126,3 +126,48 @@ rebuilt registry-example processes again returned
 37ca80ce29f36fbecaee50550c68b3c242e9f3f4e3a903094957c7d3ee0b9839.
 Logs: <TEMP>/metallic-293-final-{workspace-build,workspace-tests,clippy,licenses}.log.
 Later commits only record evidence. Publish append-only, monitor exact-head CI and leave merging to the owner/lead.
+
+## GUI and normalization compatibility refresh
+
+Normal merge/source checkpoint `52a187ee192cab2b39640c47a7120a11639223c3` integrates exact main
+`a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`. The upstream GUI prefix stays intact (GuiButton 34,
+TextButton 35, ImageButton 36); this branch's five additional classes follow at 37..41. Upstream lighting,
+exposure ranges and LookOverride normalization are preserved.
+
+Fingerprint encoding is now v4. Each normalizer has a nonempty declared `normalize_schema_id`; the hash
+encodes that identifier and presence without executing callbacks or hashing addresses. Missing, orphaned
+and empty identifiers fail closed. This is an authored semantic contract, not proof of executable behavior;
+normalization rule/alias changes must bump the identifier. LookOverride declares `look-override/ascii-alnum-v1`.
+The independent Python fixture first verifies the historical v3 golden and then computes the new v4 golden
+`62f765561636489bab87910b221e0adca58a3c9d0bc65f1ce29b7c75fdf80e9a`.
+
+Core tests passed at 52a187e: 102 passed, zero failures or ignores across 13 groups in guarded lane123.
+Source-only peer review found no actionable concern in v4
+normalizer encoding or GUI/class index preservation. The actual workspace gate remains pending. No earlier result is attributed to
+this refresh. Evidence logs are retained outside Git under `integration-evidence/305-v4-*`.
+
+The first workspace prebuild exited 101 before actual execution when the system drive reached zero free bytes.
+LLVM reported `no space on device`; the linker also failed writing a PDB. The complete failed log is preserved
+as `305-v4-prebuild.log`. This is not a test result. All managed builds were held. Package-scoped Cargo cleanup
+of known rebuildable first-party outputs began to recover capacity; source, raw logs and named benchmark
+domains remain intact. A new full prebuild and the remaining gates are required before publication.
+
+After native Cargo cleanup recovered capacity, the unchanged-source workspace prebuild passed in 2m53s and
+strict full-workspace/all-target Clippy passed in 31.56s. Licenses, formatting and task-range whitespace checks
+passed. Two guarded example invocations produced the same current registry hash:
+`6699764a6ca5e949b9070b4f21f11dd23848220de244f1eb52eac44366697392`.
+The independent fixture was also rerun successfully. Logs use `305-v4-prebuild-recovery.log`,
+`305-v4-clippy.log`, `305-v4-licenses.log` and `305-v4-hash-{one,two}.log`.
+The full actual workspace command will restore the full workspace feature selection after the example runs;
+no cached executable is invoked directly. Publication remains held until that gate completes.
+
+The complete serial workspace command then passed at unchanged executable source 52a187e: **1,866 passed,
+zero failed, eight upstream ignores across 138 result groups**, including doc tests. It used the normal guarded
+Cargo workspace invocation with `--locked -j 4 -- --test-threads=1`; the raw log is
+`305-v4-workspace-tests.log`. The suite ran alone in the managed actual Lua/GPU window, which was released
+immediately after verified exit zero. This branch adds no ignored test. The earlier disk-full prebuild remains
+recorded separately and was not an actual test failure.
+
+All local publication gates are now complete. The final append records evidence only; executable source stays
+identical to 52a187e. Normal push, current-source PR body and exact-head CI follow. The owner/lead retains merge
+authority. No live multiplayer, Team Create or broader milestone acceptance is claimed.
