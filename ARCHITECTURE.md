@@ -143,6 +143,17 @@ apps.
   Decoding/streaming through Symphonia (WAV, OGG Vorbis, FLAC, MP3). Notes: `docs/agents/81-audio.md`.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Editing (Task 10): `editor.rs` (`EditorState`: world, `Selection`, `History`, tool/snap settings, Output sink,
+  `PlayController`; no UI), `editor_ui.rs` (window layout), `commands.rs` (`Command`, `History::apply/record/undo/redo`;
+  deletes park instances so undo restores the same ids), `selection.rs`, `viewport.rs` (renders through
+  `metallic_render` into an egui texture on eframe's wgpu device, only when world/camera/size change; picking via
+  `picking.rs`, camera in `camera.rs`), `gizmo.rs` (own move/rotate/scale handles; pure maths plus egui painting),
+  `explorer.rs`, `properties.rs` (live preview while the pointer is held, one undo step on release),
+  `script_editor.rs`, `transform.rs`, `expr.rs`. Seams: `actions.rs` (toolbar/menu/key actions as data, with
+  accessories), `keymap.rs` (bindings as data), `output.rs` (`OutputSink::push(tag, level, text)` over a bounded
+  channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
+  start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
+  and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
@@ -303,8 +314,10 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
   screens). `TouchControls` captures each finger with the first thing it lands on and pushes `Device::Touch` events;
   sliding off a button sends `RawEvent::cancel` (Released without Triggered). `paint` draws it with egui in the
   visual-language colours. `ContextActionService:GetButton` reads the placed buttons (`Game::set_touch_buttons`).
-  The Controls page's touch settings (stick mode, opacity) drive the overlay; touch controls have their own glyphs.
-- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, a touch tab on the Controls page.
+  The Controls page's Touch tab (#333: stick mode, opacity, size 0.8x to 1.5x, Large controls) drives the overlay;
+  touch controls have their own glyphs. A held press whose action changes role is cancelled on reload. While touch
+  shows, `Game::set_gui_inset` moves the `ScreenGui` root below a top-placed menu button, eased with the fade.
+- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, swap sides and Edit layout.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
@@ -312,7 +325,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
 
 1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift sets
    `MoveInput::run`: 1.5 x `Humanoid.WalkSpeed`, which scripts still read unchanged); death, respawn, checkpoints and
-   character touches happen here.
+   character touches happen here. Humanoid tuning is clamped in the class registry (`metallic_core::classes`
+   `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills).
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
    touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
@@ -368,7 +382,9 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
 - **A Studio edit action:** a `Command` in `metallic_studio/src/commands.rs` applied through `History`, never by
-  mutating the world directly.
+  mutating the world directly (a live-preview gesture writes the world while dragging and calls
+  `EditorState::record` once on release). A toolbar or menu command: register an `Action` in
+  `metallic_studio/src/actions.rs` and, for a default key, a row in `keymap.rs` `METALLIC_PRESET`.
 
 ## Quality bar
 - Local Cargo cache ownership across worktrees: use `tools/cargo_lane.py` for a

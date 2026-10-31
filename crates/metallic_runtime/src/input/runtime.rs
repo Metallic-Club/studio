@@ -19,7 +19,7 @@ use super::control::{
 };
 use super::glyph::{GamepadStyle, Glyph, slot_glyph};
 use super::overrides::{PlayerOverrides, binding_device, binding_slot};
-use super::touch::{TOUCH_LOOK_SCALE, TOUCH_STICK_DEADZONE, TouchSet, TouchUse};
+use super::touch::{MENU_SLOT, TOUCH_LOOK_SCALE, TOUCH_STICK_DEADZONE, TouchSet, TouchUse};
 use metallic_core::{ChangeCursor, Changes, InstanceId, World};
 use std::cell::OnceCell;
 use std::collections::{HashSet, VecDeque};
@@ -513,7 +513,7 @@ impl InputRuntime {
     /// A new touch set can give an action another button control (`TouchButtonN`): a held
     /// button moves with its action, by path, so the press survives a relayout and the control
     /// it leaves does not press whatever action takes that control now. A held button whose
-    /// action lost its touch button is let go as a cancel.
+    /// action lost its touch button, or changed its role, is let go as a cancel.
     fn remap_touch_buttons(&mut self, new: &TouchSet) {
         let ts = Device::Touch.slot();
         let mut moved = [0.0f32; TOUCH_BUTTON_SLOTS];
@@ -525,7 +525,8 @@ impl InputRuntime {
             let Some(def) = self.touch_set.button_in_slot(s) else {
                 continue;
             };
-            match new.slot_of(&def.path) {
+            // The menu button only ever pulses, so a press never moves onto it.
+            match new.follow(def).filter(|&n| n != MENU_SLOT) {
                 Some(n) => moved[n] = moved[n].max(v),
                 None => {
                     if let Some(a) = self.find_action(&def.path) {

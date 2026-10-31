@@ -3604,11 +3604,14 @@ name = "metallic_studio"
 version = "0.1.1"
 dependencies = [
  "eframe",
+ "egui_kittest",
  "env_logger",
  "glam 0.30.10",
  "log",
  "metallic_core",
+ "metallic_render",
  "metallic_runtime",
+ "metallic_script",
  "metallic_tokens",
  "metallic_update",
  "png",
@@ -3619,6 +3622,7 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "velopack",
+ "wgpu",
 ]
 
 [[package]]

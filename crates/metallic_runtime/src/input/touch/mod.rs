@@ -30,7 +30,10 @@ mod stick;
 mod tests;
 
 pub use controls::{Capture, MAX_FINGERS, TouchControls, TouchPhase};
-pub use layout::{DeviceProfile, PlacedButton, PlacedStick, Rect, TouchLayout, layout, sizes_for};
+pub use layout::{
+    CONTROL_SCALE_RANGE, DeviceProfile, PlacedButton, PlacedStick, Rect, TouchLayout, layout,
+    sizes_for,
+};
 /// What [`TouchControls::button_infos`] reports to the scripts.
 pub use metallic_script::TouchButtonInfo;
 pub use paint::{OverlayStyle, paint};
@@ -96,6 +99,8 @@ pub struct TouchButtonDef {
     pub label: String,
     /// `TouchImage` (empty: draw [`icon`](Self::icon)).
     pub image: String,
+    /// The action's role.
+    pub role: Role,
     /// The icon for the action's role.
     pub icon: TouchIcon,
     /// `TouchLayout = Custom`.
@@ -242,12 +247,14 @@ impl TouchSet {
         }
     }
 
-    /// The control slot of the button for action `path` (buttons and the menu button).
-    pub fn slot_of(&self, path: &str) -> Option<usize> {
+    /// Where a button held under an older set continues in this one: the slot of the button for
+    /// the same action with the same role. `None` when the action lost its button or its role
+    /// changed (a held press then ends as a cancel).
+    pub fn follow(&self, old: &TouchButtonDef) -> Option<usize> {
         self.buttons
             .iter()
             .chain(self.menu.iter())
-            .find(|b| b.path == path)
+            .find(|b| b.path == old.path && b.role == old.role)
             .map(|b| b.slot)
     }
 
@@ -271,6 +278,7 @@ fn button_def(config: &InputConfig, ci: usize, ai: usize, slot: usize) -> TouchB
         instance: a.instance,
         label,
         image: a.touch_image.clone(),
+        role: a.role,
         icon: TouchIcon::for_role(a.role),
         custom: a.touch_custom,
         slot,

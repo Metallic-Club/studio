@@ -2,7 +2,7 @@
 //! graphite, silver and restrained violet (focus ring, selected tab, the one primary choice).
 use super::controls::{
     CONTENT_W, CellArt, Choice, ControlsPage, HOLD_X, Item, Mode, ResetKind, Row, RowKind, SLOT_X,
-    SliderId, Tab,
+    SliderId, Tab, segments_rect,
 };
 use super::glyph_paint::{Ink, paint_control, paint_glyph};
 use super::{MainItem, theme};
@@ -13,6 +13,7 @@ use egui::{
 use metallic_runtime::input::glyph::{ControlGlyph, GamepadStyle, control_glyph};
 use metallic_runtime::input::overrides::GamepadGlyphPref;
 use metallic_runtime::input::rebind::LISTEN_TIMEOUT;
+use metallic_runtime::input::touch::StickMode;
 use metallic_runtime::input::{Control, DeviceKind, MENU_ACTION};
 
 fn font(size: f32) -> FontId {
@@ -827,7 +828,10 @@ fn paint_cell(
             );
             // A tick at the game's default value.
             let default = match id {
-                SliderId::Sensitivity(_) | SliderId::HoldScale => 1.0,
+                SliderId::Sensitivity(_)
+                | SliderId::HoldScale
+                | SliderId::TouchOpacity
+                | SliderId::TouchSize => 1.0,
                 SliderId::Deadzone(s) => s.control().default_deadzone(),
             };
             let dt = ((default - lo) / (hi - lo)).clamp(0.0, 1.0);
@@ -902,7 +906,7 @@ fn paint_cell(
                 GamepadGlyphPref::Letters => 1,
                 GamepadGlyphPref::Positions => 2,
             };
-            let seg = Rect::from_min_size(r.min, vec2(r.width() - 44.0, r.height()));
+            let seg = segments_rect(r);
             segmented(p, seg, &["Auto", "Letters", "Positions"], sel);
             // A preview of the bottom face button in the style in use.
             let g = control_glyph(Control::ButtonA, page.style());
@@ -915,6 +919,16 @@ fn paint_cell(
                 &g,
                 Ink::NORMAL,
             );
+            if focused {
+                focus_ring(p, seg, theme::R_SM);
+            }
+            return;
+        }
+        Item::StickMode => {
+            let fixed = page.touch().stick_mode == StickMode::Fixed;
+            let (labels, sel) = (["Floating", "Fixed"], usize::from(fixed));
+            let seg = segments_rect(r);
+            segmented(p, seg, &labels, sel);
             if focused {
                 focus_ring(p, seg, theme::R_SM);
             }

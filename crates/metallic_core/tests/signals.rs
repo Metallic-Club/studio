@@ -106,3 +106,31 @@ fn interleaved_signals_preserve_local_handler_order_and_repeated_disconnect_is_h
     assert_eq!(local.len(), 2);
     assert_eq!(other.len(), 3);
 }
+
+/// Ids are world-local (#263): the first Part of two independent worlds has the same id, so a
+/// signal connected in world B with world A's handle fires for B's own Part.
+#[test]
+fn equal_ids_from_independent_worlds_address_the_local_instance() {
+    let mut a = World::new_empty();
+    let mut b = World::new_empty();
+    let part_a = a.create("Part", None).unwrap();
+    let part_b = b.create("Part", None).unwrap();
+    assert_eq!(part_a, part_b);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&seen);
+    b.property_changed(part_a, "Anchored")
+        .connect(move |value| observed.lock().unwrap().push(value.clone()));
+    b.set(part_b, "Anchored", Value::Bool(true)).unwrap();
+    assert_eq!(*seen.lock().unwrap(), vec![Value::Bool(true)]);
+
+    // An id that does not resolve in B is inert there: its signal never fires.
+    let second_a = a.create("Part", None).unwrap();
+    assert!(!b.is_alive(second_a));
+    let quiet = Arc::new(Mutex::new(0));
+    let observed = Arc::clone(&quiet);
+    b.property_changed(second_a, "Anchored")
+        .connect(move |_| *observed.lock().unwrap() += 1);
+    b.set(part_b, "Anchored", Value::Bool(false)).unwrap();
+    assert!(b.get(second_a, "Anchored").is_err());
+    assert_eq!(*quiet.lock().unwrap(), 0);
+}

@@ -219,3 +219,20 @@ prefix. The final evidence-only append commit leaves production sources exactly
 492d62a. Exact-head remote CI is inspected after publication; earlier results
 remain separately identified above. No remote machine changes or own-PR merge
 were performed.
+
+## GUI inset compatibility refresh
+
+The 1,463 default/18 CPU results above describe only 492d62a/7203830. GitHub's
+new conflict was reproduced by object-only analysis against exact main
+`5c84cf7566901c73bd9de3621ab6ad384add8030`: touch follow-up #339 introduces a
+GUI inset before the later README update. This is a substantive upstream change,
+not a documentation-only refresh or a stale GitHub status.
+
+The coordinator requested a normal merge of that exact base. Preserve the new
+gui_inset field, initializer, setter/getter and all upstream behavior; resolve the
+sole Game::paint_gui conflict with Simulation's World borrow and the new third
+gui_inset argument. No CPU-kernel change is needed. The renderer/script/physics/
+net/player changes remain upstream-identical. No newer base is included.
+
+Source review and fresh required gates remain pending; old checks are retained
+as historical evidence. Cargo remains held until the next explicit build grant.
