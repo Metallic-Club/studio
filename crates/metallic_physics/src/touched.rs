@@ -51,6 +51,7 @@ impl EventHandler for EventCollector {
 pub(crate) struct TouchTracker {
     touching: HashSet<(InstanceId, InstanceId)>,
     queue: Vec<(InstanceId, InstanceId)>,
+    ended: Vec<(InstanceId, InstanceId)>,
 }
 
 fn key(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
@@ -58,8 +59,9 @@ fn key(a: InstanceId, b: InstanceId) -> (InstanceId, InstanceId) {
 }
 
 impl TouchTracker {
-    /// Applies Rapier events; a pair is queued only when it was not already touching. Pairs
-    /// involving an `ignored` instance (character parts) are dropped.
+    /// Applies Rapier events; a pair is queued only when it was not already touching, and a
+    /// stop is queued only for a pair that was touching, so every `Touched` is followed by one
+    /// `TouchEnded`. Pairs involving an `ignored` instance (character parts) are dropped.
     pub(crate) fn apply(
         &mut self,
         events: Vec<CollisionEvent>,
@@ -81,8 +83,8 @@ impl TouchTracker {
                 if self.touching.insert(k) {
                     self.queue.push((a, b));
                 }
-            } else {
-                self.touching.remove(&k);
+            } else if self.touching.remove(&k) {
+                self.ended.push((a, b));
             }
         }
     }
@@ -90,6 +92,12 @@ impl TouchTracker {
     /// Forgets every pair involving `id` (the part was removed).
     pub(crate) fn forget(&mut self, id: InstanceId) {
         self.touching.retain(|&(a, b)| a != id && b != id);
+        self.ended.retain(|&(a, b)| a != id && b != id);
+    }
+
+    /// Takes the pairs that stopped touching since the last call.
+    pub(crate) fn drain_ended(&mut self) -> Vec<(InstanceId, InstanceId)> {
+        std::mem::take(&mut self.ended)
     }
 
     /// Takes the queued new pairs.
