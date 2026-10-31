@@ -12,7 +12,7 @@ default = []
 bytemuck = ["dep:bytemuck"]
 
 [dependencies]
-glam = "0.30.10"
+glam.workspace = true
 thiserror = "2.0.21"
 bytemuck = { version = "1.25.2", features = ["derive"], optional = true }
 
@@ -20,7 +20,9 @@ bytemuck = { version = "1.25.2", features = ["derive"], optional = true }
 criterion.workspace = true
 png = "0.18.1"
 # Reference implementation, used only by a test that checks our tangents match MikkTSpace.
-mikktspace = { version = "0.3.0", default-features = false, features = ["glam"] }
+# Its unchanged tangent-reference test uses the supported nalgebra backend.
+# This keeps legacy glam0.15 out of the active dev graph; nalgebra0.26 remains dev-only.
+mikktspace = { version = "0.3.0", default-features = false, features = ["nalgebra"] }
 
 [[bench]]
 name = "meshgen"

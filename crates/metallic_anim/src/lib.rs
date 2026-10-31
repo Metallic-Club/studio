@@ -62,6 +62,7 @@ pub use tween::{PlaybackState, Tween, TweenInfo, TweenSample};
 pub use value::{Animatable, Color3, quat_pow};
 
 /// Re-export of the math library used in the public API.
+/// Math types from the shared workspace glam version.
 pub use glam;
 
 /// Errors from this crate.

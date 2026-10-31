@@ -1,5 +1,18 @@
 # Architecture
 
+## Shared math dependency
+
+First-party animation, asset, audio, mesh generation/modeling, renderer, runtime and Studio use
+the workspace `glam` 0.33.12 dependency, matching the active Rapier/Parry math graph. Animation
+opts into serde and rendering opts into bytemuck. Their public math types share this version;
+the core's f64 `Vec3` and its explicit f32 physics conversion remain separate precision contracts.
+The standalone style-shader research checker has its own matching manifest and lockfile.
+The unchanged MikkTSpace reference test uses its supported nalgebra backend; the older nalgebra
+0.26 dependency is dev-only. `tools/check_glam_graph.py` checks active normal/build, dev and
+standalone graphs, not inactive optional lockfile entries. CPU validation requires the separate
+Simulation/presentation split and is reported unavailable on source without it; `--require-cpu`
+fails in that case. See [shared-math.md](docs/shared-math.md) for scope and compatibility evidence.
+
 Planned design from the M1 plan; crates appear as their tasks land. When a public interface changes, update this file
 and the crate docs in the same PR.
 

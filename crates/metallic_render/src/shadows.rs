@@ -43,7 +43,7 @@ pub fn fit_cascade(
     to_sun: Vec3,
     resolution: u32,
 ) -> Cascade {
-    let proj = Mat4::perspective_rh(
+    let proj = glam::camera::rh::proj::directx::perspective(
         camera.fov_deg.to_radians(),
         aspect.max(1e-3),
         slice_near,
@@ -77,7 +77,11 @@ pub fn fit_cascade(
     } else {
         Vec3::Y
     };
-    let light_view = Mat4::look_at_rh(centre + to_sun * (radius + CASTER_MARGIN), centre, up);
+    let light_view = glam::camera::rh::view::look_at_mat4(
+        centre + to_sun * (radius + CASTER_MARGIN),
+        centre,
+        up,
+    );
     // Snap the centre (in light space) to the texel grid.
     let c_ls = light_view.transform_point3(centre);
     let snapped = Vec3::new(
@@ -86,7 +90,7 @@ pub fn fit_cascade(
         c_ls.z,
     );
     let shift = Mat4::from_translation(Vec3::new(snapped.x - c_ls.x, snapped.y - c_ls.y, 0.0));
-    let light_proj = Mat4::orthographic_rh(
+    let light_proj = glam::camera::rh::proj::directx::orthographic(
         -radius,
         radius,
         -radius,
@@ -187,7 +191,12 @@ mod tests {
         let to_sun = Vec3::new(0.4, 0.8, 0.3).normalize();
         let (near, far) = (10.0, 60.0);
         let c = fit_cascade(&cam, 16.0 / 9.0, near, far, to_sun, 2048);
-        let proj = Mat4::perspective_rh(cam.fov_deg.to_radians(), 16.0 / 9.0, near, far);
+        let proj = glam::camera::rh::proj::directx::perspective(
+            cam.fov_deg.to_radians(),
+            16.0 / 9.0,
+            near,
+            far,
+        );
         let inv = (proj * cam.view()).inverse();
         for z in [0.0_f32, 1.0] {
             for y in [-1.0_f32, 1.0] {

@@ -36,6 +36,7 @@ pub use camera::Camera;
 pub use context::{RenderContext, RenderError};
 pub use edges::{EDGE_PASS, EdgePass};
 pub use exposure::{AutoExposure, ExposureMode, ExposureState};
+/// Math types from the shared workspace glam version.
 pub use glam;
 pub use lighting::LightingInputs;
 pub use lut::Lut3d;

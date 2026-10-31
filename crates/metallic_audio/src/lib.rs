@@ -50,4 +50,5 @@ pub use types::{
 };
 
 /// Re-export of the vector type used in the public API.
+/// Spatial vector from the shared workspace math dependency.
 pub use glam::Vec3;

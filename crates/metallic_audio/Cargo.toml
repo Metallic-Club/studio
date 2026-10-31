@@ -11,7 +11,7 @@ default = ["device"]
 device = ["dep:cpal"]
 
 [dependencies]
-glam = "0.30.10"
+glam.workspace = true
 thiserror = "2.0.21"
 symphonia = { version = "0.6.1", features = ["mp3"] }
 cpal = { version = "0.18.2", optional = true }
