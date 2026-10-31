@@ -1,0 +1,555 @@
+{
+  "$description": "Metallic design tokens (W3C DTCG). Source of truth: edit this file, then run `cargo run -p metallic_tokens --example export_css`. Values come from docs/design/visual-language/assets/tokens.css.",
+  "primitive": {
+    "$description": "Raw palette. Role tokens alias these; pages and apps use the roles.",
+    "g": {
+      "$description": "Graphite: neutral with a slight violet cast",
+      "950": {
+        "$type": "color",
+        "$value": "#0c0b0f"
+      },
+      "900": {
+        "$type": "color",
+        "$value": "#111015"
+      },
+      "850": {
+        "$type": "color",
+        "$value": "#16151b"
+      },
+      "800": {
+        "$type": "color",
+        "$value": "#1c1b22"
+      },
+      "750": {
+        "$type": "color",
+        "$value": "#24222b"
+      },
+      "700": {
+        "$type": "color",
+        "$value": "#2c2a34"
+      },
+      "650": {
+        "$type": "color",
+        "$value": "#35323e"
+      },
+      "600": {
+        "$type": "color",
+        "$value": "#43404d"
+      },
+      "500": {
+        "$type": "color",
+        "$value": "#5f5b6b"
+      },
+      "400": {
+        "$type": "color",
+        "$value": "#817d8c"
+      },
+      "300": {
+        "$type": "color",
+        "$value": "#a3a0ad"
+      },
+      "200": {
+        "$type": "color",
+        "$value": "#c3c0ca"
+      },
+      "100": {
+        "$type": "color",
+        "$value": "#e6e4ea"
+      },
+      "50": {
+        "$type": "color",
+        "$value": "#f4f3f7"
+      }
+    },
+    "v": {
+      "$description": "Violet: the one accent",
+      "50": {
+        "$type": "color",
+        "$value": "#f3f0fc"
+      },
+      "100": {
+        "$type": "color",
+        "$value": "#e4def8"
+      },
+      "200": {
+        "$type": "color",
+        "$value": "#cdc2f2"
+      },
+      "300": {
+        "$type": "color",
+        "$value": "#b4a6ec"
+      },
+      "400": {
+        "$type": "color",
+        "$value": "#9d8be0"
+      },
+      "500": {
+        "$type": "color",
+        "$value": "#8673cf"
+      },
+      "600": {
+        "$type": "color",
+        "$value": "#6f5cb6"
+      },
+      "700": {
+        "$type": "color",
+        "$value": "#584993"
+      },
+      "800": {
+        "$type": "color",
+        "$value": "#3a3354"
+      },
+      "900": {
+        "$type": "color",
+        "$value": "#2a2638"
+      },
+      "950": {
+        "$type": "color",
+        "$value": "#1f1c29"
+      }
+    }
+  },
+  "role": {
+    "$description": "Meaning by role; see docs/design/visual-language/visual-language.md",
+    "bg-deep": {
+      "$type": "color",
+      "$value": "{primitive.g.900}"
+    },
+    "bg-base": {
+      "$type": "color",
+      "$value": "{primitive.g.850}"
+    },
+    "bg-panel": {
+      "$type": "color",
+      "$value": "{primitive.g.800}"
+    },
+    "bg-raised": {
+      "$type": "color",
+      "$value": "{primitive.g.750}"
+    },
+    "bg-hover": {
+      "$type": "color",
+      "$value": "{primitive.g.700}"
+    },
+    "bg-active": {
+      "$type": "color",
+      "$value": "{primitive.g.650}"
+    },
+    "select": {
+      "$type": "color",
+      "$value": "{primitive.v.800}"
+    },
+    "select-weak": {
+      "$type": "color",
+      "$value": "{primitive.v.900}"
+    },
+    "line": {
+      "$type": "color",
+      "$value": "#2b2933"
+    },
+    "line-strong": {
+      "$type": "color",
+      "$value": "{primitive.g.600}"
+    },
+    "line-control": {
+      "$type": "color",
+      "$value": "#6e6a79"
+    },
+    "text-1": {
+      "$type": "color",
+      "$value": "#e6e4ea"
+    },
+    "text-2": {
+      "$type": "color",
+      "$value": "#aeaab6"
+    },
+    "text-3": {
+      "$type": "color",
+      "$value": "#8e8a97"
+    },
+    "text-off": {
+      "$type": "color",
+      "$value": "{primitive.g.500}"
+    },
+    "icon": {
+      "$type": "color",
+      "$value": "#bdbac4"
+    },
+    "accent": {
+      "$type": "color",
+      "$value": "{primitive.v.400}"
+    },
+    "accent-hover": {
+      "$type": "color",
+      "$value": "{primitive.v.300}"
+    },
+    "accent-press": {
+      "$type": "color",
+      "$value": "{primitive.v.500}"
+    },
+    "accent-text": {
+      "$type": "color",
+      "$value": "{primitive.v.300}"
+    },
+    "on-accent": {
+      "$type": "color",
+      "$value": "{primitive.g.900}"
+    },
+    "focus": {
+      "$type": "color",
+      "$value": "{primitive.v.300}"
+    },
+    "highlight": {
+      "$type": "color",
+      "$value": "rgba(255,255,255,0.06)"
+    },
+    "error": {
+      "$type": "color",
+      "$value": "#ec7a72"
+    },
+    "error-bg": {
+      "$type": "color",
+      "$value": "#3a2226"
+    },
+    "warning": {
+      "$type": "color",
+      "$value": "#e0ad55"
+    },
+    "warning-bg": {
+      "$type": "color",
+      "$value": "#352c1d"
+    },
+    "success": {
+      "$type": "color",
+      "$value": "#62bf91"
+    },
+    "success-bg": {
+      "$type": "color",
+      "$value": "#1d3329"
+    },
+    "info": {
+      "$type": "color",
+      "$value": "#7fb0e6"
+    },
+    "info-bg": {
+      "$type": "color",
+      "$value": "#1c2a3a"
+    },
+    "danger": {
+      "$type": "color",
+      "$value": "#8f3a35"
+    },
+    "danger-hover": {
+      "$type": "color",
+      "$value": "#a3443e"
+    }
+  },
+  "space": {
+    "s1": {
+      "$type": "dimension",
+      "$value": "2px"
+    },
+    "s2": {
+      "$type": "dimension",
+      "$value": "4px"
+    },
+    "s3": {
+      "$type": "dimension",
+      "$value": "6px"
+    },
+    "s4": {
+      "$type": "dimension",
+      "$value": "8px"
+    },
+    "s5": {
+      "$type": "dimension",
+      "$value": "12px"
+    },
+    "s6": {
+      "$type": "dimension",
+      "$value": "16px"
+    },
+    "s7": {
+      "$type": "dimension",
+      "$value": "20px"
+    },
+    "s8": {
+      "$type": "dimension",
+      "$value": "24px"
+    },
+    "s9": {
+      "$type": "dimension",
+      "$value": "32px"
+    },
+    "s10": {
+      "$type": "dimension",
+      "$value": "40px"
+    },
+    "s11": {
+      "$type": "dimension",
+      "$value": "48px"
+    }
+  },
+  "radius": {
+    "r-xs": {
+      "$type": "dimension",
+      "$value": "3px"
+    },
+    "r-sm": {
+      "$type": "dimension",
+      "$value": "4px"
+    },
+    "r-md": {
+      "$type": "dimension",
+      "$value": "6px"
+    },
+    "r-lg": {
+      "$type": "dimension",
+      "$value": "10px"
+    }
+  },
+  "cut": {
+    "$description": "Size of the 45 degree chamfer on the primary element",
+    "cut-sm": {
+      "$type": "dimension",
+      "$value": "6px"
+    },
+    "cut-md": {
+      "$type": "dimension",
+      "$value": "10px"
+    },
+    "cut-lg": {
+      "$type": "dimension",
+      "$value": "14px"
+    }
+  },
+  "size": {
+    "$description": "Studio control heights (desktop density)",
+    "h-row": {
+      "$type": "dimension",
+      "$value": "24px",
+      "$description": "Tree, property and list rows"
+    },
+    "h-control": {
+      "$type": "dimension",
+      "$value": "32px",
+      "$description": "Secondary buttons, inputs"
+    },
+    "h-control-lg": {
+      "$type": "dimension",
+      "$value": "36px",
+      "$description": "Primary button, toolbar"
+    }
+  },
+  "font": {
+    "font": {
+      "$type": "fontFamily",
+      "$value": [
+        "Archivo",
+        "system-ui",
+        "sans-serif"
+      ]
+    },
+    "mono": {
+      "$type": "fontFamily",
+      "$value": [
+        "JetBrains Mono",
+        "ui-monospace",
+        "monospace"
+      ]
+    }
+  },
+  "shadow": {
+    "shadow-pop": {
+      "$type": "shadow",
+      "$value": {
+        "color": "rgba(0,0,0,0.45)",
+        "offsetX": "0px",
+        "offsetY": "8px",
+        "blur": "24px",
+        "spread": "0px"
+      },
+      "$description": "Only floating surfaces get a shadow"
+    },
+    "shadow-modal": {
+      "$type": "shadow",
+      "$value": {
+        "color": "rgba(0,0,0,0.55)",
+        "offsetX": "0px",
+        "offsetY": "16px",
+        "blur": "48px",
+        "spread": "0px"
+      },
+      "$description": "Dialogs and the splash window (elevation level 4)"
+    }
+  },
+  "motion": {
+    "t-fast": {
+      "$type": "duration",
+      "$value": "90ms"
+    },
+    "t-base": {
+      "$type": "duration",
+      "$value": "140ms"
+    },
+    "t-slow": {
+      "$type": "duration",
+      "$value": "200ms"
+    },
+    "ease-out": {
+      "$type": "cubicBezier",
+      "$value": [
+        0.215,
+        0.61,
+        0.355,
+        1.0
+      ],
+      "$description": "egui emath::easing::cubic_out"
+    },
+    "ease-in-out": {
+      "$type": "cubicBezier",
+      "$value": [
+        0.645,
+        0.045,
+        0.355,
+        1.0
+      ],
+      "$description": "egui emath::easing::cubic_in_out"
+    }
+  },
+  "type": {
+    "$description": "Size, line height and weight of each type style. Archivo width: display and title 125, heading 112.5, the rest 100.",
+    "t-display": {
+      "size": {
+        "$type": "dimension",
+        "$value": "30px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "36px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 700
+      }
+    },
+    "t-title": {
+      "size": {
+        "$type": "dimension",
+        "$value": "24px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "30px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 680
+      }
+    },
+    "t-heading": {
+      "size": {
+        "$type": "dimension",
+        "$value": "15px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "20px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 620
+      }
+    },
+    "t-body": {
+      "size": {
+        "$type": "dimension",
+        "$value": "13px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "18px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 400
+      }
+    },
+    "t-body-lg": {
+      "size": {
+        "$type": "dimension",
+        "$value": "14px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "20px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 400
+      }
+    },
+    "t-strong": {
+      "size": {
+        "$type": "dimension",
+        "$value": "13px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "18px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 560
+      }
+    },
+    "t-small": {
+      "size": {
+        "$type": "dimension",
+        "$value": "12px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "16px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 400
+      }
+    },
+    "t-caption": {
+      "size": {
+        "$type": "dimension",
+        "$value": "11px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "14px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 520
+      }
+    },
+    "t-mono": {
+      "size": {
+        "$type": "dimension",
+        "$value": "12px"
+      },
+      "line": {
+        "$type": "dimension",
+        "$value": "18px"
+      },
+      "weight": {
+        "$type": "number",
+        "$value": 400
+      }
+    }
+  },
+  "$themes": {},
+  "$reduced-motion": {
+    "t-fast": "0ms",
+    "t-base": "0ms",
+    "t-slow": "80ms"
+  }
+}

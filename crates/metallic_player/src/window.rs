@@ -1,21 +1,27 @@
 //! The windowed player: winit window, wgpu surface, input, frame loop and statistics.
 use crate::args::Args;
 use crate::capture::CaptureTarget;
+use crate::controls_store::Controls;
+use crate::devices::{GamepadSource, key_control, mouse_control};
+use crate::menu::{ControlsHint, Menu, MenuOutcome, UiLayer};
 use crate::overlay::Overlay;
+use crate::touch_overlay::{TouchOverlay, emulation_window};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
-use metallic_runtime::{Action, FrameInput, Game, InputState};
+use metallic_runtime::HumanoidState;
+use metallic_runtime::input::{
+    ActionId, Control, Device, DeviceKind, FingerEvent, MENU_ACTION, RawEvent, ScriptedSource,
+};
+use metallic_runtime::{FrameInput, Game, InputRuntime, TICK};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{
-    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
-};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// How long `--fps` measures.
@@ -28,7 +34,12 @@ const AUTOPILOT_TURN: f32 = 4.8;
 const AUTOPILOT_JUMP_EVERY: f64 = 1.5;
 
 /// Plays `game` in a window until it is closed (or `--frames` / `--fps` ends it).
-pub fn run(game: Game, args: &Args) -> ExitCode {
+pub fn run(
+    mut game: Game,
+    args: &Args,
+    script: Option<ScriptedSource>,
+    controls: Controls,
+) -> ExitCode {
     let event_loop = match EventLoop::new() {
         Ok(l) => l,
         Err(e) => {
@@ -37,24 +48,67 @@ pub fn run(game: Game, args: &Args) -> ExitCode {
         }
     };
     event_loop.set_control_flow(ControlFlow::Poll);
+    let epoch = Instant::now();
+    let mut input = InputRuntime::from_world(&game.world().borrow());
+    for warning in input.warnings() {
+        eprintln!("warning: input: {warning}");
+    }
+    controls.apply(&mut input);
+    let menu_action = input.find_action(MENU_ACTION);
+    let menu_presses = menu_action.map_or(0, |id| input.presses(id));
+    let mut menu = Menu::new(game.name());
+    if let Some(page) = args.menu.as_deref() {
+        menu.open(&input, 0.0);
+        if page != "main" {
+            menu.open_controls();
+            menu.show_tab(match page {
+                "gamepad" => crate::menu::Tab::Gamepad,
+                "assist" => crate::menu::Tab::Assist,
+                "touch" => crate::menu::Tab::Touch,
+                _ => crate::menu::Tab::Keyboard,
+            });
+        }
+    }
+    if args.emulate.is_some() {
+        // Device emulation: the game sees a touch device only (spec 10.2).
+        input.set_forced_device(Some(DeviceKind::Touch));
+        game.set_input_devices(true, false, false);
+    }
+    let touch = TouchOverlay::new(&args.project, args.emulate, args.reduce_motion);
     let mut app = App {
         game,
         args: args.clone(),
         gfx: None,
-        input: InputState::new(),
-        gamepads: gilrs::Gilrs::new().ok(),
-        dragging: false,
+        input,
+        touch,
+        gamepads: GamepadSource::new(epoch),
+        script,
+        epoch,
+        events: Vec::new(),
+        fingers: Vec::new(),
+        captured: false,
         last: Instant::now(),
         frame: 0,
         frame_times: Vec::new(),
         started: None,
         failed: false,
+        quit: false,
+        menu,
+        hint: ControlsHint::new(),
+        controls,
+        menu_action,
+        menu_presses,
+        dead: false,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
         return ExitCode::from(1);
     }
     app.game.stop();
+    if let Some(report) = app.touch.timing_report() {
+        println!("{report}");
+    }
+    app.controls.save(app.input.overrides());
     if app.failed {
         ExitCode::from(1)
     } else {
@@ -69,6 +123,8 @@ struct Gfx {
     ctx: RenderContext,
     renderer: Renderer,
     overlay: Overlay,
+    /// The Player menu and the controls hint.
+    ui: UiLayer,
     minimised: bool,
 }
 
@@ -76,34 +132,51 @@ struct App {
     game: Game,
     args: Args,
     gfx: Option<Gfx>,
-    input: InputState,
-    gamepads: Option<gilrs::Gilrs>,
-    dragging: bool,
+    input: InputRuntime,
+    /// The automatic touch controls and device emulation.
+    touch: TouchOverlay,
+    gamepads: GamepadSource,
+    /// `--input-script`: when set, the input clock counts frames, see `App::input_clock`.
+    script: Option<ScriptedSource>,
+    /// When the player started: the zero of the input clock.
+    epoch: Instant,
+    /// Scratch for the script's events.
+    events: Vec<RawEvent>,
+    /// Scratch for the script's finger events.
+    fingers: Vec<FingerEvent>,
+    /// The cursor is locked and mouse movement is sent as `MouseDelta`.
+    captured: bool,
     last: Instant,
     frame: u64,
     frame_times: Vec<f64>,
     started: Option<Instant>,
     failed: bool,
-}
-
-fn action_for(key: KeyCode) -> Option<Action> {
-    Some(match key {
-        KeyCode::KeyW | KeyCode::ArrowUp => Action::Forward,
-        KeyCode::KeyS | KeyCode::ArrowDown => Action::Back,
-        KeyCode::KeyA | KeyCode::ArrowLeft => Action::Left,
-        KeyCode::KeyD | KeyCode::ArrowRight => Action::Right,
-        KeyCode::Space => Action::Jump,
-        KeyCode::ShiftLeft | KeyCode::ShiftRight => Action::Run,
-        _ => return None,
-    })
+    /// "Leave game" was chosen.
+    quit: bool,
+    /// The Player menu (Menu action: Esc or Start by default).
+    menu: Menu,
+    /// The Jump / Run / Menu hint at the start and after a glyph change.
+    hint: ControlsHint,
+    /// Where the player's input overrides are stored.
+    controls: Controls,
+    menu_action: Option<ActionId>,
+    /// `presses` of the Menu action when last looked at.
+    menu_presses: u32,
+    /// The character was dead last frame (toggles clear on death).
+    dead: bool,
 }
 
 impl App {
     fn create_gfx(&mut self, event_loop: &ActiveEventLoop) -> Result<Gfx, String> {
-        // `--fps` measures at exactly 1920x1080, so that window cannot be resized.
+        // `--fps` measures at exactly 1920x1080, so that window cannot be resized. An emulated
+        // device gets a window of its shape.
+        let (w, h) = match (&self.args.emulate, self.args.fps) {
+            (Some(device), false) => emulation_window(device),
+            _ => (1920, 1080),
+        };
         let attrs = Window::default_attributes()
             .with_title(format!("{} - Metallic player", self.game.name()))
-            .with_inner_size(PhysicalSize::new(1920, 1080))
+            .with_inner_size(PhysicalSize::new(w, h))
             .with_resizable(!self.args.fps);
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
         let (ctx, surface) =
@@ -132,6 +205,7 @@ impl App {
         }
         renderer.prewarm((config.width, config.height));
         let overlay = Overlay::new(&ctx.device, config.format);
+        let ui = UiLayer::new(&ctx.device, config.format);
         println!(
             "metallic-player: {} on {}, {}x{}, {:?} quality",
             self.game.name(),
@@ -147,35 +221,120 @@ impl App {
             ctx,
             renderer,
             overlay,
+            ui,
             minimised: false,
         })
     }
 
-    fn poll_gamepad(&mut self) {
-        let Some(gilrs) = self.gamepads.as_mut() else {
-            return;
-        };
-        while gilrs.next_event().is_some() {}
-        let pad = gilrs
-            .gamepads()
-            .find(|(_, g)| g.is_connected())
-            .map(|(_, g)| {
-                let axis = |a| g.value(a);
-                (
-                    [axis(gilrs::Axis::LeftStickX), axis(gilrs::Axis::LeftStickY)],
-                    [
-                        axis(gilrs::Axis::RightStickX),
-                        axis(gilrs::Axis::RightStickY),
-                    ],
-                    g.is_pressed(gilrs::Button::South),
-                )
-            });
-        let (left, right, jump) = pad.unwrap_or(([0.0; 2], [0.0; 2], false));
-        self.input.gamepad(left, right, jump);
+    /// Seconds on the input clock: real time, or the frame count in ticks when an input script
+    /// drives the run, so the script plays the same way every time.
+    fn input_clock(&self) -> f64 {
+        if self.script.is_some() {
+            self.frame as f64 * TICK
+        } else {
+            self.epoch.elapsed().as_secs_f64()
+        }
     }
 
-    fn set_dragging(&mut self, on: bool) {
-        self.dragging = on;
+    /// Collects the gamepad and script events of this frame. Gamepad events go to the menu
+    /// while it is open.
+    fn poll_devices(&mut self, clock: f64) {
+        self.events.clear();
+        self.gamepads.poll_into(&mut self.events);
+        for i in 0..self.events.len() {
+            let e = self.events[i];
+            self.route(e, false);
+        }
+        if let Some(script) = self.script.as_mut() {
+            self.events.clear();
+            script.poll_frame(self.frame, clock, &mut self.events);
+            for e in self.events.drain(..) {
+                self.input.push(e);
+            }
+            script.poll_fingers(self.frame, &mut self.fingers);
+            for f in self.fingers.drain(..) {
+                self.touch.finger(&mut self.input, f, clock);
+            }
+        }
+    }
+
+    /// Sends a raw event to the menu while it is open, else to the game's input.
+    fn route(&mut self, e: RawEvent, repeat: bool) {
+        if !self.menu.is_open() {
+            self.input.push(e);
+            return;
+        }
+        let out = self.menu.raw(e, repeat);
+        self.menu_outcome(out);
+    }
+
+    /// A finger while the menu is open: it points and clicks like the mouse.
+    fn menu_touch(&mut self, phase: winit::event::TouchPhase, px: [f32; 2], time: f64) {
+        use winit::event::TouchPhase as P;
+        let pos = RawEvent::vector(Device::KeyboardMouse, Control::MousePosition, px, time);
+        self.route(pos, false);
+        let value = match phase {
+            P::Started => 1.0,
+            P::Ended | P::Cancelled => 0.0,
+            P::Moved => return,
+        };
+        let click = RawEvent::button(Device::KeyboardMouse, Control::MouseButton1, value, time);
+        self.route(click, false);
+    }
+
+    fn menu_outcome(&mut self, out: MenuOutcome) {
+        match out {
+            MenuOutcome::None => {}
+            MenuOutcome::Changed => {
+                if let Some(o) = self.menu.overrides() {
+                    self.input.set_overrides(o.clone());
+                    self.update_glyph_style();
+                    self.menu.sync(&self.input);
+                    self.menu_action = self.input.find_action(MENU_ACTION);
+                }
+            }
+            MenuOutcome::Save | MenuOutcome::Closed { save: true } => {
+                self.controls.save(self.input.overrides());
+            }
+            MenuOutcome::Closed { save: false } => {}
+            MenuOutcome::Quit => self.quit = true,
+        }
+        if matches!(out, MenuOutcome::Closed { .. }) {
+            // The key that closed the menu must not reach the game as a press.
+            self.menu_presses = self.menu_action.map_or(0, |id| self.input.presses(id));
+        }
+    }
+
+    /// The face-button style: the player's choice, or by the vendor of the pad in use.
+    fn update_glyph_style(&mut self) {
+        let vendor = self.gamepads.last_vendor();
+        self.menu.set_pad_vendor(vendor);
+        let style = crate::menu::resolve_style(self.input.overrides().gamepad_glyphs, vendor);
+        self.input.set_gamepad_style(style);
+    }
+
+    /// Opens the menu when the Menu action was pressed this frame.
+    fn check_menu(&mut self, clock: f64) {
+        let Some(id) = self.menu_action else { return };
+        let presses = self.input.presses(id);
+        if presses == self.menu_presses {
+            return;
+        }
+        self.menu_presses = presses;
+        if !self.menu.is_open() {
+            self.touch.release_all(&mut self.input, clock);
+            self.input.release_all(clock);
+            self.set_captured(false);
+            self.menu.open(&self.input, clock);
+        }
+    }
+
+    /// Locks the cursor while a `MouseDelta` binding is in use (by default: right mouse held).
+    fn set_captured(&mut self, on: bool) {
+        if on == self.captured {
+            return;
+        }
+        self.captured = on;
         let Some(gfx) = self.gfx.as_ref() else {
             return;
         };
@@ -194,12 +353,43 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
-        self.poll_gamepad();
-        let mut frame_input = self.input.take_frame(dt as f32);
+        let clock = self.input_clock();
+        let (window, scale) = self.gfx.as_ref().map_or(((1, 1), 1.0), |g| {
+            (
+                (g.config.width, g.config.height),
+                g.window.scale_factor() as f32,
+            )
+        });
+        self.touch.update(
+            &mut self.input,
+            &mut self.game,
+            window,
+            scale,
+            clock,
+            dt as f32,
+        );
+        self.poll_devices(clock);
+        self.update_glyph_style();
+        let out = self.menu.tick(clock);
+        self.menu_outcome(out);
+        if self.quit {
+            event_loop.exit();
+            return;
+        }
+        let mut frame_input = self.game.input_frame(&mut self.input, clock, dt as f32);
+        self.check_menu(clock);
+        let want_capture = self.input.wants_mouse_delta() && !self.menu.is_open();
+        self.set_captured(want_capture);
         if self.args.autopilot {
             autopilot(&mut frame_input, self.game.time(), dt);
         }
-        self.game.frame(&frame_input, dt);
+        let output = self.game.frame(&frame_input, dt);
+        let dead = output.state == Some(HumanoidState::Dead);
+        if dead && !self.dead {
+            // A toggled Run or Aim does not survive death (spec 11.1).
+            self.input.clear_toggles(clock);
+        }
+        self.dead = dead;
         self.frame += 1;
 
         let Some(gfx) = self.gfx.as_mut() else {
@@ -210,6 +400,7 @@ impl App {
         }
         let size = (gfx.config.width, gfx.config.height);
         let scale = gfx.window.scale_factor() as f32;
+        self.menu.set_scale(scale);
         if let Some(path) = capture_path(&self.args, self.frame) {
             let target = CaptureTarget::new(&gfx.ctx.device, gfx.config.format, size);
             let camera = match self.args.capture_view {
@@ -229,6 +420,19 @@ impl App {
                 size,
                 scale,
                 &self.game,
+                Some(&mut self.touch),
+            );
+            let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
+            gfx.ui.draw(
+                &gfx.ctx.device,
+                &gfx.ctx.queue,
+                &target.view,
+                size,
+                scale,
+                clock,
+                |ctx| {
+                    paint_ui(ctx, menu, hint, input, clock);
+                },
             );
             match target.save_png(&gfx.ctx.device, &gfx.ctx.queue, &path) {
                 Ok(()) => println!(
@@ -253,6 +457,19 @@ impl App {
                     size,
                     scale,
                     &self.game,
+                    Some(&mut self.touch),
+                );
+                let (menu, hint, input) = (&mut self.menu, &mut self.hint, &self.input);
+                gfx.ui.draw(
+                    &gfx.ctx.device,
+                    &gfx.ctx.queue,
+                    &view,
+                    size,
+                    scale,
+                    clock,
+                    |ctx| {
+                        paint_ui(ctx, menu, hint, input, clock);
+                    },
                 );
                 gfx.window.pre_present_notify();
                 gfx.ctx.queue.present(frame);
@@ -274,6 +491,21 @@ impl App {
         if self.args.frames.is_some_and(|n| self.frame >= n) {
             event_loop.exit();
         }
+    }
+}
+
+/// Paints the controls hint (while playing) and the menu (while open).
+fn paint_ui(
+    ctx: &egui::Context,
+    menu: &mut Menu,
+    hint: &mut ControlsHint,
+    input: &InputRuntime,
+    clock: f64,
+) {
+    if menu.is_open() {
+        menu.paint(ctx, input);
+    } else {
+        hint.paint(ctx, input, clock);
     }
 }
 
@@ -346,29 +578,62 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => {
-                self.input.release_all();
-                self.set_dragging(false);
+                let now = self.input_clock();
+                self.touch.release_all(&mut self.input, now);
+                self.input.release_all(now);
+                self.set_captured(false);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
-                        event_loop.exit();
-                    } else if let Some(action) = action_for(code) {
-                        self.input.set(action, event.state == ElementState::Pressed);
-                    }
+                // Every key, Escape included, is a control: Escape is the default binding of
+                // the `Menu` action, which opens the Player menu.
+                if let PhysicalKey::Code(code) = event.physical_key
+                    && let Some(control) = key_control(code)
+                {
+                    let down = event.state == ElementState::Pressed;
+                    let time = self.input_clock();
+                    let value = f32::from(u8::from(down));
+                    let e = RawEvent::button(Device::KeyboardMouse, control, value, time);
+                    self.route(e, event.repeat);
                 }
             }
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Right,
-                ..
-            } => self.set_dragging(state == ElementState::Pressed),
+            WindowEvent::MouseInput { state, button, .. } => {
+                let time = self.input_clock();
+                let down = state == ElementState::Pressed;
+                // In device emulation the mouse is a finger (but a mouse in the menu).
+                let finger = !self.menu.is_open()
+                    && self.touch.mouse_button(&mut self.input, button, down, time);
+                if !finger && let Some(control) = mouse_control(button) {
+                    let value = f32::from(u8::from(state == ElementState::Pressed));
+                    let e = RawEvent::button(Device::KeyboardMouse, control, value, time);
+                    self.route(e, false);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let time = self.input_clock();
+                let pos = [position.x as f32, position.y as f32];
+                if !self.menu.is_open() && self.touch.cursor_moved(&mut self.input, pos, time) {
+                    return;
+                }
+                let e = RawEvent::vector(Device::KeyboardMouse, Control::MousePosition, pos, time);
+                self.route(e, false);
+            }
+            WindowEvent::Touch(t) => {
+                let time = self.input_clock();
+                let px = [t.location.x as f32, t.location.y as f32];
+                if self.menu.is_open() {
+                    // The menu is used like a mouse: a finger points and taps.
+                    self.menu_touch(t.phase, px, time);
+                } else {
+                    self.touch.touch(&mut self.input, t.id, t.phase, px, time);
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let notches = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => (p.y / 60.0) as f32,
                 };
-                self.input.wheel(notches);
+                let time = self.input_clock();
+                self.route(RawEvent::wheel(Device::KeyboardMouse, notches, time), false);
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             _ => {}
@@ -377,9 +642,17 @@ impl ApplicationHandler for App {
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event
-            && self.dragging
+            && self.captured
+            && !self.menu.is_open()
         {
-            self.input.mouse_orbit(delta.0 as f32, delta.1 as f32);
+            let pos = [delta.0 as f32, delta.1 as f32];
+            let time = self.input_clock();
+            self.input.push(RawEvent::vector(
+                Device::KeyboardMouse,
+                Control::MouseDelta,
+                pos,
+                time,
+            ));
         }
     }
 

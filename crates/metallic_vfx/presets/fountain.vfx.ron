@@ -1,0 +1,137 @@
+(
+  format: 1,
+  name: "Fountain",
+  description: "A water fountain jet falling back into a pool.",
+  tags: [
+    "water",
+    "loop",
+    "environment",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Jet",
+      capacity: 512,
+      spawn: [
+        Rate(
+          per_second: 160.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 0.15,
+          ),
+          offset: (0.0, 0.3, 0.0),
+        ),
+        Lifetime(
+          seconds: (1.4, 1.8),
+        ),
+        Velocity(
+          speed: (8.0, 9.5),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (12.0, 12.0),
+        ),
+        Size(
+          size: (0.1, 0.18),
+        ),
+        Color(
+          choices: [
+            "#DDF3FF",
+            "#9FD3F2",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.0, -12.0, 0.0),
+        ),
+        CollisionPlane(
+          point: (0.0, 0.0, 0.0),
+          normal: (0.0, 1.0, 0.0),
+          bounce: 0.0,
+          friction: 0.0,
+          on_hit: Kill,
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.1),
+              (1.0, 0.4),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        facing: VelocityParallel,
+        texture: Droplet,
+        light_emission: 0.3,
+        brightness: 1.1,
+      ),
+    ),
+    (
+      name: "Spray",
+      capacity: 256,
+      spawn: [
+        Rate(
+          per_second: 30.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 1.6,
+            inner: 0.6,
+          ),
+          offset: (0.0, 0.1, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.8, 1.2),
+        ),
+        Velocity(
+          speed: (0.5, 1.5),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (60.0, 60.0),
+        ),
+        Size(
+          size: (0.5, 0.9),
+        ),
+        Color(
+          choices: [
+            "#EAF7FF",
+          ],
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 1.0,
+        ),
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.5),
+              (1.0, 1.6),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.7),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: SoftDot,
+      ),
+    ),
+  ],
+)

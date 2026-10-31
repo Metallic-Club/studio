@@ -54,6 +54,15 @@ fn property_access(c: &mut Criterion) {
     g.bench_function("get_name", |b| {
         b.iter(|| black_box(w.get(black_box(p), "Name")))
     });
+    g.bench_function("get_ref_set_value", |b| {
+        b.iter(|| black_box(w.get_ref(black_box(p), "Position")))
+    });
+    g.bench_function("get_ref_default_value", |b| {
+        b.iter(|| black_box(w.get_ref(black_box(p), "Transparency")))
+    });
+    g.bench_function("get_ref_name", |b| {
+        b.iter(|| black_box(w.get_ref(black_box(p), "Name")))
+    });
     let mut x = 0.0;
     g.bench_function("set_position", |b| {
         b.iter(|| {
@@ -83,7 +92,7 @@ fn frame_read(c: &mut Criterion) {
                         continue;
                     }
                     for prop in PART_PROPS {
-                        if w.get(p, prop).is_ok() {
+                        if black_box(w.get(p, prop)).is_ok() {
                             sum += 1;
                         }
                     }
@@ -91,6 +100,26 @@ fn frame_read(c: &mut Criterion) {
                 black_box(sum)
             })
         });
+        g.bench_with_input(
+            BenchmarkId::new("borrowed_seven_props_per_part", n),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0usize;
+                    for &p in &parts {
+                        if !w.is_a(p, "BasePart") {
+                            continue;
+                        }
+                        for prop in PART_PROPS {
+                            if black_box(w.get_ref(p, prop)).is_ok() {
+                                sum += 1;
+                            }
+                        }
+                    }
+                    black_box(sum)
+                })
+            },
+        );
     }
     g.finish();
 }
@@ -128,7 +157,8 @@ fn tree_ops(c: &mut Criterion) {
 fn scene_files(c: &mut Criterion) {
     let mut g = c.benchmark_group("scene");
     g.sample_size(20);
-    let dir = std::env::temp_dir().join("metallic_core_bench");
+    // One folder per process, so two benchmark runs at once do not write the same file.
+    let dir = std::env::temp_dir().join(format!("metallic_core_bench-{}", std::process::id()));
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -139,6 +169,7 @@ fn scene_files(c: &mut Criterion) {
         g.bench_function("load_5000", |b| b.iter(|| black_box(load_scene(&path))));
     }
     g.finish();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 criterion_group!(benches, property_access, frame_read, tree_ops, scene_files);

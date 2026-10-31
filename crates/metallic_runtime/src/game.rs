@@ -2,19 +2,24 @@
 use crate::RuntimeError;
 use crate::avatar::{Avatar, default_model};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
-use crate::input::FrameInput;
+use crate::input::{
+    ActionEvent, ActionEventKind, ActionId, ActionValue, DeviceKind, FrameInput, InputRuntime,
+};
 use crate::locomotion::{LocomotionInput, Support};
+use crate::physics_sync::PhysicsSyncCache;
 use crate::project::ProjectConfig;
-use metallic_core::{ChangeCursor, Changes, InstanceId, Value, Vec3, World, load_scene};
+use metallic_core::{InstanceId, Value, Vec3, World, load_scene};
 pub use metallic_physics::RUN_MULTIPLIER;
 use metallic_physics::{
     CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, spawn_character,
 };
 use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
-use metallic_script::{LOCAL_PLAYER_NAME, OutputSink, ScriptHost};
+use metallic_script::{
+    InputActionEvent, InputDevice, InputEventKind, InputValue, LOCAL_PLAYER_NAME, OutputSink,
+    ScriptHost, TouchButtonInfo,
+};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -54,55 +59,6 @@ pub struct FrameOutput {
     pub state: Option<HumanoidState>,
 }
 
-/// The physics-relevant shape of a part; when it changes the physics must re-sync. These are the
-/// properties `PhysicsWorld::sync_from` reads besides the pose (it does not read `CanTouch` or
-/// `CanQuery` in M1).
-#[derive(Debug, Clone, PartialEq)]
-struct PartShape {
-    size: Value,
-    shape: Value,
-    material: Value,
-    anchored: Value,
-    can_collide: Value,
-}
-
-impl PartShape {
-    fn read(world: &World, id: InstanceId) -> PartShape {
-        let get = |p: &str| world.get(id, p).unwrap_or(Value::Nil);
-        PartShape {
-            size: get("Size"),
-            shape: get("Shape"),
-            material: get("Material"),
-            anchored: get("Anchored"),
-            can_collide: get("CanCollide"),
-        }
-    }
-}
-
-fn under_workspace(world: &World, id: InstanceId) -> bool {
-    let mut cur = world.parent(id);
-    while let Some(p) = cur {
-        if world.class_name(p) == Some("Workspace") {
-            return true;
-        }
-        cur = world.parent(p);
-    }
-    false
-}
-
-/// Every BasePart under Workspace with its shape.
-fn workspace_parts(world: &World) -> HashMap<InstanceId, PartShape> {
-    let mut out = HashMap::new();
-    let mut stack: Vec<InstanceId> = world.root("Workspace").into_iter().collect();
-    while let Some(id) = stack.pop() {
-        if world.is_a(id, "BasePart") {
-            out.insert(id, PartShape::read(world, id));
-        }
-        stack.extend_from_slice(world.children(id));
-    }
-    out
-}
-
 /// One running game: the world, its physics, characters, scripts and camera.
 ///
 /// The world is shared with the script host as `Rc<RefCell<World>>`; the game never holds a
@@ -122,13 +78,14 @@ pub struct Game {
     /// Simulated seconds since `start`.
     time: f64,
     accumulator: f64,
-    /// The world's change journal position when the physics was last checked.
-    physics_cursor: Option<ChangeCursor>,
-    /// Shapes of the parts the physics was last synced with.
-    synced_parts: HashMap<InstanceId, PartShape>,
+    physics_sync: PhysicsSyncCache,
     /// The local character's skinned avatar and the character Model it belongs to.
     avatar: Option<(InstanceId, Avatar)>,
     running: bool,
+    /// `InputRuntime::device_changes` when the scripts were last told the last-used device.
+    input_device_changes: Option<u64>,
+    /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
+    gui_inset: f32,
 }
 
 impl Game {
@@ -178,10 +135,11 @@ impl Game {
             focus: Vec3::default(),
             time: 0.0,
             accumulator: 0.0,
-            physics_cursor: None,
-            synced_parts: HashMap::new(),
+            physics_sync: PhysicsSyncCache::default(),
             avatar: None,
             running: false,
+            input_device_changes: None,
+            gui_inset: 0.0,
         }
     }
 
@@ -273,6 +231,90 @@ impl Game {
         self.running = false;
     }
 
+    /// Evaluates the player's input for one frame and connects it to the scripts; call it before
+    /// [`Game::frame`] and pass the result to it. `now` is the input clock (seconds), `dt` the
+    /// frame time.
+    ///
+    /// In order: the runtime follows scene changes (a `BindAction` creates actions) and the
+    /// answers of handlers from the last frame are applied; the raw events are evaluated; the
+    /// events and values of every `InputAction` instance go to the scripts; the client scripts
+    /// handle at most [`metallic_script::MAX_ACTION_EVENTS_PER_STEP`] events now, under the
+    /// frame's 0.25 s handler budget; `Sink` answers of `ContextActionService` handlers are
+    /// applied at once (spec 3.7), so a sunk key never reaches the contexts below it, the
+    /// default character controls included. A `Pass` answer, or a handler that has not answered
+    /// (over budget, or yielded), lets the key through. Allocates nothing once the buffers have
+    /// grown (the script values handlers receive aside).
+    pub fn input_frame(&mut self, rt: &mut InputRuntime, now: f64, dt: f32) -> FrameInput {
+        if let Ok(world) = self.world.try_borrow() {
+            rt.sync(&world);
+        }
+        self.apply_script_sinks(rt, now);
+        rt.evaluate(now, dt);
+        self.feed_input(rt);
+        if self.running {
+            self.scripts.dispatch_input_now(self.time);
+        }
+        self.apply_script_sinks(rt, now);
+        // Release edges of actions that a sink just blocked.
+        self.feed_input(rt);
+        rt.frame_input()
+    }
+
+    fn apply_script_sinks(&mut self, rt: &mut InputRuntime, now: f64) {
+        self.scripts.drain_bound_results(|r| {
+            if let Some(action) = rt_action(rt, r.action) {
+                rt.set_script_sink(action, r.sink, now);
+            }
+        });
+    }
+
+    /// Sends the runtime's events and the values of its scene actions to the scripts.
+    fn feed_input(&mut self, rt: &mut InputRuntime) {
+        while let Some(ActionEvent {
+            action,
+            kind,
+            value,
+            time,
+        }) = rt.pop_event()
+        {
+            let Some(instance) = rt.instance(action) else {
+                continue;
+            };
+            let kind = match kind {
+                ActionEventKind::Pressed => InputEventKind::Pressed,
+                ActionEventKind::Released => InputEventKind::Released,
+                ActionEventKind::Triggered => InputEventKind::Triggered,
+                ActionEventKind::StateChanged => InputEventKind::StateChanged,
+            };
+            self.scripts.input_action_event(InputActionEvent {
+                action: instance,
+                kind,
+                value: input_value(value),
+                time,
+            });
+        }
+        for i in 0..rt.action_count() {
+            let id = ActionId(i as u16);
+            if let Some(instance) = rt.instance(id) {
+                self.scripts.set_action_state(
+                    instance,
+                    input_value(rt.state(id)),
+                    rt.hold_progress(id),
+                );
+            }
+        }
+        if self.input_device_changes != Some(rt.device_changes()) {
+            self.input_device_changes = Some(rt.device_changes());
+            let (device, last) = match rt.last_device() {
+                DeviceKind::KeyboardMouse => (InputDevice::KeyboardMouse, "Keyboard"),
+                DeviceKind::Gamepad => (InputDevice::Gamepad, "Gamepad1"),
+                DeviceKind::Touch => (InputDevice::Touch, "Touch"),
+            };
+            self.scripts.set_preferred_input(device);
+            self.scripts.set_last_input_type(last);
+        }
+    }
+
     /// Advances the game by a frame of `dt` seconds and returns the camera to draw it with.
     ///
     /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`TICK`]
@@ -308,6 +350,7 @@ impl Game {
                 ticks += 1;
             }
         }
+        self.scripts.end_frame();
         let state = self.character.and_then(|c| self.characters.state(c));
         self.update_avatar(state, dt as f32);
         if state != Some(HumanoidState::Dead)
@@ -356,10 +399,38 @@ impl Game {
         }
     }
 
+    /// Tells the scripts where the touch overlay's buttons are, for
+    /// `ContextActionService:GetButton` (see
+    /// [`TouchControls::button_infos`](crate::input::touch::TouchControls::button_infos)).
+    pub fn set_touch_buttons(&mut self, buttons: &[TouchButtonInfo]) {
+        self.scripts.set_touch_buttons(buttons);
+    }
+
+    /// Sets `UserInputService.TouchEnabled`, `KeyboardEnabled` and `GamepadEnabled`.
+    pub fn set_input_devices(&mut self, touch: bool, keyboard: bool, gamepad: bool) {
+        self.scripts.set_input_devices(touch, keyboard, gamepad);
+    }
+
+    /// Sets the GUI inset: the top `points` of the screen belong to the Player's own controls
+    /// (the touch overlay's menu button, spec 7.2), so every ScreenGui is laid out in the screen
+    /// below it, like Roblox's default `IgnoreGuiInset = false`. Zero when nothing is there.
+    pub fn set_gui_inset(&mut self, points: f32) {
+        self.gui_inset = if points.is_finite() {
+            points.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// The GUI inset in points.
+    pub fn gui_inset(&self) -> f32 {
+        self.gui_inset
+    }
+
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.world.try_borrow() {
-            crate::gui::paint(&world, painter);
+            crate::gui::paint(&world, painter, self.gui_inset);
         }
     }
 
@@ -420,31 +491,11 @@ impl Game {
         }
     }
 
-    /// Re-syncs the physics when a part under Workspace appeared, disappeared or changed shape
-    /// since the last check. Moving parts needs no sync.
+    /// Re-syncs changed part signatures and character membership; pose-only changes need no sync.
     fn sync_physics_if_changed(&mut self) {
-        let changed = {
-            let Ok(world) = self.world.try_borrow() else {
-                return;
-            };
-            let Some(cursor) = self.physics_cursor else {
-                drop(world);
-                self.sync_physics_now();
-                return;
-            };
-            let (changes, now) = world.changes_since(cursor);
-            self.physics_cursor = Some(now);
-            match changes {
-                Changes::Overflow => true,
-                Changes::Ids(ids) => ids.iter().any(|&id| {
-                    let shape = (world.is_a(id, "BasePart") && under_workspace(&world, id))
-                        .then(|| PartShape::read(&world, id));
-                    shape.as_ref() != self.synced_parts.get(&id)
-                }),
-            }
-        };
-        if changed {
-            self.sync_physics_now();
+        if let Ok(world) = self.world.try_borrow() {
+            self.physics_sync
+                .synchronize(&mut self.physics, &world, false);
         }
     }
 
@@ -453,9 +504,8 @@ impl Game {
         let Ok(world) = self.world.try_borrow() else {
             return;
         };
-        self.physics.sync_from(&world);
-        self.synced_parts = workspace_parts(&world);
-        self.physics_cursor = Some(world.change_cursor());
+        self.physics_sync
+            .synchronize(&mut self.physics, &world, true);
     }
 
     /// Moves and animates the local character's avatar; a new character (after a respawn) gets a
@@ -484,7 +534,11 @@ impl Game {
             .relative_velocity(character)
             .unwrap_or_default();
         let speed = (v.x * v.x + v.z * v.z).sqrt() as f32;
-        avatar.update(root, yaw, LocomotionInput { speed, support }, dt);
+        let input = LocomotionInput {
+            vertical: v.y as f32,
+            ..LocomotionInput::new(speed, support)
+        };
+        avatar.update(root, yaw, input, dt);
     }
 
     /// The character's `HumanoidRootPart` position and facing (`Orientation.Y`, degrees).
@@ -546,10 +600,24 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
     }
 }
 
+/// The runtime action of an `InputAction` instance.
+fn rt_action(rt: &InputRuntime, instance: InstanceId) -> Option<ActionId> {
+    rt.action_for_instance(instance)
+}
+
+fn input_value(v: ActionValue) -> InputValue {
+    match v {
+        ActionValue::Bool(b) => InputValue::Bool(b),
+        ActionValue::Axis1(x) => InputValue::Axis1(x),
+        ActionValue::Axis2(x) => InputValue::Axis2(x),
+        ActionValue::Axis3(x) => InputValue::Axis3(x),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::locomotion::State;
+    use crate::locomotion::state;
 
     struct Silent;
     impl OutputSink for Silent {
@@ -589,7 +657,7 @@ mod tests {
         run(&mut g, FrameInput::default(), 0.5);
         let a = avatar(&g);
         assert!(a.feet().y.abs() < 0.05, "feet at {}", a.feet().y);
-        assert_eq!(a.locomotion().state(), State::Ground);
+        assert_eq!(a.locomotion().state(), state::GROUND);
         // Walk forward (-Z): the avatar moves with the root.
         let forward = FrameInput {
             movement: [0.0, 1.0],
@@ -640,18 +708,18 @@ mod tests {
             ..FrameInput::default()
         };
         g.frame(&jump, TICK);
-        assert_eq!(avatar(&g).locomotion().state(), State::Jump);
+        assert_eq!(avatar(&g).locomotion().state(), state::JUMP);
         // Apex after 0.25 s, back down after about 0.5 s.
-        let mut seen = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
         for _ in 0..60 {
             g.frame(&FrameInput::default(), TICK);
-            let s = avatar(&g).locomotion().state();
+            let s = avatar(&g).locomotion().state().to_owned();
             if seen.last() != Some(&s) {
                 seen.push(s);
             }
         }
-        assert_eq!(seen, [State::Jump, State::Fall, State::Land]);
+        assert_eq!(seen, [state::JUMP, state::FALL, state::LAND]);
         run(&mut g, FrameInput::default(), 0.6);
-        assert_eq!(avatar(&g).locomotion().state(), State::Ground);
+        assert_eq!(avatar(&g).locomotion().state(), state::GROUND);
     }
 }

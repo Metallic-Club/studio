@@ -1,0 +1,136 @@
+/* Metallic design tokens. Generated from design/tokens/metallic.tokens.json: do not edit.
+   Regenerate with: cargo run -p metallic_tokens --example export_css */
+:root {
+  --g-950: #0c0b0f;
+  --g-900: #111015;
+  --g-850: #16151b;
+  --g-800: #1c1b22;
+  --g-750: #24222b;
+  --g-700: #2c2a34;
+  --g-650: #35323e;
+  --g-600: #43404d;
+  --g-500: #5f5b6b;
+  --g-400: #817d8c;
+  --g-300: #a3a0ad;
+  --g-200: #c3c0ca;
+  --g-100: #e6e4ea;
+  --g-50: #f4f3f7;
+  --v-50: #f3f0fc;
+  --v-100: #e4def8;
+  --v-200: #cdc2f2;
+  --v-300: #b4a6ec;
+  --v-400: #9d8be0;
+  --v-500: #8673cf;
+  --v-600: #6f5cb6;
+  --v-700: #584993;
+  --v-800: #3a3354;
+  --v-900: #2a2638;
+  --v-950: #1f1c29;
+
+  --bg-deep: var(--g-900);
+  --bg-base: var(--g-850);
+  --bg-panel: var(--g-800);
+  --bg-raised: var(--g-750);
+  --bg-hover: var(--g-700);
+  --bg-active: var(--g-650);
+  --select: var(--v-800);
+  --select-weak: var(--v-900);
+  --line: #2b2933;
+  --line-strong: var(--g-600);
+  --line-control: #6e6a79;
+  --text-1: #e6e4ea;
+  --text-2: #aeaab6;
+  --text-3: #8e8a97;
+  --text-off: var(--g-500);
+  --icon: #bdbac4;
+  --accent: var(--v-400);
+  --accent-hover: var(--v-300);
+  --accent-press: var(--v-500);
+  --accent-text: var(--v-300);
+  --on-accent: var(--g-900);
+  --focus: var(--v-300);
+  --highlight: rgba(255,255,255,0.06);
+  --error: #ec7a72;
+  --error-bg: #3a2226;
+  --warning: #e0ad55;
+  --warning-bg: #352c1d;
+  --success: #62bf91;
+  --success-bg: #1d3329;
+  --info: #7fb0e6;
+  --info-bg: #1c2a3a;
+  --danger: #8f3a35;
+  --danger-hover: #a3443e;
+
+  --s1: 2px;
+  --s2: 4px;
+  --s3: 6px;
+  --s4: 8px;
+  --s5: 12px;
+  --s6: 16px;
+  --s7: 20px;
+  --s8: 24px;
+  --s9: 32px;
+  --s10: 40px;
+  --s11: 48px;
+
+  --r-xs: 3px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
+  --cut-sm: 6px;
+  --cut-md: 10px;
+  --cut-lg: 14px;
+
+  --h-row: 24px;
+  --h-control: 32px;
+  --h-control-lg: 36px;
+
+  --font: 'Archivo', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --shadow-pop: 0px 8px 24px 0px rgba(0,0,0,0.45);
+  --shadow-modal: 0px 16px 48px 0px rgba(0,0,0,0.55);
+
+  --t-fast: 90ms;
+  --t-base: 140ms;
+  --t-slow: 200ms;
+  --ease-out: cubic-bezier(0.215, 0.61, 0.355, 1.0);
+  --ease-in-out: cubic-bezier(0.645, 0.045, 0.355, 1.0);
+
+  --t-display-size: 30px;
+  --t-display-line: 36px;
+  --t-display-weight: 700;
+  --t-title-size: 24px;
+  --t-title-line: 30px;
+  --t-title-weight: 680;
+  --t-heading-size: 15px;
+  --t-heading-line: 20px;
+  --t-heading-weight: 620;
+  --t-body-size: 13px;
+  --t-body-line: 18px;
+  --t-body-weight: 400;
+  --t-body-lg-size: 14px;
+  --t-body-lg-line: 20px;
+  --t-body-lg-weight: 400;
+  --t-strong-size: 13px;
+  --t-strong-line: 18px;
+  --t-strong-weight: 560;
+  --t-small-size: 12px;
+  --t-small-line: 16px;
+  --t-small-weight: 400;
+  --t-caption-size: 11px;
+  --t-caption-line: 14px;
+  --t-caption-weight: 520;
+  --t-mono-size: 12px;
+  --t-mono-line: 18px;
+  --t-mono-weight: 400;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0ms;
+    --t-base: 0ms;
+    --t-slow: 80ms;
+  }
+}

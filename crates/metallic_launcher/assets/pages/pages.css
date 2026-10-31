@@ -1,0 +1,130 @@
+/* Metallic Launcher bundled pages. All colours, type families, radii and motion come from the shared
+   design tokens (/tokens.css, generated from design/tokens/metallic.tokens.json); this file uses roles
+   only and defines no token. No gradients, no glow. One violet accent on the main action, one 45 degree
+   chamfer on the primary button, and a 1 px top highlight on raised surfaces. */
+:root { color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg-base);
+  color: var(--text-1);
+  font: 400 14px/20px var(--font);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+}
+
+.card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: inset 0 1px 0 var(--highlight);
+  padding: 32px;
+}
+.card.wide { max-width: 640px; }
+
+.brand {
+  font: 600 12px/16px var(--font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0 0 20px;
+}
+h1 { font: 650 24px/30px var(--font); margin: 0 0 8px; }
+h2 { font: 620 15px/20px var(--font); margin: 24px 0 8px; }
+p { margin: 0 0 12px; color: var(--text-2); }
+p.hint { font-size: 12px; line-height: 16px; color: var(--text-3); }
+code { font: 400 12px/18px var(--mono); color: var(--text-1); }
+
+.actions { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
+
+.btn {
+  font: 560 13px/18px var(--font);
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-1);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  height: 36px;
+  padding: 0 16px;
+  background: var(--accent);
+  color: var(--on-accent);
+  clip-path: polygon(0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm), 100% 100%, 0 100%);
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:active { background: var(--accent-press); }
+.btn-secondary { background: var(--bg-raised); box-shadow: inset 0 1px 0 var(--highlight); }
+.btn-secondary:hover { background: var(--bg-hover); }
+.btn-secondary:active { background: var(--bg-active); }
+.btn-ghost { background: transparent; color: var(--text-2); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text-1); }
+.btn-ghost:active { background: var(--bg-active); }
+.btn[disabled] { background: var(--bg-raised); color: var(--text-3); cursor: default; box-shadow: none; transform: none; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* The chamfer clips anything outside the button, so its ring sits inside. */
+.btn-primary:focus-visible { outline: 2px solid var(--on-accent); outline-offset: -6px; }
+
+.status:empty { display: none; }
+.status { margin: 12px 0 0; font-size: 12px; line-height: 16px; color: var(--text-3); }
+
+/* Offline page: show the text for the reason in the address (unreachable when there is none). */
+.reason { display: none; }
+body:not([data-reason]) .reason-unreachable,
+body[data-reason="unreachable"] .reason-unreachable,
+body[data-reason="notconfigured"] .reason-notconfigured,
+body[data-reason="loadfailed"] .reason-loadfailed { display: block; }
+
+/* Demo page */
+dl.facts { margin: 0 0 8px; display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; }
+dl.facts dt { color: var(--text-3); font-size: 12px; line-height: 20px; }
+dl.facts dd { margin: 0; color: var(--text-1); overflow-wrap: anywhere; }
+ul.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.result { color: var(--text-2); font-size: 12px; line-height: 16px; margin: 8px 0 0; }
+.result:empty { display: none; }
+
+/* Settings page */
+.check { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 12px; color: var(--text-1); cursor: pointer; }
+.check input { margin: 2px 0 0; width: 16px; height: 16px; flex: none; accent-color: var(--accent); }
+.field { display: block; margin: 12px 0 4px; font-size: 12px; line-height: 16px; color: var(--text-3); }
+.text {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-deep);
+  color: var(--text-1);
+  border: 1px solid var(--line-control);
+  border-radius: var(--r-sm);
+  font: 400 13px/18px var(--mono);
+}
+select.text { font-family: var(--font); }
+.text::placeholder { color: var(--text-3); }
+.text:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.text[disabled] { border-color: var(--line); color: var(--text-3); }
+.status.error { color: var(--warning); }
+.status.ok { color: var(--success); }
+pre.out {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font: 400 12px/18px var(--mono);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+pre.out:empty { display: none; }

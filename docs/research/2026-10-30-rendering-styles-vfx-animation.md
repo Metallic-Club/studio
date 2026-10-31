@@ -279,7 +279,7 @@ basis_universal, meshoptimizer, Tracy and DXC are not verified (judgment: all pe
 CPU: sync world -> cull (CPU now, GPU later) -> build draw lists per pass
 GPU (one render graph, passes declare reads/writes):
   1 shadows         CSM, 1-4 cascades                          depth array
-  2 prepass*        depth + normal (+ motion later)            depth, normal
+  2 prepass*        1x depth + normal/mask for MSAA post reads  depth, normal
   3 GPU compute*    particle emit/update, skinning, culling    buffers
   4 opaque          forward, shading model per material        HDR colour, depth
   5 outline hull*   per material, front faces culled           HDR colour
@@ -293,6 +293,7 @@ GPU (one render graph, passes declare reads/writes):
 ```
 Passes 4-8 run at the **internal size** (output size x render scale, or a fixed pixel-art size). Pass 10's upscale
 brings the image to the output size. Without an upscale pass, the finish pass writes the output directly.
+When EDGE is enabled with MSAA, pass 2 is required; see the sample-count contract below.
 
 ### 4.2 Render graph (assistant's call)
 
@@ -301,7 +302,52 @@ creates; the graph orders passes, skips passes whose outputs nobody reads, and l
 M1 does not need the graph; it only needs the frame split into named stages (section 13) so the graph can replace the
 hard-coded order in M5 without a rewrite. No external render-graph crate.
 
-### 4.3 Clustered forward (M5)
+### 4.3 Depth/normal inputs for post edges (#109)
+
+**Chosen design:** use a separate **1x depth + normal/mask prepass when EDGE is enabled and scene MSAA > 1**.
+With scene MSAA off, reuse the opaque pass's stored 1x depth and 1x normal/mask target. This matches the unified
+[Look specification, decision 13](../design/look-presets.md). It is a design decision for #62/#65, not an implemented
+renderer hook. The current M1 renderer has neither post edges nor these normal targets.
+
+`RenderPassDepthStencilAttachment` in wgpu 30.0.1 has no resolve target [R175]; `TEXTURE_BINDING` plus `Store`
+preserves a depth texture but does not change its sample count. WGSL distinguishes `texture_depth_2d` from
+`texture_depth_multisampled_2d`, whose `textureLoad` takes a sample index [R177]. A color attachment can resolve
+[R176], but resolving a normal/mask target mixes surfaces and mask values at coverage boundaries. That is not the
+chosen outline input.
+
+| Resource | Scene MSAA off | Scene MSAA 4x | Consumer |
+| --- | --- | --- | --- |
+| Scene HDR | 1x HDR color | 4x HDR color resolved to 1x HDR | EDGE color input and later post passes |
+| Scene depth | 1x, stored and sampleable when needed | Separate 4x depth for the scene pass; no depth resolve | Scene depth testing; 1x may also feed EDGE |
+| EDGE depth | Stored scene 1x depth | Separate prepass 1x `Depth32Float` | `texture_depth_2d` in `outline_post.wgsl` |
+| EDGE normal/mask | Opaque 1x `Rgba8Unorm` MRT | Prepass 1x `Rgba8Unorm`, without blending or resolving | `texture_2d<f32>`; encoded view normal in xyz, material mask in w |
+
+All EDGE inputs have the same internal width/height, viewport, camera and frame transform. Depth and normal/mask
+attachments in each producing pass have the same sample count; never attach the 1x prepass depth to the 4x scene
+pass. Both sampled inputs use `RENDER_ATTACHMENT | TEXTURE_BINDING` and `StoreOp::Store`. EDGE writes another 1x
+HDR target rather than sampling its own output attachment. If EDGE is off and no other consumer needs an input,
+skip its prepass/target; disabling EDGE on Low also removes this dependency. Do not create these targets in M1.
+
+The prepass draws depth-writing opaque and alpha-tested geometry using the same deformation, culling and alpha
+cutoff as the scene. Clear normal/mask to zero so background pixels opt out, and use the same depth clear/compare
+convention as the producer; the supplied sample assumes standard depth, clear 1, near-to-far 0..1. Sorted blended
+transparency, particles and the expanded outline hull do not write these geometry inputs. They do not acquire
+reliable depth/normal edges through this design.
+
+The separate geometry pass costs extra vertex/fragment work and memory. Its 1x coverage does not inherit the
+scene's MSAA coverage, so diagonal edge stability and outline-mask boundaries still need visual acceptance;
+no GPU cost or anti-aliasing quality has been measured here. A custom shader resolve of multisampled depth and
+normals is an alternative, but would need one coherent surface-selection rule for both normal and mask. Sample 0
+or minimum depth alone is not a complete normal/mask policy, so that route is deferred.
+
+Before #65's renderer hook is accepted, an offscreen GPU regression must execute the complete producer -> EDGE
+chain at scene sample counts 1 and 4, submit/poll successfully with validation enabled, and read back the result.
+Use overlapping masked/unmasked opaque parts, a diagonal silhouette and alpha-tested geometry; verify that a
+near-side outline exists, background/mask-off pixels remain unchanged, and resize/render-scale changes rebuild
+all inputs consistently. A pipeline-creation-only shader check does not test attachment compatibility, input
+contents or a complete MSAA frame. This documentation change adds no hook and makes no such execution claim.
+
+### 4.4 Clustered forward (M5)
 
 Point and spot lights binned into a froxel grid (16x9x24, log depth slices) by a compute pass; light, reflection
 probe and decal indices per cluster in one storage buffer, as Godot and DOOM do [R2][R167]. Toon and pixel looks use
@@ -410,18 +456,20 @@ pattern, PAP paper, QD quantise + dither, UP pixel upscale, CRT, VIG vignette.
 |---|---|---|---|---|
 | **Realistic** (default) | Lit | 100% (Low 67% + FSR1) | SH 3 cascades, probes, sky | PRE, AO, FOG, (VOL High), BLM, (DOF opt), TM A, GR, VIG, TAA or MSAA 4x. Low: SH 2, AO half-res, no VOL, MSAA off + FXAA |
 | **Soft** (Roblox "Soft" feel) | Lit, roughness floor 0.5 | 100% | SH 2 soft, lifted ambient | FOG, BLM soft, TM N, GR (saturation 1.1). Low: same |
-| **Toon** (anime/cel) | Toon (bands 2, soft 0.03, tinted shadows, rim 0.12) | 100% | SH 2, flat ambient, no AO | HULL (2 px), EDGE (intersections only), FOG, BLM, TM N, GR. Low: EDGE off |
+| **Toon** (anime/cel) | Toon (bands 2, soft 0.03, tinted shadows, rim 0.12) | 100% | SH 2, flat ambient, no AO | PRE when MSAA, HULL (2 px), EDGE (intersections only), FOG, BLM, TM N, GR. Low: EDGE off |
 | **Comic** (Hi-Fi Rush) | Toon (bands 1) | 100% | SH 2, AO feeds hatching | PRE, EDGE (2 px), AO, BLM, TM N, GR, PAT (dots in light falloff, hatch in shadow/AO). Low: AO half-res |
 | **Ink** (Moebius/sketch) | Toon (bands 3) | 100% | SH 2 | PRE, EDGE (wobble on, 1.5 px), TM N, GR (desaturate), PAT (hatch by luminance), PAP |
 | **Painterly** | Toon (ramp, soft edges) | 100% | SH 2, soft ambient | PRE, EDGE (soft), FOG, BLM, KUW (half-res, High only), TM N, GR (warm LUT), PAP. Low: no KUW |
-| **Low-poly** | Flat | 100% | SH 2, sky ambient | EDGE (1 px, optional), FOG strong, TM N, GR, MSAA 4x (Low FXAA). Voxel variant: Flat + baked vertex AO |
+| **Low-poly** | Flat | 100% | SH 2, sky ambient | PRE when MSAA and EDGE on, EDGE (1 px, optional), FOG strong, TM N, GR, MSAA 4x (Low FXAA). Voxel variant: Flat + baked vertex AO |
 | **Pixel 3D** (t3ssel8r) | Toon (bands 2-3) | fixed 480x270 or 320x180, ortho snapped to texels | SH 1-2, hard | PRE, EDGE (1 px: depth dark, normal light), TM C, QD (palette 16-32, Bayer 4, 0.4), UP (subpixel offset). MSAA off |
 | **Retro 32-bit** (PS1) | Retro (snap 320x240, affine 1) | fixed 320x240 | no SH (blob shadows), vertex fog | TM C, QD (levels 32, Bayer 4), UP nearest, optional CRT |
 | **HD-2D** | Lit for world, LitSprite for characters | 100% (Low 67%) | SH 2-3 (sprites cast via proxies), probes | PRE, AO, FOG, (VOL High), BLM, DOF tilt-shift, TM A, GR, VIG. Low: DOF half-res, no VOL, no AO |
 | **2D Pixel** | LitSprite / Unlit (2D layers) | pixel camera, reference res e.g. 384x216 | 2D lights + normal maps, ambient | TM C, (QD optional), UP (subpixel). MSAA off |
 | **2D Smooth** | LitSprite / Unlit (2D layers) | 100% | 2D lights optional | BLM, TM N, GR, MSAA 4x |
-| 1-bit Dither (stretch) | Toon (bands 3) | fixed 640x360 | SH 1 | EDGE, TM C, QD (palette 2, Bayer 8 or blue noise), UP |
+| 1-bit Dither (stretch) | Toon (bands 3) | fixed 640x360 | SH 1 | EDGE (1x depth/normal MRT; PRE when MSAA), TM C, QD (palette 2, Bayer 8 or blue noise), UP |
 
+Every EDGE row requires stored 1x depth and a matching 1x normal/mask target. PRE is mandatory when MSAA is on;
+with MSAA off, the opaque MRT supplies both inputs. Existing PRE rows retain their other AO/post dependencies.
 Each preset is a starting point; every field stays editable in the Look editor.
 
 ### 5.6 Shader permutations and pipeline caching
@@ -666,8 +714,10 @@ Cheap only; none changes M1's look or tests. Ordered by value.
    `pub enum ShadingModel { Lit = 0 }` in `materials.rs`, and in `scene.wgsl` split `fs_main` into `surface()` (the
    existing `detail()` + colour) and `shade_lit()`, called through a `switch` on the id. Only Lit exists in M1.
    Compute screen derivatives before the switch (naga rejects derivatives in non-uniform control flow).
-4. **Sampleable depth.** Create the depth texture with `TEXTURE_BINDING` usage and `StoreOp::Store` when any post
-   pass asks for it (none in M1, so keep Discard as the default and make it a flag).
+4. **Post depth/normal contract.** `TEXTURE_BINDING` and `StoreOp::Store` make depth readable only at its existing
+   sample count. For EDGE with MSAA > 1, schedule the separate 1x depth/normal prepass from section 4.3; the scene
+   keeps its own multisampled depth. With MSAA off, store the scene 1x depth and normal/mask MRT instead. These
+   targets and EDGE belong to #62/#65, not M1; retain Discard where no later consumer needs the attachment.
 5. **Internal size separate from output size.** `RenderSettings { quality, render_scale: f32 }` (1.0 in M1); the
    HDR and depth targets use `output size x render_scale`; the finish pass samples with a linear filter. This
    unlocks pixel looks and the Iris Xe 67% mode.
@@ -866,3 +916,7 @@ Fetched during this research. Local: [L1] `~/.cargo/registry/src/*/wgpu-types-30
 - R172 https://docs.rs/crate/lampshade/latest
 - R173 https://github.com/wgsl-tooling-wg/wesl-rs
 - R174 https://crates.io/api/v1/crates/<name> (each crate in section 3.9)
+
+- R175 https://docs.rs/wgpu/30.0.1/wgpu/struct.RenderPassDepthStencilAttachment.html
+- R176 https://docs.rs/wgpu/30.0.1/wgpu/struct.RenderPassColorAttachment.html
+- R177 https://www.w3.org/TR/2026/CRD-WGSL-20261026/#textureload
