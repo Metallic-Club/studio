@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! `InputRuntime::evaluate` (and `push`, `drain_events`) must not allocate once the runtime is
 //! built (input spec section 13). A counting global allocator checks it on the reference load:
 //! 4 contexts, 32 actions, 96 bindings, 40 raw events a frame.
