@@ -75,3 +75,11 @@ cargo test --release --locked -p metallic_core --test property_write_timing -j 4
 
 Coordinate a timing window before executing the manual test. Run baseline and fixed versions with matching
 probe source and normal system allocation; do not compare the counting target's wall time.
+
+## Mandatory validation
+
+Final source `2d08a84` on main `238c6fb` passed the locked serial workspace suite: 1,585 passed, zero failed,
+eight ignored across 123 summaries. Seven ignores are upstream; one is the new manual release-timing probe,
+whose bounded release executions are recorded above. Strict workspace/all-target Clippy, licenses, formatting
+and whitespace passed. No budget, existing threshold or production signal behavior changed. The final prose
+commit does not relabel the earlier matching timing/probe fingerprints.

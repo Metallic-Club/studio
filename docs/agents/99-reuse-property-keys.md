@@ -2,10 +2,15 @@
 
 ## Current status
 
-Fixed source `b64bd23` passed focused debug/release allocation and semantic checks. The planned eight paired
-release observations are complete and retained with wide control ranges; no reliable timing gain is claimed.
-Mandatory workspace and strict Clippy gates are queued. Baseline/fixed release targets are frozen and all
-local Rust is idle. Full details and source checkpoints follow.
+Final tested source `2d08a846253f87d1954d235e6661bedcd05e842e`, main `238c6fb`: all mandatory gates passed.
+The locked serial workspace suite exited zero: 1,585 passed, zero failed, eight ignored across 123 summaries.
+Ignores comprise seven upstream tests plus this issue's new manual release-timing probe, whose planned 18
+release invocations already passed separately. Strict full Clippy, licenses, formatting and whitespace passed.
+The actual window/lane123 are released. Record-only final prose and PR publication/CI are next; no own merge.
+
+All paired timing observations remain pinned to the original matching baseline/fixed probe. Wide read controls
+prevent a reliable speedup claim. The deterministic result is zero warmed no-listener scalar-key allocations;
+signal-key/owned-Value/first-insertion costs remain. Named release artifacts are frozen, with no copying.
 
 ## Scope and base
 
@@ -113,3 +118,17 @@ suite, the remaining listener-key allocation assertions were relaxed only downwa
 upper bound, allowing a future signal-key optimization to reach zero. Exact observed counts remain printed
 and retained; all callback/value/cursor checks and exact-zero changed/no-op/default-reset assertions stay.
 This avoids freezing an unrelated known allocation as a behavioral requirement. No production/timing change.
+
+## Final mandatory gates
+
+At `2d08a84` on pinned main `238c6fb`, refreshed workspace no-run and strict workspace/all-target Clippy passed
+(Clippy 1.56s after the final listener upper-bound change). The full guarded command
+`test --workspace --locked -j 4 -- --test-threads=1` then exited zero: 1,585 passed, zero failed, eight ignored
+across 123 summaries, including all Lua, Parkour and new allocation cases. No failing test was retried, removed
+or newly ignored; the only new ignore is the explicitly required manual release timing probe, executed separately.
+
+`workspace-tests.log` and `workspace-result.json` retain the exact source and log checksum under
+`integration-evidence/99-reuse-property-keys`. Earlier Clippy failure/guard correction and initial fixture error
+remain separate observations. The actual window was released immediately after verified exit/totals. Final
+format/license/diff checks run before publication; the final commit records prose only. Open/attach the PR,
+move #99 to review, and preserve exact-head CI separately from these pinned local results.
