@@ -290,3 +290,69 @@ fn save_from_the_prompt_closes_only_when_the_save_worked() {
     );
     assert!(dir.path().join("main.mscene").exists());
 }
+
+#[test]
+fn dragging_the_body_moves_the_part_as_one_step() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.tool = Tool::Select;
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    let grab = h
+        .state()
+        .viewport
+        .screen_pos(DVec3::new(0.0, 0.0, 2.0))
+        .unwrap();
+    h.hover_at(grab);
+    h.run_steps(2);
+    press(&mut h, grab, true);
+    for i in 1..=6 {
+        h.hover_at(grab + egui::vec2(15.0 * i as f32, 0.0));
+        h.run_steps(1);
+    }
+    assert!(h.state().viewport.is_dragging());
+    press(&mut h, grab + egui::vec2(90.0, 0.0), false);
+    let s = &h.state().state;
+    let Value::Vector3(p) = s.world.get(part, "Position").unwrap() else {
+        panic!()
+    };
+    assert!(p.x > 0.5, "moved right: {p:?}");
+    assert!((p.x - p.x.round()).abs() < 1e-9, "on the grid: {p:?}");
+    assert!(p.y.abs() < 1e-9, "stays on its start height: {p:?}");
+    assert_eq!(s.history.len(), 1);
+    assert_eq!(
+        s.history.undo_name(&s.world).as_deref(),
+        Some("Move 1 part")
+    );
+    assert_eq!(s.selection.ids(), &[part]);
+}
+
+#[test]
+fn typing_during_a_drag_sets_the_exact_amount() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.select_only(part);
+    h.state_mut().state.tool = Tool::Move;
+    h.run_steps(2);
+    let origin = h.state().viewport.screen_pos(DVec3::ZERO).unwrap();
+    let grab = origin - egui::vec2(0.0, 54.0);
+    h.hover_at(grab);
+    h.run_steps(2);
+    press(&mut h, grab, true);
+    h.hover_at(grab - egui::vec2(0.0, 30.0));
+    h.run_steps(2);
+    for c in ["3", "*", "4"] {
+        h.event(Event::Text(c.into()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(!h.state().viewport.is_dragging(), "Enter ends the drag");
+    press(&mut h, grab - egui::vec2(0.0, 30.0), false);
+    let s = &h.state().state;
+    assert_eq!(
+        s.world.get(part, "Position").unwrap(),
+        Value::Vector3(Vec3::new(0.0, 12.0, 0.0))
+    );
+    assert_eq!(s.history.len(), 1);
+}

@@ -5,16 +5,17 @@
 //! drag and accept expressions (`3*4`, `+2` adds to the current value, see [`crate::expr`]).
 //!
 //! **One gesture, one undo step:** while the pointer is held (scrubbing a number, dragging in the
-//! colour picker) changes write the world directly as a live preview, and the first value of each
-//! touched property is remembered. When the pointer is released the whole gesture is recorded as
-//! one step. Typed values and toggles apply at once as one step each.
+//! colour picker) changes go through the editor's [`crate::preview::PreviewOverlay`], which writes
+//! them as a live preview and remembers the first value of each touched property. When the
+//! pointer is released the whole gesture is recorded as one `SetProperties` step. Typed values
+//! and toggles apply at once as one step each.
 use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
 use metallic_core::classes::{PropDef, all_properties, find_property};
 use metallic_core::{Color3, InstanceId, UDim2, Value, Vec3};
 
-use crate::commands::Command;
+use crate::commands::{Command, PropName};
 use crate::editor::{EditorState, UiRequest};
 use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
@@ -45,8 +46,8 @@ const SECTION_NAMES: [&str; 5] = ["Data", "Appearance", "Transform", "Physics", 
 #[derive(Default)]
 pub struct Properties {
     filter: String,
-    /// Live-preview gesture: first value of every (instance, property) touched.
-    gesture: Vec<(InstanceId, String, Value)>,
+    /// The property of the open live-preview gesture (its values live in the overlay).
+    gesture: Option<String>,
     /// Text being typed into a string field, by property name.
     text: HashMap<String, String>,
 }
@@ -67,34 +68,21 @@ impl Properties {
 
     /// True while a live-preview gesture is open.
     pub fn in_gesture(&self) -> bool {
-        !self.gesture.is_empty()
+        self.gesture.is_some()
     }
 
     fn finish_gesture(&mut self, state: &mut EditorState) {
-        if self.gesture.is_empty() {
+        let Some(prop) = self.gesture.take() else {
             return;
-        }
-        let mut commands: Vec<Command> = self
-            .gesture
-            .drain(..)
-            .filter_map(|(id, prop, old)| {
-                let new = state.world.get(id, &prop).ok()?;
-                (new != old).then(|| Command::set(id, &prop, old, new))
-            })
-            .collect();
-        match commands.len() {
-            0 => {}
-            1 => state.record(commands.remove(0)),
-            n => {
-                let prop = match &commands[0] {
-                    Command::SetProperty { prop, .. } => prop.clone(),
-                    _ => String::new(),
-                };
-                state.record(Command::Batch {
-                    name: format!("Set {prop} ({n} changes)"),
-                    commands,
-                });
-            }
+        };
+        let n = state.preview.len();
+        let name = if n == 1 {
+            format!("Set {prop}")
+        } else {
+            format!("Set {prop} ({n} changes)")
+        };
+        if let Some(cmd) = state.preview.commit(name) {
+            state.record(cmd);
         }
     }
 
@@ -342,17 +330,11 @@ impl Properties {
             }
         };
         if live {
+            let name: PropName = prop.as_str().into();
             for (id, v) in values {
-                if !self
-                    .gesture
-                    .iter()
-                    .any(|(gid, gp, _)| *gid == id && *gp == prop)
-                    && let Ok(old) = state.world.get(id, &prop)
-                {
-                    self.gesture.push((id, prop.clone(), old));
-                }
-                let _ = state.world.set(id, &prop, v);
+                let _ = state.preview.set(&mut state.world, id, &name, v);
             }
+            self.gesture = Some(prop);
             return;
         }
         let mut commands: Vec<Command> = values

@@ -10,20 +10,37 @@
 //!   drags, Properties scrubbing): one gesture, one undo step.
 //! - [`EditorState::selection`] for what to act on; [`EditorState::tool`],
 //!   [`EditorState::snapping`] and [`EditorState::space`] for the header settings.
+//! - [`EditorState::preview`]: the gesture overlay (#213). Tools write live values through it;
+//!   [`EditorState::finish_drag`] / [`EditorState::cancel_drag`] end a gizmo or body drag as one
+//!   step or none; [`EditorState::amend_drag`] changes the last drag (editable delta).
+//! - [`EditorState::gizmo_pivot`] and [`EditorState::pivot_mode`]: where transforms happen
+//!   (spec 4.4); [`EditorState::rotate_selection`], [`EditorState::drop_selection`] and
+//!   [`EditorState::snap_selection_to_grid`] are the one-shot building commands.
 //!
 //! After any history change the selection drops ids that are no longer in the tree, and the undo
 //! name flashes in the status bar for 2 s.
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use std::collections::HashSet;
+
 use metallic_core::{InstanceId, Value, Vec3, World, load_scene, save_scene};
+use metallic_render::glam::{DQuat, DVec3};
 
 use crate::StudioError;
-use crate::commands::{Command, CommandError, History};
+use crate::commands::{Command, CommandError, History, PropName, count};
+use crate::gizmo::GizmoDrag;
 use crate::output::{Level, OutputSink, Tag};
+use crate::picking::PickCache;
+use crate::pivot::{Pivot, Rigid, world_pivot};
 use crate::play::{PlayController, PlayStart};
+use crate::preview::PreviewOverlay;
 use crate::selection::{Selection, is_detached};
+use crate::snapping::grid_shift;
 use crate::transform::Aabb;
+use crate::transform::{
+    PartTransform, Ray, from_d, orientation_to_quat, quat_to_orientation, snap,
+};
 
 /// How long an undo or save note stays in the status bar.
 pub const NOTE_TIME: Duration = Duration::from_secs(2);
@@ -52,8 +69,10 @@ pub enum Tool {
     Move,
     /// Rotate rings.
     Rotate,
-    /// Scale face handles.
+    /// Scale face handles and the uniform corner.
     Scale,
+    /// Move arrows, rotate rings and scale handles together.
+    Transform,
 }
 
 impl Tool {
@@ -64,15 +83,31 @@ impl Tool {
             Tool::Move => "Move",
             Tool::Rotate => "Rotate",
             Tool::Scale => "Scale",
+            Tool::Transform => "Transform",
         }
     }
 }
 
-/// Snapping settings (header chips).
+/// Move increments offered by `[` and `]` (spec 2.2).
+pub const MOVE_STEPS: &[f64] = &[0.05, 0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0];
+/// Rotate increments offered by Shift+`[` and Shift+`]`.
+pub const ROTATE_STEPS: &[f64] = &[1.0, 5.0, 11.25, 15.0, 22.5, 30.0, 45.0, 90.0];
+
+/// Snapping settings (header chips, spec 3.1 and 5).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Snapping {
-    /// Snapping on (Ctrl inverts it during a drag).
-    pub enabled: bool,
+    /// Grid chip: moves, sizes and turns snap to the increments (Ctrl inverts during a drag).
+    pub grid: bool,
+    /// Surface chip: a body drag follows the surface under the cursor.
+    pub surface: bool,
+    /// Vertex chip: snap to corners (V forces it for one drag).
+    pub vertex: bool,
+    /// Edge chip: snap to edge midpoints, face centres and points on edges.
+    pub edge: bool,
+    /// Soft snap: with every chip off, still pull to a vertex or edge midpoint within 6 px.
+    pub soft: bool,
+    /// Align to surface: a body drag turns the selection's up axis to the surface normal.
+    pub align: bool,
     /// Move and scale increment in studs.
     pub move_step: f64,
     /// Rotate increment in degrees.
@@ -82,11 +117,44 @@ pub struct Snapping {
 impl Default for Snapping {
     fn default() -> Self {
         Snapping {
-            enabled: true,
+            grid: true,
+            surface: true,
+            vertex: false,
+            edge: false,
+            soft: true,
+            align: false,
             move_step: 1.0,
             rotate_step: 15.0,
         }
     }
+}
+
+/// Steps through a list of increments: the next smaller (`up` false) or larger one.
+pub fn next_step(steps: &[f64], current: f64, up: bool) -> f64 {
+    if up {
+        steps
+            .iter()
+            .copied()
+            .find(|&s| s > current + 1e-9)
+            .unwrap_or(current)
+    } else {
+        steps
+            .iter()
+            .rev()
+            .copied()
+            .find(|&s| s < current - 1e-9)
+            .unwrap_or(current)
+    }
+}
+
+/// Where transforms happen (header Pivot / Centre, Z).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PivotMode {
+    /// The active object's pivot.
+    #[default]
+    Pivot,
+    /// The centre of the selection's bounding box.
+    Centre,
 }
 
 /// Gizmo axes: world or the active part's own.
@@ -134,6 +202,16 @@ pub struct EditorState {
     pub snapping: Snapping,
     /// Gizmo space.
     pub space: Space,
+    /// Pivot or selection centre.
+    pub pivot_mode: PivotMode,
+    /// Pivot edit mode (P): the gizmo moves the pivot only.
+    pub pivot_edit: bool,
+    /// Live values of the gesture in progress (#213).
+    pub preview: PreviewOverlay,
+    /// Every part's box for picking and snapping; the viewport keeps it in sync.
+    pub picks: PickCache,
+    /// The camera's right axis (Ctrl+T tilts about the nearest world axis to it).
+    pub view_right: DVec3,
     /// Output handle.
     pub output: OutputSink,
     /// Play modes and the running session.
@@ -165,6 +243,11 @@ impl EditorState {
             tool: Tool::default(),
             snapping: Snapping::default(),
             space: Space::default(),
+            pivot_mode: PivotMode::default(),
+            pivot_edit: false,
+            preview: PreviewOverlay::new(),
+            picks: PickCache::new(),
+            view_right: DVec3::X,
             output,
             play: PlayController::new(),
             can_save: true,
@@ -460,6 +543,319 @@ impl EditorState {
         Aabb::of_parts(&self.world, &self.selection.parts(&self.world))
     }
 
+    /// The pivot `id` moves about (part frame times offset, Model pivot, or box centre).
+    pub fn object_pivot(&self, id: InstanceId) -> Option<Pivot> {
+        world_pivot(&self.world, self.history.pivots(), id)
+    }
+
+    /// Where the gizmo sits: the active object's pivot (Pivot mode) or the selection's box
+    /// centre with the active object's axes (Centre mode). In pivot edit mode, always the active
+    /// object's pivot.
+    pub fn gizmo_pivot(&self) -> Option<Pivot> {
+        let active = self.selection.active()?;
+        let pivot = self.object_pivot(active);
+        if self.pivot_edit || self.pivot_mode == PivotMode::Pivot {
+            return pivot;
+        }
+        let centre = self.selection_bounds()?.centre();
+        Some(Pivot {
+            position: centre,
+            rotation: pivot.map_or(DQuat::IDENTITY, |p| p.rotation),
+        })
+    }
+
+    /// Selected Models with a pivot set in the editor (it moves with them).
+    pub fn models_with_pivots(&self) -> Vec<(InstanceId, Pivot)> {
+        self.selection
+            .ids()
+            .iter()
+            .filter(|&&id| self.world.is_a(id, "Model"))
+            .filter_map(|&id| Some((id, *self.history.pivots().get(&id)?)))
+            .collect()
+    }
+
+    /// Ends a drag: records its one step (or nothing) and drops what an unused duplicate made.
+    /// True when a step was recorded.
+    pub fn finish_drag(&mut self, drag: GizmoDrag) -> bool {
+        let (record, abandon) = drag.finish(&self.world, &mut self.preview, self.history.pivots());
+        if let Some(c) = abandon {
+            self.history.abandon(c, &mut self.world);
+        }
+        let done = match record {
+            Some(c) if !self.play.is_playing() => {
+                self.record_with_pivots(c);
+                true
+            }
+            _ => false,
+        };
+        self.after_history_change();
+        done
+    }
+
+    /// Records a step whose property changes are already in the world. Pivot changes in it
+    /// (`SetPivots`, alone or in a batch) are not previewed, so they are applied here first.
+    fn record_with_pivots(&mut self, mut cmd: Command) {
+        match &mut cmd {
+            Command::SetPivots { .. } => {
+                let _ = self.history.apply_pending(&mut cmd, &mut self.world);
+            }
+            Command::Batch { commands, .. } => {
+                for c in commands.iter_mut() {
+                    if matches!(c, Command::SetPivots { .. }) {
+                        let _ = self.history.apply_pending(c, &mut self.world);
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.record(cmd);
+    }
+
+    /// Cancels a drag (Esc): the world is as before it started.
+    pub fn cancel_drag(&mut self, drag: GizmoDrag) {
+        if let Some(c) = drag.cancel(&mut self.world, &mut self.preview) {
+            self.history.abandon(c, &mut self.world);
+        }
+        self.after_history_change();
+    }
+
+    /// Changes the last drag's amount (the editable delta after release, spec 4.5): the newest
+    /// step is replaced, not added to. `drag` is the finished drag as it was before
+    /// [`EditorState::finish_drag`]. False when the drag has no single amount.
+    pub fn amend_drag(&mut self, drag: &GizmoDrag, value: f64) -> bool {
+        if self.play.is_playing() || !drag.accepts_typing() {
+            return false;
+        }
+        if self.history.take_last(&mut self.world).is_none() {
+            return false;
+        }
+        let mut d = drag.clone();
+        if let Some(p) = d.pending_mut()
+            && self.history.apply_pending(p, &mut self.world).is_err()
+        {
+            self.after_history_change();
+            return false;
+        }
+        d.set_amount(value);
+        d.apply(&mut self.world, &mut self.preview);
+        self.finish_drag(d)
+    }
+
+    /// Writes new transforms for parts as one step named `name` (Position and Size, and
+    /// Orientation when given). Model pivots in the selection follow `motion` when given.
+    fn commit_transforms(
+        &mut self,
+        name: String,
+        changes: &[(InstanceId, PartTransform, Option<Vec3>)],
+        motion: Option<Rigid>,
+    ) -> bool {
+        if self.play.is_playing() {
+            return false;
+        }
+        let names: [PropName; 3] = ["Position".into(), "Orientation".into(), "Size".into()];
+        for (id, t, orientation) in changes {
+            let _ = self.preview.set(
+                &mut self.world,
+                *id,
+                &names[0],
+                Value::Vector3(from_d(t.position)),
+            );
+            if let Some(o) = orientation {
+                let _ = self
+                    .preview
+                    .set(&mut self.world, *id, &names[1], Value::Vector3(*o));
+            }
+            let _ = self.preview.set(
+                &mut self.world,
+                *id,
+                &names[2],
+                Value::Vector3(from_d(t.size)),
+            );
+        }
+        let Some(props) = self.preview.commit(name.clone()) else {
+            return false;
+        };
+        let models = self.models_with_pivots();
+        let cmd = match motion {
+            Some(m) if !models.is_empty() => Command::Batch {
+                name: name.clone(),
+                commands: vec![
+                    props,
+                    Command::SetPivots {
+                        name,
+                        changes: models
+                            .iter()
+                            .map(|(id, p)| (*id, Some(*p), Some(m.frame(p))))
+                            .collect(),
+                    },
+                ],
+            },
+            _ => props,
+        };
+        self.record_with_pivots(cmd);
+        true
+    }
+
+    /// Moves and turns every selected part by `motion` as one step.
+    pub fn transform_selection(&mut self, motion: Rigid, verb: &str) -> bool {
+        let parts = self.selection.parts(&self.world);
+        let turns = !motion.rotation.abs_diff_eq(DQuat::IDENTITY, 1e-12);
+        let changes: Vec<_> = parts
+            .iter()
+            .filter_map(|&id| {
+                let mut t = PartTransform::read(&self.world, id)?;
+                t.position = motion.point(t.position);
+                t.rotation = (motion.rotation * t.rotation).normalize();
+                Some((id, t, turns.then(|| quat_to_orientation(t.rotation))))
+            })
+            .collect();
+        let name = format!("{verb} {}", count(changes.len(), "part"));
+        self.commit_transforms(name, &changes, Some(motion))
+    }
+
+    /// Turns the selection by `degrees` about world `axis` through the gizmo pivot (Ctrl+R,
+    /// Ctrl+T). One step.
+    pub fn rotate_selection(&mut self, axis: DVec3, degrees: f64, verb: &str) -> bool {
+        let Some(pivot) = self.gizmo_pivot() else {
+            return false;
+        };
+        let motion = Rigid {
+            rotation: DQuat::from_axis_angle(axis.normalize_or(DVec3::Y), degrees.to_radians()),
+            about: pivot.position,
+            translation: DVec3::ZERO,
+        };
+        self.transform_selection(motion, verb)
+    }
+
+    /// The world axis nearest the camera's right (Ctrl+T tilts about it).
+    pub fn tilt_axis(&self) -> DVec3 {
+        let r = self.view_right;
+        let i = (0..3)
+            .max_by(|&a, &b| r[a].abs().total_cmp(&r[b].abs()))
+            .unwrap_or(0);
+        DVec3::AXES[i] * r[i].signum()
+    }
+
+    /// Drops the selection straight down onto the first surface below it (End). One step.
+    pub fn drop_selection(&mut self) -> bool {
+        self.picks.sync(&self.world);
+        let parts = self.selection.parts(&self.world);
+        let set: HashSet<InstanceId> = parts.iter().copied().collect();
+        let skip = |id: InstanceId| set.contains(&id);
+        let mut gap = f64::INFINITY;
+        for &id in &parts {
+            let Some(t) = PartTransform::read(&self.world, id) else {
+                continue;
+            };
+            let corners = t.corners();
+            let bottom = corners.iter().map(|c| c.y).fold(f64::INFINITY, f64::min);
+            let centre = DVec3::new(t.position.x, bottom, t.position.z);
+            for c in corners.iter().chain(std::iter::once(&centre)) {
+                let ray = Ray {
+                    origin: *c,
+                    dir: DVec3::NEG_Y,
+                };
+                if let Some((hit, _)) = self.picks.surface(&ray, &skip) {
+                    gap = gap.min(hit.distance);
+                }
+            }
+        }
+        if !gap.is_finite() {
+            self.note("Nothing below the selection".into());
+            return false;
+        }
+        if gap < 1e-9 {
+            return false;
+        }
+        self.transform_selection(Rigid::translate(DVec3::new(0.0, -gap, 0.0)), "Drop")
+    }
+
+    /// True when a selected part is off the grid (its reference point, spec 2.2, or its turn).
+    pub fn off_grid(&self) -> bool {
+        let step = self.snapping.move_step;
+        let turn = self.snapping.rotate_step;
+        self.selection
+            .parts(&self.world)
+            .iter()
+            .take(256)
+            .filter_map(|&id| PartTransform::read(&self.world, id).map(|t| (id, t)))
+            .any(|(id, t)| {
+                let shift = grid_snap_shift(&t, step);
+                let o = match self.world.get_ref(id, "Orientation") {
+                    Ok(Value::Vector3(v)) => *v,
+                    _ => Vec3::new(0.0, 0.0, 0.0),
+                };
+                shift.length() > 1e-6
+                    || [o.x, o.y, o.z]
+                        .iter()
+                        .any(|&a| (snap(a, turn) - a).abs() > 1e-6)
+            })
+    }
+
+    /// Moves each selected part's reference point to the grid and rounds its turn to the rotate
+    /// increment (Ctrl+Shift+Home, spec 4.6). One step.
+    pub fn snap_selection_to_grid(&mut self) -> bool {
+        let step = self.snapping.move_step;
+        let turn = self.snapping.rotate_step;
+        let parts = self.selection.parts(&self.world);
+        let changes: Vec<_> = parts
+            .iter()
+            .filter_map(|&id| {
+                let mut t = PartTransform::read(&self.world, id)?;
+                let o = match self.world.get_ref(id, "Orientation") {
+                    Ok(Value::Vector3(v)) => *v,
+                    _ => return None,
+                };
+                let rounded = Vec3::new(snap(o.x, turn), snap(o.y, turn), snap(o.z, turn));
+                t.rotation = orientation_to_quat(rounded);
+                t.position += grid_snap_shift(&t, step);
+                Some((id, t, (rounded != o).then_some(rounded)))
+            })
+            .collect();
+        let name = format!("Snap {} to grid", count(changes.len(), "part"));
+        self.commit_transforms(name, &changes, None)
+    }
+
+    /// Sets the pivot of `id` to the world frame `pivot` (one step).
+    pub fn set_pivot(&mut self, id: InstanceId, pivot: Pivot) -> bool {
+        let Some(stored) = crate::pivot::stored_for(&self.world, id, &pivot) else {
+            return false;
+        };
+        let old = self.history.pivots().get(&id).copied();
+        let cmd = Command::SetPivots {
+            name: format!("Edit pivot of {}", self.display_name(id)),
+            changes: vec![(id, old, Some(stored))],
+        };
+        self.apply(cmd).is_ok()
+    }
+
+    /// Restores the default pivot of the active object (Reset pivot). One step.
+    pub fn reset_pivot(&mut self) -> bool {
+        let Some(id) = self.selection.active() else {
+            return false;
+        };
+        let Some(old) = self.history.pivots().get(&id).copied() else {
+            return false;
+        };
+        let cmd = Command::SetPivots {
+            name: format!("Reset pivot of {}", self.display_name(id)),
+            changes: vec![(id, Some(old), None)],
+        };
+        self.apply(cmd).is_ok()
+    }
+
+    /// Halves or doubles the move increment (`[`, `]`) through the offered steps.
+    pub fn step_move_increment(&mut self, up: bool) {
+        self.snapping.move_step = next_step(MOVE_STEPS, self.snapping.move_step, up);
+        self.note(format!("Move increment {} stud", self.snapping.move_step));
+    }
+
+    /// Steps the rotate increment down or up (Shift+`[`, Shift+`]`).
+    pub fn step_rotate_increment(&mut self, up: bool) {
+        self.snapping.rotate_step = next_step(ROTATE_STEPS, self.snapping.rotate_step, up);
+        self.note(format!("Rotate increment {}°", self.snapping.rotate_step));
+    }
+
     /// Display name of an instance (`Name`, or its class).
     pub fn display_name(&self, id: InstanceId) -> String {
         match self.world.get_ref(id, "Name") {
@@ -467,6 +863,25 @@ impl EditorState {
             _ => self.world.class_name(id).unwrap_or("?").to_string(),
         }
     }
+}
+
+/// The shift that puts a part's reference point on the world grid (spec 2.2, per axis: centre
+/// when the size is a multiple of the step, else the min corner).
+pub fn grid_snap_shift(t: &PartTransform, step: f64) -> DVec3 {
+    let corners = t.corners();
+    let mut out = DVec3::ZERO;
+    for axis in 0..3 {
+        let lo = corners
+            .iter()
+            .map(|c| c[axis])
+            .fold(f64::INFINITY, f64::min);
+        let hi = corners
+            .iter()
+            .map(|c| c[axis])
+            .fold(f64::NEG_INFINITY, f64::max);
+        out[axis] = grid_shift(lo, hi, step);
+    }
+    out
 }
 
 fn file_name(p: &Path) -> String {

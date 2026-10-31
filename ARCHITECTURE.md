@@ -117,6 +117,13 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
+  to the world so renderer and Properties need no change; commit gives one `Command::SetProperties`, cancel restores),
+  `gizmo.rs` (handles for Move/Rotate/Scale/Transform, body drags over surfaces, axis locks, R/T turns, typed values,
+  pivot drags; `GizmoDrag::finish` returns the one undo step), `snapping.rs` (`SnapSource` candidates with priority
+  and glyphs, `Surface` placement in the hit part's grid, virtual surface, soft snap), `pivot.rs` (`Pivot`, `Rigid`,
+  27 pivot snap points; editor pivots live in `History`'s `Book` as `Command::SetPivots` until core gets
+  `PivotOffset`/`WorldPivot`, #216). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
@@ -304,8 +311,8 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
 - **A Studio edit action:** a `Command` in `metallic_studio/src/commands.rs` applied through `History`, never by
-  mutating the world directly (a live-preview gesture writes the world while dragging and calls
-  `EditorState::record` once on release). A toolbar or menu command: register an `Action` in
+  mutating the world directly (a live-preview gesture writes through `EditorState::preview`, the
+  `PreviewOverlay`, while dragging and records its `commit` once on release). A toolbar or menu command: register an `Action` in
   `metallic_studio/src/actions.rs` and, for a default key, a row in `keymap.rs` `METALLIC_PRESET`.
 
 ## Quality bar

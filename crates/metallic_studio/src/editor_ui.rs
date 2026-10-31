@@ -78,7 +78,31 @@ impl EditorUi {
             save_error: None,
         };
         ui.viewport.frame_all(&ui.state);
+        ui.sync_hold_keys();
         ui
+    }
+
+    /// Copies the held keys (V, Space) from the keymap into the viewport.
+    fn sync_hold_keys(&mut self) {
+        if let Some(c) = self.keymap.chord("hold.vertex") {
+            self.viewport.holds.vertex = c.key;
+        }
+        if let Some(c) = self.keymap.chord("hold.summon") {
+            self.viewport.holds.summon = c.key;
+        }
+    }
+
+    /// Drag-context keys (Esc, X/Y/Z, R/T, Ctrl+D) go to the drag before the viewport runs.
+    fn drag_keys(&mut self, ctx: &egui::Context) {
+        if !self.viewport.is_dragging() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let mut pressed = std::mem::take(&mut self.pressed);
+        self.keymap.pressed(ctx, &[KeyContext::Drag], &mut pressed);
+        for &id in &pressed {
+            self.viewport.drag_action(id, &mut self.state);
+        }
+        self.pressed = pressed;
     }
 
     /// Opens a game folder in a new editor.
@@ -151,7 +175,7 @@ impl EditorUi {
     }
 
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
-        let typing = ctx.egui_wants_keyboard_input();
+        let typing = ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta();
         let mut contexts: Vec<KeyContext> = Vec::with_capacity(2);
         if !typing {
             contexts.push(KeyContext::Global);
@@ -266,11 +290,24 @@ impl EditorUi {
                         &mut self.state,
                         &self.keymap,
                     );
+                    ui.separator();
+                    self.actions.menu_items(
+                        ui,
+                        &[
+                            "build.rotate90",
+                            "build.tilt90",
+                            "build.drop",
+                            "build.snap_to_grid",
+                            "pivot.reset",
+                        ],
+                        &mut self.state,
+                        &self.keymap,
+                    );
                 });
                 ui.menu_button("View", |ui| {
                     self.actions.menu_items(
                         ui,
-                        &["view.frame_selection", "view.frame_all"],
+                        &["view.frame_selection", "view.frame_all", "snap.soft"],
                         &mut self.state,
                         &self.keymap,
                     );
@@ -316,6 +353,9 @@ impl EditorUi {
                     .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
                 ui.separator();
                 self.actions
+                    .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
+                ui.separator();
+                self.actions
                     .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
                 ui.separator();
                 self.actions
@@ -341,6 +381,18 @@ impl EditorUi {
                         "Saved"
                     };
                     ui.label(RichText::new(save).small().color(ui_tokens().text_dim));
+                    if let Some(st) = self.viewport.status(&self.state) {
+                        ui.separator();
+                        let colour = if st.editing {
+                            ui_tokens().accent
+                        } else {
+                            ui_tokens().text
+                        };
+                        ui.label(RichText::new(st.text).small().monospace().color(colour));
+                        if let Some(snap) = st.snap {
+                            ui.label(RichText::new(snap).small().color(ui_tokens().text_dim));
+                        }
+                    }
                     if let Some(note) = self.state.current_note() {
                         ui.separator();
                         ui.label(RichText::new(note).small());
@@ -394,6 +446,7 @@ impl EditorUi {
                 self.output.ui(ui);
             });
 
+        self.drag_keys(&ctx);
         let mut viewport_hovered = false;
         egui::CentralPanel::default().show(ui, |ui| {
             self.scripts.prune(&self.state);

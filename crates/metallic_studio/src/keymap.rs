@@ -14,7 +14,8 @@ pub enum KeyContext {
     Global,
     /// While the pointer is over the 3D viewport. Single letters live here.
     Viewport,
-    /// While a gizmo drag is held (Esc cancels, X/Y/Z lock axes in #214).
+    /// While a gizmo or body drag is held: Esc cancels, X/Y/Z lock axes, R/T turn, Ctrl+D
+    /// stamps. These keys mean nothing else during a drag.
     Drag,
 }
 
@@ -101,12 +102,43 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("tool.move", "W", KeyContext::Viewport),
     ("tool.rotate", "E", KeyContext::Viewport),
     ("tool.scale", "R", KeyContext::Viewport),
+    ("tool.transform", "T", KeyContext::Viewport),
+    ("space.toggle", "X", KeyContext::Viewport),
+    ("pivot.mode", "Z", KeyContext::Viewport),
+    ("pivot.edit", "P", KeyContext::Viewport),
+    ("snap.grid", "Ctrl+K", KeyContext::Global),
+    ("increment.move_down", "[", KeyContext::Viewport),
+    ("increment.move_up", "]", KeyContext::Viewport),
+    ("increment.rotate_down", "Shift+[", KeyContext::Viewport),
+    ("increment.rotate_up", "Shift+]", KeyContext::Viewport),
+    // US layouts report Shift+[ as "{".
+    ("increment.rotate_down", "Shift+{", KeyContext::Viewport),
+    ("increment.rotate_up", "Shift+}", KeyContext::Viewport),
+    ("build.rotate90", "Ctrl+R", KeyContext::Viewport),
+    ("build.tilt90", "Ctrl+T", KeyContext::Viewport),
+    ("build.drop", "End", KeyContext::Viewport),
+    (
+        "build.snap_to_grid",
+        "Ctrl+Shift+Home",
+        KeyContext::Viewport,
+    ),
+    ("hold.vertex", "V", KeyContext::Viewport),
+    ("hold.summon", "Space", KeyContext::Viewport),
     ("view.frame_selection", "F", KeyContext::Viewport),
     ("view.frame_all", "Home", KeyContext::Viewport),
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
     ("output.clear", "Ctrl+L", KeyContext::Global),
     ("drag.cancel", "Escape", KeyContext::Drag),
+    ("drag.lock_x", "X", KeyContext::Drag),
+    ("drag.lock_y", "Y", KeyContext::Drag),
+    ("drag.lock_z", "Z", KeyContext::Drag),
+    ("drag.plane_x", "Shift+X", KeyContext::Drag),
+    ("drag.plane_y", "Shift+Y", KeyContext::Drag),
+    ("drag.plane_z", "Shift+Z", KeyContext::Drag),
+    ("drag.turn", "R", KeyContext::Drag),
+    ("drag.tilt", "T", KeyContext::Drag),
+    ("drag.stamp", "Ctrl+D", KeyContext::Drag),
 ];
 
 /// A set of bindings.
