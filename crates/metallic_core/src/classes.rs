@@ -407,7 +407,11 @@ static CLASSES: &[ClassDef] = &[
     class(
         "ScreenGui",
         "Instance",
-        &[p("Enabled", ValueType::Bool, || Value::Bool(true))],
+        &[
+            p("Enabled", ValueType::Bool, || Value::Bool(true)),
+            // Higher draws (and takes clicks) above lower; equal orders keep tree order.
+            p("DisplayOrder", ValueType::Number, || Value::Number(0.0)),
+        ],
     ),
     class(
         "Frame",
@@ -426,6 +430,13 @@ static CLASSES: &[ClassDef] = &[
                 Value::Number(0.0)
             }),
             p("Visible", ValueType::Bool, || Value::Bool(true)),
+            // Siblings draw in ZIndex order (ties in tree order), above their parent.
+            p("ZIndex", ValueType::Number, || Value::Number(1.0)),
+            // An Active element takes the pointer: clicks on it do not reach what is below
+            // or the game. Buttons always do.
+            p("Active", ValueType::Bool, || Value::Bool(false)),
+            // Descendants are drawn and clicked only inside this element's rectangle.
+            p("ClipsDescendants", ValueType::Bool, || Value::Bool(false)),
         ],
     ),
     class(
@@ -662,6 +673,35 @@ static CLASSES: &[ClassDef] = &[
             },
         ],
     ),
+    // Clickable GUI (#79). Roblox's GuiButton derives from GuiObject; here `Frame` plays that
+    // role, so a button is also a Frame.
+    class(
+        "GuiButton",
+        "Frame",
+        &[p("AutoButtonColor", ValueType::Bool, || Value::Bool(true))],
+    ),
+    class(
+        "TextButton",
+        "GuiButton",
+        &[
+            p("Text", ValueType::String, || Value::String("Button".into())),
+            p("TextColor3", ValueType::Color3, || {
+                Value::Color3(Color3::new(27.0, 42.0, 53.0))
+            }),
+            p("TextSize", ValueType::Number, || Value::Number(14.0)),
+        ],
+    ),
+    class(
+        "ImageButton",
+        "GuiButton",
+        &[
+            p("Image", ValueType::String, || Value::String(String::new())),
+            p("ImageColor3", ValueType::Color3, || Value::Color3(WHITE)),
+            p("ImageTransparency", ValueType::Number, || {
+                Value::Number(0.0)
+            }),
+        ],
+    ),
     // Last, with the other appended classes: `require(moduleScript)` runs its `Source` once per
     // script VM. It never runs by itself, so it has no `Enabled`.
     class(
@@ -716,7 +756,10 @@ pub fn class_def(name: &str) -> Option<&'static ClassDef> {
         "BloomEffect" => 31,
         "ColorCorrectionEffect" => 32,
         "ColorGradingEffect" => 33,
-        "ModuleScript" => 34,
+        "GuiButton" => 34,
+        "TextButton" => 35,
+        "ImageButton" => 36,
+        "ModuleScript" => 37,
         _ => return None,
     };
     CLASSES.get(index)

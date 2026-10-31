@@ -158,8 +158,8 @@ pub fn allowed(origin: PageOrigin, cmd: &BridgeCommand) -> bool {
         PageOrigin::Other => false,
         PageOrigin::Site => match cmd {
             BridgeCommand::GithubSignIn | BridgeCommand::RetrySite => false,
-            // Developer mode, the development address and the update channel are for the
-            // Launcher's own settings page.
+            // Developer mode, the development address, the update channel and the page theme are
+            // for the Launcher's own settings page.
             // Listed field by field with no `..`: a new setting does not compile until it is
             // put on one side or the other, so it can never default to "the site may set it".
             BridgeCommand::SetSettings { patch } => {
@@ -168,6 +168,7 @@ pub fn allowed(origin: PageOrigin, cmd: &BridgeCommand) -> bool {
                     developer_mode: None,
                     dev_url: None,
                     channel: None,
+                    theme: None,
                 } = patch
                 else {
                     return false;
@@ -485,6 +486,7 @@ fn settings_view(origin: PageOrigin, settings: &LauncherSettings) -> Value {
             "developerMode": settings.developer_mode,
             "devUrl": settings.dev_url,
             "channel": settings.channel.as_str(),
+            "theme": settings.theme.as_str(),
         })
     } else {
         json!({ "closeToTray": settings.close_to_tray })
