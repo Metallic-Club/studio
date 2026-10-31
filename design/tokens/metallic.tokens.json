@@ -323,6 +323,24 @@
       "$value": "14px"
     }
   },
+  "size": {
+    "$description": "Studio control heights (desktop density)",
+    "h-row": {
+      "$type": "dimension",
+      "$value": "24px",
+      "$description": "Tree, property and list rows"
+    },
+    "h-control": {
+      "$type": "dimension",
+      "$value": "32px",
+      "$description": "Secondary buttons, inputs"
+    },
+    "h-control-lg": {
+      "$type": "dimension",
+      "$value": "36px",
+      "$description": "Primary button, toolbar"
+    }
+  },
   "font": {
     "font": {
       "$type": "fontFamily",
@@ -352,6 +370,17 @@
         "spread": "0px"
       },
       "$description": "Only floating surfaces get a shadow"
+    },
+    "shadow-modal": {
+      "$type": "shadow",
+      "$value": {
+        "color": "rgba(0,0,0,0.55)",
+        "offsetX": "0px",
+        "offsetY": "16px",
+        "blur": "48px",
+        "spread": "0px"
+      },
+      "$description": "Dialogs and the splash window (elevation level 4)"
     }
   },
   "motion": {
