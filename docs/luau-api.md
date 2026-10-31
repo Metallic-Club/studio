@@ -22,12 +22,28 @@ Host-injected client action events likewise have no receiver and are discarded o
 access keeps its existing client-only restriction.
 The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
 
-This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,
-ModuleScript/require loader or playable multiplayer. The separate scheduler correctness work in #173 and the later
+This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process
+or playable multiplayer. The separate scheduler correctness work in #173 and the later
 process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
 
 ## Globals
-`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
+`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
+
+## ModuleScript and `require`
+`ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
+sandboxed Luau under the requiring thread's deadline (it may `task.wait`), and returns the module's single return value to every
+caller; `script` inside the module is the ModuleScript. The cache is scoped to the VM, so the server VM and the client VM of a
+host each run a module once. Rules, as in Roblox:
+
+- the module must return exactly one value (`nil` counts): otherwise `<Full.Name>: Module code did not return exactly one value`;
+- a cyclic require errors with `Requested module was required recursively` instead of hanging;
+- an error in the module (including a syntax error) propagates to the requiring script with the module's own position, e.g.
+  `ReplicatedStorage.Config:3: boom`, and is cached: later requires raise the same error without running the module again;
+- only a `ModuleScript` instance is accepted: anything else raises `Attempted to call require with invalid argument(s).`;
+- the cached value is kept for the life of the VM; changing `Source` afterwards has no effect until the VM restarts.
+
+A timeout or script stop inside a module that is still loading leaves it marked as loading in that VM (a second require then
+reports the cycle error); the next play session starts with a fresh cache.
 All API tables are read-only.
 
 ## Instance

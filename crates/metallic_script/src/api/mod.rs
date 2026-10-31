@@ -13,6 +13,7 @@ mod input;
 mod instance;
 mod pivot;
 mod remote;
+mod require;
 mod services;
 mod signals;
 
@@ -181,6 +182,9 @@ fn build(
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }
     set("Enum", mlua::Value::Table(state.enums.table.clone())).map_err(to_err)?;
+    let (lib, shared_g) = vm.env_parts();
+    let require = require::install(lua, &state, lib, shared_g)?;
+    set("require", mlua::Value::Function(require)).map_err(to_err)?;
     set("game", mlua::Value::UserData(services::game(lua, &state)?)).map_err(to_err)?;
     let workspace = state.world()?.root("Workspace");
     let workspace = match workspace {
