@@ -12,11 +12,16 @@
 //! let players = Rc::new(Cell::new(2u8));
 //! let p = players.clone();
 //! registry.register(
-//!     Action::new("play.team_test", "Team Test", Icon::Players, ToolbarGroup::Play, move |s| s.start_play("play.team_test"))
+//!     Action::new("play.team_test", "Team Test", Icon::Players, ToolbarGroup::Play, move |s| s.request(UiRequest::StartPlay("play.team_test")))
 //!         .enabled(|s| !s.play.is_playing())
 //!         .accessory(move |ui, _| { let mut n = p.get(); ui.add(egui::DragValue::new(&mut n).range(1..=8)); p.set(n); }),
 //! );
 //! ```
+//!
+//! A play action asks the UI with [`UiRequest::StartPlay`] rather than calling
+//! [`EditorState::start_play`] itself, so the UI first commits open script tabs and ends any
+//! live-preview gesture: Play runs what is on screen. While a session runs, every editing
+//! action (tools, snapping, undo, delete...) is disabled, accessories included.
 //!
 //! The shortcut shown in the tooltip comes from the [`Keymap`], so rebinding a key updates every
 //! place that shows it.
@@ -198,7 +203,7 @@ impl ActionRegistry {
                 clicked = Some(a.id);
             }
             if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+                ui.add_enabled_ui(enabled, |ui| acc(ui, state));
             }
         }
         if let Some(id) = clicked {
@@ -243,7 +248,8 @@ pub fn default_actions() -> ActionRegistry {
     ] {
         r.register(
             Action::new(id, label, icon, ToolbarGroup::Tools, move |s| s.tool = tool)
-                .checked(move |s| s.tool == tool),
+                .checked(move |s| s.tool == tool)
+                .enabled(editing),
         );
     }
     r.register(
@@ -257,6 +263,7 @@ pub fn default_actions() -> ActionRegistry {
             },
         )
         .checked(|s| s.snapping.enabled)
+        .enabled(editing)
         .accessory(|ui, s| {
             ui.add(
                 egui::DragValue::new(&mut s.snapping.move_step)
@@ -288,6 +295,7 @@ pub fn default_actions() -> ActionRegistry {
             },
         )
         .checked(|s| s.space == Space::Local)
+        .enabled(editing)
         .accessory(|ui, s| {
             ui.label(
                 RichText::new(match s.space {
@@ -412,14 +420,18 @@ pub fn default_actions() -> ActionRegistry {
     ));
     r.register(
         Action::new("play.start", "Play", Icon::Play, ToolbarGroup::Play, |s| {
-            s.start_play("play.start")
+            s.request(UiRequest::StartPlay("play.start"))
         })
-        .enabled(|s| !s.play.is_playing() && s.play.modes().any(|(id, _)| id == "play.start")),
+        .enabled(|s| !s.play.is_playing() && s.play.has_mode("play.start")),
     );
     r.register(
-        Action::new("play.stop", "Stop", Icon::Stop, ToolbarGroup::Play, |s| {
-            s.play.stop()
-        })
+        Action::new(
+            "play.stop",
+            "Stop",
+            Icon::Stop,
+            ToolbarGroup::Play,
+            EditorState::stop_play,
+        )
         .enabled(|s| s.play.is_playing()),
     );
     r
@@ -478,7 +490,38 @@ mod tests {
         assert!(r.run("tool.rotate", &mut s));
         assert_eq!(s.tool, Tool::Rotate);
         assert!(!r.run("edit.undo", &mut s), "nothing to undo");
+        assert!(r.run("play.start", &mut s), "Play is registered");
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::StartPlay("play.start")]
+        ));
+        s.play = crate::play::PlayController::new();
         assert!(!r.run("play.start", &mut s), "no Play mode registered");
+    }
+
+    #[test]
+    fn editing_actions_are_off_while_playing() {
+        let mut r = default_actions();
+        let mut s = state();
+        s.start_play("play.start");
+        assert!(s.play.is_playing());
+        for id in [
+            "tool.move",
+            "snap.toggle",
+            "space.toggle",
+            "edit.delete",
+            "play.start",
+        ] {
+            assert!(
+                !r.get(id).is_some_and(|a| a.is_enabled(&s)),
+                "{id} runs while playing"
+            );
+        }
+        assert!(!r.run("tool.rotate", &mut s));
+        assert_eq!(s.tool, Tool::Move);
+        assert!(r.run("play.stop", &mut s));
+        assert!(!s.play.is_playing());
+        assert!(r.run("tool.rotate", &mut s));
     }
 
     #[test]

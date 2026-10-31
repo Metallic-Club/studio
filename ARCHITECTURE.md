@@ -148,10 +148,18 @@ apps.
   `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
   and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
   Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one
-  combined Local Play tag because Game supplies one sink for both VMs. Snapshot copying is O(world); callers
-  through the current borrowed PlayStart/clean_world seam copy twice. No mode is registered, no rendering/raw
-  input/Explorer integration is added, and Task #11's manual acceptance remains open. Independent #92/#275 still
-  tracks recursive clone_subtree behavior reached by Game's StarterGui copying.
+  combined `play` tag (`PLAY_TAG`) because Game supplies one sink for both VMs. Snapshot copying is O(world);
+  callers through the current borrowed PlayStart/clean_world seam copy twice. Independent #92/#275 still tracks
+  recursive clone_subtree behavior reached by Game's StarterGui copying.
+  Play and Stop (#11): `EditorState::new` registers `play::LocalPlayMode` (`play.start`, F5; client and server in
+  one process like the Player). The session owns an `InputRuntime` and is a `play::PlayView`
+  (`PlaySession::view`): the viewport draws it every frame with the game camera, avatar and ScreenGuis,
+  `play::input::PlayInput` turns egui keys and mouse into `RawEvent`s, and Explorer shows its world read-only
+  (`explorer::play_tree`). Studio keys go first each frame (keymap context `Play`: Esc, plus Shift+F5 globally).
+  While playing, `EditorState::apply/record/undo/redo` refuse, editing actions and accessories are disabled,
+  Properties and the script editor are read-only, and toolbar/status bar show a "Playing" chip (theme `success`
+  tokens). Play is asked for with `UiRequest::StartPlay`, so open script tabs and gestures commit first. Stop
+  (`EditorState::stop_play`) drops the session; a start error goes to Output and Studio stays in edit mode.
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional

@@ -6,6 +6,12 @@
 //! keymap to actions: global keys always (except while typing in a text field, where only Save
 //! and Play keys work), viewport keys only while the pointer is over the 3D view and the right
 //! button is up (so WASD flies the camera while it is held).
+//!
+//! **While playing** Studio's keys are dispatched first each frame (Global and Play contexts:
+//! Esc and Shift+F5 stop), then the rest of the keyboard and the mouse over the viewport go to
+//! the game ([`PlayInput`]), then the session advances and the viewport draws it. The toolbar
+//! and status bar show a "Playing" chip, Explorer shows the play world read-only, and
+//! Properties, Insert, the script editor and every editing action are off until Stop.
 use eframe::egui::{self, RichText};
 use eframe::egui_wgpu;
 
@@ -14,11 +20,13 @@ use crate::editor::{EditorState, INSERTABLE, UiRequest};
 use crate::explorer::Explorer;
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
+use crate::play::input::PlayInput;
 use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
 use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::viewport::Viewport;
+use crate::widgets::Plate;
 
 /// What the editor asks the app shell to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +70,8 @@ pub struct EditorUi {
     save_error: Option<String>,
     /// The creator asked for Settings; the app shows the dialog.
     settings_requested: bool,
+    /// Keyboard and mouse state of the running game's input.
+    play_input: PlayInput,
 }
 
 impl EditorUi {
@@ -80,6 +90,7 @@ impl EditorUi {
             confirm: None,
             save_error: None,
             settings_requested: false,
+            play_input: PlayInput::new(),
         };
         ui.viewport.frame_all(&ui.state);
         ui
@@ -163,11 +174,19 @@ impl EditorUi {
     }
 
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
-        let typing = ctx.egui_wants_keyboard_input();
+        let playing = self.state.play.is_playing();
+        // While playing, a focused button must not keep Esc from stopping: only text counts.
+        let typing = if playing {
+            ctx.text_edit_focused()
+        } else {
+            ctx.egui_wants_keyboard_input()
+        };
         let mut contexts: Vec<KeyContext> = Vec::with_capacity(2);
         if !typing {
             contexts.push(KeyContext::Global);
-            if viewport_hovered && !right_down && !self.viewport.is_dragging() {
+            if playing {
+                contexts.push(KeyContext::Play);
+            } else if viewport_hovered && !right_down && !self.viewport.is_dragging() {
                 contexts.push(KeyContext::Viewport);
             }
         }
@@ -188,7 +207,37 @@ impl EditorUi {
         self.pressed = pressed;
     }
 
-    fn requests(&mut self) {
+    /// Starts play mode `id` on what is on screen: open script tabs are committed and a gizmo or
+    /// Properties gesture ends first. On success the Scene tab shows and the game gets the
+    /// keyboard; on failure Output says why and editing goes on.
+    fn start_play(&mut self, ctx: &egui::Context, id: &'static str) {
+        self.scripts.flush(&mut self.state);
+        self.properties.finish_gesture(&mut self.state);
+        self.viewport.cancel_drag(&mut self.state);
+        if self.state.start_play(id) {
+            self.scripts.show_scene();
+            self.play_input = PlayInput::new();
+            ctx.memory_mut(|m| {
+                if let Some(focused) = m.focused() {
+                    m.surrender_focus(focused);
+                }
+            });
+        }
+    }
+
+    /// "Esc or Shift+F5 stops", from the keymap.
+    fn stop_keys(&self) -> String {
+        let keys: Vec<String> = self
+            .keymap
+            .bindings()
+            .iter()
+            .filter(|b| b.action == "play.stop")
+            .map(|b| b.chord.label())
+            .collect();
+        keys.join(" or ")
+    }
+
+    fn requests(&mut self, ctx: &egui::Context) {
         for r in self.state.take_requests() {
             match r {
                 UiRequest::FrameSelection | UiRequest::FrameAll => {
@@ -198,6 +247,7 @@ impl EditorUi {
                 UiRequest::OpenScript(id) => self.scripts.open(id, &self.state),
                 UiRequest::RunAction(id) => self.run_action(id),
                 UiRequest::OpenSettings => self.settings_requested = true,
+                UiRequest::StartPlay(id) => self.start_play(ctx, id),
             }
         }
     }
@@ -210,7 +260,18 @@ impl EditorUi {
     ) -> EditorExit {
         let ctx = ui.ctx().clone();
         let dt = f64::from(ctx.input(|i| i.stable_dt));
+        let played = self.state.play.is_playing();
+        if played {
+            // Studio keys first (Esc, Shift+F5, Ctrl+S); what is left belongs to the game.
+            self.keys(&ctx, false, false);
+            self.requests(&ctx);
+        }
+        let (rect, hovered) = (self.viewport.rect(), self.viewport.play_hovered());
+        if let Some(view) = self.state.play.view_mut() {
+            self.play_input.feed(&ctx, view, rect, hovered);
+        }
         self.state.play.update(dt);
+        let playing = self.state.play.is_playing();
         let mut exit = EditorExit::Stay;
 
         egui::Panel::top("menu").show(ui, |ui| {
@@ -293,7 +354,7 @@ impl EditorUi {
                 });
                 ui.menu_button("Insert", |ui| {
                     for &class in INSERTABLE {
-                        if ui.button(class).clicked() {
+                        if theme::add_enabled(ui, !playing, egui::Button::new(class)).clicked() {
                             let parent = self
                                 .state
                                 .selection
@@ -339,10 +400,10 @@ impl EditorUi {
                 if let Some(status) = self.state.play.status() {
                     let text = match status {
                         crate::play::PlayStatus::Starting => "Starting…".to_string(),
-                        crate::play::PlayStatus::Running(t) => t,
+                        crate::play::PlayStatus::Running(t) => format!("Playing · {t}"),
                         crate::play::PlayStatus::Ended(t) => t,
                     };
-                    ui.label(RichText::new(text).color(ui_tokens().success));
+                    playing_chip(ui, &text);
                 }
             });
         });
@@ -351,6 +412,11 @@ impl EditorUi {
             .exact_size(24.0)
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
+                    if playing {
+                        let text = format!("Playing: editing is off · {} stops", self.stop_keys());
+                        ui.label(RichText::new(text).small().color(theme::success()));
+                        ui.separator();
+                    }
                     let save = if self.state.is_dirty() {
                         "Unsaved changes"
                     } else {
@@ -393,14 +459,29 @@ impl EditorUi {
             .resizable(true)
             .show(ui, |ui| {
                 ui.label(RichText::new("Explorer").strong());
-                self.explorer.ui(ui, &mut self.state);
+                if let Some(view) = self.state.play.view() {
+                    playing_banner(ui, "Play world, read-only. Stop returns to editing.");
+                    view.inspect_world(&mut |world| {
+                        crate::explorer::play_tree(ui, world);
+                    });
+                } else if playing {
+                    playing_banner(ui, "Playing. Stop to edit.");
+                    ui.add_enabled_ui(false, |ui| self.explorer.ui(ui, &mut self.state));
+                } else {
+                    self.explorer.ui(ui, &mut self.state);
+                }
             });
         egui::Panel::right("properties")
             .default_size(304.0)
             .resizable(true)
             .show(ui, |ui| {
                 ui.label(RichText::new("Properties").strong());
-                self.properties.ui(ui, &mut self.state);
+                if playing {
+                    playing_banner(ui, "Edit values, read-only while playing.");
+                    ui.add_enabled_ui(false, |ui| self.properties.ui(ui, &mut self.state));
+                } else {
+                    self.properties.ui(ui, &mut self.state);
+                }
             });
         egui::Panel::bottom("output")
             .default_size(200.0)
@@ -423,9 +504,11 @@ impl EditorUi {
             }
         });
 
-        let right_down = ctx.input(|i| i.pointer.secondary_down());
-        self.keys(&ctx, viewport_hovered, right_down);
-        self.requests();
+        if !played {
+            let right_down = ctx.input(|i| i.pointer.secondary_down());
+            self.keys(&ctx, viewport_hovered, right_down);
+        }
+        self.requests(&ctx);
 
         if let Some(leave) = self.confirm {
             let done = match leave {
@@ -470,6 +553,42 @@ impl EditorUi {
         }
         exit
     }
+}
+
+/// The toolbar's "Playing" chip: `success` text on a `success-bg` plate.
+fn playing_chip(ui: &mut egui::Ui, text: &str) {
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text.to_string(), ui_tokens().body(), theme::success());
+    let pad = egui::vec2(8.0, 3.0);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
+    Plate::raised()
+        .fill(theme::success_bg())
+        .paint(ui.painter(), rect);
+    ui.painter()
+        .galley(rect.min + pad, galley, theme::success());
+}
+
+/// A full-width note at the top of a panel while playing.
+fn playing_banner(ui: &mut egui::Ui, text: &str) {
+    let width = ui.available_width();
+    let galley = ui.painter().layout(
+        text.to_string(),
+        ui_tokens().small(),
+        theme::success(),
+        width - 16.0,
+    );
+    let pad = egui::vec2(8.0, 4.0);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(width, galley.size().y + pad.y * 2.0),
+        egui::Sense::hover(),
+    );
+    Plate::panel()
+        .fill(theme::success_bg())
+        .paint(ui.painter(), rect);
+    ui.painter()
+        .galley(rect.min + pad, galley, theme::success());
+    ui.add_space(4.0);
 }
 
 fn fmt(v: f64) -> String {

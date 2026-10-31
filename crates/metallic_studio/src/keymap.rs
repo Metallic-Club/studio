@@ -16,6 +16,9 @@ pub enum KeyContext {
     Viewport,
     /// While a gizmo drag is held (Esc cancels, X/Y/Z lock axes in #214).
     Drag,
+    /// While a play session runs: Studio keys that win over the game (Esc stops). Viewport
+    /// keys are off then; the game gets them.
+    Play,
 }
 
 /// A key with modifiers, e.g. Ctrl+Shift+Z.
@@ -110,6 +113,7 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("view.frame_all", "Home", KeyContext::Viewport),
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
+    ("play.stop", "Escape", KeyContext::Play),
     ("output.clear", "Ctrl+L", KeyContext::Global),
     ("drag.cancel", "Escape", KeyContext::Drag),
 ];

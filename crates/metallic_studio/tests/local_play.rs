@@ -5,7 +5,7 @@ use metallic_runtime::{FrameInput, TICK};
 use metallic_studio::commands::Command;
 use metallic_studio::editor::EditorState;
 use metallic_studio::output::{Level, OutputLog, Tag};
-use metallic_studio::play::{LocalPlaySession, PlayController, PlaySession, PlayStatus};
+use metallic_studio::play::{LocalPlaySession, PLAY_TAG, PlayController, PlaySession, PlayStatus};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -306,7 +306,7 @@ fn combined_output_preserves_server_client_and_error_text_without_false_attribut
     assert!(
         lines
             .iter()
-            .all(|line| line.tag == Tag::Other(Arc::from("Local Play")))
+            .all(|line| line.tag == Tag::Other(Arc::from(PLAY_TAG)))
     );
 }
 

@@ -8,7 +8,7 @@
 //! Focus in viewport. Selecting in the viewport opens the ancestors of the selection.
 use std::collections::HashSet;
 
-use eframe::egui::{self, Sense, Stroke, Vec2};
+use eframe::egui::{self, RichText, Sense, Stroke, Vec2};
 use metallic_core::{InstanceId, Value};
 
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
@@ -425,4 +425,69 @@ fn meta_text(state: &EditorState, id: InstanceId, class: &str) -> Option<String>
         _ if state.world.is_builtin(id) => None,
         c => Some(c.to_string()),
     }
+}
+
+/// Most rows the play tree draws (a huge place stays responsive while playing).
+pub const MAX_PLAY_ROWS: usize = 2000;
+
+/// The play world as a read-only tree, shown in place of the Explorer while a session runs.
+///
+/// Rows open and close (Workspace and Players start open) but nothing can be selected, renamed,
+/// dragged or inserted: the play world belongs to the game and Stop throws it away. Returns
+/// the number of rows drawn.
+pub fn play_tree(ui: &mut egui::Ui, world: &metallic_core::World) -> usize {
+    let mut budget = MAX_PLAY_ROWS;
+    egui::ScrollArea::vertical()
+        .id_salt("play-tree")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for &root in world.roots() {
+                play_row(ui, world, root, &mut budget);
+            }
+            if budget == 0 {
+                ui.label(
+                    RichText::new(format!("Showing the first {MAX_PLAY_ROWS} items"))
+                        .small()
+                        .color(ui_tokens().text_dim),
+                );
+            }
+        });
+    MAX_PLAY_ROWS - budget
+}
+
+fn play_row(ui: &mut egui::Ui, world: &metallic_core::World, id: InstanceId, budget: &mut usize) {
+    if *budget == 0 {
+        return;
+    }
+    *budget -= 1;
+    let class = world.class_name(id).unwrap_or("?");
+    let name = match world.get_ref(id, "Name") {
+        Ok(Value::String(s)) if !s.is_empty() => s.clone(),
+        _ => class.to_string(),
+    };
+    let header = |ui: &mut egui::Ui| {
+        let (r, _) = ui.allocate_exact_size(Vec2::splat(ui_tokens().icon_size), Sense::hover());
+        crate::icons::paint_class(ui.painter(), r, class, ui_tokens().icon);
+        ui.label(name.as_str());
+    };
+    let kids = world.children(id);
+    if kids.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(ui_tokens().indent);
+            header(ui);
+        });
+        return;
+    }
+    let open = world.parent(id).is_none() && matches!(class, "Workspace" | "Players");
+    egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        ui.make_persistent_id(("play-row", id)),
+        open,
+    )
+    .show_header(ui, header)
+    .body(|ui| {
+        for &k in kids {
+            play_row(ui, world, k, budget);
+        }
+    });
 }

@@ -71,7 +71,9 @@ impl Properties {
         !self.gesture.is_empty()
     }
 
-    fn finish_gesture(&mut self, state: &mut EditorState) {
+    /// Records the open live-preview gesture as one undo step (pointer released, or Play
+    /// starting).
+    pub fn finish_gesture(&mut self, state: &mut EditorState) {
         if self.gesture.is_empty() {
             return;
         }

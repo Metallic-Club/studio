@@ -13,6 +13,11 @@
 //!
 //! After any history change the selection drops ids that are no longer in the tree, and the undo
 //! name flashes in the status bar for 2 s.
+//!
+//! **Play locks editing.** [`EditorState::new`] registers [`LocalPlayMode`] (Play, F5). While a
+//! session runs, [`EditorState::apply`], [`EditorState::record`], undo and redo refuse and leave
+//! the edit world, its history and the selection as they were; the session runs on its own copy,
+//! so [`EditorState::stop_play`] returns to exactly the edit state Play started from.
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -21,7 +26,7 @@ use metallic_core::{InstanceId, Value, Vec3, World, load_scene, save_scene};
 use crate::StudioError;
 use crate::commands::{Command, CommandError, History};
 use crate::output::{Level, OutputSink, Tag};
-use crate::play::{PlayController, PlayStart};
+use crate::play::{LocalPlayMode, PlayController, PlayStart};
 use crate::selection::{Selection, is_detached};
 use crate::transform::Aabb;
 
@@ -112,6 +117,9 @@ pub enum UiRequest {
     OpenScript(InstanceId),
     /// Run a registered action (context menus).
     RunAction(&'static str),
+    /// Start the play mode with this id, after the UI commits open script tabs and ends any
+    /// live-preview gesture (toolbar Play, F5).
+    StartPlay(&'static str),
     /// Open the Settings dialog (Ctrl+,).
     OpenSettings,
 }
@@ -138,7 +146,7 @@ pub struct EditorState {
     pub space: Space,
     /// Output handle.
     pub output: OutputSink,
-    /// Play modes and the running session.
+    /// Play modes (Play is registered) and the running session.
     pub play: PlayController,
     /// When false, nothing is written to disk (screenshot mode).
     pub can_save: bool,
@@ -157,6 +165,8 @@ impl EditorState {
         name: &str,
         output: OutputSink,
     ) -> EditorState {
+        let mut play = PlayController::new();
+        play.register(Box::new(LocalPlayMode));
         EditorState {
             world,
             selection: Selection::new(),
@@ -168,7 +178,7 @@ impl EditorState {
             snapping: Snapping::default(),
             space: Space::default(),
             output,
-            play: PlayController::new(),
+            play,
             can_save: true,
             insert_point: Vec3::new(0.0, 0.5, 0.0),
             requests: Vec::new(),
@@ -203,8 +213,11 @@ impl EditorState {
     }
 
     /// Runs a command as one undo step.
+    ///
+    /// While playing it refuses with [`CommandError::Nothing`] and changes nothing.
     pub fn apply(&mut self, cmd: Command) -> Result<(), CommandError> {
         if self.play.is_playing() {
+            self.note("Stop the game to edit".into());
             return Err(CommandError::Nothing("edit while playing"));
         }
         let result = self.history.apply(cmd, &mut self.world).map(|_| ());
@@ -442,12 +455,14 @@ impl EditorState {
         let _ = self.apply(cmd);
     }
 
-    /// Starts the play mode `id` with a clean copy of the world.
-    pub fn start_play(&mut self, id: &str) {
+    /// Starts the play mode `id` with a clean copy of the world (parked instances removed).
+    /// Returns true when it runs. A mode that fails to start reports why in Output and Studio
+    /// stays in edit mode. Selection and history are not touched.
+    pub fn start_play(&mut self, id: &str) -> bool {
         let world = self.clean_world();
         let output = self.output.clone();
         let dir = self.project_dir.clone();
-        self.play.start(
+        let started = self.play.start(
             id,
             PlayStart {
                 world: &world,
@@ -455,6 +470,21 @@ impl EditorState {
                 output,
             },
         );
+        if started {
+            self.output.studio("Play started on a copy of the world");
+        } else if self.play.has_mode(id) && !self.play.is_playing() {
+            self.note("Play could not start; see Output".into());
+        }
+        started
+    }
+
+    /// Stops the running session (Stop, Shift+F5, Esc): drops it with its scripts, waits and
+    /// handlers, and returns to the edit world exactly as Play found it.
+    pub fn stop_play(&mut self) {
+        if self.play.is_playing() {
+            self.play.stop();
+            self.output.studio("Play stopped; back to the edit world");
+        }
     }
 
     /// The bounding box of the selection's parts.

@@ -9,6 +9,11 @@
 //! - **Gizmos** ([`crate::gizmo`]): the active tool's handles sit at the selection's pivot. A drag
 //!   previews live by writing the world and records one undo step on release; Esc or a right
 //!   click during the drag cancels it.
+//! - **Play**: while a session with a [`PlayView`](crate::play::PlayView) runs, the viewport draws
+//!   that game every frame with the game camera, character and ScreenGuis instead of the edit
+//!   world, framed by a thin `success` line. Picking, gizmos and the fly camera are off; the
+//!   editor sends keyboard and mouse to the game ([`crate::play::input`]). After Stop the edit
+//!   world is drawn again from the editor camera, which Play never moved.
 use std::sync::Arc;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
@@ -21,6 +26,7 @@ use crate::camera::{EditorCamera, ViewProjection};
 use crate::editor::{EditorState, Space, Tool, UiRequest};
 use crate::gizmo::{self, DragModifiers, GizmoDrag, GizmoFrame, Handle};
 use crate::picking::{Hit, PickCache};
+use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::transform::{Aabb, PartTransform, from_d};
 
@@ -123,6 +129,10 @@ pub struct Viewport {
     /// Ray pick under the pointer, reused while pointer, world and camera are unchanged, so an
     /// idle pointer does not scan every part each frame.
     hover_pick: Option<(HoverKey, Option<Hit>)>,
+    /// The pointer was over the viewport in the last play frame (input goes to the game).
+    play_hovered: bool,
+    /// The last frame drew a play session (the renderer holds the play world and avatar).
+    showing_play: bool,
 }
 
 type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
@@ -151,7 +161,22 @@ impl Viewport {
             gpu_missing_logged: false,
             last_rect: Rect::NOTHING,
             hover_pick: None,
+            play_hovered: false,
+            showing_play: false,
         }
+    }
+
+    /// True when the pointer was over the viewport in the last play frame.
+    pub fn play_hovered(&self) -> bool {
+        self.showing_play && self.play_hovered
+    }
+
+    /// Cancels a gizmo drag in progress, putting the parts back (Play starting).
+    pub fn cancel_drag(&mut self, state: &mut EditorState) {
+        if let Some(drag) = self.drag.take() {
+            drag.cancel(&mut state.world);
+        }
+        self.press = Press::None;
     }
 
     /// The part under the cursor last frame.
@@ -220,6 +245,13 @@ impl Viewport {
         state: &mut EditorState,
         render_state: Option<&egui_wgpu::RenderState>,
     ) {
+        if state.play.view().is_some() {
+            self.play_ui(ui, state, render_state);
+            return;
+        }
+        if self.showing_play {
+            self.leave_play();
+        }
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         self.last_rect = rect;
@@ -337,7 +369,73 @@ impl Viewport {
         }
     }
 
-    fn render(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>, px: (u32, u32)) {
+    /// Draws the running game: every frame, from the game camera, GUI on top.
+    fn play_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &EditorState,
+        render_state: Option<&egui_wgpu::RenderState>,
+    ) {
+        let rect = ui.available_rect_before_wrap();
+        let response = ui.allocate_rect(rect, Sense::click_and_drag());
+        self.last_rect = rect;
+        self.play_hovered = response.hovered() || response.dragged();
+        self.showing_play = true;
+        self.rendered = None;
+        self.hovered_part = None;
+        self.hovered_handle = None;
+        let ppp = ui.ctx().pixels_per_point();
+        let px = (
+            ((rect.width() * ppp).round() as u32).max(1),
+            ((rect.height() * ppp).round() as u32).max(1),
+        );
+        if self.ensure_gpu(state, render_state)
+            && let Some(gpu) = &mut self.gpu
+        {
+            gpu.ensure_target(px);
+            if let (Some(view), Some((_, target, _))) = (state.play.view(), &gpu.target) {
+                view.render(&mut gpu.renderer, target, px);
+            }
+        }
+        let painter = ui.painter_at(rect);
+        match self.gpu.as_ref().and_then(|g| g.texture_id) {
+            Some(id) => {
+                painter.image(
+                    id,
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => {
+                painter.rect_filled(rect, 0.0, ui_tokens().deep);
+            }
+        }
+        if let Some(view) = state.play.view() {
+            view.paint_gui(&painter);
+        }
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            0.0,
+            Stroke::new(2.0, theme::success()),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().request_repaint();
+    }
+
+    /// Back from Play: the renderer still holds the play world and the avatar.
+    fn leave_play(&mut self) {
+        if let Some(gpu) = &mut self.gpu {
+            gpu.renderer.set_skinned(&[]);
+        }
+        self.rendered = None;
+        self.hover_pick = None;
+        self.showing_play = false;
+        self.play_hovered = false;
+    }
+
+    /// Creates the GPU side on first use; false (logged once) without a GPU.
+    fn ensure_gpu(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>) -> bool {
         if self.gpu.is_none() {
             match rs {
                 Some(rs) => self.gpu = Some(Gpu::new(rs)),
@@ -346,9 +444,16 @@ impl Viewport {
                         state.output.studio("No GPU renderer: the 3D view is off");
                         self.gpu_missing_logged = true;
                     }
-                    return;
+                    return false;
                 }
             }
+        }
+        true
+    }
+
+    fn render(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>, px: (u32, u32)) {
+        if !self.ensure_gpu(state, rs) {
+            return;
         }
         let Some(gpu) = &mut self.gpu else { return };
         let key = (state.world.change_cursor(), self.camera, px);
