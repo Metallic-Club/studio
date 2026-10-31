@@ -58,6 +58,9 @@ fn centre_brightness(px: &[u8]) -> f32 {
 fn ground_under_shadow(ctx: &RenderContext, slab: Option<f64>) -> f32 {
     let mut r = renderer(ctx, Quality::Low);
     r.sync(&shadow_world(slab));
+    // A fixed exposure: auto exposure (#151) would brighten a frame that is mostly shadow and
+    // hide the difference this test measures.
+    r.auto_exposure.enabled = false;
     let to_sun = r.sky.to_sun;
     assert!(to_sun.y > 0.2, "the default sun is up: {to_sun:?}");
     // Follow the sun ray from the slab's centre down to the ground.
