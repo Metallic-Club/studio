@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! End to end: a scripted key press goes through `Game::input_frame` to LocalScript handlers,
 //! and the `Sink` / `Pass` answer of a `ContextActionService` handler decides whether the
 //! default character controls see the key (spec 3.7, 5.2).

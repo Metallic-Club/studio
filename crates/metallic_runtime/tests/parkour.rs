@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! The Parkour template and the game loop that plays it.
 use metallic_core::{Color3, InstanceId, Value, Vec3, World, load_scene};
 use metallic_physics::HumanoidState;
