@@ -7,6 +7,10 @@
 //! and Play keys work), viewport keys only while the pointer is over the 3D view and the right
 //! button is up (so WASD flies the camera while it is held).
 //!
+//! The building tools ([`EditorTools`]), the Input Actions dock ([`InputActionsDock`]) and the
+//! colour popover ([`ColourDock`]) live in their own modules; this file only registers them,
+//! gives them their place in the layout and calls them once per frame.
+//!
 //! **While playing** Studio's keys are dispatched first each frame (Global and Play contexts:
 //! Esc and Shift+F5 stop; a disabled action leaves its key alone), then the rest of the keyboard,
 //! Tab, Space and Enter included, and the mouse over the viewport go to the game
@@ -17,7 +21,10 @@ use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
-use crate::editor::{EditorState, INSERTABLE, UiRequest};
+use crate::editor::{EditorState, Gesture, INSERTABLE, UiRequest};
+use crate::editor_colour::ColourDock;
+use crate::editor_input_actions::InputActionsDock;
+use crate::editor_tools::{EditorTools, ViewContext};
 use crate::explorer::{Explorer, PlayTree};
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
@@ -27,6 +34,7 @@ use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
 use crate::theme;
 use crate::tokens::ui_tokens;
+use crate::toolbar::{Toolbar, ToolbarLayout};
 use crate::viewport::Viewport;
 use crate::widgets::Plate;
 
@@ -62,6 +70,13 @@ pub struct EditorUi {
     pub output: OutputPanel,
     /// 3D view.
     pub viewport: Viewport,
+    /// Building tools (align, mirror, array, brush, selection modes, measure).
+    pub tools: EditorTools,
+    /// The Input Actions panel, docked on the right when open.
+    pub input_actions: InputActionsDock,
+    /// The colour popover for Color3 properties.
+    pub colour: ColourDock,
+    toolbar: Toolbar,
     explorer: Explorer,
     /// Properties panel.
     pub properties: Properties,
@@ -82,12 +97,20 @@ pub struct EditorUi {
 impl EditorUi {
     /// Builds the editor around `state`, whose Output sink must come from `output`.
     pub fn new(state: EditorState, output: OutputPanel) -> EditorUi {
+        let mut actions = default_actions();
+        let tools = EditorTools::new(&mut actions);
+        let input_actions = InputActionsDock::new(&state.world, &mut actions);
+        let colour = ColourDock::new(&state, &mut actions);
         let mut ui = EditorUi {
             state,
-            actions: default_actions(),
+            actions,
             keymap: Keymap::metallic(),
             output,
             viewport: Viewport::new(),
+            tools,
+            input_actions,
+            colour,
+            toolbar: Toolbar::new(),
             explorer: Explorer::new(),
             properties: Properties::new(),
             scripts: ScriptTabs::new(),
@@ -101,6 +124,11 @@ impl EditorUi {
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
         ui
+    }
+
+    /// Where last frame's toolbar put its groups and which collapsed into the "»" menu.
+    pub fn toolbar_layout(&self) -> &ToolbarLayout {
+        self.toolbar.layout()
     }
 
     /// Copies the held keys (V, Space) from the keymap into the viewport.
@@ -211,28 +239,47 @@ impl EditorUi {
         } else {
             ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta()
         };
-        // A gesture holds values in the preview overlay: no global action runs until it ends
-        // (Esc cancels it in the viewport or in Properties).
-        let busy = !playing && (self.viewport.is_dragging() || self.properties.is_busy());
-        let mut contexts = [KeyContext::Global; 2];
+        // A gesture (preview overlay, viewport drag, Properties scrub, brush stroke, lasso, array
+        // handle) is open: no action runs until it ends. Esc cancels it where it lives; a tool
+        // gesture's Esc is the keymap's `tool.cancel`.
+        let busy = !playing && self.state.gesture_active();
+        let fly = right_down;
+        // At most Popover, Tool, Global and Viewport (or Global and Play): no allocation.
+        let mut contexts = [KeyContext::Global; 4];
         let mut active = 0;
+        let mut push = |c| {
+            contexts[active] = c;
+            active += 1;
+        };
         if !typing {
-            active = 1;
             if playing {
+                push(KeyContext::Global);
                 // With the unsaved-changes prompt open, Esc belongs to the prompt.
                 if self.confirm.is_none() {
-                    contexts[1] = KeyContext::Play;
-                    active = 2;
+                    push(KeyContext::Play);
                 }
-            } else if viewport_hovered && !right_down && !busy {
-                contexts[1] = KeyContext::Viewport;
-                active = 2;
+            } else {
+                // The tools' contexts come first: their keys win over the same chord elsewhere.
+                if !fly && self.tools.popover_keys() {
+                    push(KeyContext::Popover);
+                }
+                if !fly && self.tools.tool_keys(viewport_hovered) {
+                    push(KeyContext::Tool);
+                }
+                push(KeyContext::Global);
+                if viewport_hovered && !fly && !busy {
+                    push(KeyContext::Viewport);
+                }
             }
         }
         let contexts = &contexts[..active];
         let mut pressed = std::mem::take(&mut self.pressed);
         if busy {
             pressed.clear();
+            if !typing && self.tools.gesture() {
+                self.keymap.pressed(ctx, &[KeyContext::Tool], &mut pressed);
+                pressed.retain(|a| *a == "tool.cancel");
+            }
         } else if typing {
             // Only Save and Play keys work while a text field has focus (Ctrl+W must not close the game).
             self.keymap
@@ -260,8 +307,13 @@ impl EditorUi {
     /// keyboard; on failure Output says why and editing goes on.
     fn start_play(&mut self, ctx: &egui::Context, id: &'static str) {
         self.scripts.flush(&mut self.state);
+        self.colour.close(&mut self.state);
         self.properties.finish_gesture(&mut self.state);
         self.viewport.cancel_drag(&mut self.state);
+        self.tools.cancel_gestures();
+        for g in [Gesture::Viewport, Gesture::Properties, Gesture::Tool] {
+            self.state.set_gesture(g, false);
+        }
         if self.state.start_play(id) {
             self.scripts.show_scene();
             self.play_input = PlayInput::new();
@@ -443,14 +495,50 @@ impl EditorUi {
                             &mut self.state,
                             &self.keymap,
                         );
+                        ui.separator();
+                        self.actions.menu_items(
+                            ui,
+                            &[
+                                "select.similar",
+                                "select.mode_box",
+                                "select.mode_lasso",
+                                "select.mode_paint",
+                                "colour.open",
+                            ],
+                            &mut self.state,
+                            &self.keymap,
+                        );
                     });
                     ui.menu_button("View", |ui| {
                         self.actions.menu_items(
                             ui,
-                            &["view.frame_selection", "view.frame_all", "snap.soft"],
+                            &[
+                                "view.frame_selection",
+                                "view.frame_all",
+                                "snap.soft",
+                                crate::editor_input_actions::TOGGLE_ID,
+                            ],
                             &mut self.state,
                             &self.keymap,
                         );
+                    });
+                    ui.menu_button("Build", |ui| {
+                        self.actions.menu_items(
+                            ui,
+                            &[
+                                "build.align",
+                                "build.distribute",
+                                "build.mirror",
+                                "build.mirror_copy",
+                                "build.array",
+                                "tool.brush",
+                                "tool.measure",
+                            ],
+                            &mut self.state,
+                            &self.keymap,
+                        );
+                        ui.separator();
+                        self.tools.mirror_axis_menu(ui);
                     });
                     ui.menu_button("Insert", |ui| {
                         for &class in INSERTABLE {
@@ -501,20 +589,9 @@ impl EditorUi {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.spacing_mut().interact_size.y = 28.0;
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Play, &mut self.state, &self.keymap);
+                    // Groups that do not fit collapse into the "»" menu (crate::toolbar).
+                    self.toolbar
+                        .show(ui, &mut self.actions, &mut self.state, &self.keymap);
                 });
             });
 
@@ -626,11 +703,30 @@ impl EditorUi {
                             playing_banner(ui, "Edit values, read-only while playing.");
                             ui.add_enabled_ui(false, |ui| self.properties.ui(ui, &mut self.state));
                         } else {
+                            // The owner may edit during its own gesture; the flag is its state
+                            // after it ran (see EditorState::gesture_active).
+                            self.state.set_gesture(Gesture::Properties, false);
                             self.properties.ui(ui, &mut self.state);
+                            self.state
+                                .set_gesture(Gesture::Properties, self.properties.is_busy());
                         }
                     },
                 );
             });
+        if let Some((prop, at)) = self.properties.take_colour_request() {
+            let pos = at.left_top() - egui::vec2(crate::colour::popover::WIDTH + 12.0, 120.0);
+            self.colour.open(&self.state, &prop, pos);
+        }
+        if self.input_actions.is_open() {
+            egui::Panel::right("input_actions")
+                .default_size(560.0)
+                .min_size(420.0)
+                .resizable(true)
+                .frame(panel::frame())
+                .show(ui, |ui| self.input_actions.ui(ui, &mut self.state));
+        } else {
+            self.input_actions.follow_history(&mut self.state);
+        }
         egui::Panel::bottom("output")
             .default_size(200.0)
             .min_size(120.0)
@@ -650,16 +746,41 @@ impl EditorUi {
                 let scene = self.scripts.tab_strip(ui, &mut self.state);
                 if scene {
                     let before = ui.available_rect_before_wrap();
+                    self.viewport.capture_pointer = self.tools.captures_pointer(&self.state);
+                    // Each gesture owner may edit during its own gesture; the flag is its
+                    // state after it ran (see EditorState::gesture_active).
+                    self.state.set_gesture(Gesture::Viewport, false);
                     self.viewport.ui(ui, &mut self.state, render_state);
+                    self.state
+                        .set_gesture(Gesture::Viewport, self.viewport.is_dragging());
                     viewport_hovered = ui.rect_contains_pointer(before);
+                    // The tools read the picker while they edit the state; it is put back after.
+                    let picks = std::mem::take(&mut self.state.picks);
+                    let cx = ViewContext {
+                        rect: self.viewport.rect(),
+                        view: self.viewport.view(),
+                        picks: &picks,
+                        pointer: ui.ctx().pointer_latest_pos().filter(|_| viewport_hovered),
+                        hovered: self.viewport.hovered(),
+                    };
+                    self.state.set_gesture(Gesture::Tool, false);
+                    self.tools.viewport(ui, &mut self.state, &cx);
+                    self.state.set_gesture(Gesture::Tool, self.tools.gesture());
+                    self.state.picks = picks;
                 } else {
                     self.scripts.editor(ui, &mut self.state);
                 }
             });
 
+        // The colour popover first: it is the topmost and takes its Esc before anything below.
+        self.colour
+            .show(&ctx, &mut self.state, self.viewport.hovered());
+        self.tools.ui(&ctx, &mut self.state);
+
         if !played {
             let right_down = ctx.input(|i| i.pointer.secondary_down());
             self.keys(&ctx, viewport_hovered, right_down);
+            self.state.set_gesture(Gesture::Tool, self.tools.gesture());
         }
         if let Some(done) = self.requests(&ctx) {
             exit = done;

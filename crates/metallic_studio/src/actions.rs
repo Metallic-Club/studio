@@ -49,6 +49,10 @@ pub enum ToolbarGroup {
     Snap,
     /// Undo, redo.
     Edit,
+    /// Building operations on the selection: align, mirror, array, select similar.
+    Build,
+    /// Panels that open and close (Input actions).
+    View,
     /// Play cluster (centred): play modes and Stop.
     Play,
 }
@@ -222,7 +226,8 @@ impl ActionRegistry {
                 clicked = Some(a.id);
             }
             if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+                // A disabled action's accessory is disabled too.
+                ui.add_enabled_ui(enabled, |ui| acc(ui, state));
             }
         }
         if let Some(id) = clicked {
@@ -247,10 +252,10 @@ impl ActionRegistry {
                 format!("{} ({shortcut})", a.label)
             };
             let checked = a.is_checked(state);
+            let enabled = a.is_enabled(state);
             let button = Button::ghost(short_label(&a.label))
                 .compact()
                 .selected(checked);
-            let enabled = a.is_enabled(state);
             let resp = ui
                 .add_enabled(enabled, button)
                 .on_hover_text(&tip)
@@ -264,6 +269,42 @@ impl ActionRegistry {
         }
         if let Some(id) = clicked {
             self.run(id, state);
+        }
+    }
+
+    /// The overflow menu of the toolbar ([`crate::toolbar`]): every action of `groups`, a
+    /// separator between groups, each with its label, shortcut, checked state and accessory.
+    pub fn overflow_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        groups: &[ToolbarGroup],
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for (n, &group) in groups.iter().enumerate() {
+            if n > 0 {
+                ui.separator();
+            }
+            for a in self.actions.iter_mut().filter(|a| a.group == group) {
+                let button = egui::Button::new(a.label.as_str())
+                    .shortcut_text(keymap.label(a.id))
+                    .selected(a.is_checked(state));
+                let enabled = a.is_enabled(state);
+                ui.horizontal(|ui| {
+                    if theme::add_enabled(ui, enabled, button).clicked() {
+                        clicked = Some(a.id);
+                    }
+                    if let Some(acc) = &mut a.accessory {
+                        // A disabled action's accessory is disabled too.
+                        ui.add_enabled_ui(enabled, |ui| acc(ui, state));
+                    }
+                });
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+            ui.close();
         }
     }
 
@@ -771,7 +812,9 @@ mod tests {
 
     #[test]
     fn every_bound_key_has_an_action() {
-        let r = default_actions();
+        // The editor's registry: the built-in actions plus the building tools and panels.
+        let ui = crate::editor_ui::EditorUi::new(state(), crate::output::OutputPanel::new());
+        let r = &ui.actions;
         for b in Keymap::metallic().bindings() {
             if b.action.starts_with("drag.")
                 || b.action.starts_with("output.")
@@ -812,8 +855,18 @@ mod tests {
             .filter(|b| b.chord == esc)
             .map(|b| b.action)
             .collect();
-        // play.stop only in the Play context (while a game runs).
-        assert_eq!(on_esc, ["play.stop", "edit.deselect", "drag.cancel"]);
+        // Esc closes a building popover or cancels a tool gesture first (#319), stops the game
+        // only in the Play context, and never closes the game.
+        assert_eq!(
+            on_esc,
+            [
+                "popover.close",
+                "tool.cancel",
+                "play.stop",
+                "edit.deselect",
+                "drag.cancel"
+            ]
+        );
         let mut r = default_actions();
         let mut s = state();
         assert!(r.run("file.close", &mut s));

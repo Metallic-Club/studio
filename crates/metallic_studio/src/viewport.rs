@@ -17,6 +17,10 @@
 //!   editable for [`EDIT_DELTA_TIME`] (click it or press Enter).
 //! - **Pivot edit** (P): the gizmo moves the pivot; its 27 snap points show as dots, a click
 //!   puts the pivot on one.
+//! - **Tools that own the pointer** (brush, measure, lasso and paint select; see
+//!   [`crate::editor_tools`]) set [`Viewport::capture_pointer`] before the frame: the viewport
+//!   then still renders and navigates but leaves clicks and drags to the tool, which reads
+//!   [`Viewport::view`] and [`EditorState::picks`] and paints its overlay on top.
 //! - **Play**: while a session with a [`PlayView`](crate::play::PlayView) runs, the viewport draws
 //!   that game every frame with the game camera, character and ScreenGuis instead of the edit
 //!   world, framed by a thin `success` line. Picking, gizmos, body drags, the editable drag
@@ -184,6 +188,9 @@ pub struct Viewport {
     /// The last frame drew a play session (the renderer holds the play world and avatar).
     showing_play: bool,
     delta_rect: Option<Rect>,
+    /// Set by the host each frame: a building tool owns left clicks and drags (no selection,
+    /// no gizmo).
+    pub capture_pointer: bool,
 }
 
 type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
@@ -228,7 +235,16 @@ impl Viewport {
             play_hovered: false,
             showing_play: false,
             delta_rect: None,
+            capture_pointer: false,
         }
+    }
+
+    /// The camera's projection for last frame's rectangle (screen points are relative to
+    /// [`Viewport::rect`]'s top-left corner).
+    pub fn view(&self) -> ViewProjection {
+        let r = self.last_rect;
+        self.camera
+            .view((f64::from(r.width()), f64::from(r.height())))
     }
 
     /// True when the pointer was over the viewport in the last play frame.
@@ -478,12 +494,20 @@ impl Viewport {
 
         let pointer = response.hover_pos();
         let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
+        // A tool takes the pointer only between gestures: a press or drag that began here
+        // always gets its release, so it ends (and the keys it holds are freed).
+        let capture = self.capture_pointer && self.drag.is_none() && self.press == Press::None;
         let summon = self.drag.is_none()
+            && !capture
             && response.hovered()
             && ui.input(|i| i.key_down(self.holds.summon))
             && !ui.ctx().egui_wants_keyboard_input();
         let pivot = state.gizmo_pivot();
-        let frame = self.gizmo_frame(state, &view, pivot, summon.then_some(pointer).flatten());
+        let frame = if capture {
+            None
+        } else {
+            self.gizmo_frame(state, &view, pivot, summon.then_some(pointer).flatten())
+        };
 
         // Hover: pivot dots, gizmo handles, then parts.
         if self.drag.is_none() {
@@ -532,8 +556,10 @@ impl Viewport {
             state.insert_point = from_d(at);
         }
 
-        self.delta_keys(ui, &response, state);
-        self.pointer_buttons(ui, &response, rect, &view, frame, pivot, state);
+        if !capture {
+            self.delta_keys(ui, &response, state);
+            self.pointer_buttons(ui, &response, rect, &view, frame, pivot, state);
+        }
 
         // Outlines, snap feedback, then the gizmo on top.
         self.paint_outlines(&painter, rect.min, &view, state);
