@@ -30,7 +30,26 @@ names, an unresolved ID becoming live, stale generations, destroy cleanup and
 independent deep-clone subscriptions. The future-ID case is intentionally legacy
 behavior; formerly accepted registrations must not be rejected.
 
-No production edit or build yet. Report this source checkpoint before baseline
-execution, then prove behavior/control validity before interpreting allocation
-failures or changing production. GPU/Lua execution is not needed for these core
-tests. Required broad gates and documentation remain next; no own-PR merge.
+Test-only checkpoint `964cd18422f715de82dfc469e444b40cdfa66ed2` has unchanged main
+production source. All three registration/cleanup behavior cases passed. The
+allocation target passed RAII recovery and all value/cursor/callback/storage-removal
+controls, then failed its two allocation contracts as expected:
+
+| 1,000 operations | Allocation calls | Requested bytes |
+| --- | ---: | ---: |
+| Default reset, no property signals | 0 | 0 |
+| Default reset, unrelated listeners | 1,000 | 8,000 |
+| Default reset, matching listeners | 1,000 | 8,000 |
+| Warmed known-property registration | 1,000 | 8,000 |
+
+The no-signal control proves that journal/default/storage removal did not add an
+incidental allocation. No fixture correction or PR #361 code was required. Logs
+are `metallic-362-behavior-baseline.log` and
+`metallic-362-allocation-baseline.log` in the local temporary directory.
+
+The production change is confined to the private key type, static validated
+emission name and known-registration name selection. Unknown/unresolved fallback
+still owns its name. Public docs clarify existing future-ID behavior proved by
+the passing baseline, rather than rejecting it. Focused fixed checks and required
+broad gates remain next. GPU/Lua execution is not needed for core probes; no
+own-PR merge or parent PR change.

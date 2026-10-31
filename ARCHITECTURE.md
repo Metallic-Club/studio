@@ -28,6 +28,9 @@ apps.
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
+  property-signal keys borrow known static registry names and own unknown/unresolved registration names,
+  preserving exact text equality and the existing unvalidated-registration/cleanup behavior. This avoids
+  temporary known-name lookup allocations; owned Value/default clones and stored property keys are separate.
   `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
