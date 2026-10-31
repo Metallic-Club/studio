@@ -1,20 +1,20 @@
 //! The HDR target, the finish pass and the post chain on a real (or software) adapter.
 //! Skipped when the machine has none.
+#[path = "support/gpu.rs"]
+mod gpu;
+
+use gpu::{TestContext as RenderContext, TestRenderer as Renderer};
 use metallic_render::glam::Vec3;
 use metallic_render::{
     Camera, FinishSettings, FullscreenPass, LightingInputs, PostContext, PostPass, PostSlot,
-    Quality, RenderContext, RenderSettings, Renderer, ToneCurve,
+    Quality, RenderSettings, ToneCurve,
 };
 
 const SIZE: (u32, u32) = (64, 48);
 
 /// A renderer whose whole view is a flat sky of linear `value` (no sun disc, no parts).
 fn flat_sky(quality: Quality, value: f32) -> Option<Renderer> {
-    Some(flat_sky_on(
-        &RenderContext::new_headless().ok()?,
-        quality,
-        value,
-    ))
+    Some(flat_sky_on(&RenderContext::new_headless()?, quality, value))
 }
 
 /// [`flat_sky`] on a given device.
@@ -60,7 +60,7 @@ fn grey_lands_on_one_value_under_every_curve() {
     let mut first = None;
     for curve in ToneCurve::ALL {
         r.finish.curve = curve;
-        let px = r.capture(&camera(), SIZE).expect("capture");
+        let px = r.capture(&camera(), SIZE);
         let m = mean(&px, 1);
         let reference = *first.get_or_insert(m);
         assert!(
@@ -77,12 +77,12 @@ fn dither_off_gives_a_flat_image_and_exposure_scales_light() {
         return;
     };
     r.finish.dither = false;
-    let px = r.capture(&camera(), SIZE).expect("capture");
+    let px = r.capture(&camera(), SIZE);
     let p = px.as_chunks::<4>().0;
     assert!(p.iter().all(|q| q == &p[0]), "flat sky is not flat");
     assert!(p.iter().all(|q| q[3] == 255));
     r.finish.exposure = 4.0;
-    let brighter = r.capture(&camera(), SIZE).expect("capture");
+    let brighter = r.capture(&camera(), SIZE);
     assert!(brighter[1] > px[1] + 40, "{} vs {}", brighter[1], px[1]);
 }
 
@@ -126,7 +126,7 @@ fn empty_chain_matches_the_old_output() {
         r.sky.zenith = c;
         r.sky.horizon = c;
         r.sky.ground = c;
-        let px = r.capture(&camera(), SIZE).expect("capture");
+        let px = r.capture(&camera(), SIZE);
         let want = old_output(c, exposure);
         for p in px.as_chunks::<4>().0 {
             for ch in 0..3 {
@@ -141,7 +141,7 @@ fn empty_chain_matches_the_old_output() {
     r.sky.zenith = c;
     r.sky.horizon = c;
     r.sky.ground = c;
-    let px = r.capture(&camera(), SIZE).expect("capture");
+    let px = r.capture(&camera(), SIZE);
     let want = old_output(c, exposure);
     for p in px.as_chunks::<4>().0 {
         assert!((i32::from(p[1]) - i32::from(want[1])).abs() <= 1);
@@ -157,20 +157,20 @@ fn grade_controls_change_the_image() {
     r.sky.horizon = [0.3, 0.1, 0.05];
     r.sky.ground = [0.3, 0.1, 0.05];
     r.finish.dither = false;
-    let base = r.capture(&camera(), SIZE).expect("capture");
+    let base = r.capture(&camera(), SIZE);
     r.finish.saturation = -1.0;
-    let grey = r.capture(&camera(), SIZE).expect("capture");
+    let grey = r.capture(&camera(), SIZE);
     assert!(
         (i32::from(grey[0]) - i32::from(grey[2])).abs() <= 1,
         "{grey:?}"
     );
     r.finish.saturation = 0.0;
     r.finish.tint = [0.0, 1.0, 1.0];
-    let tinted = r.capture(&camera(), SIZE).expect("capture");
+    let tinted = r.capture(&camera(), SIZE);
     assert!(tinted[0] < base[0] / 4, "tint kept red");
     r.finish.tint = [1.0; 3];
     r.finish.vignette = 1.0;
-    let v = r.capture(&camera(), SIZE).expect("capture");
+    let v = r.capture(&camera(), SIZE);
     let centre = ((SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2) * 4) as usize;
     assert!(v[0] < base[0], "corner not darker");
     assert!(v[centre] + 2 >= base[centre], "centre darkened");
@@ -260,7 +260,7 @@ fn near(a: [i32; 3], b: [i32; 3]) -> bool {
 
 #[test]
 fn passes_run_in_slot_order_around_the_finish_pass() {
-    let Ok(ctx) = RenderContext::new_headless() else {
+    let Some(ctx) = RenderContext::new_headless() else {
         return;
     };
     check_chain_order(&ctx);
@@ -281,7 +281,7 @@ fn check_chain_order_on(r: &mut Renderer, quality: Quality) {
     r.finish.dither = true;
     // Linear red 1.0 through the default curve: Filmic(1.0) = 0.8037, sRGB 231.
     r.post_mut().push(Box::new(Fill::new([1.0, 0.0, 0.0, 0.0])));
-    let red = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    let red = centre(&r.capture(&camera(), SIZE));
     assert!(near(red, [231, 0, 0]), "{quality:?} hdr fill: {red:?}");
     assert!(
         r.post_mut()
@@ -292,12 +292,12 @@ fn check_chain_order_on(r: &mut Renderer, quality: Quality) {
     );
 
     r.post_mut().push(Box::new(Ldr::new("invert", "1.0 - c")));
-    let inv = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    let inv = centre(&r.capture(&camera(), SIZE));
     assert!(near(inv, [24, 255, 255]), "{quality:?} invert: {inv:?}");
 
     // Two LDR passes: invert, then halve (ping-pong through both intermediates).
     r.post_mut().push(Box::new(Ldr::new("halve", "c * 0.5")));
-    let half = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    let half = centre(&r.capture(&camera(), SIZE));
     assert!(near(half, [12, 128, 128]), "{quality:?} halve: {half:?}");
     assert_eq!(
         r.post().names(PostSlot::Ldr).collect::<Vec<_>>(),
@@ -306,7 +306,7 @@ fn check_chain_order_on(r: &mut Renderer, quality: Quality) {
 
     r.post_mut().remove("invert");
     r.post_mut().remove("fill");
-    let only_half = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    let only_half = centre(&r.capture(&camera(), SIZE));
     assert!(near(only_half, [70, 70, 70]), "{quality:?}: {only_half:?}");
 }
 
@@ -315,7 +315,7 @@ fn check_chain_order_on(r: &mut Renderer, quality: Quality) {
 /// pass that reads the multisampled depth.
 #[test]
 fn gl_backend_renders_the_hdr_chain() {
-    let Ok(ctx) = RenderContext::new_headless_with_backends(wgpu::Backends::GL) else {
+    let Some(ctx) = RenderContext::new_headless_with_backends(wgpu::Backends::GL) else {
         eprintln!("no GL adapter, skipping");
         return;
     };
@@ -326,7 +326,7 @@ fn gl_backend_renders_the_hdr_chain() {
         r.hdr_format()
     );
     r.finish.dither = false;
-    let px = r.capture(&camera(), SIZE).expect("capture");
+    let px = r.capture(&camera(), SIZE);
     let want = old_output([0.18; 3], r.sky.exposure);
     assert!(
         (i32::from(px[1]) - i32::from(want[1])).abs() <= 1,
@@ -341,7 +341,7 @@ fn gl_backend_renders_the_hdr_chain() {
 }",
         0,
     ))));
-    let px = r.capture(&camera(), SIZE).expect("capture");
+    let px = r.capture(&camera(), SIZE);
     assert!(
         (i32::from(px[1]) - i32::from(want[1])).abs() <= 1,
         "with depth read: {:?} vs {want:?}",
@@ -374,7 +374,7 @@ impl PostPass for DepthCopy {
 /// black), and passes still run.
 #[test]
 fn ldr_scene_target_fallback_renders() {
-    let Ok(ctx) = RenderContext::new_headless() else {
+    let Some(ctx) = RenderContext::new_headless() else {
         return;
     };
     for quality in [Quality::Low, Quality::High] {
@@ -382,7 +382,7 @@ fn ldr_scene_target_fallback_renders() {
         r.force_ldr_scene_target();
         assert_eq!(r.hdr_format(), metallic_render::post::LDR_FORMAT);
         r.finish.dither = false;
-        let px = r.capture(&camera(), SIZE).expect("capture");
+        let px = r.capture(&camera(), SIZE);
         let want = old_output([0.18; 3], r.sky.exposure);
         assert!(
             (i32::from(px[1]) - i32::from(want[1])).abs() <= 4,
@@ -393,7 +393,7 @@ fn ldr_scene_target_fallback_renders() {
         r.sky.zenith = [4.0; 3];
         r.sky.horizon = [4.0; 3];
         r.sky.ground = [4.0; 3];
-        let px = r.capture(&camera(), SIZE).expect("capture");
+        let px = r.capture(&camera(), SIZE);
         let clipped = old_output([1.0; 3], r.sky.exposure);
         assert!(
             (i32::from(px[1]) - i32::from(clipped[1])).abs() <= 2,
