@@ -125,7 +125,17 @@ impl TokenSet {
     pub fn tokens(&self) -> &[Token] {
         &self.tokens
     }
+
+    /// The ids of every theme: [`DEFAULT_THEME`] first, then those in `$themes`.
+    pub fn theme_ids(&self) -> Vec<&str> {
+        std::iter::once(DEFAULT_THEME)
+            .chain(self.themes.iter().map(|t| t.id.as_str()))
+            .collect()
+    }
 }
+
+/// The theme that `:root` holds; `$themes` lists only the differences of the others.
+pub const DEFAULT_THEME: &str = "graphite";
 
 const KINDS: &[&str] = &[
     "color",
@@ -168,6 +178,12 @@ pub fn parse(json: &str) -> Result<TokenSet, TokenError> {
                 return invalid(
                     "$themes",
                     format!("theme id {id} must be letters, digits and dashes"),
+                );
+            }
+            if id == DEFAULT_THEME {
+                return invalid(
+                    "$themes",
+                    format!("{id} is the default theme: edit the roles"),
                 );
             }
             let values = overrides(&set, &format!("$themes.{id}"), values)?;
@@ -406,11 +422,12 @@ fn render(set: &TokenSet, token: &Token) -> Result<String, TokenError> {
     }
 }
 
-/// The CSS text: `:root` with every token in file order, one `[data-theme="<id>"]` block per theme,
+/// The CSS text: `:root` (also selected by `[data-theme="graphite"]`) with every token in file
+/// order, one `[data-theme="<id>"]` block per theme,
 /// and a `prefers-reduced-motion` block when the file has one. The same input gives the same text.
 pub fn to_css(set: &TokenSet) -> String {
-    let mut css = String::from(
-        "/* Metallic design tokens. Generated from design/tokens/metallic.tokens.json: do not edit.\n   Regenerate with: cargo run -p metallic_tokens --example export_css */\n:root {\n",
+    let mut css = format!(
+        "/* Metallic design tokens. Generated from design/tokens/metallic.tokens.json: do not edit.\n   Regenerate with: cargo run -p metallic_tokens --example export_css */\n:root, [data-theme=\"{DEFAULT_THEME}\"] {{\n",
     );
     let mut group: Option<&str> = None;
     for token in &set.tokens {
@@ -537,6 +554,19 @@ pub fn color(set: &TokenSet, name: &str) -> Option<[u8; 4]> {
     parse_color(token.value.as_str()?)
 }
 
+/// Like [`color`], as seen in `theme`: the theme's own value when it has one, else the default.
+/// `None` for an unknown theme, an unknown token or a value that is not a plain colour.
+pub fn themed_color(set: &TokenSet, theme: &str, name: &str) -> Option<[u8; 4]> {
+    if theme == DEFAULT_THEME {
+        return color(set, name);
+    }
+    let overrides = set.themes.iter().find(|t| t.id == theme)?;
+    match overrides.values.iter().find(|(n, _)| n == name) {
+        Some((_, value)) => parse_color(value),
+        None => color(set, name),
+    }
+}
+
 fn parse_color(text: &str) -> Option<[u8; 4]> {
     if let Some(hex) = text.strip_prefix('#') {
         if !hex.is_ascii() || !(hex.len() == 6 || hex.len() == 8) {
@@ -586,7 +616,28 @@ mod tests {
     }
 
     #[test]
+    fn themed_colour_falls_back_to_the_default() {
+        let set = parse(SMALL).unwrap();
+        assert_eq!(set.theme_ids(), ["graphite", "light"]);
+        assert_eq!(
+            themed_color(&set, "graphite", "bg-deep"),
+            Some([17, 16, 21, 255])
+        );
+        assert_eq!(
+            themed_color(&set, "light", "bg-deep"),
+            Some([255, 255, 255, 255])
+        );
+        assert_eq!(
+            themed_color(&set, "light", "g-900"),
+            Some([17, 16, 21, 255])
+        );
+        assert_eq!(themed_color(&set, "nope", "bg-deep"), None);
+    }
+
+    #[test]
     fn bad_files_are_refused() {
+        let graphite = r##"{"role":{"a":{"$type":"color","$value":"#000000"}},"$themes":{"graphite":{"a":"#ffffff"}}}"##;
+        assert!(parse(graphite).is_err());
         let alias = |v: &str| format!(r#"{{"role":{{"a":{{"$type":"color","$value":"{v}"}}}}}}"#);
         assert!(parse("[]").is_err());
         assert!(parse(&alias("{role.nope}")).is_err());

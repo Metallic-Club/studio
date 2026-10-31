@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use metallic_tokens::{TOKENS_JSON, color, parse, to_css};
+use metallic_tokens::{TOKENS_JSON, color, parse, themed_color, to_css};
 
 #[test]
 fn committed_css_is_current() {
@@ -16,6 +16,45 @@ fn committed_css_is_current() {
         css, committed,
         "regenerate with: cargo run -p metallic_tokens --example export_css"
     );
+}
+
+#[test]
+fn css_has_one_block_per_theme() {
+    let set = parse(TOKENS_JSON).unwrap();
+    assert_eq!(set.theme_ids(), ["graphite", "titanium", "light"]);
+    let css = to_css(&set);
+    for id in set.theme_ids() {
+        let selector = format!("[data-theme=\"{id}\"]");
+        assert_eq!(css.matches(&selector).count(), 1, "one {selector} block");
+    }
+    // Every theme can be read back, and the three really differ.
+    let base = |t: &str| themed_color(&set, t, "bg-base").unwrap();
+    assert_eq!(base("graphite"), [0x16, 0x15, 0x1b, 0xff]);
+    assert_eq!(base("titanium"), [0x24, 0x22, 0x2b, 0xff]);
+    assert_eq!(base("light"), [0xec, 0xea, 0xf0, 0xff]);
+    // Roles a theme does not override come from the default.
+    assert_eq!(
+        themed_color(&set, "titanium", "accent"),
+        color(&set, "accent")
+    );
+}
+
+#[test]
+fn themes_override_only_known_roles_and_new_tokens_exist() {
+    let css = to_css(&parse(TOKENS_JSON).unwrap());
+    for name in [
+        "edge-low",
+        "art-scrim",
+        "backdrop",
+        "shadow-modal",
+        "t-panel",
+        "t-splash",
+        "ease-in",
+        "s12",
+        "s13",
+    ] {
+        assert!(css.contains(&format!("  --{name}: ")), "missing --{name}");
+    }
 }
 
 #[test]

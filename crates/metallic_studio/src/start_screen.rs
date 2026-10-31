@@ -23,7 +23,7 @@ use eframe::egui::{
     RichText, Sense, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, vec2,
 };
 
-use crate::png_image::decode_png;
+use crate::png_image::{decode_png, png_dimensions};
 use crate::recent::{RecentProject, RecentProjects, relative_time, unix_now};
 use crate::templates::{
     PROJECT_FILE, TemplateInfo, TemplateKind, create_from_template, validate_project_name,
@@ -129,6 +129,53 @@ fn default_location() -> String {
         .into_owned()
 }
 
+/// A start-screen thumbnail is at most this wide or tall (a GPU texture limit with room to spare).
+const PREVIEW_MAX_SIDE: u32 = 4096;
+/// ... and at most this many decoded RGBA bytes.
+const PREVIEW_MAX_BYTES: usize = 32 * 1024 * 1024;
+/// ... and the file at most this large (a PNG compresses well, so this alone is not enough).
+const PREVIEW_MAX_FILE: u64 = 16 * 1024 * 1024;
+
+/// Whether an image of this size may be decoded for a thumbnail.
+fn preview_fits(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && width <= PREVIEW_MAX_SIDE
+        && height <= PREVIEW_MAX_SIDE
+        && (width as usize) * (height as usize) * 4 <= PREVIEW_MAX_BYTES
+}
+
+/// Reads a preview PNG. `None` (the "no preview" state) when the file is missing, broken or over
+/// the caps; the size is checked from the header before anything is decoded.
+fn read_preview(path: &Path) -> Option<egui::ColorImage> {
+    if std::fs::metadata(path).ok()?.len() > PREVIEW_MAX_FILE {
+        log::warn!("preview {} is too large to show", path.display());
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let label = path.to_string_lossy();
+    let shown = png_dimensions(&bytes, &label).and_then(|(w, h)| {
+        if preview_fits(w, h) {
+            decode_png(&bytes, &label)
+        } else {
+            Err(StudioError::Image {
+                path: label.to_string(),
+                message: format!("{w} x {h} is too large for a preview"),
+            })
+        }
+    });
+    match shown {
+        Ok(img) => Some(egui::ColorImage::from_rgba_unmultiplied(
+            [img.width as usize, img.height as usize],
+            &img.rgba,
+        )),
+        Err(e) => {
+            log::warn!("{e}");
+            None
+        }
+    }
+}
+
 impl StartScreen {
     /// Creates the screen for `templates` (already sorted) and the remembered `recent` games.
     /// The compiled-in Baseplate is added when `templates` has none, so a game can always be made.
@@ -165,6 +212,12 @@ impl StartScreen {
     /// Shows `message` as the folder's error line (used by the error screenshot scene).
     pub fn set_error(&mut self, message: &str) {
         self.error = Some((message.to_owned(), Field::Folder));
+    }
+
+    /// A game could not be opened: an error toast, not a message on the Folder field.
+    pub fn open_failed(&mut self, name: &str, error: &StudioError) {
+        self.toasts
+            .push(Tone::Error, format!("Could not open {name}: {error}"));
     }
 
     /// Sets the game name as if typed by the creator.
@@ -299,7 +352,8 @@ impl StartScreen {
         }
     }
 
-    /// Texture for a preview image, loaded on first use; `None` if the file is missing or broken.
+    /// Texture for a preview image, loaded on first use; `None` if the file is missing, broken or
+    /// too large to show.
     fn preview(&mut self, ctx: &egui::Context, path: &Path) -> Option<TextureHandle> {
         if path.as_os_str().is_empty() {
             return None;
@@ -307,22 +361,8 @@ impl StartScreen {
         self.previews
             .entry(path.to_path_buf())
             .or_insert_with(|| {
-                let bytes = std::fs::read(path).ok()?;
-                match decode_png(&bytes, &path.to_string_lossy()) {
-                    Ok(img) => {
-                        let size = [img.width as usize, img.height as usize];
-                        let color = egui::ColorImage::from_rgba_unmultiplied(size, &img.rgba);
-                        Some(ctx.load_texture(
-                            path.to_string_lossy(),
-                            color,
-                            egui::TextureOptions::LINEAR,
-                        ))
-                    }
-                    Err(e) => {
-                        log::warn!("{e}");
-                        None
-                    }
-                }
+                let color = read_preview(path)?;
+                Some(ctx.load_texture(path.to_string_lossy(), color, egui::TextureOptions::LINEAR))
             })
             .clone()
     }
@@ -1204,6 +1244,52 @@ mod tests {
         assert_eq!(
             screen.toasts.texts(),
             ["This folder isn't a Metallic game (it has no metallic.toml)."]
+        );
+    }
+
+    #[test]
+    fn preview_caps_are_per_side_and_per_byte() {
+        assert!(preview_fits(1280, 720));
+        assert!(preview_fits(4096, 2048));
+        assert!(!preview_fits(4097, 10), "too wide");
+        assert!(!preview_fits(10, 8192), "too tall");
+        assert!(!preview_fits(4096, 4096), "64 MB decoded");
+        assert!(!preview_fits(0, 10));
+    }
+
+    fn write_png(path: &Path, width: u32, height: u32) {
+        let file = std::fs::File::create(path).expect("create");
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().expect("header");
+        writer
+            .write_image_data(&vec![0x80; (width * height) as usize])
+            .expect("data");
+    }
+
+    #[test]
+    fn an_oversized_preview_shows_no_preview() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let ok = dir.path().join("ok.png");
+        write_png(&ok, 64, 36);
+        assert_eq!(read_preview(&ok).expect("small image").size, [64, 36]);
+        // 8192 px wide is under the 64 MB decoder limit but over the cap.
+        let wide = dir.path().join("wide.png");
+        write_png(&wide, 8192, 4);
+        assert!(read_preview(&wide).is_none());
+        assert!(read_preview(&dir.path().join("missing.png")).is_none());
+    }
+
+    #[test]
+    fn a_failed_open_is_a_toast_and_leaves_the_folder_field_alone() {
+        let mut screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
+        let error = StudioError::FolderNotEmpty(PathBuf::new());
+        screen.open_failed("Lava Run", &error);
+        assert_eq!(screen.error(), None);
+        assert_eq!(
+            screen.toasts.texts(),
+            [format!("Could not open Lava Run: {error}")]
         );
     }
 

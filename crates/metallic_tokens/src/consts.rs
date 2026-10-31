@@ -111,7 +111,7 @@ pub const LINE: [u8; 4] = [43, 41, 51, 255];
 pub const LINE_STRONG: [u8; 4] = [67, 64, 77, 255];
 
 /// `role.line-control`
-pub const LINE_CONTROL: [u8; 4] = [110, 106, 121, 255];
+pub const LINE_CONTROL: [u8; 4] = [111, 107, 122, 255];
 
 /// `role.text-1`
 pub const TEXT_1: [u8; 4] = [230, 228, 234, 255];
@@ -149,6 +149,18 @@ pub const FOCUS: [u8; 4] = [180, 166, 236, 255];
 /// `role.highlight`
 pub const HIGHLIGHT: [u8; 4] = [255, 255, 255, 15];
 
+/// `role.edge-low`
+pub const EDGE_LOW: [u8; 4] = [0, 0, 0, 77];
+
+/// `role.art-scrim`
+pub const ART_SCRIM: [u8; 4] = [18, 17, 22, 199];
+
+/// `role.backdrop`
+pub const BACKDROP: [u8; 4] = [12, 11, 15, 153];
+
+/// `role.keycap-on-accent`
+pub const KEYCAP_ON_ACCENT: [u8; 4] = [17, 16, 21, 41];
+
 /// `role.error`
 pub const ERROR: [u8; 4] = [236, 122, 114, 255];
 
@@ -178,6 +190,9 @@ pub const DANGER: [u8; 4] = [143, 58, 53, 255];
 
 /// `role.danger-hover`
 pub const DANGER_HOVER: [u8; 4] = [163, 68, 62, 255];
+
+/// `role.on-danger` (= `primitive.g.100`)
+pub const ON_DANGER: [u8; 4] = [230, 228, 234, 255];
 
 /// `space.s1`
 pub const S1: f32 = 2.0;
@@ -211,6 +226,12 @@ pub const S10: f32 = 40.0;
 
 /// `space.s11`
 pub const S11: f32 = 48.0;
+
+/// `space.s12`
+pub const S12: f32 = 64.0;
+
+/// `space.s13`
+pub const S13: f32 = 96.0;
 
 /// `radius.r-xs`
 pub const R_XS: f32 = 3.0;
@@ -267,11 +288,20 @@ pub const T_BASE: f32 = 0.14;
 /// `motion.t-slow`
 pub const T_SLOW: f32 = 0.2;
 
+/// `motion.t-panel`
+pub const T_PANEL: f32 = 0.24;
+
+/// `motion.t-splash`
+pub const T_SPLASH: f32 = 0.32;
+
 /// `motion.ease-out`
 pub const EASE_OUT: [f32; 4] = [0.215, 0.61, 0.355, 1.0];
 
 /// `motion.ease-in-out`
 pub const EASE_IN_OUT: [f32; 4] = [0.645, 0.045, 0.355, 1.0];
+
+/// `motion.ease-in`
+pub const EASE_IN: [f32; 4] = [0.55, 0.055, 0.675, 0.19];
 
 /// `type.t-display.size`
 pub const T_DISPLAY_SIZE: f32 = 30.0;
