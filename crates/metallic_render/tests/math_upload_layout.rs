@@ -1,4 +1,5 @@
 //! The shared math version must preserve the renderer's column-major GPU upload contract.
+use metallic_render::MaterialTable;
 use metallic_render::glam::{Mat4, Quat, Vec3};
 use metallic_render::scene::InstanceRaw;
 
@@ -23,16 +24,20 @@ fn nonuniform_rotated_transform_keeps_column_order_and_instance_offsets() {
     let instance = InstanceRaw {
         model: model.to_cols_array_2d(),
         color: [0.25, 0.5, 0.75, 1.0],
-        material: [0.5, 0.0, 3.0, 0.0],
+        material: [MaterialTable::row(0, 3), 0, 3, 0],
     };
     assert_eq!(std::mem::size_of::<InstanceRaw>(), 96);
     assert_eq!(std::mem::offset_of!(InstanceRaw, model), 0);
     assert_eq!(std::mem::offset_of!(InstanceRaw, color), 64);
     assert_eq!(std::mem::offset_of!(InstanceRaw, material), 80);
-    let floats: &[f32] = bytemuck::cast_slice(bytemuck::bytes_of(&instance));
+    let bytes = bytemuck::bytes_of(&instance);
+    let floats: &[f32] = bytemuck::cast_slice(&bytes[..80]);
     assert_eq!(&floats[..16], columns.as_flattened());
-    assert_eq!(&floats[16..20], &instance.color);
-    assert_eq!(&floats[20..], &instance.material);
+    assert_eq!(&floats[16..], &instance.color);
+    // The material-table ABI is integer words, not roughness/metalness floats.
+    let material_words: &[u32] = bytemuck::cast_slice(&bytes[80..]);
+    assert_eq!(material_words, &[3, 0, 3, 0]);
+    assert_eq!(material_words, &instance.material);
 }
 
 #[test]

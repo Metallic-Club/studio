@@ -133,3 +133,25 @@ separate supporting evidence; it does not deliver CPU mode in the main-based PR.
 Actual combined execution is pending at publication. Update only PR/external
 metadata when those results arrive, keeping this source and prior evidence fixed.
 No own merge, force push, main push or remote-machine action was performed.
+
+
+## Compatibility refresh on main 995f880
+
+The previous main a0bb1bf/e993e49 results and private b44 composition above remain
+historical and unchanged. New main pin:
+`995f880ced789284354ccbb1e64b6bf841382abc` (shading/material table, editor wiring,
+ModuleScript/require). Object-only merge is textually clean, but source review
+identified an actual ABI compile conflict in the added upload regression:
+InstanceRaw.material is now [u32;4], not the old float roughness/metalness payload.
+
+Normal append-only main merge preserves all upstream renderer, shader, material
+table, editor and require implementations. The added upload test retains every
+matrix/color/camera numerical assertion and the 96-byte/0/64/80 offsets, while
+initializing a valid material row and checking the 80..96 region as exact u32
+words [row,flags,material ID,reserved]. No integer header is reinterpreted as float
+material parameters. Shared glam 0.33, legacy fixtures, public interoperability,
+CPU-unavailable policy and camera call safeguards are retained. No wgpu upgrade,
+assertion relaxation, golden change, force push or own merge is introduced.
+
+Cargo is held pending the coordinator's build-slot release. This checkpoint is
+source-only; no refreshed execution or Clippy result is claimed for 995f880 yet.

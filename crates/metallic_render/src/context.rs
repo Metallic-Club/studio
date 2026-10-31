@@ -96,6 +96,13 @@ impl RenderContext {
         pollster::block_on(Self::from_instance(&instance, None))
     }
 
+    /// A headless device on the platform's software adapter (WARP on Windows, a CPU Vulkan
+    /// driver elsewhere when installed), for measuring how a change scales on a slow GPU.
+    pub fn new_headless_software() -> Result<RenderContext, RenderError> {
+        let instance = wgpu::Instance::default();
+        pollster::block_on(Self::from_instance_with(&instance, None, true))
+    }
+
     /// Wraps the device, queue and adapter of a host that already owns them (the eframe/egui
     /// Studio editor passes the ones from its `wgpu_render_state`). The adapter lets the
     /// renderer check which HDR target format it can use.
@@ -117,10 +124,18 @@ impl RenderContext {
         instance: &wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<RenderContext, RenderError> {
+        Self::from_instance_with(instance, surface, false).await
+    }
+
+    async fn from_instance_with(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        software: bool,
+    ) -> Result<RenderContext, RenderError> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
+                force_fallback_adapter: software,
                 compatible_surface: surface,
                 apply_limit_buckets: false,
             })
@@ -129,6 +144,8 @@ impl RenderContext {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("metallic device"),
+                // GPU frame timing (`Renderer::enable_gpu_timing`) where the adapter has it.
+                required_features: adapter.features() & crate::renderer::GPU_TIMING_FEATURES,
                 ..Default::default()
             })
             .await
