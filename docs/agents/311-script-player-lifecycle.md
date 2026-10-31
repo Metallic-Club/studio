@@ -1,8 +1,8 @@
 # Issue 311: explicit ScriptHost roles and player lifecycle
 
-Status: all eighteen role/lifecycle cases and 61 focused cases pass on cb26593;
-independent final review is clean. Broad gates are pending; Cargo is held until
-a fresh explicit build grant.
+Status: all eighteen role/lifecycle cases and 61 focused cases passed on cb26593;
+independent final review is clean. Refreshed onto pinned d1eecce for ABI compatibility;
+all required local gates passed. Preparing one PR for review; remote CI pending.
 
 Branch `studio/311-script-player-lifecycle`, initial main
 `e20f0828454d21ae2325b671add29f9bf5c3a7c3`. This user-prioritized remaining A3
@@ -129,15 +129,49 @@ Server/Combined dispatch behavior or core registry/class interfaces were changed
 ## Ownership and next
 
 Only script host/API/event plumbing, focused tests and public docs. Physics state
-issue 296 and transport issue 297 are actively owned elsewhere. No scheduler
+issue 296 and transport issue 297 were implemented elsewhere and are now on the
+final pinned base. This issue changes neither implementation. No scheduler
 implementation edits or core class/journal edits. Use guarded lane121 with four
 build jobs. The root worker coordinator released slot one after A1's actual suite;
-the first focused prebuild covers the script library, host_roles, server_host and
-api targets. Root's pure movement-math prebuild has slot two; no other Lua suite
-or measurement overlaps the reserved actual focused window.
-Do not run further Cargo commands until a fresh explicit build grant; the prior
-focused grant ended at its reported completion. Request the next workspace prebuild,
-then a separately coordinated actual suite and remaining gates. PlayerScripts coverage still depends
+the first focused prebuild covered the script library, host_roles, server_host and
+api targets. Root's pure movement-math prebuild had slot two; no other Lua suite
+or measurement overlapped that focused actual window.
+Before broad gates the root worker coordinator required a second compatibility
+refresh onto exact `d1eeccee2c3d46ca61921baffa562af4bd9472e8`. Main now contains
+A4 CharacterState/replica physics, A5 QUIC/memory transport, pivot APIs with boxed
+Value::CFrame/PropDef.hidden, controls, avatar and Studio additions. This is a
+substantive ABI/source refresh, not a documentation-only change. The rebase had
+no conflicts; PlayerRemoving, upstream Lua conversions, PV methods and hidden
+property filtering are all retained. Current code checkpoint: `593371a`.
+
+Fetch observed newer main `2e17419`, deliberately excluded from this pinned gate
+base. The issue diff remains the same eight script/docs files with no core,
+manifest or lockfile edits. All 61 focused results above remain labeled to cb26593;
+the completed new-base gates are recorded below.
+
+The slot-one grant covered only `test --workspace --no-run -j 4` in guarded
+lane121; its completion was reported before separately granted actual/check windows.
+PlayerScripts coverage still depends
 on actual core registration, not a fabricated class or a copied unmerged branch.
-Run meaningful focused tests and all required workspace/Clippy/license/format gates,
-then open/attach one PR, inspect CI, and do not merge it.
+
+## Final gates on pinned d1eecce
+
+Frozen source checkpoint `593371a432403e5a044bebc0ad24f58832151ef6`:
+
+- Guarded full workspace no-run prebuild passed in 6m10s, without warnings/errors.
+- Separately granted actual `test --workspace -j 4 -- --test-threads=1` exited zero:
+  1,242 passed, zero failed, six existing ignored across 110 harness/doc groups.
+  Networking, physics, pivot, runtime, script-role and documentation tests all passed.
+  Ignored tests are three window tests, two getter diagnostics and one real-budget
+  pattern probe. No new case is ignored. The source remained frozen during this run;
+  other managed Lua suites were held, with only short root core-only work permitted.
+- Strict full workspace all-target Clippy with `-D warnings` passed in 1m20s.
+  License, format and whitespace checks passed in the same granted check sequence.
+- Saved logs: `metallic-311-workspace-prebuild.log`,
+  `metallic-311-workspace-final.log`, `metallic-311-clippy-final.log`,
+  `metallic-311-licenses-final.log` under `<TEMP>`.
+
+Lane121 and its actual/check windows are released; all Cargo is held. Commit this
+documentation-only result, publish/attach the PR, set issue 311 to review and inspect
+CI. This does not change tested production behavior or claim A3/M2 acceptance.
+Do not merge the PR.
