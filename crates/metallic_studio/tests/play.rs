@@ -515,8 +515,8 @@ fn tab_space_and_enter_go_to_the_game_not_to_a_focused_button() {
     assert!(top > standing + 0.2, "Space jumps: {standing} -> {top}");
 }
 
-#[test]
-fn escape_answers_the_close_prompt_and_play_goes_on() {
+/// An edit world with one unsaved change, in the harness.
+fn dirty_harness() -> Harness<'static, EditorUi> {
     let output = OutputPanel::new();
     let (world, part) = world("");
     let mut state = EditorState::new(
@@ -535,18 +535,38 @@ fn escape_answers_the_close_prompt_and_play_goes_on() {
             Value::Number(0.5),
         ))
         .unwrap();
-    let mut h = harness(state, output);
+    harness(state, output)
+}
+
+#[test]
+fn quitting_while_playing_stops_the_game_before_the_prompt() {
+    let mut h = dirty_harness();
     h.key_press(egui::Key::F5);
     h.run_steps(2);
     assert!(h.state().state.play.is_playing());
     assert!(!h.state_mut().request_quit(), "unsaved changes ask first");
+    assert!(!h.state().state.play.is_playing(), "the game stops first");
     h.run_steps(2);
     assert!(h.state().is_confirming());
+    // Esc answers the prompt (Cancel); the editor stays open in edit mode.
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(!h.state().is_confirming(), "Esc closes the prompt");
-    assert!(h.state().state.play.is_playing(), "Esc did not stop Play");
-    h.key_press(egui::Key::Escape);
+    assert!(!h.state().state.play.is_playing());
+    assert!(h.state().state.is_dirty(), "nothing was saved or dropped");
+}
+
+#[test]
+fn ctrl_w_while_playing_stops_play_then_asks() {
+    let mut h = dirty_harness();
+    h.key_press(egui::Key::F5);
     h.run_steps(2);
-    assert!(!h.state().state.play.is_playing(), "a second Esc stops");
+    assert!(h.state().state.play.is_playing());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(2);
+    assert!(!h.state().state.play.is_playing(), "Ctrl+W stops Play");
+    assert!(
+        h.state().is_confirming(),
+        "then the unsaved-changes guard asks"
+    );
 }
