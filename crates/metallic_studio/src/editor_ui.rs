@@ -174,10 +174,10 @@ impl EditorUi {
         }
         let mut pressed = std::mem::take(&mut self.pressed);
         if typing {
-            // Only Save and Play keys work while a text field has focus.
+            // Only Save and Play keys work while a text field has focus (Ctrl+W must not close the game).
             self.keymap
                 .pressed(ctx, &[KeyContext::Global], &mut pressed);
-            pressed.retain(|a| a.starts_with("file.") || a.starts_with("play."));
+            pressed.retain(|a| *a == "file.save" || a.starts_with("play."));
         } else if !self.viewport.is_dragging() {
             self.keymap.pressed(ctx, &contexts, &mut pressed);
         } else {

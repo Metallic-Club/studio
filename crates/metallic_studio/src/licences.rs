@@ -383,7 +383,7 @@ mod tests {
         have.sort();
         assert!(
             have == want,
-            "assets/THIRD_PARTY.md does not match metallic_studio's dependencies;              run: python tools/gen_third_party.py"
+            "assets/THIRD_PARTY.md does not match metallic_studio's dependencies; run: python tools/gen_third_party.py"
         );
     }
 

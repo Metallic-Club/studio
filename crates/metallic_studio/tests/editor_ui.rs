@@ -379,3 +379,25 @@ fn escape_clears_the_selection_and_never_closes() {
     h.run_steps(3);
     assert!(h.state().state.selection.ids().is_empty());
 }
+
+#[test]
+fn ctrl_w_does_nothing_while_a_text_field_has_focus() {
+    use egui::accesskit::Role;
+    let (mut ui, _model, part) = editor();
+    let ws = ui.state.world.root("Workspace").unwrap();
+    let script = ui.state.world.create("Script", Some(ws)).unwrap();
+    ui.state
+        .set_property(&[part], "Transparency", Value::Number(0.5));
+    assert!(ui.state.is_dirty());
+    ui.state
+        .request(metallic_studio::editor::UiRequest::OpenScript(script));
+    let mut h = harness(ui);
+    h.get_by_role(Role::MultilineTextInput).click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::W);
+    h.run_steps(3);
+    assert!(
+        !h.state().is_confirming(),
+        "Ctrl+W must not start closing the game from a text field"
+    );
+}
