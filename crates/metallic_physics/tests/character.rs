@@ -1,7 +1,8 @@
 use metallic_core::{Color3, InstanceId, Value, Vec3, World};
+use metallic_core::CFrame;
 use metallic_physics::{
-    CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MoveInput,
-    PhysicsWorld, RESPAWN_DELAY, spawn_character,
+    BodyPart, BodyPose, CharacterController, CharacterEvent, CharacterState, HumanoidState,
+    MAX_PUSH, MAX_TOUCH_CANDIDATES, MoveInput, PhysicsWorld, RESPAWN_DELAY, spawn_character,
 };
 
 const DT: f64 = 1.0 / 60.0;
@@ -116,7 +117,9 @@ impl Sim {
         }
         // The lava script: `Humanoid.Health = 0` when lava is touched.
         for e in &new {
-            if let CharacterEvent::Touched { character, part } = *e
+            if let CharacterEvent::Touched {
+                character, part, ..
+            } = *e
                 && self.lava.contains(&part)
                 && let Some(h) = self.world.find_first_child(character, "Humanoid")
             {
@@ -127,11 +130,54 @@ impl Sim {
         self.phys.step(&mut self.world, DT);
     }
 
+    /// Touches of `part` by the movement capsule (reported as the `HumanoidRootPart`).
     fn touched_count(&self, part: InstanceId) -> usize {
+        self.touched_by(part, "HumanoidRootPart")
+    }
+
+    /// Touches of `part` by the character part named `hit`.
+    fn touched_by(&self, part: InstanceId, hit: &str) -> usize {
+        self.count(part, hit, true)
+    }
+
+    /// TouchEnded events of `part` by the character part named `hit`.
+    fn ended_by(&self, part: InstanceId, hit: &str) -> usize {
+        self.count(part, hit, false)
+    }
+
+    fn count(&self, part: InstanceId, hit_name: &str, start: bool) -> usize {
         self.events
             .iter()
-            .filter(|e| matches!(e, CharacterEvent::Touched { part: p, .. } if *p == part))
+            .filter(|e| {
+                let (p, h) = match **e {
+                    CharacterEvent::Touched { part, hit, .. } if start => (part, hit),
+                    CharacterEvent::TouchEnded { part, hit, .. } if !start => (part, hit),
+                    _ => return false,
+                };
+                p == part
+                    && self.world.get(h, "Name").ok() == Some(Value::String(hit_name.into()))
+            })
             .count()
+    }
+
+    /// Names of the character parts that touched `part`, sorted, without repeats.
+    fn hits(&self, part: InstanceId) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .events
+            .iter()
+            .filter_map(|e| match *e {
+                CharacterEvent::Touched { part: p, hit, .. } if p == part => {
+                    match self.world.get(hit, "Name") {
+                        Ok(Value::String(n)) => Some(n),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
     }
 
     fn run(&mut self, seconds: f64, input: MoveInput) {
@@ -183,35 +229,30 @@ fn spawns_at_origin_without_spawn_location() {
     assert_eq!(num(&world, hum, "Health"), 100.0);
     assert_eq!(num(&world, hum, "WalkSpeed"), 16.0);
 
-    let limbs = [
-        ("Head", Vec3::new(2.0, 1.0, 1.0)),
-        ("Torso", Vec3::new(2.0, 2.0, 1.0)),
-        ("Left Arm", Vec3::new(1.0, 2.0, 1.0)),
-        ("Right Arm", Vec3::new(1.0, 2.0, 1.0)),
-        ("Left Leg", Vec3::new(1.0, 2.0, 1.0)),
-        ("Right Leg", Vec3::new(1.0, 2.0, 1.0)),
-    ];
-    for (name, size) in limbs {
+    for body in BodyPart::ALL {
+        let name = body.name();
         let p = world
             .find_first_child(ch, name)
             .unwrap_or_else(|| panic!("missing {name}"));
-        assert_eq!(v3(&world, p, "Size"), size, "{name}");
+        assert_eq!(v3(&world, p, "Size"), body.size(), "{name}");
+        assert!(!world.get(p, "CanCollide").unwrap().eq(&Value::Bool(true)));
     }
-    // The body parts are collision and touch volumes; the runtime draws the skinned avatar.
+    // The body parts hold the touch volumes; the runtime draws the skinned avatar.
     let parts: Vec<InstanceId> = world
         .children(ch)
         .iter()
         .copied()
         .filter(|&c| world.is_a(c, "BasePart"))
         .collect();
-    assert_eq!(parts.len(), 7);
+    assert_eq!(parts.len(), 16);
     for p in parts {
         assert_eq!(num(&world, p, "Transparency"), 1.0);
         assert!(world.children(p).is_empty());
     }
-    // feet on the ground: legs end 3 studs below the root
-    let leg = world.find_first_child(ch, "Left Leg").unwrap();
-    assert!((v3(&world, leg, "Position").y - 1.0).abs() < 1e-9);
+    // feet on the ground: the foot boxes end 3 studs below the root
+    let foot = world.find_first_child(ch, "LeftFoot").unwrap();
+    let bottom = v3(&world, foot, "Position").y - v3(&world, foot, "Size").y / 2.0;
+    assert!(bottom.abs() < 1e-9, "{bottom}");
 }
 
 #[test]
@@ -249,7 +290,7 @@ fn walk_speed_16_studs_per_second() {
     // the avatar turned to face +X (look vector -Z rotated by -90 degrees around Y)
     let torso = sim
         .world
-        .find_first_child(sim.character(), "Torso")
+        .find_first_child(sim.character(), "UpperTorso")
         .unwrap();
     assert!((v3(&sim.world, torso, "Orientation").y + 90.0).abs() < 1e-6);
 }
@@ -462,11 +503,12 @@ fn standing_still_on_lava_dies() {
 fn arm_brushing_checkpoint_registers() {
     let mut world = World::new_with_services();
     baseplate(&mut world);
-    // a zone beside the path: only an arm (x up to 2.0) reaches it, the body (radius 1) does not
+    // a zone beside the path: only the hanging arm (out to 1.46 with the margin) reaches it, the
+    // capsule (radius 1.1 with the margin) does not
     let cp = part(
         &mut world,
         "Checkpoint",
-        Vec3::new(2.6, 3.0, 10.0),
+        Vec3::new(2.3, 3.0, 10.0),
         Vec3::new(2.0, 6.0, 4.0),
     );
     world.set(cp, "CanCollide", Value::Bool(false)).unwrap();
@@ -476,7 +518,10 @@ fn arm_brushing_checkpoint_registers() {
     sim.run(1.0, walk(0.0, 1.0));
     let p = sim.root_pos();
     assert!(p.z > 14.0 && p.x.abs() < 0.05, "path {p:?}");
-    assert_eq!(sim.touched_count(cp), 1);
+    assert_eq!(sim.touched_count(cp), 0, "the capsule stays clear");
+    // Walking toward +Z, the character's left side faces +X.
+    assert_eq!(sim.hits(cp), ["LeftHand", "LeftLowerArm"]);
+    assert_eq!(sim.touched_by(cp, "LeftHand"), 1);
     assert_eq!(
         reference(&sim.world, sim.player, "RespawnLocation"),
         Some(cp)
@@ -872,20 +917,17 @@ fn restore_moves_root_and_limbs() {
     state.yaw = 90.0;
     sim.ctl.restore_state(&mut sim.world, ch, &state);
     assert!((sim.root_pos() - state.position).magnitude() < 1e-9);
-    let head = sim.world.find_first_child(ch, "Head").unwrap();
-    // Yaw 90 turns the head's (0, 1.5, 0) offset into itself; the arm offset (1.5, 0, 0) moves.
-    assert!(
-        (v3(&sim.world, head, "Position") - (state.position + Vec3::new(0.0, 1.5, 0.0)))
-            .magnitude()
-            < 1e-9
-    );
-    let arm = sim.world.find_first_child(ch, "Right Arm").unwrap();
-    assert!(
-        (v3(&sim.world, arm, "Position") - (state.position + Vec3::new(0.0, 0.0, -1.5)))
-            .magnitude()
-            < 1e-9
-    );
-    assert!((v3(&sim.world, arm, "Orientation").y - 90.0).abs() < 1e-9);
+    // Yaw 90 turns an offset (x, y, z) into (z, y, -x).
+    let turned = |p: BodyPart| {
+        let c = p.rest_centre();
+        state.position + Vec3::new(c.z, c.y, -c.x)
+    };
+    for p in [BodyPart::Head, BodyPart::RightUpperArm, BodyPart::LeftFoot] {
+        let id = sim.world.find_first_child(ch, p.name()).unwrap();
+        let at = v3(&sim.world, id, "Position");
+        assert!((at - turned(p)).magnitude() < 1e-9, "{p:?} at {at:?}");
+        assert!((v3(&sim.world, id, "Orientation").y - 90.0).abs() < 1e-9);
+    }
 }
 
 #[test]
@@ -894,6 +936,162 @@ fn place_character_poses_the_limbs() {
     let ch = sim.character();
     metallic_physics::place_character(&mut sim.world, ch, Vec3::new(1.0, 2.0, 3.0), 0.0);
     assert!((sim.root_pos() - Vec3::new(1.0, 2.0, 3.0)).magnitude() < 1e-9);
-    let leg = sim.world.find_first_child(ch, "Left Leg").unwrap();
-    assert!((v3(&sim.world, leg, "Position") - Vec3::new(0.5, 0.0, 3.0)).magnitude() < 1e-9);
+    let foot = sim.world.find_first_child(ch, "LeftFoot").unwrap();
+    let expect = Vec3::new(1.0, 2.0, 3.0) + BodyPart::LeftFoot.rest_centre();
+    assert!((v3(&sim.world, foot, "Position") - expect).magnitude() < 1e-9);
+}
+
+/// A pose whose right arm points straight forward at shoulder height (facing -Z), the rest
+/// unchanged.
+fn pointing_pose() -> BodyPose {
+    let mut pose = BodyPose::rest(0.0);
+    // Turn each right-arm part 90 degrees about X around the shoulder: down becomes forward.
+    let shoulder = BodyPart::RightUpperArm.rest_ends().0;
+    let turn = CFrame::from_position(shoulder)
+        * CFrame::from_euler_xyz(std::f64::consts::FRAC_PI_2, 0.0, 0.0)
+        * CFrame::from_position(shoulder * -1.0);
+    for p in [
+        BodyPart::RightUpperArm,
+        BodyPart::RightLowerArm,
+        BodyPart::RightHand,
+    ] {
+        pose.parts[p.index()] = turn * pose.parts[p.index()];
+    }
+    pose
+}
+
+#[test]
+fn pointing_hand_touches_a_part_the_idle_body_does_not() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    // A small sensor ahead of the right shoulder, beyond the capsule (1.1 with the margin).
+    let target = part(
+        &mut world,
+        "Part",
+        Vec3::new(0.75, 3.6, -2.0),
+        Vec3::new(0.6, 0.6, 0.6),
+    );
+    world.set(target, "CanCollide", Value::Bool(false)).unwrap();
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    assert!(sim.hits(target).is_empty(), "idle body touched it");
+    let ch = sim.character();
+    let pose = pointing_pose();
+    let (_, tip) = pose.world_ends(BodyPart::RightHand, sim.root_pos());
+    assert!(tip.z < -1.5, "the hand points forward: {tip:?}");
+    sim.ctl.set_body_pose(ch, &pose);
+    sim.run(0.1, idle());
+    assert_eq!(sim.touched_by(target, "RightHand"), 1);
+    assert_eq!(sim.touched_count(target), 0, "the capsule does not reach it");
+    assert_eq!(
+        sim.ctl.touching(ch, target),
+        [Some(BodyPart::RightHand)],
+        "only the hand"
+    );
+    // The hand box in the world moved with the volume.
+    let hand = sim.world.find_first_child(ch, "RightHand").unwrap();
+    let centre = sim.root_pos() + pose.parts[BodyPart::RightHand.index()].position;
+    assert!((v3(&sim.world, hand, "Position") - centre).magnitude() < 1e-9);
+    // Lowering the arm again ends the touch.
+    sim.ctl.clear_body_pose(ch);
+    sim.run(0.1, idle());
+    assert_eq!(sim.ended_by(target, "RightHand"), 1);
+    assert_eq!(sim.touched_by(target, "RightHand"), 1);
+}
+
+#[test]
+fn body_volumes_never_push_or_block() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    // A loose crate resting where the pointing hand will sweep through.
+    let crate_part = part(
+        &mut world,
+        "Part",
+        Vec3::new(0.75, 0.5, -2.0),
+        Vec3::new(1.0, 1.0, 1.0),
+    );
+    world.set(crate_part, "Anchored", Value::Bool(false)).unwrap();
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    let rest = v3(&sim.world, crate_part, "Position");
+    let ch = sim.character();
+    // Point the arm down-forward into the crate: rotate the pointing pose down 45 degrees.
+    let mut pose = pointing_pose();
+    let shoulder = BodyPart::RightUpperArm.rest_ends().0;
+    let down = CFrame::from_position(shoulder)
+        * CFrame::from_euler_xyz(-0.9, 0.0, 0.0)
+        * CFrame::from_position(shoulder * -1.0);
+    for p in [
+        BodyPart::RightUpperArm,
+        BodyPart::RightLowerArm,
+        BodyPart::RightHand,
+    ] {
+        pose.parts[p.index()] = down * pose.parts[p.index()];
+    }
+    sim.ctl.set_body_pose(ch, &pose);
+    sim.run(0.5, idle());
+    assert_eq!(sim.touched_by(crate_part, "RightHand"), 1, "{:?}", sim.hits(crate_part));
+    let after = v3(&sim.world, crate_part, "Position");
+    assert!((after - rest).magnitude() < 1e-3, "pushed from {rest:?} to {after:?}");
+    // Rays pass through the body parts: a ray at the hand only meets the crate behind it.
+    let hand = sim.world.find_first_child(ch, "RightHand").unwrap();
+    let at = v3(&sim.world, hand, "Position");
+    let hit = sim
+        .phys
+        .raycast(at + Vec3::new(5.0, 0.0, 0.0), Vec3::new(-10.0, 0.0, 0.0), &[]);
+    assert!(hit.is_none_or(|h| h.instance != hand));
+}
+
+#[test]
+fn touch_ended_pairs_every_touched() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let pad = part(
+        &mut world,
+        "Part",
+        Vec3::new(10.0, -0.5, 0.0),
+        Vec3::new(4.0, 1.0, 8.0),
+    );
+    let mut sim = Sim::start(world);
+    sim.run(0.5, idle());
+    sim.run(2.0, walk(1.0, 0.0));
+    assert!(sim.root_pos().x > 20.0);
+    let hits = sim.hits(pad);
+    assert!(hits.contains(&"LeftFoot".to_string()), "{hits:?}");
+    assert!(hits.contains(&"HumanoidRootPart".to_string()), "{hits:?}");
+    for h in &hits {
+        assert_eq!(sim.touched_by(pad, h), sim.ended_by(pad, h), "{h}");
+    }
+}
+
+#[test]
+fn touch_query_cost_is_bounded() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    // 4000 parts far away and a dense cloud of 1000 small sensors around the character.
+    for i in 0..4000 {
+        let (x, z) = ((i % 64) as f64 * 3.0 + 100.0, (i / 64) as f64 * 3.0 + 100.0);
+        part(&mut world, "Part", Vec3::new(x, 0.5, z), Vec3::new(1.0, 1.0, 1.0));
+    }
+    let mut sim = Sim::start(world);
+    sim.run(0.25, idle());
+    let ch = sim.character();
+    let (looked, tests) = sim.ctl.touch_query_cost(ch);
+    assert!(looked <= 2, "far parts were looked at: {looked}");
+    assert!(tests <= 32, "{tests}");
+    for i in 0..1000 {
+        let f = i as f64;
+        let at = Vec3::new(
+            (f * 0.37).sin() * 1.2,
+            3.0 + (f * 0.11).cos() * 2.4,
+            (f * 0.53).sin() * 1.2,
+        );
+        let id = part(&mut sim.world, "Part", at, Vec3::new(0.2, 0.2, 0.2));
+        sim.world.set(id, "CanCollide", Value::Bool(false)).unwrap();
+    }
+    sim.phys.sync_from(&sim.world);
+    sim.run(0.1, idle());
+    let (looked, tests) = sim.ctl.touch_query_cost(ch);
+    assert_eq!(looked, MAX_TOUCH_CANDIDATES);
+    assert!(tests <= MAX_TOUCH_CANDIDATES * 16, "{tests}");
 }

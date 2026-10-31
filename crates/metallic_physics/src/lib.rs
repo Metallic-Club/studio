@@ -13,21 +13,25 @@
 //! linear and angular velocity derived from the move, so parts standing on it are carried along
 //! and parts in its way are pushed, by rotating movers too.
 //!
-//! Characters: [`spawn_character`] builds a Roblox-style character Model (invisible body parts
-//! that the runtime draws the skinned avatar over) for a Player and
-//! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
-//! death and respawn, checkpoints, touches). Character parts are anchored, so the physics moves
-//! them as kinematic bodies (they push loose parts) but never reports their touches:
-//! [`PhysicsWorld::drain_touched`] skips every pair involving a character part, and the runtime
-//! gets character touches from [`CharacterEvent::Touched`] instead.
+//! Characters: [`spawn_character`] builds a Roblox-style character Model (a `HumanoidRootPart`
+//! and 15 invisible R15 body parts that the runtime draws the skinned avatar over) for a Player
+//! and [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
+//! death and respawn, checkpoints, touches). Only the `HumanoidRootPart` gets a Rapier body: it
+//! is anchored, so the physics moves it as a kinematic body (it pushes loose parts). The body
+//! parts get none; they hold the bone-attached touch volumes ([`BodyPart`], [`BodyPose`]), which
+//! are queries only and never collide with or push anything. [`PhysicsWorld::drain_touched`]
+//! skips every pair involving a character part, and the runtime gets character touches from
+//! [`CharacterEvent::Touched`] and [`CharacterEvent::TouchEnded`] instead.
 #![warn(missing_docs)]
 
 mod avatar;
+mod body;
 mod character;
 mod sync;
 mod touched;
 
 pub use avatar::VIOLET;
+pub use body::{BODY_PART_COUNT, BodyPart, BodyPose, MAX_TOUCH_CANDIDATES};
 pub use character::{
     CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT,
     MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, place_character, spawn_character,
@@ -178,8 +182,11 @@ impl PhysicsWorld {
     /// New parts get a body, parts whose Size/Shape/Material/Anchored/CanCollide changed are
     /// rebuilt, and parts that were destroyed or are no longer BaseParts are removed. Call it
     /// after adding or removing parts or changing those properties; moving parts needs no sync.
+    /// A character's body parts (named like a [`BodyPart`]) get no body: their touch volumes are
+    /// queries of the [`CharacterController`].
     pub fn sync_from(&mut self, world: &World) {
-        let parts = sync::collect_parts(world);
+        let mut parts = sync::collect_parts(world);
+        parts.retain(|&(id, character)| !(character && avatar::is_body_part(world, id)));
         let alive: HashSet<InstanceId> = parts.iter().map(|&(id, _)| id).collect();
         let gone: Vec<InstanceId> = self
             .entries
