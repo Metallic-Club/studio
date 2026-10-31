@@ -55,13 +55,14 @@ apps.
   profiler per thread (the game thread): `Profiler::scope(Subsystem, name)` returns a guard (scopes nest; a parent's
   exclusive time excludes its children), `Profiler::frame()` / `begin_frame` / `end_frame` mark host frames,
   `charge_script(id, ns)` adds a script's time, `record_gpu(frame, passes)` adds GPU stage times that arrive late, and
-  `with_frames` reads the last `HISTORY` (600) `FrameRecord`s in a `RingBuffer`. Off by default and then a scope is
+  `with_frames` reads the last `HISTORY` (600) `FrameRecord`s in a `RingBuffer` (kept apart from the recording state, so
+  the reader may call any profiler function; a frame that ends meanwhile joins the history after the read). Off by default and then a scope is
   one thread-local flag read; enabling reserves the history once (about 3 MB) and recording never allocates.
   A frame keeps up to 128 scopes, 16 deep, 32 scripts and 8 GPU passes; the rest are counted, not stored.
   `metallic_script` charges script time where code runs under a script's owner (`Scheduler::as_owner`: resumes and
   event handlers), less nested scripts' time. `metallic_render` times its stages (shadows, scene, exposure, post)
   with timestamp queries written by empty compute passes, read back through three small buffers without waiting
-  (`gpu_timer.rs`); devices request `TIMESTAMP_QUERY` where the adapter has it (headless/player in `context.rs`,
+  (`gpu_timer.rs`; a `GpuFrame` guard aborts a frame's timing on every early return); devices request `TIMESTAMP_QUERY` where the adapter has it (headless/player in `context.rs`,
   Studio in `main.rs`), and without it GPU time stays `None`. `Game` scopes its tick stages and render sync; the
   player marks one frame per redraw and Studio one per `ui` call. No network work runs per frame yet, so
   `Subsystem::Net` has no scopes. Codex's #210 (`metallic_profiling`, bounded budget scopes passed by reference) is
@@ -121,7 +122,7 @@ apps.
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
-  PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
+  PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio). Headless contexts (tests, screenshots) use Vulkan, DX12 or Metal and fall back to OpenGL only without them. Every instance, adapter and device `context.rs` makes is set up under one process-wide lock: wgpu's Windows OpenGL (WGL) setup crashes the process (access violation, heap corruption) when threads do it at once (#276, upstream gfx-rs/wgpu#9760); rendering and teardown stay parallel.
   Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the
   post chain (`post.rs`: `PostChain` of `PostPass`es in an `Hdr` and an `Ldr` slot, run in list order; most passes
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
@@ -148,8 +149,12 @@ apps.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
-  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
-  egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
+  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel and the
+  TextButton/ImageButton of #79 drawn with an egui painter with egui's bundled fonts; their licence texts are in
+  `LICENSES/`). Clicks: the host gives the left mouse button, the cursor and fingers to `Game::gui_pointer` before
+  the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
+  and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
+  never reaches the game's input.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
@@ -221,10 +226,11 @@ apps.
   plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
   `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
   While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
-  Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
-  Properties and the script editor are read-only, the status bar shows the session's `PlayStatus` ("Playing", theme
-  `success`) and the viewport a `success` frame. Esc with the unsaved-changes prompt open answers the prompt. Exposure
-  adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  Stop, Save, Close game, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout
+  are off, Properties and the script editor are read-only, the status bar shows the session's `PlayStatus`
+  ("Playing", theme `success`) and the viewport a `success` frame. Quit and Close game (Ctrl+W) stop Play before
+  the unsaved-changes prompt opens; Esc answers the prompt. Exposure adaptation resets when Play starts and after
+  Stop. Play is asked for with `UiRequest::StartPlay`, so open script
   tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
   and Studio stays in edit mode.
   Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
@@ -234,6 +240,13 @@ apps.
   and glyphs, `Surface` placement in the hit part's grid, virtual surface, soft snap), `pivot.rs` (`Pivot`, `Rigid`,
   27 pivot snap points; pivots are core properties, `PivotOffset` and `WorldPivot`
   plus hidden `WorldPivotSet`, written through the preview overlay as one `SetProperties`, so they are undoable and saved). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
+  Building surfaces (#226): `viewport_header.rs` (tools, increment chips, space, pivot, snap chips, Collisions; a pure
+  `fit()` keeps items by priority from measured widths and moves the rest into a "»" menu, never scrolling), `collisions.rs` (oriented-box overlap test and a per-drag `Guard`: a uniform-grid broadphase of the
+  parts not moving, ignoring parts the selection overlaps at the start, failing safe past a work cap;
+  `GizmoDrag::limit` sweeps each frame's motion and bisects to stop at contact), `context_bar.rs` (the floating bar over the selection: pure `place()` above, below or
+  docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
+  `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
+  drag, Play or camera flight; shown ids in `hints.ron` in the config folder; Settings "Show tips"/"Reset tips").
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
@@ -267,7 +280,7 @@ apps.
   Task 4 adds `bridge.rs` (`Bridge::handle/deliver/event_script`, `BridgeCommand`, `allowed`, `BridgeHost`, `BridgeEvent`,
   `BridgeErrorCode`) and `assets/bridge.js` (`window.metallic`, main frame only): the checked path from a page to the Launcher. Only the
   site (and the development origin) and bundled pages may call it; commands are a typed enum with unknown fields refused, 16 KiB
-  message limit, 32 calls in flight, one Player start per 2 s; an answer goes only to a page of the same origin as the asker. The
+  message limit, 32 calls in flight (Play starts are limited by the shell's `LaunchGate`, see Task 9); an answer goes only to a page of the same origin as the asker. The
   shell implements `BridgeHost` (`ShellHost`); the Metallic sign-in answers `notAvailable` until Task 7. A call counts toward the 32
   only while the host runs it (long work goes to background threads and reports by events), never while its answer waits.
   Task 5 adds `single_instance.rs` (hand-over message `HandoffMessage`, `encode`/`decode`, 4096-byte limit checked before the body is
@@ -285,9 +298,11 @@ apps.
   start and every `CHECK_INTERVAL`, background download, `on_quit` applies silently without restart only when `ProcessTracker`
   counts no running Player, `restart_to_update` answers `Busy` instead, a `required` update makes `allow_play` fail with
   `UpdateRequired`; `StartedPlayers`, `UpdateSource`). `settings.rs` gains `channel` (local-only: the site may not change it).
-  The tray shows "Restart to update" once an update is downloaded.
+  The tray shows "Restart to update" once an update is downloaded, and "Open Studio" once Studio is installed (`TrayMenuState`,
+  no restart needed). `getInfo.channel` is the channel this run started on (`LauncherInfo::running`); a changed setting
+  applies from the next start. `--hidden` (autostart) starts in the tray (`show_on_start`; shown anyway without a tray icon).
   Task 7 adds `platform_auth.rs` (`PlatformAuth`: OAuth device flow against `<site>/v1/oauth/*` with client `metallic-launcher`, scopes
-  `profile play`. Only the refresh token is stored (UTF-8 bytes, Credential Manager entry `Metallic`/`platform`, 2560-byte check); the
+  `profile play`. Only the refresh token is stored (UTF-8 bytes, Credential Manager service `MetallicLauncher`, account `platform`, shown by Windows as `platform.MetallicLauncher`; 2560-byte check); the
   access token stays in memory; tokens over 256 bytes are refused; refreshes are serialised, the new refresh token is stored before use.
   `platform_sign_in` answers `{state:"pending"}` at once and a worker emits `signIn` events `pending` (with `userCode`, `verificationUri`),
   then `signedIn|denied|expired|failed`; a second call returns the running flow's code; a signed-in Launcher skips the browser. The
@@ -301,9 +316,12 @@ apps.
   Task 9 (release and hardening; product name **Metallic Play**, owner choice 2026-10-30, used for the window title, tray, pack title and bundled pages; ids, folders and `Metallic.exe` keep their names): `tools/release.py --app launcher` packs `Metallic.exe` + `metallic-player.exe` as Velopack
   `MetallicLauncher` (`--framework webview2`, channel `launcher-<channel>`, tag `launcher-v<version>-<channel>`; see
   `docs/releasing.md`). `play_limit.rs` (`PlayLimiter`, burst 3 then one per 2 s; `LaunchGate`) is one gate for every program start: Play and
-  Studio links (pipe, protocol handler, page clicks, start argument), the bridge `play`/`openStudio` and the tray (the bridge also keeps its own one-per-2-s Play limit). `url_policy::remote_content_allowed`: if
+  Studio links (pipe, protocol handler, page clicks, start argument), the bridge `play`/`openStudio` and the tray (the bridge has no limit of its own). The single-instance pipe client sends only
+  to a server of the same user whose image is this very executable, full path (`same_program`; a copy in another folder does not hand over). The GitHub sign-in page opens through the
+  same https-only browser opener as other links, after `github_auth::is_github_page`. `url_policy::remote_content_allowed`: if
   the WebView2 `FrameNavigationStarting` handler cannot be registered, iframes would be unpoliced, so the Launcher shows the bundled
-  offline page and loads no remote page (fail closed). Own data folders (`data_dirs.rs`): `%LOCALAPPDATA%\MetallicLauncher\data` (`Downloads`, `WebView2`) and `%APPDATA%\MetallicLauncher` (settings), never under `Metallic\` (another app may own it); each holds a `.metallic-launcher` marker written when the Launcher creates it, and the uninstall hook deletes only marked folders. Keyring service `MetallicLauncher`. The view starts on `about:blank`; the start page loads only after registration. CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
+  offline page and loads no remote page (fail closed). Own data folders (`data_dirs.rs`): `%LOCALAPPDATA%\MetallicLauncher\data` (`Downloads`, `WebView2`) and `%APPDATA%\MetallicLauncher` (settings), never under `Metallic\` (another app may own it); each holds a `.metallic-launcher` marker written when the Launcher creates it, and the uninstall hook deletes only marked folders. Keyring service `MetallicLauncher`, accounts `platform` and `github`
+  (Windows shows `platform.MetallicLauncher`, `github.MetallicLauncher`); the uninstall hook deletes both (`forget_saved_sign_ins`). The view starts on `about:blank`; the start page loads only after registration. CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
   Template creation preserves project metadata (`metallic.toml`, including `[[setting]]`) while setting the new name;
   legacy settings migrate from `template.toml`, with conflicting dual definitions rejected and rolled back. Catalog
   metadata, preview files and root `tests/` stay in the template; tutorials and nested game assets are copied.

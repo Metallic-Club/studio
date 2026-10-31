@@ -4,7 +4,7 @@ use crate::bloom::{BLOOM_PASS, BloomPass};
 use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
 use crate::exposure::{AutoExposure, ExposureGpu, ExposureState};
-use crate::gpu_timer::{GpuTimer, STAGES};
+use crate::gpu_timer::{GpuFrame, GpuTimer, STAGES};
 use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_exposure};
 use crate::meshes::{MeshKind, Vertex};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
@@ -988,15 +988,20 @@ impl Renderer {
         let encode = Profiler::scope(Subsystem::Render, "render.encode");
         // Taken out for the frame (the passes below borrow `self`) and put back at every exit.
         let mut gpu_timer = self.gpu_timer.take();
-        if let Some(frame) = Profiler::current_frame() {
-            let timer = gpu_timer.get_or_insert_with(|| GpuTimer::new(&self.device, &self.queue));
-            if let Some(timer) = timer {
-                timer.begin(&self.device, frame);
-            }
+        let frame = Profiler::current_frame();
+        if frame.is_some() && gpu_timer.is_none() {
+            gpu_timer = Some(GpuTimer::new(&self.device, &self.queue));
         }
-        let timer = gpu_timer.as_ref().and_then(Option::as_ref);
+        // Aborts the frame's timing on every early return (it drops before `gpu_timer` is put
+        // back) and is submitted at the end.
+        let timing = GpuFrame::start(
+            gpu_timer.as_mut().and_then(Option::as_mut),
+            &self.device,
+            frame,
+        );
 
         let Some(att) = self.attachments.as_ref() else {
+            drop(timing);
             self.gpu_timer = gpu_timer;
             return;
         };
@@ -1006,7 +1011,7 @@ impl Renderer {
                 label: Some("metallic frame"),
             });
         self.apply_exposure(&mut encoder);
-        mark(timer, &mut encoder, 0);
+        timing.mark(&mut encoder, 0);
 
         for (i, slot) in self.cascade_slots.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1030,12 +1035,13 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.skinned_shadow);
             self.draw_skinned(&mut pass, None);
         }
-        mark(timer, &mut encoder, 1);
+        timing.mark(&mut encoder, 1);
 
         let keep_depth = self.post.reads_depth();
         {
             // Made with the attachments; nothing to draw into otherwise.
             let Some(hdr) = att.hdr[0].as_ref() else {
+                drop(timing);
                 self.gpu_timer = gpu_timer;
                 return;
             };
@@ -1087,22 +1093,18 @@ impl Renderer {
             self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
             self.draw_blended(&mut pass);
         }
-        mark(timer, &mut encoder, 2);
+        timing.mark(&mut encoder, 2);
         // Meter the scene before the HDR passes: they may rewrite alpha, which marks toon
         // pixels the meter must skip.
         self.meter_frame(&mut encoder);
-        mark(timer, &mut encoder, 3);
+        timing.mark(&mut encoder, 3);
         self.post_and_finish(&mut encoder, target, camera, keep_depth);
-        mark(timer, &mut encoder, STAGES.len() as u32);
-        if let Some(timer) = timer {
-            timer.resolve(&mut encoder);
-        }
+        timing.mark(&mut encoder, STAGES.len() as u32);
+        timing.resolve(&mut encoder);
         drop(encode);
         let _submit = Profiler::scope(Subsystem::Render, "render.submit");
         self.queue.submit(Some(encoder.finish()));
-        if let Some(Some(timer)) = gpu_timer.as_mut() {
-            timer.submitted();
-        }
+        timing.submitted();
         self.gpu_timer = gpu_timer;
     }
 
@@ -1754,13 +1756,6 @@ fn make_pipelines(
         skinned_toon,
         skinned_outline,
         skinned_shadow,
-    }
-}
-
-/// Writes GPU timestamp `index` when this frame is timed.
-fn mark(timer: Option<&GpuTimer>, encoder: &mut wgpu::CommandEncoder, index: u32) {
-    if let Some(timer) = timer {
-        timer.mark(encoder, index);
     }
 }
 

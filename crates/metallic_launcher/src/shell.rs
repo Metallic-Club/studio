@@ -11,22 +11,22 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use metallic_launcher::deep_link::SitePath;
-use metallic_launcher::platform_auth::{KEYRING_ACCOUNT, KEYRING_SERVICE};
+use metallic_launcher::platform_auth::{GITHUB_KEYRING_ACCOUNT, KEYRING_ACCOUNT, KEYRING_SERVICE};
 use metallic_launcher::{
-    AppEvent, BRIDGE_VERSION, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction,
-    DeepLink, EventSink, GithubAssets, HandoffListener, HandoffMessage, InstallStatus, Installer,
-    LaunchGate, LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage,
-    NavDecision, OfflineReason, OneAtATime, PageOrigin, PlaceId, PlatformAuth, PlayLimiter,
-    PlayerWatcher, ProcessTracker, RestartError, SelfUpdater, SettingsPatch, SettingsStore,
-    SiteOrigin, SiteStatus, StartPage, TrayAction, UrlPolicy, check_site, downloads_dir_for,
+    AppEvent, Bridge, BridgeErrorCode, BridgeEvent, BridgeHost, CloseAction, DeepLink, EventSink,
+    GithubAssets, HandoffListener, HandoffMessage, InstallStatus, Installer, LaunchGate,
+    LauncherConfig, LauncherError, LauncherInfo, LauncherSettings, LocalPage, NavDecision,
+    OfflineReason, OneAtATime, PageOrigin, PlaceId, PlatformAuth, PlayLimiter, PlayerWatcher,
+    ProcessTracker, RestartError, SelfUpdater, SettingsPatch, SettingsStore, SiteOrigin,
+    SiteStatus, StartPage, TrayAction, TrayMenuState, UrlPolicy, check_site, downloads_dir_for,
     github_sign_in, is_installed_copy, local_url, on_close_requested, platform_sign_in,
-    player_status, product_paths, remote_content_allowed, serve, sign_out_in_background,
-    start_page, start_player, start_studio, studio_root_for, tray_menu, user_agent,
+    player_status, product_paths, remote_content_allowed, serve, show_on_start,
+    sign_out_in_background, start_page, start_player, start_studio, studio_root_for, user_agent,
 };
-use metallic_update::github_auth::{StoredTokenProvider, embedded_client_id};
+use metallic_update::github_auth::{StoredTokenProvider, embedded_client_id, is_github_page};
 use metallic_update::{
-    GithubAuth, HttpClient, KeyringSecretStore, LAUNCHER_FEED, Token, TokenProvider, UpdateChecker,
-    UreqClient,
+    Channel, GithubAuth, HttpClient, KeyringSecretStore, LAUNCHER_FEED, Token, TokenProvider,
+    UpdateChecker, UreqClient,
 };
 use serde_json::{Value, json};
 use tao::dpi::LogicalSize;
@@ -103,6 +103,8 @@ impl TokenProvider for NoToken {
 /// the Metallic sign-in is in `platform_auth` (`notAvailable` while the site address is not set).
 struct ShellHost {
     dev_mode: bool,
+    /// The channel this run follows (a changed setting applies from the next start).
+    running_channel: Channel,
     settings: Mutex<LauncherSettings>,
     store: SettingsStore,
     http: Arc<dyn HttpClient>,
@@ -131,13 +133,7 @@ fn sign_in_code(error: LauncherError) -> BridgeErrorCode {
 
 impl BridgeHost for ShellHost {
     fn info(&self) -> LauncherInfo {
-        LauncherInfo {
-            launcher_version: env!("CARGO_PKG_VERSION").to_string(),
-            bridge_version: BRIDGE_VERSION,
-            platform: "windows",
-            channel: self.settings().channel.as_str().to_string(),
-            dev_mode: self.dev_mode,
-        }
+        LauncherInfo::running(self.running_channel, self.dev_mode)
     }
 
     fn play(&self, link: DeepLink) -> Result<(), BridgeErrorCode> {
@@ -238,10 +234,14 @@ impl BridgeHost for ShellHost {
         github_sign_in(
             auth,
             self.sink.clone(),
-            Arc::new(|address| {
-                if let Err(error) = metallic_update::github_auth::open_in_browser(address) {
-                    log::warn!("could not open the GitHub page: {error}");
+            // The one browser opener (https only), for GitHub's pages only.
+            Arc::new(|address| match Url::parse(address) {
+                Ok(url) if is_github_page(url.as_str()) => {
+                    if let Err(error) = platform::open_in_browser(&url) {
+                        log::warn!("could not open the GitHub page: {error}");
+                    }
                 }
+                _ => log::warn!("refused to open a page that is not on GitHub"),
             }),
             &self.github_flight,
             move |signed_in| {
@@ -618,7 +618,10 @@ pub fn run(
         Ok(client_id) => Some(Arc::new(GithubAuth::new(
             client_id,
             Arc::new(UreqClient::default()),
-            Arc::new(KeyringSecretStore::new("MetallicLauncher", "github")),
+            Arc::new(KeyringSecretStore::new(
+                KEYRING_SERVICE,
+                GITHUB_KEYRING_ACCOUNT,
+            )),
         ))),
         Err(error) => {
             log::info!("GitHub sign-in is not available: {error}");
@@ -674,6 +677,7 @@ pub fn run(
     ));
     let host = ShellHost {
         dev_mode: config.dev_mode,
+        running_channel: channel,
         settings: Mutex::new(settings),
         store: SettingsStore::open_default(),
         http: http.clone(),
@@ -780,10 +784,13 @@ pub fn run(
     }
 
     // The tray icon. Without it (an unsupported system, or an error) the close button quits.
-    let studio_installed = product_paths().studio_exe.is_some();
+    let mut tray_state = TrayMenuState {
+        studio_installed: product_paths().studio_exe.is_some(),
+        update_ready: false,
+    };
     let (icon, icon_width, icon_height) = icon_rgba().unwrap_or_default();
     let tray = match platform::create_tray(
-        &tray_menu(studio_installed, false),
+        &tray_state.items(),
         icon,
         icon_width,
         icon_height,
@@ -795,6 +802,11 @@ pub fn run(
             None
         }
     };
+    // `--hidden` (autostart): stay in the tray. Counting the window as shown keeps the first
+    // page load and the show-at-latest timer from bringing it up.
+    if !show_on_start(config.start_hidden, tray.is_some()) {
+        shared.shown.store(true, Ordering::SeqCst);
+    }
 
     let builder = platform::configure_builder(builder, config.dev_mode);
     let view: WebView = builder
@@ -939,11 +951,12 @@ pub fn run(
                     handle_bridge_message(&view, &bridge, &host, &page_url, &body);
                 }
                 AppEvent::Bridge(event) => {
-                    // A downloaded update puts "Restart to update" into the tray menu.
-                    if matches!(event, BridgeEvent::UpdateReady { .. })
+                    // A downloaded update puts "Restart to update" into the tray menu, a Studio
+                    // install "Open Studio".
+                    if tray_state.on_event(&event, || product_paths().studio_exe.is_some())
                         && let Some(tray) = &tray
                     {
-                        tray.set_items(&tray_menu(studio_installed, true));
+                        tray.set_items(&tray_state.items());
                     }
                     send_bridge_event(&view, &bridge, &event);
                 }

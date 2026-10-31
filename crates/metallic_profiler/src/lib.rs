@@ -316,7 +316,12 @@ struct State {
     depth: usize,
     /// Open scopes past [`MAX_DEPTH`].
     overflow: usize,
-    frames: RingBuffer<FrameRecord>,
+    /// A frame that ended while the history was being read ([`Profiler::with_frames`]); it
+    /// joins the history when the read ends.
+    held: Box<FrameRecord>,
+    held_valid: bool,
+    /// [`Profiler::clear`] was called while the history was being read.
+    clear_pending: bool,
 }
 
 impl State {
@@ -330,7 +335,9 @@ impl State {
             stack: [0; MAX_DEPTH],
             depth: 0,
             overflow: 0,
-            frames: RingBuffer::new(0),
+            held: Box::new(FrameRecord::EMPTY),
+            held_valid: false,
+            clear_pending: false,
         }
     }
 
@@ -426,7 +433,8 @@ impl State {
         }
         self.current.frame_ns = now;
         self.in_frame = false;
-        self.frames.push(*self.current);
+        *self.held = *self.current;
+        self.held_valid = true;
     }
 
     fn charge_script(&mut self, script: u64, ns: u64) {
@@ -450,22 +458,46 @@ impl State {
         }
     }
 
-    fn record_gpu(&mut self, frame: u64, passes: &[GpuPass]) {
-        let target = if self.in_frame && self.current.index == frame {
-            Some(&mut *self.current)
+    /// Stores GPU passes on the open or held frame; false when `frame` is neither.
+    fn record_gpu(&mut self, frame: u64, passes: &[GpuPass]) -> bool {
+        if self.in_frame && self.current.index == frame {
+            set_gpu(&mut self.current, passes);
+            true
+        } else if self.held_valid && self.held.index == frame {
+            set_gpu(&mut self.held, passes);
+            true
         } else {
-            // GPU results arrive a few frames late: look at the newest frames first.
-            self.frames
-                .newest_first_mut()
-                .take(8)
-                .find(|f| f.index == frame)
-        };
-        if let Some(record) = target {
-            let n = passes.len().min(MAX_GPU_PASSES);
-            record.gpu[..n].copy_from_slice(&passes[..n]);
-            record.gpu_count = Some(n as u8);
+            false
         }
     }
+}
+
+fn set_gpu(record: &mut FrameRecord, passes: &[GpuPass]) {
+    let n = passes.len().min(MAX_GPU_PASSES);
+    record.gpu[..n].copy_from_slice(&passes[..n]);
+    record.gpu_count = Some(n as u8);
+}
+
+/// Moves the held frame (and a pending clear or reservation) into the history, unless the
+/// history is being read right now; then it waits for the next call.
+fn flush() {
+    FRAMES.with(|frames| {
+        let Ok(mut frames) = frames.try_borrow_mut() else {
+            return;
+        };
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            if state.enabled && frames.capacity() < HISTORY {
+                *frames = RingBuffer::new(HISTORY);
+            }
+            if std::mem::take(&mut state.clear_pending) {
+                frames.clear();
+            }
+            if std::mem::take(&mut state.held_valid) {
+                frames.push(*state.held);
+            }
+        });
+    });
 }
 
 fn clamp_u32(ns: u64) -> u32 {
@@ -479,6 +511,9 @@ thread_local! {
     /// True while enabled: lets a disabled host's frame marks skip the state.
     static ENABLED: Cell<bool> = const { Cell::new(false) };
     static STATE: RefCell<State> = RefCell::new(State::new());
+    /// The history, apart from the recording state, so a reader ([`Profiler::with_frames`]) can
+    /// call any other profiler function.
+    static FRAMES: RefCell<RingBuffer<FrameRecord>> = RefCell::new(RingBuffer::new(0));
 }
 
 /// The calling thread's profiler. All functions act on the calling thread only.
@@ -491,9 +526,6 @@ impl Profiler {
     pub fn set_enabled(enabled: bool) {
         STATE.with(|state| {
             let mut state = state.borrow_mut();
-            if enabled && state.frames.capacity() < HISTORY {
-                state.frames = RingBuffer::new(HISTORY);
-            }
             if !enabled {
                 state.in_frame = false;
                 state.depth = 0;
@@ -503,6 +535,8 @@ impl Profiler {
         });
         ENABLED.with(|e| e.set(enabled));
         RECORDING.with(|r| r.set(false));
+        // Reserves the history now (or after a read that is in progress).
+        flush();
     }
 
     /// True while recording is switched on.
@@ -545,6 +579,7 @@ impl Profiler {
         }
         STATE.with(|state| state.borrow_mut().end_frame());
         RECORDING.with(|r| r.set(false));
+        flush();
     }
 
     /// The number of the frame being recorded, if one is.
@@ -586,12 +621,26 @@ impl Profiler {
         if !Self::is_enabled() {
             return;
         }
-        STATE.with(|state| state.borrow_mut().record_gpu(frame, passes));
+        if STATE.with(|state| state.borrow_mut().record_gpu(frame, passes)) {
+            return;
+        }
+        FRAMES.with(|frames| {
+            // While the history is being read, the result is dropped.
+            if let Ok(mut frames) = frames.try_borrow_mut()
+                && let Some(record) = frames.newest_first_mut().take(8).find(|f| f.index == frame)
+            {
+                set_gpu(record, passes);
+            }
+        });
     }
 
-    /// Runs `f` with the recorded frames, oldest first.
+    /// Runs `f` with the recorded frames, oldest first. `f` may call any profiler function: a
+    /// frame that ends inside it joins the history after it returns (only the last one, if
+    /// several end inside it), and GPU results for older frames reported inside it are dropped.
     pub fn with_frames<R>(f: impl FnOnce(&RingBuffer<FrameRecord>) -> R) -> R {
-        STATE.with(|state| f(&state.borrow().frames))
+        let out = FRAMES.with(|frames| f(&frames.borrow()));
+        flush();
+        out
     }
 
     /// A copy of the newest recorded frame.
@@ -601,6 +650,12 @@ impl Profiler {
 
     /// Forgets the recorded frames (the storage is kept).
     pub fn clear() {
-        STATE.with(|state| state.borrow_mut().frames.clear());
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.clear_pending = true;
+            // A frame that ended but is not in the history yet goes too.
+            state.held_valid = false;
+        });
+        flush();
     }
 }
