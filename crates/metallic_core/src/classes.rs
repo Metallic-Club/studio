@@ -457,6 +457,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
         ],
     ),
