@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! Plays the whole Parkour course with a simple bot that uses only player input (move, run,
 //! jump), so every jump in the level is proven reachable with the real character controller.
 //!
@@ -79,7 +80,7 @@ fn lava_walk(z0: f64, side: f64) -> Vec<Step> {
         (0.0, 52.5),
     ]
     .into_iter()
-    .map(|(x, d)| Go(x * side, 13.5, z0 - d))
+    .map(|(x, d)| Go(x * side, 14.0, z0 - d))
     .collect()
 }
 
@@ -89,50 +90,50 @@ fn route() -> Vec<Step> {
         Go(0.0, 0.0, -12.0),
         Go(0.0, 0.0, -22.0),
         Go(3.0, 0.0, -34.0),
-        Go(-2.0, 1.5, -46.0),
+        Go(-2.0, 2.0, -46.0),
         Go(2.0, 3.0, -58.0),
-        Go(0.0, 4.5, -70.0),
+        Go(0.0, 5.0, -70.0),
         Go(0.0, 6.0, -80.0),
-        Go(0.0, 7.5, -89.0),
+        Go(0.0, 8.0, -89.0),
         Go(0.0, 9.0, -98.0),
-        Go(0.0, 10.5, -107.0),
-        Go(-5.0, 10.5, -118.0),
+        Go(0.0, 11.0, -107.0),
+        Go(-5.0, 11.0, -118.0),
         Go(3.0, 12.0, -129.0),
         Go(-3.0, 12.0, -141.0),
-        Go(2.0, 13.5, -152.0),
-        Go(0.0, 13.5, -158.0),
-        Go(0.0, 13.5, -182.0),
+        Go(2.0, 14.0, -152.0),
+        Go(0.0, 14.0, -158.0),
+        Go(0.0, 14.0, -182.0),
         Go(-4.0, 15.0, -190.0),
         Go(3.0, 15.0, -201.0),
-        Go(-2.0, 13.5, -212.0),
-        Go(0.0, 13.5, -228.0),
+        Go(-2.0, 14.0, -212.0),
+        Go(0.0, 14.0, -228.0),
         Resume,
     ];
 
     let mut slate = lava_walk(-175.0, 1.0);
     slate.extend([
         MoverAtLeast("MovingPlatform", -234.0),
-        Mover("MovingPlatform", 13.5),
+        Mover("MovingPlatform", 14.0),
         MoverAtMost("MovingPlatform", -247.0),
-        Go(0.0, 13.5, -258.0),
+        Go(0.0, 14.0, -258.0),
         // The beams over the lava river.
-        Go(-2.0, 13.5, -265.0),
-        Go(-2.0, 13.5, -278.0),
-        Go(0.0, 13.5, -281.0),
-        Go(2.0, 13.5, -285.0),
-        Go(2.0, 13.5, -299.0),
+        Go(-2.0, 14.0, -265.0),
+        Go(-2.0, 14.0, -278.0),
+        Go(0.0, 14.0, -281.0),
+        Go(2.0, 14.0, -285.0),
+        Go(2.0, 14.0, -299.0),
     ]);
     slate.extend(lava_walk(-300.0, -1.0));
-    slate.extend([Go(0.0, 13.5, -362.0), Resume]);
+    slate.extend([Go(0.0, 14.0, -362.0), Resume]);
     r.extend(placed(SLATE_AT, slate));
 
     let mut moss = vec![
-        Go(4.0, 13.5, -314.0),
+        Go(4.0, 14.0, -314.0),
         Hop(true),
-        Go(4.0, 13.5, -346.0),
+        Go(4.0, 14.0, -346.0),
         Hop(false),
         Go(4.0, 15.0, -356.0),
-        Go(-3.0, 16.5, -367.0),
+        Go(-3.0, 17.0, -367.0),
         Go(-3.0, 18.0, -377.0),
         Go(-3.0, 18.0, -393.0),
         Go(-3.0, 18.0, -403.0),
@@ -148,18 +149,19 @@ fn route() -> Vec<Step> {
         let a = (first + step * i as f64).to_radians();
         moss.push(Go(
             cx + radius * a.sin(),
-            top + rise * i as f64,
+            // Whole-stud tops, as the level rounds them (spec 2.2 grid).
+            (top + rise * i as f64).ceil(),
             cz + radius * a.cos(),
         ));
     }
-    moss.extend([Hop(false), Go(0.0, 54.5, -474.0), Resume]);
+    moss.extend([Hop(false), Go(0.0, 55.0, -474.0), Resume]);
     r.extend(placed(MOSS_AT, moss));
 
     r.extend(placed(
         ICE_AT,
         vec![
             Go(4.0, 46.0, -490.0),
-            Go(-2.0, 47.5, -502.0),
+            Go(-2.0, 48.0, -502.0),
             Go(3.0, 49.0, -515.0),
             Go(-1.0, 50.0, -528.0),
             Go(0.0, 50.0, -540.0),

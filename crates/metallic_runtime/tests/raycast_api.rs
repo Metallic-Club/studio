@@ -271,3 +271,43 @@ fn duplicate_filter_entries_are_fine() {
     // Duplicates in the filter are fine; the nearest unfiltered part is the ghost.
     assert_eq!(lines, ["Ghost"], "{lines:?}");
 }
+
+/// A server-only `Simulation` has the same physics behind `workspace:Raycast`.
+#[test]
+fn a_server_simulation_answers_raycasts_too() {
+    let mut world = World::new_with_services();
+    let workspace = world.root("Workspace").unwrap();
+    part(
+        &mut world,
+        workspace,
+        "Wall",
+        Vec3::new(0.0, 10.0, -20.0),
+        Vec3::new(10.0, 10.0, 2.0),
+    );
+    let script = world
+        .create("Script", world.root("ServerScriptService"))
+        .unwrap();
+    world
+        .set(
+            script,
+            "Source",
+            Value::String(
+                "local r = workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(0, 0, -100))
+                 print(r and r.Instance.Name, r and r.Distance)"
+                    .to_owned(),
+            ),
+        )
+        .unwrap();
+    let output = Rc::new(Captured::default());
+    let mut sim = metallic_runtime::Simulation::from_world(
+        "raycast-server".to_owned(),
+        world,
+        output.clone(),
+    );
+    sim.start().unwrap();
+    sim.advance(TICK * 3.0, &[]);
+    assert_eq!(
+        output.0.borrow().first().map(String::as_str),
+        Some("Wall 19")
+    );
+}
