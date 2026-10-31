@@ -830,8 +830,10 @@ mod tests {
 
     #[test]
     fn ctrl_wheel_steps_the_count_within_its_range() {
-        let mut s = ArrangeSettings::default();
-        s.mode = ArrayMode::Linear;
+        let mut s = ArrangeSettings {
+            mode: ArrayMode::Linear,
+            ..ArrangeSettings::default()
+        };
         s.linear.count = 1;
         assert!(!wheel_count(&mut s, -1), "linear stops at 1");
         assert!(wheel_count(&mut s, 3));
