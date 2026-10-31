@@ -2,7 +2,7 @@
 //! texts, and the Rust crates it is built from with their licences.
 //!
 //! Everything is compiled in, so the texts ship inside the exe. The font and icon texts come from
-//! `assets/fonts`; the crate list is `assets/THIRD_PARTY.md`, written by `tools/gen_third_party.py`.
+//! `crates/metallic_ui_theme/assets/fonts`; the crate list is `assets/THIRD_PARTY.md`, written by `tools/gen_third_party.py`.
 //! A test fails when that file no longer matches `Cargo.lock`.
 
 use eframe::egui::{
@@ -29,27 +29,27 @@ pub struct Bundled {
     pub text: &'static str,
 }
 
-/// Every font and icon set in `assets/fonts`.
+/// Every font and icon set in `crates/metallic_ui_theme/assets/fonts`.
 pub const BUNDLED: [Bundled; 4] = [
     Bundled {
         name: "Archivo",
         detail: "Interface text. Version 2.001. SIL Open Font License 1.1.",
-        text: include_str!("../assets/fonts/OFL-Archivo.txt"),
+        text: include_str!("../../metallic_ui_theme/assets/fonts/OFL-Archivo.txt"),
     },
     Bundled {
         name: "JetBrains Mono",
         detail: "Code and changing numbers. Version 2.304. SIL Open Font License 1.1.",
-        text: include_str!("../assets/fonts/OFL-JetBrainsMono.txt"),
+        text: include_str!("../../metallic_ui_theme/assets/fonts/OFL-JetBrainsMono.txt"),
     },
     Bundled {
         name: "Noto Sans",
         detail: "Greek and Cyrillic text. Version 2.015. SIL Open Font License 1.1.",
-        text: include_str!("../assets/fonts/OFL-NotoSans.txt"),
+        text: include_str!("../../metallic_ui_theme/assets/fonts/OFL-NotoSans.txt"),
     },
     Bundled {
         name: "Phosphor Icons",
         detail: "Interface icons. Version 2.1. MIT License.",
-        text: include_str!("../assets/fonts/LICENSE-Phosphor.txt"),
+        text: include_str!("../../metallic_ui_theme/assets/fonts/LICENSE-Phosphor.txt"),
     },
 ];
 
