@@ -98,6 +98,207 @@ fn touched_fires_once_per_contact() {
 }
 
 #[test]
+fn touch_ended_fires_once_per_separation() {
+    let mut world = World::new_with_services();
+    let base = baseplate(&mut world);
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 6.0, 0.0),
+        Vec3::new(4.0, 1.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 2.0);
+    assert_eq!(phys.drain_touched().len(), 1);
+    assert!(phys.drain_touch_ended().is_empty(), "still touching");
+    run(&mut phys, &mut world, 1.0);
+    assert!(phys.drain_touch_ended().is_empty());
+    // lift the part off the baseplate: one stop, for the pair that was reported
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(0.0, 12.0, 0.0)))
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    let ended = phys.drain_touch_ended();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert!(ended[0] == (p, base) || ended[0] == (base, p));
+    assert!(phys.drain_touch_ended().is_empty(), "reported once");
+    // touching again reports Touched and, after the next separation, TouchEnded again
+    run(&mut phys, &mut world, 2.0);
+    assert_eq!(phys.drain_touched().len(), 1);
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(0.0, 12.0, 0.0)))
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    assert_eq!(phys.drain_touch_ended().len(), 1);
+}
+
+#[test]
+fn a_destroyed_part_ends_its_touches() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 6.0, 0.0),
+        Vec3::new(4.0, 1.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 2.0);
+    assert_eq!(phys.drain_touched().len(), 1);
+    world.destroy(p);
+    phys.sync_from(&world);
+    phys.step(&mut world, 1.0 / 60.0);
+    // The baseplate still exists and hears that `p` left.
+    let ended = phys.drain_touch_ended();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert!(ended[0].0 == p || ended[0].1 == p);
+    run(&mut phys, &mut world, 0.5);
+    assert!(phys.drain_touch_ended().is_empty(), "once");
+    assert!(phys.drain_touched().is_empty());
+}
+
+/// A part resting on the baseplate, settled, with its first touch drained.
+fn resting() -> (World, PhysicsWorld, InstanceId, InstanceId) {
+    let mut world = World::new_with_services();
+    let base = baseplate(&mut world);
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 6.0, 0.0),
+        Vec3::new(4.0, 1.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 2.0);
+    assert_eq!(phys.drain_touched().len(), 1);
+    (world, phys, base, p)
+}
+
+/// A part resting on the baseplate and an anchored zone (CanCollide off) around it, settled,
+/// with the first touches drained.
+fn zone_around_resting_part() -> (World, PhysicsWorld, InstanceId) {
+    let (mut world, mut phys, _, _) = resting();
+    let zone = part(
+        &mut world,
+        Vec3::new(0.0, 2.5, 0.0),
+        Vec3::new(6.0, 3.0, 6.0),
+        true,
+    );
+    world.set(zone, "CanCollide", Value::Bool(false)).unwrap();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.2);
+    let first = phys.drain_touched();
+    assert_eq!(
+        first.len(),
+        1,
+        "the zone touches the resting part: {first:?}"
+    );
+    (world, phys, zone)
+}
+
+/// Changing `prop` rebuilds the zone's collider; it keeps touching the part, so neither a
+/// second `Touched` nor a `TouchEnded` fires.
+fn rebuild_while_touching(prop: &str, value: Value) {
+    let (mut world, mut phys, zone) = zone_around_resting_part();
+    world.set(zone, prop, value).unwrap();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.2);
+    assert!(phys.drain_touched().is_empty(), "{prop}: a second Touched");
+    assert!(phys.drain_touch_ended().is_empty(), "{prop}: a TouchEnded");
+}
+
+#[test]
+fn resizing_a_touching_part_fires_no_second_touched() {
+    rebuild_while_touching("Size", Value::Vector3(Vec3::new(7.0, 3.0, 7.0)));
+}
+
+#[test]
+fn reshaping_a_touching_part_fires_no_second_touched() {
+    rebuild_while_touching("Shape", Value::String("Ball".into()));
+}
+
+#[test]
+fn turning_on_can_collide_on_a_touching_part_fires_no_second_touched() {
+    rebuild_while_touching("CanCollide", Value::Bool(true));
+}
+
+#[test]
+fn a_rebuild_that_separates_the_parts_ends_the_touch_once() {
+    let (mut world, mut phys, zone) = zone_around_resting_part();
+    // Shrunk to a sliver in a corner, away from the part.
+    world
+        .set(zone, "Size", Value::Vector3(Vec3::new(0.2, 0.2, 0.2)))
+        .unwrap();
+    world
+        .set(zone, "Position", Value::Vector3(Vec3::new(2.8, 3.9, 2.8)))
+        .unwrap();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.2);
+    let ended = phys.drain_touch_ended();
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    assert!(ended[0].0 == zone || ended[0].1 == zone);
+    assert!(phys.drain_touched().is_empty());
+}
+
+#[test]
+fn no_touch_ended_without_a_touched() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    // Never touching anything: moved around, rebuilt, destroyed.
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 20.0, 0.0),
+        Vec3::new(1.0, 1.0, 1.0),
+        true,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.2);
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(5.0, 30.0, 0.0)))
+        .unwrap();
+    world
+        .set(p, "Size", Value::Vector3(Vec3::new(2.0, 2.0, 2.0)))
+        .unwrap();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.2);
+    world.destroy(p);
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.2);
+    assert!(phys.drain_touched().is_empty());
+    assert!(phys.drain_touch_ended().is_empty());
+}
+
+#[test]
+fn a_touch_that_starts_and_stops_between_drains_reports_both() {
+    let mut world = World::new_with_services();
+    let base = baseplate(&mut world);
+    // Placed overlapping the baseplate, then lifted away before anyone drains.
+    let p = part(
+        &mut world,
+        Vec3::new(0.0, 2.2, 0.0),
+        Vec3::new(1.0, 1.0, 1.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    phys.step(&mut world, 1.0 / 60.0);
+    world
+        .set(p, "Position", Value::Vector3(Vec3::new(0.0, 30.0, 0.0)))
+        .unwrap();
+    run(&mut phys, &mut world, 0.1);
+    let touched = phys.drain_touched();
+    let ended = phys.drain_touch_ended();
+    assert_eq!(touched.len(), 1, "{touched:?}");
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    let pair = |(a, b): (InstanceId, InstanceId)| if a <= b { (a, b) } else { (b, a) };
+    assert_eq!(pair(touched[0]), pair(ended[0]));
+    assert!(pair(touched[0]) == pair((p, base)));
+}
+
+#[test]
 fn can_collide_false_is_touched_but_not_solid() {
     let mut world = World::new_with_services();
     let zone = part(

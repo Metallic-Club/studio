@@ -82,8 +82,8 @@ Any instance (parts, models, services, scripts) can carry named values outside i
   other VM or the editor); the handler reads the current value with `GetAttribute`, so two changes in one step fire twice and
   both see the last value. `GetAttributeChangedSignal(name)` checks the name like `SetAttribute` does, and a VM can make
   signals for at most 4096 different attribute names. No event is dropped silently: the world keeps every change until each
-  VM has read it (hundreds of thousands fit), and handler calls that do not fit in a step's time budget wait for later steps
-  (a full queue warns).
+  VM has read it (hundreds of thousands fit), and when a step runs out of time the rest of the events wait in that
+  log and are delivered in the next steps, in order, never dropped (the handler queue is not used for them).
 - Attribute data is outside the VM's memory cap, so a world holds at most 16 MiB of it (names, values and, with tags,
   tags); beyond that `SetAttribute` and `Clone()` raise a budget error until something is removed or destroyed.
 - `Clone()` copies attributes; scene files store them (`attributes: [("Name", Value), ...]` per instance, written only when
@@ -106,7 +106,7 @@ Tags are text labels on instances (Roblox's `CollectionService`). `game:GetServi
   removed on an instance in the game, when a tagged instance enters the game (parented under a service) or leaves it
   (parented to nil), and, for removed, when a tagged instance is destroyed (the handler gets the destroyed instance). Like the
   other signals they run in the next `step`, whoever made the change; connecting does not replay existing instances, so also
-  loop over `GetTagged(tag)`. `GetInstanceAddedSignal` and `GetInstanceRemovedSignal` check the tag like `AddTag` does, and a VM can make signals for at most 4096 different tags. Every change is delivered (destroying thousands of tagged instances fires one removal each; the world keeps changes until every VM has read them, and handler calls that do not fit in a step's time budget wait for later steps, a full queue warns). Tags share the 16 MiB attribute data budget of a world.
+  loop over `GetTagged(tag)`. `GetInstanceAddedSignal` and `GetInstanceRemovedSignal` check the tag like `AddTag` does, and a VM can make signals for at most 4096 different tags. Every change is delivered (destroying thousands of tagged instances fires one removal each; the world keeps changes until every VM has read them, and when a step runs out of time the remaining events wait in that log and are delivered in the next steps, in order, never dropped: 20,000 tagged instances destroyed at once reach `GetInstanceRemovedSignal` handlers one by one over several steps). Tags share the 16 MiB attribute data budget of a world.
 - A tag is 1 to 255 bytes without control characters; an instance holds at most 256 tags. Tagging twice or removing a missing
   tag does nothing. `Clone()` copies tags; scene files store them (`tags: ["A", "B"]` per instance, only when present, so older
   files and older Studios keep working); Studio shows them under **Tags** in Properties (add and remove, one undo step each).
@@ -194,8 +194,7 @@ local cf, size = door:GetBoundingBox()
 | Signal | Arguments | Fired when |
 |---|---|---|
 | `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
-| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced); pairs with `Touched`. If the
-character part was destroyed by then, `hit` is the destroyed instance (its members can no longer be read) Part-to-part contacts report `Touched` only |
+| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced), and when two ordinary parts that reported `Touched` stop touching (they separated, one was destroyed, or one changed `Size`, `Shape` or `CanCollide`), on both parts that still exist, once. If the other part was destroyed by then, `hit` is the destroyed instance. Pairs with `Touched` |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |

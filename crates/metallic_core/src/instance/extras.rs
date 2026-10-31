@@ -25,6 +25,8 @@ pub const MAX_ATTRIBUTES: usize = 1024;
 /// follow the log trim it ([`World::trim_attribute_log`]), so this only matters when changes
 /// pile up unread (hundreds of thousands in one step).
 const LOG_LIMIT: usize = 262_144;
+/// A log with room for more entries than this is shrunk once it is mostly empty again.
+const SHRINK_ABOVE: usize = 4096;
 /// Most bytes of attribute data (names, values; tags too) one world holds, 16 MiB. Scripts
 /// allocate this outside the VM's own memory cap, so it is budgeted here.
 pub const MAX_EXTRAS_BYTES: usize = 16 * 1024 * 1024;
@@ -47,6 +49,21 @@ impl Extras {
 pub struct AttributeCursor {
     world: u64,
     seq: u64,
+}
+
+impl AttributeCursor {
+    /// The cursor after `n` more changes were handled.
+    pub fn after(self, n: usize) -> AttributeCursor {
+        AttributeCursor {
+            world: self.world,
+            seq: self.seq + n as u64,
+        }
+    }
+
+    /// How many changes were logged between this cursor and the later `newer` one.
+    pub fn changes_until(self, newer: AttributeCursor) -> usize {
+        newer.seq.saturating_sub(self.seq) as usize
+    }
 }
 
 /// One attribute that changed (set, changed value, or removed). Read the current value from the
@@ -112,13 +129,42 @@ impl<T: Clone> ChangeLog<T> {
         )
     }
 
-    /// Drops the entries up to and including sequence number `seq` (every reader is past them).
+    /// At most `max` of the entries after sequence number `seq`, or `None` when the log was cut
+    /// past it. Entries are numbered consecutively, so a reader that handled `n` of them is
+    /// at `seq + n`.
+    fn page_since(&self, seq: u64, max: usize) -> Option<Vec<T>> {
+        if seq < self.floor {
+            return None;
+        }
+        let start = self.entries.partition_point(|(s, _)| *s <= seq);
+        Some(
+            self.entries
+                .iter()
+                .skip(start)
+                .take(max)
+                .map(|(_, c)| c.clone())
+                .collect(),
+        )
+    }
+
+    /// Drops the entries up to and including sequence number `seq` (every reader is past them),
+    /// and gives back the memory of a burst: a log that is mostly empty again keeps room for
+    /// about twice what it holds, not for the biggest burst it ever saw.
     fn trim_to(&mut self, seq: u64) {
         let cut = self.entries.partition_point(|(s, _)| *s <= seq);
         if cut > 0 {
             self.floor = self.entries[cut - 1].0;
             self.entries.drain(..cut);
         }
+        let capacity = self.entries.capacity();
+        if capacity > SHRINK_ABOVE && self.entries.len() * 4 < capacity {
+            self.entries
+                .shrink_to((self.entries.len() * 2).max(SHRINK_ABOVE / 4));
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.entries.capacity()
     }
 }
 
@@ -318,6 +364,34 @@ impl World {
         total
     }
 
+    /// At most `max` attribute changes after `cursor`, oldest first, for a reader that handles
+    /// them a few at a time (it keeps the cursor at the first change it did not handle, see
+    /// [`AttributeCursor::after`]). `Overflow` as in [`World::attribute_changes_since`].
+    pub fn attribute_changes_page(&self, cursor: AttributeCursor, max: usize) -> AttributeChanges {
+        if cursor.world != self.uid {
+            return AttributeChanges::Overflow;
+        }
+        match self.attribute_log.page_since(cursor.seq, max) {
+            Some(changes) => AttributeChanges::Changes(changes),
+            None => AttributeChanges::Overflow,
+        }
+    }
+
+    /// Drops every attribute and tag log entry and gives their memory back. For a world that
+    /// nothing reads the logs of (the editor's edit world): its readers do not exist, so
+    /// nothing may wait for them.
+    pub fn clear_change_logs(&mut self) {
+        let attributes = self.attribute_cursor();
+        let tags = self.tag_cursor();
+        self.trim_attribute_log(&[attributes]);
+        self.trim_tag_log(&[tags]);
+    }
+
+    /// Entries of room the attribute and tag logs hold, for diagnostics and tests.
+    pub fn change_log_capacity(&self) -> usize {
+        self.attribute_log.capacity() + self.tag_log.capacity()
+    }
+
     /// The current end of the attribute log.
     pub fn attribute_cursor(&self) -> AttributeCursor {
         AttributeCursor {
@@ -372,6 +446,21 @@ pub fn check_tag(tag: &str) -> Result<(), String> {
 pub struct TagCursor {
     world: u64,
     seq: u64,
+}
+
+impl TagCursor {
+    /// The cursor after `n` more changes were handled.
+    pub fn after(self, n: usize) -> TagCursor {
+        TagCursor {
+            world: self.world,
+            seq: self.seq + n as u64,
+        }
+    }
+
+    /// How many changes were logged between this cursor and the later `newer` one.
+    pub fn changes_until(self, newer: TagCursor) -> usize {
+        newer.seq.saturating_sub(self.seq) as usize
+    }
 }
 
 /// One tag that became (or stopped being) active on an instance in the game tree.
@@ -555,6 +644,18 @@ impl World {
         TagCursor {
             world: self.uid,
             seq: self.tag_log.seq,
+        }
+    }
+
+    /// At most `max` tag changes after `cursor`, oldest first; the paged counterpart of
+    /// [`World::tag_changes_since`] (see [`World::attribute_changes_page`]).
+    pub fn tag_changes_page(&self, cursor: TagCursor, max: usize) -> TagChanges {
+        if cursor.world != self.uid {
+            return TagChanges::Overflow;
+        }
+        match self.tag_log.page_since(cursor.seq, max) {
+            Some(changes) => TagChanges::Changes(changes),
+            None => TagChanges::Overflow,
         }
     }
 

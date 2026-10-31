@@ -379,3 +379,33 @@ fn the_host_trims_the_log_it_has_delivered() {
         metallic_core::AttributeChanges::Changes(Vec::new())
     );
 }
+
+#[test]
+fn a_burst_of_changes_is_delivered_in_order_over_several_steps() {
+    let mut rig = Rig::new();
+    part(&rig, "P");
+    rig.server_script(
+        "Main",
+        "local p = workspace.P
+         local seen, last, ordered = 0, -1, true
+         p.AttributeChanged:Connect(function(name)
+             seen += 1
+             local n = tonumber(string.sub(name, 2))
+             if n ~= (last + 1) % 100 then ordered = false end
+             last = n
+         end)
+         for i = 0, 29999 do p:SetAttribute('a' .. (i % 100), i) end
+         while seen < 30000 do task.wait() end
+         print(seen, ordered)",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 3000);
+    let lines = rig.lines();
+    assert!(lines.contains(&"print:30000 true".to_string()), "{lines:?}");
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("lost") || l.contains("dropped")),
+        "{lines:?}"
+    );
+}

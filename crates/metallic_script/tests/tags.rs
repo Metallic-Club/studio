@@ -361,3 +361,45 @@ fn destroying_thousands_of_tagged_instances_fires_every_removal() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn twenty_thousand_tagged_destroys_reach_the_manager_without_losing_one() {
+    let mut rig = Rig::new();
+    rig.server_script(
+        "Manager",
+        "local CS = game:GetService('CollectionService')
+         local live, adds, removes = {}, 0, 0
+         CS:GetInstanceAddedSignal('Managed'):Connect(function(i) live[i] = true adds += 1 end)
+         CS:GetInstanceRemovedSignal('Managed'):Connect(function(i) live[i] = nil removes += 1 end)
+         local model = Instance.new('Model', workspace)
+         for batch = 1, 20 do
+             for i = 1, 1000 do
+                 Instance.new('Part', model):AddTag('Managed')
+             end
+             task.wait()
+         end
+         task.wait(1)
+         local function size() local n = 0 for _ in live do n += 1 end return n end
+         print('before', size(), adds)
+         model:Destroy()
+         while size() > 0 do task.wait() end
+         print('after', size(), adds, removes)",
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 3000);
+    let lines = rig.lines();
+    assert!(
+        lines.contains(&"print:before 20000 20000".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"print:after 0 20000 20000".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("lost") || l.contains("dropped")),
+        "{lines:?}"
+    );
+}
