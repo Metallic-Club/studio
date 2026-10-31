@@ -33,8 +33,9 @@ glam = "0.30.10"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 metallic_update.workspace = true
-# Colours, sizes and type scale for the theme; fonts are bundled in assets/fonts.
+# Colours, sizes and type scale for the theme; fonts live in metallic_ui_theme.
 metallic_tokens.workspace = true
+metallic_ui_theme.workspace = true
 velopack = "1.3.39-g8d2844f"
 
 [dev-dependencies]

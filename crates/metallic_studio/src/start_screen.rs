@@ -57,6 +57,8 @@ pub enum StartAction {
     },
     /// Open the Settings dialog (the rail's Settings button, or Ctrl+,).
     OpenSettings,
+    /// Open the Third-party licences screen (the rail footer's link).
+    OpenLicences,
 }
 
 /// The starting-points filter.
@@ -533,11 +535,11 @@ impl StartScreen {
             egui::pos2(full.left(), full.bottom() - FOOTER_HEIGHT),
             egui::pos2(full.right() - 1.0, full.bottom()),
         );
-        if ui
+        if let Some(a) = ui
             .scope_builder(UiBuilder::new().max_rect(footer), rail_footer)
             .inner
         {
-            action = Some(StartAction::OpenSettings);
+            action = Some(a);
         }
         action
     }
@@ -1054,8 +1056,30 @@ fn empty_plate(ui: &mut Ui, title: &str, body: &str) {
     );
 }
 
-/// Draws the rail's footer; true when its Settings button was pressed.
-fn rail_footer(ui: &mut Ui) -> bool {
+/// A small underlined-on-hover text link; true when clicked.
+fn footer_link(ui: &mut Ui, text: &str) -> bool {
+    let link = ui.add(
+        egui::Label::new(
+            RichText::new(text)
+                .font(fonts::small())
+                .color(theme::text_3()),
+        )
+        .sense(Sense::click()),
+    );
+    if link.hovered() || link.has_focus() {
+        let r = link.rect;
+        ui.painter().hline(
+            r.x_range(),
+            r.bottom() + 1.0,
+            Stroke::new(1.0, theme::text_1()),
+        );
+    }
+    link.clicked()
+}
+
+/// Draws the rail's footer; returns the action its Settings button or licences link asked for.
+fn rail_footer(ui: &mut Ui) -> Option<StartAction> {
+    let mut action = None;
     let rect = ui.max_rect();
     ui.painter().hline(
         rect.x_range(),
@@ -1080,28 +1104,17 @@ fn rail_footer(ui: &mut Ui) -> bool {
                 .font(fonts::small())
                 .color(theme::text_2()),
             );
-            let link = ui.add(
-                egui::Label::new(
-                    RichText::new("Release notes")
-                        .font(fonts::small())
-                        .color(theme::text_3()),
-                )
-                .sense(Sense::click()),
-            );
-            if link.hovered() || link.has_focus() {
-                let r = link.rect;
-                ui.painter().hline(
-                    r.x_range(),
-                    r.bottom() + 1.0,
-                    Stroke::new(1.0, theme::text_1()),
-                );
-            }
-            if link.clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
-                    "https://github.com/{}/releases",
-                    updater::STUDIO_FEED.repo
-                )));
-            }
+            ui.horizontal(|ui| {
+                if footer_link(ui, "Release notes") {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
+                        "https://github.com/{}/releases",
+                        updater::STUDIO_FEED.repo
+                    )));
+                }
+                if footer_link(ui, "Licences") {
+                    action = Some(StartAction::OpenLicences);
+                }
+            });
         });
     // Bottom right, beside the "Release notes" line, clear of the version line above it.
     let button = Rect::from_min_max(
@@ -1118,6 +1131,8 @@ fn rail_footer(ui: &mut Ui) -> bool {
         },
     )
     .inner
+    .then_some(StartAction::OpenSettings)
+    .or(action)
 }
 
 /// The default game name offered for a template.
@@ -1450,6 +1465,30 @@ mod tests {
         harness.get_by_label("Settings").click();
         harness.run_steps(3);
         assert_eq!(harness.state().1, Some(StartAction::OpenSettings));
+    }
+
+    #[test]
+    fn the_footer_licences_link_opens_licences() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let screen = StartScreen::new(Vec::new(), RecentProjects::load(None));
+        let mut harness = Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, state: &mut (StartScreen, Option<StartAction>)| {
+                    theme::apply(&ui.ctx().clone(), theme::ThemeId::Graphite);
+                    if let Some(a) = state.0.show(ui) {
+                        state.1 = Some(a);
+                    }
+                },
+                (screen, None),
+            );
+        harness.run_steps(3);
+        harness.get_by_label("Licences").click();
+        harness.run_steps(3);
+        assert_eq!(harness.state().1, Some(StartAction::OpenLicences));
     }
 
     #[test]

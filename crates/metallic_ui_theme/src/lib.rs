@@ -1,3 +1,6 @@
+//! The Metallic UI theme, shared by Studio and the animation and VFX editors (it depends on egui
+//! and the tokens only, never on Studio or the renderer).
+//!
 //! The Metallic Studio look: machined graphite with one restrained violet accent.
 //!
 //! Every value comes from the shared design tokens (`design/tokens/metallic.tokens.json`, read
@@ -7,11 +10,14 @@
 
 pub mod fonts;
 pub mod icons;
+pub mod saved;
+
+pub use saved::{ThemeChoice, saved_theme_choice};
 
 use std::cell::Cell;
 use std::sync::OnceLock;
 
-use eframe::egui::{
+use egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, Visuals,
     style::{TextCursorStyle, WidgetVisuals},
 };
@@ -486,6 +492,15 @@ pub fn apply(ctx: &egui::Context, theme: ThemeId) {
         ]
         .into();
     });
+}
+
+/// Installs the theme the creator saved in Studio Settings (Graphite when none is saved or the
+/// file cannot be read), resolving "System" against the theme egui reports. For tools other than
+/// Studio, which keep no settings of their own. Returns the theme installed.
+pub fn apply_saved(ctx: &egui::Context) -> ThemeId {
+    let id = saved_theme_choice().resolve(ctx.system_theme());
+    apply(ctx, id);
+    id
 }
 
 /// Marks that [`fonts::install`] has run on a context.
