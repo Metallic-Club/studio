@@ -6,6 +6,7 @@
 //! keeps a `World` borrow while Lua code runs: handlers may change the world, so the host
 //! collects what to call, releases the borrow and only then calls into Lua.
 
+mod attributes;
 mod cframe;
 mod datatypes;
 mod errors;
@@ -14,8 +15,10 @@ mod input;
 mod instance;
 mod pivot;
 mod remote;
+mod require;
 mod services;
 mod signals;
+mod tags;
 mod tween;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -83,6 +86,12 @@ pub(crate) struct ApiState {
     input_services: input::InputServices,
     /// `TweenService` and the tweens of this VM.
     pub(crate) tweens: tween::Tweens,
+    /// Attribute signal names and this VM's read position in the world's attribute log.
+    attributes: attributes::AttributeState,
+    /// Tag signal names, this VM's read position in the world's tag log and `CollectionService`.
+    tags: tags::TagState,
+    /// Which thread is loading which ModuleScript, and who waits for it.
+    pub(crate) require: require::RequireState,
 }
 
 impl ApiState {
@@ -139,6 +148,8 @@ fn build(
     raw.extend(remote::methods(lua)?);
     raw.extend(pivot::methods(lua)?);
     raw.extend(input::action_methods(lua)?);
+    raw.extend(attributes::methods(lua)?);
+    raw.extend(tags::methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
         let function = if name == "WaitForChild" {
@@ -151,6 +162,10 @@ fn build(
 
     let enums = input::Enums::install(lua)?;
     let bind_wrapper = input::bind_wrapper(lua, &enums)?;
+    let (world_cursor, tag_cursor) = {
+        let w = world.borrow();
+        (w.attribute_cursor(), w.tag_cursor())
+    };
     let state = Rc::new(ApiState {
         world,
         context: vm.context(),
@@ -172,7 +187,11 @@ fn build(
         bind_wrapper,
         input_services: input::InputServices::new(),
         tweens: tween::Tweens::default(),
+        attributes: attributes::AttributeState::new(world_cursor),
+        tags: tags::TagState::new(tag_cursor),
+        require: require::RequireState::default(),
     });
+    tags::install_service(lua, &state)?;
     input::install_services(lua, &state)?;
     tween::install_service(lua, &state)?;
 
@@ -189,6 +208,9 @@ fn build(
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }
     set("Enum", mlua::Value::Table(state.enums.table.clone())).map_err(to_err)?;
+    let (lib, shared_g) = vm.env_parts();
+    let require = require::install(lua, &state, lib, shared_g)?;
+    set("require", mlua::Value::Function(require)).map_err(to_err)?;
     set("game", mlua::Value::UserData(services::game(lua, &state)?)).map_err(to_err)?;
     let workspace = state.world()?.root("Workspace");
     let workspace = match workspace {

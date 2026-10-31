@@ -27,6 +27,7 @@ const SERVICES: &[&str] = &[
     "UserInputService",
     "ContextActionService",
     "TweenService",
+    "CollectionService",
 ];
 
 /// True when `class` is a service, which scripts cannot create.
@@ -48,6 +49,9 @@ impl LuaGame {
             return Ok(service);
         }
         if let Some(service) = super::tween::service(&self.state, name) {
+            return Ok(service);
+        }
+        if let Some(service) = super::tags::service(&self.state, name) {
             return Ok(service);
         }
         let id = self.state.world()?.root(name);

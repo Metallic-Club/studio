@@ -22,13 +22,33 @@ Host-injected client action events likewise have no receiver and are discarded o
 access keeps its existing client-only restriction.
 The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
 
-This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,
-ModuleScript/require loader or playable multiplayer. The separate scheduler correctness work in #173 and the later
+This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process
+or playable multiplayer. The separate scheduler correctness work in #173 and the later
 process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
 
 ## Globals
-`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
-All API tables are read-only.
+`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
+
+## ModuleScript and `require`
+`ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
+sandboxed Luau under the requiring thread's deadline (it may `task.wait`), and returns the module's single return value to every
+caller; `script` inside the module is the ModuleScript. The cache is scoped to the VM, so the server VM and the client VM of a
+host each run a module once. Rules, as in Roblox:
+
+- the module must return exactly one value (`nil` counts): otherwise `<Full.Name>: Module code did not return exactly one value`;
+- a cyclic require errors with `Requested module was required recursively` instead of hanging;
+- an error in the module (including a syntax error) propagates to the requiring script with the module's own position, e.g.
+  `ReplicatedStorage.Config:3: boom`, and is cached: later requires raise the same error without running the module again;
+- only a `ModuleScript` instance is accepted: anything else raises `Attempted to call require with invalid argument(s).`;
+- the cached value is kept for the life of the VM; changing `Source` afterwards has no effect until the VM restarts.
+
+A second script that requires a module while another thread is still loading it (the module yielded, for example in
+`task.wait`) **waits** for it and gets the same value; it is a cycle only when the requiring thread is the loading thread or
+the loader is itself waiting on a module the requiring thread is loading. A script that is stopped while loading a module
+releases it, so the next `require` loads it afresh. If the thread loading a module dies without reporting (a timeout outside
+the module's own error handling), the module is marked failed with `<Full.Name>: Requested module experienced an error while
+loading`, and every later `require` raises that. A client VM cannot require a ModuleScript under `ServerScriptService` or
+`ServerStorage`: it raises `Attempted to require a ModuleScript that is only available on the server`.
 
 ## Instance
 - `Instance.new(class, parent?)`. Services cannot be created; an unknown class errors.
@@ -47,6 +67,52 @@ local part = Instance.new("Part", workspace)
 part.Position = Vector3.new(0, 10, 0)
 print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
 ```
+
+## Attributes
+Any instance (parts, models, services, scripts) can carry named values outside its class properties.
+
+- `inst:SetAttribute(name, value)`; a `nil` value removes it. `inst:GetAttribute(name)` is `nil` when unset.
+  `inst:GetAttributes()` returns a new table `name -> value`.
+- Value types: boolean, number, string, `Vector3`, `Color3`, `UDim2`, `CFrame`, `nil`. Numbers must be finite; a string is at
+  most 65536 bytes; one instance holds at most 1024 attributes.
+- Names: 1 to 100 characters, ASCII letters, digits and `_`, and not starting with `RBX` (any case). A bad name or value
+  raises an error naming the problem. Setting the value an attribute already has changes and fires nothing.
+- `inst.AttributeChanged:Connect(function(name) ... end)` and `inst:GetAttributeChangedSignal(name):Connect(function() ... end)`
+  fire for a set, change or removal. Like the other signals they run in the next `step`, whoever made the change (this VM, the
+  other VM or the editor); the handler reads the current value with `GetAttribute`, so two changes in one step fire twice and
+  both see the last value. `GetAttributeChangedSignal(name)` checks the name like `SetAttribute` does, and a VM can make
+  signals for at most 4096 different attribute names. No event is dropped silently: the world keeps every change until each
+  VM has read it (hundreds of thousands fit), and when a step runs out of time the rest of the events wait in that
+  log and are delivered in the next steps, in order, never dropped (the handler queue is not used for them).
+- Attribute data is outside the VM's memory cap, so a world holds at most 16 MiB of it (names, values and, with tags,
+  tags); beyond that `SetAttribute` and `Clone()` raise a budget error until something is removed or destroyed.
+- `Clone()` copies attributes; scene files store them (`attributes: [("Name", Value), ...]` per instance, written only when
+  there are any, so older files and older Studios keep working); Studio shows them under **Attributes** in Properties (add,
+  edit Bool/Number/String, remove; every change is one undo step).
+- Core: `World::set_attribute`, `attribute`, `attributes`, and the bounded attribute log (`attribute_cursor`,
+  `attribute_changes_since`) that readers such as the script VMs and, later, replication (#305) follow.
+
+## Tags and CollectionService
+Tags are text labels on instances (Roblox's `CollectionService`). `game:GetService("CollectionService")` (or
+`game.CollectionService`):
+
+- `CS:AddTag(instance, tag)`, `CS:RemoveTag(instance, tag)`, `CS:HasTag(instance, tag)`, `CS:GetTags(instance)` (sorted array),
+  and the same as instance methods: `inst:AddTag(tag)`, `inst:RemoveTag(tag)`, `inst:HasTag(tag)`, `inst:GetTags()`.
+- `CS:GetTagged(tag)` returns the instances that carry the tag **and are in the game** (they descend from a service; a
+  detached instance, a fresh `Clone()` or an instance with no parent is not returned until it is parented). It looks the tag up
+  in an index, so its cost follows the number of tagged instances, not the size of the tree. Order: by instance id. Destroyed
+  instances are gone from every set. `CS:GetAllTags()` lists every tag some instance carries (sorted).
+- `CS:GetInstanceAddedSignal(tag)` and `CS:GetInstanceRemovedSignal(tag)` pass the instance. They fire when the tag is added or
+  removed on an instance in the game, when a tagged instance enters the game (parented under a service) or leaves it
+  (parented to nil), and, for removed, when a tagged instance is destroyed (the handler gets the destroyed instance). Like the
+  other signals they run in the next `step`, whoever made the change; connecting does not replay existing instances, so also
+  loop over `GetTagged(tag)`. `GetInstanceAddedSignal` and `GetInstanceRemovedSignal` check the tag like `AddTag` does, and a VM can make signals for at most 4096 different tags. Every change is delivered (destroying thousands of tagged instances fires one removal each; the world keeps changes until every VM has read them, and when a step runs out of time the remaining events wait in that log and are delivered in the next steps, in order, never dropped: 20,000 tagged instances destroyed at once reach `GetInstanceRemovedSignal` handlers one by one over several steps). Tags share the 16 MiB attribute data budget of a world.
+- A tag is 1 to 255 bytes without control characters; an instance holds at most 256 tags. Tagging twice or removing a missing
+  tag does nothing. `Clone()` copies tags; scene files store them (`tags: ["A", "B"]` per instance, only when present, so older
+  files and older Studios keep working); Studio shows them under **Tags** in Properties (add and remove, one undo step each).
+- Core: `World::add_tag`, `remove_tag`, `has_tag`, `tags`, `tagged`, `all_tags`, `is_in_tree`, and the bounded tag log
+  (`tag_cursor`, `tag_changes_since`) the script VMs follow. Tagged-subtree bookkeeping on reparent and destroy only runs
+  while some tag exists in the world.
 
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,

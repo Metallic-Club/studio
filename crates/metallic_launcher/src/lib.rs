@@ -62,7 +62,7 @@ pub use protocol::{
 pub use self_update::{
     PlayerWatcher, ProcessLister, ProcessTracker, RestartError, SelfUpdater, UpdateSource,
 };
-pub use settings::{LauncherSettings, SettingsPatch, SettingsStore};
+pub use settings::{LauncherSettings, SettingsPatch, SettingsStore, Theme};
 pub use single_instance::{
     Acquired, HandoffListener, HandoffMessage, HandoffSender, MAX_HANDOFF_BYTES, decode, encode,
     same_program,
