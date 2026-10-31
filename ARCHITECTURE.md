@@ -376,6 +376,10 @@ apps.
   `QuicServer`/`QuicClient` (quinn on a background tokio thread, TLS 1.3 with a pinned self-signed certificate, ALPN
   `metallic/1`), `MemoryNet` (manual clock, deterministic) and `LinkConditioner` (latency, jitter, loss; on QUIC it
   wraps the server's UDP socket). The server side enforces spec 7.3's transport limits (`transport::limits`).
+  `Connection::poll_bounded` limits events and payload bytes appended in one call; it retains an atomic event
+  that does not fit and reports its byte requirement. Memory uses a FIFO deque; QUIC holds at most one deferred
+  event outside its channel. The existing unrestricted `poll` remains available. These are delivery/dequeue
+  bounds, not a wall-clock, background-network or shared-clock maintenance bound; see [transport polling](docs/transport-polling.md).
   `wire` is the byte format on top: `ClientMsg`/`ServerMsg` in reliable frames (`[kind][source][varint len][postcard
   body]`, `encode_*`/`decode_*`, unknown kinds decode as `Decoded::UnknownKind`), `NetId` (services 1-10, dynamic from
   64), `NetValue` (every `Value` type plus `Vector2` and tables, `from_value`/`to_value`), the join snapshot body

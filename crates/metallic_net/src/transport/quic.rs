@@ -35,8 +35,10 @@ use super::limits::{
     ALPN, CLIENT_MAX_STREAMS, DatagramLimiter, FRAME_COST, HELLO_TIMEOUT, IDLE_TIMEOUT, KEEP_ALIVE,
     MAX_CLIENT_FRAME, MAX_DATAGRAM, MAX_SERVER_FRAME, SEND_BUDGET,
 };
+use super::receive::ReceiveState;
 use super::{
-    Channel, CloseReason, Connection, Incoming, LinkConditioner, LinkStats, Listener, Side,
+    Channel, CloseReason, Connection, Incoming, LinkConditioner, LinkStats, Listener, PollBudget,
+    PollReport, Side,
 };
 use crate::NetError;
 
@@ -439,7 +441,7 @@ struct QuicConnection {
     long_tx: mpsc::UnboundedSender<Queued>,
     bulk_tx: mpsc::UnboundedSender<Queued>,
     shared: Arc<Shared>,
-    closed: bool,
+    receive: ReceiveState,
     _endpoint: Option<Endpoint>,
     runtime: Option<Arc<RuntimeThread>>,
 }
@@ -511,7 +513,7 @@ impl QuicConnection {
             long_tx,
             bulk_tx,
             shared,
-            closed: false,
+            receive: ReceiveState::default(),
             _endpoint: endpoint,
             runtime: None,
         }
@@ -520,7 +522,7 @@ impl QuicConnection {
 
 impl Connection for QuicConnection {
     fn send_reliable(&mut self, channel: Channel, frame: Vec<u8>) -> Result<(), NetError> {
-        if self.closed || self.conn.close_reason().is_some() {
+        if self.receive.is_closed() || self.conn.close_reason().is_some() {
             return Err(NetError::Closed);
         }
         self.side.check_send(channel, frame.len())?;
@@ -543,7 +545,7 @@ impl Connection for QuicConnection {
     }
 
     fn send_datagram(&mut self, bytes: Vec<u8>) -> Result<(), NetError> {
-        if self.closed {
+        if self.receive.is_closed() {
             return Err(NetError::Closed);
         }
         let size = bytes.len();
@@ -564,13 +566,14 @@ impl Connection for QuicConnection {
     }
 
     fn poll(&mut self, out: &mut Vec<Incoming>) {
-        while !self.closed {
-            let Ok(event) = self.events.try_recv() else {
-                break;
-            };
-            self.closed = matches!(event, Incoming::Closed(_));
-            out.push(event);
-        }
+        self.poll_bounded(out, PollBudget::UNRESTRICTED);
+    }
+
+    fn poll_bounded(&mut self, out: &mut Vec<Incoming>, budget: PollBudget) -> PollReport {
+        let Self {
+            receive, events, ..
+        } = self;
+        poll_events(receive, events, out, budget)
     }
 
     fn rtt(&self) -> Duration {
@@ -589,8 +592,8 @@ impl Connection for QuicConnection {
     }
 
     fn close(&mut self, reason: CloseReason) {
-        if !self.closed {
-            self.closed = true;
+        if !self.receive.is_closed() {
+            self.receive.close();
             close_with(&self.conn, &self.shared, reason);
         }
     }
@@ -598,6 +601,15 @@ impl Connection for QuicConnection {
     fn remote_addr(&self) -> Option<SocketAddr> {
         Some(self.conn.remote_address())
     }
+}
+
+fn poll_events(
+    receive: &mut ReceiveState,
+    events: &mut mpsc::Receiver<Incoming>,
+    out: &mut Vec<Incoming>,
+    budget: PollBudget,
+) -> PollReport {
+    receive.poll(out, budget, || events.try_recv().ok())
 }
 
 impl Drop for QuicConnection {
@@ -875,8 +887,162 @@ async fn write_bulk(
 
 #[cfg(test)]
 mod tests {
+    use super::super::PollStop;
     use super::*;
     use crate::transport::limits::MAX_SERVER_FRAME;
+
+    #[test]
+    fn receive_channel_retains_oversized_head_close_and_output_prefix() {
+        let (tx, mut events) = mpsc::channel(8);
+        tx.try_send(Incoming::Reliable {
+            channel: Channel::Control,
+            frame: vec![7; 5],
+        })
+        .unwrap();
+        tx.try_send(Incoming::Datagram(Vec::new())).unwrap();
+        tx.try_send(Incoming::Closed(CloseReason::Kicked("é".into())))
+            .unwrap();
+        let mut receive = ReceiveState::default();
+        let prefix = Incoming::Datagram(vec![99; 100]);
+        let mut out = vec![prefix.clone()];
+        assert_eq!(
+            poll_events(&mut receive, &mut events, &mut out, PollBudget::default()).stop,
+            PollStop::EventLimit
+        );
+        assert_eq!(events.len(), 3, "zero events must not even dequeue a close");
+        for _ in 0..2 {
+            assert_eq!(
+                poll_events(
+                    &mut receive,
+                    &mut events,
+                    &mut out,
+                    PollBudget {
+                        max_events: 4,
+                        max_bytes: 4
+                    }
+                ),
+                PollReport {
+                    events: 0,
+                    bytes: 0,
+                    stop: PollStop::ByteLimit {
+                        next_event_bytes: 5
+                    }
+                }
+            );
+        }
+        assert_eq!(
+            events.len(),
+            2,
+            "only one whole head is held outside the channel"
+        );
+        assert_eq!(out, [prefix.clone()]);
+        assert_eq!(
+            poll_events(
+                &mut receive,
+                &mut events,
+                &mut out,
+                PollBudget {
+                    max_events: 1,
+                    max_bytes: 5
+                }
+            ),
+            PollReport {
+                events: 1,
+                bytes: 5,
+                stop: PollStop::EventLimit
+            }
+        );
+        assert_eq!(
+            poll_events(
+                &mut receive,
+                &mut events,
+                &mut out,
+                PollBudget {
+                    max_events: 4,
+                    max_bytes: 0
+                }
+            ),
+            PollReport {
+                events: 1,
+                bytes: 0,
+                stop: PollStop::ByteLimit {
+                    next_event_bytes: 2
+                }
+            }
+        );
+        assert_eq!(
+            poll_events(&mut receive, &mut events, &mut out, PollBudget::default()).stop,
+            PollStop::EventLimit
+        );
+        assert_eq!(
+            poll_events(
+                &mut receive,
+                &mut events,
+                &mut out,
+                PollBudget::UNRESTRICTED
+            ),
+            PollReport {
+                events: 1,
+                bytes: 2,
+                stop: PollStop::Closed
+            }
+        );
+        assert_eq!(
+            out,
+            [
+                prefix,
+                Incoming::Reliable {
+                    channel: Channel::Control,
+                    frame: vec![7; 5]
+                },
+                Incoming::Datagram(Vec::new()),
+                Incoming::Closed(CloseReason::Kicked("é".into()))
+            ]
+        );
+        assert_eq!(
+            poll_events(
+                &mut receive,
+                &mut events,
+                &mut out,
+                PollBudget::UNRESTRICTED
+            )
+            .events,
+            0
+        );
+    }
+
+    #[test]
+    fn receive_channel_local_close_discards_deferred_data_and_peer_close() {
+        let (tx, mut events) = mpsc::channel(4);
+        tx.try_send(Incoming::Datagram(vec![1; 20])).unwrap();
+        tx.try_send(Incoming::Closed(CloseReason::Normal)).unwrap();
+        let mut receive = ReceiveState::default();
+        let mut out = Vec::new();
+        poll_events(
+            &mut receive,
+            &mut events,
+            &mut out,
+            PollBudget {
+                max_events: 1,
+                max_bytes: 1,
+            },
+        );
+        receive.close();
+        assert_eq!(
+            poll_events(
+                &mut receive,
+                &mut events,
+                &mut out,
+                PollBudget::UNRESTRICTED
+            ),
+            PollReport {
+                events: 0,
+                bytes: 0,
+                stop: PollStop::Closed
+            }
+        );
+        assert!(out.is_empty());
+    }
 
     #[test]
     fn frame_lengths_are_leb128() {
