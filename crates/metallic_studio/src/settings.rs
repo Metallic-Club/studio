@@ -36,6 +36,8 @@ pub struct Settings {
     pub interface_size: u16,
     /// Turns the interface animations off or shortens them (#134).
     pub reduce_motion: bool,
+    /// First-time hints in the editor (building-tools spec 14.1).
+    pub show_tips: bool,
 }
 
 impl Default for Settings {
@@ -44,6 +46,7 @@ impl Default for Settings {
             theme: ThemeChoice::default(),
             interface_size: SIZE_DEFAULT,
             reduce_motion: false,
+            show_tips: true,
         }
     }
 }
@@ -57,6 +60,8 @@ struct SettingsFile {
     interface_size: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reduce_motion: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    show_tips: Option<bool>,
 }
 
 impl Settings {
@@ -84,6 +89,7 @@ impl Settings {
                 .interface_size
                 .map_or(defaults.interface_size, Settings::clamp_size),
             reduce_motion: file.reduce_motion.unwrap_or(defaults.reduce_motion),
+            show_tips: file.show_tips.unwrap_or(defaults.show_tips),
         })
     }
 
@@ -93,6 +99,7 @@ impl Settings {
             theme: Some(self.theme.as_str().to_owned()),
             interface_size: Some(i64::from(self.interface_size)),
             reduce_motion: Some(self.reduce_motion),
+            show_tips: Some(self.show_tips),
         })
     }
 
@@ -226,6 +233,7 @@ mod tests {
                 theme,
                 interface_size: 120,
                 reduce_motion: true,
+                show_tips: false,
             };
             s.save(&file).expect("saved");
             assert_eq!(Settings::load(&file), s);
@@ -391,6 +399,7 @@ mod tests {
             theme: ThemeChoice::Light,
             interface_size: 130,
             reduce_motion: true,
+            show_tips: true,
         };
         apply_settings(&ctx, &s);
         assert_eq!(theme::active(), ThemeId::Light);

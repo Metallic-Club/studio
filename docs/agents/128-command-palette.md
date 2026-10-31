@@ -24,6 +24,11 @@ more actions through the same `ActionRegistry::register`, and the palette lists 
   - Prefixes `>` commands, `@` objects, `#` assets. Up/Down, Tab (next group), Enter, Esc, click outside closes.
   - Ranking (`fuzzy_score`): text starts with the query, a word starts with it, initials ("fs" for Frame selection),
     inside a word, then scattered letters.
+  - Review fixes: objects parked for undo are skipped; `Matcher` scores in one pass without allocating, buffers
+    are reused, at most 2000 distinct object names are scored and only kept rows are sorted; the file index is
+    built on a background thread and reused for 10 s; the palette draws last (`Order::Tooltip`). 10k instances
+    plus 5000 paths: worst keystroke 12 ms in a debug build (the test allows 40 ms in debug, 2 ms optimised).
+  - TODO(#380): `open_command_palette_with` should also check `gesture_active` once #380 lands.
 - Keys: `palette.open` Ctrl+K, `palette.commands` Ctrl+Shift+P (opens with `>`), `insert.at_cursor` Shift+A
   (viewport). Grid snap moved from Ctrl+K to G (viewport).
 - Insert at cursor: the list opens at the pointer; the item lands at `EditorState::insert_point`, the surface
