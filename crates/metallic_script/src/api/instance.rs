@@ -52,6 +52,7 @@ const CLASS_METHODS: &[(&str, &str)] = &[
 /// The event named `name` on an instance of `class`, if there is one.
 fn event_kind(class: &str, name: &str) -> Option<EventKind> {
     match name {
+        "AttributeChanged" => Some(EventKind::AttributeChanged(0)),
         "Touched" if is_subclass(class, "BasePart") => Some(EventKind::Touched),
         "TouchEnded" if is_subclass(class, "BasePart") => Some(EventKind::TouchEnded),
         "Died" if class == "Humanoid" => Some(EventKind::Died),
@@ -93,6 +94,11 @@ fn core_error(e: CoreError) -> mlua::Error {
 }
 
 impl LuaInstance {
+    /// Errors when the instance has been destroyed.
+    pub(crate) fn ensure_alive(&self) -> mlua::Result<()> {
+        self.live()
+    }
+
     fn live(&self) -> mlua::Result<()> {
         if self.state.world()?.is_alive(self.id) {
             Ok(())
@@ -158,6 +164,17 @@ impl LuaInstance {
     fn destroyed_error(&self) -> mlua::Error {
         lua_error(format!("{} has been destroyed", self.name_hint.borrow()))
     }
+
+    /// For reading methods: `None` while the instance is alive (read the world), what it was
+    /// once it is destroyed, and the "has been destroyed" error if that was not kept.
+    pub(crate) fn last_values(&self) -> mlua::Result<Option<Rc<DestroyedInstance>>> {
+        if !self.is_destroyed()? {
+            return Ok(None);
+        }
+        self.snapshot()
+            .map(Some)
+            .ok_or_else(|| self.destroyed_error())
+    }
 }
 
 fn not_a_member(member: &str, class: &str) -> mlua::Error {
@@ -206,8 +223,7 @@ impl ApiState {
     /// world kept it since).
     pub(crate) fn destroyed(&self, id: InstanceId) -> Option<Rc<DestroyedInstance>> {
         self.take_destroyed();
-        let now = self.shared.destroyed.borrow().get(&id).cloned();
-        now.or_else(|| self.shared.destroyed_before.borrow().get(&id).cloned())
+        self.shared.destroyed.borrow().get(&id).cloned()
     }
 
     /// Moves what the world kept of destroyed instances into the step's table.
@@ -222,16 +238,22 @@ impl ApiState {
             return;
         }
         let mut destroyed = self.shared.destroyed.borrow_mut();
+        let mut fresh = self.shared.destroyed_fresh.borrow_mut();
         for d in taken.drain(..) {
+            fresh.push(d.id());
             destroyed.insert(d.id(), Rc::new(d));
         }
     }
 
     /// End of a step: every live Luau object of an instance destroyed in it keeps what the
-    /// instance was. The caller then empties the step's table.
+    /// instance was, so it stays readable after the host forgets the step's batch.
     pub(crate) fn keep_destroyed(&self) -> mlua::Result<()> {
         self.take_destroyed();
-        for (id, snapshot) in self.shared.destroyed.borrow().iter() {
+        let destroyed = self.shared.destroyed.borrow();
+        for id in self.shared.destroyed_fresh.borrow().iter() {
+            let Some(snapshot) = destroyed.get(id) else {
+                continue;
+            };
             let slot = (id.to_bits() & 0xffff_ffff) as f64;
             if let Value::UserData(ud) = self.cache.get::<Value>(slot)?
                 && let Ok(i) = ud.borrow::<LuaInstance>()

@@ -37,6 +37,15 @@ between steps or after `stop`; a character destroyed by a script mid-step is rea
 `TouchEnded`, and the table is gone a step later; writes to a destroyed instance stay on its record (Size clamped,
 CFrame stored as Position and Orientation) and it never returns to the tree.
 
+Merged with #420 (lossless tag events). `GetInstanceRemovedSignal` handlers can run steps after the destroy when a
+step runs out of time, so the host now keeps each step's records in a batch until one more step has passed and every
+VM's tag cursor is past the batch (capped at `MAX_DESTROYED_KEPT` = 65,536 records). The world keeps tagged
+instances past `DESTROYED_LIMIT`, since the tag log names each one. `GetAttribute`, `GetAttributes`, `HasTag` and
+`GetTags` on a destroyed instance return what it had; `SetAttribute`, `AddTag` and `RemoveTag` still error (documented
+deviation). Tests: `tests/tags.rs` destroys 20,000 tagged parts in one step and every deferred removal handler reads
+`Name`, `HasTag` and `GetAttribute`; the records are gone once delivered. `tests/api.rs`: attribute and tag reads on a
+destroyed instance.
+
 ## Not done
 
 - A destroyed `Model`'s `WorldPivot` and other values computed from children are not kept.

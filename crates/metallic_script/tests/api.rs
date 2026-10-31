@@ -735,6 +735,46 @@ fn a_character_destroyed_by_a_script_stays_readable_in_the_next_steps_touch_ende
     let mut kept = Vec::new();
     rig.world.borrow_mut().take_destroyed(&mut kept);
     assert!(kept.is_empty());
+    assert_eq!(rig.host.destroyed_records(), 0);
+}
+
+#[test]
+fn a_destroyed_instance_reads_its_last_attributes_and_tags() {
+    let mut rig = Rig::new();
+    rig.server_script(
+        "S",
+        r#"
+        local p = Instance.new("Part", workspace)
+        p:SetAttribute("Hp", 40)
+        p:SetAttribute("Team", "Red")
+        p:AddTag("Enemy")
+        p:AddTag("Boss")
+        p:Destroy()
+        print(p:GetAttribute("Hp"), p:GetAttribute("Team"), p:GetAttribute("None"))
+        local all = p:GetAttributes()
+        print(all.Hp, all.Team)
+        print(p:HasTag("Enemy"), p:HasTag("Nope"), table.concat(p:GetTags(), ","))
+        local CS = game:GetService("CollectionService")
+        print(CS:HasTag(p, "Boss"), #CS:GetTags(p))
+        print(pcall(function() p:SetAttribute("Hp", 1) end))
+        print(pcall(function() p:AddTag("More") end))
+        "#,
+    );
+    start(&mut rig);
+    let lines = rig.lines();
+    assert_eq!(lines[0], "print:40 Red nil", "{lines:?}");
+    assert_eq!(lines[1], "print:40 Red", "{lines:?}");
+    assert_eq!(lines[2], "print:true false Boss,Enemy", "{lines:?}");
+    assert_eq!(lines[3], "print:true 2", "{lines:?}");
+    // A documented deviation: changing attributes or tags of a destroyed instance errors.
+    assert!(
+        lines[4].starts_with("print:false") && lines[4].contains("destroyed"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[5].starts_with("print:false") && lines[5].contains("destroyed"),
+        "{lines:?}"
+    );
 }
 
 #[test]

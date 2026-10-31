@@ -6,6 +6,7 @@
 //! keeps a `World` borrow while Lua code runs: handlers may change the world, so the host
 //! collects what to call, releases the borrow and only then calls into Lua.
 
+mod attributes;
 mod cframe;
 mod datatypes;
 mod errors;
@@ -14,14 +15,16 @@ mod input;
 mod instance;
 mod pivot;
 mod remote;
+mod require;
 mod services;
 mod signals;
+mod tags;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
-use metallic_core::{DestroyedInstance, InstanceId, World};
+use metallic_core::{DestroyedInstance, InstanceId, TagCursor, World};
 use mlua::{Error, Function, Table, WeakLua};
 
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
@@ -47,15 +50,43 @@ pub(crate) struct HostShared {
     pub(crate) local_player: Cell<Option<InstanceId>>,
     /// Input events, action states and device flags pushed by the host.
     pub(crate) input: input::InputShared,
-    /// What instances destroyed during this step were (from [`World::take_destroyed`]), so a
-    /// destroyed instance stays readable. Emptied at the end of every step: by then each Luau
-    /// object of one holds its own copy, which goes when the object is collected.
+    /// What destroyed instances were (from [`World::take_destroyed`]), so a destroyed instance
+    /// stays readable to Luau objects made for it later (an event that names it). Each entry is
+    /// in one of `destroyed_batches` (or `destroyed_fresh`) and goes with it.
     pub(crate) destroyed: RefCell<HashMap<InstanceId, Rc<DestroyedInstance>>>,
-    /// The previous step's table, kept one more step: an instance destroyed by a script during a
-    /// step reaches scripts again in the next one (a `TouchEnded` of its character's limbs).
-    pub(crate) destroyed_before: RefCell<HashMap<InstanceId, Rc<DestroyedInstance>>>,
+    /// Ids taken into `destroyed` during this step, batched at its end.
+    pub(crate) destroyed_fresh: RefCell<Vec<InstanceId>>,
+    /// The steps' batches of `destroyed`, oldest first. A batch is kept one more step (an
+    /// instance destroyed during a step reaches scripts again in the next one, as a `TouchEnded`
+    /// of its character's limbs) and until every VM has read the tag log past its destroys (a
+    /// `GetInstanceRemovedSignal` handler deferred to a later step reads the instance).
+    pub(crate) destroyed_batches: RefCell<VecDeque<DestroyedBatch>>,
+    /// Steps ended so far, for `destroyed_batches`.
+    pub(crate) steps: Cell<u64>,
     /// Reused buffer for [`World::take_destroyed`].
     pub(crate) taken: RefCell<Vec<DestroyedInstance>>,
+}
+
+impl HostShared {
+    /// Forgets every destroyed-instance record (the host starts or stops).
+    pub(crate) fn forget_destroyed(&self) {
+        self.destroyed.borrow_mut().clear();
+        self.destroyed_fresh.borrow_mut().clear();
+        self.destroyed_batches.borrow_mut().clear();
+    }
+}
+
+/// Most destroyed-instance records the host keeps for events not yet delivered; past it the
+/// oldest steps' records go (their Luau objects keep their own copies).
+pub(crate) const MAX_DESTROYED_KEPT: usize = 65_536;
+
+/// Instances destroyed in one step; see [`HostShared::destroyed_batches`].
+pub(crate) struct DestroyedBatch {
+    pub(crate) ids: Vec<InstanceId>,
+    /// The step that took them.
+    pub(crate) step: u64,
+    /// The world's tag log position at the end of that step: its removals are before it.
+    pub(crate) tags: TagCursor,
 }
 
 /// Everything the API functions of one VM need.
@@ -89,6 +120,12 @@ pub(crate) struct ApiState {
     bind_wrapper: Function,
     /// `UserInputService` and `ContextActionService`.
     input_services: input::InputServices,
+    /// Attribute signal names and this VM's read position in the world's attribute log.
+    attributes: attributes::AttributeState,
+    /// Tag signal names, this VM's read position in the world's tag log and `CollectionService`.
+    tags: tags::TagState,
+    /// Which thread is loading which ModuleScript, and who waits for it.
+    pub(crate) require: require::RequireState,
 }
 
 impl ApiState {
@@ -145,6 +182,8 @@ fn build(
     raw.extend(remote::methods(lua)?);
     raw.extend(pivot::methods(lua)?);
     raw.extend(input::action_methods(lua)?);
+    raw.extend(attributes::methods(lua)?);
+    raw.extend(tags::methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
         let function = if name == "WaitForChild" {
@@ -157,6 +196,10 @@ fn build(
 
     let enums = input::Enums::install(lua)?;
     let bind_wrapper = input::bind_wrapper(lua, &enums)?;
+    let (world_cursor, tag_cursor) = {
+        let w = world.borrow();
+        (w.attribute_cursor(), w.tag_cursor())
+    };
     let state = Rc::new(ApiState {
         world,
         context: vm.context(),
@@ -177,7 +220,11 @@ fn build(
         pending_destroy: RefCell::new(Vec::new()),
         bind_wrapper,
         input_services: input::InputServices::new(),
+        attributes: attributes::AttributeState::new(world_cursor),
+        tags: tags::TagState::new(tag_cursor),
+        require: require::RequireState::default(),
     });
+    tags::install_service(lua, &state)?;
     input::install_services(lua, &state)?;
 
     let set = |name: &str, value: mlua::Value| vm.set_global(name, value);
@@ -192,6 +239,9 @@ fn build(
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }
     set("Enum", mlua::Value::Table(state.enums.table.clone())).map_err(to_err)?;
+    let (lib, shared_g) = vm.env_parts();
+    let require = require::install(lua, &state, lib, shared_g)?;
+    set("require", mlua::Value::Function(require)).map_err(to_err)?;
     set("game", mlua::Value::UserData(services::game(lua, &state)?)).map_err(to_err)?;
     let workspace = state.world()?.root("Workspace");
     let workspace = match workspace {

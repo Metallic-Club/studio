@@ -32,7 +32,7 @@ local run=game:GetService('RunService')
 assert(run:IsServer() and not run:IsClient())
 assert(players.LocalPlayer==nil and #players:GetPlayers()==0)
 assert(#players:GetChildren()==0,'synthetic player appeared')
-assert(require==nil,'sandbox changed')
+assert(io==nil and loadstring==nil and type(require)=='function','sandbox changed')
 assert(not pcall(function() return game:GetService('ReplicatedStorage').Action:GetState() end), 'client action state became available on the server')
 players.PlayerAdded:Connect(function() error('synthetic PlayerAdded') end)
 workspace.Marker.Anchored=true

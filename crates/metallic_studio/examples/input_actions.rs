@@ -1,4 +1,4 @@
-//! The Input Actions panel on its own window, until it docks into the editor (#10).
+//! The Input Actions panel on its own window (the editor docks it under View > Input actions).
 //!
 //! ```text
 //! cargo run -p metallic_studio --example input_actions -- [scene.mscene] [--save]
