@@ -16,6 +16,11 @@ use std::collections::HashMap;
 /// The property name.
 pub const PROPERTY: &str = "LookOverride";
 
+/// Protocol identity of the accepted-id/display-name/alias normalization contract.
+/// Bump this when the tables or ASCII compaction rules change, so peers cannot silently
+/// negotiate different accepted spellings. Function addresses are not protocol identifiers.
+pub const NORMALIZATION_SCHEMA_ID: &str = "look-override/ascii-alnum-v1";
+
 /// The stored value that means "no override here".
 pub const INHERIT: &str = "inherit";
 

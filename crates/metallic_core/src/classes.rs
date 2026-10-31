@@ -73,6 +73,15 @@ pub const TONEMAPPER_PRESETS: &[&str] = &[
     "AgXPunchy",
 ];
 
+/// Registry-level eligibility for a property sent from server to client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repl {
+    /// Eligible for replication, subject to instance and owner visibility rules.
+    Replicated,
+    /// Never sent to a player.
+    ServerOnly,
+}
+
 /// Largest `Humanoid.Health` and `Humanoid.MaxHealth` (writes above are clamped).
 pub const MAX_HUMANOID_HEALTH: f64 = 1e9;
 /// Largest `Humanoid.WalkSpeed` in studs per second (writes above are clamped).
@@ -95,12 +104,17 @@ pub struct PropDef {
     /// Engine bookkeeping that Luau and the Properties panel do not show (for example the scale
     /// behind `Model:GetScale`). Saved and cloned like any other property.
     pub hidden: bool,
+    /// Replication eligibility, subject to container/source/owner policy.
+    pub repl: Repl,
     /// When set, Number values and every Color3 component are brought into this range on
     /// write (and so on load and from scripts).
     pub range: Option<NumRange>,
     /// When set, a String write that is not in `allowed` is passed through this first: it
     /// returns the stored form (for example a display name to an id), or `None` to refuse.
     pub normalize: Option<fn(&str) -> Option<&'static str>>,
+    /// Stable normalization-contract identifier. Bump it when accepted aliases or rules change.
+    /// Present exactly when `normalize` is present; protocol hashes never encode function addresses.
+    pub normalize_schema_id: Option<&'static str>,
 }
 
 /// A numeric property's sane range: values outside are clamped (or wrapped, for a time of day).
@@ -160,6 +174,8 @@ const fn p(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef
         range: None,
         hidden: false,
         normalize: None,
+        normalize_schema_id: None,
+        repl: Repl::Replicated,
     }
 }
 
@@ -172,6 +188,8 @@ const fn hidden(name: &'static str, ty: ValueType, default: fn() -> Value) -> Pr
         allowed: None,
         hidden: true,
         normalize: None,
+        normalize_schema_id: None,
+        repl: Repl::Replicated,
         range: None,
     }
 }
@@ -193,6 +211,7 @@ const fn look_override() -> PropDef {
     PropDef {
         allowed: Some(look_override::LOOK_OVERRIDES),
         normalize: Some(look_override::look_override_id),
+        normalize_schema_id: Some(look_override::NORMALIZATION_SCHEMA_ID),
         ..p(look_override::PROPERTY, ValueType::String, || {
             Value::String(look_override::INHERIT.into())
         })
@@ -286,6 +305,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             color("FogColor", || {
                 Value::Color3(Color3::new(192.0, 192.0, 192.0))
@@ -343,6 +364,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             p("Anchored", ValueType::Bool, || Value::Bool(false)),
             p("CanCollide", ValueType::Bool, || Value::Bool(true)),
@@ -355,6 +378,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             // Last, so lookups of the older properties scan no further than before.
             p("PivotOffset", ValueType::CFrame, || {
@@ -485,6 +510,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
             p("DisplayName", ValueType::String, || {
@@ -498,6 +525,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             p("HoldTime", ValueType::Number, || Value::Number(500.0)),
             p("TapTime", ValueType::Number, || Value::Number(200.0)),
@@ -514,6 +543,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             p("Rebindable", ValueType::Bool, || Value::Bool(true)),
             p("Required", ValueType::Bool, || Value::Bool(false)),
@@ -528,6 +559,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             p("TouchLabel", ValueType::String, || Value::String("".into())),
             p("TouchImage", ValueType::String, || Value::String("".into())),
@@ -539,6 +572,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
             p("TouchPosition", ValueType::UDim2, || {
                 Value::UDim2(UDim2::new(0.0, 0.0, 0.0, 0.0))
@@ -670,6 +705,8 @@ static CLASSES: &[ClassDef] = &[
                 range: None,
                 hidden: false,
                 normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
             },
         ],
     ),
@@ -702,6 +739,18 @@ static CLASSES: &[ClassDef] = &[
             }),
         ],
     ),
+    // Appended to retain existing registry class order. Runtime APIs are separate work.
+    class("ServerStorage", "Instance", &[]),
+    class(
+        "ModuleScript",
+        "Instance",
+        &[p("Source", ValueType::String, || {
+            Value::String(String::new())
+        })],
+    ),
+    class("RemoteFunction", "Instance", &[]),
+    class("UnreliableRemoteEvent", "Instance", &[]),
+    class("PlayerScripts", "Instance", &[]),
 ];
 
 /// Looks up a class by name.
@@ -750,6 +799,11 @@ pub fn class_def(name: &str) -> Option<&'static ClassDef> {
         "GuiButton" => 34,
         "TextButton" => 35,
         "ImageButton" => 36,
+        "ServerStorage" => 37,
+        "ModuleScript" => 38,
+        "RemoteFunction" => 39,
+        "UnreliableRemoteEvent" => 40,
+        "PlayerScripts" => 41,
         _ => return None,
     };
     CLASSES.get(index)
@@ -829,6 +883,39 @@ pub fn default_value(class: &str, property: &str) -> Option<Value> {
         return class_def(class).map(|c| Value::String(c.name.to_string()));
     }
     find_property(class, property).map(|d| (d.default)())
+}
+
+/// Classes in canonical registry order. Protocol fingerprints include this order.
+pub fn registry_classes() -> &'static [ClassDef] {
+    CLASSES
+}
+
+static INDEXED_PROPERTIES: LazyLock<HashMap<&'static str, Vec<&'static PropDef>>> =
+    LazyLock::new(|| {
+        CLASSES
+            .iter()
+            .map(|class| (class.name, all_properties(class.name)))
+            .collect()
+    });
+
+/// The stable, zero-based property index within a class, including inherited properties.
+///
+/// Indices are meaningful only with an equal replication registry hash. The immutable table
+/// initializes once; successful warm lookups allocate nothing. Unknown classes/properties return None.
+pub fn property_index(class: &str, property: &str) -> Option<u16> {
+    let index = INDEXED_PROPERTIES
+        .get(class)?
+        .iter()
+        .position(|def| def.name == property)?;
+    u16::try_from(index).ok()
+}
+
+/// Resolves a class-relative protocol index. Unknown classes and indices return None.
+pub fn property_by_index(class: &str, index: u16) -> Option<&'static PropDef> {
+    INDEXED_PROPERTIES
+        .get(class)?
+        .get(usize::from(index))
+        .copied()
 }
 
 #[cfg(test)]
