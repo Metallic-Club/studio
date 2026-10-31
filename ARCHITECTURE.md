@@ -56,6 +56,9 @@ apps.
   facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum
   uses the foot contact's point velocity (cached anchored rates, Rapier world-COM velocity for dynamic bodies).
   The capsule stays upright; the carry sweep ignores the support but other parts can shorten it.
+  `PhysicsWorld::scripted_pose` is the pose the next step gives a part; the controller adds the step from an
+  anchored support's body pose to it as a final lead, so riders trail a Heartbeat-moved platform by one tick, not
+  two (#374). `relative_velocity` is measured against the support's motion at the bottom-sphere centre.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_vfx_editor** (#41, implemented): egui widgets for `metallic_vfx`: module stack, node canvas, curve and gradient editors, timeline and a live preview. Not wired into Studio yet.
