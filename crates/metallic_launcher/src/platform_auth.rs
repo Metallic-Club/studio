@@ -52,8 +52,11 @@ pub const CLIENT_ID: &str = "metallic-launcher";
 pub const SCOPES: &str = "profile play";
 /// Credential Manager entry: service name.
 pub const KEYRING_SERVICE: &str = "MetallicLauncher";
-/// Credential Manager entry: account name.
+/// Credential Manager entry: account name (Windows shows it as `platform.MetallicLauncher`).
 pub const KEYRING_ACCOUNT: &str = "platform";
+/// Credential Manager entry of the GitHub session for team builds: account name (with
+/// [`KEYRING_SERVICE`]; Windows shows it as `github.MetallicLauncher`).
+pub const GITHUB_KEYRING_ACCOUNT: &str = "github";
 /// The longest token accepted from the server, in bytes (the platform rejects longer ones too).
 pub const MAX_TOKEN_BYTES: usize = 256;
 
@@ -916,4 +919,20 @@ pub fn sign_out_in_background(
         log::warn!("could not start the revoke: {error}");
     }
     Ok(())
+}
+
+/// Deletes the saved sign-ins (the uninstall does this with the Metallic and the GitHub
+/// entries). A store that fails is logged and the others are still cleared; a missing entry is
+/// fine. Returns how many stores failed.
+pub fn forget_saved_sign_ins(stores: &[&dyn SecretStore]) -> usize {
+    stores
+        .iter()
+        .filter(|store| match store.delete() {
+            Ok(()) => false,
+            Err(error) => {
+                log::warn!("could not delete a saved sign-in: {error}");
+                true
+            }
+        })
+        .count()
 }

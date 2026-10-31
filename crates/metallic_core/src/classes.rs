@@ -2,6 +2,7 @@
 //!
 //! To add a class, add one [`ClassDef`] entry to `CLASSES` below and its index to [`class_def`].
 use crate::cframe::CFrame;
+use crate::look_override;
 use crate::value::{Color3, UDim2, Value, ValueType, Vec3};
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -59,8 +60,18 @@ pub const TOUCH_LAYOUTS: &[&str] = &["Auto", "Custom"];
 pub const LIGHTING_STYLES: &[&str] = &["Realistic", "Soft"];
 
 /// `ColorGradingEffect.TonemapperPreset` values. `Default` and `Retro` are Roblox's names; the
-/// rest are Metallic additions (`docs/research/2026-10-30-lighting.md` 5.4).
-pub const TONEMAPPER_PRESETS: &[&str] = &["Default", "Retro", "AgX", "Neutral", "ACES", "Filmic"];
+/// rest are Metallic additions (`docs/research/2026-10-30-lighting.md` 5.4). `Default` follows
+/// the Look's curve (AgX Punchy under Realistic); `AgXPunchy` names that curve explicitly
+/// (`docs/design/look-presets.md` conflict 14).
+pub const TONEMAPPER_PRESETS: &[&str] = &[
+    "Default",
+    "Retro",
+    "AgX",
+    "Neutral",
+    "ACES",
+    "Filmic",
+    "AgXPunchy",
+];
 
 /// Registry-level eligibility for a property sent from server to client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,11 +104,17 @@ pub struct PropDef {
     /// Engine bookkeeping that Luau and the Properties panel do not show (for example the scale
     /// behind `Model:GetScale`). Saved and cloned like any other property.
     pub hidden: bool,
-    /// Replication eligibility; container/source/owner rules also apply.
+    /// Replication eligibility, subject to container/source/owner policy.
     pub repl: Repl,
     /// When set, Number values and every Color3 component are brought into this range on
     /// write (and so on load and from scripts).
     pub range: Option<NumRange>,
+    /// When set, a String write that is not in `allowed` is passed through this first: it
+    /// returns the stored form (for example a display name to an id), or `None` to refuse.
+    pub normalize: Option<fn(&str) -> Option<&'static str>>,
+    /// Stable normalization-contract identifier. Bump it when accepted aliases or rules change.
+    /// Present exactly when `normalize` is present; protocol hashes never encode function addresses.
+    pub normalize_schema_id: Option<&'static str>,
 }
 
 /// A numeric property's sane range: values outside are clamped (or wrapped, for a time of day).
@@ -156,6 +173,8 @@ const fn p(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef
         allowed: None,
         range: None,
         hidden: false,
+        normalize: None,
+        normalize_schema_id: None,
         repl: Repl::Replicated,
     }
 }
@@ -168,6 +187,8 @@ const fn hidden(name: &'static str, ty: ValueType, default: fn() -> Value) -> Pr
         default,
         allowed: None,
         hidden: true,
+        normalize: None,
+        normalize_schema_id: None,
         repl: Repl::Replicated,
         range: None,
     }
@@ -182,6 +203,18 @@ const fn class(
         name,
         superclass: Some(superclass),
         props,
+    }
+}
+
+/// `LookOverride` of `BasePart` and `Model` (`crate::look_override`; building-tools spec 12.2).
+const fn look_override() -> PropDef {
+    PropDef {
+        allowed: Some(look_override::LOOK_OVERRIDES),
+        normalize: Some(look_override::look_override_id),
+        normalize_schema_id: Some(look_override::NORMALIZATION_SCHEMA_ID),
+        ..p(look_override::PROPERTY, ValueType::String, || {
+            Value::String(look_override::INHERIT.into())
+        })
     }
 }
 
@@ -255,7 +288,7 @@ static CLASSES: &[ClassDef] = &[
             },
             num("GeographicLatitude", || Value::Number(41.73), -90.0, 90.0),
             num("Brightness", || Value::Number(1.0), 0.0, 10.0),
-            num("ExposureCompensation", || Value::Number(0.0), -4.0, 4.0),
+            num("ExposureCompensation", || Value::Number(0.0), -5.0, 5.0),
             color("Ambient", || Value::Color3(BLACK)),
             color("OutdoorAmbient", || Value::Color3(BLACK)),
             color("ColorShift_Top", || Value::Color3(BLACK)),
@@ -271,6 +304,8 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(LIGHTING_STYLES),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             color("FogColor", || {
@@ -280,6 +315,13 @@ static CLASSES: &[ClassDef] = &[
             num("FogEnd", || Value::Number(100000.0), 0.0, 1e7),
             num("NightAdaptation", || Value::Number(1.0), 0.0, 1.0),
             num("MoonBrightness", || Value::Number(1.0), 0.0, 10.0),
+            // Histogram metering (#151; lighting doc 3.9 and 5.5). Off: the fixed exposure from
+            // the sun elevation. EV100 limits of the meter.
+            p("AutoExposure", ValueType::Bool, || Value::Bool(true)),
+            num("ExposureMin", || Value::Number(-4.0), -10.0, 20.0),
+            num("ExposureMax", || Value::Number(16.0), -10.0, 20.0),
+            // EV added only while metering, so a look can match with auto exposure on and off.
+            num("AutoExposureBias", || Value::Number(0.0), -5.0, 5.0),
         ],
     ),
     class("RunService", "Instance", &[]),
@@ -297,6 +339,7 @@ static CLASSES: &[ClassDef] = &[
             hidden("WorldPivotSet", ValueType::Bool, || Value::Bool(false)),
             // What `GetScale` returns; `ScaleTo` changes it.
             hidden("ScaleFactor", ValueType::Number, || Value::Number(1.0)),
+            look_override(),
         ],
     ),
     class(
@@ -320,6 +363,8 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(MATERIALS),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             p("Anchored", ValueType::Bool, || Value::Bool(false)),
@@ -332,12 +377,15 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(SHAPES),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             // Last, so lookups of the older properties scan no further than before.
             p("PivotOffset", ValueType::CFrame, || {
                 Value::CFrame(Box::new(CFrame::IDENTITY))
             }),
+            look_override(),
         ],
     ),
     class("Part", "BasePart", &[]),
@@ -384,7 +432,11 @@ static CLASSES: &[ClassDef] = &[
     class(
         "ScreenGui",
         "Instance",
-        &[p("Enabled", ValueType::Bool, || Value::Bool(true))],
+        &[
+            p("Enabled", ValueType::Bool, || Value::Bool(true)),
+            // Higher draws (and takes clicks) above lower; equal orders keep tree order.
+            p("DisplayOrder", ValueType::Number, || Value::Number(0.0)),
+        ],
     ),
     class(
         "Frame",
@@ -403,6 +455,13 @@ static CLASSES: &[ClassDef] = &[
                 Value::Number(0.0)
             }),
             p("Visible", ValueType::Bool, || Value::Bool(true)),
+            // Siblings draw in ZIndex order (ties in tree order), above their parent.
+            p("ZIndex", ValueType::Number, || Value::Number(1.0)),
+            // An Active element takes the pointer: clicks on it do not reach what is below
+            // or the game. Buttons always do.
+            p("Active", ValueType::Bool, || Value::Bool(false)),
+            // Descendants are drawn and clicked only inside this element's rectangle.
+            p("ClipsDescendants", ValueType::Bool, || Value::Bool(false)),
         ],
     ),
     class(
@@ -450,6 +509,8 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(INPUT_ACTION_TYPES),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
@@ -463,6 +524,8 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(INPUT_TRIGGERS),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             p("HoldTime", ValueType::Number, || Value::Number(500.0)),
@@ -479,6 +542,8 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(INPUT_ROLES),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             p("Rebindable", ValueType::Bool, || Value::Bool(true)),
@@ -493,6 +558,8 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(TOUCH_SLOTS),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             p("TouchLabel", ValueType::String, || Value::String("".into())),
@@ -504,6 +571,8 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(TOUCH_LAYOUTS),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
             p("TouchPosition", ValueType::UDim2, || {
@@ -635,8 +704,39 @@ static CLASSES: &[ClassDef] = &[
                 allowed: Some(TONEMAPPER_PRESETS),
                 range: None,
                 hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
                 repl: Repl::Replicated,
             },
+        ],
+    ),
+    // Clickable GUI (#79). Roblox's GuiButton derives from GuiObject; here `Frame` plays that
+    // role, so a button is also a Frame.
+    class(
+        "GuiButton",
+        "Frame",
+        &[p("AutoButtonColor", ValueType::Bool, || Value::Bool(true))],
+    ),
+    class(
+        "TextButton",
+        "GuiButton",
+        &[
+            p("Text", ValueType::String, || Value::String("Button".into())),
+            p("TextColor3", ValueType::Color3, || {
+                Value::Color3(Color3::new(27.0, 42.0, 53.0))
+            }),
+            p("TextSize", ValueType::Number, || Value::Number(14.0)),
+        ],
+    ),
+    class(
+        "ImageButton",
+        "GuiButton",
+        &[
+            p("Image", ValueType::String, || Value::String(String::new())),
+            p("ImageColor3", ValueType::Color3, || Value::Color3(WHITE)),
+            p("ImageTransparency", ValueType::Number, || {
+                Value::Number(0.0)
+            }),
         ],
     ),
     // Appended to retain existing registry class order. Runtime APIs are separate work.
@@ -696,11 +796,14 @@ pub fn class_def(name: &str) -> Option<&'static ClassDef> {
         "BloomEffect" => 31,
         "ColorCorrectionEffect" => 32,
         "ColorGradingEffect" => 33,
-        "ServerStorage" => 34,
-        "ModuleScript" => 35,
-        "RemoteFunction" => 36,
-        "UnreliableRemoteEvent" => 37,
-        "PlayerScripts" => 38,
+        "GuiButton" => 34,
+        "TextButton" => 35,
+        "ImageButton" => 36,
+        "ServerStorage" => 37,
+        "ModuleScript" => 38,
+        "RemoteFunction" => 39,
+        "UnreliableRemoteEvent" => 40,
+        "PlayerScripts" => 41,
         _ => return None,
     };
     CLASSES.get(index)

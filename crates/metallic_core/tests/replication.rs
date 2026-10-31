@@ -242,3 +242,34 @@ fn lighting_bookkeeping_ranges_preserve_authoritative_values() {
         "existing main class indices stay intact"
     );
 }
+
+#[test]
+fn gui_class_prefix_and_normalized_look_values_match_current_main() {
+    for (name, index) in [
+        ("GuiButton", 34),
+        ("TextButton", 35),
+        ("ImageButton", 36),
+        ("ServerStorage", 37),
+    ] {
+        assert_eq!(classes::registry_classes()[index].name, name);
+    }
+    let mut world = World::new_with_services();
+    let workspace = world.root("Workspace").unwrap();
+    let part = world.create("Part", Some(workspace)).unwrap();
+    world
+        .set(part, "LookOverride", Value::String("Retro / PS1".into()))
+        .unwrap();
+    assert_eq!(
+        property_value(&world, part, "LookOverride", None),
+        Some(Value::String("retro-32".into()))
+    );
+    let definition = classes::find_property("Part", "LookOverride").unwrap();
+    assert_eq!(
+        definition.normalize_schema_id,
+        Some(metallic_core::look_override::NORMALIZATION_SCHEMA_ID)
+    );
+    let gui = world.create("TextButton", Some(workspace)).unwrap();
+    assert!(property_visible(&world, gui, "Active", None));
+    assert!(property_visible(&world, gui, "ZIndex", None));
+    assert!(property_visible(&world, gui, "AutoButtonColor", None));
+}

@@ -1,17 +1,19 @@
 //! [`Game`]: one running game and its frame loop.
 use crate::RuntimeError;
 use crate::avatar::{Avatar, default_model};
+use crate::body_pose::{CharacterBodies, locomotion_input};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
+use crate::gui_input::{GuiInput, PointerId, PointerPhase};
 use crate::input::{
     ActionEvent, ActionEventKind, ActionId, ActionValue, DeviceKind, FrameInput, InputRuntime,
 };
-use crate::locomotion::{LocomotionInput, Support};
 use crate::physics_sync::PhysicsSyncCache;
 use crate::project::ProjectConfig;
 use metallic_core::{InstanceId, Value, Vec3, World, load_scene};
 pub use metallic_physics::RUN_MULTIPLIER;
 use metallic_physics::{
-    CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, spawn_character,
+    CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, RESPAWN_DELAY,
+    spawn_character,
 };
 use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
@@ -81,11 +83,19 @@ pub struct Game {
     physics_sync: PhysicsSyncCache,
     /// The local character's skinned avatar and the character Model it belongs to.
     avatar: Option<(InstanceId, Avatar)>,
+    /// CPU body animation of the stepped characters, which drives their touch volumes.
+    bodies: CharacterBodies,
     running: bool,
+    /// The copies of `StarterGui` made by the last [`Game::start`] (removed by the next one).
+    gui_copies: Vec<InstanceId>,
+    /// Seconds the local character has been gone (destroyed or taken out of the Workspace).
+    character_gone: f64,
     /// `InputRuntime::device_changes` when the scripts were last told the last-used device.
     input_device_changes: Option<u64>,
     /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
     gui_inset: f32,
+    /// Hover and presses on the GUI (see [`Game::gui_pointer`]).
+    gui_input: GuiInput,
 }
 
 impl Game {
@@ -137,9 +147,13 @@ impl Game {
             accumulator: 0.0,
             physics_sync: PhysicsSyncCache::default(),
             avatar: None,
+            bodies: CharacterBodies::default(),
             running: false,
+            gui_copies: Vec::new(),
+            character_gone: 0.0,
             input_device_changes: None,
             gui_inset: 0.0,
+            gui_input: GuiInput::new(),
         }
     }
 
@@ -179,7 +193,8 @@ impl Game {
     }
 
     /// Starts the game: runs the scripts (which creates the local player `Player1`), copies the
-    /// contents of `StarterGui` into the player's `PlayerGui` (once; M1 has no ResetOnSpawn),
+    /// contents of `StarterGui` into the player's `PlayerGui` (once per start; M1 has no
+    /// ResetOnSpawn; a restart after [`Game::stop`] replaces the copies of the last start),
     /// spawns the character on the first `SpawnLocation` and fires `CharacterAdded`.
     /// Calling it again while running does nothing.
     ///
@@ -205,6 +220,8 @@ impl Game {
         self.focus = self.root_position().unwrap_or_default();
         self.time = 0.0;
         self.accumulator = 0.0;
+        self.character_gone = 0.0;
+        self.gui_input.reset();
         self.running = true;
         Ok(())
     }
@@ -219,7 +236,10 @@ impl Game {
             .root("Players")
             .and_then(|p| world.find_first_child(p, LOCAL_PLAYER_NAME))
             .ok_or_else(|| RuntimeError::Start("no local player".into()))?;
-        copy_starter_gui(&mut world, player);
+        for old in self.gui_copies.drain(..) {
+            world.destroy(old);
+        }
+        self.gui_copies = copy_starter_gui(&mut world, player);
         let model = spawn_character(&mut world, player)
             .map_err(|e| RuntimeError::Start(format!("cannot spawn the character: {e}")))?;
         Ok((player, model))
@@ -228,6 +248,7 @@ impl Game {
     /// Stops the scripts. The world keeps its last state; the game can be dropped afterwards.
     pub fn stop(&mut self) {
         self.scripts.stop();
+        self.gui_input.reset();
         self.running = false;
     }
 
@@ -320,15 +341,19 @@ impl Game {
     /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`TICK`]
     /// (an accumulator carries the remainder; `dt` is clamped to [`MAX_FRAME_DT`], a negative or
     /// non-finite `dt` counts as 0). Each tick, in order:
-    /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches);
-    /// 2. physics step (movers, loose parts);
+    /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches),
+    ///    then the character's CPU body animation, whose pose the touch volumes use next tick;
+    /// 2. physics step (movers, loose parts); then a character that was destroyed or taken out
+    ///    of the Workspace respawns after [`RESPAWN_DELAY`];
     /// 3. events fed to the scripts: part-part touches both ways, character touches as
-    ///    `part.Touched(HumanoidRootPart)`, `Humanoid.Died`, `CharacterAdded` on respawn;
+    ///    `part.Touched(hit)` and `part.TouchEnded(hit)` with the touching body part (`LeftHand`,
+    ///    ...) or the `HumanoidRootPart`, `Humanoid.Died`, `CharacterAdded` on respawn;
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
     /// Then the skinned avatar follows the character (pose, smoothed facing, animation over `dt`)
-    /// and the camera follows too. Draw with [`Game::render`] and [`crate::gui::paint`].
+    /// and the camera follows too. (The touch volumes follow the tick-rate body animation of
+    /// step 1, which the avatar's animation matches.) Draw with [`Game::render`] and [`crate::gui::paint`].
     pub fn frame(&mut self, input: &FrameInput, dt: f64) -> FrameOutput {
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_FRAME_DT)
@@ -336,6 +361,10 @@ impl Game {
             0.0
         };
         self.camera.apply_input(input);
+        // The GUI events since the last frame, for the first tick's script step.
+        for event in self.gui_input.drain_events() {
+            self.scripts.gui_event(event);
+        }
         let mut ticks = 0;
         if self.running {
             // Capped so time kept by skipped ticks (see below) never piles up into a burst.
@@ -352,7 +381,7 @@ impl Game {
         }
         self.scripts.end_frame();
         let state = self.character.and_then(|c| self.characters.state(c));
-        self.update_avatar(state, dt as f32);
+        self.update_avatar(dt as f32);
         if state != Some(HumanoidState::Dead)
             && let Some(root) = self.root_position()
         {
@@ -427,15 +456,48 @@ impl Game {
         self.gui_inset
     }
 
-    /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
+    /// Draws the local player's GUI with `painter` (see [`crate::gui`]), buttons shaded by
+    /// hover and press.
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.world.try_borrow() {
-            crate::gui::paint(&world, painter, self.gui_inset);
+            let input = &self.gui_input;
+            crate::gui::paint_shaded(&world, painter, self.gui_inset, &|id| input.shade(id));
+        }
+    }
+
+    /// Gives a pointer event to the GUI before the game's input: the left mouse button and
+    /// position, or a finger, at `at` GUI points (window pixels over the scale factor) on a
+    /// `screen` of width x height points. Returns true when the GUI took it; the caller must
+    /// then not pass it (nor that press's moves and release) to the [`InputRuntime`], so a
+    /// click on a button never also drives the camera or a jump. The events reach the client
+    /// scripts in the next [`Game::frame`]'s first tick. Does nothing (false) while stopped.
+    pub fn gui_pointer(
+        &mut self,
+        pointer: PointerId,
+        phase: PointerPhase,
+        at: [f32; 2],
+        screen: [f32; 2],
+    ) -> bool {
+        if !self.running {
+            return false;
+        }
+        let Ok(world) = self.world.try_borrow() else {
+            return false;
+        };
+        self.gui_input
+            .pointer(&world, screen, self.gui_inset, pointer, phase, at)
+    }
+
+    /// The mouse left the window: the GUI elements under it get `MouseLeave`.
+    pub fn gui_mouse_left(&mut self, at: [f32; 2]) {
+        if self.running {
+            self.gui_input.mouse_left(at);
         }
     }
 
     /// One fixed simulation tick. Returns false, having done nothing, when the world is borrowed.
     fn tick(&mut self, input: &FrameInput) -> bool {
+        let respawned;
         let move_input = MoveInput {
             dir: self.camera.move_direction(input.movement),
             jump: input.jump,
@@ -448,8 +510,23 @@ impl Game {
             if let Some(character) = self.character {
                 self.characters
                     .step(&mut world, &self.physics, character, move_input, TICK);
+                // The body animation advances with the simulation, so the touch volumes follow
+                // the limbs on any host, headless or not.
+                self.bodies
+                    .animate(&mut self.characters, &world, character, TICK as f32);
             }
             self.physics.step(&mut world, TICK);
+            respawned = respawn_if_gone(
+                &mut world,
+                &self.characters,
+                self.player,
+                &mut self.character_gone,
+            );
+        }
+        if let (Some(player), Some(character)) = (self.player, respawned) {
+            self.character = Some(character);
+            self.sync_physics_now();
+            self.scripts.character_added(player, character);
         }
         self.feed_events();
         self.time += TICK;
@@ -462,20 +539,25 @@ impl Game {
     fn feed_events(&mut self) {
         for event in self.characters.drain_events() {
             match event {
-                CharacterEvent::Touched { character, part } => {
-                    let hit = self
-                        .world
-                        .try_borrow()
-                        .ok()
-                        .and_then(|w| w.find_first_child(character, ROOT_PART));
-                    if let Some(hit) = hit {
-                        self.scripts.touched(part, hit);
-                    }
+                // Both sides fire, as for part-part touches: `part.Touched(limb)` and
+                // `limb.Touched(part)`.
+                CharacterEvent::Touched { part, hit, .. } => {
+                    self.scripts.touched(part, hit);
+                    self.scripts.touched(hit, part);
+                }
+                CharacterEvent::TouchEnded { part, hit, .. } => {
+                    self.scripts.touch_ended(part, hit);
+                    self.scripts.touch_ended(hit, part);
                 }
                 CharacterEvent::Died { humanoid, .. } => self.scripts.humanoid_died(humanoid),
                 CharacterEvent::Respawned {
                     player, character, ..
                 } => {
+                    // Checked when it fires: never announce a Model that is already gone.
+                    let alive = self.world.try_borrow().is_ok_and(|w| w.is_alive(character));
+                    if !alive {
+                        continue;
+                    }
                     if Some(player) == self.player {
                         self.character = Some(character);
                     }
@@ -510,7 +592,7 @@ impl Game {
 
     /// Moves and animates the local character's avatar; a new character (after a respawn) gets a
     /// fresh one.
-    fn update_avatar(&mut self, state: Option<HumanoidState>, dt: f32) {
+    fn update_avatar(&mut self, dt: f32) {
         let (Some(character), Some((root, yaw))) = (self.character, self.root_pose()) else {
             self.avatar = None;
             return;
@@ -523,21 +605,7 @@ impl Game {
         let Some((_, avatar)) = self.avatar.as_mut() else {
             return;
         };
-        let support = match state {
-            Some(HumanoidState::Running) | None => Support::Grounded,
-            Some(HumanoidState::Jumping) => Support::Rising,
-            Some(HumanoidState::Freefall) => Support::Falling,
-            Some(HumanoidState::Dead) => Support::Frozen,
-        };
-        let v = self
-            .characters
-            .relative_velocity(character)
-            .unwrap_or_default();
-        let speed = (v.x * v.x + v.z * v.z).sqrt() as f32;
-        let input = LocomotionInput {
-            vertical: v.y as f32,
-            ..LocomotionInput::new(speed, support)
-        };
+        let input = locomotion_input(&self.characters, character);
         avatar.update(root, yaw, input, dt);
     }
 
@@ -578,10 +646,68 @@ impl Game {
     }
 }
 
-/// Copies every child of `StarterGui` into the player's `PlayerGui`.
-fn copy_starter_gui(world: &mut World, player: InstanceId) {
+/// The one respawn timer for a character that is gone without dying (#273): a Model a script
+/// destroyed, took out of the Workspace or stripped of its `HumanoidRootPart`. `gone` counts
+/// the seconds; after [`RESPAWN_DELAY`] a new character spawns.
+///
+/// The player's `Character` property is read each tick (never a cached id), so a respawn that
+/// already happened (the controller's after a death, or a script's) cancels this timer, and a
+/// dead character is left to the controller's own timer: one character ever spawns.
+fn respawn_if_gone(
+    world: &mut World,
+    controller: &CharacterController,
+    player: Option<InstanceId>,
+    gone: &mut f64,
+) -> Option<InstanceId> {
+    let player = player.filter(|&p| world.is_alive(p))?;
+    let character = match world.get(player, "Character") {
+        Ok(Value::Ref(c)) => c,
+        _ => None,
+    };
+    let present = character.is_some_and(|c| {
+        world.is_alive(c)
+            && in_workspace(world, c)
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    // The controller respawns a dead character it can still step (Humanoid and root present).
+    let dying = character.is_some_and(|c| {
+        world.is_alive(c)
+            && controller.state(c) == Some(HumanoidState::Dead)
+            && world.find_first_child(c, "Humanoid").is_some()
+            && world.find_first_child(c, ROOT_PART).is_some()
+    });
+    if present || dying {
+        *gone = 0.0;
+        return None;
+    }
+    *gone += TICK;
+    if *gone < RESPAWN_DELAY {
+        return None;
+    }
+    *gone = 0.0;
+    spawn_character(world, player).ok()
+}
+
+/// True when `id` is a descendant of the Workspace.
+fn in_workspace(world: &World, id: InstanceId) -> bool {
+    let Some(ws) = world.root("Workspace") else {
+        return false;
+    };
+    let mut at = world.parent(id);
+    while let Some(p) = at {
+        if p == ws {
+            return true;
+        }
+        at = world.parent(p);
+    }
+    false
+}
+
+/// Copies every child of `StarterGui` into the player's `PlayerGui` and returns the copies.
+fn copy_starter_gui(world: &mut World, player: InstanceId) -> Vec<InstanceId> {
+    let mut copies = Vec::new();
     let Some(starter) = world.root("StarterGui") else {
-        return;
+        return copies;
     };
     let Some(gui) = world
         .children(player)
@@ -589,15 +715,18 @@ fn copy_starter_gui(world: &mut World, player: InstanceId) {
         .copied()
         .find(|&c| world.is_a(c, "PlayerGui"))
     else {
-        return;
+        return copies;
     };
     for child in world.children(starter).to_vec() {
-        if let Ok(copy) = world.clone_subtree(child)
-            && world.set_parent(copy, Some(gui)).is_err()
-        {
-            world.destroy(copy);
+        if let Ok(copy) = world.clone_subtree(child) {
+            if world.set_parent(copy, Some(gui)).is_ok() {
+                copies.push(copy);
+            } else {
+                world.destroy(copy);
+            }
         }
     }
+    copies
 }
 
 /// The runtime action of an `InputAction` instance.
@@ -721,5 +850,98 @@ mod tests {
         assert_eq!(seen, [state::JUMP, state::FALL, state::LAND]);
         run(&mut g, FrameInput::default(), 0.6);
         assert_eq!(avatar(&g).locomotion().state(), state::GROUND);
+    }
+
+    /// #273: a Died handler that takes the body out of the Workspace (without destroying it)
+    /// gets exactly one new character, and `Player.Character` is that one.
+    #[test]
+    fn a_body_removed_on_death_respawns_once() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.2);
+        let player = g.player().unwrap();
+        let old = g.character().unwrap();
+        {
+            let mut w = g.world.borrow_mut();
+            let humanoid = w.find_first_child(old, "Humanoid").unwrap();
+            w.set(humanoid, "Health", Value::Number(0.0)).unwrap();
+        }
+        g.frame(&FrameInput::default(), TICK);
+        // What the Died handler does.
+        g.world.borrow_mut().set_parent(old, None).unwrap();
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY + 1.0);
+        let w = g.world.borrow();
+        let ws = w.root("Workspace").unwrap();
+        let models: Vec<_> = w
+            .children(ws)
+            .iter()
+            .copied()
+            .filter(|&c| w.is_a(c, "Model"))
+            .collect();
+        assert_eq!(models.len(), 1, "one character: {models:?}");
+        assert_eq!(g.character(), Some(models[0]));
+        assert_eq!(
+            w.get(player, "Character").unwrap(),
+            Value::Ref(Some(models[0]))
+        );
+    }
+
+    fn screen_guis(g: &Game) -> usize {
+        let w = g.world.borrow();
+        let Some(gui) = crate::gui::local_player_gui(&w) else {
+            return 0;
+        };
+        w.children(gui)
+            .iter()
+            .filter(|&&c| w.is_a(c, "ScreenGui"))
+            .count()
+    }
+
+    /// #273: stop then start again gives one copy of the StarterGui, not two.
+    #[test]
+    fn a_restart_does_not_duplicate_the_hud() {
+        let mut w = World::new_with_services();
+        let starter = w.root("StarterGui").unwrap();
+        let hud = w.create("ScreenGui", Some(starter)).unwrap();
+        w.set(hud, "Name", Value::String("HUD".into())).unwrap();
+        let mut g = Game::from_world("test".into(), w, Rc::new(Silent));
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 1);
+        g.stop();
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 1, "one HUD after a restart");
+        // A GUI a script made at run time is not ours to remove.
+        {
+            let mut w = g.world.borrow_mut();
+            let gui = crate::gui::local_player_gui(&w).unwrap();
+            w.create("ScreenGui", Some(gui)).unwrap();
+        }
+        g.stop();
+        g.start().unwrap();
+        assert_eq!(screen_guis(&g), 2);
+    }
+
+    /// #273: a script that destroys the character gets a new one after the respawn delay.
+    #[test]
+    fn a_destroyed_character_respawns_after_the_delay() {
+        let mut g = game();
+        run(&mut g, FrameInput::default(), 0.2);
+        let old = g.character().unwrap();
+        g.world.borrow_mut().destroy(old);
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY - 0.5);
+        assert_eq!(g.character(), Some(old), "not before the delay");
+        run(&mut g, FrameInput::default(), 1.0);
+        let new = g.character().unwrap();
+        assert_ne!(new, old);
+        assert!(g.world.borrow().is_alive(new));
+        assert!(g.root_position().is_some());
+        let player = g.player().unwrap();
+        assert_eq!(
+            g.world.borrow().get(player, "Character").unwrap(),
+            Value::Ref(Some(new))
+        );
+        // Removed from the Workspace without being destroyed counts too.
+        g.world.borrow_mut().set_parent(new, None).unwrap();
+        run(&mut g, FrameInput::default(), RESPAWN_DELAY + 0.5);
+        assert_ne!(g.character(), Some(new));
     }
 }

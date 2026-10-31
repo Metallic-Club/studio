@@ -23,6 +23,28 @@
     return (error && ERROR_TEXT[error.code]) || ERROR_TEXT.failed;
   }
 
+  // Shows `text` in a status line (a <p class="status"> with an icon per kind and a <span>).
+  // `kind` is "ok", "error" or "" (plain); empty text hides the line.
+  function show(line, text, kind) {
+    if (!line) {
+      return;
+    }
+    var span = line.querySelector("span");
+    (span || line).textContent = text;
+    line.className = "status" + (kind ? " " + kind : "");
+    line.hidden = text === "";
+  }
+
+  // The settings file is the lasting record of the theme; theme.js keeps a copy in page storage
+  // so the first paint is right. Bring the copy up to date when they differ.
+  var theme = window.metallicTheme;
+  var settingsAnswer = ask("getSettings");
+  settingsAnswer.then(function (settings) {
+    if (theme && typeof settings.theme === "string" && settings.theme !== theme.choice()) {
+      theme.remember(settings.theme);
+    }
+  }, function () {});
+
   // Offline page: pick the text for the reason in the address, and wire the Try again button.
   var params = new URLSearchParams(window.location.search);
   var reason = params.get("reason");
@@ -35,15 +57,11 @@
   if (retry) {
     retry.addEventListener("click", function () {
       retry.disabled = true;
-      if (status) {
-        status.textContent = "Checking again...";
-      }
+      show(status, "Checking again...", "");
       ask("retrySite").catch(function () {});
       window.setTimeout(function () {
         retry.disabled = false;
-        if (status) {
-          status.textContent = "Still can't connect. We'll keep trying in the background.";
-        }
+        show(status, "Still can't connect. We'll keep trying in the background.", "error");
       }, 4000);
     });
   }
@@ -80,14 +98,22 @@
     var githubStatus = document.getElementById("github-status");
     var save = document.getElementById("save");
     var note = document.getElementById("settings-status");
-    var say = function (text, kind) {
-      note.textContent = text;
-      note.className = "status" + (kind ? " " + kind : "");
+    var devUrlError = document.getElementById("dev-url-error");
+    var say = function (text, kind) { show(note, text, kind); };
+    var markDevUrl = function (bad) {
+      devUrl.setAttribute("aria-invalid", bad ? "true" : "false");
+      devUrlError.hidden = !bad;
     };
-    var syncDevUrl = function () { devUrl.disabled = !developerMode.checked; };
+    var syncDevUrl = function () {
+      devUrl.disabled = !developerMode.checked;
+      if (devUrl.disabled) {
+        markDevUrl(false);
+      }
+    };
     developerMode.addEventListener("change", syncDevUrl);
+    devUrl.addEventListener("input", function () { markDevUrl(false); });
 
-    ask("getSettings").then(function (settings) {
+    settingsAnswer.then(function (settings) {
       closeToTray.checked = settings.closeToTray === true;
       developerMode.checked = settings.developerMode === true;
       devUrl.value = typeof settings.devUrl === "string" ? settings.devUrl : "";
@@ -102,6 +128,7 @@
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       save.disabled = true;
+      markDevUrl(false);
       var address = devUrl.value.trim();
       var patch = {
         closeToTray: closeToTray.checked,
@@ -112,10 +139,50 @@
       ask("setSettings", { patch: patch }).then(function () {
         say("Saved.", "ok");
       }, function (error) {
-        say(error && error.code === "badRequest"
-          ? "The development address must be https, or http on localhost."
-          : errorText(error), "error");
+        if (error && error.code === "badRequest") {
+          markDevUrl(true);
+          say("Not saved. Check the development address.", "error");
+          devUrl.focus();
+        } else {
+          say(errorText(error), "error");
+        }
       }).then(function () { save.disabled = false; });
+    });
+  }
+
+  // Settings page: the theme. It shows at once and is saved as it is chosen, like Studio's.
+  var themeChoices = document.querySelectorAll("input[name=theme]");
+  if (theme && themeChoices.length) {
+    var themeStatus = document.getElementById("theme-status");
+    var mark = function (word) {
+      Array.prototype.forEach.call(themeChoices, function (input) {
+        input.checked = input.value === word;
+      });
+    };
+    mark(theme.choice());
+    settingsAnswer.then(function (settings) {
+      if (typeof settings.theme === "string") {
+        mark(settings.theme);
+      }
+    }, function () {});
+    var pending = null;
+    Array.prototype.forEach.call(themeChoices, function (input) {
+      input.addEventListener("change", function () {
+        if (!input.checked) {
+          return;
+        }
+        theme.remember(input.value);
+        show(themeStatus, "", "");
+        // The Launcher takes at most two saves a second: save the last choice of a quick run.
+        window.clearTimeout(pending);
+        pending = window.setTimeout(function () {
+          ask("setSettings", { patch: { theme: theme.choice() } }).catch(function (error) {
+            if (error && error.code !== "notAvailable") {
+              show(themeStatus, "The theme was not saved. " + errorText(error), "error");
+            }
+          });
+        }, 400);
+      });
     });
   }
   // GitHub sign-in for team builds: the Launcher opens GitHub in the browser; the page shows
@@ -127,10 +194,7 @@
       expired: ["The code expired. Start again.", "error"],
       failed: ["GitHub sign-in did not work. Try again.", "error"]
     };
-    var sayGithub = function (text, kind) {
-      githubStatus.textContent = text;
-      githubStatus.className = "status" + (kind ? " " + kind : "");
-    };
+    var sayGithub = function (text, kind) { show(githubStatus, text, kind); };
     if (window.metallic) {
       window.metallic.on("githubSignIn", function (event) {
         if (event.state === "pending" && typeof event.userCode === "string") {

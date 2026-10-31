@@ -157,14 +157,14 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
 pub fn icon_button(ui: &mut Ui, icon: Icon, active: bool, tooltip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
     let fill = if active {
-        color::BG_ACTIVE
+        color::bg_active()
     } else if response.hovered() {
-        color::BG_HOVER
+        color::bg_hover()
     } else {
         Color32::TRANSPARENT
     };
     ui.painter().rect_filled(rect, theme::R_MD, fill);
-    paint_icon(ui.painter(), rect.shrink(6.0), icon, color::ICON);
+    paint_icon(ui.painter(), rect.shrink(6.0), icon, color::icon());
     response.on_hover_text(tooltip)
 }
 
@@ -175,7 +175,7 @@ pub fn segmented(ui: &mut Ui, items: &[&str], selected: usize) -> Option<usize> 
     let widths: Vec<f32> = items
         .iter()
         .map(|s| {
-            ui.fonts_mut(|f| f.layout_no_wrap((*s).to_string(), font.clone(), color::TEXT))
+            ui.fonts_mut(|f| f.layout_no_wrap((*s).to_string(), font.clone(), color::text()))
                 .size()
                 .x
                 + 20.0
@@ -183,23 +183,24 @@ pub fn segmented(ui: &mut Ui, items: &[&str], selected: usize) -> Option<usize> 
         .collect();
     let total: f32 = widths.iter().sum::<f32>() + 4.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(total, 26.0), Sense::hover());
-    ui.painter().rect_filled(rect, theme::R_MD, color::BG_DEEP);
+    ui.painter()
+        .rect_filled(rect, theme::R_MD, color::bg_deep());
     let mut x = rect.min.x + 2.0;
     for (i, (label, w)) in items.iter().zip(&widths).enumerate() {
         let r = Rect::from_min_size(Pos2::new(x, rect.min.y + 2.0), Vec2::new(*w, 22.0));
         let resp = ui.interact(r, ui.scope_id().with(("seg", label, i)), Sense::click());
         let fill = if i == selected {
-            color::BG_ACTIVE
+            color::bg_active()
         } else if resp.hovered() {
-            color::BG_HOVER
+            color::bg_hover()
         } else {
             Color32::TRANSPARENT
         };
         ui.painter().rect_filled(r, theme::R_SM, fill);
         let text_color = if i == selected {
-            color::TEXT
+            color::text()
         } else {
-            color::TEXT_2
+            color::text_2()
         };
         ui.painter().text(
             r.center(),
@@ -225,17 +226,17 @@ pub fn check(ui: &mut Ui, on: &mut bool) -> Response {
     }
     let r = rect.shrink(1.5);
     if *on {
-        ui.painter().rect_filled(r, theme::R_SM, color::ICON);
+        ui.painter().rect_filled(r, theme::R_SM, color::icon());
         let p = |x: f32, y: f32| Pos2::new(r.min.x + r.width() * x, r.min.y + r.height() * y);
         ui.painter().add(egui::Shape::line(
             vec![p(0.22, 0.52), p(0.42, 0.72), p(0.78, 0.3)],
-            Stroke::new(1.8, color::ON_ACCENT),
+            Stroke::new(1.8, color::on_accent()),
         ));
     } else {
         let stroke = if response.hovered() {
-            color::ICON
+            color::icon()
         } else {
-            color::TEXT_3
+            color::text_3()
         };
         ui.painter()
             .rect_stroke(r, theme::R_SM, Stroke::new(1.0, stroke), StrokeKind::Inside);
@@ -253,7 +254,7 @@ pub fn row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
             egui::Align2::LEFT_CENTER,
             label,
             egui::TextStyle::Body.resolve(ui.style()),
-            color::TEXT_2,
+            color::text_2(),
         );
         add(ui)
     })
@@ -279,7 +280,7 @@ pub fn range(
     limits: std::ops::RangeInclusive<f32>,
 ) -> bool {
     let a = num(ui, &mut r.min, speed, limits.clone()).changed();
-    ui.label(egui::RichText::new("to").color(color::TEXT_3));
+    ui.label(egui::RichText::new("to").color(color::text_3()));
     let b = num(ui, &mut r.max, speed, limits).changed();
     a || b
 }
@@ -288,9 +289,9 @@ pub fn range(
 pub fn vec3(ui: &mut Ui, v: &mut Vec3, speed: f64) -> bool {
     let mut changed = false;
     for (letter, c, value) in [
-        ("X", color::AXIS_X, &mut v.x),
-        ("Y", color::AXIS_Y, &mut v.y),
-        ("Z", color::AXIS_Z, &mut v.z),
+        ("X", color::axis_x(), &mut v.x),
+        ("Y", color::axis_y(), &mut v.y),
+        ("Z", color::axis_z(), &mut v.z),
     ] {
         ui.label(
             egui::RichText::new(letter)

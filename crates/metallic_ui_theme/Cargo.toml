@@ -1,0 +1,13 @@
+[package]
+name = "metallic_ui_theme"
+description = "Render-free Metallic UI theme for egui: palettes, fonts, Visuals and Spacing, shared by Studio and the editors."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+metallic_tokens.workspace = true
+egui.workspace = true
+log.workspace = true
+toml.workspace = true

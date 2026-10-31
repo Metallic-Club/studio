@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 /// Fingerprint of class order, inheritance, effective property order/types/defaults, enums and
-/// replication/hidden metadata. Version 3 also encodes numeric clamp/wrap ranges and encodes boxed CFrames by their 12 row-major
+/// replication/hidden metadata. Version 4 includes declared string-normalization contract ids,
+/// numeric clamp/wrap ranges, and boxed CFrames by their 12 row-major
 /// components, never their allocation address. All lengths and numeric bits use little endian.
 ///
 /// Protocol peers must compare this hash before interpreting class-relative property indices.
@@ -66,7 +67,7 @@ fn hash_value(hash: &mut Sha256, value: &Value) {
 
 fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"metallic-registry-v3\0");
+    hash.update(b"metallic-registry-v4\0");
     hash.update((classes.len() as u64).to_le_bytes());
     for class in classes {
         field(&mut hash, class.name.as_bytes());
@@ -104,6 +105,15 @@ fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
                 hash.update(range.min.to_bits().to_le_bytes());
                 hash.update(range.max.to_bits().to_le_bytes());
                 hash.update([u8::from(range.wrap)]);
+            }
+            match (property.normalize.is_some(), property.normalize_schema_id) {
+                (false, None) => hash.update([0]),
+                (true, Some(id)) => {
+                    assert!(!id.is_empty(), "empty normalization schema id");
+                    hash.update([1]);
+                    field(&mut hash, id.as_bytes());
+                }
+                _ => panic!("normalizer and schema id must be declared together"),
             }
             hash.update([u8::from(property.allowed.is_some())]);
             if let Some(values) = property.allowed {
@@ -245,6 +255,8 @@ mod tests {
             repl: Repl::Replicated,
             hidden: false,
             range: None,
+            normalize: None,
+            normalize_schema_id: None,
         }
     }
 
@@ -252,13 +264,13 @@ mod tests {
     fn fingerprint_covers_property_metadata_defaults_order_and_class_identity() {
         let original = hash_schema(&[base(prop())]);
         assert_eq!(original, hash_schema(&[base(prop())]));
-        // Independent Python SHA-256 fixture for version 3's explicit byte encoding.
+        // Independent Python SHA-256 fixture for version 4's explicit byte encoding.
         assert_eq!(
             original,
             [
-                0xf9, 0x9a, 0x35, 0x22, 0x3a, 0x1f, 0x02, 0x9c, 0x7f, 0xb6, 0xa4, 0x34, 0x29, 0x14,
-                0x43, 0xc6, 0x92, 0xc5, 0xe3, 0xfd, 0xe1, 0x05, 0xab, 0xbb, 0x81, 0x4b, 0x32, 0x2a,
-                0x76, 0xbd, 0x48, 0x09
+                0x62, 0xf7, 0x65, 0x56, 0x16, 0x36, 0x48, 0x9b, 0xab, 0x87, 0x91, 0x0b, 0x22, 0x1e,
+                0x0a, 0xdc, 0xa5, 0x8a, 0x3c, 0x9d, 0x0b, 0xc6, 0x5f, 0x1c, 0xe2, 0x9b, 0x7c, 0x75,
+                0xfd, 0xf8, 0x0e, 0x9a
             ]
         );
         let mut changed = prop();
@@ -293,6 +305,58 @@ mod tests {
         let mut changed = base(prop());
         changed.name = "Changed";
         assert_ne!(original, hash_schema(&[changed]));
+    }
+
+    #[test]
+    fn normalization_contract_ids_are_hashed_without_executing_callbacks() {
+        fn callback(_: &str) -> Option<&'static str> {
+            panic!("schema hashing must not execute normalization");
+        }
+        let schema = |id: Option<&'static str>| {
+            let mut definition = prop();
+            definition.ty = ValueType::String;
+            definition.default = || Value::String("stored".into());
+            definition.normalize = id.map(|_| callback as fn(&str) -> Option<&'static str>);
+            definition.normalize_schema_id = id;
+            hash_schema(&[base(definition)])
+        };
+        let v1 = schema(Some("fixture-normalization/v1"));
+        assert_eq!(v1, schema(Some("fixture-normalization/v1")));
+        assert_ne!(v1, schema(None));
+        assert_ne!(v1, schema(Some("fixture-normalization/v2")));
+        for class in classes::registry_classes() {
+            for definition in class.props {
+                assert_eq!(
+                    definition.normalize.is_some(),
+                    definition.normalize_schema_id.is_some()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "normalizer and schema id must be declared together")]
+    fn unversioned_normalizer_fails_closed() {
+        let mut definition = prop();
+        definition.normalize = Some(|_| Some("stored"));
+        hash_schema(&[base(definition)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "normalizer and schema id must be declared together")]
+    fn orphan_normalization_id_fails_closed() {
+        let mut definition = prop();
+        definition.normalize_schema_id = Some("orphan/v1");
+        hash_schema(&[base(definition)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty normalization schema id")]
+    fn empty_normalization_id_fails_closed() {
+        let mut definition = prop();
+        definition.normalize = Some(|_| Some("stored"));
+        definition.normalize_schema_id = Some("");
+        hash_schema(&[base(definition)]);
     }
 
     #[test]

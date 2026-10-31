@@ -27,7 +27,7 @@ pub const LABEL_COLUMN: f32 = 150.0;
 /// Draws the timeline in `rect`. Returns a time when the user clicked or dragged on the ruler or tracks.
 pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track]) -> Option<f32> {
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, color::BG_PANEL);
+    painter.rect_filled(rect, 0.0, color::bg_panel());
     let length = length.max(0.1);
     let area = Rect::from_min_max(Pos2::new(rect.min.x + LABEL_COLUMN, rect.min.y), rect.max);
     let lane = Rect::from_min_max(
@@ -50,14 +50,14 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
         let x = x_of(t);
         painter.line_segment(
             [Pos2::new(x, rect.min.y + ruler_h), Pos2::new(x, rect.max.y)],
-            Stroke::new(1.0, color::LINE),
+            Stroke::new(1.0, color::line()),
         );
         painter.text(
             Pos2::new(x, rect.min.y + 4.0),
             egui::Align2::CENTER_TOP,
             format_time(t, step),
             FontId::proportional(11.0),
-            color::TEXT_3,
+            color::text_3(),
         );
         t += step;
     }
@@ -66,7 +66,7 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
         egui::Align2::LEFT_TOP,
         "Tracks",
         FontId::proportional(11.0),
-        color::TEXT_3,
+        color::text_3(),
     );
 
     let row_h = 22.0;
@@ -77,9 +77,9 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
         }
         let row = Rect::from_min_size(Pos2::new(rect.min.x, y), Vec2::new(rect.width(), row_h));
         let label_color = if tr.enabled {
-            color::TEXT
+            color::text()
         } else {
-            color::TEXT_3
+            color::text_3()
         };
         painter.text(
             Pos2::new(rect.min.x + 12.0, row.center().y),
@@ -93,7 +93,7 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
                 Pos2::new(x_of(a), row.center().y - 3.0),
                 Pos2::new(x_of(b), row.center().y + 3.0),
             );
-            painter.rect_filled(r, theme::R_SM, color::BG_ACTIVE);
+            painter.rect_filled(r, theme::R_SM, color::bg_active());
         }
         for &m in &tr.markers {
             let c = Pos2::new(x_of(m), row.center().y);
@@ -106,9 +106,9 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
                     c + Vec2::new(-s, 0.0),
                 ],
                 if tr.enabled {
-                    color::ICON
+                    color::icon()
                 } else {
-                    color::TEXT_3
+                    color::text_3()
                 },
                 Stroke::NONE,
             ));
@@ -122,16 +122,16 @@ pub fn timeline(ui: &mut Ui, rect: Rect, time: f32, length: f32, tracks: &[Track
             Pos2::new(x, rect.min.y + ruler_h - 2.0),
             Pos2::new(x, rect.max.y),
         ],
-        Stroke::new(1.5, color::ACCENT),
+        Stroke::new(1.5, color::accent()),
     );
     let chip = Rect::from_center_size(Pos2::new(x, rect.min.y + 11.0), Vec2::new(40.0, 18.0));
-    painter.rect_filled(chip, theme::R_SM, color::ACCENT);
+    painter.rect_filled(chip, theme::R_SM, color::accent());
     painter.text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
         format!("{:.2}", time),
         theme::semibold(11.0),
-        color::ON_ACCENT,
+        color::on_accent(),
     );
 
     let resp = ui.interact(

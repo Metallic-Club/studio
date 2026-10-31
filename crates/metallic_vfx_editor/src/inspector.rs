@@ -62,12 +62,12 @@ fn card(
     let mut changed = false;
     let mut action = CardAction::None;
     let stroke = if focused {
-        egui::Stroke::new(1.0, color::ACCENT)
+        egui::Stroke::new(1.0, color::accent())
     } else {
         egui::Stroke::NONE
     };
     egui::Frame::new()
-        .fill(color::BG_RAISED)
+        .fill(color::bg_raised())
         .stroke(stroke)
         .corner_radius(CornerRadius::same(theme::R_MD))
         .inner_margin(Margin::symmetric(8, 6))
@@ -90,12 +90,16 @@ fn card(
                 };
                 let (r, resp) =
                     ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::click());
-                widgets::paint_icon(ui.painter(), r, icon, color::ICON);
+                widgets::paint_icon(ui.painter(), r, icon, color::icon());
                 if resp.clicked() {
                     state.toggle(ui);
                 }
                 changed |= check(ui, enabled).changed();
-                let text_color = if *enabled { color::TEXT } else { color::TEXT_3 };
+                let text_color = if *enabled {
+                    color::text()
+                } else {
+                    color::text_3()
+                };
                 let label = ui.add(
                     egui::Label::new(
                         RichText::new(title)
@@ -108,7 +112,7 @@ fn card(
                     state.toggle(ui);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button(RichText::new("···").color(color::ICON), |ui| {
+                    ui.menu_button(RichText::new("···").color(color::icon()), |ui| {
                         if ui.button("Move up").clicked() {
                             action = CardAction::Up;
                             ui.close();
@@ -167,13 +171,13 @@ fn stage_header(
         ui.label(
             RichText::new(stage.label())
                 .font(theme::semibold(14.0))
-                .color(color::TEXT),
+                .color(color::text()),
         );
         if count > 0 {
-            ui.label(RichText::new(count.to_string()).color(color::TEXT_3));
+            ui.label(RichText::new(count.to_string()).color(color::text_3()));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.menu_button(RichText::new("+ Add").color(color::ICON), |ui| {
+            ui.menu_button(RichText::new("+ Add").color(color::icon()), |ui| {
                 changed = add(ui);
             });
         });
@@ -202,7 +206,7 @@ pub fn effect_settings(ui: &mut Ui, e: &mut Effect) -> bool {
     });
     row(ui, "Cycle", |ui| {
         changed |= num(ui, &mut e.duration, 0.01, 0.0..=60.0).changed();
-        ui.label(RichText::new("s").color(color::TEXT_3));
+        ui.label(RichText::new("s").color(color::text_3()));
         changed |= ui.checkbox(&mut e.looping, "Loop").changed();
     });
     row(ui, "Preview motion", |ui| {
@@ -229,7 +233,7 @@ pub fn emitter_stack(
     let base = egui::Id::unique(("emitter", key));
     ui.add_space(2.0);
     egui::Frame::new()
-        .fill(color::BG_RAISED)
+        .fill(color::bg_raised())
         .corner_radius(CornerRadius::same(theme::R_MD))
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
@@ -243,7 +247,7 @@ pub fn emitter_stack(
                     em.capacity = c.round().max(1.0) as u32;
                     changed = true;
                 }
-                ui.label(RichText::new("particles").color(color::TEXT_3));
+                ui.label(RichText::new("particles").color(color::text_3()));
             });
             row(ui, "Space", |ui| {
                 changed |= ui
@@ -255,7 +259,7 @@ pub fn emitter_stack(
             });
             row(ui, "Time scale", |ui| {
                 changed |= num(ui, &mut em.time_scale, 0.01, 0.0..=4.0).changed();
-                ui.label(RichText::new("delay").color(color::TEXT_3));
+                ui.label(RichText::new("delay").color(color::text_3()));
                 changed |= num(ui, &mut em.delay, 0.01, 0.0..=60.0).changed();
             });
             row(ui, "Step rate", |ui| {
@@ -266,7 +270,7 @@ pub fn emitter_stack(
                     } else {
                         "every frame"
                     })
-                    .color(color::TEXT_3),
+                    .color(color::text_3()),
                 );
             });
         });
@@ -393,7 +397,7 @@ pub fn emitter_stack(
 
     // Render.
     stage_header(ui, Stage::Render, 0, |ui| {
-        ui.label(RichText::new("One renderer per emitter").color(color::TEXT_3));
+        ui.label(RichText::new("One renderer per emitter").color(color::text_3()));
         false
     });
     let mut on = em.enabled;
@@ -416,7 +420,7 @@ fn spawn_body(ui: &mut Ui, m: &mut SpawnModule) -> bool {
     match m {
         SpawnModule::Rate { per_second, .. } => row(ui, "Rate", |ui| {
             changed |= num(ui, per_second, 0.5, 0.0..=10_000.0).changed();
-            ui.label(RichText::new("per second").color(color::TEXT_3));
+            ui.label(RichText::new("per second").color(color::text_3()));
         }),
         SpawnModule::Burst {
             time,
@@ -427,7 +431,7 @@ fn spawn_body(ui: &mut Ui, m: &mut SpawnModule) -> bool {
         } => {
             row(ui, "At", |ui| {
                 changed |= num(ui, time, 0.01, 0.0..=60.0).changed();
-                ui.label(RichText::new("s").color(color::TEXT_3));
+                ui.label(RichText::new("s").color(color::text_3()));
             });
             row(ui, "Count", |ui| {
                 changed |= ui
@@ -438,9 +442,9 @@ fn spawn_body(ui: &mut Ui, m: &mut SpawnModule) -> bool {
                 changed |= ui
                     .add(egui::DragValue::new(cycles).range(1..=1000))
                     .changed();
-                ui.label(RichText::new("every").color(color::TEXT_3));
+                ui.label(RichText::new("every").color(color::text_3()));
                 changed |= num(ui, interval, 0.01, 0.0..=60.0).changed();
-                ui.label(RichText::new("s").color(color::TEXT_3));
+                ui.label(RichText::new("s").color(color::text_3()));
             });
         }
         SpawnModule::Distance { per_stud, .. } => row(ui, "Per stud", |ui| {
@@ -677,7 +681,7 @@ fn init_body(ui: &mut Ui, m: &mut InitModule, key: (usize, usize)) -> bool {
                     });
                     ui.label(
                         RichText::new("Preview emits from a sphere until mesh assets exist.")
-                            .color(color::TEXT_3),
+                            .color(color::text_3()),
                     );
                 }
             }
@@ -723,7 +727,7 @@ fn init_body(ui: &mut Ui, m: &mut InitModule, key: (usize, usize)) -> bool {
             row(ui, "Spread", |ui| {
                 changed |= num(ui, &mut spread.0, 0.5, 0.0..=360.0).changed();
                 changed |= num(ui, &mut spread.1, 0.5, 0.0..=360.0).changed();
-                ui.label(RichText::new("degrees").color(color::TEXT_3));
+                ui.label(RichText::new("degrees").color(color::text_3()));
             });
         }
         InitModule::Size { size, .. } => row(ui, "Studs", |ui| {
@@ -790,7 +794,7 @@ fn update_body(ui: &mut Ui, m: &mut UpdateModule, key: (usize, usize)) -> bool {
         }
         UpdateModule::Drag { drag, .. } => row(ui, "Drag", |ui| {
             changed |= num(ui, drag, 0.02, -20.0..=50.0).changed();
-            ui.label(RichText::new("halves speed every 1/drag s").color(color::TEXT_3));
+            ui.label(RichText::new("halves speed every 1/drag s").color(color::text_3()));
         }),
         UpdateModule::CurlNoise {
             strength,
@@ -913,7 +917,7 @@ fn texture_picker(ui: &mut Ui, t: &mut Texture, key: usize, preview: &mut Previe
     let ctx = ui.ctx().clone();
     let current = preview.texture_id(&ctx, t);
     ui.horizontal(|ui| {
-        let tile = egui::Image::new((current, egui::Vec2::splat(28.0))).bg_fill(color::BG_DEEP);
+        let tile = egui::Image::new((current, egui::Vec2::splat(28.0))).bg_fill(color::bg_deep());
         ui.add(tile);
         egui::ComboBox::from_id_salt(("tex", key))
             .selected_text(t.label().to_string())
@@ -926,7 +930,7 @@ fn texture_picker(ui: &mut Ui, t: &mut Texture, key: usize, preview: &mut Previe
                             let id = preview.texture_id(&ctx, cand);
                             let selected = cand == t;
                             let img = egui::Image::new((id, egui::Vec2::splat(36.0)))
-                                .bg_fill(color::BG_DEEP);
+                                .bg_fill(color::bg_deep());
                             let resp = ui
                                 .add(egui::Button::image(img).selected(selected))
                                 .on_hover_text(cand.label());
@@ -984,7 +988,7 @@ fn render_body(
         } => {
             row(ui, "Stretch", |ui| {
                 changed |= num(ui, speed_scale, 0.002, 0.0..=2.0).changed();
-                ui.label(RichText::new("min").color(color::TEXT_3));
+                ui.label(RichText::new("min").color(color::text_3()));
                 changed |= num(ui, min_length, 0.02, 0.0..=10.0).changed();
             });
         }
@@ -1064,7 +1068,7 @@ fn render_body(
                     }
                 });
         } else if sheet.is_some() {
-            ui.label(RichText::new("sheet plays once per life").color(color::TEXT_3));
+            ui.label(RichText::new("sheet plays once per life").color(color::text_3()));
         }
     });
     if let Some(fb) = &mut r.flipbook {
@@ -1072,7 +1076,7 @@ fn render_body(
             changed |= ui
                 .add(egui::DragValue::new(&mut fb.columns).range(1..=64))
                 .changed();
-            ui.label(RichText::new("×").color(color::TEXT_3));
+            ui.label(RichText::new("×").color(color::text_3()));
             changed |= ui
                 .add(egui::DragValue::new(&mut fb.rows).range(1..=64))
                 .changed();
@@ -1101,7 +1105,7 @@ fn render_body(
     });
     row(ui, "Soft fade", |ui| {
         changed |= num(ui, &mut r.soft_fade, 0.02, 0.0..=10.0).changed();
-        ui.label(RichText::new("studs, GPU only").color(color::TEXT_3));
+        ui.label(RichText::new("studs, GPU only").color(color::text_3()));
     });
     row(ui, "Sort", |ui| {
         for (v, l) in [
@@ -1122,12 +1126,12 @@ fn render_body(
                 1 => "cut-out",
                 _ => "bands",
             })
-            .color(color::TEXT_3),
+            .color(color::text_3()),
         );
     });
     row(ui, "Pixel snap", |ui| {
         changed |= num(ui, &mut r.pixel_snap, 0.5, 0.0..=16.0).changed();
-        ui.label(RichText::new("px").color(color::TEXT_3));
+        ui.label(RichText::new("px").color(color::text_3()));
     });
     changed
 }
@@ -1171,7 +1175,7 @@ pub fn trail_inspector(ui: &mut Ui, t: &mut Trail, key: usize, preview: &mut Pre
         changed |= num(ui, &mut t.brightness, 0.02, 0.0..=20.0).changed()
     });
     ui.add_space(4.0);
-    ui.label(RichText::new("Color, head to tail").color(color::TEXT_2));
+    ui.label(RichText::new("Color, head to tail").color(color::text_2()));
     changed |= gradient_edit(ui, &mut t.color, ("trail-color", key));
     changed |= curve_rows(ui, "Width scale", &mut t.width_scale, ("trail-width", key));
     changed |= curve_rows(
@@ -1220,7 +1224,7 @@ pub fn beam_inspector(ui: &mut Ui, b: &mut Beam, key: usize, preview: &mut Previ
     row(ui, "Jitter", |ui| {
         changed |= num(ui, &mut b.jitter, 0.02, 0.0..=10.0).changed();
         changed |= num(ui, &mut b.jitter_fps, 0.5, 0.0..=60.0).changed();
-        ui.label(RichText::new("fps").color(color::TEXT_3));
+        ui.label(RichText::new("fps").color(color::text_3()));
     });
     row(ui, "Light emission", |ui| {
         changed |= ui
@@ -1234,7 +1238,7 @@ pub fn beam_inspector(ui: &mut Ui, b: &mut Beam, key: usize, preview: &mut Previ
         changed |= check(ui, &mut b.face_camera).changed()
     });
     ui.add_space(4.0);
-    ui.label(RichText::new("Color, start to end").color(color::TEXT_2));
+    ui.label(RichText::new("Color, start to end").color(color::text_2()));
     changed |= gradient_edit(ui, &mut b.color, ("beam-color", key));
     changed |= curve_rows(
         ui,
