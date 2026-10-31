@@ -167,6 +167,19 @@ impl StartScreen {
         }
     }
 
+    /// Decodes and uploads every template preview now (a splash step), so the first frame of the
+    /// start screen does not stall on image files.
+    pub fn preload(&mut self, ctx: &egui::Context) {
+        let paths: Vec<PathBuf> = self
+            .templates
+            .iter()
+            .map(|t| t.preview_path.clone())
+            .collect();
+        for path in paths {
+            self.preview(ctx, &path);
+        }
+    }
+
     /// Texture for a preview image, loaded on first use; `None` if the file is missing or broken.
     fn preview(&mut self, ctx: &egui::Context, path: &Path) -> Option<TextureHandle> {
         self.previews

@@ -25,6 +25,8 @@ pub const UI_STRONG: &str = "ui-strong";
 pub const HEADING: &str = "heading";
 /// Family of the display and title voices (weight 700, width 125).
 pub const DISPLAY: &str = "display";
+/// Family of the wordmark's second line (weight 520, width 125; splash only).
+pub const DISPLAY_LIGHT: &str = "display-light";
 /// Phosphor regular icons alone (also the last fallback of every text family).
 pub const ICONS: &str = "icons";
 /// Phosphor fill icons (status only). It is a family of its own: both Phosphor fonts use the same
@@ -38,7 +40,7 @@ struct Voice {
     width: f32,
 }
 
-fn voices() -> [Voice; 4] {
+fn voices() -> [Voice; 5] {
     let named = |name: &str| FontFamily::Name(name.into());
     [
         Voice {
@@ -59,6 +61,11 @@ fn voices() -> [Voice; 4] {
         Voice {
             family: named(DISPLAY),
             weight: 700.0,
+            width: 125.0,
+        },
+        Voice {
+            family: named(DISPLAY_LIGHT),
+            weight: 520.0,
             width: 125.0,
         },
     ]
@@ -159,6 +166,12 @@ pub fn title() -> FontId {
 /// `display`: the one big line of a screen.
 pub fn display() -> FontId {
     FontId::new(tk::T_DISPLAY_SIZE, FontFamily::Name(DISPLAY.into()))
+}
+
+/// The display width at `size`, bold (`light` false) or at weight 520 (`light` true).
+pub fn wordmark(size: f32, light: bool) -> FontId {
+    let family = if light { DISPLAY_LIGHT } else { DISPLAY };
+    FontId::new(size, FontFamily::Name(family.into()))
 }
 
 /// A Phosphor regular icon font at `size`.

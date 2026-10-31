@@ -21,6 +21,7 @@ pub mod github_auth;
 pub mod png_image;
 pub mod recent;
 pub mod screenshot;
+pub mod splash;
 pub mod start_screen;
 pub mod templates;
 pub mod theme;
