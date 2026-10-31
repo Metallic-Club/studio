@@ -27,7 +27,7 @@ or playable multiplayer. The separate scheduler correctness work in #173 and the
 process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
 
 ## Globals
-`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
+`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `RaycastParams`, `Enum`.
 
 ## ModuleScript and `require`
 `ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
@@ -113,6 +113,24 @@ Tags are text labels on instances (Roblox's `CollectionService`). `game:GetServi
 - Core: `World::add_tag`, `remove_tag`, `has_tag`, `tags`, `tagged`, `all_tags`, `is_in_tree`, and the bounded tag log
   (`tag_cursor`, `tag_changes_since`) the script VMs follow. Tagged-subtree bookkeeping on reparent and destroy only runs
   while some tag exists in the world.
+
+## Raycasting
+`workspace:Raycast(origin, direction, params?)` casts a ray and returns a `RaycastResult` for the nearest part it hits, or
+`nil`. Roblox semantics: the length of `direction` is the maximum distance in studs (longer than 15000 is shortened to 15000);
+a zero direction returns `nil`; a part the ray starts inside is not hit, so the ray goes on to the next one.
+
+- `RaycastResult`: `Instance`, `Position`, `Normal` (unit length), `Material` (an `Enum.Material`), `Distance`. Read-only.
+- `RaycastParams.new()`: `FilterDescendantsInstances` (an array of Instances; each one counts with all its descendants),
+  `FilterType` (`Enum.RaycastFilterType.Exclude`, the default, skips them; `Include` hits only them, and an empty Include list
+  hits nothing), `RespectCanCollide` (default `false`: parts with `CanCollide = false` are hit, as in Roblox; `true` skips
+  them), `IgnoreWater`, `CollisionGroup` and `BruteForceAllSlow` (accepted and ignored: there is no water and no collision
+  groups yet), and `params:AddToFilter(instance or array)`. A filter covers at most 100,000 parts per call.
+- The physics sees the parts as of the last tick: a part a script creates is hit from the next tick on. Parts exist for
+  raycasts before the first script runs.
+- Errors: an origin or direction that is not a finite `Vector3`, a params argument that is not a `RaycastParams`, and
+  `Raycast` on anything but the Workspace.
+- `part.Material = result.Material` works: string properties that name a material accept `Enum.Material` items.
+- Without a physics (a bare `ScriptHost` with no `set_scene_query`), `Raycast` returns `nil`. `Game` provides its physics.
 
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,

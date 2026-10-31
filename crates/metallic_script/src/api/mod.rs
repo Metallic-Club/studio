@@ -14,6 +14,7 @@ mod gui;
 mod input;
 mod instance;
 mod pivot;
+mod raycast;
 mod remote;
 mod require;
 mod services;
@@ -50,6 +51,8 @@ pub(crate) struct HostShared {
     pub(crate) local_player: Cell<Option<InstanceId>>,
     /// Input events, action states and device flags pushed by the host.
     pub(crate) input: input::InputShared,
+    /// What `workspace:Raycast` asks (set by the host that owns the physics).
+    pub(crate) scene: RefCell<Option<Rc<dyn crate::SceneQuery>>>,
 }
 
 /// Everything the API functions of one VM need.
@@ -147,6 +150,7 @@ fn build(
     raw.extend(input::action_methods(lua)?);
     raw.extend(attributes::methods(lua)?);
     raw.extend(tags::methods(lua)?);
+    raw.extend(raycast::methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
         let function = if name == "WaitForChild" {
@@ -198,6 +202,11 @@ fn build(
     )
     .map_err(to_err)?;
     set("CFrame", mlua::Value::Table(cframe::constructor(lua)?)).map_err(to_err)?;
+    set(
+        "RaycastParams",
+        mlua::Value::Table(raycast::constructor(lua, &state)?),
+    )
+    .map_err(to_err)?;
     for (name, table) in datatypes::constructors(lua)? {
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }

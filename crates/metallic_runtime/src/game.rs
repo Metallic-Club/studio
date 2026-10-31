@@ -285,9 +285,12 @@ impl Game {
             self.focus = root + Vec3::new(0.0, FOCUS_HEIGHT, 0.0);
         }
         let ignore = self.character_parts();
-        self.last_camera =
-            self.camera
-                .camera(self.focus, &self.simulation.physics, &ignore, dt as f32);
+        self.last_camera = self.camera.camera(
+            self.focus,
+            &self.simulation.physics.borrow(),
+            &ignore,
+            dt as f32,
+        );
         FrameOutput {
             camera: self.last_camera,
             ticks,
