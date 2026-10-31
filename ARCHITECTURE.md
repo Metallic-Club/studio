@@ -39,6 +39,22 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  The edit-only `metallic_core::edit` kernel owns the original World, resolves stable `(editor, counter)` object
+  identities, preflights complete typed batches on an independent `deep_clone`, then replays validated operations
+  into the original World. Validation rejection preserves its subscriptions and journal. Staging costs O(world)
+  per batch; accepted callbacks retain existing per-operation behavior. Unexpected replay failures or callback
+  panics terminally poison the authority; partial live effects are not rolled back. Bounded editor counters and
+  exact request/receipt history provide idempotency without recycling destroyed object identities. A trusted
+  host grants edit permissions and whole-script Source ownership; this is not an authentication or lease service.
+  `EditReplica` applies ordered accepted records with stable references and sibling anchors; snapshots include
+  effective properties and ordered children, independently of local instance allocation. There is no network,
+  persistence, optimistic UI, runtime simulation or available Team Create session in this foundation (#301).
+  Create/Move use explicit `World::set_parent_at` placement: no anchor appends within the current parent too;
+  anchored reorders enter the journal, preserve original signals and emit no false child arrival. The anchor's
+  final index excludes the moving object, and an already placed object follows core's no-op cursor behavior.
+  Edit CFrame values are boxed like World values, compare all twelve numeric components by bits for exact request
+  identity, and count the owned transform payload against request/receipt limits. Generic Set follows low-level
+  World property validation; it does not invoke high-level pivot/scale helpers or invent new field permissions.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
