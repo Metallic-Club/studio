@@ -178,5 +178,11 @@ gated on presentation, matching the other Game-only integration targets. Upstrea
 rendering, touch/input, player, scripting, A6 and manifest additions are preserved.
 The CPU kernel itself is unchanged. No new capability or acceptance is claimed.
 
+Before gates, the coordinator also requested the exact additive main
+`720383017d8efb297e12d236558b64f842567018` union, which contains the merged
+LocalInput foundation and Arrange follow-up. The sole conflict in runtime lib.rs
+keeps LocalInput and its re-export unconditional, with the presentation attribute
+remaining only on locomotion. No later main changes are included.
+
 Source-only preparation is complete; fresh compatibility gates are pending a
 build/actual-test grant. No Cargo is started during root's reserved actual suite.

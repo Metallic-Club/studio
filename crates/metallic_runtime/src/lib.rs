@@ -38,6 +38,7 @@ mod game;
 pub mod gui;
 #[cfg(feature = "presentation")]
 pub mod input;
+mod local_input;
 #[cfg(feature = "presentation")]
 mod locomotion;
 mod physics_sync;
@@ -50,6 +51,7 @@ pub use camera_controller::CameraController;
 pub use game::{FrameOutput, Game};
 #[cfg(feature = "presentation")]
 pub use input::{FrameInput, InputRuntime};
+pub use local_input::{LocalInput, move_direction};
 pub use metallic_physics::HumanoidState;
 pub use project::ProjectConfig;
 pub use simulation::{
