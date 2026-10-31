@@ -207,3 +207,15 @@ directions, append, root ordering, cross-parent placement, unchanged-position cu
 same-parent child-added signals. Formatting and whitespace checks passed; Rust execution is pending the shared
 resource schedule. Earlier test and benchmark evidence remains pinned to its historical source. In particular,
 the original 5% wall-time target is still unresolved; this compatibility work makes no new timing claim.
+
+The task coordinator transferred validation/publication ownership to the Codex platform-backend worker at exact
+`f23d161cc38577412919401e52a4c9a17665ed84`. Read-only review found no production semantic concern in the typed
+Reordered notice, coarse parent/descendant behavior, shared cursor boundary or no-op/error paths. It found one
+stale public API sentence that still described same-parent reappend as Reparented; that comment now matches the
+new no-op/explicit-reorder contract. No executable behavior changed during this correction.
+
+Cargo remains held for resource coordination after a disk-space interruption in another lane. Owned lane116
+firstparty dev artifacts were cleaned using native package-scoped Cargo after path/owner/cache-tag validation;
+thirdparty cache and all external historical performance/source evidence were preserved. No fresh #318 Rust
+gate or timing result is claimed yet. The eight current upstream manual/UI ignores and any new layout probe
+remain separate from execution success; actual counts will be recorded only after a verified run.

@@ -235,8 +235,9 @@ impl World {
     /// Accepted property changes are not deduplicated; equal-value writes and rejected mutations
     /// add no notices. Creation and destruction include every affected instance. Subtree clones
     /// record parent-before-child creations in allocation order. A reparent notice identifies only
-    /// its operation root; descendant invalidations still appear in the coarse reader. The existing
-    /// same-parent assignment/reappend behavior also counts as a reparent operation.
+    /// its operation root; descendant invalidations still appear in the coarse reader. Same-parent
+    /// `set_parent` is a no-op. An explicit same-parent `set_parent_at` reorder produces one
+    /// [`ChangeKind::Reordered`] notice, with the parent invalidated only in the coarse reader.
     ///
     /// This is a bounded invalidation feed, not a replay log: it retains no historic values or
     /// parents. Reparent descendant invalidations share its retention budget, so either reader
