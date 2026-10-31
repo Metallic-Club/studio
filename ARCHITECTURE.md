@@ -19,6 +19,11 @@ graph LR
   anim[metallic_anim] --> runtime
   anim --> animed[metallic_anim_editor]
   animed --> studio
+  egui[egui] --> uitheme[metallic_ui_theme]
+  tokens[metallic_tokens] --> uitheme
+  uitheme --> studio
+  uitheme --> animed
+  uitheme --> vfxed[metallic_vfx_editor]
 ```
 Arrows point from a dependency to its user (dotted: planned, not wired yet). Nothing below `runtime` knows about the
 apps.
@@ -61,6 +66,10 @@ apps.
   two (#374). `relative_velocity` is measured against the support's motion at the bottom-sphere centre.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
+- **metallic_ui_theme** (S8): the render-free egui theme shared by Studio, `metallic_anim_editor` and `metallic_vfx_editor`:
+  palettes for Graphite, Titanium and Light read from `metallic_tokens`, the bundled fonts and icons (`assets/fonts`), the
+  `Visuals`/`Spacing` setup (`apply`), and `apply_saved`, which follows the theme chosen in Studio Settings by reading
+  `settings.toml` (read-only). Depends on egui and `metallic_tokens` only; `metallic_studio::theme` re-exports it.
 - **metallic_vfx_editor** (#41, implemented): egui widgets for `metallic_vfx`: module stack, node canvas, curve and gradient editors, timeline and a live preview. Not wired into Studio yet.
 - **metallic_physics2d** (#126, M3 early slice; standalone, not wired into the runtime yet): `PhysicsWorld2d` wraps
   rapier2d behind our own plain-data types (`Scene2d` of `BodyDesc`/`JointDesc` keyed by caller `BodyId`s, so it does

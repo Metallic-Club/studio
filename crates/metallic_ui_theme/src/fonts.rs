@@ -1,6 +1,6 @@
 //! Studio's typefaces: Archivo for all interface text, JetBrains Mono for code and changing
 //! numbers, Noto Sans as the Greek and Cyrillic fallback, Phosphor for icons. The files and their
-//! licences are in `crates/metallic_studio/assets/fonts` (see `NOTICE.txt` there).
+//! licences are in `crates/metallic_ui_theme/assets/fonts` (see `NOTICE.txt` there).
 //!
 //! Archivo and Noto Sans are variable fonts: each voice below is one instance picked with
 //! [`FontTweak::coords`] (`wght`, `wdth`), so one file gives every weight. egui's own fonts are
