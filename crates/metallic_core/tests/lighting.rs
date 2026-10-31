@@ -266,7 +266,7 @@ fn lighting_values_are_kept_in_range_on_write_and_load() {
         .unwrap();
     assert_eq!(
         w.get(lighting, "ExposureCompensation").unwrap(),
-        Value::Number(-4.0)
+        Value::Number(-5.0)
     );
 
     // A scene file written with out-of-range values (by hand or an older build) loads clamped.

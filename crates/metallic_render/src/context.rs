@@ -1,5 +1,21 @@
 //! Device creation: a standalone window/headless device, or one borrowed from a host.
+//!
+//! Every instance, adapter and device made here is made under one process-wide lock
+//! ([`setup_lock`]). wgpu's OpenGL backend on Windows (WGL) is not safe to set up on several
+//! threads at once: each instance makes a hidden window, sets its pixel format and creates a GL
+//! context in the vendor's OpenGL driver, and when threads do that together the process dies
+//! with an access violation or `STATUS_HEAP_CORRUPTION` (#276; upstream gfx-rs/wgpu#9760).
+//! Serialising the setup removes the crash; tearing devices down and rendering stay parallel.
+//! Headless devices also try Vulkan, DX12 or Metal first, so OpenGL is set up at all only where
+//! none of those has an adapter (or when it is asked for).
 use std::fmt;
+use std::sync::{Mutex, MutexGuard};
+
+/// Held while an instance, adapter or device is created. See the module documentation.
+fn setup_lock() -> MutexGuard<'static, ()> {
+    static SETUP: Mutex<()> = Mutex::new(());
+    SETUP.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Why a device could not be created.
 #[derive(Debug)]
@@ -60,6 +76,7 @@ impl RenderContext {
     pub fn new_for_window(
         window: impl Into<wgpu::SurfaceTarget<'static>>,
     ) -> Result<(RenderContext, wgpu::Surface<'static>), RenderError> {
+        let _setup = setup_lock();
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window)
@@ -68,11 +85,12 @@ impl RenderContext {
         Ok((ctx, surface))
     }
 
-    /// Creates a device with no window, for tests and screenshots. Same limits and error
-    /// handling as [`RenderContext::new_for_window`].
+    /// Creates a device with no window, for tests and screenshots: Vulkan, DX12 or Metal, and
+    /// OpenGL only when none of those has an adapter. Same limits and error handling as
+    /// [`RenderContext::new_for_window`].
     pub fn new_headless() -> Result<RenderContext, RenderError> {
-        let instance = wgpu::Instance::default();
-        pollster::block_on(Self::from_instance(&instance, None))
+        Self::new_headless_with_backends(wgpu::Backends::PRIMARY)
+            .or_else(|_| Self::new_headless_with_backends(wgpu::Backends::GL))
     }
 
     /// Like [`RenderContext::new_headless`], limited to `backends` (for example
@@ -80,6 +98,7 @@ impl RenderContext {
     pub fn new_headless_with_backends(
         backends: wgpu::Backends,
     ) -> Result<RenderContext, RenderError> {
+        let _setup = setup_lock();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
             ..wgpu::InstanceDescriptor::new_without_display_handle()

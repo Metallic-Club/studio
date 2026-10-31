@@ -3416,6 +3416,7 @@ dependencies = [
  "egui_kittest",
  "image",
  "metallic_anim",
+ "metallic_ui_theme",
 ]
 
 [[package]]
@@ -3567,6 +3568,7 @@ dependencies = [
  "naga",
  "png",
  "pollster 1.0.1",
+ "serde_json",
  "wgpu",
  "winit",
 ]
@@ -3577,7 +3579,9 @@ version = "0.1.1"
 dependencies = [
  "criterion",
  "egui",
+ "glam 0.30.10",
  "metallic_anim",
+ "metallic_asset",
  "metallic_core",
  "metallic_physics",
  "metallic_render",
@@ -3614,6 +3618,7 @@ dependencies = [
  "metallic_runtime",
  "metallic_script",
  "metallic_tokens",
+ "metallic_ui_theme",
  "metallic_update",
  "png",
  "rfd",
@@ -3631,6 +3636,16 @@ name = "metallic_tokens"
 version = "0.1.1"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "metallic_ui_theme"
+version = "0.1.1"
+dependencies = [
+ "egui",
+ "log",
+ "metallic_tokens",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]
@@ -3667,6 +3682,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "image",
+ "metallic_ui_theme",
  "metallic_vfx",
 ]
 

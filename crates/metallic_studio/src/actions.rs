@@ -12,20 +12,29 @@
 //! let players = Rc::new(Cell::new(2u8));
 //! let p = players.clone();
 //! registry.register(
-//!     Action::new("play.team_test", "Team Test", Icon::Players, ToolbarGroup::Play, move |s| s.start_play("play.team_test"))
+//!     Action::new("play.team_test", "Team Test", Icon::Players, ToolbarGroup::Play, move |s| s.request(UiRequest::StartPlay("play.team_test")))
 //!         .enabled(|s| !s.play.is_playing())
 //!         .accessory(move |ui, _| { let mut n = p.get(); ui.add(egui::DragValue::new(&mut n).range(1..=8)); p.set(n); }),
 //! );
 //! ```
 //!
+//! A play action asks the UI with [`UiRequest::StartPlay`] rather than calling
+//! [`EditorState::start_play`] itself, so the UI first commits open script tabs and ends any
+//! live-preview gesture: Play runs what is on screen. While a session runs, every editing
+//! action (tools, snapping, undo, delete...) is disabled, accessories included.
+//!
 //! The shortcut shown in the tooltip comes from the [`Keymap`], so rebinding a key updates every
 //! place that shows it.
 use eframe::egui::{self, RichText};
 
-use crate::editor::{EditorState, Space, Tool, UiRequest};
-use crate::icons::{self, Icon};
+use metallic_render::glam::DVec3;
+
+use crate::editor::{EditorState, MOVE_STEPS, PivotMode, ROTATE_STEPS, Space, Tool, UiRequest};
+use crate::icons::Icon;
 use crate::keymap::Keymap;
+use crate::theme;
 use crate::tokens::ui_tokens;
+use crate::widgets::button::Button;
 
 /// Where an action appears on the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,8 +43,10 @@ pub enum ToolbarGroup {
     Hidden,
     /// Select / Move / Rotate / Scale.
     Tools,
-    /// Snap and space settings.
+    /// Increment, space and pivot settings.
     Settings,
+    /// Snap target chips (Grid, Surface, Vertex, Edge, Align), drawn as text toggles.
+    Snap,
     /// Undo, redo.
     Edit,
     /// Play cluster (centred): play modes and Stop.
@@ -169,40 +180,124 @@ impl ActionRegistry {
             .collect();
         order.sort_by_key(|&i| self.actions[i].id == "play.stop");
         for i in order {
-            let a = &mut self.actions[i];
-            let enabled = a.is_enabled(state);
-            let checked = a.is_checked(state);
-            let shortcut = keymap.label(a.id);
-            let tip = if shortcut.is_empty() {
-                a.label.clone()
-            } else {
-                format!("{} ({shortcut})", a.label)
-            };
-            let button = egui::Button::new("")
-                .selected(checked)
-                .min_size(egui::vec2(28.0, 26.0));
-            let resp = ui
-                .add_enabled(enabled, button)
-                .on_hover_text(&tip)
-                .on_disabled_hover_text(&tip);
-            let colour = if !enabled {
-                ui_tokens().text_dim.gamma_multiply(0.6)
-            } else if a.id == "play.start" || (a.group == ToolbarGroup::Play && a.id != "play.stop")
-            {
-                ui_tokens().success
-            } else {
-                ui_tokens().text
-            };
-            icons::paint(ui.painter(), resp.rect, a.icon, colour);
-            if resp.clicked() {
-                clicked = Some(a.id);
-            }
-            if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+            if toolbar_button(&mut self.actions[i], ui, state, keymap) {
+                clicked = Some(self.actions[i].id);
             }
         }
         if let Some(id) = clicked {
             self.run(id, state);
+        }
+    }
+
+    /// Draws the actions of `group` as icon buttons (the viewport header's tools); with `keys`
+    /// each carries its key as a cap. The name is the tooltip and the accessible name.
+    pub fn icon_keys(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: ToolbarGroup,
+        keys: bool,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for a in self.actions.iter().filter(|a| a.group == group) {
+            let key = keymap.label(a.id);
+            let tip = tip_for(a, keymap);
+            let mut button = Button::ghost("")
+                .compact()
+                .glyph(a.icon)
+                .selected(a.is_checked(state))
+                .alt(&tip);
+            if keys && !key.is_empty() {
+                button = button.keycap(&key);
+            }
+            if ui.add_enabled(a.is_enabled(state), button).clicked() {
+                clicked = Some(a.id);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+        }
+    }
+
+    /// Draws one action: as a toolbar button, or as a chip with its short or full label.
+    pub fn draw_one(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: &str,
+        look: Look,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let Some(a) = self.actions.iter_mut().find(|a| a.id == id) else {
+            return;
+        };
+        let clicked = match look {
+            Look::Toolbar => toolbar_button(a, ui, state, keymap),
+            Look::Chip => chip_button(a, ui, state, keymap, true),
+            Look::ChipFull => chip_button(a, ui, state, keymap, false),
+        };
+        if clicked {
+            let id = a.id;
+            self.run(id, state);
+        }
+    }
+
+    /// Appends the ids of the actions in `group`, in registration order, to `out`.
+    pub fn ids_in(&self, group: ToolbarGroup, out: &mut Vec<&'static str>) {
+        out.extend(
+            self.actions
+                .iter()
+                .filter(|a| a.group == group)
+                .map(|a| a.id),
+        );
+    }
+
+    /// Draws one action as a text toggle chip with its full label (Collisions).
+    pub fn chip(&mut self, ui: &mut egui::Ui, id: &str, state: &mut EditorState, keymap: &Keymap) {
+        self.draw_one(ui, id, Look::ChipFull, state, keymap);
+    }
+
+    /// Draws the actions of `group` as text toggle chips (the snap targets).
+    pub fn chips(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: ToolbarGroup,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for a in self.actions.iter_mut().filter(|a| a.group == group) {
+            if chip_button(a, ui, state, keymap, true) {
+                clicked = Some(a.id);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+        }
+    }
+
+    /// Draws `ids` as checkable menu entries (the viewport header's overflow menu).
+    pub fn check_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        ids: &[&'static str],
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for &id in ids {
+            let Some(a) = self.get(id) else { continue };
+            let button = egui::Button::new(&a.label)
+                .selected(a.is_checked(state))
+                .shortcut_text(keymap.label(id));
+            if theme::add_enabled(ui, a.is_enabled(state), button).clicked() {
+                clicked = Some(id);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+            ui.close();
         }
     }
 
@@ -218,7 +313,7 @@ impl ActionRegistry {
         for &id in ids {
             let Some(a) = self.get(id) else { continue };
             let button = egui::Button::new(&a.label).shortcut_text(keymap.label(id));
-            if ui.add_enabled(a.is_enabled(state), button).clicked() {
+            if theme::add_enabled(ui, a.is_enabled(state), button).clicked() {
                 clicked = Some(id);
             }
         }
@@ -227,6 +322,113 @@ impl ActionRegistry {
             ui.close();
         }
     }
+}
+
+/// How [`ActionRegistry::draw_one`] draws an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    /// A toolbar button (icon, plus the accessory such as "World").
+    Toolbar,
+    /// A text chip with the first word of the label ("Grid").
+    Chip,
+    /// A text chip with the whole label ("Collisions").
+    ChipFull,
+}
+
+fn tip_for(a: &Action, keymap: &Keymap) -> String {
+    let shortcut = keymap.label(a.id);
+    if shortcut.is_empty() {
+        a.label.clone()
+    } else {
+        format!("{} ({shortcut})", a.label)
+    }
+}
+
+/// One toolbar button and its accessory; true when clicked.
+fn toolbar_button(
+    a: &mut Action,
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    keymap: &Keymap,
+) -> bool {
+    let enabled = a.is_enabled(state);
+    let checked = a.is_checked(state);
+    let shortcut = keymap.label(a.id);
+    let mut tip = tip_for(a, keymap);
+    if a.id == "play.start" && !enabled && !state.play.is_playing() {
+        tip.push_str("\nPlay is not connected yet: no play mode is registered in this build.");
+    }
+    // Tools, Play and Stop show their key as a cap; the rest are icon buttons whose tooltip
+    // names the key.
+    let labelled = matches!(a.group, ToolbarGroup::Tools | ToolbarGroup::Play);
+    let key = shortcut.as_str();
+    let name = a.label.as_str();
+    let mut button = if a.id == "play.start" {
+        Button::primary(name)
+    } else if a.group == ToolbarGroup::Play {
+        Button::secondary(name)
+    } else {
+        Button::ghost(if labelled { name } else { "" })
+    };
+    button = button.compact().selected(checked);
+    // A text placeholder icon says nothing the accessory label does not (Pivot/Centre).
+    if a.accessory.is_none() || !matches!(a.icon, Icon::Text(_)) {
+        button = button.glyph(a.icon);
+    }
+    if !labelled {
+        button = button.alt(&tip);
+    }
+    if labelled && !key.is_empty() {
+        button = button.keycap(key);
+    }
+    let mut resp = ui.add_enabled(enabled, button);
+    if labelled {
+        resp = resp.on_hover_text(&tip);
+    }
+    let clicked = resp.on_disabled_hover_text(&tip).clicked();
+    if let Some(acc) = &mut a.accessory {
+        ui.add_enabled_ui(enabled, |ui| acc(ui, state));
+    }
+    clicked
+}
+
+/// One text chip and its accessory; true when clicked.
+fn chip_button(
+    a: &mut Action,
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    keymap: &Keymap,
+    short: bool,
+) -> bool {
+    let tip = tip_for(a, keymap);
+    let enabled = a.is_enabled(state);
+    let text = if short {
+        short_label(&a.label)
+    } else {
+        a.label.as_str()
+    };
+    let button = Button::ghost(text).compact().selected(a.is_checked(state));
+    let clicked = ui
+        .add_enabled(enabled, button)
+        .on_hover_text(&tip)
+        .on_disabled_hover_text(&tip)
+        .clicked();
+    if let Some(acc) = &mut a.accessory {
+        ui.add_enabled_ui(enabled, |ui| acc(ui, state));
+    }
+    clicked
+}
+
+/// The chip text: the first word of the label ("Grid snapping" shows "Grid").
+fn short_label(label: &str) -> &str {
+    label.split(' ').next().unwrap_or(label)
+}
+
+/// An increment without trailing zeros ("0.25", "1", "11.25").
+/// An increment as shown on a chip: "1", "0.25", "11.25".
+pub fn fmt_step(v: f64) -> String {
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The built-in editor actions.
@@ -240,39 +442,241 @@ pub fn default_actions() -> ActionRegistry {
         ("tool.move", "Move", Icon::Move, Tool::Move),
         ("tool.rotate", "Rotate", Icon::Rotate, Tool::Rotate),
         ("tool.scale", "Scale", Icon::Scale, Tool::Scale),
+        (
+            "tool.transform",
+            "Transform",
+            Icon::Text("T"),
+            Tool::Transform,
+        ),
     ] {
         r.register(
             Action::new(id, label, icon, ToolbarGroup::Tools, move |s| s.tool = tool)
-                .checked(move |s| s.tool == tool),
+                .checked(move |s| s.tool == tool)
+                .enabled(editing),
         );
+    }
+    let mut off_grid: Option<((metallic_core::ChangeCursor, u64, u64, u64), bool)> = None;
+    r.register(
+        Action::new(
+            "snap.grid",
+            "Grid snapping",
+            Icon::Snap,
+            ToolbarGroup::Snap,
+            |s| s.snapping.grid = !s.snapping.grid,
+        )
+        .checked(|s| s.snapping.grid)
+        .accessory(move |ui, s| {
+            // Off-grid check, recomputed only when the world, selection or increments change.
+            let key = (
+                s.world.change_cursor(),
+                s.selection.revision(),
+                s.snapping.move_step.to_bits(),
+                s.snapping.rotate_step.to_bits(),
+            );
+            let off = match off_grid {
+                Some((k, v)) if k == key => v,
+                _ => {
+                    let v = s.off_grid();
+                    off_grid = Some((key, v));
+                    v
+                }
+            };
+            if off
+                && ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Off grid").small().color(theme::warning()),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Snap selection to grid (Ctrl+Shift+Home)")
+                    .clicked()
+            {
+                s.snap_selection_to_grid();
+            }
+        }),
+    );
+    for (id, label, get, flip) in [
+        (
+            "snap.surface",
+            "Surface snapping",
+            (|s: &EditorState| s.snapping.surface) as fn(&EditorState) -> bool,
+            (|s: &mut EditorState| s.snapping.surface = !s.snapping.surface)
+                as fn(&mut EditorState),
+        ),
+        (
+            "snap.vertex",
+            "Vertex snapping (hold V for one drag)",
+            |s| s.snapping.vertex,
+            |s| s.snapping.vertex = !s.snapping.vertex,
+        ),
+        (
+            "snap.edge",
+            "Edge snapping",
+            |s| s.snapping.edge,
+            |s| s.snapping.edge = !s.snapping.edge,
+        ),
+        (
+            "snap.align",
+            "Align to surface",
+            |s| s.snapping.align,
+            |s| s.snapping.align = !s.snapping.align,
+        ),
+    ] {
+        r.register(Action::new(id, label, Icon::Snap, ToolbarGroup::Snap, flip).checked(get));
+    }
+    r.register(Action::new(
+        "view.focus_context_bar",
+        "Focus the contextual toolbar",
+        Icon::Text("."),
+        ToolbarGroup::Hidden,
+        // The editor window moves the focus (it owns the bar); see `EditorUi::run_action`.
+        |_| {},
+    ));
+    r.register(
+        Action::new(
+            "snap.collisions",
+            "Collisions",
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            |s| s.snapping.collisions = !s.snapping.collisions,
+        )
+        .checked(|s| s.snapping.collisions),
+    );
+    r.register(
+        Action::new(
+            "snap.soft",
+            "Soft snap",
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            |s| {
+                s.snapping.soft = !s.snapping.soft;
+                let on = if s.snapping.soft { "on" } else { "off" };
+                s.note(format!("Soft snap {on}"));
+            },
+        )
+        .checked(|s| s.snapping.soft),
+    );
+    for (id, label, up, rotate) in [
+        ("increment.move_down", "Halve move increment", false, false),
+        ("increment.move_up", "Double move increment", true, false),
+        (
+            "increment.rotate_down",
+            "Smaller rotate increment",
+            false,
+            true,
+        ),
+        ("increment.rotate_up", "Larger rotate increment", true, true),
+    ] {
+        r.register(Action::new(
+            id,
+            label,
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            move |s| {
+                if rotate {
+                    s.step_rotate_increment(up);
+                } else {
+                    s.step_move_increment(up);
+                }
+            },
+        ));
     }
     r.register(
         Action::new(
-            "snap.toggle",
-            "Snap to increments",
-            Icon::Snap,
+            "pivot.mode",
+            "Pivot or selection centre",
+            Icon::Text("Pv"),
             ToolbarGroup::Settings,
             |s| {
-                s.snapping.enabled = !s.snapping.enabled;
+                s.pivot_mode = match s.pivot_mode {
+                    PivotMode::Pivot => PivotMode::Centre,
+                    PivotMode::Centre => PivotMode::Pivot,
+                };
             },
         )
-        .checked(|s| s.snapping.enabled)
+        .checked(|s| s.pivot_mode == PivotMode::Centre)
         .accessory(|ui, s| {
-            ui.add(
-                egui::DragValue::new(&mut s.snapping.move_step)
-                    .range(0.05..=64.0)
-                    .speed(0.05)
-                    .suffix(" stud"),
-            )
-            .on_hover_text("Move and scale increment");
-            ui.add(
-                egui::DragValue::new(&mut s.snapping.rotate_step)
-                    .range(1.0..=90.0)
-                    .speed(0.5)
-                    .suffix("°"),
-            )
-            .on_hover_text("Rotate increment");
+            ui.label(
+                RichText::new(match s.pivot_mode {
+                    PivotMode::Pivot => "Pivot",
+                    PivotMode::Centre => "Centre",
+                })
+                .color(ui_tokens().text_dim),
+            );
         }),
+    );
+    r.register(
+        Action::new(
+            "pivot.edit",
+            "Edit pivot",
+            Icon::Text("P"),
+            ToolbarGroup::Settings,
+            |s| s.pivot_edit = !s.pivot_edit,
+        )
+        .checked(|s| s.pivot_edit)
+        .enabled(editing),
+    );
+    r.register(
+        Action::new(
+            "pivot.reset",
+            "Reset pivot",
+            Icon::Text("P"),
+            ToolbarGroup::Hidden,
+            |s| {
+                s.reset_pivot();
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.rotate90",
+            "Rotate 90°",
+            Icon::Rotate,
+            ToolbarGroup::Hidden,
+            |s| {
+                s.rotate_selection(DVec3::Y, 90.0, "Rotate");
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.tilt90",
+            "Tilt 90°",
+            Icon::Rotate,
+            ToolbarGroup::Hidden,
+            |s| {
+                let axis = s.tilt_axis();
+                s.rotate_selection(axis, 90.0, "Tilt");
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.drop",
+            "Drop onto surface below",
+            Icon::Text("v"),
+            ToolbarGroup::Hidden,
+            |s| {
+                s.drop_selection();
+            },
+        )
+        .enabled(has_selection),
+    );
+    r.register(
+        Action::new(
+            "build.snap_to_grid",
+            "Snap selection to grid",
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            |s| {
+                s.snap_selection_to_grid();
+            },
+        )
+        .enabled(has_selection),
     );
     r.register(
         Action::new(
@@ -288,6 +692,7 @@ pub fn default_actions() -> ActionRegistry {
             },
         )
         .checked(|s| s.space == Space::Local)
+        .enabled(editing)
         .accessory(|ui, s| {
             ui.label(
                 RichText::new(match s.space {
@@ -390,6 +795,27 @@ pub fn default_actions() -> ActionRegistry {
         },
     ));
     r.register(Action::new(
+        "file.close",
+        "Close game",
+        Icon::Text("W"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::CloseGame),
+    ));
+    r.register(Action::new(
+        "edit.deselect",
+        "Clear selection",
+        Icon::Text("Esc"),
+        ToolbarGroup::Hidden,
+        |s| s.selection.clear(),
+    ));
+    r.register(Action::new(
+        "settings.open",
+        "Settings",
+        Icon::Text(","),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::OpenSettings),
+    ));
+    r.register(Action::new(
         "view.frame_selection",
         "Frame selection",
         Icon::Text("F"),
@@ -405,17 +831,89 @@ pub fn default_actions() -> ActionRegistry {
     ));
     r.register(
         Action::new("play.start", "Play", Icon::Play, ToolbarGroup::Play, |s| {
-            s.start_play("play.start")
+            s.request(UiRequest::StartPlay("play.start"))
         })
-        .enabled(|s| !s.play.is_playing() && s.play.modes().any(|(id, _)| id == "play.start")),
+        .enabled(|s| !s.play.is_playing() && s.play.has_mode("play.start")),
     );
     r.register(
-        Action::new("play.stop", "Stop", Icon::Stop, ToolbarGroup::Play, |s| {
-            s.play.stop()
-        })
+        Action::new(
+            "play.stop",
+            "Stop",
+            Icon::Stop,
+            ToolbarGroup::Play,
+            EditorState::stop_play,
+        )
         .enabled(|s| s.play.is_playing()),
     );
+    lock_while_playing(&mut r);
     r
+}
+
+/// A ghost chip showing an increment; a click opens the list of `steps`, the mouse wheel over it
+/// steps through them. Returns the chip and the picked step.
+pub fn step_chip(
+    ui: &mut egui::Ui,
+    text: &str,
+    tip: &str,
+    steps: &[f64],
+    unit: &str,
+    value: f64,
+) -> (egui::Response, Option<f64>) {
+    let mut picked = None;
+    let r = ui.add(Button::ghost(text).compact()).on_hover_text(tip);
+    egui::Popup::menu(&r).show(|ui| {
+        for &step in steps {
+            if ui
+                .selectable_label(value == step, format!("{}{unit}", fmt_step(step)))
+                .clicked()
+            {
+                picked = Some(step);
+                ui.close();
+            }
+        }
+    });
+    if r.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll != 0.0 {
+            picked = Some(crate::editor::next_step(steps, value, scroll > 0.0));
+        }
+    }
+    (r, picked)
+}
+
+/// The increment chips of the viewport header (spec 3.1): "1 stud" and "15°".
+pub fn increment_chips(ui: &mut egui::Ui, s: &mut EditorState) {
+    let text = format!("{} stud", fmt_step(s.snapping.move_step));
+    let tip = "Move and scale increment ([ and ]; scroll to step)";
+    let value = s.snapping.move_step;
+    if let (_, Some(step)) = step_chip(ui, &text, tip, MOVE_STEPS, " stud", value) {
+        s.snapping.move_step = step;
+    }
+    let text = format!("{}°", fmt_step(s.snapping.rotate_step));
+    let tip = "Rotate increment (Shift+[ and Shift+]; scroll to step)";
+    let value = s.snapping.rotate_step;
+    if let (_, Some(step)) = step_chip(ui, &text, tip, ROTATE_STEPS, "°", value) {
+        s.snapping.rotate_step = step;
+    }
+}
+
+/// Actions that stay usable while a play session runs: the play controls, Save (it writes the
+/// edit world, which Play never changes) and Settings.
+pub const PLAY_SAFE: &[&str] = &["play.start", "play.stop", "file.save", "settings.open"];
+
+/// Disables every action not in [`PLAY_SAFE`] while playing (tools, snapping, pivots, edit
+/// commands, selection, view framing). A disabled action also leaves its shortcut to the game.
+/// Actions registered later decide for themselves.
+fn lock_while_playing(r: &mut ActionRegistry) {
+    for a in &mut r.actions {
+        if PLAY_SAFE.contains(&a.id) {
+            continue;
+        }
+        let before = a.enabled.take();
+        a.enabled = Some(Box::new(move |s: &EditorState| {
+            !s.play.is_playing() && before.as_ref().is_none_or(|f| f(s))
+        }));
+    }
 }
 
 #[cfg(test)]
@@ -439,11 +937,56 @@ mod tests {
     fn every_bound_key_has_an_action() {
         let r = default_actions();
         for b in Keymap::metallic().bindings() {
-            if b.action.starts_with("drag.") || b.action.starts_with("output.") {
-                continue; // handled by the viewport drag and the Output panel
+            if b.action.starts_with("drag.")
+                || b.action.starts_with("output.")
+                || b.action.starts_with("hold.")
+            {
+                continue; // handled by the viewport drag, held keys and the Output panel
             }
             assert!(r.get(b.action).is_some(), "no action for {}", b.action);
         }
+    }
+
+    #[test]
+    fn settings_open_is_bound_to_ctrl_comma_and_asks_the_ui() {
+        let keymap = Keymap::metallic();
+        let chord = keymap.chord("settings.open").expect("bound");
+        assert_eq!(
+            chord,
+            crate::keymap::KeyChord::parse("Ctrl+,").expect("parses")
+        );
+        assert_eq!(keymap.label("settings.open"), "Ctrl+,");
+        let mut r = default_actions();
+        let mut s = state();
+        assert!(r.run("settings.open", &mut s));
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::OpenSettings]
+        ));
+    }
+
+    #[test]
+    fn ctrl_w_closes_the_game_and_escape_only_clears_the_selection() {
+        let keymap = Keymap::metallic();
+        assert_eq!(keymap.label("file.close"), "Ctrl+W");
+        let esc = crate::keymap::KeyChord::parse("Escape").expect("parses");
+        let on_esc: Vec<_> = keymap
+            .bindings()
+            .iter()
+            .filter(|b| b.chord == esc)
+            .map(|b| b.action)
+            .collect();
+        // play.stop only in the Play context (while a game runs).
+        assert_eq!(on_esc, ["play.stop", "edit.deselect", "drag.cancel"]);
+        let mut r = default_actions();
+        let mut s = state();
+        assert!(r.run("file.close", &mut s));
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::CloseGame]
+        ));
+        assert!(r.run("edit.deselect", &mut s));
+        assert!(s.take_requests().is_empty(), "Esc asks for no close");
     }
 
     #[test]
@@ -453,7 +996,44 @@ mod tests {
         assert!(r.run("tool.rotate", &mut s));
         assert_eq!(s.tool, Tool::Rotate);
         assert!(!r.run("edit.undo", &mut s), "nothing to undo");
+        assert!(r.run("play.start", &mut s), "Play is registered");
+        assert!(matches!(
+            s.take_requests().as_slice(),
+            [UiRequest::StartPlay("play.start")]
+        ));
+        s.play = crate::play::PlayController::new();
         assert!(!r.run("play.start", &mut s), "no Play mode registered");
+    }
+
+    #[test]
+    fn editing_actions_are_off_while_playing() {
+        let mut r = default_actions();
+        let mut s = state();
+        s.start_play("play.start");
+        assert!(s.play.is_playing());
+        for id in [
+            "tool.move",
+            "snap.surface",
+            "pivot.mode",
+            "edit.delete",
+            "edit.select_all",
+            "view.frame_all",
+            "play.start",
+        ] {
+            assert!(r.get(id).is_some(), "{id} exists");
+            assert!(
+                !r.get(id).is_some_and(|a| a.is_enabled(&s)),
+                "{id} runs while playing"
+            );
+        }
+        for id in ["file.save", "settings.open", "play.stop"] {
+            assert!(r.get(id).is_some_and(|a| a.is_enabled(&s)), "{id} is off");
+        }
+        assert!(!r.run("tool.rotate", &mut s));
+        assert_eq!(s.tool, Tool::Move);
+        assert!(r.run("play.stop", &mut s));
+        assert!(!s.play.is_playing());
+        assert!(r.run("tool.rotate", &mut s));
     }
 
     #[test]

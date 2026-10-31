@@ -29,7 +29,7 @@ pub fn show(ui: &mut Ui, art: Option<&TextureHandle>) {
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()
-                .fill(theme::BG_BASE)
+                .fill(theme::bg_base())
                 .inner_margin(egui::Margin::symmetric(48, 36)),
         )
         .show(ui, |ui| {
@@ -39,7 +39,7 @@ pub fn show(ui: &mut Ui, art: Option<&TextureHandle>) {
             ui.label(
                 RichText::new("Buttons, keycaps, plates and the cut in every state.")
                     .font(fonts::body_lg())
-                    .color(theme::TEXT_2),
+                    .color(theme::text_2()),
             );
             ui.add_space(28.0);
             buttons(ui);
@@ -63,7 +63,7 @@ fn caption(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .font(fonts::small())
-            .color(theme::TEXT_3),
+            .color(theme::text_3()),
     );
 }
 
@@ -98,7 +98,7 @@ fn buttons(ui: &mut Ui) {
                 ui.label(
                     RichText::new(name)
                         .font(fonts::strong())
-                        .color(theme::TEXT_2),
+                        .color(theme::text_2()),
                 );
             });
             for (_, state) in STATES {
@@ -127,13 +127,13 @@ fn keycaps(ui: &mut Ui) {
         ui.label(
             RichText::new("Press")
                 .font(fonts::body_lg())
-                .color(theme::TEXT_2),
+                .color(theme::text_2()),
         );
         keycap(ui, "F5");
         ui.label(
             RichText::new("to try it.")
                 .font(fonts::body_lg())
-                .color(theme::TEXT_2),
+                .color(theme::text_2()),
         );
     });
     ui.add_space(12.0);
@@ -146,11 +146,12 @@ fn keycaps(ui: &mut Ui) {
     ui.add_space(28.0);
     heading(ui, "Focus ring");
     let (rect, _) = ui.allocate_exact_size(vec2(160.0, 32.0), Sense::hover());
-    ui.painter().rect_filled(rect, theme::R_SM, theme::BG_DEEP);
+    ui.painter()
+        .rect_filled(rect, theme::R_SM, theme::bg_deep());
     ui.painter().rect_stroke(
         rect,
         theme::R_SM,
-        Stroke::new(1.0, theme::FOCUS),
+        Stroke::new(1.0, theme::focus()),
         egui::StrokeKind::Inside,
     );
     focus_ring(ui.painter(), rect, CornerRadius::same(theme::R_SM));
@@ -188,11 +189,11 @@ fn cuts(ui: &mut Ui, art: Option<&TextureHandle>) {
             let (rect, _) = ui.allocate_exact_size(vec2(150.0, 112.0), Sense::hover());
             let painter = ui.painter();
             let radius = CornerRadius::same(theme::R_MD + 2);
-            cut::fill(painter, rect, radius, theme::CUT_MD + 2.0, theme::ACCENT);
+            cut::fill(painter, rect, radius, theme::CUT_MD + 2.0, theme::accent());
             let inner = rect.shrink(2.0);
             let inner_radius = CornerRadius::same(theme::R_MD);
             let inner_cut = cut::inset_cut(theme::CUT_MD + 2.0, 2.0);
-            cut::fill(painter, inner, inner_radius, inner_cut, theme::BG_RAISED);
+            cut::fill(painter, inner, inner_radius, inner_cut, theme::bg_raised());
             let art_rect = Rect::from_min_size(inner.min, vec2(inner.width(), 62.0));
             match art {
                 Some(tex) => cut::paint_image(
@@ -208,7 +209,7 @@ fn cuts(ui: &mut Ui, art: Option<&TextureHandle>) {
                     Color32::WHITE,
                 ),
                 None => {
-                    painter.rect_filled(art_rect, 0.0, theme::BG_ACTIVE);
+                    painter.rect_filled(art_rect, 0.0, theme::bg_active());
                 }
             }
             painter.text(
@@ -216,14 +217,14 @@ fn cuts(ui: &mut Ui, art: Option<&TextureHandle>) {
                 Align2::LEFT_TOP,
                 icons::CHECK_CIRCLE,
                 fonts::icon_fill(14.0),
-                theme::ACCENT,
+                theme::accent(),
             );
             painter.text(
                 egui::pos2(inner.left() + 32.0, art_rect.bottom() + 10.0),
                 Align2::LEFT_TOP,
                 "Selected",
                 fonts::strong(),
-                theme::TEXT_1,
+                theme::text_1(),
             );
             ui.add_space(8.0);
             caption(ui, "cut-md frame, image clip");

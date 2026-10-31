@@ -344,7 +344,9 @@ impl World {
     ///
     /// Errors: [`CoreError::InvalidInstance`] if either id is destroyed, [`CoreError::Cycle`] if
     /// `parent` is the instance itself or one of its descendants, [`CoreError::Locked`] if `id` is a
-    /// built-in service (even when `parent` is its current parent). Fires `child_added`.
+    /// built-in service (even when `parent` is its current parent). Fires `child_added`. Moving an
+    /// instance to the parent it already has (or a root to `None`) is a no-op, as in Roblox: no
+    /// signal, no change of order, nothing journaled (#97).
     pub fn set_parent(
         &mut self,
         id: InstanceId,
@@ -370,6 +372,9 @@ impl World {
                 cur = self.parent(c);
             }
         }
+        if self.parent(id) == parent {
+            return Ok(());
+        }
         self.detach(id);
         if let Some(n) = self.node_mut(id) {
             n.parent = parent;
@@ -382,6 +387,45 @@ impl World {
             None => self.roots.push(id),
         }
         self.record_subtree(id);
+        Ok(())
+    }
+
+    /// Like [`World::set_parent`], then puts `id` at position `index` among its siblings (the
+    /// roots for `None`); an `index` past the end means last. This is how an editor restores
+    /// an order (undo) or reorders within one parent, which `set_parent` never does.
+    ///
+    /// `child_added` fires only when the parent changes. A move to the place it already has is
+    /// a no-op; a reorder within the same parent fires nothing and journals `id` and the parent.
+    pub fn set_parent_at(
+        &mut self,
+        id: InstanceId,
+        parent: Option<InstanceId>,
+        index: usize,
+    ) -> Result<(), CoreError> {
+        let moved = self.parent(id) != parent;
+        self.set_parent(id, parent)?;
+        let siblings = match parent {
+            Some(p) => match self.node_mut(p) {
+                Some(n) => &mut n.children,
+                None => return Ok(()),
+            },
+            None => &mut self.roots,
+        };
+        let Some(from) = siblings.iter().position(|&c| c == id) else {
+            return Ok(());
+        };
+        let to = index.min(siblings.len() - 1);
+        if from == to {
+            return Ok(());
+        }
+        let child = siblings.remove(from);
+        siblings.insert(to, child);
+        if !moved {
+            self.record(id);
+            if let Some(p) = parent {
+                self.record(p);
+            }
+        }
         Ok(())
     }
 
@@ -486,17 +530,23 @@ impl World {
         }
         // Lighting and effect numbers are brought into their sane range (1e39 would overflow
         // the renderer's f32 math).
-        let value = match def.range {
+        let mut value = match def.range {
             Some(range) => range.apply(value),
             None => value,
         };
         if let (Some(allowed), Value::String(s)) = (def.allowed, &value)
             && !allowed.contains(&s.as_str())
         {
-            return Err(CoreError::InvalidValue {
-                property: prop.to_string(),
-                reason: format!("`{s}` is not one of {allowed:?}"),
-            });
+            // A display name (`"Retro / PS1"`) is stored as its id.
+            match def.normalize.and_then(|f| f(s)) {
+                Some(stored) => value = Value::String(stored.to_string()),
+                None => {
+                    return Err(CoreError::InvalidValue {
+                        property: prop.to_string(),
+                        reason: format!("`{s}` is not one of {allowed:?}"),
+                    });
+                }
+            }
         }
         let old = self.get(id, prop)?;
         let is_default = default_value(class, prop).as_ref() == Some(&value);

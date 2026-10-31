@@ -22,6 +22,9 @@ metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
 metallic_update = { path = "crates/metallic_update" }
 metallic_tokens = { path = "crates/metallic_tokens" }
+toml = "1.1.8"
+log = "0.4"
+metallic_ui_theme = { path = "crates/metallic_ui_theme" }
 metallic_audio = { path = "crates/metallic_audio" }
 metallic_net = { path = "crates/metallic_net" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

@@ -438,8 +438,8 @@ impl ColourPopover {
                 .constrain(true);
             let response = area.show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .fill(theme::bg_panel())
+                    .stroke(Stroke::new(1.0, theme::line_strong()))
                     .corner_radius(CornerRadius::same(8))
                     .inner_margin(PAD)
                     .show(ui, |ui| self.contents(ui, library, now));
@@ -550,17 +550,17 @@ impl ColourPopover {
             Align2::LEFT_CENTER,
             "Colour",
             FontId::proportional(14.0),
-            theme::TEXT,
+            theme::text_1(),
         );
         let (sub, sub_colour) = match &self.message {
-            Some(m) => (m.clone(), theme::ERROR),
+            Some(m) => (m.clone(), theme::error()),
             None => (
                 format!(
                     "{} {}",
                     self.targets,
                     if self.targets == 1 { "part" } else { "parts" }
                 ),
-                theme::TEXT_DIM,
+                theme::text_2(),
             ),
         };
         painter.text(
@@ -713,10 +713,10 @@ impl ColourPopover {
             }
         }
         painter.add(Shape::mesh(mesh));
-        painter.circle_stroke(centre, outer, Stroke::new(1.0, theme::BORDER));
-        painter.circle_stroke(centre, inner, Stroke::new(1.0, theme::BORDER));
+        painter.circle_stroke(centre, outer, Stroke::new(1.0, theme::line_strong()));
+        painter.circle_stroke(centre, inner, Stroke::new(1.0, theme::line_strong()));
         if resp.has_focus() {
-            painter.circle_stroke(centre, outer + 3.0, Stroke::new(2.0, theme::FOCUS));
+            painter.circle_stroke(centre, outer + 3.0, Stroke::new(2.0, theme::focus()));
         }
         let a = (self.hsv.h - 90.0).to_radians();
         let mid = centre + vec2(a.cos(), a.sin()) * (outer - RING_THICKNESS / 2.0);
@@ -819,14 +819,14 @@ impl ColourPopover {
         painter.rect_stroke(
             rect,
             0.0,
-            Stroke::new(1.0, theme::BORDER),
+            Stroke::new(1.0, theme::line_strong()),
             StrokeKind::Outside,
         );
         if resp.has_focus() {
             painter.rect_stroke(
                 rect.expand(2.0),
                 2.0,
-                Stroke::new(2.0, theme::FOCUS),
+                Stroke::new(2.0, theme::focus()),
                 StrokeKind::Outside,
             );
         }
@@ -883,7 +883,7 @@ impl ColourPopover {
             painter.rect_stroke(
                 rect,
                 4.0,
-                Stroke::new(1.0, theme::BORDER),
+                Stroke::new(1.0, theme::line_strong()),
                 StrokeKind::Inside,
             );
             if resp.has_focus() {
@@ -906,12 +906,12 @@ impl ColourPopover {
                 ui.label(
                     egui::RichText::new("Mixed")
                         .size(12.0)
-                        .color(theme::TEXT_DIM),
+                        .color(theme::text_2()),
                 );
             } else {
                 ui.add_space(2.0);
             }
-            ui.label(egui::RichText::new("Hex").size(13.0).color(theme::TEXT_DIM));
+            ui.label(egui::RichText::new("Hex").size(13.0).color(theme::text_2()));
             let w = ui.available_width();
             self.field(ui, Field::Hex, w, library, now);
         });
@@ -950,12 +950,12 @@ impl ColourPopover {
         let (rect, _) = ui.allocate_exact_size(vec2(width, ROW), Sense::hover());
         let has_focus = ui.memory(|m| m.has_focus(edit_id));
         let painter = ui.painter().clone();
-        painter.rect_filled(rect, 4.0, theme::DEEP);
+        painter.rect_filled(rect, 4.0, theme::bg_deep());
         let hovered = ui.rect_contains_pointer(rect);
         let border = if hovered {
-            theme::ACCENT
+            theme::accent()
         } else {
-            theme::BORDER
+            theme::line_strong()
         };
         painter.rect_stroke(rect, 4.0, Stroke::new(1.0, border), StrokeKind::Inside);
 
@@ -966,7 +966,7 @@ impl ColourPopover {
             Align2::CENTER_CENTER,
             field.prefix(),
             FontId::proportional(11.0),
-            theme::TEXT_DIM,
+            theme::text_2(),
         );
         if field != Field::Hex {
             let scrub = ui
@@ -1055,14 +1055,14 @@ impl ColourPopover {
         painter.rect_stroke(
             rect,
             3.0,
-            Stroke::new(1.0, theme::BORDER),
+            Stroke::new(1.0, theme::line_strong()),
             StrokeKind::Inside,
         );
         if colour == self.colour() {
             painter.rect_stroke(
                 rect.expand(1.0),
                 4.0,
-                Stroke::new(1.0, theme::TEXT),
+                Stroke::new(1.0, theme::text_1()),
                 StrokeKind::Outside,
             );
         }
@@ -1070,7 +1070,7 @@ impl ColourPopover {
             painter.rect_stroke(
                 rect,
                 3.0,
-                Stroke::new(1.0, theme::ACCENT),
+                Stroke::new(1.0, theme::accent()),
                 StrokeKind::Inside,
             );
         }
@@ -1125,7 +1125,7 @@ impl ColourPopover {
                 ui.label(
                     egui::RichText::new("Committed colours appear here")
                         .size(12.0)
-                        .color(theme::TEXT_DIM),
+                        .color(theme::text_2()),
                 );
             }
             self.roving[0] = self.roving[0].min(colours.len().saturating_sub(1));
@@ -1408,31 +1408,31 @@ impl ColourPopover {
         let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
         let painter = ui.painter();
         let fill = if resp.hovered() || open {
-            theme::HOVER
+            theme::bg_hover()
         } else {
-            theme::DEEP
+            theme::bg_deep()
         };
         painter.rect_filled(rect, 4.0, fill);
         painter.rect_stroke(
             rect,
             4.0,
-            Stroke::new(1.0, theme::BORDER),
+            Stroke::new(1.0, theme::line_strong()),
             StrokeKind::Inside,
         );
         let galley = painter.layout(
             text.to_owned(),
             FontId::proportional(13.0),
-            theme::TEXT,
+            theme::text_1(),
             rect.width() - 26.0,
         );
         painter.galley(
             pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0),
             galley,
-            theme::TEXT,
+            theme::text_1(),
         );
         // Chevron.
         let c = pos2(rect.right() - 11.0, rect.center().y);
-        let chevron = Stroke::new(1.3, theme::TEXT_DIM);
+        let chevron = Stroke::new(1.3, theme::text_2());
         painter.line_segment([c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0)], chevron);
         painter.line_segment([c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], chevron);
         if resp.has_focus() {
@@ -1458,14 +1458,14 @@ impl ColourPopover {
         let resp = ui.interact(rect, id, Sense::click());
         let painter = ui.painter();
         if active {
-            painter.rect_filled(rect, 4.0, theme::ACCENT.gamma_multiply(0.35));
+            painter.rect_filled(rect, 4.0, theme::accent().gamma_multiply(0.35));
         } else if resp.hovered() {
-            painter.rect_filled(rect, 4.0, theme::HOVER);
+            painter.rect_filled(rect, 4.0, theme::bg_hover());
         }
         let colour = if active || resp.hovered() {
-            theme::TEXT
+            theme::text_1()
         } else {
-            theme::TEXT_DIM
+            theme::text_2()
         };
         paint_icon(painter, rect, icon, colour);
         if resp.has_focus() {
@@ -1539,7 +1539,7 @@ fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, colour: Color32) 
 
 /// The ring and square markers: filled circle, 3 px white border, 1 px graphite outer ring.
 fn paint_marker(painter: &egui::Painter, at: Pos2, radius: f32, fill: Color32) {
-    painter.circle_filled(at, radius + 1.0, theme::DEEP);
+    painter.circle_filled(at, radius + 1.0, theme::bg_deep());
     painter.circle_filled(at, radius, Color32::WHITE);
     painter.circle_filled(at, radius - 3.0, fill);
 }
@@ -1548,7 +1548,7 @@ fn focus_ring(painter: &egui::Painter, rect: Rect, radius: f32) {
     painter.rect_stroke(
         rect.expand(2.0),
         radius + 2.0,
-        Stroke::new(2.0, theme::FOCUS),
+        Stroke::new(2.0, theme::focus()),
         StrokeKind::Outside,
     );
 }
@@ -1560,7 +1560,7 @@ fn row_label(ui: &mut Ui, text: &str) {
         Align2::LEFT_CENTER,
         text,
         FontId::proportional(13.0),
-        theme::TEXT_DIM,
+        theme::text_2(),
     );
 }
 
