@@ -88,5 +88,14 @@ cargo fmt --all --check
 - `metallic_physics2d` (`crates/metallic_physics2d/src/world.rs`, `sync_from`) also calls
   `detect_collisions` after inserting bodies with rapier2d 0.36.1, so it likely has the same bug.
   Not changed here (out of scope); worth its own issue.
-- PR #53 (`studio/34-teleport-ray-normal`) changes `step` in the same file; see the dry-run merge
-  result in the PR text.
+- PR #53 (`studio/34-teleport-ray-normal`, at `d2689cc`) changes `step` in the same file. Dry-run
+  merge (scratch detached worktree, not committed or pushed): the first version conflicted only in
+  ARCHITECTURE.md (both edited the "kinematic movers" line), so the #405 sentence moved to the end
+  of the metallic_physics bullet. After that the merge is clean (`lib.rs` auto-merges; this fix
+  stays out of `step`) and `cargo test -j 4 -p metallic_physics` passes on the merged tree
+  (physics.rs 21, rebuild_touching 5, character 37, rotating_support 14, unit 8).
+
+## Status
+
+Implemented and tested locally; not pushed, no PR yet. Full workspace test, clippy, deny and fmt
+pass (see the report on the branch commits).
