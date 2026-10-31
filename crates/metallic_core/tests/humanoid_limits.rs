@@ -6,6 +6,9 @@ use metallic_core::classes::{
 };
 use metallic_core::*;
 
+mod common;
+use common::TestDir;
+
 fn number(w: &World, id: InstanceId, prop: &str) -> f64 {
     match w.get(id, prop).unwrap() {
         Value::Number(n) => n,
@@ -70,9 +73,8 @@ fn scene_files_are_clamped_on_load() {
     let model = w.create("Model", Some(ws)).unwrap();
     let h = w.create("Humanoid", Some(model)).unwrap();
     w.set(h, "WalkSpeed", Value::Number(20.0)).unwrap();
-    let dir = std::env::temp_dir().join("metallic_core_humanoid_limits");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("huge.mscene");
+    let dir = TestDir::new("scene_files_are_clamped_on_load");
+    let path = dir.file("huge.mscene");
     save_scene(&w, &path).unwrap();
     // Edit the file by hand as a creator might.
     let text = std::fs::read_to_string(&path).unwrap();
