@@ -98,20 +98,18 @@ pub const ART_TEXT: Color32 = rgba(tk::G_100);
 /// Icons on [`ART_SCRIM`].
 pub const ART_ICON: Color32 = rgba(tk::G_200);
 
-// Tokens the research document proposes but `metallic_tokens` does not carry yet (task T1 adds
-// them to the JSON). The values are the Graphite ones from sections 3.1 and 3.5.
-/// Plate behind text and chips on game art (`art-scrim`, the same in every theme).
-pub const ART_SCRIM: Color32 = Color32::from_rgba_unmultiplied_const(18, 17, 22, 199);
-/// 1 px bottom edge of raised plates (`edge-low`, black at 30 %).
-pub const EDGE_LOW: Color32 = Color32::from_rgba_unmultiplied_const(0, 0, 0, 77);
-/// Keycap fill on the accent (`rgb(17 16 21 / .16)`).
-pub const KEYCAP_ON_ACCENT: Color32 = Color32::from_rgba_unmultiplied_const(17, 16, 21, 41);
+/// Plate behind text and chips on game art (`art-scrim`).
+pub const ART_SCRIM: Color32 = rgba(tk::ART_SCRIM);
+/// 1 px bottom edge of raised plates (`edge-low`).
+pub const EDGE_LOW: Color32 = rgba(tk::EDGE_LOW);
+/// Keycap fill on the accent (`keycap-on-accent`).
+pub const KEYCAP_ON_ACCENT: Color32 = rgba(tk::KEYCAP_ON_ACCENT);
 /// Modal scrim (`backdrop`).
-pub const BACKDROP: Color32 = Color32::from_rgba_unmultiplied_const(12, 11, 15, 153);
+pub const BACKDROP: Color32 = rgba(tk::BACKDROP);
 /// Stage swap, panel collapse, progress fill (`t-panel`, seconds).
-pub const T_PANEL: f32 = 0.24;
+pub const T_PANEL: f32 = tk::T_PANEL;
 /// Splash in, splash to start screen (`t-splash`, seconds).
-pub const T_SPLASH: f32 = 0.32;
+pub const T_SPLASH: f32 = tk::T_SPLASH;
 /// Hover and press fills (`t-fast`, seconds).
 pub const T_FAST: f32 = tk::T_FAST;
 /// Menus, focus ring, toast exit (`t-base`, seconds).
