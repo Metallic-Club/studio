@@ -113,6 +113,13 @@ impl PreviewOverlay {
         self.index.get(&key).map(|&i| &self.entries[i].original)
     }
 
+    /// [`PreviewOverlay::original`] for a shared name (no allocation; for per-frame use).
+    pub fn original_named(&self, id: InstanceId, prop: &PropName) -> Option<&Value> {
+        self.index
+            .get(&(id, prop.clone()))
+            .map(|&i| &self.entries[i].original)
+    }
+
     /// Ends the gesture: the changed pairs become one `SetProperties` named `name` (the world
     /// already holds the new values; pass it to `History::record`). `None` when nothing changed.
     pub fn commit(&mut self, name: String) -> Option<Command> {

@@ -25,12 +25,12 @@
 //! Handles: arrows, plane squares and a centre disc (Move); rings (Rotate); face cubes and a
 //! corner square for uniform scale (Scale); all of them at once (Transform). Snapping is relative
 //! to the start, Ctrl inverts it, Shift gives one tenth. A face drag moves one face (Alt: both),
-//! with a 0.05 stud floor; Ball parts keep equal axes. Point snapping (vertices, edges; V held)
+//! within core's 0.001 to 2048 stud limits; Ball parts keep equal axes. Point snapping (vertices, edges; V held)
 //! comes from [`crate::snapping`].
 use std::collections::HashSet;
 
 use eframe::egui::{self, Color32, Pos2, Shape, Stroke};
-use metallic_core::transform::MAX_PART_SIZE;
+use metallic_core::transform::{MAX_PART_SIZE, MIN_PART_SIZE};
 use metallic_core::{InstanceId, Value, World};
 use metallic_render::glam::{DQuat, DVec3};
 
@@ -51,9 +51,9 @@ use crate::transform::{PartTransform, Ray, from_d, quat_to_orientation, snap};
 pub const AXIS_PX: f64 = 90.0;
 /// Pointer distance (points) that still counts as on a handle.
 const HIT_PX: f64 = 8.0;
-/// Smallest size a resize handle gives, in studs (the move increment floor, spec 4.3). Core's
-/// limits ([`metallic_core::transform::MIN_PART_SIZE`] .. [`MAX_PART_SIZE`]) still apply.
-pub const MIN_SIZE: f64 = 0.05;
+/// Smallest size a resize handle gives, in studs: core's limit, so a handle never changes a size
+/// it did not drag (spec 4.3).
+pub const MIN_SIZE: f64 = MIN_PART_SIZE;
 /// Ring sample count.
 const RING_SEGMENTS: usize = 64;
 /// Radius of the centre disc in points (8 px across).
@@ -646,6 +646,16 @@ impl GizmoDrag {
         self.pending.as_mut()
     }
 
+    /// True when the drag has not moved, turned or resized anything yet.
+    pub fn is_unmoved(&self) -> bool {
+        self.motion.is_identity() && !self.resizes
+    }
+
+    /// True when the drag carries a pending command (Alt-drag's duplicate).
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// The parts this drag moves.
     pub fn part_ids(&self) -> impl Iterator<Item = InstanceId> + '_ {
         self.parts.iter().map(|p| p.id)
@@ -1164,19 +1174,33 @@ impl GizmoDrag {
                 );
             }
         }
-        if self.motion.is_identity() {
-            return;
-        }
         // Pivots are core properties: a pivot edit and the WorldPivots of moved Models are
-        // written through the overlay too, so they land in the same one step.
+        // written through the overlay too, so they land in the same one step. Every frame writes
+        // them; back at no motion (dragged out and back, typed 0) they return to the values the
+        // gesture started from, exactly, so nothing stale is committed.
+        let identity = self.motion.is_identity();
         if let Target::Pivot { id, start, .. } = &self.target {
             for (target, prop, value) in pivot_writes(world, *id, &self.motion.frame(start)) {
-                let _ = overlay.set(world, target, &self.prop_name(prop), value);
+                write_or_restore(
+                    world,
+                    overlay,
+                    target,
+                    &self.prop_name(prop),
+                    value,
+                    identity,
+                );
             }
         }
         for (id, start) in &self.models {
             let value = Value::CFrame(Box::new(to_cframe(&self.motion.frame(start))));
-            let _ = overlay.set(world, *id, &self.prop_name("WorldPivot"), value);
+            write_or_restore(
+                world,
+                overlay,
+                *id,
+                &self.prop_name("WorldPivot"),
+                value,
+                identity,
+            );
         }
     }
 
@@ -1524,6 +1548,23 @@ fn swept_arc(
     painter.add(Shape::mesh(mesh));
 }
 
+/// Shows `value` for `prop` of `id`; with `restore`, puts back the value the gesture started from
+/// instead (and writes nothing when the gesture has not touched it).
+fn write_or_restore(
+    world: &mut World,
+    overlay: &mut PreviewOverlay,
+    id: InstanceId,
+    prop: &PropName,
+    value: Value,
+    restore: bool,
+) {
+    if !restore {
+        let _ = overlay.set(world, id, prop, value);
+    } else if let Some(original) = overlay.original_named(id, prop).cloned() {
+        let _ = overlay.set(world, id, prop, original);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1697,7 +1738,7 @@ mod tests {
         assert!((cur.size.x - 6.0).abs() < 1e-9);
         assert!((cur.position.x - cur.size.x / 2.0 - -2.0).abs() < 1e-9);
         let cur = d.update(&input(ray_down(-10.0, 0.0), &s, none))[0];
-        assert!((cur.size.x - MIN_SIZE).abs() < 1e-9);
+        assert!((cur.size.x - MIN_PART_SIZE).abs() < 1e-9, "core's floor");
         assert!((cur.position.x - cur.size.x / 2.0 - -2.0).abs() < 1e-9);
         let alt = DragModifiers { alt: true, ..none };
         let cur = d.update(&input(ray_down(1.0, 0.0), &s, alt))[0];
@@ -1834,5 +1875,67 @@ mod tests {
         let t = GizmoFrame::new(DVec3::ZERO, DQuat::IDENTITY, Tool::Transform, &view);
         let ring = view.project(t.ring_point(1, 3, 64)).unwrap();
         assert_eq!(t.hit(&view, ring), Some(Handle::Ring(1)));
+    }
+
+    #[test]
+    fn grabbing_a_face_or_corner_of_a_tiny_part_does_not_jump_its_size() {
+        let (w, p) = world_with_part(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.01, 1.0, 1.0));
+        let s = Snapping {
+            grid: false,
+            ..Snapping::default()
+        };
+        let none = DragModifiers::default();
+        let f = frame(DVec3::ZERO, Tool::Scale);
+        let mut d =
+            GizmoDrag::begin(&w, f, Handle::Face(0, true), &ray_down(0.0, 0.0), &[p]).unwrap();
+        let cur = d.update(&input(ray_down(0.0, 0.0), &s, none))[0];
+        assert!((cur.size.x - 0.01).abs() < 1e-12, "no jump to a floor");
+        let (w, p) = world_with_part(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.001, 4.0, 4.0));
+        let diag = DVec3::ONE.normalize();
+        let along = |t: f64| Ray {
+            origin: diag * t + DVec3::new(1.0, -1.0, 0.0).normalize() * 30.0,
+            dir: -DVec3::new(1.0, -1.0, 0.0).normalize(),
+        };
+        let mut d = GizmoDrag::begin(&w, f, Handle::Uniform, &along(4.0), &[p]).unwrap();
+        let cur = d.update(&input(along(4.0), &s, none))[0];
+        assert!(
+            (cur.size.y - 4.0).abs() < 1e-9,
+            "no forced x50: {:?}",
+            cur.size
+        );
+    }
+
+    #[test]
+    fn a_set_model_pivot_dragged_out_and_back_is_not_committed_moved() {
+        let mut w = World::new_with_services();
+        let ws = w.root("Workspace").unwrap();
+        let m = w.create("Model", Some(ws)).unwrap();
+        let p = w.create("Part", Some(m)).unwrap();
+        let pivot = Pivot::at(DVec3::new(5.0, 0.0, 0.0));
+        for (id, prop, v) in pivot_writes(&w, m, &pivot) {
+            w.set(id, prop, v).unwrap();
+        }
+        let before = w.get(m, "WorldPivot").unwrap();
+        let f = frame(DVec3::ZERO, Tool::Move);
+        let mut d = GizmoDrag::begin(&w, f, Handle::Axis(0), &ray_down(0.0, 0.0), &[p])
+            .unwrap()
+            .with_models(vec![(m, pivot)]);
+        let s = Snapping {
+            grid: false,
+            ..Snapping::default()
+        };
+        let mut o = PreviewOverlay::new();
+        d.update(&input(ray_down(3.0, 0.0), &s, DragModifiers::default()));
+        d.apply(&mut w, &mut o);
+        assert_ne!(w.get(m, "WorldPivot").unwrap(), before, "the pivot follows");
+        d.update(&input(ray_down(0.0, 0.0), &s, DragModifiers::default()));
+        d.apply(&mut w, &mut o);
+        assert_eq!(
+            w.get(m, "WorldPivot").unwrap(),
+            before,
+            "back with the parts"
+        );
+        let (cmd, _) = d.finish(&mut o);
+        assert!(cmd.is_none(), "{cmd:?}");
     }
 }

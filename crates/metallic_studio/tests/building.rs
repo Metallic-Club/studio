@@ -234,9 +234,11 @@ fn end_drops_onto_the_part_below() {
 
 #[test]
 fn snap_to_grid_moves_the_reference_point_and_rounds_the_turn() {
+    // Resting on the ground: y = 0.5 puts the bottom face on y = 0.
     let (mut s, ids, _log) = state_with(&[
-        (Vec3::new(0.3, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0)),
-        (Vec3::new(5.3, 0.0, 0.0), Vec3::new(0.5, 1.0, 1.0)),
+        (Vec3::new(0.3, 0.5, 0.5), Vec3::new(1.0, 1.0, 1.0)),
+        (Vec3::new(5.3, 0.5, 0.5), Vec3::new(0.5, 1.0, 1.0)),
+        (Vec3::new(9.0, 0.5, 0.0), Vec3::new(2.0, 1.0, 2.0)),
     ]);
     s.world
         .set(
@@ -245,14 +247,17 @@ fn snap_to_grid_moves_the_reference_point_and_rounds_the_turn() {
             Value::Vector3(Vec3::new(0.0, 7.0, 0.0)),
         )
         .unwrap();
-    s.selection.set(ids.clone());
+    // A flush 2 x 1 x 2 plate (faces on grid lines) is on the grid.
+    s.selection.set([ids[2]]);
+    assert!(!s.off_grid(), "flush faces are on the grid (spec 2.2)");
+    s.selection.set(ids[..2].to_vec());
     assert!(s.off_grid());
     assert!(s.snap_selection_to_grid());
-    // Size 1 is a multiple of the 1 stud step: the centre snaps.
-    assert!(close(pos(&s, ids[0]), Vec3::new(0.0, 0.0, 0.0)));
+    // The 1-stud cube's min corner (-0.2) goes to 0: faces on 0 and 1, centre on 0.5.
+    assert!(close(pos(&s, ids[0]), Vec3::new(0.5, 0.5, 0.5)));
     assert!(close(orientation(&s, ids[0]), Vec3::new(0.0, 0.0, 0.0)));
-    // Size 0.5 is not: the min corner (5.05) snaps to 5, the centre lands on 5.25.
-    assert!(close(pos(&s, ids[1]), Vec3::new(5.25, 0.0, 0.0)));
+    // The 0.5-wide part's min corner (5.05) goes to 5: centre on 5.25.
+    assert!(close(pos(&s, ids[1]), Vec3::new(5.25, 0.5, 0.5)));
     assert!(!s.off_grid());
     assert_eq!(s.history.len(), 1);
     assert_eq!(
@@ -482,4 +487,23 @@ fn a_gizmo_pivot_drag_is_one_property_step() {
     );
     s.undo();
     assert!(pivot_of(&s.world, p).length() < 1e-9);
+}
+
+#[test]
+fn a_world_pivot_that_cannot_be_made_orthonormal_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, model, _part, _log) = saved_state(dir.path());
+    s.selection.set([model]);
+    let degenerate = metallic_core::CFrame {
+        position: Vec3::new(1.0, 2.0, 3.0),
+        rotation: [[0.0; 3]; 3],
+    };
+    let mut props = metallic_studio::properties::Properties::new();
+    props.set(&mut s, "WorldPivot", Value::CFrame(Box::new(degenerate)));
+    assert!(s.history.is_empty(), "nothing written");
+    assert_eq!(
+        s.world.get(model, "WorldPivotSet").unwrap(),
+        Value::Bool(false)
+    );
+    assert!(s.current_note().unwrap_or("").contains("WorldPivot not set"));
 }

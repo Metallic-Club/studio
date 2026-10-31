@@ -153,14 +153,13 @@ pub fn has_custom_pivot(world: &World, id: InstanceId) -> bool {
     }
 }
 
-/// Models in or under `ids` whose `WorldPivot` is set (and no `PrimaryPart` carries it), with
-/// their pivots now: a move of their parts must move these pivots too (`PivotTo` semantics).
+/// Models in or under `ids` whose `WorldPivot` is set, with that stored value now: a move of their
+/// parts moves it too, as core's `pivot_to` does (also when a `PrimaryPart` gives the pivot).
 pub fn models_with_set_pivots(world: &World, ids: &[InstanceId]) -> Vec<(InstanceId, Pivot)> {
     let mut out = Vec::new();
     let mut stack: Vec<InstanceId> = ids.to_vec();
     while let Some(id) = stack.pop() {
         if world.is_a(id, "Model")
-            && primary_part(world, id).is_none()
             && matches!(world.get_ref(id, "WorldPivotSet"), Ok(Value::Bool(true)))
             && let Ok(Value::CFrame(cf)) = world.get_ref(id, "WorldPivot")
             && !out.iter().any(|(o, _)| *o == id)
@@ -305,6 +304,19 @@ mod tests {
             w.set(id, prop, v).unwrap();
         }
         assert!((world_pivot(&w, m).unwrap().position - DVec3::new(2.0, 0.0, 0.0)).length() < 1e-9);
+    }
+
+    #[test]
+    fn a_set_world_pivot_moves_even_with_a_primary_part() {
+        let mut w = World::new_with_services();
+        let ws = w.root("Workspace").unwrap();
+        let m = w.create("Model", Some(ws)).unwrap();
+        let p = w.create("Part", Some(m)).unwrap();
+        for (id, prop, v) in pivot_writes(&w, m, &Pivot::at(DVec3::new(3.0, 0.0, 0.0))) {
+            w.set(id, prop, v).unwrap();
+        }
+        w.set(m, "PrimaryPart", Value::Ref(Some(p))).unwrap();
+        assert_eq!(models_with_set_pivots(&w, &[m]).len(), 1);
     }
 
     #[test]

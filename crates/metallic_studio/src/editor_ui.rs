@@ -53,7 +53,8 @@ pub struct EditorUi {
     /// 3D view.
     pub viewport: Viewport,
     explorer: Explorer,
-    properties: Properties,
+    /// Properties panel.
+    pub properties: Properties,
     scripts: ScriptTabs,
     pressed: Vec<&'static str>,
     /// Open while the unsaved-changes prompt shows.
@@ -188,23 +189,26 @@ impl EditorUi {
 
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
         let typing = ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta();
+        // A gesture holds values in the preview overlay: no global action runs until it ends
+        // (Esc cancels it in the viewport or in Properties).
+        let busy = self.viewport.is_dragging() || self.properties.is_busy();
         let mut contexts: Vec<KeyContext> = Vec::with_capacity(2);
         if !typing {
             contexts.push(KeyContext::Global);
-            if viewport_hovered && !right_down && !self.viewport.is_dragging() {
+            if viewport_hovered && !right_down && !busy {
                 contexts.push(KeyContext::Viewport);
             }
         }
         let mut pressed = std::mem::take(&mut self.pressed);
-        if typing {
+        if busy {
+            pressed.clear();
+        } else if typing {
             // Only Save and Play keys work while a text field has focus.
             self.keymap
                 .pressed(ctx, &[KeyContext::Global], &mut pressed);
             pressed.retain(|a| a.starts_with("file.") || a.starts_with("play."));
-        } else if !self.viewport.is_dragging() {
-            self.keymap.pressed(ctx, &contexts, &mut pressed);
         } else {
-            pressed.clear();
+            self.keymap.pressed(ctx, &contexts, &mut pressed);
         }
         for &id in &pressed {
             self.run_action(id);

@@ -352,7 +352,9 @@ impl Viewport {
     /// move so far plus the copy are one step.
     fn stamp(&mut self, state: &mut EditorState) {
         let Some(drag) = self.drag.take() else { return };
-        if drag.handle != Handle::Body {
+        // Not a body drag, or an Alt-drag whose copies have not moved yet (they would be dropped
+        // and the selection left on them): nothing to stamp.
+        if drag.handle != Handle::Body || (drag.has_pending() && drag.is_unmoved()) {
             self.drag = Some(drag);
             return;
         }
@@ -363,6 +365,10 @@ impl Viewport {
         let (record, abandon) = drag.finish(&mut state.preview);
         if let Some(c) = abandon {
             state.history.abandon(c, &mut state.world);
+            if let Some(sel) = self.before_duplicate.take() {
+                state.selection.set(sel);
+            }
+            return;
         }
         let mut dup = Command::Duplicate {
             sources: parts.clone(),
@@ -382,6 +388,8 @@ impl Viewport {
         } else if let Some(r) = record {
             state.record(r);
         }
+        // The Alt-drag's copies (if any) are recorded now; the selection stays on them.
+        self.before_duplicate = None;
         let active = state.selection.active();
         self.drag = GizmoDrag::begin_body(&state.world, frame, &ray, &parts, grab, active);
     }
@@ -827,7 +835,15 @@ impl Viewport {
             ctx.input(|i| i.key_down(self.holds.vertex)) && !ctx.egui_wants_keyboard_input();
 
         if self.drag.is_some() {
-            if secondary_pressed {
+            // Losing focus (Alt+Tab, another window) loses the pointer release too: the drag is
+            // cancelled, as with Esc, so nothing half-done lands in History.
+            let focus_lost = ctx.input(|i| {
+                !i.focused
+                    || i.events
+                        .iter()
+                        .any(|e| matches!(e, egui::Event::WindowFocused(false)))
+            });
+            if secondary_pressed || focus_lost {
                 self.cancel(state);
                 return;
             }

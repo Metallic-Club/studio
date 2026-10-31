@@ -396,3 +396,122 @@ fn ctrl_comma_asks_for_the_settings_dialog() {
     assert!(h.state_mut().take_settings_request());
     assert!(!h.state_mut().take_settings_request(), "asked once");
 }
+
+#[test]
+fn global_keys_wait_during_a_properties_scrub_and_esc_cancels_it() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    // One earlier step, so a stray Ctrl+Z would show.
+    {
+        let e = h.state_mut();
+        let _ = e.state.apply(metallic_studio::commands::Command::set(
+            part,
+            "Transparency",
+            Value::Number(0.0),
+            Value::Number(0.25),
+        ));
+    }
+    // Hold the pointer (as a scrub does) over the status bar, away from the viewport.
+    let held = egui::pos2(640.0, 796.0);
+    h.hover_at(held);
+    press(&mut h, held, true);
+    {
+        let e = h.state_mut();
+        let EditorUi {
+            properties, state, ..
+        } = e;
+        properties.scrub(state, "Transparency", Value::Number(0.75));
+    }
+    h.run_steps(1);
+    assert!(h.state().properties.in_gesture());
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    let s = &h.state().state;
+    assert_eq!(s.history.len(), 1, "Ctrl+Z waits for the scrub");
+    assert_eq!(
+        s.world.get(part, "Transparency").unwrap(),
+        Value::Number(0.75)
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().properties.in_gesture());
+    assert_eq!(
+        h.state().state.world.get(part, "Transparency").unwrap(),
+        Value::Number(0.25),
+        "Esc puts the value back"
+    );
+    assert_eq!(
+        h.state().state.selection.ids(),
+        &[part],
+        "Esc did not also run a global action"
+    );
+    press(&mut h, held, false);
+    h.run_steps(2);
+    let s = &h.state().state;
+    assert_eq!(s.history.len(), 1, "a cancelled scrub records nothing");
+    assert_eq!(
+        s.world.get(part, "Transparency").unwrap(),
+        Value::Number(0.25)
+    );
+}
+
+#[test]
+fn losing_focus_cancels_a_drag() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    let origin = h.state().viewport.screen_pos(DVec3::ZERO).unwrap();
+    let grab = origin - egui::vec2(0.0, 54.0);
+    h.hover_at(grab);
+    h.run_steps(2);
+    press(&mut h, grab, true);
+    h.hover_at(grab - egui::vec2(0.0, 120.0));
+    h.run_steps(2);
+    assert!(h.state().viewport.is_dragging());
+    h.event(Event::WindowFocused(false));
+    h.run_steps(2);
+    assert!(!h.state().viewport.is_dragging());
+    let s = &h.state().state;
+    assert_eq!(
+        s.world.get(part, "Position").unwrap(),
+        Value::Vector3(Vec3::new(0.0, 0.0, 0.0))
+    );
+    assert!(s.history.is_empty());
+    assert!(!s.preview.is_active());
+}
+
+#[test]
+fn ctrl_d_before_an_alt_drag_moves_keeps_the_selection_on_live_parts() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.tool = Tool::Select;
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    let grab = h
+        .state()
+        .viewport
+        .screen_pos(DVec3::new(0.0, 0.0, 2.0))
+        .unwrap();
+    h.hover_at(grab);
+    h.run_steps(2);
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    press(&mut h, grab, true);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+    assert!(
+        h.state().viewport.is_dragging(),
+        "Alt on the body drags a copy"
+    );
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(2);
+    press(&mut h, grab, false);
+    h.run_steps(2);
+    let s = &h.state().state;
+    assert!(!s.selection.ids().is_empty());
+    for &id in s.selection.ids() {
+        assert!(s.is_live(id), "selection on a live part");
+    }
+}

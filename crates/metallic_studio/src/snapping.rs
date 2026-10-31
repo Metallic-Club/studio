@@ -298,6 +298,9 @@ pub struct Surface {
     pub part: Option<InstanceId>,
 }
 
+/// Farthest a virtual surface hit may be from the camera, in studs (twice the largest part).
+pub const MAX_SURFACE_DISTANCE: f64 = 4096.0;
+
 impl Surface {
     /// A horizontal virtual plane at height `y` with the world grid.
     pub fn ground(y: f64) -> Surface {
@@ -310,9 +313,15 @@ impl Surface {
         }
     }
 
-    /// The same plane through the point where `ray` meets it (virtual surface), if in front.
+    /// The same plane through the point where `ray` meets it (virtual surface), if in front and
+    /// within [`MAX_SURFACE_DISTANCE`] of the camera. At grazing angles the hit runs off towards
+    /// infinity; past that range the drag keeps its last placement instead.
     pub fn extend(&self, ray: &Ray) -> Option<Surface> {
         let t = ray.plane_hit(self.point, self.normal)?;
+        let distance = t * ray.dir.length();
+        if !distance.is_finite() || distance > MAX_SURFACE_DISTANCE {
+            return None;
+        }
         Some(Surface {
             point: ray.at(t),
             part: None,
@@ -339,24 +348,14 @@ impl Surface {
     }
 }
 
-fn is_multiple(size: f64, step: f64) -> bool {
-    let k = size / step;
-    (k - k.round()).abs() < 1e-6
-}
-
-/// Spec 2.2 grid rule along one axis: the box `[lo, hi]` (coordinates on the axis, relative to
-/// the grid origin) snaps by its centre when its size is a multiple of `step`, else by its min
-/// corner. Returns the shift to add.
-pub fn grid_shift(lo: f64, hi: f64, step: f64) -> f64 {
+/// Spec 2.2 grid rule along one axis: a box whose min corner is at `lo` (relative to the grid
+/// origin) snaps that corner to the grid, so its faces sit on grid lines whenever its size is a
+/// multiple of `step`. Returns the shift to add.
+pub fn grid_shift(lo: f64, step: f64) -> f64 {
     if step <= 0.0 {
         return 0.0;
     }
-    if is_multiple(hi - lo, step) {
-        let mid = (lo + hi) * 0.5;
-        snap(mid, step) - mid
-    } else {
-        snap(lo, step) - lo
-    }
+    snap(lo, step) - lo
 }
 
 /// Where the reference point of a dragged selection goes on `surface` (spec 5.2).
@@ -385,17 +384,14 @@ pub fn place_on_surface(
         let (u, v) = surface.plane_axes();
         for w in [u, v] {
             let base = (r - surface.origin).dot(w);
-            let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-            for c in corners {
-                let x = c.dot(w);
-                lo = lo.min(x);
-                hi = hi.max(x);
-            }
+            let mut lo = corners
+                .iter()
+                .map(|c| c.dot(w))
+                .fold(f64::INFINITY, f64::min);
             if !lo.is_finite() {
                 lo = 0.0;
-                hi = 0.0;
             }
-            r += w * grid_shift(base + lo, base + hi, step);
+            r += w * grid_shift(base + lo, step);
         }
     }
     r
@@ -521,19 +517,20 @@ mod tests {
         let corners = cube_corners(0.5, rot);
         let r = place_on_surface(&corners, DVec3::ZERO, &surface, Some(1.0));
         let local = rot.inverse() * (r - ramp.position);
-        // On the ramp's own grid: whole studs along its X and Z, resting on its top face.
-        assert!((local.x - local.x.round()).abs() < 1e-9, "{local:?}");
-        assert!((local.z - local.z.round()).abs() < 1e-9, "{local:?}");
+        // On the ramp's own grid: faces on whole studs along its X and Z (centre on a half), resting
+        // on its top face.
+        let half = |v: f64| ((v - 0.5) - (v - 0.5).round()).abs() < 1e-9;
+        assert!(half(local.x) && half(local.z), "{local:?}");
         assert!((local.y - 1.0).abs() < 1e-9, "{local:?}");
         // Not on world stud lines.
         assert!((r.y - r.y.round()).abs() > 1e-3);
     }
 
     #[test]
-    fn odd_sizes_snap_by_min_corner_and_even_by_centre() {
-        // A 4-wide plate centred on a grid line; a 1.5-wide one snaps its min corner.
-        assert!((grid_shift(-2.2, 1.8, 1.0) - 0.2).abs() < 1e-9);
-        assert!((grid_shift(0.3, 1.8, 1.0) - -0.3).abs() < 1e-9);
+    fn every_size_snaps_by_its_min_corner() {
+        // Min corner to the grid: a 4-wide plate and a 1.5-wide one alike.
+        assert!((grid_shift(-2.2, 1.0) - 0.2).abs() < 1e-9);
+        assert!((grid_shift(0.3, 1.0) - -0.3).abs() < 1e-9);
         let corners = cube_corners(0.5, DQuat::IDENTITY);
         let r = place_on_surface(
             &corners,
@@ -546,7 +543,8 @@ mod tests {
                 .unwrap(),
             Some(1.0),
         );
-        assert!((r - DVec3::new(3.0, 0.5, -2.0)).length() < 1e-9, "{r:?}");
+        // Min corner (2.8, -2.1) to (3, -2): faces on grid lines, centre on (3.5, -1.5).
+        assert!((r - DVec3::new(3.5, 0.5, -1.5)).length() < 1e-9, "{r:?}");
     }
 
     #[test]
@@ -656,5 +654,25 @@ mod tests {
         let hit = find(&[&picks as &dyn SnapSource], &q, &mut buf).unwrap();
         assert_eq!(hit.kind, SnapKind::Vertex);
         assert!((hit.point - corner).length() < 1e-12);
+    }
+
+    #[test]
+    fn a_grazing_ray_does_not_throw_the_surface_far_away() {
+        let ground = Surface::ground(0.0);
+        let steep = Ray {
+            origin: DVec3::new(0.0, 10.0, 0.0),
+            dir: DVec3::new(1.0, -1.0, 0.0).normalize(),
+        };
+        assert!(ground.extend(&steep).is_some());
+        let grazing = Ray {
+            origin: DVec3::new(0.0, 10.0, 0.0),
+            dir: DVec3::new(1.0, -1e-8, 0.0).normalize(),
+        };
+        assert!(ground.extend(&grazing).is_none(), "1e9 studs away");
+        let behind = Ray {
+            origin: DVec3::new(0.0, 10.0, 0.0),
+            dir: DVec3::Y,
+        };
+        assert!(ground.extend(&behind).is_none());
     }
 }

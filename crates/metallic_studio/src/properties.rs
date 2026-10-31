@@ -49,6 +49,8 @@ pub struct Properties {
     filter: String,
     /// The property of the open live-preview gesture (its values live in the overlay).
     gesture: Option<String>,
+    /// Esc cancelled the gesture; ignore the widget until the pointer is released.
+    cancelled: bool,
     /// Text being typed into a string field, by property name.
     text: HashMap<String, String>,
 }
@@ -70,6 +72,26 @@ impl Properties {
     /// True while a live-preview gesture is open.
     pub fn in_gesture(&self) -> bool {
         self.gesture.is_some()
+    }
+
+    /// True while a scrub is open or was cancelled with the pointer still held: global keys wait.
+    pub fn is_busy(&self) -> bool {
+        self.gesture.is_some() || self.cancelled
+    }
+
+    /// Esc during a scrub: every previewed value goes back and no step is recorded.
+    pub fn cancel_gesture(&mut self, state: &mut EditorState) {
+        if self.gesture.take().is_some() {
+            state.preview.cancel(&mut state.world);
+            self.cancelled = true;
+        }
+    }
+
+    /// Shows `value` for `prop` on the selection as a live scrub would (pointer held): it is
+    /// previewed, and recorded as one step when the pointer is released. For scripted checks.
+    pub fn scrub(&mut self, state: &mut EditorState, prop: &str, value: Value) {
+        let ids = state.selection.ids().to_vec();
+        self.commit(state, &ids, Edit::Set(prop.to_string(), value), true);
     }
 
     fn finish_gesture(&mut self, state: &mut EditorState) {
@@ -99,6 +121,9 @@ impl Properties {
         let pointer_down = ui.input(|i| i.pointer.primary_down());
         if !pointer_down {
             self.finish_gesture(state);
+            self.cancelled = false;
+        } else if self.gesture.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.cancel_gesture(state);
         }
         let ids: Vec<InstanceId> = state.selection.ids().to_vec();
         let Some(&active) = ids.last() else {
@@ -356,7 +381,11 @@ impl Properties {
     }
 
     fn commit(&mut self, state: &mut EditorState, ids: &[InstanceId], edit: Edit, live: bool) {
-        if state.play.is_playing() {
+        if state.play.is_playing() || (live && self.cancelled) {
+            return;
+        }
+        // A viewport drag owns the overlay; a Properties edit waits for it.
+        if !live && state.preview.is_active() {
             return;
         }
         let (prop, values): (String, Vec<(InstanceId, Value)>) = match edit {
@@ -376,20 +405,28 @@ impl Properties {
             }
         };
         // Part sizes stay inside the engine's limits, as a script's write would.
+        let mut refused = None;
         let values: Vec<(InstanceId, Value)> = values
             .into_iter()
-            .map(|(id, v)| match v {
+            .filter_map(|(id, v)| match v {
                 Value::Vector3(s) if prop == "Size" && state.world.is_a(id, "BasePart") => {
-                    (id, Value::Vector3(clamp_part_size(s)))
+                    Some((id, Value::Vector3(clamp_part_size(s))))
                 }
-                // A Model's WorldPivot is made orthonormal like core's `set_world_pivot`.
+                // A Model's WorldPivot is made orthonormal like core's `set_world_pivot`; one that
+                // cannot be (degenerate axes, not finite) is refused, as core refuses it.
                 Value::CFrame(cf) if prop == "WorldPivot" => match orthonormal(*cf, "WorldPivot") {
-                    Ok(cf) => (id, Value::CFrame(Box::new(cf))),
-                    Err(_) => (id, Value::CFrame(cf)),
+                    Ok(cf) => Some((id, Value::CFrame(Box::new(cf)))),
+                    Err(e) => {
+                        refused = Some(e.to_string());
+                        None
+                    }
                 },
-                v => (id, v),
+                v => Some((id, v)),
             })
             .collect();
+        if let Some(why) = refused {
+            state.note(format!("WorldPivot not set: {why}"));
+        }
         // Setting WorldPivot also marks it set (`WorldPivotSet`), as core's `set_world_pivot`
         // does; without that the pivot keeps following the bounding box.
         let marks: Vec<InstanceId> = if prop == "WorldPivot" {

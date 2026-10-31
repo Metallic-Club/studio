@@ -293,6 +293,11 @@ impl EditorState {
         if self.play.is_playing() {
             return Err(CommandError::Nothing("edit while playing"));
         }
+        if self.preview.is_active() {
+            // A gesture (drag, Properties scrub) is open: its values are in the world but not in
+            // History yet, so another step now would undo out of order.
+            return Err(CommandError::Nothing("edit during a drag"));
+        }
         let result = self.history.apply(cmd, &mut self.world).map(|_| ());
         if let Err(e) = &result {
             self.output.push(Tag::Studio, Level::Warning, e.to_string());
@@ -313,7 +318,7 @@ impl EditorState {
 
     /// Undo; shows the step name in the status bar.
     pub fn undo(&mut self) {
-        if self.play.is_playing() {
+        if self.play.is_playing() || self.preview.is_active() {
             return;
         }
         if let Some(name) = self.history.undo(&mut self.world) {
@@ -324,7 +329,7 @@ impl EditorState {
 
     /// Redo.
     pub fn redo(&mut self) {
-        if self.play.is_playing() {
+        if self.play.is_playing() || self.preview.is_active() {
             return;
         }
         if let Some(name) = self.history.redo(&mut self.world) {
@@ -630,7 +635,8 @@ impl EditorState {
         changes: &[(InstanceId, PartTransform, Option<Vec3>)],
         motion: Option<Rigid>,
     ) -> bool {
-        if self.play.is_playing() {
+        // An open gesture owns the overlay; committing now would take its values with it.
+        if self.play.is_playing() || self.preview.is_active() {
             return false;
         }
         let names: [PropName; 3] = ["Position".into(), "Orientation".into(), "Size".into()];
@@ -669,7 +675,7 @@ impl EditorState {
 
     /// Writes pivot property changes as one step named `name`.
     fn commit_writes(&mut self, name: String, writes: Vec<PivotWrite>) -> bool {
-        if self.play.is_playing() || writes.is_empty() {
+        if self.play.is_playing() || self.preview.is_active() || writes.is_empty() {
             return false;
         }
         for (id, prop, value) in writes {
@@ -847,8 +853,8 @@ impl EditorState {
     }
 }
 
-/// The shift that puts a part's reference point on the world grid (spec 2.2, per axis: centre
-/// when the size is a multiple of the step, else the min corner).
+/// The shift that puts a part's bounding-box min corner on the world grid on each axis (spec 2.2):
+/// its faces then sit on grid lines.
 pub fn grid_snap_shift(t: &PartTransform, step: f64) -> DVec3 {
     let corners = t.corners();
     let mut out = DVec3::ZERO;
@@ -857,11 +863,7 @@ pub fn grid_snap_shift(t: &PartTransform, step: f64) -> DVec3 {
             .iter()
             .map(|c| c[axis])
             .fold(f64::INFINITY, f64::min);
-        let hi = corners
-            .iter()
-            .map(|c| c[axis])
-            .fold(f64::NEG_INFINITY, f64::max);
-        out[axis] = grid_shift(lo, hi, step);
+        out[axis] = grid_shift(lo, step);
     }
     out
 }
