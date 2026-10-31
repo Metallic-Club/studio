@@ -410,7 +410,8 @@ impl UserData for LuaSignal {
                             matches!(this.key.1, EventKind::UisInputBegan | EventKind::UisInputEnded);
                         if pointer_only && !this.state.pacing.warned_uis_pointer_only.replace(true) {
                             this.state.sink.warn(
-                                "UserInputService.InputBegan/InputEnded report only the left                                  mouse button and touches for now; keyboard keys and other                                  buttons are not wired yet (#80)",
+                                "UserInputService.InputBegan/InputEnded report only the left mouse button and \
+                                 touches for now; keyboard keys and other buttons are not wired yet (#80)",
                             );
                         }
                         let (id, alive) = this.state.hub.connect(this.key, func, owner)?;
