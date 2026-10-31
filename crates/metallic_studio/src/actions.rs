@@ -180,54 +180,82 @@ impl ActionRegistry {
             .collect();
         order.sort_by_key(|&i| self.actions[i].id == "play.stop");
         for i in order {
-            let a = &mut self.actions[i];
-            let enabled = a.is_enabled(state);
-            let checked = a.is_checked(state);
-            let shortcut = keymap.label(a.id);
-            let mut tip = if shortcut.is_empty() {
-                a.label.clone()
-            } else {
-                format!("{} ({shortcut})", a.label)
-            };
-            if a.id == "play.start" && !enabled && !state.play.is_playing() {
-                tip.push_str(
-                    "\nPlay is not connected yet: no play mode is registered in this build.",
-                );
-            }
-            // Tools, Play and Stop show their key as a cap; the rest are icon buttons whose
-            // tooltip names the key.
-            let labelled = matches!(a.group, ToolbarGroup::Tools | ToolbarGroup::Play);
-            let key = shortcut.as_str();
-            let name = a.label.as_str();
-            let mut button = if a.id == "play.start" {
-                Button::primary(name)
-            } else if a.group == ToolbarGroup::Play {
-                Button::secondary(name)
-            } else {
-                Button::ghost(if labelled { name } else { "" })
-            };
-            button = button.compact().glyph(a.icon).selected(checked);
-            if !labelled {
-                button = button.alt(&tip);
-            }
-            if labelled && !key.is_empty() {
-                button = button.keycap(key);
-            }
-            let mut resp = ui.add_enabled(enabled, button);
-            if labelled {
-                resp = resp.on_hover_text(&tip);
-            }
-            let resp = resp.on_disabled_hover_text(&tip);
-            if resp.clicked() {
-                clicked = Some(a.id);
-            }
-            if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+            if toolbar_button(&mut self.actions[i], ui, state, keymap) {
+                clicked = Some(self.actions[i].id);
             }
         }
         if let Some(id) = clicked {
             self.run(id, state);
         }
+    }
+
+    /// Draws the actions of `group` as icon buttons (the viewport header's tools); with `keys`
+    /// each carries its key as a cap. The name is the tooltip and the accessible name.
+    pub fn icon_keys(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: ToolbarGroup,
+        keys: bool,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for a in self.actions.iter().filter(|a| a.group == group) {
+            let key = keymap.label(a.id);
+            let tip = tip_for(a, keymap);
+            let mut button = Button::ghost("")
+                .compact()
+                .glyph(a.icon)
+                .selected(a.is_checked(state))
+                .alt(&tip);
+            if keys && !key.is_empty() {
+                button = button.keycap(&key);
+            }
+            if ui.add_enabled(a.is_enabled(state), button).clicked() {
+                clicked = Some(a.id);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+        }
+    }
+
+    /// Draws one action: as a toolbar button, or as a chip with its short or full label.
+    pub fn draw_one(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: &str,
+        look: Look,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let Some(a) = self.actions.iter_mut().find(|a| a.id == id) else {
+            return;
+        };
+        let clicked = match look {
+            Look::Toolbar => toolbar_button(a, ui, state, keymap),
+            Look::Chip => chip_button(a, ui, state, keymap, true),
+            Look::ChipFull => chip_button(a, ui, state, keymap, false),
+        };
+        if clicked {
+            let id = a.id;
+            self.run(id, state);
+        }
+    }
+
+    /// Appends the ids of the actions in `group`, in registration order, to `out`.
+    pub fn ids_in(&self, group: ToolbarGroup, out: &mut Vec<&'static str>) {
+        out.extend(
+            self.actions
+                .iter()
+                .filter(|a| a.group == group)
+                .map(|a| a.id),
+        );
+    }
+
+    /// Draws one action as a text toggle chip with its full label (Collisions).
+    pub fn chip(&mut self, ui: &mut egui::Ui, id: &str, state: &mut EditorState, keymap: &Keymap) {
+        self.draw_one(ui, id, Look::ChipFull, state, keymap);
     }
 
     /// Draws the actions of `group` as text toggle chips (the snap targets).
@@ -240,30 +268,36 @@ impl ActionRegistry {
     ) {
         let mut clicked = None;
         for a in self.actions.iter_mut().filter(|a| a.group == group) {
-            let shortcut = keymap.label(a.id);
-            let tip = if shortcut.is_empty() {
-                a.label.clone()
-            } else {
-                format!("{} ({shortcut})", a.label)
-            };
-            let checked = a.is_checked(state);
-            let button = Button::ghost(short_label(&a.label))
-                .compact()
-                .selected(checked);
-            let enabled = a.is_enabled(state);
-            let resp = ui
-                .add_enabled(enabled, button)
-                .on_hover_text(&tip)
-                .on_disabled_hover_text(&tip);
-            if resp.clicked() {
+            if chip_button(a, ui, state, keymap, true) {
                 clicked = Some(a.id);
-            }
-            if let Some(acc) = &mut a.accessory {
-                ui.add_enabled_ui(enabled, |ui| acc(ui, state));
             }
         }
         if let Some(id) = clicked {
             self.run(id, state);
+        }
+    }
+
+    /// Draws `ids` as checkable menu entries (the viewport header's overflow menu).
+    pub fn check_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        ids: &[&'static str],
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for &id in ids {
+            let Some(a) = self.get(id) else { continue };
+            let button = egui::Button::new(&a.label)
+                .selected(a.is_checked(state))
+                .shortcut_text(keymap.label(id));
+            if theme::add_enabled(ui, a.is_enabled(state), button).clicked() {
+                clicked = Some(id);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+            ui.close();
         }
     }
 
@@ -290,13 +324,109 @@ impl ActionRegistry {
     }
 }
 
+/// How [`ActionRegistry::draw_one`] draws an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    /// A toolbar button (icon, plus the accessory such as "World").
+    Toolbar,
+    /// A text chip with the first word of the label ("Grid").
+    Chip,
+    /// A text chip with the whole label ("Collisions").
+    ChipFull,
+}
+
+fn tip_for(a: &Action, keymap: &Keymap) -> String {
+    let shortcut = keymap.label(a.id);
+    if shortcut.is_empty() {
+        a.label.clone()
+    } else {
+        format!("{} ({shortcut})", a.label)
+    }
+}
+
+/// One toolbar button and its accessory; true when clicked.
+fn toolbar_button(
+    a: &mut Action,
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    keymap: &Keymap,
+) -> bool {
+    let enabled = a.is_enabled(state);
+    let checked = a.is_checked(state);
+    let shortcut = keymap.label(a.id);
+    let mut tip = tip_for(a, keymap);
+    if a.id == "play.start" && !enabled && !state.play.is_playing() {
+        tip.push_str("\nPlay is not connected yet: no play mode is registered in this build.");
+    }
+    // Tools, Play and Stop show their key as a cap; the rest are icon buttons whose tooltip
+    // names the key.
+    let labelled = matches!(a.group, ToolbarGroup::Tools | ToolbarGroup::Play);
+    let key = shortcut.as_str();
+    let name = a.label.as_str();
+    let mut button = if a.id == "play.start" {
+        Button::primary(name)
+    } else if a.group == ToolbarGroup::Play {
+        Button::secondary(name)
+    } else {
+        Button::ghost(if labelled { name } else { "" })
+    };
+    button = button.compact().selected(checked);
+    // A text placeholder icon says nothing the accessory label does not (Pivot/Centre).
+    if a.accessory.is_none() || !matches!(a.icon, Icon::Text(_)) {
+        button = button.glyph(a.icon);
+    }
+    if !labelled {
+        button = button.alt(&tip);
+    }
+    if labelled && !key.is_empty() {
+        button = button.keycap(key);
+    }
+    let mut resp = ui.add_enabled(enabled, button);
+    if labelled {
+        resp = resp.on_hover_text(&tip);
+    }
+    let clicked = resp.on_disabled_hover_text(&tip).clicked();
+    if let Some(acc) = &mut a.accessory {
+        ui.add_enabled_ui(enabled, |ui| acc(ui, state));
+    }
+    clicked
+}
+
+/// One text chip and its accessory; true when clicked.
+fn chip_button(
+    a: &mut Action,
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    keymap: &Keymap,
+    short: bool,
+) -> bool {
+    let tip = tip_for(a, keymap);
+    let enabled = a.is_enabled(state);
+    let text = if short {
+        short_label(&a.label)
+    } else {
+        a.label.as_str()
+    };
+    let button = Button::ghost(text).compact().selected(a.is_checked(state));
+    let clicked = ui
+        .add_enabled(enabled, button)
+        .on_hover_text(&tip)
+        .on_disabled_hover_text(&tip)
+        .clicked();
+    if let Some(acc) = &mut a.accessory {
+        ui.add_enabled_ui(enabled, |ui| acc(ui, state));
+    }
+    clicked
+}
+
 /// The chip text: the first word of the label ("Grid snapping" shows "Grid").
 fn short_label(label: &str) -> &str {
     label.split(' ').next().unwrap_or(label)
 }
 
 /// An increment without trailing zeros ("0.25", "1", "11.25").
-fn fmt_step(v: f64) -> String {
+/// An increment as shown on a chip: "1", "0.25", "11.25".
+pub fn fmt_step(v: f64) -> String {
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
@@ -336,38 +466,6 @@ pub fn default_actions() -> ActionRegistry {
         )
         .checked(|s| s.snapping.grid)
         .accessory(move |ui, s| {
-            ui.menu_button(format!("{} stud", fmt_step(s.snapping.move_step)), |ui| {
-                for &step in MOVE_STEPS {
-                    if ui
-                        .selectable_label(
-                            s.snapping.move_step == step,
-                            format!("{} stud", fmt_step(step)),
-                        )
-                        .clicked()
-                    {
-                        s.snapping.move_step = step;
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Move and scale increment ([ and ])");
-            ui.menu_button(format!("{}°", fmt_step(s.snapping.rotate_step)), |ui| {
-                for &step in ROTATE_STEPS {
-                    if ui
-                        .selectable_label(
-                            s.snapping.rotate_step == step,
-                            format!("{}°", fmt_step(step)),
-                        )
-                        .clicked()
-                    {
-                        s.snapping.rotate_step = step;
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Rotate increment (Shift+[ and Shift+])");
             // Off-grid check, recomputed only when the world, selection or increments change.
             let key = (
                 s.world.change_cursor(),
@@ -427,6 +525,24 @@ pub fn default_actions() -> ActionRegistry {
     ] {
         r.register(Action::new(id, label, Icon::Snap, ToolbarGroup::Snap, flip).checked(get));
     }
+    r.register(Action::new(
+        "view.focus_context_bar",
+        "Focus the contextual toolbar",
+        Icon::Text("."),
+        ToolbarGroup::Hidden,
+        // The editor window moves the focus (it owns the bar); see `EditorUi::run_action`.
+        |_| {},
+    ));
+    r.register(
+        Action::new(
+            "snap.collisions",
+            "Collisions",
+            Icon::Snap,
+            ToolbarGroup::Hidden,
+            |s| s.snapping.collisions = !s.snapping.collisions,
+        )
+        .checked(|s| s.snapping.collisions),
+    );
     r.register(
         Action::new(
             "snap.soft",
@@ -733,9 +849,64 @@ pub fn default_actions() -> ActionRegistry {
     r
 }
 
+/// A ghost chip showing an increment; a click opens the list of `steps`, the mouse wheel over it
+/// steps through them. Returns the chip and the picked step.
+pub fn step_chip(
+    ui: &mut egui::Ui,
+    text: &str,
+    tip: &str,
+    steps: &[f64],
+    unit: &str,
+    value: f64,
+) -> (egui::Response, Option<f64>) {
+    let mut picked = None;
+    let r = ui.add(Button::ghost(text).compact()).on_hover_text(tip);
+    egui::Popup::menu(&r).show(|ui| {
+        for &step in steps {
+            if ui
+                .selectable_label(value == step, format!("{}{unit}", fmt_step(step)))
+                .clicked()
+            {
+                picked = Some(step);
+                ui.close();
+            }
+        }
+    });
+    if r.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if scroll != 0.0 {
+            picked = Some(crate::editor::next_step(steps, value, scroll > 0.0));
+        }
+    }
+    (r, picked)
+}
+
+/// The increment chips of the viewport header (spec 3.1): "1 stud" and "15°".
+pub fn increment_chips(ui: &mut egui::Ui, s: &mut EditorState) {
+    let text = format!("{} stud", fmt_step(s.snapping.move_step));
+    let tip = "Move and scale increment ([ and ]; scroll to step)";
+    let value = s.snapping.move_step;
+    if let (_, Some(step)) = step_chip(ui, &text, tip, MOVE_STEPS, " stud", value) {
+        s.snapping.move_step = step;
+    }
+    let text = format!("{}°", fmt_step(s.snapping.rotate_step));
+    let tip = "Rotate increment (Shift+[ and Shift+]; scroll to step)";
+    let value = s.snapping.rotate_step;
+    if let (_, Some(step)) = step_chip(ui, &text, tip, ROTATE_STEPS, "°", value) {
+        s.snapping.rotate_step = step;
+    }
+}
+
 /// Actions that stay usable while a play session runs: the play controls, Save (it writes the
-/// edit world, which Play never changes) and Settings.
-pub const PLAY_SAFE: &[&str] = &["play.start", "play.stop", "file.save", "settings.open"];
+/// edit world, which Play never changes), Settings, and Close game (it stops Play, then asks
+/// about unsaved changes).
+pub const PLAY_SAFE: &[&str] = &[
+    "play.start",
+    "play.stop",
+    "file.save",
+    "file.close",
+    "settings.open",
+];
 
 /// Disables every action not in [`PLAY_SAFE`] while playing (tools, snapping, pivots, edit
 /// commands, selection, view framing). A disabled action also leaves its shortcut to the game.
@@ -862,7 +1033,7 @@ mod tests {
                 "{id} runs while playing"
             );
         }
-        for id in ["file.save", "settings.open", "play.stop"] {
+        for id in ["file.save", "file.close", "settings.open", "play.stop"] {
             assert!(r.get(id).is_some_and(|a| a.is_enabled(&s)), "{id} is off");
         }
         assert!(!r.run("tool.rotate", &mut s));
