@@ -9,7 +9,7 @@
 use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
-use crate::actions::{ActionRegistry, ToolbarGroup, default_actions, increment_chips};
+use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
 use crate::context_bar::ContextBar;
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
 use crate::explorer::Explorer;
@@ -22,6 +22,7 @@ use crate::script_editor::ScriptTabs;
 use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::viewport::Viewport;
+use crate::viewport_header::ViewportHeader;
 
 /// What the editor asks the app shell to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,9 +58,6 @@ fn recoloured_one(c: &crate::commands::Command) -> Option<metallic_core::Instanc
     }
 }
 
-/// Height of the viewport header in px (spec 3.1).
-pub const HEADER_HEIGHT: f32 = 36.0;
-
 /// The editor window for one open game.
 pub struct EditorUi {
     /// Data and edit entry points.
@@ -73,6 +71,8 @@ pub struct EditorUi {
     /// 3D view.
     pub viewport: Viewport,
     explorer: Explorer,
+    /// The strip over the viewport (spec 3.1).
+    pub header: ViewportHeader,
     /// The floating toolbar over the selection (spec 3.2).
     pub context_bar: ContextBar,
     /// First-time hints (spec 14.1); in memory until the app loads the saved ones.
@@ -102,6 +102,7 @@ impl EditorUi {
             viewport: Viewport::new(),
             explorer: Explorer::new(),
             properties: Properties::new(),
+            header: ViewportHeader::new(),
             context_bar: ContextBar::new(),
             hints: Hints::in_memory(),
             hint_seen: (u64::MAX, 0),
@@ -289,54 +290,6 @@ impl EditorUi {
                 self.hint(HintEvent::RecolouredOne(id));
             }
         }
-    }
-
-    /// The viewport header (spec 3.1), 36 px over the viewport: tools Q/W/E/R/T, the increments,
-    /// World/Local and Pivot/Centre, the snap chips and, at the right, Collisions.
-    fn viewport_header(&mut self, ui: &mut egui::Ui) {
-        let width = ui.available_width();
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(width, HEADER_HEIGHT), egui::Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, theme::bg_panel());
-        let inner = rect.shrink2(egui::vec2(8.0, 4.0));
-        // Collisions first, at the right end, so the rest never pushes it out.
-        let mut right = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(inner)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        right.spacing_mut().interact_size.y = 28.0;
-        self.actions
-            .chip(&mut right, "snap.collisions", &mut self.state, &self.keymap);
-        let used = right.min_rect().width() + 8.0;
-        let mut left_rect = inner;
-        left_rect.set_right(inner.right() - used);
-        let mut left = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(left_rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        left.set_clip_rect(left_rect);
-        // A narrow viewport scrolls the header sideways (wheel or drag) rather than hiding chips.
-        egui::ScrollArea::horizontal()
-            .id_salt("viewport-header")
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(&mut left, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.spacing_mut().interact_size.y = 28.0;
-                    self.actions
-                        .icon_keys(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
-                    ui.separator();
-                    increment_chips(ui, &mut self.state);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
-                });
-            });
     }
 
     fn requests(&mut self) {
@@ -637,7 +590,8 @@ impl EditorUi {
                 self.scripts.prune(&self.state);
                 let scene = self.scripts.tab_strip(ui, &mut self.state);
                 if scene {
-                    self.viewport_header(ui);
+                    self.header
+                        .ui(ui, &mut self.actions, &mut self.state, &self.keymap);
                     let before = ui.available_rect_before_wrap();
                     self.viewport.ui(ui, &mut self.state, render_state);
                     viewport_hovered = ui.rect_contains_pointer(before);

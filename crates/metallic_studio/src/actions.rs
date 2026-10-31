@@ -175,53 +175,8 @@ impl ActionRegistry {
             .collect();
         order.sort_by_key(|&i| self.actions[i].id == "play.stop");
         for i in order {
-            let a = &mut self.actions[i];
-            let enabled = a.is_enabled(state);
-            let checked = a.is_checked(state);
-            let shortcut = keymap.label(a.id);
-            let mut tip = if shortcut.is_empty() {
-                a.label.clone()
-            } else {
-                format!("{} ({shortcut})", a.label)
-            };
-            if a.id == "play.start" && !enabled && !state.play.is_playing() {
-                tip.push_str(
-                    "\nPlay is not connected yet: no play mode is registered in this build.",
-                );
-            }
-            // Tools, Play and Stop show their key as a cap; the rest are icon buttons whose
-            // tooltip names the key.
-            let labelled = matches!(a.group, ToolbarGroup::Tools | ToolbarGroup::Play);
-            let key = shortcut.as_str();
-            let name = a.label.as_str();
-            let mut button = if a.id == "play.start" {
-                Button::primary(name)
-            } else if a.group == ToolbarGroup::Play {
-                Button::secondary(name)
-            } else {
-                Button::ghost(if labelled { name } else { "" })
-            };
-            button = button.compact().selected(checked);
-            // A text placeholder icon says nothing the accessory label does not (Pivot/Centre).
-            if a.accessory.is_none() || !matches!(a.icon, Icon::Text(_)) {
-                button = button.glyph(a.icon);
-            }
-            if !labelled {
-                button = button.alt(&tip);
-            }
-            if labelled && !key.is_empty() {
-                button = button.keycap(key);
-            }
-            let mut resp = ui.add_enabled(enabled, button);
-            if labelled {
-                resp = resp.on_hover_text(&tip);
-            }
-            let resp = resp.on_disabled_hover_text(&tip);
-            if resp.clicked() {
-                clicked = Some(a.id);
-            }
-            if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
+            if toolbar_button(&mut self.actions[i], ui, state, keymap) {
+                clicked = Some(self.actions[i].id);
             }
         }
         if let Some(id) = clicked {
@@ -229,29 +184,26 @@ impl ActionRegistry {
         }
     }
 
-    /// Draws the actions of `group` as icon buttons with their key as a cap (the viewport
-    /// header's tools); the name is the tooltip and the accessible name.
+    /// Draws the actions of `group` as icon buttons (the viewport header's tools); with `keys`
+    /// each carries its key as a cap. The name is the tooltip and the accessible name.
     pub fn icon_keys(
         &mut self,
         ui: &mut egui::Ui,
         group: ToolbarGroup,
+        keys: bool,
         state: &mut EditorState,
         keymap: &Keymap,
     ) {
         let mut clicked = None;
         for a in self.actions.iter().filter(|a| a.group == group) {
             let key = keymap.label(a.id);
-            let tip = if key.is_empty() {
-                a.label.clone()
-            } else {
-                format!("{} ({key})", a.label)
-            };
+            let tip = tip_for(a, keymap);
             let mut button = Button::ghost("")
                 .compact()
                 .glyph(a.icon)
                 .selected(a.is_checked(state))
                 .alt(&tip);
-            if !key.is_empty() {
+            if keys && !key.is_empty() {
                 button = button.keycap(&key);
             }
             if ui.add_enabled(a.is_enabled(state), button).clicked() {
@@ -263,27 +215,42 @@ impl ActionRegistry {
         }
     }
 
-    /// Draws one action as a text toggle chip (Collisions at the header's right end).
-    pub fn chip(&mut self, ui: &mut egui::Ui, id: &str, state: &mut EditorState, keymap: &Keymap) {
-        let Some(a) = self.actions.iter().find(|a| a.id == id) else {
+    /// Draws one action: as a toolbar button, or as a chip with its short or full label.
+    pub fn draw_one(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: &str,
+        look: Look,
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let Some(a) = self.actions.iter_mut().find(|a| a.id == id) else {
             return;
         };
-        let shortcut = keymap.label(a.id);
-        let tip = if shortcut.is_empty() {
-            a.label.clone()
-        } else {
-            format!("{} ({shortcut})", a.label)
+        let clicked = match look {
+            Look::Toolbar => toolbar_button(a, ui, state, keymap),
+            Look::Chip => chip_button(a, ui, state, keymap, true),
+            Look::ChipFull => chip_button(a, ui, state, keymap, false),
         };
-        let button = Button::ghost(&a.label)
-            .compact()
-            .selected(a.is_checked(state));
-        let resp = ui
-            .add_enabled(a.is_enabled(state), button)
-            .on_hover_text(&tip);
-        if resp.clicked() {
+        if clicked {
             let id = a.id;
             self.run(id, state);
         }
+    }
+
+    /// Appends the ids of the actions in `group`, in registration order, to `out`.
+    pub fn ids_in(&self, group: ToolbarGroup, out: &mut Vec<&'static str>) {
+        out.extend(
+            self.actions
+                .iter()
+                .filter(|a| a.group == group)
+                .map(|a| a.id),
+        );
+    }
+
+    /// Draws one action as a text toggle chip with its full label (Collisions).
+    pub fn chip(&mut self, ui: &mut egui::Ui, id: &str, state: &mut EditorState, keymap: &Keymap) {
+        self.draw_one(ui, id, Look::ChipFull, state, keymap);
     }
 
     /// Draws the actions of `group` as text toggle chips (the snap targets).
@@ -296,29 +263,36 @@ impl ActionRegistry {
     ) {
         let mut clicked = None;
         for a in self.actions.iter_mut().filter(|a| a.group == group) {
-            let shortcut = keymap.label(a.id);
-            let tip = if shortcut.is_empty() {
-                a.label.clone()
-            } else {
-                format!("{} ({shortcut})", a.label)
-            };
-            let checked = a.is_checked(state);
-            let button = Button::ghost(short_label(&a.label))
-                .compact()
-                .selected(checked);
-            let resp = ui
-                .add_enabled(a.is_enabled(state), button)
-                .on_hover_text(&tip)
-                .on_disabled_hover_text(&tip);
-            if resp.clicked() {
+            if chip_button(a, ui, state, keymap, true) {
                 clicked = Some(a.id);
-            }
-            if let Some(acc) = &mut a.accessory {
-                acc(ui, state);
             }
         }
         if let Some(id) = clicked {
             self.run(id, state);
+        }
+    }
+
+    /// Draws `ids` as checkable menu entries (the viewport header's overflow menu).
+    pub fn check_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        ids: &[&'static str],
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for &id in ids {
+            let Some(a) = self.get(id) else { continue };
+            let button = egui::Button::new(&a.label)
+                .selected(a.is_checked(state))
+                .shortcut_text(keymap.label(id));
+            if theme::add_enabled(ui, a.is_enabled(state), button).clicked() {
+                clicked = Some(id);
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+            ui.close();
         }
     }
 
@@ -343,6 +317,100 @@ impl ActionRegistry {
             ui.close();
         }
     }
+}
+
+/// How [`ActionRegistry::draw_one`] draws an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    /// A toolbar button (icon, plus the accessory such as "World").
+    Toolbar,
+    /// A text chip with the first word of the label ("Grid").
+    Chip,
+    /// A text chip with the whole label ("Collisions").
+    ChipFull,
+}
+
+fn tip_for(a: &Action, keymap: &Keymap) -> String {
+    let shortcut = keymap.label(a.id);
+    if shortcut.is_empty() {
+        a.label.clone()
+    } else {
+        format!("{} ({shortcut})", a.label)
+    }
+}
+
+/// One toolbar button and its accessory; true when clicked.
+fn toolbar_button(
+    a: &mut Action,
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    keymap: &Keymap,
+) -> bool {
+    let enabled = a.is_enabled(state);
+    let checked = a.is_checked(state);
+    let shortcut = keymap.label(a.id);
+    let mut tip = tip_for(a, keymap);
+    if a.id == "play.start" && !enabled && !state.play.is_playing() {
+        tip.push_str("\nPlay is not connected yet: no play mode is registered in this build.");
+    }
+    // Tools, Play and Stop show their key as a cap; the rest are icon buttons whose tooltip
+    // names the key.
+    let labelled = matches!(a.group, ToolbarGroup::Tools | ToolbarGroup::Play);
+    let key = shortcut.as_str();
+    let name = a.label.as_str();
+    let mut button = if a.id == "play.start" {
+        Button::primary(name)
+    } else if a.group == ToolbarGroup::Play {
+        Button::secondary(name)
+    } else {
+        Button::ghost(if labelled { name } else { "" })
+    };
+    button = button.compact().selected(checked);
+    // A text placeholder icon says nothing the accessory label does not (Pivot/Centre).
+    if a.accessory.is_none() || !matches!(a.icon, Icon::Text(_)) {
+        button = button.glyph(a.icon);
+    }
+    if !labelled {
+        button = button.alt(&tip);
+    }
+    if labelled && !key.is_empty() {
+        button = button.keycap(key);
+    }
+    let mut resp = ui.add_enabled(enabled, button);
+    if labelled {
+        resp = resp.on_hover_text(&tip);
+    }
+    let clicked = resp.on_disabled_hover_text(&tip).clicked();
+    if let Some(acc) = &mut a.accessory {
+        acc(ui, state);
+    }
+    clicked
+}
+
+/// One text chip and its accessory; true when clicked.
+fn chip_button(
+    a: &mut Action,
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    keymap: &Keymap,
+    short: bool,
+) -> bool {
+    let tip = tip_for(a, keymap);
+    let text = if short {
+        short_label(&a.label)
+    } else {
+        a.label.as_str()
+    };
+    let button = Button::ghost(text).compact().selected(a.is_checked(state));
+    let clicked = ui
+        .add_enabled(a.is_enabled(state), button)
+        .on_hover_text(&tip)
+        .on_disabled_hover_text(&tip)
+        .clicked();
+    if let Some(acc) = &mut a.accessory {
+        acc(ui, state);
+    }
+    clicked
 }
 
 /// The chip text: the first word of the label ("Grid snapping" shows "Grid").

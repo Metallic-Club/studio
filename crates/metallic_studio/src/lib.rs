@@ -78,6 +78,7 @@ pub mod tools;
 pub mod transform;
 pub mod updater;
 pub mod viewport;
+pub mod viewport_header;
 pub mod widgets;
 
 pub use error::StudioError;

@@ -5,7 +5,11 @@ Branch `studio/226-building-surfaces`, from main after #337.
 ## Done
 - Viewport header (spec 3.1): a 36 px strip over the viewport with the tools, the increment chips ("1 stud", "15°",
   click for the list, scroll to step), World/Local, Pivot/Centre, Grid/Surface/Vertex/Edge/Align chips and
-  Collisions at the right. The top bar keeps Edit and Play.
+  Collisions at the right. The top bar keeps Edit and Play. `viewport_header.rs` never scrolls: tools and
+  increments always show, the rest stay by priority (Grid, Surface, World/Local, Vertex, Edge, Collisions,
+  Pivot/Centre, Align) using last frame's measured widths, and what does not fit goes into a "»" menu; when even
+  that is too narrow the tools drop their keycaps. Kittest checks 1280 and 1600 px (every header button inside the
+  strip). Screenshots: `226-header-1280.png`, `226-header-1600.png`.
 - Collisions (`snap.collisions`, off by default): `collisions::blocked` tests moved parts against the pick cache
   (sphere reject, then 15-axis box test, 0.01 stud touch tolerance); `GizmoDrag::hold_if` returns the drag to the
   last accepted frame without allocating.

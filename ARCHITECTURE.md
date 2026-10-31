@@ -170,8 +170,8 @@ apps.
   and glyphs, `Surface` placement in the hit part's grid, virtual surface, soft snap), `pivot.rs` (`Pivot`, `Rigid`,
   27 pivot snap points; pivots are core properties, `PivotOffset` and `WorldPivot`
   plus hidden `WorldPivotSet`, written through the preview overlay as one `SetProperties`, so they are undoable and saved). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
-  Building surfaces (#226): the viewport header in `editor_ui.rs` (tools, increment chips, space, pivot, snap chips,
-  Collisions), `collisions.rs` (oriented-box overlap test; with Collisions on, `GizmoDrag::hold_if` keeps the last
+  Building surfaces (#226): `viewport_header.rs` (tools, increment chips, space, pivot, snap chips, Collisions; a pure
+  `fit()` keeps items by priority from measured widths and moves the rest into a "»" menu, never scrolling), `collisions.rs` (oriented-box overlap test; with Collisions on, `GizmoDrag::hold_if` keeps the last
   frame that did not overlap), `context_bar.rs` (the floating bar over the selection: pure `place()` above, below or
   docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
   `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
