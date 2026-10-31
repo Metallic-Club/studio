@@ -676,7 +676,7 @@ impl Locomotion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::avatar::{STUD_METRES, default_model};
+    use crate::body_pose::{STUD_METRES, default_model};
     use glam::{Mat4, Vec3};
 
     const DT: f32 = 1.0 / 60.0;

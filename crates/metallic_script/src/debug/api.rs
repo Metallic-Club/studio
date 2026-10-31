@@ -167,6 +167,16 @@ impl Debugger<'_> {
         }
     }
 
+    /// Single-step hook calls so far, both VMs (for tests of what runs single-stepped).
+    #[doc(hidden)]
+    pub fn step_hook_calls(&self) -> u64 {
+        self.host
+            .sides()
+            .into_iter()
+            .map(|side| side.vm.sched().debug.step_hooks.get())
+            .sum()
+    }
+
     /// Running, or paused with the reason and call stack.
     pub fn state(&self) -> DebugState {
         let host = &*self.host;

@@ -87,6 +87,9 @@ pub struct ScriptHost {
     pub(crate) break_on_error: bool,
     /// Paused by [`Debugger::pause`] while no script was running.
     pub(crate) manual_pause: bool,
+    /// Set once [`Self::debugger`] is first used: until then nothing can pause, and
+    /// [`Self::is_paused`] is one load (a server or test host never asks for a debugger).
+    debugging: bool,
     /// Scripts found while paused (or after a start paused): started once the game runs.
     pending_starts: Vec<(InstanceId, Context, String, String)>,
     /// GUI events for the client scripts, delivered by the next step.
@@ -112,6 +115,7 @@ impl ScriptHost {
             breakpoints: BTreeMap::new(),
             break_on_error: false,
             manual_pause: false,
+            debugging: false,
             pending_starts: Vec::new(),
             gui_events: Vec::new(),
         }
@@ -148,13 +152,17 @@ impl ScriptHost {
 
     /// The script debugger: breakpoints, pause and step, and the paused frames.
     pub fn debugger(&mut self) -> Debugger<'_> {
+        self.debugging = true;
         Debugger { host: self }
     }
 
     /// True while the debugger has the game paused: [`Self::step`] then runs nothing and
     /// the runtime stops physics and characters too.
     pub fn is_paused(&self) -> bool {
-        // No allocation: the runtime asks every frame.
+        // No allocation: the runtime asks every tick.
+        if !self.debugging {
+            return false;
+        }
         self.manual_pause
             || self
                 .server

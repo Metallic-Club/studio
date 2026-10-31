@@ -55,6 +55,23 @@ theme = \"chrome\"
 }
 
 #[test]
+fn a_theme_that_is_not_a_word_resets_only_the_theme() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("settings.toml");
+    for bad in ["3", "true", "[\"light\"]", "{ name = \"light\" }"] {
+        std::fs::write(
+            &path,
+            format!("close_to_tray = false\ndeveloper_mode = true\ntheme = {bad}\n"),
+        )
+        .unwrap();
+        let settings = SettingsStore::at(path.clone()).load();
+        assert!(!settings.close_to_tray, "{bad}");
+        assert!(settings.developer_mode, "{bad}");
+        assert_eq!(settings.theme, Theme::Graphite, "{bad}");
+    }
+}
+
+#[test]
 fn every_named_theme_is_a_shared_token_theme() {
     // The pages set `data-theme` to this word; the token CSS must have a block for it.
     let set = metallic_tokens::parse(metallic_tokens::TOKENS_JSON).unwrap();

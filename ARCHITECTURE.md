@@ -12,11 +12,12 @@ graph LR
   asset[metallic_asset] --> render
   physics --> runtime[metallic_runtime]
   script --> runtime
-  render --> runtime
+  render -- presentation --> runtime
   audio[metallic_audio] -.-> runtime
   runtime --> player[metallic_player]
   runtime --> studio[metallic_studio]
   anim[metallic_anim] --> runtime
+  asset --> runtime
   anim --> animed[metallic_anim_editor]
   animed --> studio
   egui[egui] --> uitheme[metallic_ui_theme]
@@ -43,6 +44,18 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  `change_cursor` feeds independent readers: `changes_since` deduplicates coarse instance invalidations;
+  `changes_since_detailed` returns ordered `Change { id, kind }` notices for creation, destruction, direct
+  reparent operations, explicit same-parent/root reorders and properties. `Reordered` identifies the moved sibling;
+  its parent receives only a coarse invalidation, and unchanged descendants receive none. A cross-parent
+  `set_parent_at` emits one `Reparented` notice; readers observe its final position. Same-parent `set_parent`
+  and unchanged `set_parent_at` calls leave both cursors unchanged. Property tokens are canonical static registry names, with no journal-owned
+  strings or values. Private property metadata keeps a thin static `PropDef` pointer and forms the public name
+  token on read. Both readers share the same bounded retention/overflow boundary, including coarse-only
+  descendant invalidations after reparent. Clones record creations in deterministic parent-before-child order.
+  The detailed feed retains current-state invalidations, not historic values or a durable editing operation log.
+  This A1 foundation leaves the existing half-drop history algorithm unchanged; full-capacity ring PR #186
+  remains a separate integration, as do A2 wire property indices/filtering and the M2 transport/operation log.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
@@ -64,7 +77,7 @@ apps.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
+  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
   R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
@@ -122,6 +135,14 @@ apps.
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
   vignette, sRGB encode, dither). Add a pass with `renderer.post_mut().push(Box::new(pass))`; a pass that returns
   `reads_depth` gets the scene depth (multisampled when MSAA is on).
+  Post stack v1 (#65, `docs/agents/65-post-stack.md`): a pass that returns `reads_geometry` makes the renderer run a
+  1x geometry prepass (`shaders/prepass.wgsl`; world normal + linear view depth in one `Rgba16Float` target, negative
+  depth for hull-outlined toon skinned meshes) and gets it as `PostContext::geometry`. The `edges` HDR pass
+  (`edges.rs`, `EdgePass`, off by default) draws silhouette and crease lines from it and skips hull-outlined surfaces,
+  so toon characters keep one outline. The `mlaa` LDR pass (`mlaa.rs`, `MlaaPass`) is MLAA-style edge AA using SMAA's
+  local contrast test, on while MSAA is off. `Renderer::set_lut(Option<&Lut3d>, strength)` (`lut.rs`, `.cube` parsing) grades display colour in the
+  finish pass. GPU frame timing: `enable_gpu_timing` / `read_gpu_time_ms` (timestamp queries where the adapter has
+  them).
   Lighting (#149, `lighting.rs`, `shaders/lighting.wgsl`): `sync` also reads the `Lighting` service and its children
   (`LightingInputs::read`) and `evaluate`s them into the sky, the finish settings, a lighting block in the globals
   uniform (ambient, fog, shadow filter, sun / moon discs, stars) and the `bloom` post pass (`bloom.rs`).
@@ -158,6 +179,16 @@ apps.
   the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
   and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
   never reaches the game's input.
+  `Simulation` owns the shared CPU kernel (World, physics, characters, server/Combined ScriptHost, membership cache,
+  CPU skeletal body animation and fixed-step clock). Public constructors use server-only scripts without creating
+  a synthetic player; Game
+  delegates through a private Combined constructor. Trusted `PlayerInput` keys are world-local Player InstanceIds,
+  not backend/wire identities; inputs are world-space, missing samples are idle and repeated samples use the last
+  value. Character references resolve each server tick so respawn keeps the same Player input key. Each Player is
+  visited once per tick. Game retains its existing camera mapping, avatar, GUI and client input behavior.
+  Default feature `presentation` preserves existing APIs. Without default features, Simulation and `metallic-sim`
+  have no renderer/wgpu/window/GUI/gamepad dependency. `metallic-sim` runs a trusted project for finite explicit ticks,
+  then stops; it does not listen, admit players, register joinability, deploy a server or establish M2 acceptance.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
@@ -445,7 +476,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills). A
    character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
-3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
+3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`, and every
+   `drain_touch_ended` pair as `touch_ended(a, b)` and `touch_ended(b, a)`; a character
    touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
    touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model
    (`TouchEnded` still fires on the touched part when the character was destroyed first, with the destroyed limb);
@@ -522,3 +554,40 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - Benchmarks: criterion benches live in `crates/<crate>/benches/` (`cargo bench -p metallic_core --bench world` exists;
   render sync, physics step and script step follow). Budgets, bench names and the perf-CI plan are in
   `docs/research/2026-10-30-performance-and-scale.md`; record numbers in `docs/agents/`.
+
+
+### Core replication schema and visibility (issue 293)
+
+`metallic_core::classes` defines registry-level `Repl` eligibility and class-relative `property_index` /
+`property_by_index` lookups in base-first declaration order. `replication::registry_hash()` returns a cached
+SHA-256 compatibility fingerprint of ordered class names, inheritance, effective properties, types, defaults,
+allowed values and policy. Its versioned encoding uses explicit lengths and little-endian numeric bits. Peers
+must agree on this fingerprint before using property indices; it is neither a credential nor a scene hash.
+It returns `Result<[u8; 32], SchemaError>` (no panics): a malformed registry is a typed error and the peer refuses to connect. The test `registry_hash_is_pinned` holds the golden value; any class or property change must update it on purpose (the `registry_hash` example prints the new value). `classes::class_index` / `class_at` give the wire class index, and `metallic_core::{orientation_to_quat, quat_to_orientation}` (moved from physics) convert `Orientation` for the wire.
+
+`replication::{instance_visible, property_visible, property_value}` implement the play-client filter. They hide
+ServerStorage/ServerScriptService subtrees and server Script.Source, restrict private PlayerGui/PlayerScripts
+subtrees to their owning trusted Player, and turn references to invisible instances into Ref(None). Queries are
+uncached and reflect reparenting immediately. The caller supplies a Player from its authenticated, same-world
+roster; these functions do not authenticate it or send any data. Authorized edit sessions need their own snapshot
+policy. Combined-mode client/server VMs still share one World until the runtime split and transport are integrated.
+
+Core definitions now include ServerStorage (a standard service), ModuleScript, RemoteFunction,
+UnreliableRemoteEvent and PlayerScripts. Registration does not implement require or the new classes' Luau remote
+methods. Existing class order is retained by appending definitions. The small `registry_hash` core example prints
+only the fingerprint for comparing separate processes, without loading creator content.
+
+The replication registry fingerprint's v2 encoding includes hidden-property metadata and boxed CFrame defaults
+as 12 row-major little-endian f64 bit patterns. Allocation addresses are excluded. PropDef.hidden hides engine
+bookkeeping from Luau/Properties UI; it does not suppress replication. Confidentiality uses Repl plus instance,
+server-source and player-owner visibility. This lets client-side transform helpers receive the registered state.
+
+Fingerprint encoding v3 additionally includes each numeric range's presence, min/max bits and clamp/wrap mode.
+Encoding v4 adds a declared string-normalization contract id. `PropDef.normalize_schema_id` must be nonempty
+exactly when a normalizer exists; malformed declarations fail closed during fingerprint construction. The
+fingerprint never executes callbacks or encodes their addresses. Authors must bump the contract id when accepted
+aliases or normalization rules change; the hash describes that declared contract, not the implementation's code.
+Current-main GUI classes retain indices 34..36; the five replication classes append at 37..41. These preview
+indices are usable only after an equal fingerprint is negotiated.
+Lighting properties and class ordering from main are retained; replication-only classes append after those classes.
+Numeric normalization belongs to World::set; outgoing replication observes that authoritative normalized value.

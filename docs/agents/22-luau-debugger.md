@@ -24,15 +24,19 @@ Branch `studio/22-luau-debugger`. Two PRs: (1) VM hooks and the pause/step/inspe
   no script benches.
 - ModuleScripts: `require` tells the debugger about each compiled module chunk (breakpoints, frame names), and
   its `pcall` does not count as handling an error, so break-on-error stops at the module's error line.
-- A breakpoint hit during a tick stops the frame's tick loop at that tick; the frame's leftover time is dropped.
-  The avatar pose holds while paused.
+- The pause gate lives in `Simulation::advance` (and `tick_once`): no ticks while paused, and a breakpoint hit
+  during a tick stops the loop at that tick with the frame's leftover time dropped. `Game::frame` holds the
+  avatar pose while paused. A host that never handed out a `Debugger` (the server Simulation, tests) answers
+  `is_paused` with one bool load.
 - Step Over and Out across a yield (`task.wait()`) wait for that thread and stop at its next line; other threads
-  run meanwhile. Step Into across a yield stops in whatever script code runs next.
+  run meanwhile at full speed: Step Over and Out single-step only the stepped thread, so a thread that never
+  resumes leaves the rest of the game unaffected. Step Into across a yield stops in whatever script code runs
+  next (every thread single-steps for it).
 - Code resumed after a break (coroutines, `task.spawn` spawners) and watch expressions run as the paused frame's
   script, so their connections and threads count against that script's quotas and stop with it.
 - Single-step mode is cleared after each debugger resume. Setting a local to a value of another type is allowed
   (Luau is dynamic) with a warning in Output.
-- Tests: `crates/metallic_script/tests/debugger.rs` (23), `crates/metallic_runtime/tests/debugger_pause.rs` (2).
+- Tests: `crates/metallic_script/tests/debugger.rs` (24), `crates/metallic_runtime/tests/debugger_pause.rs` (2).
 
 ## PR 2: Studio UI
 

@@ -500,6 +500,38 @@ fn step_over_a_wait_stops_on_the_next_line_of_the_same_thread() {
 }
 
 #[test]
+fn a_step_over_waiting_forever_leaves_other_threads_at_full_speed() {
+    let (mut rig, _) = rig_with(
+        "game:GetService('RunService').Heartbeat:Connect(function()
+    local n = 0
+    for i = 1, 20 do n = n + i end
+end)
+task.wait(1e6)
+print('never')
+",
+        &[(5, Breakpoint::Plain)],
+    );
+    rig.host.start().unwrap();
+    assert_eq!(paused_at(&mut rig).map(|p| p.0), Some(5));
+    rig.host.debugger().step_over();
+    let before = rig.host.debugger().step_hook_calls();
+    let now = rig.run(0.0, 10);
+    assert!(!rig.host.is_paused());
+    assert_eq!(
+        rig.host.debugger().step_hook_calls(),
+        before,
+        "only the stepped thread single-steps; the Heartbeat handler runs normally"
+    );
+    // Step Into, by contrast, stops in the next thread that runs.
+    rig.host.debugger().pause();
+    rig.run(now, 1);
+    assert!(rig.host.is_paused());
+    rig.host.debugger().step_into();
+    rig.run(now + 1.0, 2);
+    assert!(rig.host.debugger().step_hook_calls() > before);
+}
+
+#[test]
 fn code_resumed_after_a_break_keeps_its_script() {
     let (mut rig, id) = rig_with(
         "local co = coroutine.create(function()\n    print('co')\n    game:GetService('RunService').Heartbeat:Connect(function() print('beat') end)\nend)\ncoroutine.resume(co)\n",

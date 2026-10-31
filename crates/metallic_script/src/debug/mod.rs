@@ -193,6 +193,8 @@ pub(crate) struct DebugCore {
     /// >0 while the debugger itself runs Lua (conditions, watches): no breaks then.
     suppress: Cell<u32>,
     step: Cell<Option<Step>>,
+    /// Single-step hook calls so far (tests check which threads single-step).
+    pub(crate) step_hooks: Cell<u64>,
     /// Break at the next instruction any thread runs (Pause, or a step with no stack).
     break_next: Cell<bool>,
     /// Paused threads, innermost first. Non-empty means paused.
@@ -271,6 +273,7 @@ impl DebugCore {
             break_on_error: Cell::new(false),
             suppress: Cell::new(0),
             step: Cell::new(None),
+            step_hooks: Cell::new(0),
             break_next: Cell::new(false),
             paused: RefCell::new(Vec::new()),
             reason: RefCell::new(None),
@@ -654,9 +657,16 @@ impl DebugCore {
     }
 
     /// Whether the thread being resumed should single-step.
+    /// Whether a resume of `l` runs single-stepped. A Step Over or Out single-steps only its
+    /// own thread: others run at full speed (they cannot end the step), even when the stepped
+    /// thread waits on something that never comes. Step Into, a finished step and Pause stop
+    /// in whatever runs next, so every thread single-steps for them.
     fn wants_step(&self, l: *mut ffi::lua_State) -> bool {
         self.break_next.get()
-            || self.step.get().is_some()
+            || self
+                .step
+                .get()
+                .is_some_and(|st| st.done || st.kind == StepKind::Into || st.thread == l)
             || self
                 .resumed
                 .borrow()
@@ -713,6 +723,7 @@ unsafe extern "C-unwind" fn hook_step(l: *mut ffi::lua_State, ar: *mut ffi::lua_
 
 unsafe fn on_step(s: &Scheduler, l: *mut ffi::lua_State, line: c_int) {
     let d = &s.debug;
+    d.step_hooks.set(d.step_hooks.get() + 1);
     if d.suppress.get() > 0 {
         return;
     }
