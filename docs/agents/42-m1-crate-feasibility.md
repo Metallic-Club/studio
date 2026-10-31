@@ -47,7 +47,7 @@ without asserting that no owner ever approved the policy. No dependencies or pub
 The original source index is preserved. Selected primary API pages for mlua 0.12.2, Velopack 1.2.161 and puffin
 were checked again during the publication pass; this is not a new audit of every historical citation or an update
 of every candidate version. Fresh workspace prebuild, strict all-target Clippy, licenses, format and task-range
-whitespace checks passed. The full actual workspace suite is queued in the shared Lua window before publication.
+whitespace checks passed. The full actual workspace suite passed before publication.
 
 The source-label integrity check found 97 defined entries, with no missing references or duplicate definitions.
 This checks document structure only; it does not establish that every historical external page is unchanged.
@@ -59,3 +59,12 @@ zero-result yield as an unexecuted candidate, adds GC/error prototype cases and 
 A final read-only review found no substantive contradiction; its ordinary-yield-status wording clarification was
 applied. No debugger behavior or new performance result is claimed. The tested crates tree is
 0178bb34d1e58cb44cfd78b01c26f438b252d6e5, exactly equal to main 5c84cf7; all task changes are documentation.
+
+Final fresh gates at 46a942f4753a878cafaf891fdd3dd05856a180ad: guarded workspace tests with serial harnesses
+passed 1,529 tests, zero failed, six existing manual tests and one upstream Studio documentation example ignored
+(119 groups). Workspace prebuild took 3m46s; strict workspace/all-target Clippy passed in 48.35s; license, format
+and task-range whitespace checks passed. Guarded lane122 transitioned from the completed root-owned #315 task,
+cleaning local workspace packages and retaining third-party dependencies; no compiler artifacts were copied.
+The actual test suite ran alone in the shared Lua window. Logs: <TEMP>/metallic-42-{workspace-build,workspace-tests,
+clippy,licenses}.log. The final evidence-only commit preserves that tested crates tree. Open one PR, monitor CI
+and leave merging to the owner/lead.
