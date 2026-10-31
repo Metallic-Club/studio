@@ -14,12 +14,15 @@ metallic_render.workspace = true
 # egui's bundled fonts (OFL-1.1 / Ubuntu-font-1.0, Ruling R11; texts in LICENSES/).
 egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
 thiserror = "2.0.21"
 wgpu = "30.0.1"
 toml = "1.1.8"
 
 [dev-dependencies]
+metallic_tokens.workspace = true
 png = "0.18.1"
+tempfile = "3"
 criterion.workspace = true
 
 [[bench]]
