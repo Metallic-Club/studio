@@ -33,14 +33,22 @@
 //! into `BasePart.Touched` and `BasePart.TouchEnded` on the touched part, with the character
 //! part as `hit`. When a character dies its contacts end and it reports no new touches.
 //!
-//! Rules: `Health <= 0` or the root below `Workspace.FallenPartsDestroyHeight` makes the
+//! Rules: `Health <= 0` (or not a number), the root below `Workspace.FallenPartsDestroyHeight`,
+//! or the root leaving the world (a non-finite coordinate or one beyond [`WORLD_LIMIT`]) makes the
 //! character Dead (one [`CharacterEvent::Died`], input ignored, gravity still applies); after
 //! [`RESPAWN_DELAY`] seconds the old Model is destroyed and a fresh one spawns. Touching a
 //! Checkpoint whose `Order` is higher than the current `RespawnLocation`'s (any Checkpoint beats a
 //! non-Checkpoint or none) makes it the player's `RespawnLocation` and colours it violet.
+//!
+//! Sanitising (#172, #272): `World::set` already clamps Humanoid tuning to the limits in
+//! [`metallic_core::classes`] and refuses non-finite numbers. The controller still reads every
+//! tuning value defensively (missing or non-finite becomes the default, then clamped to the same
+//! limits), resets a non-finite movement state to rest, ignores a non-finite move direction, and
+//! never writes a non-finite pose.
 use crate::avatar::{self, PartIds, ROOT_PART, VIOLET};
 use crate::body::{BodyPart, BodyPose, Contact, ROOT_HIT, TOUCH_MARGIN, TouchVolumes};
 use crate::{GRAVITY, PhysicsWorld, from_vector, to_vector};
+use metallic_core::classes::{MAX_JUMP_POWER, MAX_SLOPE_ANGLE, MAX_WALK_SPEED};
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::parry::query::ShapeCastOptions;
@@ -74,6 +82,36 @@ const SNAP_DISTANCE: f64 = 1.5;
 pub const MAX_PUSH: f64 = 0.5;
 /// Running ([`MoveInput::run`]) moves this many times faster than `Humanoid.WalkSpeed`.
 pub const RUN_MULTIPLIER: f64 = 1.5;
+/// A character whose root is farther than this from the origin on any axis, in studs, has left
+/// the world and dies (a Metallic addition next to `FallenPartsDestroyHeight`). At this distance
+/// the renderer's 32-bit positions are already off by a tenth of a stud.
+pub const WORLD_LIMIT: f64 = 1e6;
+
+/// Whether a root position is inside the world: finite, within [`WORLD_LIMIT`] on every axis
+/// and not below the destroy height `floor`.
+fn in_world(p: Vec3, floor: f64) -> bool {
+    // `abs() <= limit` is false for NaN and the infinities.
+    let inside = |c: f64| c.abs() <= WORLD_LIMIT;
+    inside(p.x) && inside(p.y) && inside(p.z) && p.y >= floor
+}
+
+fn finite_or(x: f64, default: f64) -> f64 {
+    if x.is_finite() { x } else { default }
+}
+
+fn is_finite_vec(v: Vec3) -> bool {
+    v.x.is_finite() && v.y.is_finite() && v.z.is_finite()
+}
+
+fn finite_vec_or_zero(v: Vec3) -> Vec3 {
+    if is_finite_vec(v) { v } else { Vec3::default() }
+}
+
+/// A tuning number as the controller uses it: missing or non-finite becomes `default`, then
+/// it is clamped to `0..=max`.
+fn tuning_value(v: Option<f64>, default: f64, max: f64) -> f64 {
+    finite_or(v.unwrap_or(default), default).clamp(0.0, max)
+}
 
 /// Movement wish for one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -169,6 +207,20 @@ struct Motion {
     velocity: Vec3,
     /// Velocity of the last step minus what the carrying part (or the part jumped from) added.
     relative: Vec3,
+}
+
+impl Motion {
+    /// The same state with every non-finite number reset to rest (#172: a NaN vertical speed
+    /// used to freeze the character for good).
+    fn sanitised(mut self) -> Self {
+        self.vertical = finite_or(self.vertical, 0.0);
+        self.inherited = finite_vec_or_zero(self.inherited);
+        self.yaw = finite_or(self.yaw, 0.0);
+        self.dead_time = finite_or(self.dead_time, 0.0).max(0.0);
+        self.velocity = finite_vec_or_zero(self.velocity);
+        self.relative = finite_vec_or_zero(self.relative);
+        self
+    }
 }
 
 impl Default for Motion {
@@ -268,7 +320,9 @@ fn ref_prop(world: &World, id: InstanceId, prop: &str) -> Option<InstanceId> {
 }
 
 /// Root position for a new character: on top of the RespawnLocation, the first SpawnLocation,
-/// or (0, 3, 0).
+/// or (0, 3, 0). A pad whose top lies outside the world ([`WORLD_LIMIT`]) is skipped and the
+/// default is used, so the new character is not killed for leaving the world as soon as it
+/// spawns, again and again (#345).
 fn spawn_point(world: &World, player: InstanceId, workspace: InstanceId) -> Vec3 {
     let pad = ref_prop(world, player, "RespawnLocation")
         .filter(|&p| world.is_a(p, "BasePart"))
@@ -282,6 +336,7 @@ fn spawn_point(world: &World, player: InstanceId, workspace: InstanceId) -> Vec3
         let half = (up[0].abs() * size.x + up[1].abs() * size.y + up[2].abs() * size.z) / 2.0;
         Some(pos + Vec3::new(0.0, half + ROOT_HEIGHT, 0.0))
     });
+    let on_top = on_top.filter(|&p| in_world(p, f64::NEG_INFINITY));
     on_top.unwrap_or(Vec3::new(0.0, ROOT_HEIGHT, 0.0))
 }
 
@@ -462,12 +517,16 @@ impl CharacterController {
                 dead_time: state.dead_time,
                 velocity: state.velocity,
                 relative: state.relative,
-            },
+            }
+            .sanitised(),
         );
-        let body = self.bodies.entry(character).or_default();
-        body.ids.refresh(world, character);
-        let pose = body.volumes.pose(state.yaw);
-        avatar::place_pose(world, &body.ids, state.position, state.yaw, &pose);
+        if is_finite_vec(state.position) {
+            let yaw = finite_or(state.yaw, 0.0);
+            let body = self.bodies.entry(character).or_default();
+            body.ids.refresh(world, character);
+            let pose = body.volumes.pose(yaw);
+            avatar::place_pose(world, &body.ids, state.position, yaw, &pose);
+        }
     }
 
     /// Takes the events of all steps since the last call, oldest first.
@@ -500,8 +559,17 @@ impl CharacterController {
         let Some(root_pos) = vec_prop(world, root, "Position") else {
             return;
         };
-        let mut m = self.motions.get(&character).copied().unwrap_or_default();
+        let mut m = self
+            .motions
+            .get(&character)
+            .copied()
+            .unwrap_or_default()
+            .sanitised();
         let dt = dt.max(0.0);
+        let floor = world
+            .root("Workspace")
+            .and_then(|w| num_prop(world, w, "FallenPartsDestroyHeight"))
+            .unwrap_or(f64::NEG_INFINITY);
 
         if m.state == HumanoidState::Dead {
             m.dead_time += dt;
@@ -520,37 +588,47 @@ impl CharacterController {
             }
         } else {
             let health = num_prop(world, humanoid, "Health").unwrap_or(0.0);
-            let floor = world
-                .root("Workspace")
-                .and_then(|w| num_prop(world, w, "FallenPartsDestroyHeight"))
-                .unwrap_or(f64::NEG_INFINITY);
-            if health <= 0.0 || root_pos.y < floor {
-                m = Motion {
-                    state: HumanoidState::Dead,
-                    vertical: m.vertical.min(0.0),
-                    yaw: m.yaw,
-                    ..Motion::default()
-                };
-                self.events.push(CharacterEvent::Died {
-                    character,
-                    humanoid,
-                });
+            // `World::set` refuses NaN, so a NaN Health cannot be written today; the is_nan
+            // check stays as a guard in case a future path stores one (#172, #345).
+            if health.is_nan() || health <= 0.0 || !in_world(root_pos, floor) {
+                self.die(&mut m, character, humanoid);
             }
         }
         let alive = m.state != HumanoidState::Dead;
-        let input = if alive { input } else { MoveInput::default() };
-        let hum = |p: &str, default: f64| num_prop(world, humanoid, p).unwrap_or(default);
+        let mut input = if alive { input } else { MoveInput::default() };
+        input.dir = finite_vec_or_zero(input.dir);
+        let hum = |p: &str, default: f64, max: f64| {
+            tuning_value(num_prop(world, humanoid, p), default, max)
+        };
         let tuning = Tuning {
-            walk_speed: hum("WalkSpeed", 16.0) * if input.run { RUN_MULTIPLIER } else { 1.0 },
-            jump_power: hum("JumpPower", 50.0),
-            max_slope: hum("MaxSlopeAngle", 89.0).clamp(0.0, 89.9),
+            walk_speed: hum("WalkSpeed", 16.0, MAX_WALK_SPEED)
+                * if input.run { RUN_MULTIPLIER } else { 1.0 },
+            jump_power: hum("JumpPower", 50.0, MAX_JUMP_POWER),
+            max_slope: hum("MaxSlopeAngle", 89.0, MAX_SLOPE_ANGLE),
         };
 
         let own: Vec<ColliderHandle> = parts_of(world, character)
             .into_iter()
             .filter_map(|p| physics.collider_of(p))
             .collect();
-        let new_root = move_capsule(physics, &own, &mut m, root_pos, input, &tuning, dt);
+        // A root far outside the world (huge or non-finite) is not swept through the scene:
+        // the character is already dead and waits to respawn where it is.
+        let lost = !in_world(root_pos, f64::NEG_INFINITY);
+        let mut new_root = if lost {
+            root_pos
+        } else {
+            move_capsule(physics, &own, &mut m, root_pos, input, &tuning, dt)
+        };
+        m = m.sanitised();
+        if !is_finite_vec(new_root) {
+            // Never write a non-finite pose: the world would refuse it and the character would
+            // hang where it was.
+            new_root = root_pos;
+        }
+        if alive && !in_world(new_root, floor) {
+            self.die(&mut m, character, humanoid);
+        }
+        let alive = m.state != HumanoidState::Dead;
 
         let flat = Vec3::new(input.dir.x, 0.0, input.dir.z);
         if flat.magnitude() > 1e-3 {
@@ -603,6 +681,20 @@ impl CharacterController {
         self.started = started;
         self.ended = ended;
         self.motions.insert(character, m);
+    }
+
+    /// Makes the character Dead and reports [`CharacterEvent::Died`] (once per life).
+    fn die(&mut self, m: &mut Motion, character: InstanceId, humanoid: InstanceId) {
+        *m = Motion {
+            state: HumanoidState::Dead,
+            vertical: m.vertical.min(0.0),
+            yaw: m.yaw,
+            ..Motion::default()
+        };
+        self.events.push(CharacterEvent::Died {
+            character,
+            humanoid,
+        });
     }
 
     /// Applies the checkpoint rule to every newly touched Checkpoint.

@@ -46,6 +46,10 @@ enum HostEvent {
         part: InstanceId,
         hit: InstanceId,
     },
+    TouchEnded {
+        part: InstanceId,
+        hit: InstanceId,
+    },
     Died {
         humanoid: InstanceId,
     },
@@ -301,6 +305,11 @@ impl ScriptHost {
         self.inputs.push(HostEvent::Touched { part, hit });
     }
 
+    /// Queues `part.TouchEnded(hit)` for the next `step`.
+    pub fn touch_ended(&mut self, part: InstanceId, hit: InstanceId) {
+        self.inputs.push(HostEvent::TouchEnded { part, hit });
+    }
+
     /// Queues `Humanoid.Died` for the next `step`.
     pub fn humanoid_died(&mut self, humanoid: InstanceId) {
         self.inputs.push(HostEvent::Died { humanoid });
@@ -484,6 +493,9 @@ impl ScriptHost {
             match input {
                 HostEvent::Touched { part, hit } => {
                     self.fire_instance_event(part, EventKind::Touched, Some(hit));
+                }
+                HostEvent::TouchEnded { part, hit } => {
+                    self.fire_instance_event(part, EventKind::TouchEnded, Some(hit));
                 }
                 HostEvent::Died { humanoid } => {
                     self.fire_instance_event(humanoid, EventKind::Died, None);

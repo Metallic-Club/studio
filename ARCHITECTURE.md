@@ -50,7 +50,12 @@ apps.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here.
+  and the Humanoid rules (death, respawn, checkpoints) live here. A character is a `HumanoidRootPart` (the only
+  character part with a Rapier body) plus the 15 R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`).
+  Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every frame with
+  `CharacterController::set_body_pose` (else `BodyPose::rest`). The capsules are queries only: one broad-phase lookup
+  per step, at most `MAX_TOUCH_CANDIDATES` parts, nothing allocated once warm. They report
+  `CharacterEvent::Touched`/`TouchEnded { part, hit }` per body part; the movement capsule reports as the root.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_vfx_editor** (#41, implemented): egui widgets for `metallic_vfx`: module stack, node canvas, curve and gradient editors, timeline and a live preview. Not wired into Studio yet.
@@ -104,7 +109,8 @@ apps.
   The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
-  physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
+  avatar's posed bones become the character's touch volumes (`body_pose.rs`: each body part's capsule is skinned
+  rigidly by one VRM bone) and go to `CharacterController::set_body_pose` after every frame. `locomotion.rs` is a small built-in controller
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
@@ -134,6 +140,17 @@ apps.
   Decoding/streaming through Symphonia (WAV, OGG Vorbis, FLAC, MP3). Notes: `docs/agents/81-audio.md`.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Editing (Task 10): `editor.rs` (`EditorState`: world, `Selection`, `History`, tool/snap settings, Output sink,
+  `PlayController`; no UI), `editor_ui.rs` (window layout), `commands.rs` (`Command`, `History::apply/record/undo/redo`;
+  deletes park instances so undo restores the same ids), `selection.rs`, `viewport.rs` (renders through
+  `metallic_render` into an egui texture on eframe's wgpu device, only when world/camera/size change; picking via
+  `picking.rs`, camera in `camera.rs`), `gizmo.rs` (own move/rotate/scale handles; pure maths plus egui painting),
+  `explorer.rs`, `properties.rs` (live preview while the pointer is held, one undo step on release),
+  `script_editor.rs`, `transform.rs`, `expr.rs`. Seams: `actions.rs` (toolbar/menu/key actions as data, with
+  accessories), `keymap.rs` (bindings as data), `output.rs` (`OutputSink::push(tag, level, text)` over a bounded
+  channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
+  start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
+  and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
@@ -294,8 +311,10 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
   screens). `TouchControls` captures each finger with the first thing it lands on and pushes `Device::Touch` events;
   sliding off a button sends `RawEvent::cancel` (Released without Triggered). `paint` draws it with egui in the
   visual-language colours. `ContextActionService:GetButton` reads the placed buttons (`Game::set_touch_buttons`).
-  The Controls page's touch settings (stick mode, opacity) drive the overlay; touch controls have their own glyphs.
-- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, a touch tab on the Controls page.
+  The Controls page's Touch tab (#333: stick mode, opacity, size 0.8x to 1.5x, Large controls) drives the overlay;
+  touch controls have their own glyphs. A held press whose action changes role is cancelled on reload. While touch
+  shows, `Game::set_gui_inset` moves the `ScreenGui` root below a top-placed menu button, eased with the fade.
+- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, swap sides and Edit layout.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;
@@ -303,10 +322,12 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
 
 1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift sets
    `MoveInput::run`: 1.5 x `Humanoid.WalkSpeed`, which scripts still read unchanged); death, respawn, checkpoints and
-   character touches happen here.
+   character touches happen here. Humanoid tuning is clamped in the class registry (`metallic_core::classes`
+   `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills).
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
-   touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
+   touch as `touched(part, hit)` and its end as `touch_ended(part, hit)`, with `hit` the touching body part (or the
+   `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
    `Respawned` -> `physics.sync_from` and `character_added(player, model)`.
 4. **script step** (`ScriptHost::step`: new scripts, remotes, the inputs above, `RunService.Heartbeat`, resumed waits).
 5. **physics re-sync** when the change journal shows a BasePart under Workspace was created, destroyed, reparented or
@@ -359,7 +380,9 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
 - **A Studio edit action:** a `Command` in `metallic_studio/src/commands.rs` applied through `History`, never by
-  mutating the world directly.
+  mutating the world directly (a live-preview gesture writes the world while dragging and calls
+  `EditorState::record` once on release). A toolbar or menu command: register an `Action` in
+  `metallic_studio/src/actions.rs` and, for a default key, a row in `keymap.rs` `METALLIC_PRESET`.
 
 ## Quality bar
 - Local Cargo cache ownership across worktrees: use `tools/cargo_lane.py` for a

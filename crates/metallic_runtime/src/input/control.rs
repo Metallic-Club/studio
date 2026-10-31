@@ -116,8 +116,9 @@ controls! {
 }
 
 /// Number of per-action touch button controls (`TouchButton1` to `TouchButton7`): the automatic
-/// touch controls give each on-screen button its own control (spec 4.3, "TouchButton(action)"):
-/// six buttons around the primary and the menu button.
+/// touch controls give each on-screen button its own control (spec 4.3, "TouchButton(action)").
+/// `TouchButton1` to `TouchButton6` are the at most 6 action buttons of spec 7.2 (the primary is
+/// `TouchButton1`, the secondaries follow in `TouchOrder`); `TouchButton7` is the menu button.
 pub const TOUCH_BUTTON_SLOTS: usize = 7;
 
 /// Number of controls.

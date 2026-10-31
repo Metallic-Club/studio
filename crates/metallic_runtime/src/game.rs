@@ -84,6 +84,8 @@ pub struct Game {
     running: bool,
     /// `InputRuntime::device_changes` when the scripts were last told the last-used device.
     input_device_changes: Option<u64>,
+    /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
+    gui_inset: f32,
 }
 
 impl Game {
@@ -137,6 +139,7 @@ impl Game {
             avatar: None,
             running: false,
             input_device_changes: None,
+            gui_inset: 0.0,
         }
     }
 
@@ -320,12 +323,14 @@ impl Game {
     /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches);
     /// 2. physics step (movers, loose parts);
     /// 3. events fed to the scripts: part-part touches both ways, character touches as
-    ///    `part.Touched(HumanoidRootPart)`, `Humanoid.Died`, `CharacterAdded` on respawn;
+    ///    `part.Touched(hit)` and `part.TouchEnded(hit)` with the touching body part (`LeftHand`,
+    ///    ...) or the `HumanoidRootPart`, `Humanoid.Died`, `CharacterAdded` on respawn;
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
     /// Then the skinned avatar follows the character (pose, smoothed facing, animation over `dt`)
-    /// and the camera follows too. Draw with [`Game::render`] and [`crate::gui::paint`].
+    /// and hands its bones to the character's touch volumes for the next ticks; the camera
+    /// follows too. Draw with [`Game::render`] and [`crate::gui::paint`].
     pub fn frame(&mut self, input: &FrameInput, dt: f64) -> FrameOutput {
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_FRAME_DT)
@@ -408,10 +413,26 @@ impl Game {
         self.scripts.set_input_devices(touch, keyboard, gamepad);
     }
 
+    /// Sets the GUI inset: the top `points` of the screen belong to the Player's own controls
+    /// (the touch overlay's menu button, spec 7.2), so every ScreenGui is laid out in the screen
+    /// below it, like Roblox's default `IgnoreGuiInset = false`. Zero when nothing is there.
+    pub fn set_gui_inset(&mut self, points: f32) {
+        self.gui_inset = if points.is_finite() {
+            points.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    /// The GUI inset in points.
+    pub fn gui_inset(&self) -> f32 {
+        self.gui_inset
+    }
+
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.world.try_borrow() {
-            crate::gui::paint(&world, painter);
+            crate::gui::paint(&world, painter, self.gui_inset);
         }
     }
 
@@ -443,15 +464,9 @@ impl Game {
     fn feed_events(&mut self) {
         for event in self.characters.drain_events() {
             match event {
-                CharacterEvent::Touched { character, part } => {
-                    let hit = self
-                        .world
-                        .try_borrow()
-                        .ok()
-                        .and_then(|w| w.find_first_child(character, ROOT_PART));
-                    if let Some(hit) = hit {
-                        self.scripts.touched(part, hit);
-                    }
+                CharacterEvent::Touched { part, hit, .. } => self.scripts.touched(part, hit),
+                CharacterEvent::TouchEnded { part, hit, .. } => {
+                    self.scripts.touch_ended(part, hit);
                 }
                 CharacterEvent::Died { humanoid, .. } => self.scripts.humanoid_died(humanoid),
                 CharacterEvent::Respawned {
@@ -520,6 +535,9 @@ impl Game {
             ..LocomotionInput::new(speed, support)
         };
         avatar.update(root, yaw, input, dt);
+        // The touch volumes follow the bones drawn this frame from the next tick on.
+        self.characters
+            .set_body_pose(character, &avatar.body_pose(root));
     }
 
     /// The character's `HumanoidRootPart` position and facing (`Orientation.Y`, degrees).

@@ -159,6 +159,28 @@ fn touched_connects_and_disconnects() {
 }
 
 #[test]
+fn touch_ended_fires_with_the_part_that_left() {
+    let mut rig = Rig::new();
+    let ws = rig.root("Workspace");
+    let pad = rig.add("Part", "Pad", ws);
+    let hand = rig.add("Part", "LeftHand", ws);
+    rig.server_script(
+        "S",
+        r#"
+        workspace.Pad.Touched:Connect(function(hit) print("on", hit.Name) end)
+        workspace.Pad.TouchEnded:Connect(function(hit) print("off", hit.Name) end)
+        "#,
+    );
+    start(&mut rig);
+    let t = rig.run(0.0, 1);
+    rig.host.touched(pad, hand);
+    let t = rig.run(t, 1);
+    rig.host.touch_ended(pad, hand);
+    rig.run(t, 1);
+    assert_eq!(rig.lines(), ["print:on LeftHand", "print:off LeftHand"]);
+}
+
+#[test]
 fn connect_inside_handler_does_not_fire_in_same_dispatch() {
     let mut rig = Rig::new();
     let ws = rig.root("Workspace");

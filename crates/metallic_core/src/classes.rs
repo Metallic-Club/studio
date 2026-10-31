@@ -62,6 +62,15 @@ pub const LIGHTING_STYLES: &[&str] = &["Realistic", "Soft"];
 /// rest are Metallic additions (`docs/research/2026-10-30-lighting.md` 5.4).
 pub const TONEMAPPER_PRESETS: &[&str] = &["Default", "Retro", "AgX", "Neutral", "ACES", "Filmic"];
 
+/// Largest `Humanoid.Health` and `Humanoid.MaxHealth` (writes above are clamped).
+pub const MAX_HUMANOID_HEALTH: f64 = 1e9;
+/// Largest `Humanoid.WalkSpeed` in studs per second (writes above are clamped).
+pub const MAX_WALK_SPEED: f64 = 1000.0;
+/// Largest `Humanoid.JumpPower` in studs per second (writes above are clamped).
+pub const MAX_JUMP_POWER: f64 = 1000.0;
+/// Largest `Humanoid.MaxSlopeAngle` in degrees, as in Roblox (writes above are clamped).
+pub const MAX_SLOPE_ANGLE: f64 = 89.0;
+
 /// Definition of one property of a class.
 pub struct PropDef {
     /// Property name.
@@ -336,11 +345,24 @@ static CLASSES: &[ClassDef] = &[
         "Humanoid",
         "Instance",
         &[
-            p("Health", ValueType::Number, || Value::Number(100.0)),
-            p("MaxHealth", ValueType::Number, || Value::Number(100.0)),
-            p("WalkSpeed", ValueType::Number, || Value::Number(16.0)),
-            p("JumpPower", ValueType::Number, || Value::Number(50.0)),
-            p("MaxSlopeAngle", ValueType::Number, || Value::Number(89.0)),
+            // Tuning is clamped on write (scripts, scene files, engine code) so a huge value
+            // cannot send a character to infinity (#272). Non-finite writes are refused by
+            // `World::set` and the old value stays.
+            num("Health", || Value::Number(100.0), 0.0, MAX_HUMANOID_HEALTH),
+            num(
+                "MaxHealth",
+                || Value::Number(100.0),
+                0.0,
+                MAX_HUMANOID_HEALTH,
+            ),
+            num("WalkSpeed", || Value::Number(16.0), 0.0, MAX_WALK_SPEED),
+            num("JumpPower", || Value::Number(50.0), 0.0, MAX_JUMP_POWER),
+            num(
+                "MaxSlopeAngle",
+                || Value::Number(89.0),
+                0.0,
+                MAX_SLOPE_ANGLE,
+            ),
         ],
     ),
     class(

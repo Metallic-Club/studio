@@ -24,6 +24,8 @@
 //! [`CharacterEvent::Touched`] and [`CharacterEvent::TouchEnded`] instead.
 #![warn(missing_docs)]
 
+#[cfg(test)]
+mod alloc_count;
 mod avatar;
 mod body;
 mod character;
@@ -34,7 +36,8 @@ pub use avatar::VIOLET;
 pub use body::{BODY_PART_COUNT, BodyPart, BodyPose, MAX_TOUCH_CANDIDATES};
 pub use character::{
     CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT,
-    MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, place_character, spawn_character,
+    MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, WORLD_LIMIT, place_character,
+    spawn_character,
 };
 pub use sync::{MaterialProps, material_props};
 

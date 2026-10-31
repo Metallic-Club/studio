@@ -80,13 +80,7 @@ impl PartIds {
 
 /// Writes Position and Orientation of the root part (at `root`, facing `yaw` degrees; 0 looks
 /// along -Z) and of every body part (from `pose`). Missing parts are skipped.
-pub(crate) fn place_pose(
-    world: &mut World,
-    ids: &PartIds,
-    root: Vec3,
-    yaw: f64,
-    pose: &BodyPose,
-) {
+pub(crate) fn place_pose(world: &mut World, ids: &PartIds, root: Vec3, yaw: f64, pose: &BodyPose) {
     // The properties exist on every Part, so these writes cannot fail.
     if let Some(id) = ids.root {
         let _ = world.set(id, "Position", Value::Vector3(root));
@@ -98,7 +92,11 @@ pub(crate) fn place_pose(
         };
         let frame = pose.parts[p.index()];
         let _ = world.set(id, "Position", Value::Vector3(root + frame.position));
-        let _ = world.set(id, "Orientation", Value::Vector3(frame.orientation_degrees()));
+        let _ = world.set(
+            id,
+            "Orientation",
+            Value::Vector3(frame.orientation_degrees()),
+        );
     }
 }
 

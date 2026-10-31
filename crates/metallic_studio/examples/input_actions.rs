@@ -117,7 +117,7 @@ fn main() -> eframe::Result {
         "Input actions",
         native,
         Box::new(move |cc| {
-            theme::apply(&cc.egui_ctx);
+            theme::apply(&cc.egui_ctx, theme::ThemeId::Graphite);
             Ok(Box::new(App {
                 world,
                 panel,

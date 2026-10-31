@@ -360,7 +360,7 @@ impl PaletteStore {
 }
 
 /// Writes through a temporary file and a rename, so a crash never leaves half a file.
-fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

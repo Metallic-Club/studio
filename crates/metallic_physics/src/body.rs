@@ -452,14 +452,59 @@ mod tests {
 
     #[test]
     fn diff_reports_started_and_ended_in_order() {
-        let mut world = metallic_core::World::new();
+        let mut world = metallic_core::World::new_empty();
         let p = world.create("Part", None).unwrap();
         let c = |hit: Hit| Contact { hit, part: p };
         let before = [c(0), c(2), c(5)];
         let now = [c(1), c(2), c(6)];
         let (mut s, mut e) = (Vec::new(), Vec::new());
-        diff(&before, &now, &mut |x| s.push(x.hit), &mut |x| e.push(x.hit));
+        diff(&before, &now, &mut |x| s.push(x.hit), &mut |x| {
+            e.push(x.hit)
+        });
         assert_eq!(s, [1, 6]);
         assert_eq!(e, [0, 5]);
+    }
+
+    #[test]
+    fn query_and_commit_do_not_allocate_once_warm() {
+        use metallic_core::{Value, World};
+        let mut world = World::new_with_services();
+        let ws = world.root("Workspace").unwrap();
+        let mut add = |pos: Vec3, size: Vec3| {
+            let id = world.create("Part", Some(ws)).unwrap();
+            world.set(id, "Position", Value::Vector3(pos)).unwrap();
+            world.set(id, "Size", Value::Vector3(size)).unwrap();
+            world.set(id, "Anchored", Value::Bool(true)).unwrap();
+        };
+        add(Vec3::new(0.0, -2.0, 0.0), Vec3::new(64.0, 4.0, 64.0));
+        for i in 0..40 {
+            let f = f64::from(i);
+            add(
+                Vec3::new((f * 0.7).sin(), 1.0 + f * 0.1, (f * 0.3).cos()),
+                Vec3::new(0.3, 0.3, 0.3),
+            );
+        }
+        let mut physics = PhysicsWorld::new();
+        physics.sync_from(&world);
+        let mut volumes = TouchVolumes::default();
+        let probe = Capsule::new_y(1.5, 1.1);
+        let frame = |volumes: &mut TouchVolumes, k: usize| {
+            // Alternate two poses so contacts start and end every step.
+            let pose = BodyPose::rest(if k.is_multiple_of(2) { 0.0 } else { 90.0 });
+            let root = Vec3::new(0.0, 3.0, 0.0);
+            let probe_pose = Pose::from_translation(to_vector(root - Vec3::new(0.0, 0.48, 0.0)));
+            volumes.query(&physics, &[], &probe, &probe_pose, &pose, root);
+            let (mut started, mut ended) = (0, 0);
+            volumes.commit(|_| started += 1, |_| ended += 1);
+            started + ended
+        };
+        for k in 0..20 {
+            frame(&mut volumes, k);
+        }
+        let (changes, allocations) =
+            crate::alloc_count::count(|| (0..600).map(|k| frame(&mut volumes, k)).sum::<usize>());
+        assert!(changes > 0, "the poses should change the contacts");
+        assert!(!volumes.touching.is_empty());
+        assert_eq!(allocations, 0);
     }
 }

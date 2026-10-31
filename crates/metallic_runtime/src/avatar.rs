@@ -4,9 +4,11 @@
 //! process. Each frame [`Avatar::update`] places it on the `HumanoidRootPart` (feet
 //! [`ROOT_HEIGHT`] studs below the root centre, so they rest on the floor), turns it smoothly
 //! toward the character's facing and animates it with the built-in
-//! [`crate::locomotion::Locomotion`] state machine. The character's invisible body parts still do
-//! the collisions and touches.
+//! [`crate::locomotion::Locomotion`] state machine. [`Avatar::body_pose`] hands the posed bones to
+//! the character's touch volumes, so touches follow the limbs on screen.
+use crate::body_pose::BodyRig;
 use crate::locomotion::{Locomotion, LocomotionInput};
+use metallic_physics::BodyPose;
 use metallic_physics::ROOT_HEIGHT;
 use metallic_render::glam::{Mat4, Vec3};
 use metallic_render::metallic_asset::{Pose, SkinnedModel};
@@ -47,6 +49,9 @@ pub(crate) struct Avatar {
     /// Feet position in studs.
     feet: Vec3,
     joints: Vec<Mat4>,
+    /// The model matrix of the last [`Avatar::place`].
+    model_matrix: Mat4,
+    rig: BodyRig,
 }
 
 impl Avatar {
@@ -54,6 +59,7 @@ impl Avatar {
     pub fn new(model: Arc<SkinnedModel>, root: Vec3, yaw: f32) -> Avatar {
         let locomotion = Locomotion::new(&model);
         let pose = Pose::rest(&model.skeleton);
+        let rig = BodyRig::new(&model.skeleton);
         let mut avatar = Avatar {
             model,
             locomotion,
@@ -61,6 +67,8 @@ impl Avatar {
             yaw,
             feet: root,
             joints: Vec::new(),
+            model_matrix: Mat4::IDENTITY,
+            rig,
         };
         avatar.place(root);
         avatar
@@ -109,8 +117,15 @@ impl Avatar {
         let model = Mat4::from_translation(self.feet)
             * Mat4::from_rotation_y(self.yaw + PI)
             * Mat4::from_scale(Vec3::splat(1.0 / STUD_METRES));
+        self.model_matrix = model;
         self.pose
             .skin_matrices(&self.model.skeleton, model, &mut self.joints);
+    }
+
+    /// Where the character's body parts are in the pose last drawn, relative to the root centre
+    /// `root` (studs): the input of the touch volumes. Allocates nothing.
+    pub fn body_pose(&self, root: Vec3) -> BodyPose {
+        self.rig.pose(&self.joints, self.model_matrix, root)
     }
 
     /// What the renderer draws for this avatar.

@@ -127,7 +127,8 @@ local cf, size = door:GetBoundingBox()
 
 | Signal | Arguments | Fired when |
 |---|---|---|
-| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is its `HumanoidRootPart` (so `hit.Parent` is the character Model) |
+| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
+| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, or the character died); pairs with `Touched`. Part-to-part contacts report `Touched` only |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |
@@ -149,6 +150,10 @@ StarterGui, Lighting, RunService, UserInputService, ContextActionService. Others
 - Player: `UserId`, `Character`, `CharacterAdded`. Combined startup creates a `PlayerGui` for its local player;
   server-only startup adds no player or GUI.
 - `Humanoid:TakeDamage(n)` only lowers `Health` (not below 0). Death is detected by the character controller.
+- Humanoid tuning is clamped on write: `Health` and `MaxHealth` to 0..1e9, `WalkSpeed` and `JumpPower` to 0..1000,
+  `MaxSlopeAngle` to 0..89. Setting a NaN or infinite number raises an error and keeps the old value. A character
+  dies when `Health` is 0, when it falls below `Workspace.FallenPartsDestroyHeight`, or when its root goes more than
+  1,000,000 studs from the origin on any axis.
 - `RunService:IsServer()`, `RunService:IsClient()`, `RunService.Heartbeat`.
 
 ```lua
