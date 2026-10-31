@@ -11,6 +11,7 @@ import time
 
 ORDER = (1, 4, 4, 1, 1, 4)
 EXPECTED_CASES = 4
+CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
 def exit_status(code, windows):
@@ -31,7 +32,7 @@ def exit_status(code, windows):
 def execute(command, timeout, environment):
     started = time.monotonic()
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
-                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                             creationflags=CREATION_FLAGS)
     timed_out = False
     try:
         stdout, stderr = child.communicate(timeout=timeout)
@@ -124,9 +125,11 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
-                              encoding="utf-8", check=True, timeout=10).stdout.strip()
+                              encoding="utf-8", check=True, timeout=10,
+                              creationflags=CREATION_FLAGS).stdout.strip()
     changes = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True,
-                             encoding="utf-8", check=True, timeout=10).stdout
+                             encoding="utf-8", check=True, timeout=10,
+                             creationflags=CREATION_FLAGS).stdout
     if changes.strip():
         parser.error("checkpoint the worktree before recording a source revision")
     return matrix(args.executable, args.output, revision)
