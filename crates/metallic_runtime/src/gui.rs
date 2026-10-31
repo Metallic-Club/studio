@@ -5,12 +5,36 @@
 //! parent's rectangle plus an offset in pixels (egui points). The screen is the parent of a
 //! ScreenGui's children. A disabled ScreenGui or an invisible Frame hides its whole subtree.
 //! `BackgroundTransparency` 1 draws no background; a TextLabel's `Text` is centred in its
-//! rectangle in `TextColor3` at `TextSize` points.
+//! rectangle in `TextColor3` at `TextSize` points. Text that would not fit its rectangle is drawn
+//! smaller until it does (never below [`MIN_TEXT_SIZE`]), so a long message on a small screen
+//! stays inside its label (#273).
 //!
 //! [`layout`] does the maths without egui (and is unit tested); [`paint`] draws its result.
 use egui::{Align2, Color32, FontId, Painter, Rect};
 use metallic_core::{Color3, InstanceId, UDim2, Value, World};
 use metallic_script::LOCAL_PLAYER_NAME;
+
+/// The smallest size text is shrunk to.
+pub const MIN_TEXT_SIZE: f32 = 8.0;
+
+/// The size to draw text of `size` points that measures `measured` (width, height) at that size
+/// inside a rectangle of `room` points: `size` when it fits, else scaled down to fit, at least
+/// [`MIN_TEXT_SIZE`].
+pub fn fitted_text_size(size: f32, measured: [f32; 2], room: [f32; 2]) -> f32 {
+    let ratio = |m: f32, r: f32| {
+        if m > r && m > 0.0 {
+            r.max(0.0) / m
+        } else {
+            1.0
+        }
+    };
+    let scale = ratio(measured[0], room[0]).min(ratio(measured[1], room[1]));
+    if scale >= 1.0 {
+        size
+    } else {
+        (size * scale).max(MIN_TEXT_SIZE.min(size))
+    }
+}
 
 /// One element to draw, in screen points.
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +146,9 @@ fn add_element(world: &World, id: InstanceId, parent: [f32; 4], out: &mut Vec<Gu
     }
 }
 
+/// Space kept free on each side of a label's text when it has to shrink.
+const TEXT_PAD: f32 = 4.0;
+
 /// Draws the local player's GUI over the painter's clip rectangle (the whole 3D view).
 pub fn paint(world: &World, painter: &Painter) {
     let area = painter.clip_rect();
@@ -135,13 +162,18 @@ pub fn paint(world: &World, painter: &Painter) {
             painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(r, g, b, alpha));
         }
         if let Some((text, [r, g, b], size)) = item.text {
-            painter.text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                text,
-                FontId::proportional(size),
-                Color32::from_rgb(r, g, b),
-            );
+            let color = Color32::from_rgb(r, g, b);
+            let mut galley =
+                painter.layout_no_wrap(text.clone(), FontId::proportional(size), color);
+            let room = [rect.width() - 2.0 * TEXT_PAD, rect.height()];
+            let fitted = fitted_text_size(size, galley.size().into(), room);
+            if fitted < size {
+                galley = painter.layout_no_wrap(text, FontId::proportional(fitted), color);
+            }
+            let at = Align2::CENTER_CENTER
+                .anchor_size(rect.center(), galley.size())
+                .min;
+            painter.galley(at, galley, color);
         }
     }
 }
@@ -149,6 +181,72 @@ pub fn paint(world: &World, painter: &Painter) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_shrinks_to_fit_its_label_and_never_grows() {
+        assert_eq!(fitted_text_size(28.0, [100.0, 30.0], [200.0, 60.0]), 28.0);
+        assert_eq!(fitted_text_size(28.0, [400.0, 30.0], [200.0, 60.0]), 14.0);
+        assert_eq!(fitted_text_size(28.0, [100.0, 60.0], [200.0, 30.0]), 14.0);
+        assert_eq!(
+            fitted_text_size(28.0, [4000.0, 30.0], [200.0, 60.0]),
+            MIN_TEXT_SIZE
+        );
+        assert_eq!(fitted_text_size(6.0, [4000.0, 30.0], [200.0, 60.0]), 6.0);
+        assert_eq!(
+            fitted_text_size(28.0, [400.0, 30.0], [-5.0, 60.0]),
+            MIN_TEXT_SIZE
+        );
+    }
+
+    /// The Parkour banner's longest message at 28 pt in a 30%-wide banner on a 1,280-point
+    /// screen (1080p at 150%) stays inside the banner.
+    #[test]
+    fn the_banner_message_stays_inside_the_banner_on_a_small_screen() {
+        let (mut w, _, frame) = world_with_label();
+        let label = w.children(frame)[0];
+        w.set(frame, "Size", Value::UDim2(UDim2::new(0.3, 0.0, 0.06, 0.0)))
+            .unwrap();
+        w.set(
+            label,
+            "Text",
+            Value::String("Oops! Back to your checkpoint...".into()),
+        )
+        .unwrap();
+        w.set(label, "TextSize", Value::Number(28.0)).unwrap();
+        let ctx = egui::Context::default();
+        let screen = egui::vec2(1280.0, 720.0);
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, screen)),
+            ..Default::default()
+        };
+        let mut drawn = Vec::new();
+        ctx.begin_pass(input);
+        paint(&w, &ctx.layer_painter(egui::LayerId::background()));
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        for clipped in &output.shapes {
+            if let egui::epaint::Shape::Text(t) = &clipped.shape {
+                drawn.push(Rect::from_min_size(t.pos, t.galley.size()));
+            }
+        }
+        let banner = 0.3 * screen.x;
+        assert_eq!(drawn.len(), 1);
+        assert!(
+            drawn[0].width() <= banner,
+            "text {} wide in a {banner}-point banner",
+            drawn[0].width()
+        );
+        let unfitted = ctx.fonts_mut(|f| {
+            f.layout_no_wrap(
+                "Oops! Back to your checkpoint...".into(),
+                FontId::proportional(28.0),
+                Color32::WHITE,
+            )
+            .size()
+            .x
+        });
+        assert!(unfitted > banner, "the case the fix is for: {unfitted}");
+    }
 
     fn world_with_label() -> (World, InstanceId, InstanceId) {
         let mut w = World::new_with_services();
