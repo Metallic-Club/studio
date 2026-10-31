@@ -357,7 +357,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
    touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
-   touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model;
+   touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model
+   (`TouchEnded` still fires on the touched part when the character was destroyed first, with the destroyed limb);
    `Died` -> `humanoid_died`;
    `Respawned` -> `physics.sync_from` and `character_added(player, model)`.
 4. **script step** (`ScriptHost::step`: new scripts, remotes, the inputs above, `RunService.Heartbeat`, resumed waits).

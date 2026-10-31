@@ -28,6 +28,9 @@ collisions, so lava and triggers reacted to fixed boxes instead of the animated 
     farther than the torso reaches.
   - Death ends every contact (TouchEnded), and so does a character destroyed or replaced without dying. Destroyed
     touched parts get no TouchEnded.
+  - The character is usually gone before scripts run, so the script host fires `part.TouchEnded(hit)` while
+    `part` exists even if `hit` was destroyed (scripts get the destroyed instance); the limb's own side is dropped.
+    Re-check fix: before, the host dropped these events, so scripts never heard them.
 - **Runtime (`metallic_runtime::body_pose`).**
   - `BodyAnimator` runs the locomotion over the skeleton on the CPU (clip sampling, blending, joint hierarchy). It
     depends on `metallic_asset` and `metallic_anim` only, not on `metallic_render`, so a headless Simulation (#309)

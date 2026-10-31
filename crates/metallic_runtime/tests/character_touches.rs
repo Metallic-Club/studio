@@ -124,3 +124,84 @@ fn game_frame_reports_body_part_touches_on_both_sides() {
     // One more end than start for the foot: the first contact began before it connected.
     assert_eq!(count("foot off Pad"), count("foot on Pad") + 1, "{lines:?}");
 }
+
+const PROBE_SCRIPT: &str = r#"
+local probe = workspace.Probe
+probe.Touched:Connect(function(hit) print("probe on " .. hit.Name) end)
+probe.TouchEnded:Connect(function() print("probe off") end)
+"#;
+
+/// Only the left foot reaches this spot just ahead of its toe (studs from the root, facing -Z).
+const AHEAD_OF_LEFT_TOE: Vec3 = Vec3::new(-0.7, -2.82, -0.88);
+
+fn probe_world() -> World {
+    let mut world = World::new_with_services();
+    let ws = world.root("Workspace").unwrap();
+    for (name, pos, size, solid) in [
+        (
+            "Floor",
+            Vec3::new(0.0, -2.0, 0.0),
+            Vec3::new(256.0, 4.0, 256.0),
+            true,
+        ),
+        // Parked away until the character stands still.
+        (
+            "Probe",
+            Vec3::new(0.0, 0.2, 60.0),
+            Vec3::new(0.3, 0.3, 0.3),
+            false,
+        ),
+    ] {
+        let id = world.create("Part", Some(ws)).unwrap();
+        world.set(id, "Name", Value::String(name.into())).unwrap();
+        world.set(id, "Position", Value::Vector3(pos)).unwrap();
+        world.set(id, "Size", Value::Vector3(size)).unwrap();
+        world.set(id, "Anchored", Value::Bool(true)).unwrap();
+        world.set(id, "CanCollide", Value::Bool(solid)).unwrap();
+    }
+    let script = world
+        .create("Script", world.root("ServerScriptService"))
+        .unwrap();
+    world
+        .set(script, "Source", Value::String(PROBE_SCRIPT.into()))
+        .unwrap();
+    world
+}
+
+#[test]
+fn a_destroyed_or_replaced_character_ends_its_touch_once_in_scripts() {
+    let output = Rc::new(Captured::default());
+    let mut game = Game::from_world("probe".into(), probe_world(), output.clone());
+    game.start().unwrap();
+    run(&mut game, 0.5);
+    let root = game.root_position().unwrap();
+    {
+        let shared = game.world();
+        let mut w = shared.borrow_mut();
+        let ws = w.root("Workspace").unwrap();
+        let probe = w.find_first_child(ws, "Probe").unwrap();
+        w.set(probe, "Position", Value::Vector3(root + AHEAD_OF_LEFT_TOE))
+            .unwrap();
+    }
+    run(&mut game, 0.5);
+    let lines = || output.0.borrow().clone();
+    let count = |l: &str| output.0.borrow().iter().filter(|x| *x == l).count();
+    assert_eq!(lines(), ["probe on LeftFoot"]);
+
+    // Destroyed outright (by a script, say): exactly one TouchEnded on the probe.
+    let first = game.character().unwrap();
+    game.world().borrow_mut().destroy(first);
+    run(&mut game, 0.3);
+    assert_eq!(count("probe off"), 1, "{:?}", lines());
+
+    // The game respawns the player in the same spot, and the new foot touches again.
+    run(&mut game, metallic_physics::RESPAWN_DELAY + 1.0);
+    assert_eq!(count("probe on LeftFoot"), 2, "{:?}", lines());
+    assert_eq!(count("probe off"), 1, "{:?}", lines());
+
+    // Replaced without dying (a fresh character for the same player): one more TouchEnded.
+    let player = game.player().unwrap();
+    metallic_physics::spawn_character(&mut game.world().borrow_mut(), player).unwrap();
+    run(&mut game, 0.3);
+    assert_eq!(count("probe off"), 2, "{:?}", lines());
+}

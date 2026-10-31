@@ -439,6 +439,40 @@ mod tests {
     }
 
     #[test]
+    fn the_cpu_pose_does_not_depend_on_the_tick_rate() {
+        // The same 1.5 s of running at 30, 60 and 144 Hz: the arm swings just as far and the
+        // poses after the same time agree closely.
+        let run = LocomotionInput::new(24.0, Support::Grounded);
+        let animate = |hz: f32| {
+            let mut anim = BodyAnimator::new(default_model().unwrap(), 0.0);
+            let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+            for _ in 0..(1.5 * hz).round() as usize {
+                anim.update(0.0, run, 1.0 / hz);
+                let pose = anim.body_pose();
+                assert!(pose.is_finite());
+                let z = pose.parts[BodyPart::RightHand.index()].position.z;
+                (lo, hi) = (lo.min(z), hi.max(z));
+            }
+            (hi - lo, anim.body_pose())
+        };
+        let (swing60, pose60) = animate(60.0);
+        for hz in [30.0, 144.0] {
+            let (swing, pose) = animate(hz);
+            assert!(
+                (swing - swing60).abs() < 0.2,
+                "{hz} Hz swing {swing} vs {swing60}"
+            );
+            for p in BodyPart::ALL {
+                let (a, b) = (
+                    pose.parts[p.index()].position,
+                    pose60.parts[p.index()].position,
+                );
+                assert!(close(a, b, 0.25), "{p:?} at {hz} Hz: {a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
     fn the_headless_animator_poses_the_body_like_the_drawn_avatar() {
         let model = default_model().unwrap();
         let root = Vec3::new(3.0, 7.0, -1.0);
