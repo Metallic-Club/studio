@@ -10,6 +10,7 @@
 use crate::sky::Sky;
 use crate::tonemap::{FinishSettings, ToneCurve};
 use glam::Vec3;
+use metallic_core::classes::{default_value, find_property};
 use metallic_core::lighting::lighting_child;
 use metallic_core::{InstanceId, Value, World};
 
@@ -181,7 +182,105 @@ impl Reader<'_> {
     }
 }
 
+/// `x` inside the registry range of `class.prop` (wrapped for `ClockTime`); the default when
+/// not finite.
+fn sane(class: &str, prop: &str, x: f32) -> f32 {
+    let default = match default_value(class, prop) {
+        Some(Value::Number(n)) => n as f32,
+        _ => 0.0,
+    };
+    if !x.is_finite() {
+        return default;
+    }
+    match find_property(class, prop).and_then(|d| d.range) {
+        Some(r) => r.apply_number(f64::from(x)) as f32,
+        None => x,
+    }
+}
+
+/// A 0..1 colour of `class.prop`: components clamped to 0..1, the default where not finite.
+fn sane_colour(class: &str, prop: &str, c: [f32; 3]) -> [f32; 3] {
+    let default = match default_value(class, prop) {
+        Some(Value::Color3(d)) => [d.r, d.g, d.b].map(|v| v as f32 / 255.0),
+        _ => [0.0; 3],
+    };
+    std::array::from_fn(|i| {
+        if c[i].is_finite() {
+            c[i].clamp(0.0, 1.0)
+        } else {
+            default[i]
+        }
+    })
+}
+
 impl LightingInputs {
+    /// The inputs with every number inside its property's range and finite. [`evaluate`] uses
+    /// this, so values set from code (not through `World::set`) cannot put NaN or infinity into
+    /// the shaders.
+    pub fn sanitized(&self) -> LightingInputs {
+        let l = |p: &str, x: f32| sane("Lighting", p, x);
+        let lc = |p: &str, c: [f32; 3]| sane_colour("Lighting", p, c);
+        LightingInputs {
+            clock_time: l("ClockTime", self.clock_time),
+            latitude: l("GeographicLatitude", self.latitude),
+            brightness: l("Brightness", self.brightness),
+            exposure_compensation: l("ExposureCompensation", self.exposure_compensation),
+            ambient: lc("Ambient", self.ambient),
+            outdoor_ambient: lc("OutdoorAmbient", self.outdoor_ambient),
+            color_shift_top: lc("ColorShift_Top", self.color_shift_top),
+            color_shift_bottom: lc("ColorShift_Bottom", self.color_shift_bottom),
+            environment_diffuse: l("EnvironmentDiffuseScale", self.environment_diffuse),
+            environment_specular: l("EnvironmentSpecularScale", self.environment_specular),
+            global_shadows: self.global_shadows,
+            shadow_softness: l("ShadowSoftness", self.shadow_softness),
+            soft_style: self.soft_style,
+            fog_color: lc("FogColor", self.fog_color),
+            fog_start: l("FogStart", self.fog_start),
+            fog_end: l("FogEnd", self.fog_end),
+            night_adaptation: l("NightAdaptation", self.night_adaptation),
+            moon_brightness: l("MoonBrightness", self.moon_brightness),
+            atmosphere: self.atmosphere.as_ref().map(|a| {
+                let n = |p: &str, x: f32| sane("Atmosphere", p, x);
+                let c = |p: &str, x: [f32; 3]| sane_colour("Atmosphere", p, x);
+                AtmosphereInputs {
+                    density: n("Density", a.density),
+                    offset: n("Offset", a.offset),
+                    color: c("Color", a.color),
+                    decay: c("Decay", a.decay),
+                    glare: n("Glare", a.glare),
+                    haze: n("Haze", a.haze),
+                    height_falloff: n("HeightFalloff", a.height_falloff),
+                    fog_height: n("FogHeight", a.fog_height),
+                    absorption: c("Absorption", a.absorption),
+                    air_color: c("AirColor", a.air_color),
+                }
+            }),
+            sky: SkyInputs {
+                sun_angular_size: sane("Sky", "SunAngularSize", self.sky.sun_angular_size),
+                moon_angular_size: sane("Sky", "MoonAngularSize", self.sky.moon_angular_size),
+                star_count: sane("Sky", "StarCount", self.sky.star_count),
+                celestial_bodies_shown: self.sky.celestial_bodies_shown,
+            },
+            cloud_cover: sane("Clouds", "Cover", self.cloud_cover),
+            cloud_color: sane_colour("Clouds", "Color", self.cloud_color),
+            bloom: self.bloom.map(|b| BloomInputs {
+                intensity: sane("BloomEffect", "Intensity", b.intensity),
+                size: sane("BloomEffect", "Size", b.size),
+                threshold: sane("BloomEffect", "Threshold", b.threshold),
+            }),
+            color_correction: self.color_correction.map(|c| {
+                let n = |p: &str, x: f32| sane("ColorCorrectionEffect", p, x);
+                ColorCorrectionInputs {
+                    brightness: n("Brightness", c.brightness),
+                    contrast: n("Contrast", c.contrast),
+                    saturation: n("Saturation", c.saturation),
+                    tint: sane_colour("ColorCorrectionEffect", "TintColor", c.tint),
+                }
+            }),
+            tonemapper: self.tonemapper.clone(),
+        }
+    }
+
     /// Reads the place's lighting. A world without a `Lighting` service reads as defaults.
     pub fn read(world: &World) -> LightingInputs {
         let child = |class: &'static str| Reader {
@@ -596,6 +695,7 @@ pub fn evaluate(inp: &LightingInputs) -> LightingFrame {
 }
 
 fn evaluate_base(inp: &LightingInputs) -> LightingFrame {
+    let inp = &inp.sanitized();
     let to_sun = sun_direction(inp.clock_time, inp.latitude);
     let elevation = to_sun.y.clamp(-1.0, 1.0).asin().to_degrees();
     let t = sky_at(elevation);
@@ -859,6 +959,109 @@ mod tests {
                 let v = inverse_curve(curve, [c; 3]);
                 let enc = crate::tonemap::linear_to_srgb(curve.map(v)[1]);
                 assert!((enc - c).abs() < 0.02, "{curve:?}: {enc} vs {c}");
+            }
+        }
+    }
+
+    /// Inputs with every number set to `x` (colours too), every optional block present.
+    fn extreme(x: f32) -> LightingInputs {
+        LightingInputs {
+            clock_time: x,
+            latitude: x,
+            brightness: x,
+            exposure_compensation: x,
+            ambient: [x; 3],
+            outdoor_ambient: [x; 3],
+            color_shift_top: [x; 3],
+            color_shift_bottom: [x; 3],
+            environment_diffuse: x,
+            environment_specular: x,
+            global_shadows: true,
+            shadow_softness: x,
+            soft_style: false,
+            fog_color: [x; 3],
+            fog_start: x,
+            fog_end: x,
+            night_adaptation: x,
+            moon_brightness: x,
+            atmosphere: Some(AtmosphereInputs {
+                density: x,
+                offset: x,
+                color: [x; 3],
+                decay: [x; 3],
+                glare: x,
+                haze: x,
+                height_falloff: x,
+                fog_height: x,
+                absorption: [x; 3],
+                air_color: [x; 3],
+            }),
+            sky: SkyInputs {
+                sun_angular_size: x,
+                moon_angular_size: x,
+                star_count: x,
+                celestial_bodies_shown: true,
+            },
+            cloud_cover: x,
+            cloud_color: [x; 3],
+            bloom: Some(BloomInputs {
+                intensity: x,
+                size: x,
+                threshold: x,
+            }),
+            color_correction: Some(ColorCorrectionInputs {
+                brightness: x,
+                contrast: x,
+                saturation: x,
+                tint: [x; 3],
+            }),
+            tonemapper: "Default".into(),
+        }
+    }
+
+    /// Huge, infinite and NaN inputs (from code, or 1e39 read as f32) never reach the shaders.
+    #[test]
+    fn extreme_inputs_give_a_finite_frame() {
+        for x in [
+            1e39_f64 as f32,
+            f32::MAX,
+            -f32::MAX,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            0.0,
+        ] {
+            let f = evaluate(&extreme(x));
+            let floats: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&f.uniform));
+            for (i, v) in floats.iter().enumerate() {
+                assert!(v.is_finite(), "x = {x}: uniform float {i} is {v}");
+            }
+            let colours = [
+                f.sky.zenith,
+                f.sky.horizon,
+                f.sky.ground,
+                f.sky.sun_color,
+                f.sky.to_sun.to_array(),
+                f.finish.tint,
+            ];
+            for v in colours.iter().flatten() {
+                assert!(v.is_finite(), "x = {x}: sky / tint {colours:?}");
+            }
+            let scalars = [
+                f.sky.fog_density,
+                f.sky.exposure,
+                f.finish.exposure,
+                f.finish.saturation,
+                f.finish.contrast,
+                f.finish.brightness,
+                f.finish.vignette,
+            ];
+            assert!(
+                scalars.iter().all(|v| v.is_finite()),
+                "x = {x}: {scalars:?}"
+            );
+            if let Some(b) = f.bloom {
+                assert!(b.intensity.is_finite() && b.size.is_finite() && b.threshold.is_finite());
             }
         }
     }

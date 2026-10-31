@@ -5,7 +5,7 @@ use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
 use crate::lighting::{LightingInputs, LightingUniform, evaluate};
 use crate::meshes::{MeshKind, Vertex};
-use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot};
+use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
 use crate::scene::{InstanceRaw, Scene};
 use crate::shadows::{
     Cascade, MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
@@ -33,6 +33,26 @@ const LIGHTING_WGSL: &str = include_str!("../shaders/lighting.wgsl");
 const SHADOW_WGSL: &str = include_str!("../shaders/shadow.wgsl");
 const SKIN_COMMON_WGSL: &str = include_str!("../shaders/skin_common.wgsl");
 const SKINNED_WGSL: &str = include_str!("../shaders/skinned.wgsl");
+
+// The WGSL files each shader module is joined from.
+const SCENE_PARTS: &[&str] = &[
+    COLOR_WGSL,
+    TONECURVE_WGSL,
+    COMMON_WGSL,
+    LIGHTING_WGSL,
+    SKIN_COMMON_WGSL,
+    SCENE_WGSL,
+    SKINNED_WGSL,
+];
+const SKY_PARTS: &[&str] = &[
+    COLOR_WGSL,
+    TONECURVE_WGSL,
+    COMMON_WGSL,
+    LIGHTING_WGSL,
+    SKY_WGSL,
+];
+const SHADOW_PARTS: &[&str] = &[SKIN_COMMON_WGSL, SHADOW_WGSL];
+const FINISH_PARTS: &[&str] = &[COLOR_WGSL, TONECURVE_WGSL, FINISH_WGSL];
 
 /// Overall quality preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -169,6 +189,9 @@ struct Attachments {
     size: (u32, u32),
     msaa_color: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
+    /// Whether `depth` can be bound by post passes. Only while a pass reads depth: a sampleable
+    /// multisampled depth texture renders nothing on some GL drivers.
+    depth_sampleable: bool,
     hdr: [Option<wgpu::TextureView>; 2],
     ldr: [Option<wgpu::TextureView>; 2],
     finish_groups: [Option<wgpu::BindGroup>; 2],
@@ -218,11 +241,7 @@ impl FinishGpu {
         FinishGpu {
             layout,
             pipeline_layout,
-            module: shader(
-                device,
-                "metallic finish",
-                &[COLOR_WGSL, TONECURVE_WGSL, FINISH_WGSL],
-            ),
+            module: shader(device, "metallic finish", FINISH_PARTS),
             uniform: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("metallic finish uniform"),
                 size: std::mem::size_of::<FinishUniform>() as u64,
@@ -319,6 +338,10 @@ pub struct Renderer {
     /// The lighting last applied by [`Renderer::set_lighting`].
     lighting: Option<LightingInputs>,
     light_uniform: LightingUniform,
+    /// What the adapter supports for [`HDR_FORMAT`] (`None` for a host-provided device).
+    hdr_features: Option<wgpu::TextureFormatFeatures>,
+    /// The HDR target format in use (see [`hdr_format_for`]).
+    hdr_format: wgpu::TextureFormat,
     scene: Scene,
     uploaded_version: Option<u64>,
     meshes: Vec<GpuMesh>,
@@ -449,9 +472,18 @@ impl Renderer {
         let shadow_map = ShadowMap::new(&device, settings.shadow_resolution(), settings.cascades());
         let global_group = make_global_group(&device, &global_layout, &globals, &shadow_map);
         let cascade_slots = make_cascade_slots(&device, &shadow_layout, settings.cascades());
+        let hdr_features = ctx
+            .adapter
+            .as_ref()
+            .map(|a| a.get_texture_format_features(HDR_FORMAT));
+        let hdr_format = hdr_format_for(hdr_features, settings.samples());
+        if hdr_format != HDR_FORMAT {
+            log::warn!("{HDR_FORMAT:?} is not renderable here; HDR falls back to {hdr_format:?}");
+        }
         let pipelines = make_pipelines(
             &device,
             settings.samples(),
+            hdr_format,
             &global_layout,
             &shadow_layout,
             &skin_layout,
@@ -469,6 +501,8 @@ impl Renderer {
             lighting: None,
             light_uniform: LightingUniform::zeroed(),
             finish_gpu,
+            hdr_features,
+            hdr_format,
             scene: Scene::new(),
             uploaded_version: None,
             meshes,
@@ -521,9 +555,11 @@ impl Renderer {
         );
         self.cascade_slots =
             make_cascade_slots(&self.device, &self.shadow_layout, settings.cascades());
+        self.hdr_format = hdr_format_for(self.hdr_features, settings.samples());
         self.pipelines = make_pipelines(
             &self.device,
             settings.samples(),
+            self.hdr_format,
             &self.global_layout,
             &self.shadow_layout,
             &self.skin_layout,
@@ -539,6 +575,12 @@ impl Renderer {
     /// The post chain.
     pub fn post(&self) -> &PostChain {
         &self.post
+    }
+
+    /// Format of the HDR scene target: [`HDR_FORMAT`], or [`LDR_FORMAT`] where the adapter
+    /// cannot render to it (see [`crate::post::hdr_format_for`]).
+    pub fn hdr_format(&self) -> wgpu::TextureFormat {
+        self.hdr_format
     }
 
     /// Number of parts currently known to the renderer (drawn or not).
@@ -653,30 +695,23 @@ impl Renderer {
     }
 
     fn ensure_attachments(&mut self, size: (u32, u32)) {
-        if self.attachments.as_ref().is_some_and(|a| a.size == size) {
+        let samples = self.settings.samples();
+        let sampleable = self.post.reads_depth();
+        if let Some(att) = self.attachments.as_mut()
+            && att.size == size
+        {
+            if att.depth_sampleable != sampleable {
+                att.depth = make_depth(&self.device, size, samples, sampleable);
+                att.depth_sampleable = sampleable;
+            }
             return;
         }
-        let samples = self.settings.samples();
         let extent = wgpu::Extent3d {
             width: size.0,
             height: size.1,
             depth_or_array_layers: 1,
         };
-        // Sampleable so post passes that read depth can bind it (stored only when one does).
-        let depth = self
-            .device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("metallic depth"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: samples,
-                dimension: wgpu::TextureDimension::D2,
-                format: DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = make_depth(&self.device, size, samples, sampleable);
         let msaa_color = (samples > 1).then(|| {
             self.device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -685,7 +720,7 @@ impl Renderer {
                     mip_level_count: 1,
                     sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
-                    format: HDR_FORMAT,
+                    format: self.hdr_format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
                 })
@@ -695,6 +730,7 @@ impl Renderer {
             size,
             msaa_color,
             depth,
+            depth_sampleable: sampleable,
             hdr: [None, None],
             ldr: [None, None],
             finish_groups: [None, None],
@@ -710,7 +746,7 @@ impl Renderer {
         if att.hdr[i].is_some() {
             return;
         }
-        let view = color_target(&self.device, "metallic hdr", att.size, HDR_FORMAT);
+        let view = color_target(&self.device, "metallic hdr", att.size, self.hdr_format);
         att.finish_groups[i] = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("metallic finish group"),
             layout: &self.finish_gpu.layout,
@@ -893,7 +929,10 @@ impl Renderer {
 
         let keep_depth = self.post.reads_depth();
         {
-            let hdr = att.hdr[0].as_ref().expect("made with the attachments");
+            // Made with the attachments; nothing to draw into otherwise.
+            let Some(hdr) = att.hdr[0].as_ref() else {
+                return;
+            };
             let (view, resolve) = match &att.msaa_color {
                 Some(msaa) => (msaa, Some(hdr)),
                 None => (hdr, None),
@@ -974,7 +1013,8 @@ impl Renderer {
                 encoder: &mut *encoder,
                 input,
                 output,
-                output_format: HDR_FORMAT,
+                output_format: self.hdr_format,
+                hdr_format: self.hdr_format,
                 size,
                 depth: keep_depth.then_some(&att.depth),
                 depth_samples: samples,
@@ -1032,6 +1072,7 @@ impl Renderer {
                 input,
                 output,
                 output_format,
+                hdr_format: self.hdr_format,
                 size,
                 depth: keep_depth.then_some(&att.depth),
                 depth_samples: samples,
@@ -1264,6 +1305,36 @@ fn make_cascade_slots(
         .collect()
 }
 
+/// The scene depth target; `sampleable` adds `TEXTURE_BINDING` for post passes that read it.
+fn make_depth(
+    device: &wgpu::Device,
+    size: (u32, u32),
+    samples: u32,
+    sampleable: bool,
+) -> wgpu::TextureView {
+    let usage = if sampleable {
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+    } else {
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+    };
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("metallic depth"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 fn shader(device: &wgpu::Device, label: &str, parts: &[&str]) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -1274,37 +1345,15 @@ fn shader(device: &wgpu::Device, label: &str, parts: &[&str]) -> wgpu::ShaderMod
 fn make_pipelines(
     device: &wgpu::Device,
     samples: u32,
+    format: wgpu::TextureFormat,
     global_layout: &wgpu::BindGroupLayout,
     shadow_layout: &wgpu::BindGroupLayout,
     skin_layout: &wgpu::BindGroupLayout,
 ) -> Pipelines {
-    let scene_module = shader(
-        device,
-        "metallic scene",
-        &[
-            COLOR_WGSL,
-            TONECURVE_WGSL,
-            COMMON_WGSL,
-            LIGHTING_WGSL,
-            SKIN_COMMON_WGSL,
-            SCENE_WGSL,
-            SKINNED_WGSL,
-        ],
-    );
-    let sky_module = shader(
-        device,
-        "metallic sky",
-        &[
-            COLOR_WGSL,
-            TONECURVE_WGSL,
-            COMMON_WGSL,
-            LIGHTING_WGSL,
-            SKY_WGSL,
-        ],
-    );
-    // Every scene pipeline writes linear light into the HDR target.
-    let format = HDR_FORMAT;
-    let shadow_module = shader(device, "metallic shadow", &[SKIN_COMMON_WGSL, SHADOW_WGSL]);
+    let scene_module = shader(device, "metallic scene", SCENE_PARTS);
+    let sky_module = shader(device, "metallic sky", SKY_PARTS);
+    // Every scene pipeline writes linear light into the HDR target (`format`).
+    let shadow_module = shader(device, "metallic shadow", SHADOW_PARTS);
 
     let main_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("metallic main layout"),
@@ -1502,5 +1551,36 @@ fn make_pipelines(
         skinned_toon,
         skinned_outline,
         skinned_shadow,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses and validates `parts` joined, as `shader` would hand them to wgpu.
+    pub(crate) fn validate_wgsl(label: &str, parts: &[&str]) {
+        let source = parts.join(
+            "
+",
+        );
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(&source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{label}: {}", e.emit_to_string(&source)));
+    }
+
+    /// Every shader module the renderer builds parses and validates (no GPU needed), so a
+    /// merge that breaks a shader fails here rather than at pipeline creation.
+    #[test]
+    fn every_shader_module_validates() {
+        validate_wgsl("scene", SCENE_PARTS);
+        validate_wgsl("sky", SKY_PARTS);
+        validate_wgsl("shadow", SHADOW_PARTS);
+        validate_wgsl("finish", FINISH_PARTS);
     }
 }

@@ -11,10 +11,17 @@ fn tmp(name: &str) -> std::path::PathBuf {
     d.join(name)
 }
 
-/// A value of the property's type that differs from `v`.
-fn other(v: &Value, allowed: Option<&'static [&'static str]>) -> Value {
+/// A value of the property's type that differs from `v` (inside its range).
+fn other(v: &Value, def: &classes::PropDef) -> Value {
+    let allowed = def.allowed;
     match v {
-        Value::Number(n) => Value::Number(n + 0.25),
+        Value::Number(n) => {
+            let up = n + 0.25;
+            match def.range {
+                Some(r) if up >= r.max => Value::Number(n - 0.25),
+                _ => Value::Number(up),
+            }
+        }
         Value::Bool(b) => Value::Bool(!b),
         Value::Color3(c) => Value::Color3(Color3::new(255.0 - c.r, (c.g + 17.0) % 256.0, 3.0)),
         Value::String(s) => {
@@ -50,7 +57,7 @@ fn every_lighting_property_reads_its_default_and_round_trips() {
                 "{class}.{}",
                 def.name
             );
-            let changed = other(&default, def.allowed);
+            let changed = other(&default, def);
             w.set(id, def.name, changed.clone()).unwrap();
             assert_eq!(
                 w.get(id, def.name).unwrap(),
@@ -190,4 +197,99 @@ fn hand_set_lighting_survives_a_scene_save_and_load() {
     );
     let b2 = lighting_child(&loaded, "BloomEffect").unwrap();
     assert_eq!(loaded.get(b2, "Enabled").unwrap(), Value::Bool(false));
+}
+
+/// Every lighting and effect Number and Color3 has a finite range; values outside are clamped
+/// (ClockTime wraps), and non-finite values are refused, both on write and on load.
+#[test]
+fn lighting_values_are_kept_in_range_on_write_and_load() {
+    let mut w = World::new_with_services();
+    let lighting = w.root("Lighting").unwrap();
+    let mut ids = vec![("Lighting", lighting)];
+    for class in LIGHTING_CHILD_CLASSES {
+        ids.push((class, w.create(class, Some(lighting)).unwrap()));
+    }
+    for (class, id) in &ids {
+        for def in all_properties(class) {
+            let is_colour = def.ty == ValueType::Color3;
+            if def.ty != ValueType::Number && !is_colour {
+                continue;
+            }
+            let range = def
+                .range
+                .unwrap_or_else(|| panic!("{class}.{} has no range", def.name));
+            assert!(range.min.is_finite() && range.max.is_finite());
+            for big in [1e39, -1e39, f64::MAX, f64::MIN] {
+                let v = if is_colour {
+                    Value::Color3(Color3::new(big, big, big))
+                } else {
+                    Value::Number(big)
+                };
+                w.set(*id, def.name, v).unwrap();
+                let check = |x: f64| {
+                    assert!(
+                        x.is_finite() && x >= range.min && x <= range.max,
+                        "{class}.{} = {x} after writing {big}",
+                        def.name
+                    )
+                };
+                match w.get(*id, def.name).unwrap() {
+                    Value::Number(n) => check(n),
+                    Value::Color3(c) => [c.r, c.g, c.b].into_iter().for_each(check),
+                    other => panic!("{other:?}"),
+                }
+            }
+            for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+                let before = w.get(*id, def.name).unwrap();
+                let v = if is_colour {
+                    Value::Color3(Color3::new(bad, 0.0, 0.0))
+                } else {
+                    Value::Number(bad)
+                };
+                assert!(
+                    w.set(*id, def.name, v).is_err(),
+                    "{class}.{} took {bad}",
+                    def.name
+                );
+                assert_eq!(w.get(*id, def.name).unwrap(), before);
+            }
+        }
+    }
+    // Specific limits.
+    w.set(lighting, "ClockTime", Value::Number(25.5)).unwrap();
+    assert_eq!(w.get(lighting, "ClockTime").unwrap(), Value::Number(1.5));
+    w.set(lighting, "ClockTime", Value::Number(-1.0)).unwrap();
+    assert_eq!(w.get(lighting, "ClockTime").unwrap(), Value::Number(23.0));
+    w.set(lighting, "Brightness", Value::Number(1e39)).unwrap();
+    assert_eq!(w.get(lighting, "Brightness").unwrap(), Value::Number(10.0));
+    w.set(lighting, "ExposureCompensation", Value::Number(-1e39))
+        .unwrap();
+    assert_eq!(
+        w.get(lighting, "ExposureCompensation").unwrap(),
+        Value::Number(-4.0)
+    );
+
+    // A scene file written with out-of-range values (by hand or an older build) loads clamped.
+    let mut w = World::new_with_services();
+    let l = w.root("Lighting").unwrap();
+    w.set(l, "Brightness", Value::Number(7.0)).unwrap();
+    w.set(l, "FogColor", Value::Color3(Color3::new(1.0, 2.0, 3.0)))
+        .unwrap();
+    let path = tmp("out_of_range.ron");
+    save_scene(&w, &path).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let edited = text.replacen("7.0", "1e39", 1).replacen("3.0", "1e300", 1);
+    assert_ne!(
+        text, edited,
+        "scene text has no plain 7.0 / 3.0:
+{text}"
+    );
+    std::fs::write(&path, edited).unwrap();
+    let loaded = load_scene(&path).unwrap();
+    let l2 = loaded.root("Lighting").unwrap();
+    assert_eq!(loaded.get(l2, "Brightness").unwrap(), Value::Number(10.0));
+    assert_eq!(
+        loaded.get(l2, "FogColor").unwrap(),
+        Value::Color3(Color3::new(1.0, 2.0, 255.0))
+    );
 }

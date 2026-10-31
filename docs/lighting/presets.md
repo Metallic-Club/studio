@@ -40,6 +40,10 @@ differs.
 
 ## How properties map to the image
 
+Every Number and Color3 below has a sane range in the class registry; writes outside it (scripts, scene files) are
+clamped, and `ClockTime` wraps around 24.
+
+
 - `ClockTime`, `GeographicLatitude`: sun position (equinox; +X east, +Z south). The sky, sun colour, sun strength
   and metered exposure come from the per-elevation table in `docs/agents/37-lighting/m1_sky_table.md`. Below -1
   degrees the moon lights the scene (`MoonBrightness`), with stars (`Sky.StarCount`).

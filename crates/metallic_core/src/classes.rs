@@ -71,6 +71,47 @@ pub struct PropDef {
     pub default: fn() -> Value,
     /// When set, a String value must be one of these.
     pub allowed: Option<&'static [&'static str]>,
+    /// When set, Number values and every Color3 component are brought into this range on
+    /// write (and so on load and from scripts).
+    pub range: Option<NumRange>,
+}
+
+/// A numeric property's sane range: values outside are clamped (or wrapped, for a time of day).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NumRange {
+    /// Smallest value.
+    pub min: f64,
+    /// Largest value (exclusive when `wrap`).
+    pub max: f64,
+    /// Wrap around instead of clamping (`ClockTime` 25 is 1).
+    pub wrap: bool,
+}
+
+impl NumRange {
+    /// `x` brought into the range. `x` must be finite.
+    pub fn apply_number(self, x: f64) -> f64 {
+        if self.wrap {
+            let span = self.max - self.min;
+            let w = self.min + (x - self.min).rem_euclid(span);
+            // rem_euclid can round up to `span` for tiny negative inputs.
+            if w >= self.max { self.min } else { w }
+        } else {
+            x.clamp(self.min, self.max)
+        }
+    }
+
+    /// `value` brought into the range: Numbers and Color3 components; other types unchanged.
+    pub fn apply(self, value: Value) -> Value {
+        match value {
+            Value::Number(n) => Value::Number(self.apply_number(n)),
+            Value::Color3(c) => Value::Color3(Color3::new(
+                self.apply_number(c.r),
+                self.apply_number(c.g),
+                self.apply_number(c.b),
+            )),
+            other => other,
+        }
+    }
 }
 
 /// Definition of one class.
@@ -89,6 +130,7 @@ const fn p(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef
         ty,
         default,
         allowed: None,
+        range: None,
     }
 }
 
@@ -108,12 +150,28 @@ const GREY: Color3 = Color3::new(163.0, 162.0, 165.0);
 const BLACK: Color3 = Color3::new(0.0, 0.0, 0.0);
 const WHITE: Color3 = Color3::new(255.0, 255.0, 255.0);
 
-const fn num(name: &'static str, default: fn() -> Value) -> PropDef {
-    p(name, ValueType::Number, default)
+/// A Number clamped to `min..=max`.
+const fn num(name: &'static str, default: fn() -> Value, min: f64, max: f64) -> PropDef {
+    PropDef {
+        range: Some(NumRange {
+            min,
+            max,
+            wrap: false,
+        }),
+        ..p(name, ValueType::Number, default)
+    }
 }
 
+/// A Color3 with components clamped to 0..=255.
 const fn color(name: &'static str, default: fn() -> Value) -> PropDef {
-    p(name, ValueType::Color3, default)
+    PropDef {
+        range: Some(NumRange {
+            min: 0.0,
+            max: 255.0,
+            wrap: false,
+        }),
+        ..p(name, ValueType::Color3, default)
+    }
 }
 
 static CLASSES: &[ClassDef] = &[
@@ -148,31 +206,39 @@ static CLASSES: &[ClassDef] = &[
         "Lighting",
         "Instance",
         &[
-            num("ClockTime", || Value::Number(14.5)),
-            num("GeographicLatitude", || Value::Number(41.73)),
-            num("Brightness", || Value::Number(1.0)),
-            num("ExposureCompensation", || Value::Number(0.0)),
+            PropDef {
+                range: Some(NumRange {
+                    min: 0.0,
+                    max: 24.0,
+                    wrap: true,
+                }),
+                ..p("ClockTime", ValueType::Number, || Value::Number(14.5))
+            },
+            num("GeographicLatitude", || Value::Number(41.73), -90.0, 90.0),
+            num("Brightness", || Value::Number(1.0), 0.0, 10.0),
+            num("ExposureCompensation", || Value::Number(0.0), -4.0, 4.0),
             color("Ambient", || Value::Color3(BLACK)),
             color("OutdoorAmbient", || Value::Color3(BLACK)),
             color("ColorShift_Top", || Value::Color3(BLACK)),
             color("ColorShift_Bottom", || Value::Color3(BLACK)),
-            num("EnvironmentDiffuseScale", || Value::Number(1.0)),
-            num("EnvironmentSpecularScale", || Value::Number(1.0)),
+            num("EnvironmentDiffuseScale", || Value::Number(1.0), 0.0, 1.0),
+            num("EnvironmentSpecularScale", || Value::Number(1.0), 0.0, 1.0),
             p("GlobalShadows", ValueType::Bool, || Value::Bool(true)),
-            num("ShadowSoftness", || Value::Number(0.2)),
+            num("ShadowSoftness", || Value::Number(0.2), 0.0, 1.0),
             PropDef {
                 name: "LightingStyle",
                 ty: ValueType::String,
                 default: || Value::String("Realistic".into()),
                 allowed: Some(LIGHTING_STYLES),
+                range: None,
             },
             color("FogColor", || {
                 Value::Color3(Color3::new(192.0, 192.0, 192.0))
             }),
-            num("FogStart", || Value::Number(0.0)),
-            num("FogEnd", || Value::Number(100000.0)),
-            num("NightAdaptation", || Value::Number(1.0)),
-            num("MoonBrightness", || Value::Number(1.0)),
+            num("FogStart", || Value::Number(0.0), 0.0, 1e7),
+            num("FogEnd", || Value::Number(100000.0), 0.0, 1e7),
+            num("NightAdaptation", || Value::Number(1.0), 0.0, 1.0),
+            num("MoonBrightness", || Value::Number(1.0), 0.0, 10.0),
         ],
     ),
     class("RunService", "Instance", &[]),
@@ -197,6 +263,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Plastic".into()),
                 allowed: Some(MATERIALS),
+                range: None,
             },
             p("Anchored", ValueType::Bool, || Value::Bool(false)),
             p("CanCollide", ValueType::Bool, || Value::Bool(true)),
@@ -206,6 +273,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Block".into()),
                 allowed: Some(SHAPES),
+                range: None,
             },
         ],
     ),
@@ -304,6 +372,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Bool".into()),
                 allowed: Some(INPUT_ACTION_TYPES),
+                range: None,
             },
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
             p("DisplayName", ValueType::String, || {
@@ -314,6 +383,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Press".into()),
                 allowed: Some(INPUT_TRIGGERS),
+                range: None,
             },
             p("HoldTime", ValueType::Number, || Value::Number(500.0)),
             p("TapTime", ValueType::Number, || Value::Number(200.0)),
@@ -327,6 +397,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("None".into()),
                 allowed: Some(INPUT_ROLES),
+                range: None,
             },
             p("Rebindable", ValueType::Bool, || Value::Bool(true)),
             p("Required", ValueType::Bool, || Value::Bool(false)),
@@ -338,6 +409,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Auto".into()),
                 allowed: Some(TOUCH_SLOTS),
+                range: None,
             },
             p("TouchLabel", ValueType::String, || Value::String("".into())),
             p("TouchImage", ValueType::String, || Value::String("".into())),
@@ -346,6 +418,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Auto".into()),
                 allowed: Some(TOUCH_LAYOUTS),
+                range: None,
             },
             p("TouchPosition", ValueType::UDim2, || {
                 Value::UDim2(UDim2::new(0.0, 0.0, 0.0, 0.0))
@@ -408,14 +481,14 @@ static CLASSES: &[ClassDef] = &[
         "Atmosphere",
         "Instance",
         &[
-            num("Density", || Value::Number(0.3)),
-            num("Offset", || Value::Number(0.25)),
+            num("Density", || Value::Number(0.3), 0.0, 1.0),
+            num("Offset", || Value::Number(0.25), 0.0, 1.0),
             color("Color", || Value::Color3(Color3::new(199.0, 199.0, 199.0))),
             color("Decay", || Value::Color3(Color3::new(106.0, 112.0, 125.0))),
-            num("Glare", || Value::Number(2.0)),
-            num("Haze", || Value::Number(1.0)),
-            num("HeightFalloff", || Value::Number(0.02)),
-            num("FogHeight", || Value::Number(0.0)),
+            num("Glare", || Value::Number(2.0), 0.0, 10.0),
+            num("Haze", || Value::Number(1.0), 0.0, 10.0),
+            num("HeightFalloff", || Value::Number(0.02), 0.0, 1.0),
+            num("FogHeight", || Value::Number(0.0), -1e5, 1e5),
             color("Absorption", || Value::Color3(BLACK)),
             color("AirColor", || {
                 Value::Color3(Color3::new(116.0, 172.0, 255.0))
@@ -426,9 +499,9 @@ static CLASSES: &[ClassDef] = &[
         "Sky",
         "Instance",
         &[
-            num("SunAngularSize", || Value::Number(1.5)),
-            num("MoonAngularSize", || Value::Number(1.5)),
-            num("StarCount", || Value::Number(3000.0)),
+            num("SunAngularSize", || Value::Number(1.5), 0.0, 60.0),
+            num("MoonAngularSize", || Value::Number(1.5), 0.0, 60.0),
+            num("StarCount", || Value::Number(3000.0), 0.0, 10000.0),
             p("CelestialBodiesShown", ValueType::Bool, || {
                 Value::Bool(true)
             }),
@@ -439,7 +512,7 @@ static CLASSES: &[ClassDef] = &[
         "Instance",
         &[
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
-            num("Cover", || Value::Number(0.0)),
+            num("Cover", || Value::Number(0.0), 0.0, 1.0),
             color("Color", || Value::Color3(WHITE)),
         ],
     ),
@@ -448,9 +521,9 @@ static CLASSES: &[ClassDef] = &[
         "Instance",
         &[
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
-            num("Intensity", || Value::Number(0.04)),
-            num("Size", || Value::Number(24.0)),
-            num("Threshold", || Value::Number(0.0)),
+            num("Intensity", || Value::Number(0.04), 0.0, 1.0),
+            num("Size", || Value::Number(24.0), 0.0, 64.0),
+            num("Threshold", || Value::Number(0.0), 0.0, 10.0),
         ],
     ),
     class(
@@ -458,9 +531,9 @@ static CLASSES: &[ClassDef] = &[
         "Instance",
         &[
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
-            num("Brightness", || Value::Number(0.0)),
-            num("Contrast", || Value::Number(0.0)),
-            num("Saturation", || Value::Number(0.0)),
+            num("Brightness", || Value::Number(0.0), -1.0, 1.0),
+            num("Contrast", || Value::Number(0.0), -1.0, 1.0),
+            num("Saturation", || Value::Number(0.0), -1.0, 1.0),
             color("TintColor", || Value::Color3(WHITE)),
         ],
     ),
@@ -474,6 +547,7 @@ static CLASSES: &[ClassDef] = &[
                 ty: ValueType::String,
                 default: || Value::String("Default".into()),
                 allowed: Some(TONEMAPPER_PRESETS),
+                range: None,
             },
         ],
     ),

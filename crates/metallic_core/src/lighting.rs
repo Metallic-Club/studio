@@ -414,6 +414,14 @@ mod tests {
                 if let (Some(allowed), Value::String(s)) = (def.allowed, &value) {
                     assert!(allowed.contains(&s.as_str()), "{}: {s}", preset.id);
                 }
+                if let Some(range) = def.range {
+                    assert_eq!(
+                        range.apply(value.clone()),
+                        value,
+                        "{}: {class}.{prop} out of range",
+                        preset.id
+                    );
+                }
             }
         }
     }

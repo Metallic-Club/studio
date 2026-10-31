@@ -27,6 +27,17 @@ The `Lighting` service with Roblox property names, applied live in the renderer,
   bounds, presets differ, edits reach the image, GlobalShadows and FogEnd work), unit tests in both `lighting.rs`.
 - Previews: `examples/lighting_presets.rs` writes `docs/lighting/presets/*.png` (320 x 180).
 
+## Review fixes
+
+- Ranges: every Lighting and effect Number and Color3 has a registry range (`PropDef::range`, `NumRange`) applied
+  in `World::set`, so scene loads and Luau writes are covered: values are clamped (ClockTime wraps), non-finite ones
+  were already refused. The renderer also runs `LightingInputs::sanitized` in `evaluate` for values set from code.
+  Tests: core `lighting_values_are_kept_in_range_on_write_and_load` (1e39, f64::MAX, inf, NaN; a hand-edited scene
+  file), script `lighting_values_from_scripts_stay_in_range`, render `extreme_inputs_give_a_finite_frame`.
+- Toon (#320, via #62): toon light is relative to the default lighting's pre-exposed sun and sky, toon characters
+  get the same fog and soft shadows; the toon headless test runs without bloom (bloom lifts the 2 px ink by ~15/255).
+- Bloom uses the renderer's HDR format (`PostContext::hdr_format`); bloom and lighting shaders validate with naga.
+
 ## Tuning notes
 
 Four render / critique rounds on the reference scene. Main changes: exposure key -0.6 EV (sunlit grey baseplate no

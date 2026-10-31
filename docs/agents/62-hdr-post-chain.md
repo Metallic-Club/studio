@@ -31,6 +31,21 @@ ordered, extensible list of post passes (styles research section 13 hooks 1, 2, 
   vignette, HDR and LDR passes in order through both ping-pong targets, depth offered, Low and High), unit tests in
   `tonemap.rs` and `post.rs`. Default image matches main (reference scene: max 9/255 at MSAA edges, mean 0.04).
 
+## Review fixes
+
+- Toon path (#320) validated: `every_shader_module_validates` parses and validates every module with naga (no GPU),
+  and the toon headless render test runs. `invert_curve` refines through the full curve, so toon colours hold under
+  every `ToneCurve` (exact for Filmic and Clamp).
+- `empty_chain_matches_the_old_output`: flat colours from 0.002 to 6 (grey and colour) match a CPU model of the old
+  in-shader Narkowicz + sRGB output within 1/255, dither off and on.
+- No `expect` outside tests. `FullscreenPass` caches its bind groups by (input, aux) and drops them when the frame
+  size changes, so a steady frame creates no bind groups.
+- GL: `Rgba16Float` support is checked on the adapter (`hdr_format_for`); without float render targets the HDR
+  target falls back to `Rgba8Unorm` (light above 1 clips) with a log warning. On this machine's GL adapter float is
+  supported, and `gl_backend_renders_the_hdr_chain` renders the chain through GL. That test found a GL bug: a
+  sampleable multisampled depth texture made the frame black, so depth is now sampleable only while a pass reads it.
+  `RenderContext::new_headless_with_backends` and `Renderer::hdr_format` were added for this.
+
 ## Not done (follow-ups)
 
 - Render scale (internal size separate from output size) and the separate 1x depth/normal prepass (#109).

@@ -3,7 +3,7 @@
 //! A mip chain: a prefilter (soft threshold, firefly clamp) into half resolution, box-filtered
 //! downsamples, then tent upsamples that add each level back. The composite blends the scene
 //! toward the normalised blur by `intensity` (a lerp, so it keeps the image's energy).
-use crate::post::{FullscreenPass, HDR_FORMAT, PostContext, PostDraw, PostPass, PostSlot};
+use crate::post::{FullscreenPass, PostContext, PostDraw, PostPass, PostSlot};
 
 /// Name of the bloom pass in the post chain.
 pub const BLOOM_PASS: &str = "bloom";
@@ -86,6 +86,7 @@ pub struct BloomPass {
     up: FullscreenPass,
     composite: FullscreenPass,
     levels: Vec<Level>,
+    format: wgpu::TextureFormat,
 }
 
 impl Default for BloomPass {
@@ -99,6 +100,7 @@ impl Default for BloomPass {
             up: FullscreenPass::new("metallic bloom up", UPSAMPLE, 0),
             composite: FullscreenPass::new("metallic bloom composite", COMPOSITE, 16),
             levels: Vec::new(),
+            format: crate::post::HDR_FORMAT,
         }
     }
 }
@@ -110,15 +112,22 @@ impl BloomPass {
         (px.log2().round() as i32 - 1).clamp(2, 6) as usize
     }
 
-    fn ensure_levels(&mut self, device: &wgpu::Device, size: (u32, u32), count: usize) {
+    fn ensure_levels(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        count: usize,
+    ) {
         let mut want = Vec::with_capacity(count);
         let mut s = size;
         for _ in 0..count {
             s = ((s.0 / 2).max(1), (s.1 / 2).max(1));
             want.push(s);
         }
-        let same =
-            self.levels.len() == count && self.levels.iter().zip(&want).all(|(l, w)| l.size == *w);
+        let same = self.format == format
+            && self.levels.len() == count
+            && self.levels.iter().zip(&want).all(|(l, w)| l.size == *w);
         if same {
             return;
         }
@@ -134,7 +143,7 @@ impl BloomPass {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: HDR_FORMAT,
+                    format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
@@ -149,6 +158,7 @@ impl BloomPass {
                 up: tex("metallic bloom up", size),
             })
             .collect();
+        self.format = format;
     }
 }
 
@@ -167,7 +177,8 @@ impl PostPass for BloomPass {
 
     fn record(&mut self, ctx: &mut PostContext<'_>) {
         let count = self.level_count(ctx.size.1);
-        self.ensure_levels(ctx.device, ctx.size, count);
+        self.ensure_levels(ctx.device, ctx.hdr_format, ctx.size, count);
+        let hdr = ctx.hdr_format;
         let threshold = [self.threshold.max(0.0), 0.0, 0.0, 0.0];
         let input = ctx.input;
         let levels = std::mem::take(&mut self.levels);
@@ -177,7 +188,7 @@ impl PostPass for BloomPass {
                 input,
                 aux: None,
                 output: &levels[0].down,
-                output_format: HDR_FORMAT,
+                output_format: hdr,
             },
             bytemuck::cast_slice(&threshold),
         );
@@ -188,7 +199,7 @@ impl PostPass for BloomPass {
                     input: &levels[i - 1].down,
                     aux: None,
                     output: &levels[i].down,
-                    output_format: HDR_FORMAT,
+                    output_format: hdr,
                 },
                 &[],
             );
@@ -207,7 +218,7 @@ impl PostPass for BloomPass {
                     input: smaller,
                     aux: Some(&levels[i].down),
                     output: &levels[i].up,
-                    output_format: HDR_FORMAT,
+                    output_format: hdr,
                 },
                 &[],
             );
@@ -230,5 +241,28 @@ impl PostPass for BloomPass {
             bytemuck::cast_slice(&v),
         );
         self.levels = levels;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bloom_shaders_validate() {
+        let b = BloomPass::default();
+        for pass in [&b.prefilter, &b.down, &b.up, &b.composite] {
+            pass.validate();
+        }
+    }
+
+    #[test]
+    fn level_count_follows_size_and_height() {
+        let mut b = BloomPass::default();
+        assert_eq!(b.level_count(1080), 4);
+        b.size = 1.0;
+        assert_eq!(b.level_count(1080), 2);
+        b.size = 64.0;
+        assert_eq!(b.level_count(2160), 6);
     }
 }
