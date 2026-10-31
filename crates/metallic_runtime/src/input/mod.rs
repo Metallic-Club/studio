@@ -9,6 +9,10 @@
 //!        Game::frame(&FrameInput, dt)      (unchanged: MoveInput and the camera read FrameInput)
 //! ```
 //!
+//! Callers preparing canonical command data can opt into `LocalInput::from_frame` with the
+//! evaluated frame and absolute camera yaw. The adapter retains this module's presentation
+//! boundary and does not change the Game flow above.
+//!
 //! - [`control`]: devices, [`Control`]s (named like Roblox's `Enum.KeyCode`), [`RawEvent`], the
 //!   [`RawSource`] trait and the bounded [`InputQueue`]. The window library stays out of this
 //!   crate: `metallic_player` has the winit and gilrs sources.
@@ -35,8 +39,8 @@
 
 mod config;
 mod control;
-mod local_input;
 pub mod glyph;
+mod local_input;
 pub mod overrides;
 pub mod rebind;
 mod runtime;

@@ -135,7 +135,6 @@ fn every_axis_byte_pair_decodes_to_finite_bounded_movement() {
     }
 }
 
-
 #[test]
 fn every_canonical_axis_code_round_trips_without_losing_either_axis() {
     for axis in -127i8..=127 {
@@ -200,7 +199,10 @@ fn yaw_half_step_neighbors_and_turn_seam_have_stable_codes() {
 fn non_finite_second_axis_does_not_erase_the_first_or_held_flags() {
     for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let command = LocalInput::from_components([0.5, invalid], true, true, FRAC_PI_2);
-        assert_eq!((command.move_x, command.move_z, command.yaw), (64, 0, 16_384));
+        assert_eq!(
+            (command.move_x, command.move_z, command.yaw),
+            (64, 0, 16_384)
+        );
         assert!(command.jump && command.run);
     }
 }

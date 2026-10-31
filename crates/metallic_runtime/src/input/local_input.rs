@@ -1,9 +1,28 @@
 //! Presentation-bound conversion from evaluated actions to canonical command data.
 
+use super::FrameInput;
+use crate::LocalInput;
+
+impl LocalInput {
+    /// Quantizes an already-evaluated input frame with the absolute camera yaw in radians.
+    ///
+    /// Movement is the action runtime's processed value: deadzones, response curves and
+    /// binding scales are not applied again. This delegates sanitization, saturation and rounding
+    /// to [`Self::from_components`]. Jump and run remain held flags; orbit and zoom do not
+    /// contribute to the command. The frame is not changed.
+    ///
+    /// This adapter belongs to the presentation input module. It does not change the Game
+    /// tick path, validate a network packet or establish an authenticated player identity.
+    pub fn from_frame(input: &FrameInput, camera_yaw: f32) -> Self {
+        Self::from_components(input.movement, input.jump, input.run, camera_yaw)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{
-        Control, Device, FrameInput, InputConfig, InputRuntime, RawEvent, default_character_controls,
+        Control, Device, FrameInput, InputConfig, InputRuntime, RawEvent,
+        default_character_controls,
     };
     use crate::LocalInput;
     use std::f32::consts::FRAC_PI_2;
@@ -80,7 +99,10 @@ mod tests {
         let before = frame;
         let command = LocalInput::from_frame(&frame, FRAC_PI_2);
         assert_eq!(frame, before);
-        assert_eq!((command.move_x, command.move_z, command.yaw), (64, -32, 16_384));
+        assert_eq!(
+            (command.move_x, command.move_z, command.yaw),
+            (64, -32, 16_384)
+        );
         frame.orbit = [f32::NAN, f32::INFINITY];
         frame.zoom = f32::NEG_INFINITY;
         assert_eq!(LocalInput::from_frame(&frame, FRAC_PI_2), command);

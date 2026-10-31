@@ -1,5 +1,13 @@
 # #349 Presentation FrameInput adapter and quantization regressions
 
+## Current status
+
+Test-only checkpoint `f60529420218a92788eaacd33ddae9d664ca0b14` retains the pre-implementation tests for a
+reproducible missing-method baseline. A thin adapter and API/architecture docs are now implemented in the working
+tree, but no Rust build or test has run. Cargo remains held. The first focused grant can check the historical
+test-only baseline, return to the implementation and validate both adapter and pure quantization cases without
+claiming an unexecuted result. No Game behavior, wire rule, trigonometry or dependency changed.
+
 ## Goal and ownership
 
 Scoped child of #340, authorized by the multiplayer conductor after read-only research. #315 is closed, so this
@@ -34,3 +42,16 @@ No Cargo command has run: heavy work is held during the conductor's actual suite
 Next: obtain a focused compile slot, observe the missing-method baseline without misclassifying fixture errors,
 implement the thin adapter, update API/architecture docs and run focused then required full gates. Do not claim
 an executed red, green or CPU feature-graph result before it actually runs. No dependency or visual UI change.
+
+
+## Implementation checkpoint
+
+`input/local_input.rs` now defines the inherent `LocalInput::from_frame` method and delegates directly to
+`from_components(input.movement, input.jump, input.run, camera_yaw)`. No other processing runs. The four nested
+unit tests exercise processed keyboard diagonals/held flags, raw-stick evaluation with one existing deadzone,
+absolute yaw with ignored orbit/zoom, and non-finite command components. They live under the input module so
+PR #309's presentation gate will also gate the adapter tests. Root local_input remains independent of FrameInput.
+
+The six additional pure tests cover every canonical axis, all 65,536 yaw codes, representable half-step neighbors,
+turn seams, non-finite second-axis input and bounded seeded float-bit invariants. These are test definitions,
+not observed results yet. No dependency, global manifest, Game tick, Simulation, driver or codec file changed.
