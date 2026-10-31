@@ -59,7 +59,8 @@ const FINISH_PARTS: &[&str] = &[COLOR_WGSL, TONECURVE_WGSL, FINISH_WGSL];
 pub enum Quality {
     /// One 1024 px shadow cascade, no multisampling.
     Low,
-    /// Three 2048 px shadow cascades and 4x MSAA.
+    /// Three 2048 px shadow cascades and 4x MSAA (lowered to the highest count the scene
+    /// target and depth formats support; see [`Renderer::msaa_samples`]).
     #[default]
     High,
 }
@@ -84,12 +85,75 @@ impl RenderSettings {
             Quality::High => 2048,
         }
     }
+    /// The sample count the preset asks for; [`supported_samples`] lowers it to what the
+    /// formats support.
     fn samples(self) -> u32 {
         match self.quality {
             Quality::Low => 1,
             Quality::High => 4,
         }
     }
+}
+
+/// The highest sample count up to `requested` that a colour target with `color` flags can
+/// render and resolve and a depth target with `depth` flags can render; 1 always works.
+fn supported_samples(
+    requested: u32,
+    color: wgpu::TextureFormatFeatureFlags,
+    depth: wgpu::TextureFormatFeatureFlags,
+) -> u32 {
+    [16, 8, 4, 2]
+        .into_iter()
+        .filter(|&n| n <= requested)
+        .find(|&n| {
+            color.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE)
+                && color.sample_count_supported(n)
+                && depth.sample_count_supported(n)
+        })
+        .unwrap_or(1)
+}
+
+/// What the device accepts for `format`, the way wgpu validates it: the adapter's own
+/// features when the device has `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` or is a downlevel
+/// device, the WebGPU guarantees otherwise (and when no adapter is known).
+fn device_format_features(
+    device: &wgpu::Device,
+    adapter: Option<&wgpu::Adapter>,
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureFormatFeatures {
+    let features = device.features();
+    if let Some(a) = adapter {
+        let adapter_specific =
+            features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        let downlevel = !a
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::WEBGPU_TEXTURE_FORMAT_SUPPORT);
+        if adapter_specific || downlevel {
+            return a.get_texture_format_features(format);
+        }
+    }
+    format.guaranteed_format_features(features)
+}
+
+/// The scene target format ([`hdr_format_for`]) and the MSAA sample count to use with it.
+fn scene_targets(
+    device: &wgpu::Device,
+    adapter: Option<&wgpu::Adapter>,
+    hdr_features: Option<wgpu::TextureFormatFeatures>,
+    settings: RenderSettings,
+) -> (wgpu::TextureFormat, u32) {
+    let requested = settings.samples();
+    let format = hdr_format_for(hdr_features, requested);
+    let samples = supported_samples(
+        requested,
+        device_format_features(device, adapter, format).flags,
+        device_format_features(device, adapter, DEPTH_FORMAT).flags,
+    );
+    if samples != requested {
+        log::warn!("{requested}x MSAA is not supported for {format:?}; using {samples}x");
+    }
+    (format, samples)
 }
 
 /// Uniform block shared by all shaders; mirrors `Globals` in `common.wgsl`.
@@ -323,7 +387,9 @@ struct CascadeSlot {
 }
 
 /// Draws the Parts of a world. Create with [`Renderer::new`], call [`Renderer::sync`] when the
-/// world changed and [`Renderer::render`] once per frame.
+/// world changed and [`Renderer::render`] once per frame. `render` draws with
+/// [`Camera::sanitized`], so a non-finite camera position or field of view falls back to a
+/// finite one.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -342,6 +408,10 @@ pub struct Renderer {
     hdr_features: Option<wgpu::TextureFormatFeatures>,
     /// The HDR target format in use (see [`hdr_format_for`]).
     hdr_format: wgpu::TextureFormat,
+    /// The context's adapter, to check MSAA support when the settings change.
+    adapter: Option<wgpu::Adapter>,
+    /// MSAA sample count of the scene pass (see [`Renderer::msaa_samples`]).
+    samples: u32,
     /// Bumped whenever the attachments are rebuilt ([`PostContext::targets`]).
     targets: u64,
     scene: Scene,
@@ -478,13 +548,15 @@ impl Renderer {
             .adapter
             .as_ref()
             .map(|a| a.get_texture_format_features(HDR_FORMAT));
-        let hdr_format = hdr_format_for(hdr_features, settings.samples());
+        let adapter = ctx.adapter.clone();
+        let (hdr_format, samples) =
+            scene_targets(&device, adapter.as_ref(), hdr_features, settings);
         if hdr_format != HDR_FORMAT {
             log::warn!("{HDR_FORMAT:?} is not renderable here; HDR falls back to {hdr_format:?}");
         }
         let pipelines = make_pipelines(
             &device,
-            settings.samples(),
+            samples,
             hdr_format,
             &global_layout,
             &shadow_layout,
@@ -505,6 +577,8 @@ impl Renderer {
             finish_gpu,
             hdr_features,
             hdr_format,
+            adapter,
+            samples,
             targets: 0,
             scene: Scene::new(),
             uploaded_version: None,
@@ -558,10 +632,10 @@ impl Renderer {
         );
         self.cascade_slots =
             make_cascade_slots(&self.device, &self.shadow_layout, settings.cascades());
-        self.hdr_format = hdr_format_for(self.hdr_features, settings.samples());
+        self.pick_scene_targets();
         self.pipelines = make_pipelines(
             &self.device,
-            settings.samples(),
+            self.samples,
             self.hdr_format,
             &self.global_layout,
             &self.shadow_layout,
@@ -594,16 +668,32 @@ impl Renderer {
             allowed_usages: wgpu::TextureUsages::empty(),
             flags: wgpu::TextureFormatFeatureFlags::empty(),
         });
-        self.hdr_format = hdr_format_for(self.hdr_features, self.settings.samples());
+        self.pick_scene_targets();
         self.pipelines = make_pipelines(
             &self.device,
-            self.settings.samples(),
+            self.samples,
             self.hdr_format,
             &self.global_layout,
             &self.shadow_layout,
             &self.skin_layout,
         );
         self.attachments = None;
+    }
+
+    /// Sets [`Renderer::hdr_format`] and [`Renderer::msaa_samples`] for the current settings.
+    fn pick_scene_targets(&mut self) {
+        (self.hdr_format, self.samples) = scene_targets(
+            &self.device,
+            self.adapter.as_ref(),
+            self.hdr_features,
+            self.settings,
+        );
+    }
+
+    /// The MSAA sample count in use: the quality preset's count (4 for [`Quality::High`]),
+    /// lowered to the highest count the scene target format and the depth format support.
+    pub fn msaa_samples(&self) -> u32 {
+        self.samples
     }
 
     /// Number of parts currently known to the renderer (drawn or not).
@@ -718,7 +808,7 @@ impl Renderer {
     }
 
     fn ensure_attachments(&mut self, size: (u32, u32)) {
-        let samples = self.settings.samples();
+        let samples = self.samples;
         let sampleable = self.post.reads_depth();
         if let Some(att) = self.attachments.as_mut()
             && att.size == size
@@ -867,6 +957,8 @@ impl Renderer {
         }
         self.ensure_attachments(size);
         self.upload_scene();
+        // A NaN eye or field of view would reach the uniform block, the sort and the cascades.
+        let camera = &camera.sanitized();
         self.select_skinned_lods(camera, size.1);
 
         // Blended parts are re-sorted every frame because the order depends on the camera.
@@ -947,6 +1039,9 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.shadow);
             pass.set_bind_group(0, &slot.bind_group, &[]);
             self.draw_opaque(&mut pass);
+            // Like Roblox, partly transparent parts cast a full shadow; invisible ones
+            // (Transparency 1) are not in the blended list and cast none.
+            self.draw_blended_instances(&mut pass);
             pass.set_pipeline(&self.pipelines.skinned_shadow);
             self.draw_skinned(&mut pass, None);
         }
@@ -1022,7 +1117,7 @@ impl Renderer {
             return;
         };
         let size = att.size;
-        let samples = self.settings.samples();
+        let samples = self.samples;
         let mut chain = std::mem::take(&mut self.post);
 
         // HDR passes ping-pong between hdr[0] and hdr[1].
@@ -1145,6 +1240,12 @@ impl Renderer {
             return;
         }
         pass.set_pipeline(&self.pipelines.blended);
+        self.draw_blended_instances(pass);
+    }
+
+    /// Draws the blended instances far to near with the pipeline already set (the blended
+    /// pipeline, or the shadow pipeline for their shadows).
+    fn draw_blended_instances(&self, pass: &mut wgpu::RenderPass<'_>) {
         let stride = std::mem::size_of::<InstanceRaw>() as u64;
         let mut bound: Option<MeshKind> = None;
         for (i, kind) in self.blended_kinds.iter().enumerate() {
@@ -1608,5 +1709,38 @@ mod tests {
         validate_wgsl("sky", SKY_PARTS);
         validate_wgsl("shadow", SHADOW_PARTS);
         validate_wgsl("finish", FINISH_PARTS);
+    }
+
+    #[test]
+    fn msaa_falls_back_to_the_highest_supported_count() {
+        use wgpu::TextureFormatFeatureFlags as F;
+        let resolve = F::MULTISAMPLE_RESOLVE;
+        let all = F::MULTISAMPLE_X2 | F::MULTISAMPLE_X4 | F::MULTISAMPLE_X8 | resolve;
+        assert_eq!(supported_samples(4, all, all), 4);
+        assert_eq!(supported_samples(1, all, all), 1);
+        // Never above the request, even when more is supported.
+        assert_eq!(supported_samples(2, all, all), 2);
+        // Colour without 4x: the next lower count both support.
+        assert_eq!(supported_samples(4, F::MULTISAMPLE_X2 | resolve, all), 2);
+        // Depth without 4x limits it too.
+        assert_eq!(supported_samples(4, all, F::MULTISAMPLE_X2), 2);
+        // No resolve support, or no multisampling at all: single sample.
+        assert_eq!(supported_samples(4, F::MULTISAMPLE_X4, all), 1);
+        assert_eq!(supported_samples(4, F::empty(), F::empty()), 1);
+    }
+
+    /// The WebGPU guarantees (used when the device has no adapter-specific format features)
+    /// include 4x for the HDR, LDR and depth formats, so the High preset keeps 4x there.
+    #[test]
+    fn guaranteed_formats_keep_4x() {
+        let g =
+            |f: wgpu::TextureFormat| f.guaranteed_format_features(wgpu::Features::empty()).flags;
+        for format in [HDR_FORMAT, LDR_FORMAT] {
+            assert_eq!(
+                supported_samples(4, g(format), g(DEPTH_FORMAT)),
+                4,
+                "{format:?}"
+            );
+        }
     }
 }
