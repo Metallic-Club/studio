@@ -17,8 +17,10 @@ use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
+use crate::context_bar::ContextBar;
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
 use crate::explorer::{Explorer, PlayTree};
+use crate::hints::{HintEvent, Hints};
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
 use crate::panel;
@@ -28,6 +30,7 @@ use crate::script_editor::ScriptTabs;
 use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::viewport::Viewport;
+use crate::viewport_header::ViewportHeader;
 use crate::widgets::Plate;
 
 /// What the editor asks the app shell to do.
@@ -50,6 +53,20 @@ enum Leave {
     Quit,
 }
 
+/// The part whose Color the step `c` changed, when it changed exactly one part's Color.
+fn recoloured_one(c: &crate::commands::Command) -> Option<metallic_core::InstanceId> {
+    use crate::commands::Command;
+    match c {
+        Command::SetProperty { id, prop, .. } if prop == "Color" => Some(*id),
+        Command::SetProperties { changes, .. } => match changes.as_slice() {
+            [(id, prop, _, _)] if &**prop == "Color" => Some(*id),
+            _ => None,
+        },
+        Command::Batch { commands, .. } if commands.len() == 1 => recoloured_one(&commands[0]),
+        _ => None,
+    }
+}
+
 /// The editor window for one open game.
 pub struct EditorUi {
     /// Data and edit entry points.
@@ -63,6 +80,14 @@ pub struct EditorUi {
     /// 3D view.
     pub viewport: Viewport,
     explorer: Explorer,
+    /// The strip over the viewport (spec 3.1).
+    pub header: ViewportHeader,
+    /// The floating toolbar over the selection (spec 3.2).
+    pub context_bar: ContextBar,
+    /// First-time hints (spec 14.1); in memory until the app loads the saved ones.
+    pub hints: Hints,
+    /// Selection and history revisions the hints last looked at.
+    hint_seen: (u64, u64),
     /// Properties panel.
     pub properties: Properties,
     scripts: ScriptTabs,
@@ -90,6 +115,10 @@ impl EditorUi {
             viewport: Viewport::new(),
             explorer: Explorer::new(),
             properties: Properties::new(),
+            header: ViewportHeader::new(),
+            context_bar: ContextBar::new(),
+            hints: Hints::in_memory(),
+            hint_seen: (u64::MAX, 0),
             scripts: ScriptTabs::new(),
             pressed: Vec::new(),
             confirm: None,
@@ -145,6 +174,8 @@ impl EditorUi {
         editor.viewport.frame_selection(&editor.state);
         let back = -editor.viewport.camera.forward();
         editor.viewport.camera.dolly(back, 6.0);
+        // Show the contextual toolbar at once (no pointer to wait for in a capture).
+        editor.context_bar.arm(editor.state.selection.revision());
         Some(editor)
     }
 
@@ -196,6 +227,13 @@ impl EditorUi {
         if id == "file.save" {
             self.scripts.flush(&mut self.state);
         }
+        if id == "edit.duplicate" {
+            self.hint(HintEvent::Duplicated);
+        }
+        if id == "view.focus_context_bar" {
+            self.context_bar.focus();
+            return;
+        }
         if id == "output.clear" {
             self.output.log.clear();
             return;
@@ -209,7 +247,9 @@ impl EditorUi {
         let typing = if playing {
             ctx.text_edit_focused()
         } else {
-            ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta()
+            ctx.egui_wants_keyboard_input()
+                || self.viewport.is_editing_delta()
+                || self.context_bar.has_focus()
         };
         // A gesture holds values in the preview overlay: no global action runs until it ends
         // (Esc cancels it in the viewport or in Properties).
@@ -253,6 +293,41 @@ impl EditorUi {
             self.run_action(id);
         }
         self.pressed = pressed;
+    }
+
+    fn hint(&mut self, event: HintEvent) {
+        let blocked = self.viewport.is_busy() || self.state.play.is_playing();
+        self.hints.note(&event, std::time::Instant::now(), blocked);
+    }
+
+    /// Turns what happened this frame into hint events (selection, drags, recolouring).
+    fn watch_hints(&mut self) {
+        let revision = self.state.selection.revision();
+        if revision != self.hint_seen.0 {
+            self.hint_seen.0 = revision;
+            let parts = !self.state.selection.parts(&self.state.world).is_empty();
+            self.hint(HintEvent::Selected { parts });
+        }
+        if let Some(d) = self.viewport.take_finished() {
+            self.hint(HintEvent::DragEnded {
+                axis: d.axis,
+                body: d.body,
+                snapping_off: d.snapping_off,
+                off_grid: d.off_grid,
+                near_corner: d.near_corner,
+            });
+            self.hint(HintEvent::MovedSelection);
+            if let Some((id, y)) = d.one {
+                self.hint(HintEvent::MovedOne { id, y });
+            }
+        }
+        let history = self.state.history.revision();
+        if history != self.hint_seen.1 {
+            self.hint_seen.1 = history;
+            if let Some(id) = self.state.history.peek_undo().and_then(recoloured_one) {
+                self.hint(HintEvent::RecolouredOne(id));
+            }
+        }
     }
 
     /// Starts play mode `id` on what is on screen: open script tabs are committed and a gizmo or
@@ -451,6 +526,8 @@ impl EditorUi {
                             &mut self.state,
                             &self.keymap,
                         );
+                        ui.separator();
+                        ui.checkbox(&mut self.context_bar.enabled, "Contextual toolbar");
                     });
                     ui.menu_button("Insert", |ui| {
                         for &class in INSERTABLE {
@@ -502,15 +579,6 @@ impl EditorUi {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.spacing_mut().interact_size.y = 28.0;
                     self.actions
-                        .toolbar(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
                         .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
                     ui.separator();
                     self.actions
@@ -540,20 +608,6 @@ impl EditorUi {
                         Some(crate::play::PlayStatus::Ended(t)) => (t, theme::text_2()),
                     };
                     ui.label(small(play.into_owned()).color(colour));
-                    // The drag readout (spec 4.5): the amount, editable for a few seconds after
-                    // release (accent), and what the drag snapped to.
-                    if let Some(st) = self.viewport.status(&self.state) {
-                        ui.label(small("·".into()).color(dim));
-                        let colour = if st.editing {
-                            theme::accent()
-                        } else {
-                            theme::text_1()
-                        };
-                        ui.label(small(st.text).monospace().color(colour));
-                        if let Some(snap) = st.snap {
-                            ui.label(small(snap).color(dim));
-                        }
-                    }
                     if let Some(note) = self.state.current_note() {
                         ui.label(small("·".into()).color(dim));
                         ui.label(small(note.to_string()).color(theme::text_1()));
@@ -583,6 +637,20 @@ impl EditorUi {
                             ));
                         }
                         ui.label(small(text).monospace().color(theme::text_2()));
+                        // The drag readout (spec 3.3 and 4.5): the amount, editable for a few
+                        // seconds after release (accent), and what the drag snapped to.
+                        if let Some(st) = self.viewport.status(&self.state) {
+                            ui.label(small("·".into()).color(dim));
+                            if let Some(snap) = st.snap {
+                                ui.label(small(snap).color(dim));
+                            }
+                            let colour = if st.editing {
+                                theme::accent()
+                            } else {
+                                theme::text_1()
+                            };
+                            ui.label(small(st.text).monospace().color(colour));
+                        }
                     });
                 });
             });
@@ -649,6 +717,8 @@ impl EditorUi {
                 self.scripts.prune(&self.state);
                 let scene = self.scripts.tab_strip(ui, &mut self.state);
                 if scene {
+                    self.header
+                        .ui(ui, &mut self.actions, &mut self.state, &self.keymap);
                     let before = ui.available_rect_before_wrap();
                     self.viewport.ui(ui, &mut self.state, render_state);
                     viewport_hovered = ui.rect_contains_pointer(before);
@@ -656,6 +726,20 @@ impl EditorUi {
                     self.scripts.editor(ui, &mut self.state);
                 }
             });
+
+        let top = self.viewport.rect().top();
+        self.context_bar.ui(
+            &ctx,
+            &mut self.state,
+            &self.viewport,
+            &mut self.actions,
+            &self.keymap,
+            top,
+        );
+
+        self.watch_hints();
+        let blocked = self.viewport.is_busy() || self.state.play.is_playing();
+        self.hints.ui(&ctx, self.viewport.rect(), blocked);
 
         if !played {
             let right_down = ctx.input(|i| i.pointer.secondary_down());

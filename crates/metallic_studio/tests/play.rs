@@ -550,3 +550,54 @@ fn escape_answers_the_close_prompt_and_play_goes_on() {
     h.run_steps(2);
     assert!(!h.state().state.play.is_playing(), "a second Esc stops");
 }
+
+/// Nothing from the building UI draws over the running game (#384): the contextual toolbar and the
+/// hint card go away for Play, and the viewport header sits above the game, never over it.
+#[test]
+fn no_floating_toolbar_header_chip_or_hint_card_over_the_game() {
+    let output = OutputPanel::new();
+    let (world, part) = world("");
+    let mut state = EditorState::new(
+        world,
+        std::path::Path::new("."),
+        std::path::Path::new("unused.mscene"),
+        "Test",
+        output.log.sink(),
+    );
+    state.can_save = false;
+    let mut h = harness(state, output);
+    h.state_mut().state.selection.select_only(part);
+    let revision = h.state().state.selection.revision();
+    h.state_mut().context_bar.arm(revision);
+    h.run_steps(3);
+    // Editing: the bar and the first-select hint show.
+    assert!(h.state().context_bar.last_rect.is_some(), "bar before Play");
+    assert!(h.query_by_label("Got it").is_some(), "hint before Play");
+
+    h.key_press(egui::Key::F5);
+    h.run_steps(3);
+    assert!(h.state().state.play.is_playing());
+    assert!(
+        h.state().context_bar.last_rect.is_none(),
+        "no bar over the game"
+    );
+    assert!(h.query_by_label("More").is_none());
+    assert!(
+        h.query_by_label("Got it").is_none(),
+        "no hint card over the game"
+    );
+    let game = h.state().viewport.rect();
+    let header = h.state().header.rect();
+    assert!(
+        header.bottom() <= game.top() + 0.5,
+        "header {header:?} must sit above the game {game:?}"
+    );
+    // Nothing else floats over the game: every widget drawn inside it belongs to the game view.
+    for node in h.query_all(By::new().role(egui::accesskit::Role::Button)) {
+        let r = node.rect();
+        assert!(
+            !game.shrink(1.0).contains(r.center()),
+            "a Studio button over the game at {r:?}"
+        );
+    }
+}
