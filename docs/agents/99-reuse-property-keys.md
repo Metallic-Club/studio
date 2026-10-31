@@ -55,3 +55,17 @@ The production change is an existing-key `get_mut` branch between default remova
 replaces only the value, preserving every validation/range/old-value comparison and event path. It does not
 early-return on no-ops or change signal storage. API docs explicitly retain allocation caveats. Next: focused
 green and candidate release prebuild in a separate output directory, then coordinated timing/full gates.
+
+## Timing provenance correction
+
+The first ignored timing definition lived in the allocator-instrumented test target. It never ran. Review
+identified the allocator-hook confound, so test-only `56d4585` moves it into `property_write_timing.rs`, which
+uses the default system allocator and contains no counting hook. That baseline is a child of `97d2b70`, with
+production identical to main. It was normally merged into the fixed branch so both checkpoints remain in
+history. The uninstrumented baseline release prebuild passed in 54.65s; its separate `99-baseline-timing`
+target and the original instrumented baseline remain retained. No target artifacts were copied.
+
+`baseline-system-provenance.json` records executable/source/probe fingerprints. Candidate and baseline probe
+bytes match SHA256 `e643cc85bb2e21d5ad6f7891880f4a4894ace546b1cdb1379be95f02f674c47c`. Candidate timing will
+use another release target, and workspace gates will use `99-dev`, preventing later guard owner/profile
+transitions from cleaning retained release artifacts. No actual timing has executed yet.
