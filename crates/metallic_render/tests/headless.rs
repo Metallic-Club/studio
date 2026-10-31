@@ -239,7 +239,7 @@ fn toon_avatar_has_ink_outline_and_warm_shading() {
     r.post_mut().remove("bloom");
     // Anti-aliasing (on at Low, where MSAA is off) blends the line's stair steps into the
     // background, as it should; this test checks the ink colour itself.
-    r.post_mut().remove(metallic_render::SMAA_PASS);
+    r.post_mut().remove(metallic_render::MLAA_PASS);
     let cam = Camera {
         position: Vec3::new(0.0, 2.75, 9.0),
         look_at: Vec3::new(0.0, 2.75, 0.0),

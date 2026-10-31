@@ -5,8 +5,8 @@ use metallic_core::{Color3, Value, Vec3 as V3, World};
 use metallic_render::glam::{Mat4, Vec3};
 use metallic_render::metallic_asset::{Pose, SkinnedModel};
 use metallic_render::{
-    Camera, EDGE_PASS, EdgePass, LightingInputs, Lut3d, Quality, RenderContext, RenderSettings,
-    Renderer, SMAA_PASS, SkinStyle, SkinnedInstance, SmaaPass,
+    Camera, EDGE_PASS, EdgePass, LightingInputs, Lut3d, MLAA_PASS, MlaaPass, Quality,
+    RenderContext, RenderSettings, Renderer, SkinStyle, SkinnedInstance,
 };
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -153,7 +153,7 @@ fn edges_outline_silhouettes_and_creases_but_not_planes_or_sky() {
     // MSAA 4x (High) and none (Low): the prepass is single-sampled either way.
     for quality in [Quality::High, Quality::Low] {
         let mut r = renderer(&ctx, quality);
-        r.post_mut().remove(SMAA_PASS);
+        r.post_mut().remove(MLAA_PASS);
         r.post_mut().remove("bloom");
         r.sync(&scene());
         let off = r.capture(&camera(), SIZE).expect("capture");
@@ -177,6 +177,81 @@ fn edges_outline_silhouettes_and_creases_but_not_planes_or_sky() {
         // Rebuilding targets (a resize) keeps working.
         let small = r.capture(&camera(), (160, 100)).expect("capture");
         assert_eq!(small.len(), 160 * 100 * 4);
+    }
+}
+
+#[test]
+fn grazing_floor_gets_no_line_at_the_frame_border() {
+    let _gpu = gpu();
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    // A floor filling the whole frame, its far part seen under a degree from edge-on: depth
+    // changes fastest along the top border, where a one-sided neighbour would read as a step.
+    let mut w = World::new_with_services();
+    add(
+        &mut w,
+        [2000.0, 1.0, 2000.0],
+        [0.0, -0.5, 0.0],
+        0.0,
+        [150.0; 3],
+    );
+    for quality in [Quality::High, Quality::Low] {
+        let mut r = renderer(&ctx, quality);
+        r.post_mut().remove(MLAA_PASS);
+        r.post_mut().remove("bloom");
+        r.sync(&w);
+        let low = Camera {
+            position: Vec3::new(0.0, 2.0, 0.0),
+            look_at: Vec3::new(0.0, 0.0, -10.5),
+            fov_deg: 20.0,
+        };
+        // Also turned and tilted, so the side borders cut the depth gradient too.
+        let turned = Camera {
+            position: Vec3::new(0.0, 2.0, 0.0),
+            look_at: Vec3::new(5.0, 0.0, -9.2),
+            fov_deg: 20.0,
+        };
+        // Looking up 30 degrees: a sliver of floor along the bottom border, whose pixels' inner
+        // neighbours are farther (the bottom border is the near side of the plane).
+        let up = Camera {
+            position: Vec3::new(0.0, 2.0, 0.0),
+            look_at: Vec3::new(0.0, 2.0 + 10.0 * 30f32.to_radians().tan(), -10.0),
+            fov_deg: 70.0,
+        };
+        // (camera, rows that must be all floor and free of lines).
+        let all = 0..SIZE.1;
+        let bottom = SIZE.1 - 4..SIZE.1;
+        for (cam, rows) in [(low, all.clone()), (turned, all), (up, bottom)] {
+            let off = r.capture(&cam, SIZE).expect("capture");
+            // Those rows are floor: their first and last pixels differ from the sky alone.
+            r.sync(&World::new_with_services());
+            let sky = r.capture(&cam, SIZE).expect("capture");
+            r.sync(&w);
+            for x in [0, SIZE.0 - 1] {
+                for y in [rows.start, rows.end - 1] {
+                    assert_ne!(
+                        px(&off, x, y),
+                        px(&sky, x, y),
+                        "{quality:?}: sky at ({x}, {y})"
+                    );
+                }
+            }
+            edges(&mut r).enabled = true;
+            let on = r.capture(&cam, SIZE).expect("capture");
+            edges(&mut r).enabled = false;
+            let diff: Vec<_> = changed(&off, &on)
+                .into_iter()
+                .filter(|(_, y)| rows.contains(y))
+                .collect();
+            assert!(
+                diff.is_empty(),
+                "{quality:?}: {} line pixels on a plane, first {:?}",
+                diff.len(),
+                &diff[..diff.len().min(8)]
+            );
+        }
     }
 }
 
@@ -268,7 +343,7 @@ fn anti_aliasing_smooths_stair_steps_where_msaa_is_off() {
     r.post_mut().remove("bloom");
     assert!(
         r.post_mut()
-            .get_mut::<SmaaPass>(SMAA_PASS)
+            .get_mut::<MlaaPass>(MLAA_PASS)
             .expect("aa pass")
             .enabled,
         "on by default without MSAA"
@@ -276,7 +351,7 @@ fn anti_aliasing_smooths_stair_steps_where_msaa_is_off() {
     r.sync(&scene());
     let aa = r.capture(&camera(), SIZE).expect("capture");
     r.post_mut()
-        .get_mut::<SmaaPass>(SMAA_PASS)
+        .get_mut::<MlaaPass>(MLAA_PASS)
         .expect("aa")
         .enabled = false;
     let raw = r.capture(&camera(), SIZE).expect("capture");
@@ -330,7 +405,7 @@ fn anti_aliasing_smooths_stair_steps_where_msaa_is_off() {
     let mut hi = hi;
     assert!(
         !hi.post_mut()
-            .get_mut::<SmaaPass>(SMAA_PASS)
+            .get_mut::<MlaaPass>(MLAA_PASS)
             .expect("aa")
             .enabled
     );

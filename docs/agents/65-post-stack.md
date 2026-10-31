@@ -22,26 +22,34 @@ Status: implemented, tested.
     - silhouettes from the second difference of 1/z, which is 0 on any plane, so floors seen at grazing angles get
       no lines; only the near side of a depth step draws;
     - creases where the normal turns by more than `crease_threshold` between neighbours of about the same depth.
+  - A neighbour past the frame border continues the surface linearly in 1/z, so a plane seen edge-on at the frame
+    border gets no line there (test `grazing_floor_gets_no_line_at_the_frame_border`).
   - The line multiplies the scene colour by `color` (a dark warm brown, never black or neon).
   - Width is in 1080p pixels and scales with the frame height.
   - **No double outlines**: pixels with negative depth are skipped, and their neighbours draw no crease against
     them. A toon character keeps exactly its hull line (test `toon_characters_keep_one_outline`). Standard avatars
     and parts get post lines.
-- **Anti-aliasing: SMAA-style morphological AA** (`smaa.rs`, LDR slot, last). The renderer turns it on whenever
-  MSAA is off (`Quality::Low`); High keeps MSAA 4x and leaves it off. It runs three passes:
-  1. Luma edges with local contrast adaptation.
+- **Anti-aliasing: MLAA-style edge AA using SMAA's local contrast test** (`mlaa.rs`, `MlaaPass`, pass name
+  `mlaa`, LDR slot, last). It is not SMAA: no area or search textures, no diagonal patterns, no corner rounding.
+  The renderer turns it on whenever MSAA is off (`Quality::Low`); High keeps MSAA 4x and leaves it off. It runs
+  three passes:
+  1. Luma edges, kept with SMAA's local contrast test (at least half the largest step around).
   2. Blend weights. An orthogonal line search (up to 32 px each way) finds the line ends and their crossing edges.
-     The coverage area of the reconstructed line (L, Z and U shapes) is computed analytically per pixel, instead of
-     with the reference implementation's precomputed area texture.
+     The coverage area of the reconstructed line (L, Z and U shapes) is computed analytically per pixel, as in
+     MLAA, instead of read from a precomputed area texture.
   3. A neighbourhood blend.
 
-## Why SMAA over TAA
+## Why MLAA-style AA over TAA (and over FXAA)
 
 - TAA needs motion vectors and a history buffer. Every skinned, procedural and vertex-snapped surface would have to
   write correct velocities, or it ghosts.
 - TAA smears toon lines, pixel-3D and low-poly looks, and those Looks are core to Metallic.
 - TAA makes captures depend on frame history. Screenshots and the image tests here are deterministic per frame.
 - Morphological AA runs on every tier, including WebGL2 (fragment passes only), and costs a fixed amount per pixel.
+- `docs/design/look-presets.md` row 5 planned FXAA for #65. FXAA blurs along every local luma step, including
+  toon bands, texture detail and pixel-3D texels; line reconstruction only blends across found edges and leaves
+  the rest of the image untouched (the AA test checks that smoothed pixels stay within their neighbours' range).
+  It also needs no lookup textures, the reason that row gave for FXAA. Cost: 0.2 ms at 1080p on the test GPU.
 - Costs: no temporal stability on sub-pixel detail (a later TAA or upscaler can take that up), and v1 has no
   diagonal search or corner rounding.
 
@@ -59,13 +67,15 @@ Status: implemented, tested.
 - `tests/post_stack.rs` (GPU tests, serialised):
   - The LUT grades by strength: identity within 1 level, a red/blue swap at full and half strength, off at 0.
   - Edges outline silhouettes and creases but not planes or sky, on High and Low.
+  - A floor seen under a degree from edge-on gets no line at the frame border, on High and Low.
   - Toon characters keep one outline.
   - AA softens stair steps only where MSAA is off, and only mixes neighbour colours.
   - The GPU timer measures a frame.
 - Unit tests:
-  - `lut.rs`: `.cube` parsing and errors, identity order, half-float conversion.
+  - `lut.rs`: `.cube` parsing and errors (NaN and infinite entries are refused), identity order, half-float
+    conversion (subnormals, values flushed to 0 below the smallest half, NaN, infinities, negatives).
   - `edges.rs`: shader validates, width scaling.
-  - `smaa.rs`: shaders validate.
+  - `mlaa.rs`: shaders validate.
 - `tests/headless.rs` toon ink test and `tests/post_chain.rs` remove the new passes where they assert exact colours or an
   empty chain.
 - Regression: 53 images (lighting presets, avatar review toon and standard, Parkour avatar shots) are byte-identical
@@ -80,7 +90,7 @@ Status: implemented, tested.
 | `high-edges-standard-avatar.png` | High + edges, standard avatar outlined by the post pass |
 | `high-lut.png` | High + a warm 33^3 LUT at full strength |
 | `low-no-aa.png` | Low (no MSAA), AA off |
-| `low-smaa.png` | Low with the default AA |
+| `low-mlaa.png` | Low with the default AA |
 
 ## GPU time, 1920 x 1080 (timestamp queries; median, p10..p90)
 
@@ -88,17 +98,17 @@ RTX 3060 Ti:
 
 | Setting | ms |
 | --- | --- |
-| High default | 0.835 (0.744..0.840, bimodal clocks) |
-| High + edges (toon avatar) | 0.831 (0.827..0.838) |
-| High + edges (standard avatar) | 0.782 (0.778..0.786) |
-| High + LUT | 0.755 (0.750..0.760) |
-| Low, AA off | 0.652 (0.648..0.655) |
-| Low + SMAA | 0.857 (0.853..0.864) |
-| Low + SMAA + edges | 0.994 (0.989..1.227) |
+| High default | 0.751 (0.746..0.842, bimodal clocks) |
+| High + edges (toon avatar) | 0.837 (0.831..0.842) |
+| High + edges (standard avatar) | 0.787 (0.783..0.793) |
+| High + LUT | 0.755 (0.752..0.760) |
+| Low, AA off | 0.653 (0.648..0.656) |
+| Low + MLAA | 0.859 (0.853..1.223) |
+| Low + MLAA + edges | 0.998 (0.992..1.350) |
 
-- Edges: the prepass plus the pass cost about 0.08 ms against the default's low mode.
+- Edges: the prepass plus the pass cost about 0.09 ms.
 - LUT: free within noise.
-- SMAA: about 0.2 ms at 1080p.
+- MLAA: about 0.2 ms at 1080p.
 
 WARP (software, 20 frames, noisy):
 
@@ -108,7 +118,7 @@ WARP (software, 20 frames, noisy):
 | High + edges | 1344 (+10%) |
 | High + LUT | 1199 |
 | Low, AA off | 1209 |
-| Low + SMAA | 1216 |
+| Low + MLAA | 1216 |
 
 `Renderer::enable_gpu_timing` / `read_gpu_time_ms` (from #63) are carried here too, so this branch measures on its own.
 
@@ -116,11 +126,11 @@ WARP (software, 20 frames, noisy):
 
 Nothing allocates per frame:
 
-- The prepass targets, SMAA targets and LUT texture are made on resize or on change.
+- The prepass targets, MLAA targets and LUT texture are made on resize or on change.
 - Per-frame uniforms are written into existing buffers.
 - With the passes off, the prepass does not run.
 
 ## Follow-ups
 
 - #64 Looks pick the edge settings, the LUT and the AA per Look (pixel Looks turn AA off).
-- A diagonal search for SMAA, if diagonal edges look stepped on Low in review.
+- A diagonal search for the MLAA pass, if diagonal edges look stepped on Low in review.

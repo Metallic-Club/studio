@@ -14,8 +14,8 @@ mod reference_scene;
 use metallic_render::glam::{Mat4, Vec3};
 use metallic_render::metallic_asset::{Pose, SkinnedModel};
 use metallic_render::{
-    EDGE_PASS, EdgePass, Lut3d, Quality, RenderContext, RenderSettings, Renderer, SMAA_PASS,
-    SkinStyle, SkinnedInstance, SmaaPass,
+    EDGE_PASS, EdgePass, Lut3d, MLAA_PASS, MlaaPass, Quality, RenderContext, RenderSettings,
+    Renderer, SkinStyle, SkinnedInstance,
 };
 use reference_scene::{reference_camera, reference_world};
 use std::sync::Arc;
@@ -85,7 +85,7 @@ const SETTINGS: [Setting; 7] = [
         style: SkinStyle::Toon,
     },
     Setting {
-        name: "low-smaa",
+        name: "low-mlaa",
         quality: Quality::Low,
         edges: false,
         lut: false,
@@ -93,7 +93,7 @@ const SETTINGS: [Setting; 7] = [
         style: SkinStyle::Toon,
     },
     Setting {
-        name: "low-smaa-edges",
+        name: "low-mlaa-edges",
         quality: Quality::Low,
         edges: true,
         lut: false,
@@ -185,7 +185,7 @@ fn main() {
             .expect("edges")
             .enabled = s.edges;
         r.post_mut()
-            .get_mut::<SmaaPass>(SMAA_PASS)
+            .get_mut::<MlaaPass>(MLAA_PASS)
             .expect("aa")
             .enabled = s.aa;
         r.set_lut(s.lut.then_some(&lut), if s.lut { 1.0 } else { 0.0 });

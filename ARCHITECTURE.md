@@ -116,8 +116,8 @@ apps.
   1x geometry prepass (`shaders/prepass.wgsl`; world normal + linear view depth in one `Rgba16Float` target, negative
   depth for hull-outlined toon skinned meshes) and gets it as `PostContext::geometry`. The `edges` HDR pass
   (`edges.rs`, `EdgePass`, off by default) draws silhouette and crease lines from it and skips hull-outlined surfaces,
-  so toon characters keep one outline. The `smaa` LDR pass (`smaa.rs`, `SmaaPass`) is morphological AA, on while MSAA
-  is off. `Renderer::set_lut(Option<&Lut3d>, strength)` (`lut.rs`, `.cube` parsing) grades display colour in the
+  so toon characters keep one outline. The `mlaa` LDR pass (`mlaa.rs`, `MlaaPass`) is MLAA-style edge AA using SMAA's
+  local contrast test, on while MSAA is off. `Renderer::set_lut(Option<&Lut3d>, strength)` (`lut.rs`, `.cube` parsing) grades display colour in the
   finish pass. GPU frame timing: `enable_gpu_timing` / `read_gpu_time_ms` (timestamp queries where the adapter has
   them).
   Lighting (#149, `lighting.rs`, `shaders/lighting.wgsl`): `sync` also reads the `Lighting` service and its children

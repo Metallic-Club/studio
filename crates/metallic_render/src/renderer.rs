@@ -8,6 +8,7 @@ use crate::exposure::{AutoExposure, ExposureGpu, ExposureState};
 use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_exposure};
 use crate::lut::Lut3d;
 use crate::meshes::{MeshKind, Vertex};
+use crate::mlaa::{MLAA_PASS, MlaaPass};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
 use crate::scene::{InstanceRaw, Scene};
 use crate::shadows::{
@@ -18,7 +19,6 @@ use crate::skinned::{
     select_lod, skinned_layout,
 };
 use crate::sky::Sky;
-use crate::smaa::{SMAA_PASS, SmaaPass};
 use crate::tonemap::{FinishSettings, FinishUniform};
 use bytemuck::{Pod, Zeroable};
 use metallic_core::World;
@@ -688,7 +688,7 @@ impl Renderer {
         renderer.meter_supported = crate::exposure::supported(&renderer.device);
         renderer.post.push(Box::new(EdgePass::default()));
         renderer.post.push(Box::new(BloomPass::default()));
-        let mut aa = SmaaPass::default();
+        let mut aa = MlaaPass::default();
         aa.enabled = settings.samples() == 1;
         renderer.post.push(Box::new(aa));
         renderer.set_lighting(&LightingInputs::default());
@@ -707,7 +707,7 @@ impl Renderer {
         }
         self.settings = settings;
         // Morphological AA stands in for MSAA when MSAA is off.
-        if let Some(aa) = self.post.get_mut::<SmaaPass>(SMAA_PASS) {
+        if let Some(aa) = self.post.get_mut::<MlaaPass>(MLAA_PASS) {
             aa.enabled = settings.samples() == 1;
         }
         self.shadow_map = ShadowMap::new(

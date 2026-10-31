@@ -1,4 +1,6 @@
-//! Morphological anti-aliasing in the style of SMAA 1x (#65), the AA of renders without MSAA.
+//! MLAA-style edge anti-aliasing (#65), using SMAA's local contrast test for edge detection: the
+//! AA of renders without MSAA. It is not SMAA: it has no area or search textures, no diagonal
+//! patterns and no corner rounding.
 //!
 //! Three full-screen passes on the display-encoded image (LDR slot, after the finish pass):
 //!
@@ -12,14 +14,14 @@
 //!    a precomputed area texture, is how much of the neighbour across the edge the pixel takes.
 //! 3. **Blend**: each pixel mixes in its four neighbours by those weights.
 //!
-//! Diagonal patterns and corner rounding of full SMAA are not done. Why this and not TAA: no
+//! Why this and not TAA: no
 //! motion vectors or history, so nothing ghosts or smears thin toon lines and pixel looks, a
 //! still frame is deterministic (captures and tests), and it runs on every tier including
 //! WebGL2. The renderer turns it on when MSAA is off ([`crate::Quality::Low`]).
 use crate::post::{FullscreenPass, LDR_FORMAT, PostContext, PostDraw, PostPass, PostSlot};
 
 /// Name of the anti-aliasing pass in the post chain.
-pub const SMAA_PASS: &str = "smaa";
+pub const MLAA_PASS: &str = "mlaa";
 
 const EDGES: &str = "
 struct P { v: vec4<f32> } // x: luma threshold
@@ -194,9 +196,9 @@ fn col(p: vec2<i32>) -> vec3<f32> {
     return vec4<f32>(post_output(mixed), 1.0);
 }";
 
-/// The anti-aliasing pass. The renderer adds one named [`SMAA_PASS`] at the end of the chain
+/// The anti-aliasing pass. The renderer adds one named [`MLAA_PASS`] at the end of the chain
 /// and turns it on while MSAA is off; Looks without AA (pixel art) turn it off.
-pub struct SmaaPass {
+pub struct MlaaPass {
     /// Run the pass.
     pub enabled: bool,
     /// Smallest luma step (display-encoded, 0..1) treated as an edge.
@@ -207,14 +209,14 @@ pub struct SmaaPass {
     targets: Option<(u64, (u32, u32), wgpu::TextureView, wgpu::TextureView)>,
 }
 
-impl Default for SmaaPass {
+impl Default for MlaaPass {
     fn default() -> Self {
-        SmaaPass {
+        MlaaPass {
             enabled: false,
             threshold: 0.1,
-            edges: FullscreenPass::new("metallic smaa edges", EDGES, 16),
-            weights: FullscreenPass::new("metallic smaa weights", WEIGHTS, 0),
-            blend: FullscreenPass::new("metallic smaa blend", BLEND, 0),
+            edges: FullscreenPass::new("metallic mlaa edges", EDGES, 16),
+            weights: FullscreenPass::new("metallic mlaa weights", WEIGHTS, 0),
+            blend: FullscreenPass::new("metallic mlaa blend", BLEND, 0),
             targets: None,
         }
     }
@@ -239,9 +241,9 @@ fn target(device: &wgpu::Device, label: &str, size: (u32, u32)) -> wgpu::Texture
         .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-impl PostPass for SmaaPass {
+impl PostPass for MlaaPass {
     fn name(&self) -> &str {
-        SMAA_PASS
+        MLAA_PASS
     }
 
     fn slot(&self) -> PostSlot {
@@ -259,8 +261,8 @@ impl PostPass for SmaaPass {
             self.targets = Some((
                 ctx.targets,
                 ctx.size,
-                target(ctx.device, "metallic smaa edges", ctx.size),
-                target(ctx.device, "metallic smaa weights", ctx.size),
+                target(ctx.device, "metallic mlaa edges", ctx.size),
+                target(ctx.device, "metallic mlaa weights", ctx.size),
             ));
         }
         let Some((_, _, edges, weights)) = self.targets.take() else {
@@ -308,7 +310,7 @@ mod tests {
 
     #[test]
     fn shaders_validate() {
-        let p = SmaaPass::default();
+        let p = MlaaPass::default();
         p.edges.validate();
         p.weights.validate();
         p.blend.validate();

@@ -32,7 +32,7 @@ fn flat_sky_on(ctx: &RenderContext, quality: Quality, value: f32) -> Renderer {
         ..LightingInputs::default()
     });
     r.finish = FinishSettings::default();
-    for pass in ["bloom", "edges", "smaa"] {
+    for pass in ["bloom", "edges", "mlaa"] {
         r.post_mut().remove(pass);
     }
     r.sky.zenith = [value; 3];

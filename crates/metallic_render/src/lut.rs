@@ -22,6 +22,8 @@ pub enum LutError {
     Size,
     /// A line that is neither a keyword nor three numbers (1-based line number).
     Line(usize),
+    /// An entry that is NaN or infinite (1-based line number).
+    NotFinite(usize),
     /// Fewer or more entries than `size`^3.
     Count {
         /// Entries the size asks for.
@@ -36,6 +38,7 @@ impl std::fmt::Display for LutError {
         match self {
             LutError::Size => write!(f, "missing or unsupported LUT_3D_SIZE"),
             LutError::Line(n) => write!(f, "line {n} is not three numbers"),
+            LutError::NotFinite(n) => write!(f, "line {n} has a NaN or infinite value"),
             LutError::Count { expected, found } => {
                 write!(f, "expected {expected} entries, found {found}")
             }
@@ -103,6 +106,9 @@ impl Lut3d {
             let [r, g, b] = v[..] else {
                 return Err(LutError::Line(i + 1));
             };
+            if !(r.is_finite() && g.is_finite() && b.is_finite()) {
+                return Err(LutError::NotFinite(i + 1));
+            }
             data.push([r, g, b]);
         }
         let size = size.ok_or(LutError::Size)?;
@@ -127,9 +133,11 @@ impl Lut3d {
         self.data[(b as usize * n + g as usize) * n + r as usize]
     }
 
-    /// Texel data for an `Rgba16Float` 3D texture, in upload order.
+    /// Texel data for an `Rgba16Float` 3D texture, in upload order. Entries are clamped to 0..=1;
+    /// NaN (possible from [`Lut3d::from_fn`]) becomes 0.
     pub(crate) fn texels(&self) -> Vec<[u16; 4]> {
-        let h = |v: f32| half_bits(v.clamp(0.0, 1.0));
+        // Positive half bits order like their values, so this clamps to 1.0 (0x3c00).
+        let h = |v: f32| half_bits(v).min(0x3c00);
         self.data
             .iter()
             .map(|c| [h(c[0]), h(c[1]), h(c[2]), h(1.0)])
@@ -137,21 +145,27 @@ impl Lut3d {
     }
 }
 
-/// IEEE half-float bits of `v` in 0..=1 (round to nearest; enough for colour data).
+/// IEEE half-float bits of `v`, rounded to nearest. Total over every `f32`: NaN and values at or
+/// below 0 give 0, values past the half range give the largest finite half, and values below
+/// the smallest half subnormal flush to 0.
 fn half_bits(v: f32) -> u16 {
-    if v <= 0.0 {
+    if v.is_nan() || v <= 0.0 {
         return 0;
     }
-    let bits = v.to_bits();
-    let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
-    let mant = bits & 0x7f_ffff;
-    if exp <= 0 {
-        // Subnormal half.
-        let m = (mant | 0x80_0000) >> (14 - exp);
-        return ((m + 0x1000) >> 13) as u16;
+    if v >= 65504.0 {
+        return 0x7bff;
     }
-    let h = ((exp as u32) << 10) | (mant >> 13);
-    // Round to nearest on the dropped bits (a carry into the exponent is still correct).
+    if v < 2f32.powi(-14) {
+        // Subnormal half: v = m * 2^-24. The product is exact in f32 and m <= 1024 (1024 is the
+        // smallest normal half, 0x0400, so the rounding carry is still correct).
+        return (v * 16_777_216.0).round() as u16;
+    }
+    let bits = v.to_bits();
+    let exp = ((bits >> 23) & 0xff) + 15 - 127;
+    let mant = bits & 0x7f_ffff;
+    let h = (exp << 10) | (mant >> 13);
+    // Round to nearest on the dropped bits (a carry into the exponent is still correct, and
+    // v < 65504 keeps it finite).
     (h + ((mant >> 12) & 1)) as u16
 }
 
@@ -178,6 +192,39 @@ mod tests {
         }
         assert_eq!(half_bits(1.0), 0x3c00);
         assert_eq!(half_bits(0.5), 0x3800);
+        // Subnormal halves round to nearest; anything below half the smallest one is 0.
+        assert_eq!(half_bits(2f32.powi(-24)), 1);
+        assert_eq!(half_bits(3.0 * 2f32.powi(-24)), 3);
+        assert_eq!(half_bits(2f32.powi(-14)), 0x0400);
+        assert_eq!(half_bits(2f32.powi(-14) * 0.9999), 0x0400);
+        for tiny in [1e-12, 1.2e-10, 1e-38, f32::MIN_POSITIVE, 1e-45, 2.9e-8] {
+            assert_eq!(half_bits(tiny), 0, "{tiny}");
+        }
+        for v in [1e-7, 1e-6, 3e-5, 6e-5] {
+            let back = half_to_f32(half_bits(v));
+            assert!((back - v).abs() <= 2f32.powi(-25), "{v} -> {back}");
+        }
+        // Non-finite, negative and huge inputs.
+        assert_eq!(half_bits(f32::NAN), 0);
+        assert_eq!(half_bits(-f32::NAN), 0);
+        assert_eq!(half_bits(f32::NEG_INFINITY), 0);
+        assert_eq!(half_bits(-0.5), 0);
+        assert_eq!(half_bits(-0.0), 0);
+        assert_eq!(half_bits(f32::INFINITY), 0x7bff);
+        assert_eq!(half_bits(1e9), 0x7bff);
+        assert_eq!(half_bits(65504.0), 0x7bff);
+    }
+
+    #[test]
+    fn texels_are_clamped_and_sanitised() {
+        let l = Lut3d::from_fn(2, |c| match (c[0] > 0.5, c[1] > 0.5) {
+            (false, false) => [1e-12, -0.25, f32::NAN],
+            (true, false) => [f32::INFINITY, 2.0, f32::NEG_INFINITY],
+            _ => c,
+        });
+        let t = l.texels();
+        assert_eq!(t[0], [0, 0, 0, 0x3c00]);
+        assert_eq!(t[1], [0x3c00, 0x3c00, 0, 0x3c00]);
     }
 
     #[test]

@@ -46,20 +46,37 @@ fn depth_of(t: vec4<f32>) -> f32 {
     let d0 = g0.w;
     let inv0 = 1.0 / d0;
     let r = i32(max(floor(params.opts.x + 0.5), 1.0));
+    let size = vec2<i32>(textureDimensions(post_aux));
     let th = params.opts.y;
     var sil = 0.0;
     var crease = 0.0;
     for (var axis = 0; axis < 2; axis = axis + 1) {
         let o = select(vec2<i32>(0, r), vec2<i32>(r, 0), axis == 0);
-        let ga = geo(p - o);
-        let gb = geo(p + o);
+        let pa = p - o;
+        let pb = p + o;
+        let in_a = all(pa >= vec2<i32>(0)) && all(pa < size);
+        let in_b = all(pb >= vec2<i32>(0)) && all(pb < size);
+        let ga = geo(pa);
+        let gb = geo(pb);
         let da = depth_of(ga);
         let db = depth_of(gb);
+        // A neighbour past the frame border continues the surface linearly in 1/z, so the frame
+        // border is never read as a depth step (planes seen edge-on would get a border line).
+        var inv_a = 1.0 / da;
+        var inv_b = 1.0 / db;
+        if (!in_a) {
+            inv_a = 2.0 * inv0 - inv_b;
+        }
+        if (!in_b) {
+            inv_b = 2.0 * inv0 - inv_a;
+        }
         // Second difference of 1/z, relative to this pixel: 0 on any plane.
-        let lap = abs((1.0 / da + 1.0 / db - 2.0 * inv0) * d0);
+        let lap = abs((inv_a + inv_b - 2.0 * inv0) * d0);
         let jump = smoothstep(th, 2.0 * th, lap);
-        // Near side only: a neighbour clearly farther than this pixel.
-        let farther = max(smoothstep(th, 2.0 * th, (da - d0) * inv0), smoothstep(th, 2.0 * th, (db - d0) * inv0));
+        // Near side only: a neighbour on screen and clearly farther than this pixel.
+        let fa = select(0.0, smoothstep(th, 2.0 * th, (da - d0) * inv0), in_a);
+        let fb = select(0.0, smoothstep(th, 2.0 * th, (db - d0) * inv0), in_b);
+        let farther = max(fa, fb);
         sil = max(sil, jump * farther);
         // Crease toward the + neighbour, on surfaces of about the same depth (a hull-outlined
         // neighbour already has its own line).
