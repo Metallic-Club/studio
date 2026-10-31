@@ -634,3 +634,49 @@ fn the_viewport_header_fits_at_1280_and_1600() {
         }
     }
 }
+
+/// Ctrl+. focuses the contextual toolbar once; a click elsewhere takes the focus away for good, so
+/// shortcuts work again (#384 review).
+#[test]
+fn the_context_bar_lets_go_of_focus_after_an_outside_click() {
+    let (mut ui, _, part) = editor();
+    ui.state.selection.select_only(part);
+    ui.state.tool = Tool::Move;
+    let revision = ui.state.selection.revision();
+    ui.context_bar.arm(revision);
+    let mut themed = false;
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_accessibility_check(false)
+        .build_ui_state(
+            move |ui, editor: &mut EditorUi| {
+                if install_theme(ui, &mut themed) {
+                    return;
+                }
+                editor.ui(ui, None);
+            },
+            ui,
+        );
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Period);
+    h.run_steps(3);
+    assert!(h.state().context_bar.has_focus(), "Ctrl+. focuses the bar");
+    // Click the Explorer's filter field, then leave it with Esc.
+    h.hover_at(egui::pos2(140.0, 126.0));
+    h.run_steps(1);
+    press(&mut h, egui::pos2(140.0, 126.0), true);
+    press(&mut h, egui::pos2(140.0, 126.0), false);
+    h.run_steps(3);
+    assert!(
+        !h.state().context_bar.has_focus(),
+        "an outside click releases the bar"
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    // Viewport shortcuts work again: E picks Rotate.
+    h.hover_at(egui::pos2(640.0, 500.0));
+    h.run_steps(2);
+    h.key_press(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().state.tool, Tool::Rotate);
+}

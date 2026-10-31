@@ -428,8 +428,10 @@ pub struct GizmoDrag {
     resizes: bool,
     names: [PropName; 6],
     buf: Vec<SnapCandidate>,
-    /// The last frame Collisions accepted: transforms, motion and shown value.
-    held: (Vec<PartTransform>, Rigid, f64),
+    /// Collisions: the last accepted frame (transforms, motion, shown value) and scratch buffers.
+    held: Held,
+    /// Unique per drag (clones keep it), so per-drag caches know when a new drag began.
+    serial: u64,
 }
 
 fn read_parts(world: &World, ids: &[InstanceId]) -> Vec<DragPart> {
@@ -449,6 +451,74 @@ fn read_parts(world: &World, ids: &[InstanceId]) -> Vec<DragPart> {
             })
         })
         .collect()
+}
+
+/// Bisection steps when Collisions cuts a frame's motion (1/1024 of the frame's step).
+const BISECT_STEPS: usize = 10;
+
+static NEXT_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// What Collisions keeps between frames of one drag.
+#[derive(Debug, Clone)]
+struct Held {
+    parts: Vec<PartTransform>,
+    motion: Rigid,
+    shown: f64,
+    target: Vec<PartTransform>,
+    probe: Vec<PartTransform>,
+}
+
+impl Default for Held {
+    fn default() -> Self {
+        Held {
+            parts: Vec::new(),
+            motion: Rigid::IDENTITY,
+            shown: 0.0,
+            target: Vec::new(),
+            probe: Vec::new(),
+        }
+    }
+}
+
+/// `out[i]` = `a[i]` moved `t` of the way to `b[i]` (position, rotation, size).
+fn lerp_into(out: &mut Vec<PartTransform>, a: &[PartTransform], b: &[PartTransform], t: f64) {
+    out.clear();
+    out.extend(a.iter().zip(b).map(|(a, b)| PartTransform {
+        position: a.position.lerp(b.position, t),
+        rotation: a.rotation.slerp(b.rotation, t),
+        size: a.size.lerp(b.size, t),
+    }));
+}
+
+/// Most sweep samples per frame (a thin part on a huge jump may then skip a little).
+const MAX_SWEEP: usize = 256;
+
+/// How many samples the sweep from `a` to `b` needs: the farthest any point moves (translation,
+/// turn and size change), over half the thinnest part, at least 1, at most [`MAX_SWEEP`].
+fn sweep_steps(a: &[PartTransform], b: &[PartTransform]) -> usize {
+    let mut travel = 0.0_f64;
+    let mut thin = f64::INFINITY;
+    for (a, b) in a.iter().zip(b) {
+        let turn = a.rotation.angle_between(b.rotation) * 0.5 * a.size.max(b.size).length();
+        let grow = (b.size - a.size).abs().max_element();
+        travel = travel.max(a.position.distance(b.position) + turn + grow);
+        thin = thin.min(a.size.min(b.size).min_element());
+    }
+    let step = (0.5 * thin).max(0.05);
+    let n = (travel / step).ceil();
+    if n.is_finite() && n >= 1.0 {
+        (n as usize).min(MAX_SWEEP)
+    } else {
+        1
+    }
+}
+
+fn lerp_rigid(a: Rigid, b: Rigid, t: f64) -> Rigid {
+    Rigid {
+        rotation: a.rotation.slerp(b.rotation, t),
+        about: a.about.lerp(b.about, t),
+        translation: a.translation.lerp(b.translation, t),
+    }
 }
 
 impl GizmoDrag {
@@ -488,7 +558,8 @@ impl GizmoDrag {
                 "WorldPivotSet".into(),
             ],
             buf: Vec::new(),
-            held: (Vec::new(), Rigid::IDENTITY, 0.0),
+            held: Held::default(),
+            serial: NEXT_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -669,29 +740,63 @@ impl GizmoDrag {
         &self.ids
     }
 
-    /// Collisions (spec 3.1), after [`GizmoDrag::update`]: with `blocked` the drag goes back to the
-    /// last frame that was accepted (the start at first); otherwise this frame is accepted. No
-    /// allocation once the buffer has grown.
-    pub fn hold_if(&mut self, blocked: bool) {
-        let (held, motion, shown) = &mut self.held;
-        if blocked {
-            if held.len() == self.current.len() {
-                self.current.copy_from_slice(held);
-                self.motion = *motion;
-                self.shown = *shown;
-            } else {
-                for (c, p) in self.current.iter_mut().zip(&self.parts) {
-                    *c = p.start;
-                }
-                self.motion = Rigid::IDENTITY;
-                self.shown = 0.0;
-            }
-        } else {
-            held.clear();
-            held.extend_from_slice(&self.current);
-            *motion = self.motion;
-            *shown = self.shown;
+    /// Unique per drag; a clone keeps it.
+    pub fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    /// The moved parts' transforms when the drag started, written into `out` (cleared first).
+    pub fn starts(&self, out: &mut Vec<PartTransform>) {
+        out.clear();
+        out.extend(self.parts.iter().map(|p| p.start));
+    }
+
+    /// Collisions (spec 3.1), after [`GizmoDrag::update`]: keeps the moved parts clear of other
+    /// parts. `blocked` tests a set of moved transforms. The motion from the last accepted frame
+    /// (the start at first) is swept in steps no longer than half the thinnest moved part; at the
+    /// first blocked step it is cut at the last clear fraction, found by bisection, so the parts
+    /// stop at contact (not a frame short, and not through a thin wall). No allocation once the
+    /// buffers have grown.
+    pub fn limit(&mut self, mut blocked: impl FnMut(&[PartTransform]) -> bool) {
+        let h = &mut self.held;
+        if h.parts.len() != self.current.len() {
+            h.parts.clear();
+            h.parts.extend(self.parts.iter().map(|p| p.start));
+            h.motion = Rigid::IDENTITY;
+            h.shown = 0.0;
         }
+        // Sweep: samples no further apart than half the thinnest moved part, so nothing tunnels
+        // through a thin wall in one fast frame; then bisect inside the first blocked step.
+        h.target.clear();
+        h.target.extend_from_slice(&self.current);
+        let steps = sweep_steps(&h.parts, &h.target);
+        let mut cut = None;
+        for k in 1..=steps {
+            let t = k as f64 / steps as f64;
+            lerp_into(&mut h.probe, &h.parts, &h.target, t);
+            if blocked(&h.probe) {
+                cut = Some(((k - 1) as f64 / steps as f64, t));
+                break;
+            }
+        }
+        if let Some((mut lo, mut hi)) = cut {
+            for _ in 0..BISECT_STEPS {
+                let mid = 0.5 * (lo + hi);
+                lerp_into(&mut h.probe, &h.parts, &h.target, mid);
+                if blocked(&h.probe) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            lerp_into(&mut self.current, &h.parts, &h.target, lo);
+            self.motion = lerp_rigid(h.motion, self.motion, lo);
+            self.shown = h.shown + (self.shown - h.shown) * lo;
+        }
+        h.parts.clear();
+        h.parts.extend_from_slice(&self.current);
+        h.motion = self.motion;
+        h.shown = self.shown;
     }
 
     /// The parts this drag moves.
@@ -1671,6 +1776,41 @@ mod tests {
         };
         d.update(&input(ray_down(10.3, 0.0), &snapping, fine));
         assert!((d.current[0].position.x - 1.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn collisions_stop_at_contact_and_ignore_overlaps_present_at_the_start() {
+        use crate::collisions::Guard;
+        let (mut w, p) = world_with_part(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0));
+        let ws = w.root("Workspace").unwrap();
+        let wall = w.create("Part", Some(ws)).unwrap();
+        let rim = w.create("Part", Some(ws)).unwrap();
+        let boxed = |x: f64| PartTransform {
+            position: DVec3::new(x, 0.0, 0.0),
+            rotation: DQuat::IDENTITY,
+            size: DVec3::splat(2.0),
+        };
+        let free = DragModifiers {
+            invert_snap: true,
+            ..DragModifiers::default()
+        };
+        let snapping = Snapping::default();
+        let f = frame(DVec3::ZERO, Tool::Move);
+        let mut d = GizmoDrag::begin(&w, f, Handle::Axis(0), &ray_down(0.0, 0.0), &[p]).unwrap();
+        let mut starts = Vec::new();
+        d.starts(&mut starts);
+        // A wall at x 5..7, and a rim the part already sinks into at the start.
+        let others = [(wall, boxed(6.0)), (rim, boxed(-0.5))];
+        let mut guard = Guard::new(d.serial(), others.into_iter(), d.moving(), &starts);
+        // One frame jumps far past the wall: the part stops flush against it, not a frame short.
+        d.update(&input(ray_down(10.0, 0.0), &snapping, free));
+        d.limit(|m| guard.blocked(m));
+        let x = d.current()[0].position.x;
+        assert!((4.0..=4.03).contains(&x), "stops at contact, got {x}");
+        // Back the other way, out through the rim it started in: nothing holds it.
+        d.update(&input(ray_down(-3.0, 0.0), &snapping, free));
+        d.limit(|m| guard.blocked(m));
+        assert!((d.current()[0].position.x + 3.0).abs() < 1e-9);
     }
 
     #[test]

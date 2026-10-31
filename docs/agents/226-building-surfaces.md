@@ -10,9 +10,13 @@ Branch `studio/226-building-surfaces`, from main after #337.
   Pivot/Centre, Align) using last frame's measured widths, and what does not fit goes into a "»" menu; when even
   that is too narrow the tools drop their keycaps. Kittest checks 1280 and 1600 px (every header button inside the
   strip). Screenshots: `226-header-1280.png`, `226-header-1600.png`.
-- Collisions (`snap.collisions`, off by default): `collisions::blocked` tests moved parts against the pick cache
-  (sphere reject, then 15-axis box test, 0.01 stud touch tolerance); `GizmoDrag::hold_if` returns the drag to the
-  last accepted frame without allocating.
+- Collisions (`snap.collisions`, off by default): a `collisions::Guard` is built once per drag with a uniform
+  8-stud grid of the parts that are not moving (scales to 10k parts and big selections); parts the selection
+  already overlaps at the start are ignored (a slab sunk in its rim, an Alt-drag copy on its source). Each frame
+  `GizmoDrag::limit` sweeps the motion in steps of half the thinnest moved part, then bisects in the first
+  blocked step, so parts stop at contact and never tunnel. Past 50,000 box tests it fails safe (held) with a
+  status note. Review fixes (#384 FIX-FIRST): this, focus requested once by the bar and released on an outside
+  click, docked bar avoids the gizmo, Esc rule in spec 14.1, corrupt `hints.ron` moved aside with a warning.
 - Contextual toolbar (spec 3.2) in `context_bar.rs`: placement above / below / docked, never over the selection or
   gizmo (test with 20 seeded camera poses), 200 ms still-pointer delay after a selection change, hidden during drags,
   box select, camera flight and Play, 90 ms fade (`theme::motion`), Ctrl+. focus with Left/Right/Esc, View menu

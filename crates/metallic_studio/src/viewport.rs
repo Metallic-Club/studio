@@ -193,6 +193,8 @@ pub struct Viewport {
     /// The camera is being flown, panned or orbited this frame.
     navigating: bool,
     finished: Option<FinishedDrag>,
+    /// Collisions for the current drag (built when it starts).
+    guard: Option<crate::collisions::Guard>,
 }
 
 type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
@@ -237,6 +239,7 @@ impl Viewport {
             delta_rect: None,
             navigating: false,
             finished: None,
+            guard: None,
         }
     }
 
@@ -1078,8 +1081,21 @@ impl Viewport {
             };
             drag.update(&input);
             if state.snapping.collisions {
-                let hit = crate::collisions::blocked(&state.picks, drag.current(), drag.moving());
-                drag.hold_if(hit);
+                if self
+                    .guard
+                    .as_ref()
+                    .is_none_or(|g| g.serial() != drag.serial())
+                {
+                    self.guard = Some(crate::collisions::Guard::for_drag(&drag, &state.picks));
+                }
+                if let Some(guard) = &mut self.guard {
+                    drag.limit(|moved| guard.blocked(moved));
+                    if guard.overloaded() {
+                        state.note(
+                            "Collisions: too many parts nearby to check; the drag is held".into(),
+                        );
+                    }
+                }
             }
             drag.apply(&mut state.world, &mut state.preview);
         }
@@ -1091,6 +1107,7 @@ impl Viewport {
     }
 
     fn end(&mut self, drag: GizmoDrag, state: &mut EditorState) {
+        self.guard = None;
         let keep = drag.accepts_typing().then(|| drag.clone());
         let summary = summarise(&drag, state);
         let recorded = state.finish_drag(drag);

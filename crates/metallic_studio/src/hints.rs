@@ -154,6 +154,31 @@ pub enum HintEvent {
     LookPicker,
 }
 
+/// Largest `hints.ron` read; anything bigger is treated as corrupt.
+const MAX_FILE_BYTES: u64 = 64 * 1024;
+
+/// The hint ids in `file`: none when it is missing; when it is unreadable, too big or not valid,
+/// a warning is logged and the file is moved aside so it cannot fail again.
+fn read_seen(file: &std::path::Path) -> HashSet<HintId> {
+    let text = match std::fs::metadata(file) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashSet::new(),
+        Ok(m) if m.len() > MAX_FILE_BYTES => Err(format!("{} bytes", m.len())),
+        _ => std::fs::read_to_string(file).map_err(|e| e.to_string()),
+    };
+    let parsed = text.and_then(|t| ron::from_str::<HintsFile>(&t).map_err(|e| e.to_string()));
+    match parsed {
+        Ok(f) => f.seen.iter().filter_map(|s| HintId::parse(s)).collect(),
+        Err(e) => {
+            log::warn!("hints file is unreadable ({e}); starting with every tip unseen");
+            let aside = file.with_extension("ron.bad");
+            if let Err(e) = std::fs::rename(file, &aside) {
+                log::warn!("could not move the unreadable hints file aside: {e}");
+            }
+            HashSet::new()
+        }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct HintsFile {
     #[serde(default)]
@@ -210,13 +235,11 @@ impl Hints {
     }
 
     /// Loads `file` (a missing or broken file means no hint was shown yet).
+    ///
+    /// A file that cannot be read or parsed is logged and moved aside to `hints.ron.bad`
+    /// (replacing an older one), and the hints start fresh; the next save writes a clean file.
     pub fn load(file: Option<PathBuf>) -> Hints {
-        let seen = file
-            .as_deref()
-            .and_then(|f| std::fs::read_to_string(f).ok())
-            .and_then(|t| ron::from_str::<HintsFile>(&t).ok())
-            .map(|f| f.seen.iter().filter_map(|s| HintId::parse(s)).collect())
-            .unwrap_or_default();
+        let seen = file.as_deref().map(read_seen).unwrap_or_default();
         Hints {
             seen,
             file,
@@ -548,6 +571,20 @@ mod tests {
             h.note(&drag(Some(a), false, false, false), s(t), false);
         }
         assert_eq!(h.current(), None);
+    }
+
+    #[test]
+    fn a_corrupt_hints_file_is_moved_aside_and_the_hints_start_fresh() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let file = dir.path().join(FILE_NAME);
+        std::fs::write(&file, "(seen: [\"first-select\"").expect("write");
+        let mut h = Hints::load(Some(file.clone()));
+        assert!(!h.was_shown(HintId::FirstSelect));
+        assert!(dir.path().join("hints.ron.bad").exists(), "kept for a look");
+        assert!(!file.exists());
+        // The next save writes a clean file that loads.
+        h.note(&HintEvent::Selected { parts: true }, Instant::now(), false);
+        assert!(Hints::load(Some(file)).was_shown(HintId::FirstSelect));
     }
 
     #[test]

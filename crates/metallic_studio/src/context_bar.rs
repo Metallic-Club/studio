@@ -83,11 +83,15 @@ pub fn place(
     if fits(below) {
         return Some((below, Placement::Below));
     }
-    // Docked under the header: centred if that is clear, else the side with more room.
+    // Docked under the header: centred if that is clear, else either side; never over the
+    // selection or the gizmo.
     let y = area.top() + GAP / 2.0;
     for x in [centred, left_min, left_max] {
         let docked = Rect::from_min_size(pos2(x, y), size);
-        if !docked.intersects(selection) && docked.bottom() <= area.bottom() {
+        if !docked.intersects(selection)
+            && !gizmo.is_some_and(|g| docked.intersects(g))
+            && docked.bottom() <= area.bottom()
+        {
             return Some((docked, Placement::Docked));
         }
     }
@@ -153,6 +157,8 @@ pub struct ContextBar {
     still_since: Option<Instant>,
     last_pointer: Option<Pos2>,
     focus: Option<usize>,
+    /// The focused button still has to take keyboard focus (requested once).
+    grab: bool,
     /// Where the bar was drawn last frame (for tests and the hint card).
     pub last_rect: Option<Rect>,
     items: Vec<Item>,
@@ -169,6 +175,7 @@ impl Default for ContextBar {
             still_since: None,
             last_pointer: None,
             focus: None,
+            grab: false,
             last_rect: None,
             items: Vec::with_capacity(ACTIONS.len() + 4),
             measured: None,
@@ -192,6 +199,7 @@ impl ContextBar {
     pub fn focus(&mut self) {
         if self.last_rect.is_some() {
             self.focus = Some(0);
+            self.grab = true;
         }
     }
 
@@ -262,6 +270,7 @@ impl ContextBar {
         self.last_rect = Some(rect);
         self.keys(ctx);
         let mut run: Option<&'static str> = None;
+        let mut held = false;
         Area::new(id)
             .order(Order::Foreground)
             .fixed_pos(rect.min)
@@ -280,14 +289,22 @@ impl ContextBar {
                             for i in 0..self.items.len() {
                                 let item = self.items[i];
                                 let r = self.item(ui, item, state, keymap, &mut run);
-                                if self.focus == Some(i) {
+                                if self.focus == Some(i) && self.grab {
                                     r.request_focus();
                                 }
+                                held |= r.has_focus();
                             }
                         });
                     });
                 self.measured = Some((self.items.len(), shown.response.rect.width()));
             });
+        // Focus is requested once (Ctrl+., Left, Right). When a click elsewhere or another widget
+        // takes it, the bar lets go so global shortcuts work again.
+        if self.grab {
+            self.grab = false;
+        } else if self.focus.is_some() && !held {
+            self.focus = None;
+        }
         if let Some(id) = run {
             actions.run(id, state);
         }
@@ -350,8 +367,10 @@ impl ContextBar {
             });
         } else if right {
             self.focus = Some((f + 1) % n.max(1));
+            self.grab = true;
         } else if left {
             self.focus = Some((f + n.max(1) - 1) % n.max(1));
+            self.grab = true;
         }
     }
 
@@ -598,6 +617,7 @@ mod tests {
             if let Some((r, _)) = place(sel, Some(gizmo), viewport, top, size) {
                 placed += 1;
                 assert!(!r.intersects(sel), "covers the selection: {r:?} {sel:?}");
+                assert!(!r.intersects(gizmo), "covers the gizmo: {r:?} {gizmo:?}");
                 assert!(r.top() >= top && r.bottom() <= viewport.bottom());
             }
         }
@@ -622,6 +642,11 @@ mod tests {
         let (r, how) = place(tall, None, viewport, 36.0, size).unwrap();
         assert_eq!(how, Placement::Docked);
         assert!(!r.intersects(tall));
+        // A gizmo under the header pushes the docked bar to a side, clear of it.
+        let gizmo = Rect::from_min_size(pos2(250.0, 36.0), vec2(200.0, 200.0));
+        let (r, how) = place(tall, Some(gizmo), viewport, 36.0, size).unwrap();
+        assert_eq!(how, Placement::Docked);
+        assert!(!r.intersects(tall) && !r.intersects(gizmo), "{r:?}");
         let everything = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         assert!(place(everything, None, viewport, 36.0, size).is_none());
     }
