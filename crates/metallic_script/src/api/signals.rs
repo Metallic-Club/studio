@@ -60,6 +60,8 @@ pub(crate) enum EventKind {
     StateChanged,
     /// `UserInputService.LastInputTypeChanged(type)`
     LastInputTypeChanged,
+    /// `Tween.Completed(playbackState)` of the tween with this id (carried by `RunService`).
+    TweenCompleted(u64),
     /// `Instance.AttributeChanged(name)` for id 0, `GetAttributeChangedSignal(name)` for the
     /// interned name id of that attribute (no arguments).
     AttributeChanged(u32),
@@ -143,6 +145,15 @@ impl Hub {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Disconnects and drops every connection of `key`.
+    pub(crate) fn remove_key(&self, key: SignalKey) {
+        if let Some(list) = self.connections.borrow_mut().remove(&key) {
+            for c in &list {
+                c.alive.set(false);
+            }
+        }
     }
 
     /// Disconnects everything `owner` connected.

@@ -7,4 +7,5 @@ publish.workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+metallic_anim = { path = "../metallic_anim" }
 mlua = { version = "0.12.2", features = ["luau", "vendored"] }

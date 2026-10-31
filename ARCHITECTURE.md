@@ -103,7 +103,9 @@ apps.
   The role is fixed at construction, preserves pre-existing world state and filters client script candidates before
   running-script bookkeeping. This adds no transport, player admission, server executable or M2 acceptance.
   The host exposes the Roblox-named API
-  (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
+  (documented in `docs/luau-api.md`) and RemoteEvent delivery. `TweenService` (`api/tween.rs`, curves from
+  `metallic_anim`) advances playing tweens once per `ScriptHost::step` by its `dt`, before `Heartbeat`; `Completed`
+  rides a `RunService`-carried signal key (`EventKind::TweenCompleted(id)`). Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
   Task queue ownership uses weak thread keys and fresh lease identities; task-created callbacks bind their
   function/arguments at creation. Coroutine admission adapters consume private scheduler markers while ordinary

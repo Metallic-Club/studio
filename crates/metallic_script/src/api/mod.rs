@@ -19,6 +19,7 @@ mod require;
 mod services;
 mod signals;
 mod tags;
+mod tween;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
@@ -83,6 +84,8 @@ pub(crate) struct ApiState {
     bind_wrapper: Function,
     /// `UserInputService` and `ContextActionService`.
     input_services: input::InputServices,
+    /// `TweenService` and the tweens of this VM.
+    pub(crate) tweens: tween::Tweens,
     /// Attribute signal names and this VM's read position in the world's attribute log.
     attributes: attributes::AttributeState,
     /// Tag signal names, this VM's read position in the world's tag log and `CollectionService`.
@@ -183,12 +186,14 @@ fn build(
         pending_destroy: RefCell::new(Vec::new()),
         bind_wrapper,
         input_services: input::InputServices::new(),
+        tweens: tween::Tweens::default(),
         attributes: attributes::AttributeState::new(world_cursor),
         tags: tags::TagState::new(tag_cursor),
         require: require::RequireState::default(),
     });
     tags::install_service(lua, &state)?;
     input::install_services(lua, &state)?;
+    tween::install_service(lua, &state)?;
 
     let set = |name: &str, value: mlua::Value| vm.set_global(name, value);
     let to_err = |e: ScriptError| Error::runtime(e.message);
@@ -198,6 +203,7 @@ fn build(
     )
     .map_err(to_err)?;
     set("CFrame", mlua::Value::Table(cframe::constructor(lua)?)).map_err(to_err)?;
+    set("TweenInfo", mlua::Value::Table(tween::constructor(lua)?)).map_err(to_err)?;
     for (name, table) in datatypes::constructors(lua)? {
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }

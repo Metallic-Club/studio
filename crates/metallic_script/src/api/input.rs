@@ -449,6 +449,9 @@ impl Enums {
             ("ContextActionPriority", CONTEXT_ACTION_PRIORITIES.to_vec()),
             ("RotationOrder", named(&ROTATION_ORDERS)),
             ("NormalId", named(&NORMAL_IDS)),
+            ("EasingStyle", named(super::tween::EASING_STYLES)),
+            ("EasingDirection", named(super::tween::EASING_DIRECTIONS)),
+            ("PlaybackState", named(super::tween::PLAYBACK_STATES)),
         ];
         let table = lua.create_table()?;
         let mut items = HashMap::new();

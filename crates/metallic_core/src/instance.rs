@@ -167,12 +167,16 @@ impl World {
             return (Changes::Overflow, now);
         }
         let start = self.journal.partition_point(|&(r, _)| r <= cursor.revision);
-        let mut seen = HashSet::new();
-        let ids = self.journal[start..]
-            .iter()
-            .filter(|(_, id)| seen.insert(*id))
-            .map(|&(_, id)| id)
-            .collect();
+        let entries = &self.journal[start..];
+        // Sized up front: two allocations however many instances changed (none when nothing did).
+        let mut seen = HashSet::with_capacity(entries.len());
+        let mut ids = Vec::with_capacity(entries.len());
+        ids.extend(
+            entries
+                .iter()
+                .filter(|(_, id)| seen.insert(*id))
+                .map(|&(_, id)| id),
+        );
         (Changes::Ids(ids), now)
     }
 
@@ -574,6 +578,9 @@ impl World {
         if let Some(n) = self.node_mut(id) {
             if is_default {
                 n.props.remove(prop);
+            } else if let Some(slot) = n.props.get_mut(prop) {
+                // Overwrite in place: a property set every frame (a tween) allocates no key.
+                *slot = value.clone();
             } else {
                 n.props.insert(prop.to_string(), value.clone());
             }

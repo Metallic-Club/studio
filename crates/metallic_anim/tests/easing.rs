@@ -16,7 +16,8 @@ const TABLE: &[(EasingStyle, EasingDirection, [f32; 5])] = &[
     (EasingStyle::Sine, EasingDirection::InOut, [0.0244717, 0.146447, 0.5, 0.853553, 0.975528]),
     (EasingStyle::Back, EasingDirection::In, [-0.0143142, -0.0641366, -0.0876975, 0.18259, 0.591172]),
     (EasingStyle::Back, EasingDirection::Out, [0.408828, 0.81741, 1.0877, 1.06414, 1.01431]),
-    (EasingStyle::Back, EasingDirection::InOut, [-0.0232253, -0.0438488, 0.5, 1.04385, 1.02323]),
+    // Penner's InOut: the overshoot scaled by 1.525 (not the In curve mirrored), as Roblox.
+    (EasingStyle::Back, EasingDirection::InOut, [-0.0375186, -0.0996818, 0.5, 1.09968, 1.03752]),
     (EasingStyle::Quad, EasingDirection::In, [0.01, 0.0625, 0.25, 0.5625, 0.81]),
     (EasingStyle::Quad, EasingDirection::Out, [0.19, 0.4375, 0.75, 0.9375, 0.99]),
     (EasingStyle::Quad, EasingDirection::InOut, [0.02, 0.125, 0.5, 0.875, 0.98]),
@@ -31,7 +32,8 @@ const TABLE: &[(EasingStyle, EasingDirection, [f32; 5])] = &[
     (EasingStyle::Bounce, EasingDirection::InOut, [0.03, 0.117188, 0.5, 0.882812, 0.97]),
     (EasingStyle::Elastic, EasingDirection::In, [0.00195312, -0.00552427, -0.015625, 0.0883883, -0.25]),
     (EasingStyle::Elastic, EasingDirection::Out, [1.25, 0.911612, 1.01562, 1.00552, 0.998047]),
-    (EasingStyle::Elastic, EasingDirection::InOut, [-0.000976563, -0.0078125, 0.5, 1.00781, 1.00098]),
+    // Penner's InOut: period 0.45 (1.5 x the In period), as Roblox.
+    (EasingStyle::Elastic, EasingDirection::InOut, [0.000339157, 0.0119694, 0.5, 0.988031, 0.999661]),
     (EasingStyle::Exponential, EasingDirection::In, [0.00195312, 0.00552427, 0.03125, 0.176777, 0.5]),
     (EasingStyle::Exponential, EasingDirection::Out, [0.5, 0.823223, 0.96875, 0.994476, 0.998047]),
     (EasingStyle::Exponential, EasingDirection::InOut, [0.00195312, 0.015625, 0.5, 0.984375, 0.998047]),

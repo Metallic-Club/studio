@@ -26,6 +26,7 @@ const SERVICES: &[&str] = &[
     "RunService",
     "UserInputService",
     "ContextActionService",
+    "TweenService",
     "CollectionService",
 ];
 
@@ -45,6 +46,9 @@ impl LuaGame {
             return Err(lua_error(format!("'{name}' is not a valid Service name")));
         }
         if let Some(service) = super::input::service(&self.state, name) {
+            return Ok(service);
+        }
+        if let Some(service) = super::tween::service(&self.state, name) {
             return Ok(service);
         }
         if let Some(service) = super::tags::service(&self.state, name) {
