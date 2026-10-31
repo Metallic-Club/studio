@@ -12,7 +12,9 @@
 //! borrowed from a host such as the Studio editor.
 #![warn(missing_docs)]
 
+pub mod bloom;
 pub mod camera;
+pub mod lighting;
 pub mod materials;
 pub mod meshes;
 pub mod post;
@@ -28,6 +30,7 @@ mod renderer;
 pub use camera::Camera;
 pub use context::{RenderContext, RenderError};
 pub use glam;
+pub use lighting::LightingInputs;
 pub use metallic_asset;
 pub use post::{FullscreenPass, PostChain, PostContext, PostDraw, PostPass, PostSlot};
 pub use renderer::{Quality, RenderSettings, Renderer};

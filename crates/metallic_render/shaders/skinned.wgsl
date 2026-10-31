@@ -32,19 +32,18 @@ fn luma(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
-// How bright the scene's light is next to the default sky (1 under the default sun), with a
-// little of its hue, so toon characters still dim at dusk and pick up a coloured sun.
+// How bright the scene's light is next to the default lighting (1 in a fresh place), with a
+// little of its hue, so toon characters still dim at dusk and pick up a coloured sun. The sky
+// colours are pre-exposed, so this follows the brightness the scene is shown at.
 fn toon_light() -> vec3<f32> {
     let sky = mix(g.sky_horizon.rgb, g.sky_zenith.rgb, 0.45);
-    let e = g.sun_color.rgb * 0.27 + sky * 0.3;
-    let k = luma(e) / 0.95;
-    return clamp(mix(vec3<f32>(k), e / 0.95, 0.25), vec3<f32>(0.0), vec3<f32>(1.25));
+    let e = (g.sun_color.rgb * 0.27 + sky * 0.3) / max(g.light_toon.x, 1e-6);
+    return clamp(mix(vec3<f32>(luma(e)), e, 0.25), vec3<f32>(0.0), vec3<f32>(1.25));
 }
 
+// Toon characters sit in the same fog as everything else.
 fn toon_fog(c: vec3<f32>, wp: vec3<f32>) -> vec3<f32> {
-    let dist = length(g.camera_pos.xyz - wp);
-    let fog = 1.0 - exp(-pow(dist * g.camera_pos.w, 2.0));
-    return mix(c, g.sky_horizon.rgb, clamp(fog, 0.0, 1.0));
+    return apply_fog(c, wp);
 }
 
 @fragment
@@ -52,7 +51,7 @@ fn fs_toon(in: VOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_n);
     let v = normalize(g.camera_pos.xyz - in.world_pos);
     let ndl = dot(n, g.sun_dir.xyz);
-    let sh = shadow_factor(in.world_pos, n, 1.0 / in.clip.w);
+    let sh = shadow_factor(in.world_pos, n, 1.0 / in.clip.w, in.clip.xy);
     // Soft band edges: a few hundredths of the light range, about a pixel or two wide. The
     // band sits a little past the true terminator so planes turned partly away read as shade.
     // The cast-shadow term stays as soft as the filtered shadow map: a hard step on it shows the
