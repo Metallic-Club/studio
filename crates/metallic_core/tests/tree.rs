@@ -329,13 +329,14 @@ fn player_gui_is_a_registered_class_with_unique_bits() {
     assert_ne!(again.to_bits(), gui.to_bits());
 }
 
-/// Every built-in: the root services plus `StarterPlayerScripts` under `StarterPlayer`.
+/// Every built-in: the root services (ServerStorage included) plus `StarterPlayerScripts` under
+/// `StarterPlayer`.
 fn builtins(w: &World) -> Vec<InstanceId> {
     let mut out = w.roots().to_vec();
     let sp = w.root("StarterPlayer").unwrap();
     out.extend_from_slice(w.children(sp));
     assert!(out.iter().all(|&b| w.is_builtin(b)));
-    assert_eq!(out.len(), 9);
+    assert_eq!(out.len(), 10);
     out
 }
 
