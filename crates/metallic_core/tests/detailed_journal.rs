@@ -95,19 +95,79 @@ fn reparent_detail_reports_only_the_direct_operation_and_keeps_coarse_descendant
 }
 
 #[test]
-fn same_parent_assignment_keeps_the_existing_reappend_semantics() {
+fn same_parent_assignment_preserves_order_and_both_cursors() {
     let mut world = World::new_empty();
     let parent = world.create("Folder", None).unwrap();
     let first = world.create("Part", Some(parent)).unwrap();
     let second = world.create("Part", Some(parent)).unwrap();
     let before = world.change_cursor();
     world.set_parent(first, Some(parent)).unwrap();
+    assert_eq!(world.children(parent), [first, second]);
+    assert_eq!(world.change_cursor(), before);
+    assert!(entries(&world, before).is_empty());
+    assert!(coarse(&world, before).is_empty());
+}
+
+#[test]
+fn explicit_reorders_report_only_the_moved_sibling_in_operation_order() {
+    let mut world = World::new_empty();
+    let parent = world.create("Folder", None).unwrap();
+    let first = world.create("Folder", Some(parent)).unwrap();
+    let leaf = world.create("Part", Some(first)).unwrap();
+    let second = world.create("Part", Some(parent)).unwrap();
+    let signals = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = signals.clone();
+    world
+        .child_added
+        .connect(move |event| observed.lock().unwrap().push(*event));
+    let before = world.change_cursor();
+    world
+        .set_parent_at(first, Some(parent), usize::MAX)
+        .unwrap();
     assert_eq!(world.children(parent), [second, first]);
+    world.set_parent_at(first, Some(parent), 0).unwrap();
+    assert_eq!(world.children(parent), [first, second]);
     assert_eq!(
         entries(&world, before),
-        [change(first, ChangeKind::Reparented)]
+        [
+            change(first, ChangeKind::Reordered),
+            change(first, ChangeKind::Reordered),
+        ]
+    );
+    assert_eq!(coarse(&world, before), [first, parent]);
+    assert_eq!(world.parent(leaf), Some(first));
+    assert!(signals.lock().unwrap().is_empty());
+    let settled = world.change_cursor();
+    world.set_parent_at(first, Some(parent), 0).unwrap();
+    world
+        .set_parent_at(second, Some(parent), usize::MAX)
+        .unwrap();
+    assert_eq!(world.change_cursor(), settled);
+}
+
+#[test]
+fn root_reorder_and_cross_parent_placement_have_distinct_notices() {
+    let mut world = World::new_empty();
+    let first = world.create("Folder", None).unwrap();
+    let second = world.create("Folder", None).unwrap();
+    let existing = world.create("Part", Some(second)).unwrap();
+    let leaf = world.create("Part", Some(first)).unwrap();
+    let before = world.change_cursor();
+    world.set_parent_at(first, None, usize::MAX).unwrap();
+    assert_eq!(world.roots(), [second, first]);
+    assert_eq!(
+        entries(&world, before),
+        [change(first, ChangeKind::Reordered)]
     );
     assert_eq!(coarse(&world, before), [first]);
+    let before_move = world.change_cursor();
+    world.set_parent_at(first, Some(second), 0).unwrap();
+    assert_eq!(world.children(second), [first, existing]);
+    assert_eq!(
+        entries(&world, before_move),
+        [change(first, ChangeKind::Reparented)]
+    );
+    assert_eq!(coarse(&world, before_move), [first, leaf]);
 }
 
 #[test]
@@ -197,6 +257,9 @@ fn errors_and_equal_value_writes_leave_both_views_and_cursor_unchanged() {
     assert!(world.set(stale, "Anchored", Value::Bool(true)).is_err());
     assert!(world.set_parent(parent, Some(part)).is_err());
     assert!(world.set_parent(part, Some(stale)).is_err());
+    assert!(world.set_parent_at(parent, Some(part), 0).is_err());
+    assert!(world.set_parent_at(part, Some(stale), 0).is_err());
+    assert!(world.set_parent_at(stale, None, 0).is_err());
     assert!(world.clone_subtree(stale).is_err());
     world.destroy(stale);
     assert_eq!(world.change_cursor(), before);

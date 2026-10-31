@@ -508,12 +508,13 @@ pub fn github_sign_in(
     std::thread::Builder::new()
         .name("github-sign-in".to_string())
         .spawn(move || {
-            let _ticket = ticket;
+            let ticket = ticket;
             let mut ui = EventUi {
                 sink: sink.as_ref(),
                 open: open.as_ref(),
             };
-            let result = auth.device_sign_in(&mut ui);
+            // The flight's cancel flag stops it (between requests, retries and polls).
+            let result = auth.device_sign_in_until(&mut ui, ticket.cancel_flag());
             if let Err(error) = &result {
                 log::warn!("the GitHub sign-in did not finish: {error}");
             }

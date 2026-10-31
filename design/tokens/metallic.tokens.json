@@ -153,7 +153,7 @@
     },
     "line-control": {
       "$type": "color",
-      "$value": "#6e6a79"
+      "$value": "#6f6b7a"
     },
     "text-1": {
       "$type": "color",
@@ -203,6 +203,26 @@
       "$type": "color",
       "$value": "rgba(255,255,255,0.06)"
     },
+    "edge-low": {
+      "$type": "color",
+      "$value": "rgba(0,0,0,0.30)",
+      "$description": "1px bottom edge of raised plates"
+    },
+    "art-scrim": {
+      "$type": "color",
+      "$value": "rgba(18,17,22,0.78)",
+      "$description": "Plate behind text and chips on game art"
+    },
+    "backdrop": {
+      "$type": "color",
+      "$value": "rgba(12,11,15,0.60)",
+      "$description": "Modal scrim"
+    },
+    "keycap-on-accent": {
+      "$type": "color",
+      "$value": "rgba(17,16,21,0.16)",
+      "$description": "Keycap fill on the accent"
+    },
     "error": {
       "$type": "color",
       "$value": "#ec7a72"
@@ -242,6 +262,11 @@
     "danger-hover": {
       "$type": "color",
       "$value": "#a3443e"
+    },
+    "on-danger": {
+      "$type": "color",
+      "$value": "{primitive.g.100}",
+      "$description": "Text on danger"
     }
   },
   "space": {
@@ -288,6 +313,14 @@
     "s11": {
       "$type": "dimension",
       "$value": "48px"
+    },
+    "s12": {
+      "$type": "dimension",
+      "$value": "64px"
+    },
+    "s13": {
+      "$type": "dimension",
+      "$value": "96px"
     }
   },
   "radius": {
@@ -323,6 +356,24 @@
       "$value": "14px"
     }
   },
+  "size": {
+    "$description": "Studio control heights (desktop density)",
+    "h-row": {
+      "$type": "dimension",
+      "$value": "24px",
+      "$description": "Tree, property and list rows"
+    },
+    "h-control": {
+      "$type": "dimension",
+      "$value": "32px",
+      "$description": "Secondary buttons, inputs"
+    },
+    "h-control-lg": {
+      "$type": "dimension",
+      "$value": "36px",
+      "$description": "Primary button, toolbar"
+    }
+  },
   "font": {
     "font": {
       "$type": "fontFamily",
@@ -352,6 +403,17 @@
         "spread": "0px"
       },
       "$description": "Only floating surfaces get a shadow"
+    },
+    "shadow-modal": {
+      "$type": "shadow",
+      "$value": {
+        "color": "rgba(0,0,0,0.55)",
+        "offsetX": "0px",
+        "offsetY": "16px",
+        "blur": "48px",
+        "spread": "0px"
+      },
+      "$description": "Dialogs and the splash window (elevation level 4)"
     }
   },
   "motion": {
@@ -366,6 +428,16 @@
     "t-slow": {
       "$type": "duration",
       "$value": "200ms"
+    },
+    "t-panel": {
+      "$type": "duration",
+      "$value": "240ms",
+      "$description": "Stage swap, panel collapse, progress fill"
+    },
+    "t-splash": {
+      "$type": "duration",
+      "$value": "320ms",
+      "$description": "Splash in, splash to start screen"
     },
     "ease-out": {
       "$type": "cubicBezier",
@@ -386,6 +458,16 @@
         1.0
       ],
       "$description": "egui emath::easing::cubic_in_out"
+    },
+    "ease-in": {
+      "$type": "cubicBezier",
+      "$value": [
+        0.55,
+        0.055,
+        0.675,
+        0.19
+      ],
+      "$description": "egui emath::easing::cubic_in; exits only"
     }
   },
   "type": {
@@ -517,10 +599,78 @@
       }
     }
   },
-  "$themes": {},
+  "$themes": {
+    "titanium": {
+      "bg-deep": "#1c1b22",
+      "bg-base": "#24222b",
+      "bg-panel": "#2c2a34",
+      "bg-raised": "#35323e",
+      "bg-hover": "#3c3946",
+      "bg-active": "#43404d",
+      "select-weak": "#2f2b3b",
+      "line": "#3a3744",
+      "line-strong": "#5f5b6b",
+      "line-control": "#8a8695",
+      "text-1": "#f4f3f7",
+      "text-2": "#c3c0ca",
+      "text-3": "#b3afbd",
+      "text-off": "#6c6878",
+      "icon": "#cfccd6",
+      "accent-text": "#c2b6f0",
+      "highlight": "rgba(255,255,255,0.07)",
+      "error": "#f2948c",
+      "warning": "#e8bb6a",
+      "success": "#74cc9f",
+      "info": "#95bfee",
+      "art-scrim": "rgba(18,17,22,0.76)",
+      "backdrop": "rgba(12,11,15,0.55)"
+    },
+    "light": {
+      "bg-deep": "#ffffff",
+      "bg-base": "#eceaf0",
+      "bg-panel": "#f4f3f7",
+      "bg-raised": "#ffffff",
+      "bg-hover": "#e3e1e8",
+      "bg-active": "#d8d5de",
+      "select": "#e4def8",
+      "select-weak": "#f3f0fc",
+      "line": "#d8d5de",
+      "line-strong": "#c3c0ca",
+      "line-control": "#7a7685",
+      "text-1": "#16151b",
+      "text-2": "#43404d",
+      "text-3": "#57535f",
+      "text-off": "#a3a0ad",
+      "icon": "#43404d",
+      "accent": "#6f5cb6",
+      "accent-hover": "#584993",
+      "accent-press": "#4d4082",
+      "on-accent": "#ffffff",
+      "accent-text": "#584993",
+      "focus": "#584993",
+      "highlight": "rgba(255,255,255,0.7)",
+      "edge-low": "rgba(22,21,27,0.08)",
+      "error": "#b3261e",
+      "error-bg": "#fbe9e7",
+      "warning": "#7a5200",
+      "warning-bg": "#fbf0d9",
+      "success": "#1d7048",
+      "success-bg": "#e2f2e9",
+      "info": "#1f5c9e",
+      "info-bg": "#e3edf8",
+      "danger": "#b3261e",
+      "danger-hover": "#96201a",
+      "on-danger": "#ffffff",
+      "art-scrim": "rgba(12,11,15,0.74)",
+      "backdrop": "rgba(22,21,27,0.40)",
+      "shadow-pop": "0px 8px 24px 0px rgba(0,0,0,0.16)"
+    }
+  },
   "$reduced-motion": {
     "t-fast": "0ms",
     "t-base": "0ms",
-    "t-slow": "80ms"
+    "t-slow": "80ms",
+    "t-panel": "80ms",
+    "t-splash": "80ms"
   }
 }

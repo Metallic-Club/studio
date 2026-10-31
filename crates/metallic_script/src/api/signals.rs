@@ -36,6 +36,8 @@ const MAX_DEFERRED: usize = 10_000;
 pub(crate) enum EventKind {
     /// `BasePart.Touched(hit)`
     Touched,
+    /// `BasePart.TouchEnded(hit)`
+    TouchEnded,
     /// `Humanoid.Died()`
     Died,
     /// `Player.CharacterAdded(model)`
@@ -58,6 +60,8 @@ pub(crate) enum EventKind {
     StateChanged,
     /// `UserInputService.LastInputTypeChanged(type)`
     LastInputTypeChanged,
+    /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
+    Gui(super::gui::GuiEventKind),
 }
 
 /// One signal: an event of one instance.

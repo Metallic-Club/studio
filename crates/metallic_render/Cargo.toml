@@ -15,5 +15,7 @@ pollster = "1.0.1"
 log = "0.4"
 
 [dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 winit = "0.30"
 png = "0.18.1"
+serde_json = "1"

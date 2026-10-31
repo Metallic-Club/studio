@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# The fuzz crate has its own workspace (cargo fuzz, nightly); it is not a workspace member.
+exclude = ["crates/metallic_net/fuzz"]
 
 [workspace.package]
 version = "0.1.1"
@@ -20,12 +22,24 @@ metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
 metallic_update = { path = "crates/metallic_update" }
 metallic_tokens = { path = "crates/metallic_tokens" }
+toml = "1.1.8"
+log = "0.4"
+metallic_ui_theme = { path = "crates/metallic_ui_theme" }
 metallic_audio = { path = "crates/metallic_audio" }
+metallic_net = { path = "crates/metallic_net" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 egui = { version = "0.37.0", default-features = false }
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "accesskit", "wayland", "x11"] }
 egui_kittest = { version = "0.37.0", features = ["wgpu"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync"] }
+sha2 = "0.10.9"
+time = { version = "0.3.55", default-features = false }
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+zstd = { version = "0.13.3", default-features = false }
 
 # Debug builds keep file:line backtraces for our crates and drop debug info for dependencies.
 # Full debug info made each lane's target dir 2-4 GB, and the build PC is short on disk.

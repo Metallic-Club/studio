@@ -18,7 +18,7 @@ struct Frame {
     sun_color: vec4<f32>,    // rgb: colour times intensity
     sky_color: vec4<f32>,    // ambient light from above
     ground_color: vec4<f32>, // ambient light from below
-    toon: vec4<f32>,         // x: band count, y: band edge softness, z: rim width, w: specular size
+    toon: vec4<f32>,         // x: band steps (tones = steps + 1), y: band edge softness, z: rim width, w: specular size
     shadow_tint: vec4<f32>,  // rgb: colour multiplier in toon shadow (never pure black)
 }
 
@@ -99,7 +99,9 @@ fn shade_pbr(albedo: vec3<f32>, rough_in: f32, metal: f32, n: vec3<f32>, v: vec3
     return direct + ambient;
 }
 
-// Quantises half-Lambert light into `bands` steps with soft, anti-aliased edges.
+// Quantises half-Lambert light into `bands` steps with soft, anti-aliased edges. `bands` counts the steps
+// (light edges), so it gives bands + 1 tones: 1 = two-tone lit/shadow, 3 = four tones. The darkest and
+// brightest tones cover half a step each.
 fn toon_bands(ndl: f32, shadow: f32, bands: f32, softness: f32) -> f32 {
     let x = clamp(ndl * 0.5 + 0.5, 0.0, 1.0) * shadow;
     let b = max(bands, 1.0);

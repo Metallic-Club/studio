@@ -4,7 +4,7 @@ Scripts are sandboxed Luau with Roblox-style names. `Script`s run in the **serve
 (one local player, `Player1`, in the default combined host). Errors read `<Instance full name>:<line>: <message>` and go to the output sink; one failing
 script or handler never stops the others. Every call into a script (start, handler, Heartbeat, remote) has a 0.1 s budget.
 
-Code: `crates/metallic_script/src/api/`. Tests: `crates/metallic_script/tests/{api,remote,cframe}.rs`.
+Code: `crates/metallic_script/src/api/`. Tests: `crates/metallic_script/tests/{api,remote,cframe,pivot}.rs`.
 
 ## Where scripts run
 In combined mode, `ScriptHost::start` runs in tree order: every enabled `Script` under Workspace or ServerScriptService (server VM) and every
@@ -70,7 +70,8 @@ print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
     `tostring` gives the 12 components. Fields cannot be assigned.
 - `BasePart.CFrame` reads `Position` and `Orientation` as one frame and writes both. `Orientation` keeps degrees
   applied Y, then X, then Z, so `part.CFrame:ToOrientation()` is `Orientation` in radians. A non-finite CFrame is
-  refused and changes nothing. `CFrame` is not a stored property type: it is not in scene files or remote payloads.
+  refused and changes nothing. `BasePart.CFrame` itself is not stored; `PivotOffset` and `WorldPivot` are stored
+  CFrame properties (scene files keep them). Remote payloads do not carry CFrames yet.
 - `Color3.fromRGB(r, g, b)`: `R G B` read as 0..1.
 - `UDim2.new(xs, xo, ys, yo)`: `X` and `Y` read as `{Scale, Offset}`.
 
@@ -79,13 +80,56 @@ part.Color = Color3.fromRGB(255, 80, 0)
 part.Size = Vector3.new(4, 1, 2) * 2
 ```
 
+## Pivots, size and scale
+Roblox's `PVInstance` API on `BasePart` and `Model` (`IsA("PVInstance")` is true for both; it is not a registry class).
+Code: `metallic_core::transform`, shared with Studio's building tools. Spec: `docs/design/building-tools.md` sections 4.3,
+4.4 and 16.
+
+- `GetPivot()`: for a part `CFrame * PivotOffset`. For a Model, its `PrimaryPart`'s pivot when that is a BasePart inside
+  the model; otherwise `WorldPivot`.
+- `PivotTo(cframe)`: moves the part, or every BasePart descendant of the model (through Folders and nested Models),
+  so the pivot lands on `cframe`. The WorldPivots of nested Models move with them. On a Model without a PrimaryPart,
+  `WorldPivot` becomes `cframe`.
+- `BasePart.PivotOffset` (CFrame, default identity): the pivot relative to the part.
+- `Model.WorldPivot` (CFrame): until it is first set (directly or by `PivotTo`) it reads as the centre of the model's
+  bounding box with world axes, and follows the parts; after that it stays where it was put. It is ignored while a
+  valid `PrimaryPart` is set. `Model.PrimaryPart` (BasePart or nil) is ignored when it is not a BasePart inside the model.
+- `BasePart:Resize(face, delta)`: `face` is `Enum.NormalId` (`Right Top Back Left Bottom Front`, values 0 to 5; the number
+  or the name also work). The face moves `delta` studs along its normal and the opposite face stays; sizes stay within
+  0.001 to 2048 studs.
+  A Ball grows on all axes, a Cylinder's Y and Z together. Returns false and changes nothing when the part has
+  `CanCollide` and the grown part would newly overlap (by more than 0.0001 studs) another `CanCollide` part in
+  Workspace; true otherwise.
+- `Model:ScaleTo(scale)` / `GetScale()`: `scale` (positive, finite) is absolute, relative to the model's size at scale 1,
+  as in Roblox: `ScaleTo(2)` then `ScaleTo(0.5)` gives half the original size, and `ScaleTo(1)` (or
+  `ScaleTo(GetScale() * 0.5)` after `ScaleTo(2)`) restores it. Part positions and sizes scale about the pivot, which stays
+  put; orientations stay; `PivotOffset` positions and nested WorldPivots scale too; nested Models' `GetScale` multiplies.
+- **Limits.** A part's `Size` is 0.001 to 2048 studs per axis. Assigning `Size` clamps each axis, as Roblox does, and
+  so does `Resize`. `ScaleTo` and `PivotTo` compute and check every new value first. If a part would leave the size
+  limits, or a position would overflow, they error and change nothing (`GetScale` included).
+- **CFrame properties.** `PivotOffset`, `WorldPivot`, `BasePart.CFrame` and `PivotTo`'s target are made orthonormal on
+  write. A scaled or skewed matrix keeps its right axis and corrects the others (`CFrame:Orthonormalize`), so
+  `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate rotation (for example all zeros) errors.
+- `Model:GetBoundingBox()` returns `(CFrame, Vector3)`: the box around every BasePart descendant, oriented like the
+  PrimaryPart (or the pivot when there is none). An empty model returns its pivot and size 0.
+  `Model:GetExtentsSize()` returns that size.
+
+```lua
+local door = workspace.Door
+door.PrimaryPart = door.Hinge
+door:PivotTo(door:GetPivot() * CFrame.Angles(0, math.rad(90), 0))   -- swing about the hinge
+local cf, size = door:GetBoundingBox()
+```
+
 ## Signals
 `signal:Connect(fn)` returns a connection with `:Disconnect()` and `.Connected`. Handlers run in their own thread (they may
 `task.wait`). A `Connect` made inside a handler does not run in the same dispatch; `Disconnect` inside a handler is safe.
 
 | Signal | Arguments | Fired when |
 |---|---|---|
-| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is its `HumanoidRootPart` (so `hit.Parent` is the character Model) |
+| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
+| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced); pairs with `Touched`. If the
+character part was destroyed by then, `hit` is the destroyed instance (its members can no longer be read) Part-to-part contacts report `Touched` only |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |
@@ -107,6 +151,10 @@ StarterGui, Lighting, RunService, UserInputService, ContextActionService. Others
 - Player: `UserId`, `Character`, `CharacterAdded`. Combined startup creates a `PlayerGui` for its local player;
   server-only startup adds no player or GUI.
 - `Humanoid:TakeDamage(n)` only lowers `Health` (not below 0). Death is detected by the character controller.
+- Humanoid tuning is clamped on write: `Health` and `MaxHealth` to 0..1e9, `WalkSpeed` and `JumpPower` to 0..1000,
+  `MaxSlopeAngle` to 0..89. Setting a NaN or infinite number raises an error and keeps the old value. A character
+  dies when `Health` is 0, when it falls below `Workspace.FallenPartsDestroyHeight`, or when its root goes more than
+  1,000,000 studs from the origin on any axis.
 - `RunService:IsServer()`, `RunService:IsClient()`, `RunService.Heartbeat`.
 
 ```lua
@@ -130,6 +178,36 @@ end)
   release queued ownership so manual resumes work again, preserving nil/multiple values and native errors.
 - Native `pcall` and `xpcall` are unchanged. Ordinary coroutine creation, yielding, status and close behavior
   remain available; internally tagged results are consumed by the scheduler/admission helpers.
+
+## GUI and buttons
+The local player's `PlayerGui` (copied from `StarterGui` at start) is drawn over the 3D view: `ScreenGui` (`Enabled`,
+`DisplayOrder`), `Frame` (`Position`, `Size`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`, `ZIndex`, `Active`,
+`ClipsDescendants`), `TextLabel` (`Text`, `TextColor3`, `TextSize`) and the buttons `TextButton` (`Text`, `TextColor3`,
+`TextSize`) and `ImageButton` (`Image`, `ImageColor3`, `ImageTransparency`; the image is not drawn yet). Both buttons
+are `GuiButton`s (`AutoButtonColor`), which are `Frame`s here (Roblox's GuiObject).
+
+- Order: ScreenGuis by `DisplayOrder`, then each element above its parent and siblings by `ZIndex` (Roblox's default
+  `ZIndexBehavior.Sibling`); ties keep tree order. `ClipsDescendants` cuts its descendants to its rectangle, for drawing
+  and clicks.
+- A press goes to the front-most element under the pointer that takes clicks: a button, or an element with
+  `Active = true`. Other elements let it through. A press taken by the GUI never reaches the game (camera, jump,
+  `ContextActionService`).
+- Button events: `MouseButton1Down(x, y)`, then on release over the same button `MouseButton1Up(x, y)`,
+  `MouseButton1Click()` and `Activated(inputObject, clickCount)`. A finger tap fires the same events. `AutoButtonColor`
+  darkens the background while hovered or pressed.
+- Every Frame: `MouseEnter(x, y)` and `MouseLeave(x, y)` (mouse only), `InputBegan(input)`, `InputChanged(input)` (mouse
+  movement, at most once per frame) and `InputEnded(input)` for the elements under the pointer down to the first that
+  takes clicks. `input` has `UserInputType` (`MouseButton1`, `MouseMovement` or `Touch`), `UserInputState`, `Position`
+  (Vector3, GUI points), `Delta` and `KeyCode`.
+- Events reach LocalScripts at the next step; at most 256 wait at once. Not yet: gamepad selection, `Modal`,
+  `MouseButton2` events, double-click counts, `ZIndexBehavior.Global`.
+
+```lua
+local button = script.Parent.Play
+button.Activated:Connect(function(input)
+    print("play pressed with", input.UserInputType.Name)
+end)
+```
 
 ## RemoteEvent
 `FireServer(...)` (client only), `FireClient(player, ...)` and `FireAllClients(...)` (server only), `OnServerEvent(player, ...)`
@@ -173,7 +251,7 @@ Spec: `docs/design/input-actions.md` section 5. Everything here needs the client
 controls of the input runtime), `Enum.UserInputType` (`MouseButton1` to `3`, `MouseWheel`, `MouseMovement`, `Touch`, `Keyboard`,
 `Focus`, `Gamepad1` to `4`, `TextInput`, `None`), `Enum.UserInputState` (`Begin`, `Change`, `End`, `Cancel`, `None`),
 `Enum.InputActionType`, `Enum.InputTrigger`, `Enum.TouchSlot` (Metallic), `Enum.ContextActionResult` (`Sink`, `Pass`),
-`Enum.PreferredInput` (`KeyboardAndMouse`, `Gamepad`, `Touch`), `Enum.RotationOrder` (`XYZ`, `XZY`, `YZX`, `YXZ`, `ZXY`, `ZYX`; used by `CFrame`), `Enum.ContextActionPriority` (`Low` 1000, `Medium` 2000,
+`Enum.PreferredInput` (`KeyboardAndMouse`, `Gamepad`, `Touch`), `Enum.RotationOrder` (`XYZ`, `XZY`, `YZX`, `YXZ`, `ZXY`, `ZYX`; used by `CFrame`), `Enum.NormalId` (used by `Resize`), `Enum.ContextActionPriority` (`Low` 1000, `Medium` 2000,
 `High` 3000). Items have `Name` and `Value`, compare with `==` and print as `Enum.KeyCode.Space`. A wrong member errors
 (`Nope is not a valid member of Enum.KeyCode`). Raw `UserInputService` events (#80) will reuse these names.
 
@@ -194,7 +272,11 @@ The value is the action's value as the runtime reported it. On the server any of
   unbound or its context disabled while pressed). `inputObject` has `KeyCode` (`Unknown`), `UserInputType`, `UserInputState`,
   `Position`, `Delta`. Return `Enum.ContextActionResult.Pass` to let lower consumers see the event; anything else sinks.
 - `UnbindAction(name)`, `SetTitle(name, text)`, `SetImage(name, image)`, `SetPosition(name, udim2)` (set `TouchLabel`,
-  `TouchImage`, and `TouchLayout = Custom` with `TouchPosition`). `GetButton(name)` returns nil until the touch overlay exists.
+  `TouchImage`, and `TouchLayout = Custom` with `TouchPosition`). `GetButton(name)` returns the touch overlay's button of an
+  action bound with `createTouchButton`, or nil when there is none or the overlay did not place it. It is a read-only
+  `TouchButton` object (the overlay is drawn by the Player, not by GUI instances): `Name`, `ClassName`, `Text`, `Image`,
+  `Visible`, `AbsolutePosition` and `AbsoluteSize` (`Vector2`, dp from the top-left of the screen), `Position` and `Size`
+  (`UDim2` offsets in dp).
 
 ### UserInputService (last input only)
 `GetLastInputType()`, `LastInputTypeChanged(type)`, `PreferredInput`, `TouchEnabled`, `KeyboardEnabled`, `GamepadEnabled`.

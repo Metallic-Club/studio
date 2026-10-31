@@ -192,3 +192,18 @@ were released immediately after verified exit and parsed totals.
 Merged-source required gates are now complete. Publish the normal main merge plus this documentation-only
 record by append-only push, then inspect existing PR #318 CI on the resulting head. The 5% local wall-time target
 remains unresolved regardless of the separate instruction-count CI outcome. No own merge or new workflow.
+
+## Explicit ordering compatibility refresh
+
+Integrating exact main `a0bb1bfc0e84ffd637fe8d1759f4822322601cd8` preserves its #97 same-parent
+`set_parent` no-op and explicit `set_parent_at` operation. The clean textual merge left two calls incompatible
+with the detailed journal's private `record` signature. Those now retain upstream coarse invalidations and add
+one typed `Reordered` notice for an actual same-parent/root reorder. Parent invalidation is coarse only;
+unchanged descendants receive no entry. A cross-parent placement remains one direct `Reparented` notice,
+whose final position is read from current state. No ordering snapshots or extra heap strings are stored.
+
+The obsolete reappend test now checks upstream no-op semantics. New coverage exercises sibling moves in both
+directions, append, root ordering, cross-parent placement, unchanged-position cursors, errors and silent
+same-parent child-added signals. Formatting and whitespace checks passed; Rust execution is pending the shared
+resource schedule. Earlier test and benchmark evidence remains pinned to its historical source. In particular,
+the original 5% wall-time target is still unresolved; this compatibility work makes no new timing claim.
