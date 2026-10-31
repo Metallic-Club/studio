@@ -15,10 +15,11 @@ use super::FrameInput;
 use super::config::{ActionType, BindingDef, CHARACTER_CONTROLS, InputConfig, Role, Trigger};
 use super::control::{
     CONTROL_COUNT, Control, ControlKind, DEVICE_SLOTS, Device, DeviceKind, InputQueue,
-    QUEUE_CAPACITY, RawEvent, RawSource,
+    QUEUE_CAPACITY, RawEvent, RawSource, TOUCH_BUTTON_SLOTS,
 };
 use super::glyph::{GamepadStyle, Glyph, slot_glyph};
 use super::overrides::{PlayerOverrides, binding_device, binding_slot};
+use super::touch::{TOUCH_LOOK_SCALE, TOUCH_STICK_DEADZONE, TouchSet, TouchUse};
 use metallic_core::{ChangeCursor, Changes, InstanceId, World};
 use std::cell::OnceCell;
 use std::collections::{HashSet, VecDeque};
@@ -116,6 +117,8 @@ struct CompiledAction {
     hold_fired: bool,
     last_tap_release: f64,
     next_repeat: f64,
+    /// The next release cancels the press: no `Triggered` (a finger slid off its button).
+    cancel_release: bool,
 }
 
 struct CompiledBinding {
@@ -177,6 +180,13 @@ pub struct InputRuntime {
     order_counter: u64,
     warnings: Vec<String>,
     character: [Option<ActionId>; 5],
+    // Touch.
+    touch_set: TouchSet,
+    touch_generation: u64,
+    /// Actions whose touch button went away while held: the next full re-evaluation ends them
+    /// as a cancel (no `Triggered`).
+    touch_cancel: Vec<usize>,
+    forced_device: Option<DeviceKind>,
     // Player overrides (spec 8.4) and glyphs (spec 9).
     /// The creator's config, before overrides.
     base: InputConfig,
@@ -252,6 +262,10 @@ impl InputRuntime {
             order_counter: 1 << 32,
             warnings: Vec::new(),
             character: [None; 5],
+            touch_set: TouchSet::default(),
+            touch_generation: 0,
+            touch_cancel: Vec::new(),
+            forced_device: None,
             base: InputConfig::default(),
             overrides: PlayerOverrides::default(),
             gamepad_style: GamepadStyle::Letters,
@@ -334,6 +348,12 @@ impl InputRuntime {
                 )
             })
             .collect();
+        // Touch cancels still waiting for an evaluation follow their actions by path.
+        let pending: Vec<String> = self
+            .touch_cancel
+            .drain(..)
+            .filter_map(|a| self.actions.get(a).map(|a| a.path.clone()))
+            .collect();
         self.actions.clear();
         self.bindings.clear();
         self.timed.clear();
@@ -379,14 +399,27 @@ impl InputRuntime {
         for (rank, &i) in ranked.iter().enumerate() {
             rank_of[i] = rank.min(u16::MAX as usize - 1) as u16;
         }
+        let (mut touch_set, touch_uses) = TouchSet::build(config, &rank_of);
 
         for (ci, ctx) in config.contexts.iter().enumerate() {
-            for a in &ctx.actions {
+            for (ai, a) in ctx.actions.iter().enumerate() {
                 let active = ctx.enabled && a.enabled;
                 let start = self.bindings.len();
                 let action_index = self.actions.len();
+                // The automatic touch control's binding (spec 4.3: "Touch: automatic").
+                let implicit = touch_uses[ci][ai].and_then(|u| match u {
+                    TouchUse::Stick => Some(
+                        BindingDef::key(Control::TouchStick).with_deadzone(TOUCH_STICK_DEADZONE),
+                    ),
+                    TouchUse::Look => Some(
+                        BindingDef::key(Control::TouchLook)
+                            .with_scale(TOUCH_LOOK_SCALE)
+                            .with_vector2_scale([1.0, -1.0]),
+                    ),
+                    TouchUse::Button(slot) => Control::touch_button(slot).map(BindingDef::key),
+                });
                 if active {
-                    for b in &a.bindings {
+                    for b in a.bindings.iter().chain(implicit.as_ref()) {
                         let deadzone = b
                             .deadzone
                             .or_else(|| b.key.map(Control::default_deadzone))
@@ -438,6 +471,7 @@ impl InputRuntime {
                     hold_fired: before.is_some_and(|o| o.3),
                     last_tap_release: before.map_or(f64::NEG_INFINITY, |o| o.4),
                     next_repeat: f64::INFINITY,
+                    cancel_release: false,
                 });
                 let last = self.actions.len() - 1;
                 if active && matches!(a.trigger, Trigger::Hold | Trigger::Repeat) {
@@ -458,11 +492,88 @@ impl InputRuntime {
             self.find_action(&format!("{CHARACTER_CONTROLS}/Look")),
             self.find_action(&format!("{CHARACTER_CONTROLS}/Zoom")),
         ];
+        touch_set.resolve(|path| self.find_action(path));
+        for path in &pending {
+            if let Some(a) = self.find_action(path) {
+                self.touch_cancel.push(a.0 as usize);
+            }
+        }
+        if touch_set != self.touch_set {
+            self.remap_touch_buttons(&touch_set);
+            self.touch_set = touch_set;
+            self.touch_generation += 1;
+        }
         self.glyphs.clear();
         self.glyphs
             .resize_with(self.actions.len(), Default::default);
         self.glyph_changes += 1;
         self.dirty_all = true;
+    }
+
+    /// A new touch set can give an action another button control (`TouchButtonN`): a held
+    /// button moves with its action, by path, so the press survives a relayout and the control
+    /// it leaves does not press whatever action takes that control now. A held button whose
+    /// action lost its touch button is let go as a cancel.
+    fn remap_touch_buttons(&mut self, new: &TouchSet) {
+        let ts = Device::Touch.slot();
+        let mut moved = [0.0f32; TOUCH_BUTTON_SLOTS];
+        for (s, c) in (0..TOUCH_BUTTON_SLOTS).filter_map(|s| Some((s, Control::touch_button(s)?))) {
+            let v = self.slot_value[ts][c.index()];
+            if v <= 0.0 {
+                continue;
+            }
+            let Some(def) = self.touch_set.button_in_slot(s) else {
+                continue;
+            };
+            match new.slot_of(&def.path) {
+                Some(n) => moved[n] = moved[n].max(v),
+                None => {
+                    if let Some(a) = self.find_action(&def.path) {
+                        self.touch_cancel.push(a.0 as usize);
+                    }
+                }
+            }
+        }
+        let kind = DeviceKind::Touch.index();
+        for (s, c) in (0..TOUCH_BUTTON_SLOTS).filter_map(|s| Some((s, Control::touch_button(s)?))) {
+            let ci = c.index();
+            let (was, is) = (self.slot_value[ts][ci], moved[s]);
+            if was >= PAD_ACTIVE && is < PAD_ACTIVE {
+                self.held[kind] = self.held[kind].saturating_sub(1);
+            } else if was < PAD_ACTIVE && is >= PAD_ACTIVE {
+                self.held[kind] += 1;
+            }
+            self.slot_value[ts][ci] = is;
+            self.value[ci] = (0..DEVICE_SLOTS)
+                .map(|d| self.slot_value[d][ci])
+                .fold(0.0, f32::max);
+        }
+    }
+
+    /// Which actions have automatic touch controls (spec 7): the stick, the look pad and the
+    /// buttons, rebuilt on every load.
+    pub fn touch_set(&self) -> &TouchSet {
+        &self.touch_set
+    }
+
+    /// Counts changes of [`touch_set`](Self::touch_set); the touch overlay places its controls
+    /// again when it changes.
+    pub fn touch_generation(&self) -> u64 {
+        self.touch_generation
+    }
+
+    /// Pins the last-used device (device emulation and Studio's "Preview as", spec 10.2): while
+    /// set, [`last_device`](Self::last_device) is `kind` whatever is used. `None` returns to the
+    /// hysteresis rule.
+    pub fn set_forced_device(&mut self, kind: Option<DeviceKind>) {
+        self.forced_device = kind;
+        if let Some(kind) = kind
+            && kind != self.last_device
+        {
+            self.last_device = kind;
+            self.last_switch = self.clock;
+            self.device_changes += 1;
+        }
     }
 
     /// Reloads the contexts when the world's change journal reports that an input instance (or
@@ -690,9 +801,12 @@ impl InputRuntime {
             self.dirty_all = false;
             for a in 0..self.actions.len() {
                 if self.actions[a].ty == ActionType::Bool {
+                    self.actions[a].cancel_release = self.touch_cancel.contains(&a);
                     self.recompute_bool(a, now);
+                    self.actions[a].cancel_release = false;
                 }
             }
+            self.touch_cancel.clear();
         }
         while let Some(e) = self.queue.pop() {
             self.apply(e);
@@ -1001,10 +1115,13 @@ impl InputRuntime {
             }
         }
         self.track_device(&e, before, t);
+        let cancel = e.cancel && c.kind() == ControlKind::Button;
         for i in 0..self.by_control[ci].len() {
             let a = self.bindings[self.by_control[ci][i]].action;
             if self.actions[a].ty == ActionType::Bool {
+                self.actions[a].cancel_release = cancel;
                 self.recompute_bool(a, t);
+                self.actions[a].cancel_release = false;
             }
         }
         self.clock = t;
@@ -1019,11 +1136,14 @@ impl InputRuntime {
 
     /// The last-used-device rule (spec 4.4).
     fn track_device(&mut self, e: &RawEvent, before: f32, t: f64) {
+        if self.forced_device.is_some() {
+            return;
+        }
         let kind = e.device.kind();
         let pos = e.pos.unwrap_or([0.0; 2]);
         let meaningful = match (kind, e.control.kind()) {
             (DeviceKind::Touch, ControlKind::Button) => e.value > 0.0 && before <= 0.0,
-            (DeviceKind::Touch, ControlKind::Stick) => len2(pos) > 0.0,
+            (DeviceKind::Touch, ControlKind::Stick | ControlKind::Delta) => len2(pos) > 0.0,
             (_, ControlKind::Button) => e.value >= PAD_ACTIVE && before < PAD_ACTIVE,
             (_, ControlKind::Stick) => len2(pos) > PAD_ACTIVE,
             (_, ControlKind::Wheel) => e.value != 0.0,
@@ -1288,9 +1408,10 @@ impl InputRuntime {
         act.emitted[0] = 0.0;
         act.next_repeat = f64::INFINITY;
         let trigger = act.trigger;
-        let is_tap = held <= act.tap + EPS;
+        let is_tap = held <= act.tap + EPS && !act.cancel_release;
         let mut fire = false;
         match trigger {
+            _ if act.cancel_release => act.last_tap_release = f64::NEG_INFINITY,
             Trigger::Release => fire = true,
             Trigger::Tap => fire = is_tap,
             Trigger::DoubleTap => {

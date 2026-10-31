@@ -8,6 +8,7 @@ graph LR
   core[metallic_core] --> physics[metallic_physics]
   core --> script[metallic_script]
   core --> render[metallic_render]
+  core --> net[metallic_net]
   asset[metallic_asset] --> render
   physics --> runtime[metallic_runtime]
   script --> runtime
@@ -75,6 +76,15 @@ apps.
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
+  Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the
+  post chain (`post.rs`: `PostChain` of `PostPass`es in an `Hdr` and an `Ldr` slot, run in list order; most passes
+  wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
+  vignette, sRGB encode, dither). Add a pass with `renderer.post_mut().push(Box::new(pass))`; a pass that returns
+  `reads_depth` gets the scene depth (multisampled when MSAA is on).
+  Lighting (#149, `lighting.rs`, `shaders/lighting.wgsl`): `sync` also reads the `Lighting` service and its children
+  (`LightingInputs::read`) and `evaluate`s them into the sky, the finish settings, a lighting block in the globals
+  uniform (ambient, fog, shadow filter, sun / moon discs, stars) and the `bloom` post pass (`bloom.rs`).
+  `set_lighting` applies inputs directly. Presets live in `metallic_core::lighting` (`docs/lighting/presets.md`).
   Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
@@ -106,7 +116,8 @@ apps.
   snapshots for ordinary property/pose ticks, and falls back to cache reconciliation on lost history or a new world.
   The physics wrapper retains its own synchronization/reset contract; no physics API is added by this cache.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
-  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F] [--no-overrides] [--menu PAGE]`; winit window, wgpu
+  [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F] [--no-overrides] [--menu PAGE]
+  [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]`; winit window, wgpu
   surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless mode for smoke tests (no window, no GPU).
   `devices.rs` holds the winit key and mouse mapping and the gilrs `GamepadSource` (the mapping table of spec 4.2); both
   produce `RawEvent`s for the runtime. `menu/` is the Player menu (#254): Resume, Controls, Leave game. The Controls
@@ -114,6 +125,9 @@ apps.
   `menu/glyph_paint.rs`, the in-play hint in `menu/hud.rs`) takes raw events while open, so it works with keyboard,
   mouse or gamepad alone. `controls_store.rs` and `data_dir.rs` load and save the overrides per game in the Player's
   own data folder (`%APPDATA%\MetallicPlayer`, `METALLIC_PLAYER_DATA_DIR` overrides it).
+  `touch_overlay.rs` connects the automatic touch controls to winit: real touches, device emulation (the window takes
+  the device's shape, the mouse is a finger, a right click pins a second one), the 140 ms fade and `TouchImage` files;
+  it logs the overlay's draw time at the end of a windowed emulated run.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -123,9 +137,19 @@ apps.
   Decoding/streaming through Symphonia (WAV, OGG Vorbis, FLAC, MP3). Notes: `docs/agents/81-audio.md`.
 - **metallic_studio** (Tasks 9-11, 13-14): egui editor: theme, start screen, templates, viewport, Explorer, Properties,
   Output, gizmos, `History` of `Command`s (undo/redo), `PlaySession`, updater, developer mode.
+  Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
+  `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
+  `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
+  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; #10's
+  `History` and #213's preview turn a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
+  Input Actions panel (#253): `input_actions/` is self-contained until the editor shell (#10) exists. It edits
+  `InputContext` > `InputAction` > `InputBinding` instances; every change is one `EditStep` (built by `StepBuilder`,
+  handed to a `CommandSink`; `History` is the stand-in undo stack). Logic modules: `capture`, `checks`, `presets`,
+  `touch` (device presets, automatic touch layout, custom `TouchPosition`), `preview`. View: `InputActionsPanel::show`
+  or `show_with_sink`. Demo: `cargo run -p metallic_studio --example input_actions`.
   Colour (#221): `colour/` holds `ColourPopover` (ring + square, Hex/RGB/HSV, eyedropper hook, recent, palettes,
   OKLCh harmonies). It returns `ColourEvent`s (preview, commit with undo name, cancel) and never edits the scene;
   the Properties panel and preview overlay will consume them (#10, #213). Recent colours live in the user config
@@ -211,18 +235,29 @@ apps.
   as an interface only), `Op` + `MeshCommand` + `History`, `triangulate` to a local `MeshData` (switches to
   `metallic_meshgen`'s once merged), `uv` (box/planar, LSCM), `export` (GLB/glTF/OBJ). Demo:
   `cargo run -p metallic_modeling --example modeling_demo`.
-- **metallic_net** (M2a, #297 transport; more modules land with tasks A6-A12): `transport` has the `Connection` and
+- **metallic_net** (M2a, #297 transport, #328 wire; more modules land with tasks A7-A12): depends on `metallic_core`
+  only. `transport` has the `Connection` and
   `Listener` traits (non-blocking, polled once per tick), channels `Control`/`World`/`Remote`/`Bulk` plus datagrams,
   `QuicServer`/`QuicClient` (quinn on a background tokio thread, TLS 1.3 with a pinned self-signed certificate, ALPN
   `metallic/1`), `MemoryNet` (manual clock, deterministic) and `LinkConditioner` (latency, jitter, loss; on QUIC it
   wraps the server's UDP socket). The server side enforces spec 7.3's transport limits (`transport::limits`).
+  `wire` is the byte format on top: `ClientMsg`/`ServerMsg` in reliable frames (`[kind][source][varint len][postcard
+  body]`, `encode_*`/`decode_*`, unknown kinds decode as `Decoded::UnknownKind`), `NetId` (services 1-10, dynamic from
+  64), `NetValue` (every `Value` type plus `Vector2` and tables, `from_value`/`to_value`), the join snapshot body
+  (`compress_join`/`decompress_join`: postcard `Vec<Create>`, zstd 3, inflation capped at 16 MiB), datagrams
+  (3-byte header; bit-packed `SnapshotPacket` and `InputPacket`, postcard `UnreliableRemotePacket`), `BitWriter`/
+  `BitReader`, LEB128/zigzag varints and `quant` (1/64-stud cell positions, smallest-three orientations through
+  `CFrame`, 1/8 stud/s velocities). Decoders treat bytes as hostile: size caps before reading (64 KiB client frames,
+  1,200-byte datagrams), lengths bounded by the bytes present, tables nested at most 32 deep, never a panic. Fuzz
+  targets for the three decoders live in `crates/metallic_net/fuzz` (own workspace, `cargo fuzz` on nightly).
 
 ## Input flow
 Games listen to actions, never to raw keys (design: `docs/design/input-actions.md`; phase 1 is implemented: spec
 sections 3, 4.1, 4.2, 4.4 and 6).
 
 ```
-winit keys/mouse, gilrs pads, --input-script  ->  RawEvent  ->  InputQueue (1,024 per frame)
+winit touches, --emulate mouse, finger script lines  ->  TouchControls (layout, finger capture)  --+
+winit keys/mouse, gilrs pads, --input-script  ->  RawEvent  ->  InputQueue (1,024 per frame)  <--+
 InputRuntime::evaluate(now, dt):  bindings -> actions (values, Pressed/Released/Triggered/StateChanged events)
 InputRuntime::frame_input():      CharacterControls actions -> FrameInput   (Move, Jump, Run, Look, Zoom)
 Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read FrameInput
@@ -254,7 +289,16 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
   hold-time scale, per-stick sensitivity, dead zone and invert. `glyph.rs` maps controls to drawn glyphs (keycaps,
   mouse, Letters and Positions face buttons; no brand art); `InputRuntime::glyph(s)` caches them per action and
   device, and `glyph_changes()` counts changes of device, binding or style.
-- **Not yet** (later phases, spec section 15): touch controls (#252), Studio panel (#253), Luau glyph API.
+- **Touch** (#252, spec 7, `input/touch/`). `TouchSet` picks the controls on every load: a Direction2D action with
+  `ShowOnTouch` gets the stick or the look pad (`TouchSlot`, role, context priority), Bool actions get buttons sorted by
+  `TouchOrder` (at most 6, plus the menu button for role `Menu`). The runtime adds implicit bindings: `TouchStick`
+  (dead zone 0.15), `TouchLook` (0.01 rad per dp) and `TouchButton1` to `TouchButton7`. `layout(profile, set)` is the
+  pure placement rule in dp (48 dp minimum, 8 dp gaps, 16 dp inside the safe area, spare ring slots for narrow
+  screens). `TouchControls` captures each finger with the first thing it lands on and pushes `Device::Touch` events;
+  sliding off a button sends `RawEvent::cancel` (Released without Triggered). `paint` draws it with egui in the
+  visual-language colours. `ContextActionService:GetButton` reads the placed buttons (`Game::set_touch_buttons`).
+  The Controls page's touch settings (stick mode, opacity) drive the overlay; touch controls have their own glyphs.
+- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, a touch tab on the Controls page.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

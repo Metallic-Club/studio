@@ -111,7 +111,14 @@ controls! {
     ButtonA, ButtonB, ButtonX, ButtonY, ButtonL1, ButtonR1, ButtonL2, ButtonR2, ButtonL3, ButtonR3,
     ButtonSelect, ButtonStart, DPadUp, DPadDown, DPadLeft, DPadRight, Thumbstick1, Thumbstick2,
     TouchStick, TouchLook, TouchButton,
+    TouchButton1, TouchButton2, TouchButton3, TouchButton4, TouchButton5, TouchButton6,
+    TouchButton7,
 }
+
+/// Number of per-action touch button controls (`TouchButton1` to `TouchButton7`): the automatic
+/// touch controls give each on-screen button its own control (spec 4.3, "TouchButton(action)"):
+/// six buttons around the primary and the menu button.
+pub const TOUCH_BUTTON_SLOTS: usize = 7;
 
 /// Number of controls.
 pub const CONTROL_COUNT: usize = Control::ALL.len();
@@ -126,14 +133,25 @@ impl Control {
         self as usize
     }
 
-    /// How this control reports its value.
+    /// The control of on-screen touch button `slot` (0 is `TouchButton1`); `None` past
+    /// [`TOUCH_BUTTON_SLOTS`].
+    pub fn touch_button(slot: usize) -> Option<Control> {
+        (slot < TOUCH_BUTTON_SLOTS).then(|| Control::ALL[Control::TouchButton1.index() + slot])
+    }
+
+    /// The slot of a per-action touch button control (`TouchButton1` is 0).
+    pub fn touch_button_slot(self) -> Option<usize> {
+        let first = Control::TouchButton1.index();
+        (self.index() >= first && self.index() < first + TOUCH_BUTTON_SLOTS)
+            .then(|| self.index() - first)
+    }
+
+    /// How this control reports its value. `TouchLook` is the look pad: dp moved since the last
+    /// frame, like `MouseDelta`.
     pub fn kind(self) -> ControlKind {
         match self {
-            Control::Thumbstick1
-            | Control::Thumbstick2
-            | Control::TouchStick
-            | Control::TouchLook => ControlKind::Stick,
-            Control::MouseDelta => ControlKind::Delta,
+            Control::Thumbstick1 | Control::Thumbstick2 | Control::TouchStick => ControlKind::Stick,
+            Control::MouseDelta | Control::TouchLook => ControlKind::Delta,
             Control::MouseWheel => ControlKind::Wheel,
             Control::MousePosition => ControlKind::Position,
             _ => ControlKind::Button,
@@ -162,7 +180,15 @@ impl Control {
                 | Control::TouchStick
                 | Control::TouchLook
                 | Control::TouchButton
-        )
+        ) || self.touch_button_slot().is_some()
+    }
+
+    /// True for the touch controls: the stick, the look pad and every on-screen button.
+    pub fn is_touch(self) -> bool {
+        matches!(
+            self,
+            Control::TouchStick | Control::TouchLook | Control::TouchButton
+        ) || self.touch_button_slot().is_some()
     }
 
     /// True for the controls of a gamepad.
@@ -187,6 +213,9 @@ pub struct RawEvent {
     pub pos: Option<[f32; 2]>,
     /// Monotonic seconds. Taps and holds are measured with this, not with frame counts.
     pub time: f64,
+    /// A release that cancels the press: the action gets its `Released` edge but no
+    /// `Triggered` (a finger that slid off a touch button, spec 7.5). Buttons only.
+    pub cancel: bool,
 }
 
 impl RawEvent {
@@ -198,6 +227,15 @@ impl RawEvent {
             value,
             pos: None,
             time,
+            cancel: false,
+        }
+    }
+
+    /// Releases a button without firing `Triggered` (spec 7.5: sliding off a touch button).
+    pub fn cancel(device: Device, control: Control, time: f64) -> Self {
+        Self {
+            cancel: true,
+            ..Self::button(device, control, 0.0, time)
         }
     }
 
@@ -209,6 +247,7 @@ impl RawEvent {
             value: 0.0,
             pos: Some(pos),
             time,
+            cancel: false,
         }
     }
 

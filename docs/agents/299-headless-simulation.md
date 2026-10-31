@@ -162,3 +162,21 @@ The append-only publication changes this evidence note after the tested merge;
 production sources remain exactly 3d67ed5. Old 893ff3e results are historical;
 the checks above validate the merged source. Exact-head remote CI is checked
 after publication. No own-PR merge or remote machine changes were performed.
+
+## Second compatibility refresh: touch controls and rendering
+
+After the append-only publication at eaa4c0b, GitHub reported a new conflict as
+main gained touch controls, HDR/post processing, lighting, input actions and A6
+wire formats. The root worker coordinator requested a normal merge of exact
+`b4909b582241cd1f5c946aa69a7e91021a8271d4`. The 1,234 default/18 CPU results above
+remain valid only for the preceding 3d67ed5/d1eecce composition.
+
+The only textual conflict is Game's script import list: retain the extracted
+imports and add TouchButtonInfo. Both new touch/device setter APIs forward to
+the ScriptHost held by Simulation. The new touch-controls integration target is
+gated on presentation, matching the other Game-only integration targets. Upstream
+rendering, touch/input, player, scripting, A6 and manifest additions are preserved.
+The CPU kernel itself is unchanged. No new capability or acceptance is claimed.
+
+Source-only preparation is complete; fresh compatibility gates are pending a
+build/actual-test grant. No Cargo is started during root's reserved actual suite.
