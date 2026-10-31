@@ -47,6 +47,13 @@ apps.
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
+  `PropDef::normalize` converts a String write outside `allowed` to its stored form (a display name to an id).
+  `look_override` (#222): `BasePart.LookOverride` and `Model.LookOverride` (String, default `inherit`; ids
+  `realistic`, `soft`, `toon`, `low-poly`, `voxel`, `pixel-3d`, `retro-32`; display names such as "Retro / PS1" are
+  accepted on write). `resolve(world, id)` gives the effective style: own value, else the nearest ancestor Model's
+  non-`inherit` value, else `None` (the place Look). `LookOverrides` caches it per part and is kept current with
+  `apply(world, &changes)` from the change journal, returning the parts whose style changed (including parts below a
+  Model whose own value changed). The renderer's `Scene` holds one; `PartDraw::style` carries the resolved id.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
@@ -58,7 +65,14 @@ apps.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here. The controller records its support contact
+  and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
+  R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
+  that never push. Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every
+  tick with `CharacterController::set_body_pose` (else `BodyPose::rest`). The capsules are controller queries: one
+  broad-phase lookup per step, at most `MAX_TOUCH_CANDIDATES` parts (existing contacts first, then the nearest; the rest
+  are counted in `TouchQueryCost`), nothing allocated once warm. They report `CharacterEvent::Touched`/`TouchEnded
+  { part, hit }` per body part, including when a character is destroyed or replaced; the movement capsule reports as
+  the root. Nothing is matched by name, so NPC Models keep their own physics. The controller records its support contact
   (`SupportContact`, part of `CharacterState`) in body-local coordinates and carries the capsule's bottom-sphere
   centre through the support's next observed pose change, so riders keep their radius on tilted spinners. Idle
   facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum
@@ -134,7 +148,10 @@ apps.
   The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
-  physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
+  avatar is animated by a `BodyAnimator` (`body_pose.rs`), which needs only `metallic_asset` and `metallic_anim` (no
+  renderer). The tick loop runs one per stepped character (`CharacterBodies`) and hands its pose to
+  `CharacterController::set_body_pose`, so a headless server computes the same limb touch volumes; each body part's
+  capsule is skinned rigidly by one VRM bone. `locomotion.rs` is a small built-in controller
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
@@ -178,6 +195,26 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
+  and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
+  Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one
+  combined `play` tag (`PLAY_TAG`) because Game supplies one sink for both VMs. Snapshot copying is O(world);
+  callers through the current borrowed PlayStart/clean_world seam copy twice. Independent #92/#275 still tracks
+  recursive clone_subtree behavior reached by Game's StarterGui copying.
+  Play and Stop (#11): `EditorState::new` registers `play::LocalPlayMode` (`play.start`, F5; client and server in
+  one process like the Player). The session owns an `InputRuntime` and is a `play::PlayView`
+  (`PlaySession::view`): the viewport draws it every frame with the game camera, avatar and ScreenGuis,
+  `play::input::PlayInput` turns egui keys and mouse into `RawEvent`s, and Explorer shows its world read-only
+  (`explorer::PlayTree`, only visible rows drawn). Studio keys go first each frame (keymap context `Play`: Esc,
+  plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
+  `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
+  While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
+  Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
+  Properties and the script editor are read-only, the status bar shows the session's `PlayStatus` ("Playing", theme
+  `success`) and the viewport a `success` frame. Esc with the unsaved-changes prompt open answers the prompt. Exposure
+  adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
+  and Studio stays in edit mode.
   Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
   to the world so renderer and Properties need no change; commit gives one `Command::SetProperties`, cancel restores),
   `gizmo.rs` (handles for Move/Rotate/Scale/Transform, body drags over surfaces, axis locks, R/T turns, typed values,
@@ -361,7 +398,10 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
-   touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
+   touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
+   touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model
+   (`TouchEnded` still fires on the touched part when the character was destroyed first, with the destroyed limb);
+   `Died` -> `humanoid_died`;
    `Respawned` -> `physics.sync_from` and `character_added(player, model)`.
 4. **script step** (`ScriptHost::step`: new scripts, remotes, the inputs above, `RunService.Heartbeat`, resumed waits).
 5. **physics re-sync** when the change journal shows a BasePart under Workspace was created, destroyed, reparented or

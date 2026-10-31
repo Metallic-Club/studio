@@ -45,14 +45,17 @@
 //! body there, so the rider stays one tick behind the script instead of two, in the same
 //! characters-then-physics order.
 //!
-//! Touches: after moving, the controller overlaps the whole avatar (the capsule and every avatar
-//! part, each grown by 0.1 stud) with the scene, sensors included, and reports
-//! [`CharacterEvent::Touched`] once per part when contact starts, and again only after the part
-//! separated. This is the only source of character touches: standing still on lava, or lava
-//! appearing under a standing character, is reported too, and [`PhysicsWorld::drain_touched`]
-//! never reports character parts. The runtime (Tasks 7/8) turns these events into
-//! `BasePart.Touched` on the touched part (with a character part as `hit`). Dead characters
-//! report no touches.
+//! Touches: after moving, the controller overlaps the movement capsule and the 15 bone-attached
+//! body volumes (see [`crate::body`]), each grown by 0.1 stud, with the scene, sensors included.
+//! The volumes follow the pose set with [`CharacterController::set_body_pose`] (the animated
+//! avatar), else the rest pose. Each pair of a character part and a scene part reports
+//! [`CharacterEvent::Touched`] when contact starts and [`CharacterEvent::TouchEnded`] when it
+//! stops; the capsule reports as the `HumanoidRootPart`, each volume as its body part (`Head`,
+//! `UpperTorso`, `LeftHand`, ...). This is the only source of character touches: standing still
+//! on lava, or lava appearing under a standing character, is reported too, and
+//! [`PhysicsWorld::drain_touched`] never reports character parts. The runtime turns these events
+//! into `BasePart.Touched` and `BasePart.TouchEnded` on the touched part, with the character
+//! part as `hit`. When a character dies its contacts end and it reports no new touches.
 //!
 //! Rules: `Health <= 0` (or not a number), the root below `Workspace.FallenPartsDestroyHeight`,
 //! or the root leaving the world (a non-finite coordinate or one beyond [`WORLD_LIMIT`]) makes the
@@ -66,15 +69,18 @@
 //! tuning value defensively (missing or non-finite becomes the default, then clamped to the same
 //! limits), resets a non-finite movement state to rest, ignores a non-finite move direction, and
 //! never writes a non-finite pose.
-use crate::avatar::{self, ROOT_PART, VIOLET};
-use crate::{GRAVITY, PhysicsWorld, from_vector, to_pose, to_vector};
+use crate::avatar::{self, PartIds, ROOT_PART, VIOLET};
+use crate::body::{
+    BodyPart, BodyPose, Contact, ROOT_HIT, TOUCH_MARGIN, TouchQueryCost, TouchVolumes,
+};
+use crate::{GRAVITY, PhysicsWorld, from_vector, to_vector};
 use metallic_core::classes::{MAX_JUMP_POWER, MAX_SLOPE_ANGLE, MAX_WALK_SPEED};
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::parry::query::ShapeCastOptions;
-use rapier3d::parry::shape::{Capsule, Cuboid, Shape};
+use rapier3d::parry::shape::{Capsule, Shape};
 use rapier3d::prelude::{ColliderHandle, Pose, QueryFilter, RigidBodyHandle, Vector};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Seconds between a character's death and its respawn (the Roblox default).
 pub const RESPAWN_DELAY: f64 = 5.0;
@@ -98,8 +104,6 @@ const CAPSULE_DROP: f64 = ROOT_HEIGHT - FOOT_LIFT - HALF_SEGMENT - RADIUS;
 const GROUND_PROBE: f64 = 0.1;
 /// Walking down a drop up to this height keeps the character on the ground.
 const SNAP_DISTANCE: f64 = 1.5;
-/// How much the touch overlap test grows the capsule and every avatar part, in studs.
-const TOUCH_MARGIN: f64 = 0.1;
 /// Most the character is pushed out of overlapping parts in one step, in studs.
 pub const MAX_PUSH: f64 = 0.5;
 /// Running ([`MoveInput::run`]) moves this many times faster than `Humanoid.WalkSpeed`.
@@ -180,13 +184,27 @@ pub enum CharacterEvent {
         /// The new Model, now `Player.Character`.
         character: InstanceId,
     },
-    /// The character started touching a part (once per contact, again only after separation).
-    /// The runtime fires the part's `Touched` for it.
+    /// A part of the character started touching a scene part (once per contact, again only
+    /// after separation). The runtime fires `part.Touched(hit)`.
     Touched {
         /// The character Model.
         character: InstanceId,
         /// The part touched (not a part of the character).
         part: InstanceId,
+        /// The character part touching it: a body part, or the `HumanoidRootPart` for the
+        /// movement capsule.
+        hit: InstanceId,
+    },
+    /// A contact reported by [`CharacterEvent::Touched`] stopped (the parts separated or the
+    /// character died). The runtime fires `part.TouchEnded(hit)`. Not reported for a part that
+    /// was destroyed.
+    TouchEnded {
+        /// The character Model.
+        character: InstanceId,
+        /// The part no longer touched.
+        part: InstanceId,
+        /// The character part that touched it.
+        hit: InstanceId,
     },
     /// A Checkpoint became the player's `RespawnLocation`.
     CheckpointReached {
@@ -413,18 +431,19 @@ pub struct CharacterState {
     pub relative: Vec3,
 }
 
-/// Poses every avatar part found in `model` so the root is at `root` and the figure faces
-/// `yaw` degrees around +Y (0 looks along -Z). Clients use it to place remote characters' limbs.
+/// Poses every character part found in `model` in the rest pose so the root is at `root` and the
+/// figure faces `yaw` degrees around +Y (0 looks along -Z). Clients use it to place remote
+/// characters' parts.
 pub fn place_character(world: &mut World, model: InstanceId, root: Vec3, yaw: f64) {
     avatar::place(world, model, root, yaw);
 }
 
 /// Builds a character for `player` and makes it the player's `Character`.
 ///
-/// The Model is named after the player and holds the avatar parts (a 2x2x1 `HumanoidRootPart`,
-/// Head 2x1x1, Torso 2x2x1, arms and legs 1x2x1, all invisible and Anchored: they are the
-/// character's collision and touch volumes, and the runtime draws the skinned default avatar
-/// over them) and a `Humanoid` with default properties. The root is placed
+/// The Model is named after the player and holds the character parts (a 2x2x1 `HumanoidRootPart`
+/// and the 15 R15 body parts `Head`, `UpperTorso`, `LowerTorso`, `LeftUpperArm`, ..., `RightFoot`,
+/// all invisible and Anchored; the body parts hold the bone-attached touch volumes, and the
+/// runtime draws the skinned default avatar over them) and a `Humanoid` with default properties. The root is placed
 /// [`ROOT_HEIGHT`] above the top surface (rotation included) of the player's `RespawnLocation`,
 /// even a non-colliding zone (the character then falls through it), else of the first
 /// `SpawnLocation` in Workspace, else at (0, 3, 0). A previous character of the player is
@@ -511,17 +530,41 @@ fn player_of(world: &World, character: InstanceId) -> Option<InstanceId> {
         .find(|&p| ref_prop(world, p, "Character") == Some(character))
 }
 
-/// All BaseParts inside `model`.
-fn parts_of(world: &World, model: InstanceId) -> Vec<InstanceId> {
-    let mut out = Vec::new();
-    let mut stack = vec![model];
+/// Fills `out` with the colliders of every BasePart inside `model`; `stack` is scratch space.
+fn colliders_of(
+    world: &World,
+    physics: &PhysicsWorld,
+    model: InstanceId,
+    stack: &mut Vec<InstanceId>,
+    out: &mut Vec<ColliderHandle>,
+) {
+    out.clear();
+    stack.clear();
+    stack.push(model);
     while let Some(id) = stack.pop() {
-        if world.is_a(id, "BasePart") {
-            out.push(id);
+        if world.is_a(id, "BasePart")
+            && let Some(h) = physics.collider_of(id)
+        {
+            out.push(h);
         }
         stack.extend(world.children(id).iter().copied());
     }
-    out
+}
+
+/// Reports [`CharacterEvent::TouchEnded`] for every contact of a character that is being
+/// forgotten (destroyed, replaced or respawned), skipping touched parts that are gone.
+fn end_all(events: &mut Vec<CharacterEvent>, world: &World, character: InstanceId, body: &Body) {
+    for &c in &body.volumes.touching {
+        if world.is_alive(c.part)
+            && let Some(hit) = hit_of(&body.ids, c)
+        {
+            events.push(CharacterEvent::TouchEnded {
+                character,
+                part: c.part,
+                hit,
+            });
+        }
+    }
 }
 
 fn capsule() -> Capsule {
@@ -532,13 +575,28 @@ fn capsule_pose(root: Vec3) -> Pose {
     Pose::from_translation(to_vector(root - Vec3::new(0.0, CAPSULE_DROP, 0.0)))
 }
 
+/// A character's part ids and touch volumes.
+#[derive(Default)]
+struct Body {
+    ids: PartIds,
+    volumes: TouchVolumes,
+}
+
 /// Moves Humanoid characters; keeps their per-character state between frames.
 #[derive(Default)]
 pub struct CharacterController {
     motions: HashMap<InstanceId, Motion>,
-    /// Parts each character touched after its last step.
-    touching: HashMap<InstanceId, HashSet<InstanceId>>,
+    /// Part ids, body pose and contacts of each character.
+    bodies: HashMap<InstanceId, Body>,
     events: Vec<CharacterEvent>,
+    /// Scene parts that started touching the character in the current step (reused).
+    started: Vec<InstanceId>,
+    /// Contacts that ended in the current step (reused).
+    ended: Vec<Contact>,
+    /// The character's own colliders (reused).
+    own: Vec<ColliderHandle>,
+    /// Scratch stack for walking the character Model (reused).
+    walk: Vec<InstanceId>,
 }
 
 impl CharacterController {
@@ -551,6 +609,11 @@ impl CharacterController {
     /// longer exists.
     pub fn state(&self, character: InstanceId) -> Option<HumanoidState> {
         self.motions.get(&character).map(|m| m.state)
+    }
+
+    /// The character's facing after its last step, degrees around +Y (0 looks along -Z).
+    pub fn yaw(&self, character: InstanceId) -> Option<f64> {
+        self.motions.get(&character).map(|m| m.yaw)
     }
 
     /// The character's velocity during its last step in studs per second (own motion plus the
@@ -566,6 +629,60 @@ impl CharacterController {
     /// idle, walk or run.
     pub fn relative_velocity(&self, character: InstanceId) -> Option<Vec3> {
         self.motions.get(&character).map(|m| m.relative)
+    }
+
+    /// Sets the pose the character's touch volumes follow from now on: each body part's frame
+    /// relative to the `HumanoidRootPart` centre (see [`BodyPose`]). The runtime calls it every
+    /// frame with the animated avatar's bones; the next [`CharacterController::step`] uses it.
+    /// A pose with a non-finite value is ignored. Until a pose is set the volumes use
+    /// [`BodyPose::rest`] at the character's facing.
+    pub fn set_body_pose(&mut self, character: InstanceId, pose: &BodyPose) {
+        if pose.is_finite() {
+            self.bodies.entry(character).or_default().volumes.animated = Some(*pose);
+        }
+    }
+
+    /// Goes back to the rest pose for the character's touch volumes.
+    pub fn clear_body_pose(&mut self, character: InstanceId) {
+        if let Some(b) = self.bodies.get_mut(&character) {
+            b.volumes.animated = None;
+        }
+    }
+
+    /// The pose the character's touch volumes use: the one set with
+    /// [`CharacterController::set_body_pose`], else the rest pose at its facing.
+    pub fn body_pose(&self, character: InstanceId) -> BodyPose {
+        let yaw = self.motions.get(&character).map_or(0.0, |m| m.yaw);
+        self.bodies
+            .get(&character)
+            .map_or_else(|| BodyPose::rest(yaw), |b| b.volumes.pose(yaw))
+    }
+
+    /// What touches `part` after the character's last step, in [`BodyPart::ALL`] order with the
+    /// movement capsule (`None`, reported as the `HumanoidRootPart`) last.
+    pub fn touching(&self, character: InstanceId, part: InstanceId) -> Vec<Option<BodyPart>> {
+        self.bodies.get(&character).map_or_else(Vec::new, |b| {
+            b.volumes
+                .touching
+                .iter()
+                .filter(|c| c.part == part)
+                .map(|c| BodyPart::ALL.get(usize::from(c.hit)).copied())
+                .collect()
+        })
+    }
+
+    /// What the character's last touch query cost: parts tested (at most
+    /// [`crate::MAX_TOUCH_CANDIDATES`]), narrow-phase tests (at most 16 per part), parts left out
+    /// at the cap, and how many queries so far reached the cap.
+    pub fn touch_query_cost(&self, character: InstanceId) -> TouchQueryCost {
+        self.bodies
+            .get(&character)
+            .map_or_else(TouchQueryCost::default, |b| TouchQueryCost {
+                parts: b.volumes.tested_parts,
+                tests: b.volumes.tests,
+                dropped: b.volumes.dropped,
+                capped_queries: b.volumes.capped_queries,
+            })
     }
 
     /// The character's movement state and root position, to rewind to later. A character that
@@ -589,8 +706,9 @@ impl CharacterController {
         })
     }
 
-    /// Sets the character's movement state and places the whole avatar at `state.position` and
-    /// `state.yaw`. The set of parts it touches is left alone, so no touch is reported twice.
+    /// Sets the character's movement state and places the whole character at `state.position`
+    /// and `state.yaw` (body parts in the current [`CharacterController::body_pose`]). The set of
+    /// parts it touches is left alone, so no touch is reported twice.
     pub fn restore_state(
         &mut self,
         world: &mut World,
@@ -612,7 +730,11 @@ impl CharacterController {
             .sanitised(),
         );
         if is_finite_vec(state.position) {
-            avatar::place(world, character, state.position, finite_or(state.yaw, 0.0));
+            let yaw = finite_or(state.yaw, 0.0);
+            let body = self.bodies.entry(character).or_default();
+            body.ids.refresh(world, character);
+            let pose = body.volumes.pose(yaw);
+            avatar::place_pose(world, &body.ids, state.position, yaw, &pose);
         }
     }
 
@@ -636,7 +758,15 @@ impl CharacterController {
         dt: f64,
     ) {
         self.motions.retain(|&id, _| world.is_alive(id));
-        self.touching.retain(|&id, _| world.is_alive(id));
+        // A character destroyed or replaced without dying still ends its contacts.
+        let events = &mut self.events;
+        self.bodies.retain(|&id, body| {
+            let alive = world.is_alive(id);
+            if !alive {
+                end_all(events, world, id, body);
+            }
+            alive
+        });
         let (Some(humanoid), Some(root)) = (
             world.find_first_child(character, "Humanoid"),
             world.find_first_child(character, ROOT_PART),
@@ -665,7 +795,9 @@ impl CharacterController {
                 && let Ok(new) = spawn_character(world, player)
             {
                 self.motions.remove(&character);
-                self.touching.remove(&character);
+                if let Some(body) = self.bodies.remove(&character) {
+                    end_all(&mut self.events, world, character, &body);
+                }
                 self.events.push(CharacterEvent::Respawned {
                     player,
                     old: character,
@@ -694,10 +826,8 @@ impl CharacterController {
             max_slope: hum("MaxSlopeAngle", 89.0, MAX_SLOPE_ANGLE),
         };
 
-        let own: Vec<ColliderHandle> = parts_of(world, character)
-            .into_iter()
-            .filter_map(|p| physics.collider_of(p))
-            .collect();
+        let mut own = std::mem::take(&mut self.own);
+        colliders_of(world, physics, character, &mut self.walk, &mut own);
         // A root far outside the world (huge or non-finite) is not swept through the scene:
         // the character is already dead and waits to respawn where it is.
         let lost = !in_world(root_pos, f64::NEG_INFINITY);
@@ -721,21 +851,61 @@ impl CharacterController {
         if flat.magnitude() > 1e-3 {
             m.yaw = (-flat.x).atan2(-flat.z).to_degrees();
         }
-        avatar::place(world, character, new_root, m.yaw);
-        let now = if alive {
-            overlapping_parts(world, physics, &own, character, new_root)
-        } else {
-            HashSet::new()
+        let body = self.bodies.entry(character).or_default();
+        body.ids.refresh(world, character);
+        let pose = body.volumes.pose(m.yaw);
+        avatar::place_pose(world, &body.ids, new_root, m.yaw, &pose);
+        let ids = body.ids;
+        let capped_before = body.volumes.capped_queries;
+        let mut started = std::mem::take(&mut self.started);
+        let mut ended = std::mem::take(&mut self.ended);
+        started.clear();
+        ended.clear();
+        let events = &mut self.events;
+        let on_start = |c: Contact| {
+            if let Some(hit) = hit_of(&ids, c) {
+                events.push(CharacterEvent::Touched {
+                    character,
+                    part: c.part,
+                    hit,
+                });
+                started.push(c.part);
+            }
         };
-        let before = self.touching.remove(&character).unwrap_or_default();
-        let mut started: Vec<InstanceId> = now.difference(&before).copied().collect();
-        started.sort();
-        for &part in &started {
-            self.events
-                .push(CharacterEvent::Touched { character, part });
+        let on_end = |c: Contact| ended.push(c);
+        if alive {
+            let probe = Capsule::new_y(HALF_SEGMENT as f32, (RADIUS + TOUCH_MARGIN) as f32);
+            let probe_pose = capsule_pose(new_root);
+            body.volumes
+                .query(physics, &own, &probe, &probe_pose, &pose, new_root);
+            body.volumes.commit(on_start, on_end);
+        } else {
+            body.volumes.clear(on_end);
         }
+        if capped_before == 0 && body.volumes.capped_queries > 0 {
+            eprintln!(
+                "warning: character {character:?} touches more than {} parts; the farthest are \
+                 ignored until others leave",
+                crate::MAX_TOUCH_CANDIDATES
+            );
+        }
+        for &c in &ended {
+            if let Some(hit) = hit_of(&ids, c)
+                && world.is_alive(c.part)
+            {
+                self.events.push(CharacterEvent::TouchEnded {
+                    character,
+                    part: c.part,
+                    hit,
+                });
+            }
+        }
+        started.sort_unstable();
+        started.dedup();
         self.reach_checkpoints(world, character, &started);
-        self.touching.insert(character, now);
+        self.started = started;
+        self.ended = ended;
+        self.own = own;
         self.motions.insert(character, m);
     }
 
@@ -792,41 +962,15 @@ impl CharacterController {
     }
 }
 
-/// Parts (not the character's own) overlapping the capsule or any avatar part, each grown by
-/// [`TOUCH_MARGIN`]; sensors included. Reads the avatar parts' pose from `world`.
-fn overlapping_parts(
-    world: &World,
-    physics: &PhysicsWorld,
-    own: &[ColliderHandle],
-    character: InstanceId,
-    root: Vec3,
-) -> HashSet<InstanceId> {
-    let skip = |h: ColliderHandle, _: &rapier3d::prelude::Collider| !own.contains(&h);
-    let queries = physics.queries(QueryFilter::default().predicate(&skip));
-    let mut out = HashSet::new();
-    let probe = Capsule::new_y(HALF_SEGMENT as f32, (RADIUS + TOUCH_MARGIN) as f32);
-    out.extend(
-        queries
-            .intersect_shape(capsule_pose(root), &probe)
-            .filter_map(|(h, _)| physics.owner_of(h)),
-    );
-    for part in parts_of(world, character) {
-        let (Some(pos), Some(o), Some(size)) = (
-            vec_prop(world, part, "Position"),
-            vec_prop(world, part, "Orientation"),
-            vec_prop(world, part, "Size"),
-        ) else {
-            continue;
-        };
-        let half = size * 0.5 + Vec3::new(TOUCH_MARGIN, TOUCH_MARGIN, TOUCH_MARGIN);
-        let shape = Cuboid::new(to_vector(half));
-        out.extend(
-            queries
-                .intersect_shape(to_pose(pos, o), &shape)
-                .filter_map(|(h, _)| physics.owner_of(h)),
-        );
+/// The character part of a contact: the root for the capsule, else the body part.
+fn hit_of(ids: &PartIds, c: Contact) -> Option<InstanceId> {
+    if c.hit == ROOT_HIT {
+        ids.root()
+    } else {
+        BodyPart::ALL
+            .get(usize::from(c.hit))
+            .and_then(|&p| ids.body(p))
     }
-    out
 }
 
 /// Humanoid properties the movement uses.

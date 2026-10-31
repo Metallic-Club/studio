@@ -54,6 +54,7 @@ fn event_kind(class: &str, name: &str) -> Option<EventKind> {
     match name {
         "AttributeChanged" => Some(EventKind::AttributeChanged(0)),
         "Touched" if is_subclass(class, "BasePart") => Some(EventKind::Touched),
+        "TouchEnded" if is_subclass(class, "BasePart") => Some(EventKind::TouchEnded),
         "Died" if class == "Humanoid" => Some(EventKind::Died),
         "CharacterAdded" if class == "Player" => Some(EventKind::CharacterAdded),
         "PlayerAdded" if class == "Players" => Some(EventKind::PlayerAdded),

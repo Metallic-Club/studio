@@ -125,7 +125,9 @@ impl Properties {
         self.commit(state, &ids, Edit::Set(prop.to_string(), value), true);
     }
 
-    fn finish_gesture(&mut self, state: &mut EditorState) {
+    /// Records the open live-preview gesture as one undo step (pointer released, or Play
+    /// starting).
+    pub fn finish_gesture(&mut self, state: &mut EditorState) {
         let Some(prop) = self.gesture.take() else {
             return;
         };
