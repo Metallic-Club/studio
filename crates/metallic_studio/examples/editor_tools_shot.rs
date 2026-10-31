@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .ok_or("usage: editor_tools_shot <out.png>")?;
     let template = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/parkour");
-    let mut editor = EditorUi::demo(&template).ok_or("the Parkour template did not open")?;
+    let editor = EditorUi::demo(&template).ok_or("the Parkour template did not open")?;
     editor.input_actions.set_open(true);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1600.0, 900.0))
