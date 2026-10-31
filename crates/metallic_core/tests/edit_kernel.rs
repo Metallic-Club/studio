@@ -258,6 +258,220 @@ fn strict_anchors_cycles_deleted_targets_and_builtin_roots_are_rejected() {
 }
 
 #[test]
+fn same_parent_move_without_anchor_appends_children_and_roots() {
+    let mut world = World::new_empty();
+    let parent = world.create("Model", None).expect("parent");
+    let a = world.create("Part", Some(parent)).expect("a");
+    let b = world.create("Part", Some(parent)).expect("b");
+    let c = world.create("Part", Some(parent)).expect("c");
+    world
+        .set(parent, "PrimaryPart", Value::Ref(Some(a)))
+        .expect("ref");
+    let root_b = world.create("Folder", None).expect("root b");
+    let root_c = world.create("Folder", None).expect("root c");
+    let baseline = world.deep_clone();
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&arrivals);
+    world
+        .child_added
+        .connect(move |event| observed.lock().expect("arrivals").push(*event));
+    let mut authority = authority(world);
+    let mut replica = EditReplica::new(baseline, EditLimits::default()).expect("replica");
+    let stable_a = authority.id_of(a).expect("stable a");
+    let stable_parent = authority.id_of(parent).expect("stable parent");
+    let request = batch(
+        1,
+        vec![EditOp::Move {
+            id: stable_a,
+            parent: Some(stable_parent),
+            after: None,
+        }],
+    );
+    let cursor = authority.world().change_cursor();
+    let record = commit(&mut authority, A, &request);
+    assert_eq!(authority.world().children(parent), &[b, c, a]);
+    assert_eq!(
+        authority.world().changes_since(cursor).0,
+        Changes::Ids(vec![a, parent])
+    );
+    assert_eq!(
+        authority.world().get(parent, "PrimaryPart"),
+        Ok(Value::Ref(Some(a)))
+    );
+    replica.apply(&record).expect("append replay");
+    assert_eq!(
+        authority.snapshot().expect("snapshot"),
+        replica.snapshot().expect("replica")
+    );
+    let cursor = authority.world().change_cursor();
+    assert_eq!(
+        authority.submit(A, &request).expect("duplicate"),
+        Submission::Duplicate(record.receipt)
+    );
+    assert_eq!(authority.world().change_cursor(), cursor);
+
+    let append_root = commit(
+        &mut authority,
+        A,
+        &batch(
+            2,
+            vec![EditOp::Move {
+                id: stable_parent,
+                parent: None,
+                after: None,
+            }],
+        ),
+    );
+    assert_eq!(authority.world().roots(), &[root_b, root_c, parent]);
+    replica.apply(&append_root).expect("root append replay");
+    let stable_root_b = authority.id_of(root_b).expect("root b id");
+    let anchored_root = commit(
+        &mut authority,
+        A,
+        &batch(
+            3,
+            vec![EditOp::Move {
+                id: stable_parent,
+                parent: None,
+                after: Some(stable_root_b),
+            }],
+        ),
+    );
+    assert_eq!(authority.world().roots(), &[root_b, parent, root_c]);
+    replica.apply(&anchored_root).expect("root anchor replay");
+    assert_eq!(
+        authority.snapshot().expect("snapshot"),
+        replica.snapshot().expect("replica")
+    );
+    assert!(
+        arrivals.lock().expect("arrivals").is_empty(),
+        "reorders are not new attachments"
+    );
+}
+
+#[test]
+fn anchored_moves_journal_in_both_directions_and_reject_late_batches_atomically() {
+    let mut world = World::new_empty();
+    let parent = world.create("Model", None).expect("parent");
+    let a = world.create("Part", Some(parent)).expect("a");
+    let b = world.create("Part", Some(parent)).expect("b");
+    let c = world.create("Part", Some(parent)).expect("c");
+    let d = world.create("Part", Some(parent)).expect("d");
+    let other = world.create("Model", None).expect("other");
+    let x = world.create("Part", Some(other)).expect("x");
+    let baseline = world.deep_clone();
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&arrivals);
+    world
+        .child_added
+        .connect(move |event| observed.lock().expect("arrivals").push(*event));
+    let values = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&values);
+    world
+        .property_changed(a, "Name")
+        .connect(move |value| observed.lock().expect("values").push(value.clone()));
+    let mut authority = authority(world);
+    let mut replica = EditReplica::new(baseline, EditLimits::default()).expect("replica");
+    let id = |local| authority.id_of(local).expect("stable id");
+    let (ia, ib, ic, id_d, ip, io, ix) = (id(a), id(b), id(c), id(d), id(parent), id(other), id(x));
+    let move_a = EditOp::Move {
+        id: ia,
+        parent: Some(ip),
+        after: Some(ic),
+    };
+    let before = authority.snapshot().expect("before");
+    let cursor = authority.world().change_cursor();
+    assert!(matches!(
+        authority.submit(
+            A,
+            &batch(
+                1,
+                vec![
+                    move_a.clone(),
+                    set(ia, "Name", EditValue::String("candidate".into())),
+                    set(ib, "missing", EditValue::Nil)
+                ]
+            )
+        ),
+        Err(EditError::Core { operation: 2, .. })
+    ));
+    assert_eq!(authority.snapshot().expect("unchanged"), before);
+    assert_eq!(authority.sequence(), 0);
+    assert_eq!(authority.world().change_cursor(), cursor);
+    assert!(arrivals.lock().expect("arrivals").is_empty());
+    assert!(values.lock().expect("values").is_empty());
+
+    let first = commit(&mut authority, A, &batch(1, vec![move_a]));
+    assert_eq!(authority.world().children(parent), &[b, c, a, d]);
+    assert_eq!(
+        authority.world().changes_since(cursor).0,
+        Changes::Ids(vec![a, parent])
+    );
+    replica.apply(&first).expect("later anchor replay");
+    let earlier = EditOp::Move {
+        id: id_d,
+        parent: Some(ip),
+        after: Some(ib),
+    };
+    let second = commit(&mut authority, A, &batch(2, vec![earlier.clone()]));
+    assert_eq!(authority.world().children(parent), &[b, d, c, a]);
+    replica.apply(&second).expect("earlier anchor replay");
+    let cursor = authority.world().change_cursor();
+    let noop = commit(&mut authority, A, &batch(3, vec![earlier]));
+    assert_eq!(
+        authority.world().change_cursor(),
+        cursor,
+        "already placed move preserves core no-op semantics"
+    );
+    replica.apply(&noop).expect("no-op replay");
+    assert!(arrivals.lock().expect("arrivals").is_empty());
+    let moved = commit(
+        &mut authority,
+        A,
+        &batch(
+            4,
+            vec![EditOp::Move {
+                id: ia,
+                parent: Some(io),
+                after: Some(ix),
+            }],
+        ),
+    );
+    assert_eq!(authority.world().children(parent), &[b, d, c]);
+    assert_eq!(authority.world().children(other), &[x, a]);
+    assert_eq!(*arrivals.lock().expect("arrivals"), vec![(other, a)]);
+    replica.apply(&moved).expect("new parent replay");
+    let created = EditId::new(1, 1);
+    let record = commit(
+        &mut authority,
+        A,
+        &batch(
+            5,
+            vec![EditOp::Create {
+                id: created,
+                class: "Part".into(),
+                parent: Some(ip),
+                after: Some(ib),
+                properties: vec![],
+            }],
+        ),
+    );
+    let local = authority.instance_of(created).expect("created");
+    assert_eq!(authority.world().children(parent), &[b, local, d, c]);
+    assert_eq!(
+        *arrivals.lock().expect("arrivals"),
+        vec![(other, a), (parent, local)],
+        "one creation arrival, no candidate/reorder arrivals"
+    );
+    assert!(values.lock().expect("values").is_empty());
+    replica.apply(&record).expect("anchored creation replay");
+    assert_eq!(
+        authority.snapshot().expect("snapshot"),
+        replica.snapshot().expect("replica")
+    );
+}
+
+#[test]
 fn builtin_service_names_are_protected_while_registered_settings_remain_editable() {
     let mut authority = authority(World::new_with_services());
     let workspace = authority

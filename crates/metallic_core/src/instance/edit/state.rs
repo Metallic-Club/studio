@@ -162,29 +162,28 @@ impl Document {
         id: InstanceId,
         parent: Option<InstanceId>,
         after: Option<InstanceId>,
+        operation: usize,
     ) -> Result<(), EditError> {
-        let Some(anchor) = after else { return Ok(()) };
-        let siblings = match parent {
-            Some(parent) => {
-                &mut self
-                    .world
-                    .node_mut(parent)
+        let index = match after {
+            Some(anchor) => {
+                let siblings = match parent {
+                    Some(parent) => self.world.children(parent),
+                    None => self.world.roots(),
+                };
+                // Core's target index is the final position, after removing this node.
+                siblings
+                    .iter()
+                    .copied()
+                    .filter(|&sibling| sibling != id)
+                    .position(|sibling| sibling == anchor)
                     .ok_or(EditError::InvalidDocument)?
-                    .children
+                    + 1
             }
-            None => &mut self.world.roots,
+            None => usize::MAX,
         };
-        let position = siblings
-            .iter()
-            .position(|&entry| entry == id)
-            .ok_or(EditError::InvalidDocument)?;
-        siblings.remove(position);
-        let position = siblings
-            .iter()
-            .position(|&entry| entry == anchor)
-            .ok_or(EditError::InvalidDocument)?;
-        siblings.insert(position + 1, id);
-        Ok(())
+        self.world
+            .set_parent_at(id, parent, index)
+            .map_err(|source| EditError::Core { operation, source })
     }
 
     fn subtree(&self, root: InstanceId) -> Result<Vec<InstanceId>, EditError> {
@@ -300,7 +299,7 @@ impl Document {
                     if self.is_script(local) {
                         self.bindings.script_owners.insert(*id, editor);
                     }
-                    self.order_after(local, parent, after)?;
+                    self.order_after(local, parent, after, index)?;
                     for (name, value) in properties {
                         self.property(editor, (*id, local), name, value, index, check_owner)?;
                     }
@@ -316,13 +315,7 @@ impl Document {
                     self.subtree(local)?;
                     let parent = self.parent(*parent)?;
                     let after = self.validate_anchor(*id, parent, *after)?;
-                    self.world
-                        .set_parent(local, parent)
-                        .map_err(|source| EditError::Core {
-                            operation: index,
-                            source,
-                        })?;
-                    self.order_after(local, parent, after)?;
+                    self.order_after(local, parent, after, index)?;
                 }
                 EditOp::Destroy { id } => {
                     let local = self.resolve(*id)?;

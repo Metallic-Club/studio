@@ -8,6 +8,9 @@
 //! Successful replay preserves existing per-operation callbacks and journal behavior. It does
 //! not replace the live World or its signals. Callback panics are not rolled back; a live replay
 //! panic or unexpected replay error leaves the authority terminally poisoned until reload.
+//! Create/Move placement uses [`World::set_parent_at`]: an absent anchor appends even within the
+//! same parent, anchored reorders are journaled, and an already placed object keeps core no-op
+//! behavior. Reordering alone emits no `child_added` arrival.
 //! This module does not run scripts/physics, authenticate editors, time script leases, perform
 //! optimistic UI/undo, transport records or durably save a session. [`EditReplica`] accepts only
 //! a trusted authority's ordered records, not arbitrary user submissions.

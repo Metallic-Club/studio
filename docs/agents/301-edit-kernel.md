@@ -134,3 +134,26 @@ equality, owned payload accounting and unchanged hidden-field semantics without 
 The final evidence commit changes only this note. Published history is preserved through normal merges/pushes;
 no rebase, force-push or own merge is used. Current-head GitHub CI is checked after pushing this refreshed input.
 The earlier 1,005-test and green CI result at `4447974` remains historical old-base evidence, not this new-base proof.
+
+## Explicit ordering compatibility maintenance
+
+PR #317 is open at published `4f49c25`; its 1,239-test/CI result above remains historical. Main now makes ordinary
+same-parent `set_parent` a no-op (#97) and provides `set_parent_at` for deliberate ordering. The published kernel's
+Move(after=None) contract still promises append, so relying on ordinary set_parent no longer fulfills it.
+
+Normal-merged exact main `a0bb1bfc0e84ffd637fe8d1759f4822322601cd8` at
+`f28a060aec691372be77ce530a50e4e86c3d1764`, without conflicts, rebase or force push. Inherited upstream changes do
+not expand this compatibility task into runtime or UI work.
+
+Two new focused regressions failed before the fix: same-parent append retained `[a,b,c]` instead of `[b,c,a]`, and
+an anchored reorder changed order but left `Changes::Ids([])`. Both actual red results are retained externally.
+The private placement helper now calculates the final destination index with the moving id excluded and calls
+World::set_parent_at. This covers roots, both anchor directions and cross-parent placement. Create still starts
+with World::create, preserving its original arrival notification, before explicit ordering. No direct vector
+reordering or duplicated core mutation model remains in this helper.
+
+All 16 edit-kernel integration tests passed after the fix, including strict anchor rejection, late-batch rollback
+of order/cursor/original subscriptions, duplicate receipt stability, stable references, anchored creation and
+authority/replica convergence. The entire core suite passed 100 tests with zero failures or ignores. New full
+workspace/strict Clippy/license/format gates and independent review are pending on the refreshed source; no prior
+head's CI is substituted. Actual Lua/GPU execution remains held for the coordinator's timing grant.

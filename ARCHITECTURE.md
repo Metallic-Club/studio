@@ -49,6 +49,9 @@ apps.
   `EditReplica` applies ordered accepted records with stable references and sibling anchors; snapshots include
   effective properties and ordered children, independently of local instance allocation. There is no network,
   persistence, optimistic UI, runtime simulation or available Team Create session in this foundation (#301).
+  Create/Move use explicit `World::set_parent_at` placement: no anchor appends within the current parent too;
+  anchored reorders enter the journal, preserve original signals and emit no false child arrival. The anchor's
+  final index excludes the moving object, and an already placed object follows core's no-op cursor behavior.
   Edit CFrame values are boxed like World values, compare all twelve numeric components by bits for exact request
   identity, and count the owned transform payload against request/receipt limits. Generic Set follows low-level
   World property validation; it does not invoke high-level pivot/scale helpers or invent new field permissions.
