@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! `BasePart.TouchEnded` between two ordinary parts, through the public runtime frame path:
 //! when two parts touch and separate, each part fires `Touched` once and `TouchEnded` once.
 

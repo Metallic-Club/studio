@@ -309,7 +309,9 @@ impl World {
             extras.attributes.insert(name.to_string(), value);
         }
         self.extras_bytes = self.extras_bytes - old_cost + new_cost;
-        self.record(id);
+        // Attributes and tags are coarse-only in the journal for now: `changes_since` reports
+        // the id, `changes_since_detailed` reports nothing (use the attribute and tag logs).
+        self.record(id, None);
         self.attribute_log.push(AttributeChange {
             id,
             name: name.to_string(),
@@ -528,7 +530,7 @@ impl World {
             .entry(tag.to_string())
             .or_default()
             .insert(id);
-        self.record(id);
+        self.record(id, None); // coarse-only, like attributes
         if self.is_in_tree(id) {
             self.tag_log.push(TagChange {
                 id,
@@ -560,7 +562,7 @@ impl World {
                 self.tag_index.remove(tag);
             }
         }
-        self.record(id);
+        self.record(id, None); // coarse-only, like attributes
         if self.is_in_tree(id) {
             self.tag_log.push(TagChange {
                 id,

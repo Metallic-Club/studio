@@ -95,6 +95,11 @@ pub struct PostContext<'a> {
     pub depth: Option<&'a wgpu::TextureView>,
     /// Sample count of `depth`: 1, or 4 with MSAA (bind it as `texture_depth_multisampled_2d`).
     pub depth_samples: u32,
+    /// The geometry prepass (`Rgba16Float`, one sample per pixel, `size` pixels): world normal
+    /// in rgb and linear view depth in a; a is negative on surfaces that draw their own
+    /// inverted-hull outline and 0 on background. Present when any pass in the chain returns
+    /// true from [`PostPass::reads_geometry`] and the adapter can render `Rgba16Float`.
+    pub geometry: Option<&'a wgpu::TextureView>,
     /// The camera of this frame.
     pub camera: &'a Camera,
 }
@@ -115,6 +120,11 @@ pub trait PostPass: Any + Send {
     fn slot(&self) -> PostSlot;
     /// Return true to get [`PostContext::depth`]. The renderer then keeps the depth buffer.
     fn reads_depth(&self) -> bool {
+        false
+    }
+    /// Return true to get [`PostContext::geometry`]. The renderer then draws the geometry
+    /// prepass (one extra pass over the opaque geometry) before the scene.
+    fn reads_geometry(&self) -> bool {
         false
     }
     /// A disabled pass is skipped without copying its input.
@@ -203,6 +213,12 @@ impl PostChain {
 
     pub(crate) fn reads_depth(&self) -> bool {
         self.passes.iter().any(|p| p.enabled() && p.reads_depth())
+    }
+
+    pub(crate) fn reads_geometry(&self) -> bool {
+        self.passes
+            .iter()
+            .any(|p| p.enabled() && p.reads_geometry())
     }
 
     pub(crate) fn active_mut(&mut self, slot: PostSlot) -> impl Iterator<Item = &mut dyn PostPass> {

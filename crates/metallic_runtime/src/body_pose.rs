@@ -4,7 +4,7 @@
 //! sampling, blending and the joint hierarchy, with no renderer. The simulation runs one per
 //! character every tick and hands [`BodyAnimator::body_pose`] to
 //! [`metallic_physics::CharacterController::set_body_pose`], so a headless server computes the
-//! same limb poses as a client. The drawn [`crate::avatar::Avatar`] uses the same animator.
+//! same limb poses as a client. The drawn `Avatar` uses the same animator.
 //!
 //! Each body part's touch capsule (see [`metallic_physics::BodyPart`]) is carried rigidly by one
 //! bone: the part's rest frame is skinned with that bone's matrix, exactly like a mesh vertex
@@ -103,28 +103,31 @@ impl BodyAnimator {
     }
 
     /// Facing, in radians.
+    #[cfg(feature = "presentation")]
     pub fn yaw(&self) -> f32 {
         self.yaw
     }
 
     /// The current local joint transforms.
+    #[cfg(feature = "presentation")]
     pub fn pose(&self) -> &Pose {
         &self.pose
     }
 
     /// The model animated.
+    #[cfg(feature = "presentation")]
     pub fn model(&self) -> &Arc<SkinnedModel> {
         &self.model
     }
 
     /// Which bone carries each body part.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "presentation"))]
     pub fn rig(&self) -> &BodyRig {
         &self.rig
     }
 
     /// The animation controller (for tests and diagnostics).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "presentation"))]
     pub fn locomotion(&self) -> &Locomotion {
         &self.locomotion
     }
@@ -255,6 +258,7 @@ impl BodyRig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "presentation")]
     use crate::avatar::Avatar;
     use metallic_core::Value;
     use metallic_physics::{
@@ -320,6 +324,7 @@ mod tests {
         assert!(rig.bones.iter().all(Option::is_some));
     }
 
+    #[cfg(feature = "presentation")]
     #[test]
     fn rest_avatar_gives_the_rest_pose() {
         let model = default_model().unwrap();
@@ -342,6 +347,7 @@ mod tests {
 
     /// How far a body part's centre moves around (largest minus smallest coordinate, per axis)
     /// over `seconds` of animation driven by `input`, relative to a still root.
+    #[cfg(feature = "presentation")]
     fn sweep(input: LocomotionInput, part: BodyPart, seconds: f32) -> (CVec3, CVec3) {
         let model = default_model().unwrap();
         let root = Vec3::new(0.0, 3.0, 0.0);
@@ -361,6 +367,7 @@ mod tests {
         (lo, hi)
     }
 
+    #[cfg(feature = "presentation")]
     #[test]
     fn volumes_follow_the_run_clip() {
         let idle = sweep(
@@ -388,6 +395,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "presentation")]
     #[test]
     fn volumes_follow_the_jump_clip() {
         let idle = sweep(
@@ -472,6 +480,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "presentation")]
     #[test]
     fn the_headless_animator_poses_the_body_like_the_drawn_avatar() {
         let model = default_model().unwrap();
