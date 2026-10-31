@@ -15,11 +15,11 @@ checked at that size, not at 64 MB.
 ## Fixed
 | Function | Worst case before | Fix |
 |---|---|---|
-| `table.concat` (millions of elements) | 2.5 s | ranges over 8192 elements join chunk by chunk; the Lua loop between chunks is interruptible. Results, errors (text, index, position) and odd `i`/`j` behave as the plain function (compared in a test); NaN, infinite, fractional and 32-bit-overflowing bounds go to the C function untouched. Peak memory is the parts plus the result, about what the C function's own buffer needs |
+| `table.concat` (millions of elements) | 2.5 s | ranges over 8192 elements join chunk by chunk; the Lua loop between chunks is interruptible. Chunking follows the range the C function walks: bounds are read as it reads them (numbers and numeric strings truncated toward zero), so `#t + 0.5` is chunked too. NaN, infinite and 32-bit-overflowing bounds are converted by the platform: for the end of the range the C function is probed (empty range or largest integer); a start bound that overflows makes the C call cheap either way. Results and errors (text, index, position) match the plain function (compared in a test, including fractional, string and overflowing bounds). Peak memory is the parts plus the result, about what the C function's own buffer needs |
 | `string.pack`, `packsize`, `unpack` (64 MB format) | 0.2 to 0.65 s | format strings over 64 KB are refused |
-| `string.pack("c200000000", "")` | padding until memory ran out (0.13 s, then a memory error) | item sizes with 7 or more digits are refused by `string.pack` |
+| `string.pack("c200000000", "")`, 300 x `c999999` | padding until memory ran out | `string.pack` refuses a format whose `c<n>` items add up to more than 16 MB (every other item is at most 16 bytes, so 64 KB of format cannot reach it) |
 | `string.upper`, `lower`, `reverse`, `utf8.len`, `utf8.offset` (128 MB) | 0.1 to 0.4 s (`upper`: 385 ms) | strings over 16 MB are refused (`upper` at 16 MB: about 50 ms) |
-| `string.split` (128 MB of `a,`) | 0.6 s and a memory error | subjects over 1 MB are refused (1M pieces: about 70 ms) |
+| `string.split` (128 MB of `a,`) | 0.6 s and a memory error | subjects over 4 MB are refused (4M pieces: about 0.3 s at 70 ns a piece) |
 
 Wrappers run the C function directly. An argument error of a wrapped function (for example
 `string.upper({})`) therefore reads `[engine]:N: ...` instead of the caller's position; `table.concat` is

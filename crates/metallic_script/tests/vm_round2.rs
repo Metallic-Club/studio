@@ -600,6 +600,15 @@ fn concat_behaves_exactly_like_the_raw_c_function() {
         "-math.huge",
         "'2'",
         "true",
+        "49999.5",
+        "50000.9",
+        "'49999'",
+        "' 49999 '",
+        "-0.5",
+        "1e4",
+        "2147483647.5",
+        "-2147483648.5",
+        "2^31 - 1",
     ];
     let mut calls = Vec::new();
     for n in sizes {
@@ -668,6 +677,19 @@ fn concat_behaves_exactly_like_the_raw_c_function() {
 }
 
 #[test]
+fn concat_with_fractional_or_string_bounds_is_interruptible() {
+    // A fractional or numeric-string bound is read by the C function as an integer, so the
+    // range is as long as with an integer bound and must be chunked all the same.
+    for bound in ["#big + 0.5", "tostring(#big)", "#big + 0.9", "'5e6'"] {
+        assert_stops_early(
+            "local t = table.create(5000000, 0) for i = 1, 5000000 do t[i] = i end return t",
+            &format!("table.concat(big, ',', 1, {bound})"),
+            Duration::from_millis(400),
+        );
+    }
+}
+
+#[test]
 fn concat_chunk_boundaries_join_correctly() {
     let (mut vm, _) = vm();
     vm.set_resume_budget(Duration::from_secs(20));
@@ -711,18 +733,30 @@ fn huge_pack_formats_are_refused() {
         start.elapsed()
     );
     // A short format with a huge item size: the padding would run until memory ran out.
-    for fmt in ["c200000000", "c1000000", "<i4 c99999999"] {
+    // Each item is small, the total is not: 300 x c999999 padded until memory ran out.
+    for fmt in [
+        "c200000000".to_string(),
+        "<i4 c99999999".to_string(),
+        "c999999".repeat(300),
+        "c9999999".repeat(2),
+        "c99999999999999999999".to_string(),
+    ] {
         let err = vm
             .run_script("T", &format!("string.pack('{fmt}', 1, '')"))
             .unwrap_err();
         assert!(
-            err.message.contains("item size too large"),
-            "{fmt}: {}",
+            err.message.contains("result too large"),
+            "{}: {}",
+            &fmt[..fmt.len().min(30)],
             err.message
         );
     }
-    vm.run_script("T", "assert(#string.pack('c999999', 'x') == 999999)")
-        .unwrap();
+    vm.run_script(
+        "T",
+        "assert(#string.pack('c999999', 'x') == 999999)
+         assert(#string.pack(string.rep('c999999', 10), 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j') == 9999990)",
+    )
+    .unwrap();
     vm.run_script(
         "T",
         "local p = string.pack('<i4 z s2', 7, 'hi', 'abc')
@@ -780,7 +814,7 @@ fn huge_split_subjects_are_refused() {
     let err = vm
         .run_script(
             "T",
-            "local s = string.rep('a,', 2000000) string.split(s, ',')",
+            "local s = string.rep('a,', 2200000) string.split(s, ',')",
         )
         .unwrap_err();
     assert!(err.message.contains("string too long"), "{}", err.message);

@@ -158,9 +158,13 @@ end
 
 -- #344: the remaining single C calls whose work grows with their input.
 -- table.concat joins ranges of more than CONCAT_CHUNK elements chunk by chunk (each chunk is one
--- C call of bounded size; the loop between chunks is interruptible). Only integer ranges are
--- chunked; NaN, infinite, fractional and 32-bit-overflowing bounds go to the C function as
--- they are. Luau has no tail calls, so an error raised by the C function would carry this
+-- C call of bounded size; the loop between chunks is interruptible). The chunking follows the
+-- range the C function would walk: bounds are read as it reads them (numbers and numeric
+-- strings truncated toward zero), so a fractional bound is chunked too. A bound that overflows
+-- 32 bits, or is NaN or infinite, is converted by the platform: for the end of the range the
+-- C function is asked (concat of one element) whether it reads an empty range or the largest
+-- integer; for the start the C call is cheap whichever it reads (it fails at the first
+-- missing element or walks nothing). Luau has no tail calls, so an error raised by the C function would carry this
 -- wrapper's position: every call therefore runs under pcall, and a failure is run once more
 -- inside a closure (which gives the C function the same call-site name) and re-raised at the
 -- caller's position, so text, index and position are those of the plain function.
@@ -175,12 +179,28 @@ local function concat_failed(t, sep, i, j)
     end
     error(e, 3) -- 1 = here, 2 = table.concat, 3 = its caller
 end
+local floor, ceil, tonumber = math.floor, math.ceil, tonumber
+local PROBE = { "a" }
+local function bound_int(x)
+    if type(x) == "string" then x = tonumber(x) end
+    if type(x) ~= "number" or x ~= x or x >= 2147483648 or x <= -2147483649 then return nil end
+    if x >= 0 then return floor(x) end
+    return ceil(x)
+end
+local function last_int(j)
+    local n = bound_int(j)
+    if n ~= nil then return n end
+    local v = j
+    if type(v) == "string" then v = tonumber(v) end
+    if type(v) ~= "number" then return nil end
+    if pcall(concat, PROBE, "", 1, j) then return nil end
+    return 2147483647
+end
 table.concat = function(t, sep, i, j)
-    if type(t) == "table"
-        and (i == nil or (type(i) == "number" and i % 1 == 0 and i >= -2147483648 and i <= 2147483647))
-        and (j == nil or (type(j) == "number" and j % 1 == 0 and j >= -2147483648 and j <= 2147483647)) then
-        local first, last = i or 1, j or rawlen(t)
-        if last - first >= CONCAT_CHUNK then
+    if type(t) == "table" then
+        local first = i == nil and 1 or bound_int(i)
+        local last = j == nil and rawlen(t) or last_int(j)
+        if first and last and last - first >= CONCAT_CHUNK then
             local parts, count = {}, 0
             local from = first
             while from <= last do
@@ -204,21 +224,29 @@ table.concat = function(t, sep, i, j)
 end
 
 -- string.pack / packsize / unpack walk their format string item by item: refuse formats over
--- MAX_FORMAT bytes (real formats are a few dozen), and string.pack also refuses item sizes of
--- 7 or more digits (`c200000000` pads that many bytes). upper / lower / reverse / utf8.len /
+-- MAX_FORMAT bytes (real formats are a few dozen), and string.pack also refuses a format whose
+-- `c<n>` items add up to more than MAX_PACK bytes (`c200000000`, or 300 x `c999999`: each pads
+-- n bytes). Every other item is at most 16 bytes, so 64 KB of format cannot reach MAX_PACK. upper / lower / reverse / utf8.len /
 -- utf8.offset make one pass over the string at 3 ns per byte: refuse strings over MAX_TEXT
--- (16 MB). string.split makes one table slot per piece: refuse subjects over MAX_SPLIT (1 MB).
+-- (16 MB). string.split makes one table slot per piece: refuse subjects over MAX_SPLIT (4 MB).
 local MAX_FORMAT = 65536
 local MAX_TEXT = 16777216
-local MAX_SPLIT = 1048576
+local MAX_SPLIT = 4194304
+local MAX_PACK = 16777216
 for _, name in { "pack", "packsize", "unpack" } do
     local f = string[name]
     string[name] = function(fmt, ...)
         if type(fmt) == "string" and #fmt > MAX_FORMAT then
             error("string." .. name .. ": format string too long (limit 65536)", 2)
         end
-        if name == "pack" and type(fmt) == "string" and fmt:find("%d%d%d%d%d%d%d") then
-            error("string.pack: item size too large (limit 999999)", 2)
+        if name == "pack" and type(fmt) == "string" and fmt:find("c%d") then
+            local total = 0
+            for digits in fmt:gmatch("c(%d+)") do
+                total = total + tonumber(digits)
+            end
+            if total > MAX_PACK then
+                error("string.pack: result too large (limit 16777216 bytes)", 2)
+            end
         end
         return f(fmt, ...)
     end
@@ -250,7 +278,7 @@ local split = string.split
 if split then
     string.split = function(s, sep)
         if type(s) == "string" and #s > MAX_SPLIT then
-            error("string.split: string too long (limit 1048576 bytes)", 2)
+            error("string.split: string too long (limit 4194304 bytes)", 2)
         end
         return split(s, sep)
     end
