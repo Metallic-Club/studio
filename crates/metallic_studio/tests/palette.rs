@@ -3,7 +3,7 @@
 use eframe::egui::{self, Event, Key, Modifiers};
 use egui_kittest::Harness;
 use metallic_core::{InstanceId, Value, Vec3, World};
-use metallic_studio::editor::EditorState;
+use metallic_studio::editor::{EditorState, Gesture};
 use metallic_studio::editor_ui::EditorUi;
 use metallic_studio::output::OutputPanel;
 use metallic_studio::palette::{Group, PaletteMode};
@@ -182,4 +182,17 @@ fn ctrl_enter_asks_litha_and_the_question_waits_for_the_panel() {
         h.state_mut().take_litha_question().as_deref(),
         Some("why does my coin fall")
     );
+}
+
+#[test]
+fn the_palette_does_not_open_during_a_gesture() {
+    let (mut ui, _, _) = editor();
+    for g in [Gesture::Viewport, Gesture::Properties, Gesture::Tool] {
+        ui.state.set_gesture(g, true);
+        ui.open_command_palette();
+        assert!(!ui.palette.is_open(), "{g:?} gesture open");
+        ui.state.set_gesture(g, false);
+    }
+    ui.open_command_palette();
+    assert!(ui.palette.is_open());
 }

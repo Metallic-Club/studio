@@ -28,7 +28,8 @@ more actions through the same `ActionRegistry::register`, and the palette lists 
     are reused, at most 2000 distinct object names are scored and only kept rows are sorted; the file index is
     built on a background thread and reused for 10 s; the palette draws last (`Order::Tooltip`). 10k instances
     plus 5000 paths: worst keystroke 12 ms in a debug build (the test allows 40 ms in debug, 2 ms optimised).
-  - TODO(#380): `open_command_palette_with` should also check `gesture_active` once #380 lands.
+  - `open_command_palette_with` refuses while playing, while the viewport is busy and while
+    `EditorState::gesture_active()` (#380) is true.
 - Keys: `palette.open` Ctrl+K, `palette.commands` Ctrl+Shift+P (opens with `>`), `insert.at_cursor` Shift+A
   (viewport). Grid snap moved from Ctrl+K to G (viewport).
 - Insert at cursor: the list opens at the pointer; the item lands at `EditorState::insert_point`, the surface
