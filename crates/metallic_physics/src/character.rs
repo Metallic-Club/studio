@@ -453,50 +453,8 @@ impl CharacterController {
         std::mem::take(&mut self.events)
     }
 
-    /// Moves a character that stands on a part by that part's movement in the
-    /// [`PhysicsWorld::step`] that just ran: the velocity of the part under the character
-    /// (linear plus angular about the part's centre) times [`PhysicsWorld::last_step_seconds`].
-    /// Call it once per frame per character, right after [`PhysicsWorld::step`], so a character
-    /// on a mover (an anchored part a script moves, even from `Heartbeat`) stays where the mover
-    /// is drawn instead of a step behind (#273). The tick order stays controller, then physics.
-    pub fn carry(&mut self, world: &mut World, physics: &PhysicsWorld, character: InstanceId) {
-        let Some(m) = self.motions.get_mut(&character) else {
-            return;
-        };
-        let (HumanoidState::Running, Some(ground)) = (m.state, m.ground) else {
-            return;
-        };
-        let t = physics.last_step_seconds();
-        let Some(root_pos) = world
-            .find_first_child(character, ROOT_PART)
-            .and_then(|r| vec_prop(world, r, "Position"))
-        else {
-            return;
-        };
-        let v = physics.velocity(ground).unwrap_or_default();
-        let w = physics.angular_velocity(ground).unwrap_or_default();
-        let r = vec_prop(world, ground, "Position").map_or(Vec3::default(), |c| root_pos - c);
-        // v + w x r: the ground's velocity under the character.
-        let at_feet = v + Vec3::new(
-            w.y * r.z - w.z * r.y,
-            w.z * r.x - w.x * r.z,
-            w.x * r.y - w.y * r.x,
-        );
-        let delta = at_feet * t;
-        if t <= 0.0 || !is_finite_vec(delta) || delta.magnitude() < 1e-9 {
-            return;
-        }
-        let new_root = root_pos + delta;
-        if !is_finite_vec(new_root) {
-            return;
-        }
-        avatar::place(world, character, new_root, m.yaw);
-        m.velocity = m.velocity + at_feet;
-    }
-
     /// Advances one character by `dt` seconds (call once per frame per character, before
-    /// [`PhysicsWorld::step`], then [`CharacterController::carry`] after it). See the module
-    /// documentation for the rules.
+    /// [`PhysicsWorld::step`]). See the module documentation for the rules.
     ///
     /// Does nothing if `character` no longer exists or lacks its `Humanoid` or
     /// `HumanoidRootPart`. After a [`CharacterEvent::Respawned`] the player's new character is
@@ -744,11 +702,9 @@ fn move_capsule(
         Vec3::default()
     };
     let jumping = grounded && input.jump;
-    // On the ground the part's own movement is applied after the physics step
-    // (`CharacterController::carry`), where the part really is; here only the character's own.
     let dy = if grounded && !jumping {
         m.vertical = 0.0;
-        0.0
+        carry.y * dt
     } else {
         if jumping {
             m.vertical = t.jump_power;
@@ -762,11 +718,15 @@ fn move_capsule(
         m.inherited = Vec3::new(carry.x, 0.0, carry.z);
     }
     let carried = if grounded && !jumping {
-        Vec3::default()
+        carry
     } else {
         m.inherited
     };
-    let horizontal = walk + carried;
+    let horizontal = if grounded && !jumping {
+        walk + Vec3::new(carry.x, 0.0, carry.z)
+    } else {
+        walk + m.inherited
+    };
     let desired = Vec3::new(horizontal.x * dt, dy, horizontal.z * dt);
 
     // 3. Sweep.

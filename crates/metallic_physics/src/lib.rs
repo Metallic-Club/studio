@@ -92,8 +92,6 @@ pub struct PhysicsWorld {
     /// Synced parts that belong to a character; [`Self::drain_touched`] never reports them.
     characters: HashSet<InstanceId>,
     accumulator: f64,
-    /// Seconds the last [`PhysicsWorld::step`] simulated (0 when it ran no substep).
-    last_step: f64,
     /// Replica mode: no body is ever integrated (see [`PhysicsWorld::new_replica`]).
     replica: bool,
 }
@@ -161,7 +159,6 @@ impl PhysicsWorld {
             touches: TouchTracker::default(),
             characters: HashSet::new(),
             accumulator: 0.0,
-            last_step: 0.0,
             replica: false,
         }
     }
@@ -305,7 +302,6 @@ impl PhysicsWorld {
             self.accumulator = 0.0;
         }
         let substeps = ((self.accumulator / SUBSTEP) + 1e-6).floor() as usize;
-        self.last_step = substeps as f64 * SUBSTEP;
         if substeps == 0 {
             return;
         }
@@ -396,12 +392,6 @@ impl PhysicsWorld {
             }
         }
         self.collect_touches();
-    }
-
-    /// Seconds the last [`Self::step`] simulated: 0 when it ran no substep. A part's
-    /// [`Self::velocity`] times this is how far it moved in that step.
-    pub fn last_step_seconds(&self) -> f64 {
-        self.last_step
     }
 
     /// Current velocity of a part in studs per second: the body velocity for unanchored parts,

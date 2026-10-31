@@ -103,8 +103,7 @@ impl Sim {
         v3(&self.world, self.root(), "Position")
     }
 
-    /// One game frame: controller, then physics (synced again after a respawn), then the carry
-    /// by the part under the character.
+    /// One game frame: controller, then physics (synced again after a respawn).
     fn frame(&mut self, input: MoveInput) {
         let ch = self.character();
         self.ctl.step(&mut self.world, &self.phys, ch, input, DT);
@@ -126,8 +125,6 @@ impl Sim {
         }
         self.events.extend(new);
         self.phys.step(&mut self.world, DT);
-        let ch = self.character();
-        self.ctl.carry(&mut self.world, &self.phys, ch);
     }
 
     fn touched_count(&self, part: InstanceId) -> usize {
@@ -391,44 +388,6 @@ fn carried_by_moving_platform() {
     let ch = sim.character();
     assert!((sim.ctl.velocity(ch).unwrap().x - 8.0).abs() < 0.5);
     assert!(sim.ctl.relative_velocity(ch).unwrap().magnitude() < 0.5);
-}
-
-/// #273: carried by the part's movement of the same frame, so the character keeps its place on
-/// the platform exactly (no one-step lag), also when the platform starts and stops.
-#[test]
-fn carried_without_lag() {
-    let mut world = World::new_with_services();
-    let plat = part(
-        &mut world,
-        "Part",
-        Vec3::new(0.0, -1.0, 0.0),
-        Vec3::new(20.0, 2.0, 20.0),
-    );
-    let mut sim = Sim::start(world);
-    sim.run(0.5, idle());
-    let gap = sim.root_pos().x;
-    for i in 1..=30 {
-        let x = f64::from(i) * 0.1;
-        sim.world
-            .set(plat, "Position", Value::Vector3(Vec3::new(x, -1.0, 0.0)))
-            .unwrap();
-        sim.frame(idle());
-        let off = sim.root_pos().x - x - gap;
-        assert!(off.abs() < 1e-3, "frame {i}: {off} studs off the platform");
-    }
-    sim.run(0.2, idle());
-    assert!((sim.root_pos().x - 3.0 - gap).abs() < 1e-3, "stops with it");
-    // Rising: the feet stay on the top.
-    let y0 = sim.root_pos().y;
-    for i in 1..=20 {
-        let y = -1.0 + f64::from(i) * 0.05;
-        sim.world
-            .set(plat, "Position", Value::Vector3(Vec3::new(3.0, y, 0.0)))
-            .unwrap();
-        sim.frame(idle());
-        let off = sim.root_pos().y - y0 - f64::from(i) * 0.05;
-        assert!(off.abs() < 0.02, "frame {i}: {off} studs off the top");
-    }
 }
 
 #[test]

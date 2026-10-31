@@ -323,9 +323,6 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills). A
    character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
-   Right after it `CharacterController::carry` moves a grounded character by its ground part's movement in that step
-   (velocity at the feet x `last_step_seconds`), so it rides movers without lag; a `Heartbeat` move shows up one
-   tick later, as in Roblox, because scripts run after physics (#273).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
    touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
    `Respawned` -> `physics.sync_from` and `character_added(player, model)`.

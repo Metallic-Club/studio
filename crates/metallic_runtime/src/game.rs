@@ -332,11 +332,9 @@ impl Game {
     /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`TICK`]
     /// (an accumulator carries the remainder; `dt` is clamped to [`MAX_FRAME_DT`], a negative or
     /// non-finite `dt` counts as 0). Each tick, in order:
-    /// 1. physics step (movers, loose parts), so the character meets movers where scripts put
-    ///    them in the last tick and where they are drawn;
-    /// 2. character controller (movement from `input`, death, respawn, checkpoints, touches);
-    ///    a character that was destroyed or taken out of the Workspace respawns after
-    ///    [`RESPAWN_DELAY`];
+    /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches);
+    /// 2. physics step (movers, loose parts); then a character that was destroyed or taken out
+    ///    of the Workspace respawns after [`RESPAWN_DELAY`];
     /// 3. events fed to the scripts: part-part touches both ways, character touches as
     ///    `part.Touched(HumanoidRootPart)`, `Humanoid.Died`, `CharacterAdded` on respawn;
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
@@ -466,10 +464,6 @@ impl Game {
                     .step(&mut world, &self.physics, character, move_input, TICK);
             }
             self.physics.step(&mut world, TICK);
-            if let Some(character) = self.character {
-                // Movers moved in this physics step carry the character standing on them now.
-                self.characters.carry(&mut world, &self.physics, character);
-            }
             respawned = respawn_if_gone(
                 &mut world,
                 &self.characters,
@@ -818,72 +812,6 @@ mod tests {
         assert_eq!(seen, [state::JUMP, state::FALL, state::LAND]);
         run(&mut g, FrameInput::default(), 0.6);
         assert_eq!(avatar(&g).locomotion().state(), state::GROUND);
-    }
-
-    fn x_of(g: &Game, part: InstanceId) -> f64 {
-        match g.world.borrow().get(part, "Position") {
-            Ok(Value::Vector3(p)) => p.x,
-            _ => panic!("no position"),
-        }
-    }
-
-    /// #273: a floor that a `Heartbeat` script moves carries the character with it. Scripts run
-    /// after physics (spec order: character, physics, scripts), so the physics step applies a
-    /// Heartbeat move one tick later, as in Roblox; the character follows within that same
-    /// step (`CharacterController::carry`), so it trails the drawn floor by exactly one
-    /// Heartbeat move and never drifts. Before the fix it trailed by two.
-    #[test]
-    fn a_heartbeat_mover_carries_the_character_one_move_behind_at_most() {
-        let mut w = World::new_with_services();
-        let ws = w.root("Workspace").unwrap();
-        let floor = w.create("Part", Some(ws)).unwrap();
-        w.set(floor, "Name", Value::String("Floor".into())).unwrap();
-        w.set(floor, "Size", Value::Vector3(Vec3::new(400.0, 1.0, 400.0)))
-            .unwrap();
-        w.set(floor, "Position", Value::Vector3(Vec3::new(0.0, -0.5, 0.0)))
-            .unwrap();
-        w.set(floor, "Anchored", Value::Bool(true)).unwrap();
-        let script = w.create("Script", w.root("ServerScriptService")).unwrap();
-        w.set(
-            script,
-            "Source",
-            Value::String(
-                r#"local floor = workspace:WaitForChild("Floor")
-local beats = 0
--- Still for 60 Heartbeats (the character lands), then 0.05 studs a Heartbeat for 60.
-game:GetService("RunService").Heartbeat:Connect(function()
-    beats = beats + 1
-    if beats > 60 and beats <= 120 then
-        floor.Position = floor.Position + Vector3.new(0.05, 0, 0)
-    end
-end)"#
-                    .into(),
-            ),
-        )
-        .unwrap();
-        let mut g = Game::from_world("test".into(), w, Rc::new(Silent));
-        g.start().unwrap();
-        run(&mut g, FrameInput::default(), 1.0);
-        let gap = g.root_position().unwrap().x - x_of(&g, floor);
-        let mut trail = Vec::new();
-        for _ in 0..60 {
-            g.frame(&FrameInput::default(), TICK);
-            trail.push(gap - (g.root_position().unwrap().x - x_of(&g, floor)));
-        }
-        assert!(
-            (x_of(&g, floor) - 3.0).abs() < 1e-6,
-            "the script moved the floor"
-        );
-        for (i, t) in trail.iter().enumerate().skip(2) {
-            assert!(
-                (t - 0.05).abs() < 1e-3,
-                "frame {i}: trails the floor by {t} studs ({trail:?})"
-            );
-        }
-        // Stopped: the character catches up and sits where it started on the floor.
-        run(&mut g, FrameInput::default(), 0.2);
-        let end = g.root_position().unwrap().x - x_of(&g, floor);
-        assert!((end - gap).abs() < 1e-3, "settled {} off", end - gap);
     }
 
     /// #273: a Died handler that takes the body out of the Workspace (without destroying it)
