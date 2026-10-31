@@ -63,6 +63,8 @@ pub(crate) enum EventKind {
     /// `Instance.AttributeChanged(name)` for id 0, `GetAttributeChangedSignal(name)` for the
     /// interned name id of that attribute (no arguments).
     AttributeChanged(u32),
+    /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
+    Gui(super::gui::GuiEventKind),
 }
 
 /// One signal: an event of one instance.

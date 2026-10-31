@@ -203,6 +203,36 @@ end)
 - Native `pcall` and `xpcall` are unchanged. Ordinary coroutine creation, yielding, status and close behavior
   remain available; internally tagged results are consumed by the scheduler/admission helpers.
 
+## GUI and buttons
+The local player's `PlayerGui` (copied from `StarterGui` at start) is drawn over the 3D view: `ScreenGui` (`Enabled`,
+`DisplayOrder`), `Frame` (`Position`, `Size`, `BackgroundColor3`, `BackgroundTransparency`, `Visible`, `ZIndex`, `Active`,
+`ClipsDescendants`), `TextLabel` (`Text`, `TextColor3`, `TextSize`) and the buttons `TextButton` (`Text`, `TextColor3`,
+`TextSize`) and `ImageButton` (`Image`, `ImageColor3`, `ImageTransparency`; the image is not drawn yet). Both buttons
+are `GuiButton`s (`AutoButtonColor`), which are `Frame`s here (Roblox's GuiObject).
+
+- Order: ScreenGuis by `DisplayOrder`, then each element above its parent and siblings by `ZIndex` (Roblox's default
+  `ZIndexBehavior.Sibling`); ties keep tree order. `ClipsDescendants` cuts its descendants to its rectangle, for drawing
+  and clicks.
+- A press goes to the front-most element under the pointer that takes clicks: a button, or an element with
+  `Active = true`. Other elements let it through. A press taken by the GUI never reaches the game (camera, jump,
+  `ContextActionService`).
+- Button events: `MouseButton1Down(x, y)`, then on release over the same button `MouseButton1Up(x, y)`,
+  `MouseButton1Click()` and `Activated(inputObject, clickCount)`. A finger tap fires the same events. `AutoButtonColor`
+  darkens the background while hovered or pressed.
+- Every Frame: `MouseEnter(x, y)` and `MouseLeave(x, y)` (mouse only), `InputBegan(input)`, `InputChanged(input)` (mouse
+  movement, at most once per frame) and `InputEnded(input)` for the elements under the pointer down to the first that
+  takes clicks. `input` has `UserInputType` (`MouseButton1`, `MouseMovement` or `Touch`), `UserInputState`, `Position`
+  (Vector3, GUI points), `Delta` and `KeyCode`.
+- Events reach LocalScripts at the next step; at most 256 wait at once. Not yet: gamepad selection, `Modal`,
+  `MouseButton2` events, double-click counts, `ZIndexBehavior.Global`.
+
+```lua
+local button = script.Parent.Play
+button.Activated:Connect(function(input)
+    print("play pressed with", input.UserInputType.Name)
+end)
+```
+
 ## RemoteEvent
 `FireServer(...)` (client only), `FireClient(player, ...)` and `FireAllClients(...)` (server only), `OnServerEvent(player, ...)`
 (server only), `OnClientEvent(...)` (client only). Wrong side: `FireClient can only be called from the server` and so on.
