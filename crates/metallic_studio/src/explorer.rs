@@ -137,11 +137,14 @@ impl Explorer {
                 self.reveal(a, state);
             }
         }
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT + 4.0;
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .hint_text("Filter by name or class")
                 .desired_width(f32::INFINITY),
         );
+        ui.add_space(6.0);
         let key = (
             state.world.change_cursor(),
             state.history.revision(),
@@ -188,11 +191,18 @@ impl Explorer {
         );
         let selected = state.selection.contains(row.id);
         let painter = ui.painter_at(rect);
-        if selected {
-            painter.rect_filled(rect, 0.0, ui_tokens().accent.gamma_multiply(0.30));
-        } else if resp.hovered() {
-            painter.rect_filled(rect, 0.0, ui_tokens().hover);
-        }
+        let several = state.selection.len() > 1;
+        let active = state.selection.active() == Some(row.id);
+        crate::panel::paint_row(
+            &painter,
+            rect,
+            crate::panel::RowLook {
+                hovered: resp.hovered(),
+                selected: selected && (active || !several),
+                selected_weak: selected && several && !active,
+                focused: resp.has_focus(),
+            },
+        );
         let x0 = rect.min.x + 4.0 + row.depth as f32 * ui_tokens().indent;
         let cy = rect.center().y;
         // Caret.

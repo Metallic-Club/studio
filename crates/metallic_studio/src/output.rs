@@ -307,6 +307,10 @@ impl OutputPanel {
     /// Draws the panel.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.log.drain();
+        ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT + 4.0;
+        // Filter toggles mark "on" with a neutral fill: violet is for place and action.
+        ui.visuals_mut().selection.bg_fill = crate::theme::bg_active();
+        ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, crate::theme::text_1());
         ui.horizontal(|ui| {
             let mut changed = false;
             for (i, (label, level)) in [
