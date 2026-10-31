@@ -37,7 +37,7 @@
   --select-weak: var(--v-900);
   --line: #2b2933;
   --line-strong: var(--g-600);
-  --line-control: #6e6a79;
+  --line-control: #6f6b7a;
   --text-1: #e6e4ea;
   --text-2: #aeaab6;
   --text-3: #8e8a97;
@@ -64,6 +64,7 @@
   --info-bg: #1c2a3a;
   --danger: #8f3a35;
   --danger-hover: #a3443e;
+  --on-danger: var(--g-100);
 
   --s1: 2px;
   --s2: 4px;
@@ -197,6 +198,7 @@
   --info-bg: #e3edf8;
   --danger: #b3261e;
   --danger-hover: #96201a;
+  --on-danger: #ffffff;
   --art-scrim: rgba(12,11,15,0.74);
   --backdrop: rgba(22,21,27,0.40);
   --shadow-pop: 0px 8px 24px 0px rgba(0,0,0,0.16);

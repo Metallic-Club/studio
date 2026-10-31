@@ -93,6 +93,8 @@ pub const INFO_BG: Color32 = rgba(tk::INFO_BG);
 pub const DANGER: Color32 = rgba(tk::DANGER);
 /// Destructive buttons under the pointer.
 pub const DANGER_HOVER: Color32 = rgba(tk::DANGER_HOVER);
+/// Text on the destructive fill.
+pub const ON_DANGER: Color32 = rgba(tk::ON_DANGER);
 /// Text on [`ART_SCRIM`] (the same in every theme).
 pub const ART_TEXT: Color32 = rgba(tk::G_100);
 /// Icons on [`ART_SCRIM`].

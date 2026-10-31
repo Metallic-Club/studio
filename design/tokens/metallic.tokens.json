@@ -153,7 +153,7 @@
     },
     "line-control": {
       "$type": "color",
-      "$value": "#6e6a79"
+      "$value": "#6f6b7a"
     },
     "text-1": {
       "$type": "color",
@@ -262,6 +262,11 @@
     "danger-hover": {
       "$type": "color",
       "$value": "#a3443e"
+    },
+    "on-danger": {
+      "$type": "color",
+      "$value": "{primitive.g.100}",
+      "$description": "Text on danger"
     }
   },
   "space": {
@@ -655,6 +660,7 @@
       "info-bg": "#e3edf8",
       "danger": "#b3261e",
       "danger-hover": "#96201a",
+      "on-danger": "#ffffff",
       "art-scrim": "rgba(12,11,15,0.74)",
       "backdrop": "rgba(22,21,27,0.40)",
       "shadow-pop": "0px 8px 24px 0px rgba(0,0,0,0.16)"

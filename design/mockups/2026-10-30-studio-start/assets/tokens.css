@@ -16,7 +16,7 @@
   --bg-deep: var(--g-900); --bg-base: var(--g-850); --bg-panel: var(--g-800);
   --bg-raised: var(--g-750); --bg-hover: var(--g-700); --bg-active: var(--g-650);
   --select: var(--v-800); --select-weak: var(--v-900);
-  --line: #2b2933; --line-strong: var(--g-600); --line-control: #6e6a79;
+  --line: #2b2933; --line-strong: var(--g-600); --line-control: #6f6b7a;
   --text-1: #e6e4ea; --text-2: #aeaab6; --text-3: #8e8a97; --text-off: var(--g-500);
   --icon: #bdbac4; --accent: var(--v-400); --accent-hover: var(--v-300); --accent-press: var(--v-500);
   --accent-text: var(--v-300); --on-accent: var(--g-900); --focus: var(--v-300);

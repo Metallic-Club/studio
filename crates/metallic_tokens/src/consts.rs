@@ -111,7 +111,7 @@ pub const LINE: [u8; 4] = [43, 41, 51, 255];
 pub const LINE_STRONG: [u8; 4] = [67, 64, 77, 255];
 
 /// `role.line-control`
-pub const LINE_CONTROL: [u8; 4] = [110, 106, 121, 255];
+pub const LINE_CONTROL: [u8; 4] = [111, 107, 122, 255];
 
 /// `role.text-1`
 pub const TEXT_1: [u8; 4] = [230, 228, 234, 255];
@@ -190,6 +190,9 @@ pub const DANGER: [u8; 4] = [143, 58, 53, 255];
 
 /// `role.danger-hover`
 pub const DANGER_HOVER: [u8; 4] = [163, 68, 62, 255];
+
+/// `role.on-danger` (= `primitive.g.100`)
+pub const ON_DANGER: [u8; 4] = [230, 228, 234, 255];
 
 /// `space.s1`
 pub const S1: f32 = 2.0;
