@@ -352,6 +352,8 @@ fn instance_new_clone_and_identity() {
         print(seen[workspace.Made], #workspace:GetChildren())
         print(pcall(Instance.new, "Nope"))
         print(pcall(Instance.new, "Workspace"))
+        print(pcall(Instance.new, "BasePart"))
+        print(pcall(Instance.new, "Instance"))
         "#,
     );
     start(&mut rig);
@@ -363,6 +365,15 @@ fn instance_new_clone_and_identity() {
         "{lines:?}"
     );
     assert!(lines[3].contains("Unable to create"), "{lines:?}");
+    // abstract classes are refused by core (#93) with the same Roblox wording
+    assert!(
+        lines[4].contains("Unable to create an Instance of type \"BasePart\""),
+        "{lines:?}"
+    );
+    assert!(
+        lines[5].contains("Unable to create an Instance of type \"Instance\""),
+        "{lines:?}"
+    );
 }
 
 #[test]

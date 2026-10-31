@@ -624,7 +624,7 @@ pub(crate) fn constructor(lua: &Lua, state: &Rc<ApiState>) -> mlua::Result<Table
             };
             let created = state.world_mut()?.create(&class, parent);
             let id = created.map_err(|e| match e {
-                CoreError::UnknownClass(_) => {
+                CoreError::UnknownClass(_) | CoreError::NotCreatable(_) => {
                     lua_error(format!("Unable to create an Instance of type \"{class}\""))
                 }
                 other => core_error(other),

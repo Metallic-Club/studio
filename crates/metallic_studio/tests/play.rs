@@ -250,9 +250,10 @@ fn edit_while_playing_is_refused() {
 #[test]
 fn error_at_start_keeps_edit_mode() {
     let mut log = OutputLog::new(64);
-    let (mut world, part) = world("print('ran before the failure')");
-    // No Workspace: the character cannot spawn, so the game fails to start.
-    world.destroy(world.root("Workspace").unwrap());
+    let (world, part) =
+        world("print('ran before the failure'); game:GetService('Players').Player1:Destroy()");
+    // No local player (services cannot be destroyed, #93): the character cannot spawn, so the
+    // game fails to start.
     let mut state = EditorState::new(
         world,
         std::path::Path::new("."),

@@ -294,7 +294,8 @@ impl Loader {
 /// Reads a scene file into a new world (built on [`World::new_with_services`]).
 ///
 /// Errors: [`CoreError::Io`] if unreadable, [`CoreError::Scene`] if it does not parse, has an
-/// unsupported version or a dangling reference; class/property errors from [`World::create`] and [`World::set`].
+/// unsupported version or a dangling reference; class/property errors from [`World::create`] and [`World::set`]
+/// (a service that does not match a built-in gives [`CoreError::NotCreatable`]; built-ins are matched, never created).
 pub fn load_scene(path: &Path) -> Result<World, CoreError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CoreError::Io(format!("{}: {e}", path.display())))?;

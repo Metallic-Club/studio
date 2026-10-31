@@ -307,6 +307,7 @@ mod tests {
             name: "Fixture",
             superclass: None,
             props: Box::leak(vec![prop].into_boxed_slice()),
+            creatable: true,
         }
     }
 
@@ -362,7 +363,8 @@ mod tests {
                 ClassDef {
                     name: "Added",
                     superclass: None,
-                    props: &[]
+                    props: &[],
+                    creatable: true,
                 }
             ])
         );
@@ -444,6 +446,7 @@ mod tests {
             name: "Orphan",
             superclass: Some("Missing"),
             props: &[],
+            creatable: true,
         };
         assert_eq!(
             hash_schema(&[orphan]),
@@ -456,11 +459,13 @@ mod tests {
             name: "A",
             superclass: Some("B"),
             props: &[],
+            creatable: true,
         };
         let b = ClassDef {
             name: "B",
             superclass: Some("A"),
             props: &[],
+            creatable: true,
         };
         assert_eq!(
             hash_schema(&[a, b]),
@@ -559,6 +564,7 @@ mod tests {
             name: "Fixture",
             superclass: None,
             props: Box::leak(vec![prop(), extra].into_boxed_slice()),
+            creatable: true,
         };
         let pair_hash = ok_hash(&[pair]);
         assert_ne!(single, pair_hash);
@@ -568,6 +574,7 @@ mod tests {
             name: "Fixture",
             superclass: None,
             props: Box::leak(vec![extra, prop()].into_boxed_slice()),
+            creatable: true,
         };
         assert_ne!(pair_hash, ok_hash(&[reversed]));
         let schema = |parent| {
@@ -577,11 +584,13 @@ mod tests {
                     name: "OtherBase",
                     superclass: None,
                     props: &[],
+                    creatable: true,
                 },
                 ClassDef {
                     name: "Derived",
                     superclass: Some(parent),
                     props: &[],
+                    creatable: true,
                 },
             ]
         };

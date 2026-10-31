@@ -1114,10 +1114,20 @@ impl Renderer {
     /// Draws the synced scene into `target` (a single-sample view of the surface format given to
     /// [`Renderer::new`]) as seen by `camera`. `size` is the target size in pixels; a zero size
     /// (a minimised window) draws nothing.
+    ///
+    /// The frame is always drawn at the real size of `target`'s texture (mip level 0): when
+    /// `size` differs from it (for example one frame late during a window resize), `size` is
+    /// ignored apart from the zero check, so the attachments always match the target.
     pub fn render(&mut self, target: &wgpu::TextureView, camera: &Camera, size: (u32, u32)) {
         if size.0 == 0 || size.1 == 0 {
             return;
         }
+        let texture = target.texture();
+        let real = (texture.width(), texture.height());
+        if real != size {
+            log::debug!("render size {size:?} differs from target {real:?}; using the target");
+        }
+        let size = real;
         self.ensure_attachments(size);
         self.upload_scene();
         if self.material_table.take_dirty() {
@@ -1628,11 +1638,14 @@ impl Renderer {
 
     /// Draws one throw-away frame offscreen at `size` and waits for it, so pipeline
     /// compilation, render-target creation and instance-buffer growth happen now instead of in
-    /// the first visible frame. Call after [`Renderer::sync`].
+    /// the first visible frame. Call after [`Renderer::sync`]. Each side is clamped to the
+    /// device's `max_texture_dimension_2d`.
     pub fn prewarm(&mut self, size: (u32, u32)) {
         if size.0 == 0 || size.1 == 0 {
             return;
         }
+        let max = self.device.limits().max_texture_dimension_2d;
+        let size = (size.0.min(max), size.1.min(max));
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("metallic prewarm"),
             size: wgpu::Extent3d {
@@ -1654,9 +1667,20 @@ impl Renderer {
 
     /// Renders one frame offscreen and returns it as tightly packed RGBA8 bytes
     /// (`size.0 * size.1 * 4`), already encoded for display. Used for screenshots and tests.
+    ///
+    /// Returns [`RenderError::InvalidSize`] when a side is zero, when a side is above the
+    /// device's `max_texture_dimension_2d`, or when the readback buffer would exceed its
+    /// `max_buffer_size`.
     pub fn capture(&mut self, camera: &Camera, size: (u32, u32)) -> Result<Vec<u8>, RenderError> {
         let (w, h) = size;
-        if w == 0 || h == 0 {
+        let limits = self.device.limits();
+        let max = limits.max_texture_dimension_2d;
+        if w == 0 || h == 0 || w > max || h > max {
+            return Err(RenderError::InvalidSize);
+        }
+        let row_bytes = w * 4;
+        let padded = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        if u64::from(padded) * u64::from(h) > limits.max_buffer_size {
             return Err(RenderError::InvalidSize);
         }
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -1695,8 +1719,6 @@ impl Renderer {
             self.render(&view, camera, size);
         }
 
-        let row_bytes = w * 4;
-        let padded = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic readback"),
             size: u64::from(padded) * u64::from(h),

@@ -1,7 +1,7 @@
 //! Renders small scenes on a real (or software) adapter. Skipped when the machine has none.
 use metallic_core::{Color3, Value, Vec3 as V3, World};
 use metallic_render::glam::Vec3;
-use metallic_render::{Camera, Quality, RenderContext, RenderSettings, Renderer};
+use metallic_render::{Camera, Quality, RenderContext, RenderError, RenderSettings, Renderer};
 
 const SIZE: (u32, u32) = (320, 200);
 
@@ -279,4 +279,136 @@ fn toon_avatar_has_ink_outline_and_warm_shading() {
         c[0] as i32 - c[2] as i32 > 25,
         "torso colour {c:?} is not warm"
     );
+}
+
+/// Runs `f` inside a validation error scope and fails the test on any wgpu validation error.
+/// (The context logs uncaptured errors instead of panicking, so tests must catch them here.)
+fn no_validation_errors(ctx: &RenderContext, f: impl FnOnce()) {
+    let scope = ctx.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    f();
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        panic!("wgpu validation error: {e}");
+    }
+}
+
+fn target(ctx: &RenderContext, width: u32, height: u32) -> wgpu::Texture {
+    ctx.device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    })
+}
+
+#[test]
+fn render_with_a_size_other_than_the_target_uses_the_target() {
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    for quality in [Quality::Low, Quality::High] {
+        let mut r = Renderer::with_settings(
+            &ctx,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            RenderSettings { quality },
+        );
+        r.sync(&scene());
+        let tex = target(&ctx, 8, 8);
+        let view = tex.create_view(&Default::default());
+        no_validation_errors(&ctx, || {
+            // Stale sizes, as during a window resize: smaller, larger, then the right one.
+            r.render(&view, &camera(), (4, 4));
+            r.render(&view, &camera(), (16, 9));
+            r.render(&view, &camera(), (8, 8));
+            let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        });
+    }
+}
+
+#[test]
+fn capture_wider_than_8192_does_not_panic() {
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let mut r = Renderer::new(&ctx, wgpu::TextureFormat::Rgba8UnormSrgb);
+    r.sync(&scene());
+    let max = ctx.device.limits().max_texture_dimension_2d;
+    no_validation_errors(&ctx, || {
+        let result = r.capture(&camera(), (8193, 2));
+        if max >= 8193 {
+            let px = result.expect("adapter allows 8193 px, capture must work");
+            assert_eq!(px.len(), 8193 * 2 * 4);
+        } else {
+            assert!(matches!(result, Err(RenderError::InvalidSize)));
+        }
+    });
+}
+
+#[test]
+fn capture_above_the_device_limit_is_invalid_size() {
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let mut r = Renderer::new(&ctx, wgpu::TextureFormat::Rgba8UnormSrgb);
+    r.sync(&scene());
+    let max = ctx.device.limits().max_texture_dimension_2d;
+    no_validation_errors(&ctx, || {
+        for size in [(max + 1, 2), (2, max + 1)] {
+            assert!(matches!(
+                r.capture(&camera(), size),
+                Err(RenderError::InvalidSize)
+            ));
+        }
+        // Prewarm clamps instead of failing.
+        r.prewarm((max + 1, 2));
+    });
+}
+
+#[test]
+fn straight_down_camera_draws_the_part() {
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let mut r = Renderer::new(&ctx, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let top_down = Camera {
+        position: Vec3::new(0.0, 50.0, 0.0),
+        look_at: Vec3::ZERO,
+        fov_deg: 60.0,
+    };
+    // Sky only, from the same camera: the reference for "nothing drawn".
+    r.sync(&World::new_with_services());
+    let empty = r.capture(&top_down, SIZE).expect("capture");
+
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").expect("workspace");
+    let part = w.create("Part", Some(ws)).expect("part");
+    w.set(part, "Size", Value::Vector3(V3::new(20.0, 1.0, 20.0)))
+        .expect("size");
+    w.set(
+        part,
+        "Color",
+        Value::Color3(Color3::new(139.0, 108.0, 214.0)),
+    )
+    .expect("color");
+    r.sync(&w);
+    let px = r.capture(&top_down, SIZE).expect("capture");
+
+    let centre = ((SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2) * 4) as usize;
+    assert_ne!(
+        px[centre..centre + 3],
+        empty[centre..centre + 3],
+        "the part is not drawn at the centre"
+    );
+    assert!(distinct_colours(&px) > 10, "frame looks blank");
 }
