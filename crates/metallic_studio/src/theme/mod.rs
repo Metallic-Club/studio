@@ -93,25 +93,25 @@ pub const INFO_BG: Color32 = rgba(tk::INFO_BG);
 pub const DANGER: Color32 = rgba(tk::DANGER);
 /// Destructive buttons under the pointer.
 pub const DANGER_HOVER: Color32 = rgba(tk::DANGER_HOVER);
+/// Text on the destructive fill.
+pub const ON_DANGER: Color32 = rgba(tk::ON_DANGER);
 /// Text on [`ART_SCRIM`] (the same in every theme).
 pub const ART_TEXT: Color32 = rgba(tk::G_100);
 /// Icons on [`ART_SCRIM`].
 pub const ART_ICON: Color32 = rgba(tk::G_200);
 
-// Tokens the research document proposes but `metallic_tokens` does not carry yet (task T1 adds
-// them to the JSON). The values are the Graphite ones from sections 3.1 and 3.5.
-/// Plate behind text and chips on game art (`art-scrim`, the same in every theme).
-pub const ART_SCRIM: Color32 = Color32::from_rgba_unmultiplied_const(18, 17, 22, 199);
-/// 1 px bottom edge of raised plates (`edge-low`, black at 30 %).
-pub const EDGE_LOW: Color32 = Color32::from_rgba_unmultiplied_const(0, 0, 0, 77);
-/// Keycap fill on the accent (`rgb(17 16 21 / .16)`).
-pub const KEYCAP_ON_ACCENT: Color32 = Color32::from_rgba_unmultiplied_const(17, 16, 21, 41);
+/// Plate behind text and chips on game art (`art-scrim`).
+pub const ART_SCRIM: Color32 = rgba(tk::ART_SCRIM);
+/// 1 px bottom edge of raised plates (`edge-low`).
+pub const EDGE_LOW: Color32 = rgba(tk::EDGE_LOW);
+/// Keycap fill on the accent (`keycap-on-accent`).
+pub const KEYCAP_ON_ACCENT: Color32 = rgba(tk::KEYCAP_ON_ACCENT);
 /// Modal scrim (`backdrop`).
-pub const BACKDROP: Color32 = Color32::from_rgba_unmultiplied_const(12, 11, 15, 153);
+pub const BACKDROP: Color32 = rgba(tk::BACKDROP);
 /// Stage swap, panel collapse, progress fill (`t-panel`, seconds).
-pub const T_PANEL: f32 = 0.24;
+pub const T_PANEL: f32 = tk::T_PANEL;
 /// Splash in, splash to start screen (`t-splash`, seconds).
-pub const T_SPLASH: f32 = 0.32;
+pub const T_SPLASH: f32 = tk::T_SPLASH;
 /// Hover and press fills (`t-fast`, seconds).
 pub const T_FAST: f32 = tk::T_FAST;
 /// Menus, focus ring, toast exit (`t-base`, seconds).
@@ -195,6 +195,8 @@ pub fn visuals() -> Visuals {
     v.error_fg_color = ERROR;
     // Dialogs (level 4) and menus, popups, tooltips (level 3).
     v.window_fill = BG_PANEL;
+    // Disabled widgets are drawn in `text-off` on a flat plate (see [`add_enabled`]), not faded.
+    v.disabled_alpha = 1.0;
     v.window_stroke = Stroke::new(1.0, HIGHLIGHT);
     v.window_shadow = SHADOW_MODAL;
     v.window_corner_radius = CornerRadius::same(R_LG);
@@ -217,6 +219,22 @@ pub fn visuals() -> Visuals {
     w.active = state(BG_ACTIVE, Stroke::new(1.0, TEXT_3), TEXT_1);
     w.open = state(BG_ACTIVE, Stroke::new(1.0, TEXT_3), TEXT_1);
     v
+}
+
+/// Like `ui.add_enabled`, but a disabled widget is drawn with `text-off` on `bg-panel` instead of
+/// egui's alpha fade. Use it for egui's own widgets; Studio's `Button` already does this itself.
+pub fn add_enabled(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
+    if enabled {
+        return ui.add(widget);
+    }
+    ui.scope(|ui| {
+        let w = &mut ui.visuals_mut().widgets;
+        for state in [&mut w.noninteractive, &mut w.inactive] {
+            *state = self::state(BG_PANEL, Stroke::new(1.0, LINE), TEXT_OFF);
+        }
+        ui.add_enabled(false, widget)
+    })
+    .inner
 }
 
 /// Installs the Metallic theme (fonts, colours, spacing, text sizes) into `ctx`.
@@ -315,6 +333,53 @@ mod tests {
         for (got, want) in [DEEP.r(), DEEP.g(), DEEP.b()].into_iter().zip(icon_bg) {
             assert!((i16::from(got) - want).abs() <= 8);
         }
+    }
+
+    #[test]
+    fn control_height_comes_from_line_height_and_padding() {
+        // `apply` sizes the button padding from Archivo's line height so that a body-size button
+        // is exactly `h-control` (32 px) tall; a change to either constant must not move it.
+        assert_eq!(CONTROL_HEIGHT, 32.0);
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let style = ctx.global_style();
+        let text = tk::T_BODY_SIZE * ARCHIVO_LINE;
+        let height = text + 2.0 * style.spacing.button_padding.y;
+        assert!(
+            (height - CONTROL_HEIGHT).abs() <= 1.0,
+            "button is {height} px tall, expected {CONTROL_HEIGHT}"
+        );
+    }
+
+    /// The colour the text of a disabled or enabled `egui::Button` is drawn in.
+    fn button_text_colour(enabled: bool) -> Color32 {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let mut found = None;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            add_enabled(ui, enabled, egui::Button::new("Cut"));
+        });
+        out.textures_delta.clear();
+        for clipped in out.shapes {
+            let mut stack = vec![clipped.shape];
+            while let Some(shape) = stack.pop() {
+                match shape {
+                    egui::Shape::Vec(inner) => stack.extend(inner),
+                    egui::Shape::Text(t) => {
+                        found = Some(t.override_text_color.unwrap_or(t.fallback_color));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        found.expect("the button drew its label")
+    }
+
+    #[test]
+    fn disabled_widgets_use_text_off_not_a_fade() {
+        assert_eq!(visuals().disabled_alpha, 1.0);
+        assert_eq!(button_text_colour(false), TEXT_OFF);
+        assert_eq!(button_text_colour(true), TEXT_1);
     }
 
     #[test]

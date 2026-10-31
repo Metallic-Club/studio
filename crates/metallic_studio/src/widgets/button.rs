@@ -225,11 +225,11 @@ impl<'a> Button<'a> {
                 rest: theme::DANGER,
                 hover: theme::DANGER_HOVER,
                 press: theme::DANGER,
-                text: theme::TEXT_1,
-                text_hover: theme::TEXT_1,
-                icon: theme::TEXT_1,
+                text: theme::ON_DANGER,
+                text_hover: theme::ON_DANGER,
+                icon: theme::ON_DANGER,
                 keycap_fill: theme::KEYCAP_ON_ACCENT,
-                keycap_text: theme::TEXT_1,
+                keycap_text: theme::ON_DANGER,
             },
         }
     }

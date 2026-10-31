@@ -274,7 +274,7 @@ impl eframe::App for StudioApp {
                         Ok(editor) => self.phase = Phase::Opened(Box::new(editor)),
                         Err(e) => {
                             log::warn!("could not open {name}: {e}");
-                            start.set_error(&e.to_string());
+                            start.open_failed(&name, &e);
                         }
                     }
                 }
