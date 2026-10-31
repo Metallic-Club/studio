@@ -310,6 +310,8 @@ impl EditorUi {
 
     /// Opens the command palette with `text` typed (">" lists commands only). Not while playing.
     pub fn open_command_palette_with(&mut self, text: &str) {
+        // TODO(#380): also return while a viewport gesture is active (`gesture_active`), once
+        // the tool gestures land.
         if self.state.play.is_playing() {
             return;
         }

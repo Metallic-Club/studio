@@ -22,9 +22,12 @@
 //! computed when the query changes, not every frame.
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2};
-use metallic_core::{InstanceId, Value, Vec3, World};
+use metallic_core::{InstanceId, Value, Vec3};
 
 use crate::actions::ActionRegistry;
 use crate::editor::{EditorState, INSERTABLE};
@@ -42,6 +45,10 @@ pub const PALETTE_TOP: f32 = 44.0;
 pub const RECENT_COMMANDS: usize = 8;
 /// Most files the asset scan lists.
 pub const MAX_ASSETS: usize = 5000;
+/// Most distinct (name, class) object matches kept per query; the rest are not scored further.
+pub const MAX_OBJECT_CANDIDATES: usize = 2000;
+/// A file index older than this is rebuilt (in the background) when the palette opens.
+pub const ASSET_INDEX_AGE: Duration = Duration::from_secs(10);
 
 const ROW: f32 = 28.0;
 const HEADER: f32 = 22.0;
@@ -141,11 +148,75 @@ pub struct Row {
     pub choice: Choice,
 }
 
-#[derive(Debug, Clone)]
-struct AssetFile {
-    rel: String,
-    kind: &'static str,
-    size: u64,
+/// One file of the game folder, in the asset index.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetFile {
+    /// Path relative to the game folder, with `/` separators.
+    pub rel: String,
+    /// "Scene", "Script", "Image"...
+    pub kind: &'static str,
+    /// Size in bytes.
+    pub size: u64,
+}
+
+/// The game folder's file list, built off the UI thread and reused between openings.
+#[derive(Debug, Default)]
+struct AssetIndex {
+    dir: Option<PathBuf>,
+    files: Arc<Vec<AssetFile>>,
+    built: Option<Instant>,
+    /// A scan running on a background thread.
+    pending: Option<Receiver<Vec<AssetFile>>>,
+}
+
+impl AssetIndex {
+    /// Starts a background scan of `dir` unless the index is fresh or a scan already runs.
+    fn refresh(&mut self, dir: &Path) {
+        let same = self.dir.as_deref() == Some(dir);
+        if !same {
+            self.dir = Some(dir.to_path_buf());
+            self.files = Arc::new(Vec::new());
+            self.built = None;
+            self.pending = None;
+        }
+        let fresh = self.built.is_some_and(|t| t.elapsed() < ASSET_INDEX_AGE);
+        if fresh || self.pending.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        let dir = dir.to_path_buf();
+        let spawned = std::thread::Builder::new()
+            .name("palette-assets".into())
+            .spawn(move || {
+                let _ = tx.send(scan_assets(&dir));
+            });
+        if spawned.is_ok() {
+            self.pending = Some(rx);
+        }
+    }
+
+    /// Takes a finished scan; true when the file list changed.
+    fn poll(&mut self) -> bool {
+        let Some(rx) = &self.pending else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(files) => {
+                self.pending = None;
+                self.built = Some(Instant::now());
+                let changed = *self.files != files;
+                if changed {
+                    self.files = Arc::new(files);
+                }
+                changed
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.pending = None;
+                false
+            }
+        }
+    }
 }
 
 /// The palette's state. One per editor window.
@@ -158,8 +229,11 @@ pub struct CommandPalette {
     rows: Vec<Row>,
     selected: usize,
     recent: VecDeque<&'static str>,
-    assets: Vec<AssetFile>,
+    assets: AssetIndex,
     guides: Vec<LearnEntry>,
+    /// Reused per query: (score, index) of the candidates, and the object walk's stack.
+    scored: Vec<(i32, u32)>,
+    stack: Vec<InstanceId>,
     /// Insert palette: screen position, world point and parent taken when it opened.
     insert_at: Option<(Pos2, Vec3, Option<InstanceId>)>,
     focus: bool,
@@ -214,13 +288,36 @@ impl CommandPalette {
         self.recent.iter().copied()
     }
 
-    /// Opens the search palette with `text` already typed ("" or ">"), listing the files of
-    /// `project_dir` for the Assets group.
+    /// Opens the search palette with `text` already typed ("" or ">"). The Assets group searches
+    /// the files of `project_dir`: the last index at once, while a stale one is rebuilt on a
+    /// background thread (the results update when it lands).
     pub fn open(&mut self, text: &str, project_dir: &Path) {
         self.mode = Some(PaletteMode::Search);
         self.set_query(text);
-        self.assets = scan_assets(project_dir);
+        self.assets.refresh(project_dir);
         self.reset();
+    }
+
+    /// True while the file index is being rebuilt.
+    pub fn is_indexing(&self) -> bool {
+        self.assets.pending.is_some()
+    }
+
+    /// Takes a finished file scan, if any; the next refresh searches it. True when it changed.
+    pub fn poll_index(&mut self) -> bool {
+        let changed = self.assets.poll();
+        if changed {
+            self.computed = None;
+        }
+        changed
+    }
+
+    /// Replaces the file index (tests and benchmarks).
+    #[doc(hidden)]
+    pub fn set_asset_index(&mut self, files: Vec<AssetFile>) {
+        self.assets.files = Arc::new(files);
+        self.assets.built = Some(Instant::now());
+        self.computed = None;
     }
 
     /// Opens the Insert palette at screen point `pos`; a part lands at `at` under `parent`.
@@ -256,6 +353,7 @@ impl CommandPalette {
     /// Recomputes the rows if the query or mode changed since the last time.
     pub fn refresh(&mut self, state: &EditorState, actions: &ActionRegistry, keymap: &Keymap) {
         let Some(mode) = self.mode else { return };
+        self.poll_index();
         if self
             .computed
             .as_ref()
@@ -286,47 +384,59 @@ impl CommandPalette {
             Some('#') => (Some(Group::Assets), raw[1..].trim()),
             _ => (None, raw),
         };
+        let m = Matcher::new(q);
         let wants = |g: Group| only.is_none_or(|o| o == g);
         let many = only.is_some();
         if wants(Group::Objects) && !q.is_empty() {
-            object_rows(&state.world, q, if many { 50 } else { 6 }, &mut self.rows);
+            let cap = if many { 50 } else { 6 };
+            object_rows(state, &m, cap, &mut self.stack, &mut self.rows);
         }
         if wants(Group::Assets) && !q.is_empty() {
-            let mut hits: Vec<(i32, &AssetFile)> = self
-                .assets
-                .iter()
-                .filter_map(|a| fuzzy_score(q, &a.rel).map(|s| (s, a)))
-                .collect();
-            hits.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.rel.cmp(&b.1.rel)));
-            hits.truncate(if many { 50 } else { 5 });
-            self.rows.extend(hits.into_iter().map(|(_, a)| Row {
-                group: Group::Assets,
-                title: a.rel.clone(),
-                detail: format!("{} · {}", a.kind, size_text(a.size)),
-                shortcut: String::new(),
-                enabled: true,
-                class: None,
-                choice: Choice::Asset(a.rel.clone()),
+            let files = Arc::clone(&self.assets.files);
+            self.scored.clear();
+            for (i, a) in files.iter().enumerate() {
+                if let Some(s) = m.score(&a.rel) {
+                    self.scored.push((s, i as u32));
+                }
+            }
+            let cap = if many { 50 } else { 5 };
+            top(&mut self.scored, cap);
+            self.rows.extend(self.scored.iter().map(|&(_, i)| {
+                let a = &files[i as usize];
+                Row {
+                    group: Group::Assets,
+                    title: a.rel.clone(),
+                    detail: format!("{} · {}", a.kind, size_text(a.size)),
+                    shortcut: String::new(),
+                    enabled: true,
+                    class: None,
+                    choice: Choice::Asset(a.rel.clone()),
+                }
             }));
         }
         if wants(Group::Commands) {
-            self.command_rows(state, actions, keymap, q, many);
+            self.command_rows(state, actions, keymap, &m, many);
         }
         if only.is_none() && !q.is_empty() {
-            let mut hits: Vec<(i32, &LearnEntry)> = self
-                .guides
-                .iter()
-                .filter_map(|g| fuzzy_score(q, &g.title).map(|s| (s, g)))
-                .collect();
-            hits.sort_by_key(|h| std::cmp::Reverse(h.0));
-            self.rows.extend(hits.into_iter().take(3).map(|(_, g)| Row {
-                group: Group::Learn,
-                title: g.title.clone(),
-                detail: g.detail.clone(),
-                shortcut: String::new(),
-                enabled: true,
-                class: None,
-                choice: Choice::Learn(g.url.clone()),
+            self.scored.clear();
+            for (i, g) in self.guides.iter().enumerate() {
+                if let Some(s) = m.score(&g.title) {
+                    self.scored.push((s, i as u32));
+                }
+            }
+            top(&mut self.scored, 3);
+            let guides = &self.guides;
+            self.rows.extend(self.scored.iter().map(|&(_, i)| {
+                let g = &guides[i as usize];
+                Row {
+                    group: Group::Learn,
+                    title: g.title.clone(),
+                    detail: g.detail.clone(),
+                    shortcut: String::new(),
+                    enabled: true,
+                    class: None,
+                    choice: Choice::Learn(g.url.clone()),
+                }
             }));
         }
         let question = q.to_string();
@@ -350,26 +460,43 @@ impl CommandPalette {
         state: &EditorState,
         actions: &ActionRegistry,
         keymap: &Keymap,
-        q: &str,
+        m: &Matcher,
         many: bool,
     ) {
-        let mut hits: Vec<(i32, Row)> = Vec::new();
-        for a in actions.iter() {
-            if a.id.starts_with("palette.") {
-                continue;
-            }
-            let Some(score) = fuzzy_score(q, &a.label).or_else(|| fuzzy_score(q, a.id)) else {
+        // Actions are indexed 0..n, then Insert classes n..n+k; rows are built for the kept
+        // ones only.
+        let list: Vec<&crate::actions::Action> = actions
+            .iter()
+            .filter(|a| !a.id.starts_with("palette."))
+            .collect();
+        let empty = m.is_empty();
+        self.scored.clear();
+        for (i, a) in list.iter().enumerate() {
+            let Some(score) = m.score(&a.label).or_else(|| m.score(a.id)) else {
                 continue;
             };
             // Recent commands first for an empty query.
             let recent = self.recent.iter().position(|r| *r == a.id);
-            let score = match (q.is_empty(), recent) {
-                (true, Some(i)) => 10_000 - i as i32,
+            let score = match (empty, recent) {
+                (true, Some(r)) => 10_000 - r as i32,
                 _ => score,
             };
-            hits.push((
-                score,
-                Row {
+            self.scored.push((score, i as u32));
+        }
+        let playing = state.play.is_playing();
+        if !playing {
+            for (k, &class) in INSERTABLE.iter().enumerate() {
+                if let Some(score) = m.score_parts("Insert ", class) {
+                    self.scored.push((score - 1, (list.len() + k) as u32));
+                }
+            }
+        }
+        let cap = if many || empty { 200 } else { 8 };
+        top(&mut self.scored, cap);
+        for &(_, i) in &self.scored {
+            let i = i as usize;
+            let row = match list.get(i) {
+                Some(a) => Row {
                     group: Group::Commands,
                     title: a.label.clone(),
                     detail: String::new(),
@@ -378,56 +505,50 @@ impl CommandPalette {
                     class: None,
                     choice: Choice::Run(a.id),
                 },
-            ));
-        }
-        if !state.play.is_playing() {
-            for &class in INSERTABLE {
-                let title = format!("Insert {class}");
-                if let Some(score) = fuzzy_score(q, &title) {
-                    hits.push((
-                        score - 1,
-                        Row {
-                            group: Group::Commands,
-                            title,
-                            detail: String::new(),
-                            shortcut: String::new(),
-                            enabled: true,
-                            class: Some(class),
-                            choice: Choice::Insert {
-                                class,
-                                parent: insert_parent(state),
-                                at: state.insert_point,
-                            },
+                None => {
+                    let class = INSERTABLE[i - list.len()];
+                    Row {
+                        group: Group::Commands,
+                        title: format!("Insert {class}"),
+                        detail: String::new(),
+                        shortcut: String::new(),
+                        enabled: true,
+                        class: Some(class),
+                        choice: Choice::Insert {
+                            class,
+                            parent: insert_parent(state),
+                            at: state.insert_point,
                         },
-                    ));
+                    }
                 }
-            }
+            };
+            self.rows.push(row);
         }
-        // Stable: equal scores keep registration order.
-        hits.sort_by_key(|h| std::cmp::Reverse(h.0));
-        let cap = if many || q.is_empty() { 200 } else { 8 };
-        self.rows
-            .extend(hits.into_iter().take(cap).map(|(_, row)| row));
     }
 
     fn search_insert(&mut self) {
         let Some((_, at, parent)) = self.insert_at else {
             return;
         };
-        let q = self.query.trim();
-        let mut hits: Vec<(i32, &'static str)> = INSERTABLE
-            .iter()
-            .filter_map(|&c| fuzzy_score(q, c).map(|s| (s, c)))
-            .collect();
-        hits.sort_by_key(|h| std::cmp::Reverse(h.0));
-        self.rows.extend(hits.into_iter().map(|(_, class)| Row {
-            group: Group::Insert,
-            title: class.to_string(),
-            detail: String::new(),
-            shortcut: String::new(),
-            enabled: true,
-            class: Some(class),
-            choice: Choice::Insert { class, parent, at },
+        let m = Matcher::new(self.query.trim());
+        self.scored.clear();
+        for (i, c) in INSERTABLE.iter().enumerate() {
+            if let Some(s) = m.score(c) {
+                self.scored.push((s, i as u32));
+            }
+        }
+        top(&mut self.scored, INSERTABLE.len());
+        self.rows.extend(self.scored.iter().map(|&(_, i)| {
+            let class = INSERTABLE[i as usize];
+            Row {
+                group: Group::Insert,
+                title: class.to_string(),
+                detail: String::new(),
+                shortcut: String::new(),
+                enabled: true,
+                class: Some(class),
+                choice: Choice::Insert { class, parent, at },
+            }
         }));
     }
 
@@ -509,6 +630,10 @@ impl CommandPalette {
             return None;
         }
         self.refresh(state, actions, keymap);
+        if self.is_indexing() {
+            // Pick up the background file scan when it lands.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         if down {
             self.move_selection(1);
         }
@@ -554,7 +679,8 @@ impl CommandPalette {
         };
         let mut picked = None;
         let area = egui::Area::new(egui::Id::unique("command-palette"))
-            .order(egui::Order::Foreground)
+            // Above every other overlay (menus, toasts, the play bar), below only debug paint.
+            .order(egui::Order::Tooltip)
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 egui::Frame::new()
@@ -738,17 +864,45 @@ pub fn insert_parent(state: &EditorState) -> Option<InstanceId> {
         .filter(|&a| !state.world.is_a(a, "BasePart"))
 }
 
-/// Instances matching `q`, one row per (name, class), best first, at most `cap` rows.
-fn object_rows(world: &World, q: &str, cap: usize, out: &mut Vec<Row>) {
-    struct Hit {
+/// Keeps the `cap` best of `scored` (highest score first; equal scores keep their order).
+fn top(scored: &mut Vec<(i32, u32)>, cap: usize) {
+    if scored.len() > cap && cap > 0 {
+        // Partition first so only the kept ones are sorted.
+        scored.select_nth_unstable_by(cap - 1, |a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        scored.truncate(cap);
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+}
+
+/// Live instances matching `m`, one row per (name, class), best first, at most `cap` rows.
+/// Objects parked for undo (deleted, still restorable) are skipped. At most
+/// [`MAX_OBJECT_CANDIDATES`] distinct names are scored; later instances still add to their
+/// counts.
+fn object_rows(
+    state: &EditorState,
+    m: &Matcher,
+    cap: usize,
+    stack: &mut Vec<InstanceId>,
+    out: &mut Vec<Row>,
+) {
+    struct Hit<'w> {
         score: i32,
-        name: String,
+        name: &'w str,
         class: &'static str,
         ids: Vec<InstanceId>,
     }
-    let mut hits: Vec<Hit> = Vec::new();
-    let mut index: HashMap<(String, &'static str), usize> = HashMap::new();
-    let mut stack: Vec<InstanceId> = world.roots().iter().rev().copied().collect();
+    let world = &state.world;
+    let mut hits: Vec<Hit<'_>> = Vec::new();
+    let mut index: HashMap<(&str, &'static str), usize> = HashMap::new();
+    stack.clear();
+    stack.extend(
+        world
+            .roots()
+            .iter()
+            .rev()
+            .copied()
+            .filter(|&r| !state.history.is_parked(r)),
+    );
     while let Some(id) = stack.pop() {
         stack.extend(world.children(id).iter().rev());
         let Some(class) = world.class_name(id) else {
@@ -758,23 +912,33 @@ fn object_rows(world: &World, q: &str, cap: usize, out: &mut Vec<Row>) {
             Ok(Value::String(s)) => s.as_str(),
             _ => class,
         };
-        let score = fuzzy_score(q, name).or_else(|| fuzzy_score(q, class).map(|s| s - 50));
-        let Some(score) = score else { continue };
-        match index.get(&(name.to_string(), class)) {
-            Some(&i) => hits[i].ids.push(id),
-            None => {
-                index.insert((name.to_string(), class), hits.len());
-                hits.push(Hit {
-                    score,
-                    name: name.to_string(),
-                    class,
-                    ids: vec![id],
-                });
-            }
+        if let Some(&i) = index.get(&(name, class)) {
+            hits[i].ids.push(id);
+            continue;
         }
+        if hits.len() >= MAX_OBJECT_CANDIDATES {
+            continue;
+        }
+        let Some(score) = m.score(name).or_else(|| m.score(class).map(|s| s - 50)) else {
+            continue;
+        };
+        index.insert((name, class), hits.len());
+        hits.push(Hit {
+            score,
+            name,
+            class,
+            ids: vec![id],
+        });
     }
-    hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
-    out.extend(hits.into_iter().take(cap).map(|h| {
+    let mut order: Vec<(i32, u32)> = hits
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.score, i as u32))
+        .collect();
+    top(&mut order, cap);
+    let mut hits: Vec<Option<Hit<'_>>> = hits.into_iter().map(Some).collect();
+    out.extend(order.iter().filter_map(|&(_, i)| {
+        let h = hits[i as usize].take()?;
         let path = world
             .parent(h.ids[0])
             .map(|p| world.full_name(p))
@@ -783,9 +947,9 @@ fn object_rows(world: &World, q: &str, cap: usize, out: &mut Vec<Row>) {
             1 => String::new(),
             n => format!(" · {n} objects"),
         };
-        Row {
+        Some(Row {
             group: Group::Objects,
-            title: h.name,
+            title: h.name.to_string(),
             detail: if path.is_empty() {
                 format!("{}{count}", h.class)
             } else {
@@ -795,64 +959,122 @@ fn object_rows(world: &World, q: &str, cap: usize, out: &mut Vec<Row>) {
             enabled: true,
             class: Some(h.class),
             choice: Choice::Select(h.ids),
-        }
+        })
     }));
+}
+
+/// A lowered query, scored against many texts without allocating. See [`fuzzy_score`].
+#[derive(Debug, Clone, Default)]
+pub struct Matcher {
+    q: Vec<char>,
+}
+
+fn lower(c: char) -> char {
+    if c.is_ascii() {
+        c.to_ascii_lowercase()
+    } else {
+        c.to_lowercase().next().unwrap_or(c)
+    }
+}
+
+/// A word starts at `here` after `prev` (`None` at the start): after a non-letter-or-digit, or
+/// at a lower-to-upper case change ("frameAll").
+fn word_start(prev: Option<char>, here: char) -> bool {
+    match prev {
+        None => true,
+        Some(p) => !p.is_alphanumeric() || (p.is_lowercase() && here.is_uppercase()),
+    }
+}
+
+impl Matcher {
+    /// Lowers `query` once.
+    pub fn new(query: &str) -> Matcher {
+        Matcher {
+            q: query.chars().map(lower).collect(),
+        }
+    }
+
+    /// True for the empty query (it matches everything).
+    pub fn is_empty(&self) -> bool {
+        self.q.is_empty()
+    }
+
+    /// The score of `text`; see [`fuzzy_score`]. One pass over `text` plus, at each place the
+    /// first query letter occurs, a check of at most the query's length.
+    pub fn score(&self, text: &str) -> Option<i32> {
+        self.score_parts("", text)
+    }
+
+    /// The score of `head` followed by `tail` ("Insert " + class), without joining them.
+    pub fn score_parts(&self, head: &str, tail: &str) -> Option<i32> {
+        let q = &self.q;
+        if q.is_empty() {
+            return Some(0);
+        }
+        let text = head.chars().chain(tail.chars());
+        let mut best_sub = 0; // 3000 start, 2000 word start, 1000 inside
+        let mut initials = 0;
+        let mut seq = 0;
+        let mut seq_score = 0;
+        let mut last_seq: Option<usize> = None;
+        let mut prev: Option<char> = None;
+        let mut n = 0usize;
+        for (i, c) in text.clone().enumerate() {
+            n += 1;
+            let lc = lower(c);
+            let ws = word_start(prev, c);
+            if best_sub < 3000 && lc == q[0] {
+                let matches = text
+                    .clone()
+                    .skip(i)
+                    .take(q.len())
+                    .map(lower)
+                    .eq(q.iter().copied());
+                if matches {
+                    let place = if i == 0 {
+                        3000
+                    } else if ws {
+                        2000
+                    } else {
+                        1000
+                    };
+                    best_sub = best_sub.max(place);
+                }
+            }
+            if ws && initials < q.len() && lc == q[initials] {
+                initials += 1;
+            }
+            if seq < q.len() && lc == q[seq] {
+                seq_score += if ws { 30 } else { 10 };
+                if i > 0 && last_seq == Some(i - 1) {
+                    seq_score += 15;
+                }
+                last_seq = Some(i);
+                seq += 1;
+            }
+            prev = Some(c);
+        }
+        let short = 100 - n.min(100) as i32;
+        if best_sub >= 2000 {
+            return Some(best_sub + short);
+        }
+        if initials == q.len() {
+            return Some(1500 + short);
+        }
+        if best_sub == 1000 {
+            return Some(1000 + short);
+        }
+        (seq == q.len()).then_some(seq_score + short / 10)
+    }
 }
 
 /// How well `query` matches `text`, higher is better; `None` when it does not match. Case is
 /// ignored. Best first: the text starts with the query, a word starts with it, the query is the
 /// words' initials, the query is inside a word, the letters are scattered in order. Shorter texts
-/// win ties. An empty query matches everything with 0.
+/// win ties. An empty query matches everything with 0. To score many texts, build a [`Matcher`]
+/// once.
 pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
-    if query.is_empty() {
-        return Some(0);
-    }
-    let q: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
-    let t: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
-    let word_start = |i: usize| {
-        i == 0 || {
-            let prev = text.chars().nth(i - 1).unwrap_or(' ');
-            let here = text.chars().nth(i).unwrap_or(' ');
-            !prev.is_alphanumeric() || (prev.is_lowercase() && here.is_uppercase())
-        }
-    };
-    let short = 100 - t.len().min(100) as i32;
-    // Substring at the start or at a word start.
-    let pos = t.windows(q.len()).position(|w| w == q.as_slice());
-    match pos {
-        Some(0) => return Some(3000 + short),
-        Some(p) if word_start(p) => return Some(2000 + short),
-        _ => {}
-    }
-    // Initials ("fs" for "Frame selection").
-    let mut qi = 0;
-    for (i, &c) in t.iter().enumerate() {
-        if qi < q.len() && word_start(i) && c == q[qi] {
-            qi += 1;
-        }
-    }
-    if qi == q.len() {
-        return Some(1500 + short);
-    }
-    // Substring inside a word.
-    if pos.is_some() {
-        return Some(1000 + short);
-    }
-    // Letters in order.
-    let mut score = 0;
-    let mut qi = 0;
-    let mut last = None;
-    for (i, &c) in t.iter().enumerate() {
-        if qi < q.len() && c == q[qi] {
-            score += if word_start(i) { 30 } else { 10 };
-            if last == Some(i.wrapping_sub(1)) {
-                score += 15;
-            }
-            last = Some(i);
-            qi += 1;
-        }
-    }
-    (qi == q.len()).then_some(score + short / 10)
+    Matcher::new(query).score(text)
 }
 
 fn size_text(bytes: u64) -> String {
@@ -922,6 +1144,7 @@ mod tests {
     use super::*;
     use crate::actions::default_actions;
     use crate::output::OutputLog;
+    use metallic_core::World;
 
     fn state() -> EditorState {
         let mut world = World::new_with_services();
@@ -1044,6 +1267,113 @@ mod tests {
 
         p.open("lava", Path::new("."));
         assert!(matches!(p.ask_litha(), Choice::AskLitha(q) if q == "lava"));
+    }
+
+    #[test]
+    fn deleted_objects_are_not_found() {
+        let mut s = state();
+        let ws = s.world.root("Workspace").unwrap();
+        let ghost = s.world.create("Part", Some(ws)).unwrap();
+        s.world
+            .set(ghost, "Name", Value::String("Ghost".into()))
+            .unwrap();
+        let actions = default_actions();
+        let keymap = Keymap::metallic();
+        let mut p = CommandPalette::new();
+        p.open("@ghost", Path::new("."));
+        p.refresh(&s, &actions, &keymap);
+        assert_eq!(p.rows()[0].title, "Ghost");
+        s.selection.select_only(ghost);
+        s.delete_selection();
+        assert!(s.history.is_parked(ghost), "kept for undo");
+        p.set_query("@ghos");
+        p.refresh(&s, &actions, &keymap);
+        assert!(
+            p.rows().iter().all(|r| r.group != Group::Objects),
+            "a deleted object is not offered: {:?}",
+            p.rows()
+        );
+    }
+
+    #[test]
+    fn scorer_matches_the_reference_rules_without_allocating_per_text() {
+        let m = Matcher::new("fs");
+        assert!(m.score("Frame selection").unwrap() > m.score("Offset").unwrap());
+        assert_eq!(m.score_parts("Insert ", "Part"), fuzzy_score("fs", "Insert Part"));
+        let m = Matcher::new("ins pa");
+        assert_eq!(m.score_parts("Insert ", "Part"), fuzzy_score("ins pa", "Insert Part"));
+        assert!(Matcher::new("ÉCO").score("écoute").is_some(), "non-ASCII case");
+    }
+
+    /// 10k instances and 5000 paths, several keystrokes. The budget is 2 ms per query in an
+    /// optimised build; debug builds are an order of magnitude slower, so they get 40 ms.
+    #[test]
+    fn a_keystroke_over_10k_instances_and_5000_files_is_fast() {
+        let mut world = World::new_with_services();
+        let ws = world.root("Workspace").unwrap();
+        for i in 0..10_000u32 {
+            let folder = i % 50 == 0;
+            let id = world
+                .create(if folder { "Folder" } else { "Part" }, Some(ws))
+                .unwrap();
+            world
+                .set(id, "Name", Value::String(format!("Block{}", i % 700)))
+                .unwrap();
+        }
+        let s = EditorState::new(
+            world,
+            Path::new("."),
+            Path::new("unused.mscene"),
+            "Test",
+            OutputLog::new(64).sink(),
+        );
+        let files: Vec<AssetFile> = (0..5000u32)
+            .map(|i| AssetFile {
+                rel: format!("assets/level{}/props/crate_{i}.glb", i % 40),
+                kind: "Model",
+                size: u64::from(i) * 100,
+            })
+            .collect();
+        let actions = default_actions();
+        let keymap = Keymap::metallic();
+        let mut p = CommandPalette::new();
+        p.open("", Path::new("."));
+        p.set_asset_index(files);
+        let budget = if cfg!(debug_assertions) { 40.0 } else { 2.0 };
+        let mut worst: f64 = 0.0;
+        for q in ["b", "bl", "blo", "block4", "crate", "lvl", "zz"] {
+            p.set_query(q);
+            let t = Instant::now();
+            p.refresh(&s, &actions, &keymap);
+            worst = worst.max(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        assert!(worst < budget, "worst query took {worst:.2} ms");
+    }
+
+    #[test]
+    fn the_file_index_is_built_in_the_background_and_reused() {
+        let dir = std::env::temp_dir().join(format!("palette-index-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(dir.join("art"));
+        std::fs::write(dir.join("art/coin_spin.png"), b"x").unwrap();
+        let s = state();
+        let actions = default_actions();
+        let keymap = Keymap::metallic();
+        let mut p = CommandPalette::new();
+        p.open("#coin_spin", &dir);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while p.is_indexing() && Instant::now() < deadline {
+            p.poll_index();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        p.refresh(&s, &actions, &keymap);
+        assert_eq!(p.rows()[0].title, "art/coin_spin.png");
+        // A second opening within ASSET_INDEX_AGE reuses the index: no new scan.
+        p.close();
+        p.open("#coin", &dir);
+        assert!(!p.is_indexing());
+        let _ = std::fs::remove_file(dir.join("art/coin_spin.png"));
+        let _ = std::fs::remove_dir(dir.join("art"));
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
