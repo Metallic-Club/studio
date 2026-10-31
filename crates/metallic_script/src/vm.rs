@@ -96,7 +96,8 @@ fn setup_failed(e: Error) -> ScriptError {
 }
 
 /// Lua that bounds `string.rep` (results over 64 MB are rejected, also when the count is
-/// a numeric string). The pattern functions are bounded in `pattern.rs`.
+/// a numeric string) and `table.sort` without a comparator (tables over 2^18 elements are
+/// rejected, #274). The pattern functions are bounded in `pattern.rs`.
 const STRING_LIMITS: &str = r#"
 local string, type, error, tonumber, tostring = string, type, error, tonumber, tostring
 local rep = string.rep
@@ -107,6 +108,19 @@ string.rep = function(s, n)
         error("string.rep: result too large (limit 64 MB)", 2)
     end
     return rep(s, n)
+end
+
+-- #274: table.sort without a comparator runs entirely in C, where the time budget's interrupt
+-- cannot fire. Tables over MAX_SORT must pass a comparator (a Lua function, so interruptible);
+-- the sort itself and its error behaviour are Luau's own.
+local table, rawlen = table, rawlen
+local sort = table.sort
+local MAX_SORT = 262144
+table.sort = function(t, comp)
+    if comp == nil and type(t) == "table" and rawlen(t) > MAX_SORT then
+        error("table.sort: table too large to sort without a comparator (limit 262144)", 2)
+    end
+    return sort(t, comp)
 end
 "#;
 

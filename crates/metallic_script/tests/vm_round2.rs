@@ -295,3 +295,76 @@ fn long_bracket_class_lazy_is_bounded() {
          string.find(string.rep('a', 100000), '[' .. class .. ']-c')",
     );
 }
+
+#[test]
+fn big_sort_without_comparator_is_refused_fast() {
+    // #274: 8M numbers sorted in C ran 1.1 s past the budget (1M here keeps the test light). Now it is refused up front.
+    let (mut vm, _) = vm();
+    let start = Instant::now();
+    let err = vm
+        .run_script("T", "local t = table.create(1000000, 1) table.sort(t)")
+        .unwrap_err();
+    assert!(
+        err.message.contains("table.sort: table too large"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.starts_with("T:1:"), "{}", err.message);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        start.elapsed()
+    );
+    // Raw length counts: a __len metamethod cannot hide the size.
+    let err = vm
+        .run_script(
+            "T",
+            "local t = setmetatable(table.create(2000000, 1), {__len = function() return 1 end}) table.sort(t)",
+        )
+        .unwrap_err();
+    assert!(err.message.contains("too large"), "{}", err.message);
+}
+
+#[test]
+fn big_sort_with_a_comparator_stays_interruptible() {
+    let (mut vm, _) = vm();
+    let start = Instant::now();
+    let err = vm
+        .run_script(
+            "T",
+            "local t = table.create(2000000, 1) table.sort(t, function(a, b) while true do end end)",
+        )
+        .unwrap_err();
+    assert!(err.message.contains("Script timeout"), "{}", err.message);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn normal_sorts_behave_as_before() {
+    let (mut vm, _) = vm();
+    vm.run_script(
+        "T",
+        "local t = {5, 2, 9, 1, 7}
+         table.sort(t)
+         assert(table.concat(t, ',') == '1,2,5,7,9')
+         table.sort(t, function(a, b) return a > b end)
+         assert(table.concat(t, ',') == '9,7,5,2,1')
+         local w = {'b', 'a', 'c'}
+         table.sort(w)
+         assert(w[1] == 'a' and w[3] == 'c')
+         -- a table at the limit still sorts, errors keep Luau's own wording
+         local big = table.create(262144, 3)
+         big[1] = 1
+         table.sort(big)
+         assert(big[1] == 1)
+         local ok, e = pcall(table.sort, 5)
+         assert(not ok)
+         local ok2, e2 = pcall(table.sort, {3, 'x', 1})
+         assert(not ok2)",
+    )
+    .unwrap();
+}

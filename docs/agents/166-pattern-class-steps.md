@@ -48,3 +48,13 @@ cargo fmt --all -- --check
 
 ## Open questions
 - None for #166.
+
+## #274: table.sort without a comparator
+- `STRING_LIMITS` in `vm.rs` also wraps `table.sort`: with no comparator and a raw length above
+  262144 (2^18, about 35 ms of C sort) it raises `table.sort: table too large to sort without a
+  comparator (limit 262144)`. With a comparator the sort runs Lua callbacks, so the interrupt still
+  fires. Luau's own sort, ordering and error texts are unchanged for everything else.
+- Why a cap and not a Rust sort: keeps Luau's exact semantics (`invalid order function`, error
+  wording). No change to property reads and writes, so the `instructions` gate is not affected.
+- Tests in `tests/vm_round2.rs`: `big_sort_without_comparator_is_refused_fast`,
+  `big_sort_with_a_comparator_stays_interruptible`, `normal_sorts_behave_as_before`.
