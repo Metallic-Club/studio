@@ -30,29 +30,15 @@ fn size_in_limits(size: Vec3) -> bool {
         .all(|v| (MIN_PART_SIZE..=MAX_PART_SIZE).contains(v))
 }
 
-/// `cf` with its rotation made orthonormal (Gram-Schmidt on the right and up axes), as Roblox
-/// does with the CFrames it stores. Errors when the rotation is degenerate or not finite.
+/// `cf` with its rotation made orthonormal by the stored-CFrame rule
+/// ([`CFrame::try_orthonormalize`]: keeps the look vector), as `World::set` stores it. Errors
+/// when the rotation is degenerate or not finite.
 pub fn orthonormal(cf: CFrame, property: &str) -> Result<CFrame, CoreError> {
     if !cf.is_finite() {
         return Err(wrong(property, "all numeric components must be finite"));
     }
-    let right = cf.right_vector();
-    let up = cf.up_vector();
-    let rm = right.magnitude();
-    let degenerate = || wrong(property, "the rotation is degenerate");
-    if rm < 1e-9 {
-        return Err(degenerate());
-    }
-    let rest = up - right * (dot(up, right) / (rm * rm));
-    if rest.magnitude() < 1e-9 * up.magnitude().max(1.0) {
-        return Err(degenerate());
-    }
-    let out = cf.orthonormalize();
-    if out.is_finite() {
-        Ok(out)
-    } else {
-        Err(degenerate())
-    }
+    cf.try_orthonormalize()
+        .ok_or_else(|| wrong(property, "the rotation is degenerate"))
 }
 
 /// Property writes planned by an operation. They are all checked before any is applied, so a

@@ -221,3 +221,49 @@ fn part_cframe_maps_onto_position_and_orientation() {
         "{o:?}"
     );
 }
+
+#[test]
+fn cframe_new_twelve_numbers_is_orthonormal() {
+    let lines = run(r#"
+        local V = Vector3.new
+        local function dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+        local function cross(a, b)
+            return V(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X)
+        end
+        -- Unit, perpendicular, right-handed axes.
+        local function orthonormal(cf, what)
+            local r, u, b = cf.RightVector, cf.UpVector, cf.ZVector
+            near(r.Magnitude, 1, what .. " right length")
+            near(u.Magnitude, 1, what .. " up length")
+            near(b.Magnitude, 1, what .. " back length")
+            near(dot(r, u), 0, what .. " right.up")
+            near(dot(u, b), 0, what .. " up.back")
+            near(dot(b, r), 0, what .. " back.right")
+            near(cross(r, u), b, what .. " handedness")
+        end
+        -- An orthonormal matrix is kept bit for bit.
+        local m = CFrame.new(1, 2, 3, 0, 0, 1, 0, 1, 0, -1, 0, 0)
+        assert(m == CFrame.fromMatrix(V(1, 2, 3), V(0, 0, -1), V(0, 1, 0), V(1, 0, 0)), "kept")
+        local turned = CFrame.new(4, 5, 6) * CFrame.Angles(0.3, -0.7, 1.1)
+        assert(CFrame.new(turned:GetComponents()) == turned, "round trip")
+        -- Scaled: 2 on the diagonal is the plain rotation.
+        local scaled = CFrame.new(1, 2, 3, 2, 0, 0, 0, 2, 0, 0, 0, 2)
+        orthonormal(scaled, "scaled")
+        same(scaled, CFrame.new(1, 2, 3), "scaled")
+        -- Skewed: right (1, 0, 0), up (1, 1, 0), back (0, 0, 2). The look vector is kept.
+        local skewed = CFrame.new(0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 2)
+        orthonormal(skewed, "skewed")
+        near(skewed.LookVector, V(0, 0, -1), "skewed look")
+        near(skewed.UpVector, V(1, 1, 0).Unit, "skewed up")
+        -- What a script builds is what a property stores.
+        local p = Instance.new("Part")
+        p.PivotOffset = skewed
+        assert(p.PivotOffset == skewed, "stored as built")
+        -- A matrix that cannot be fixed falls back to the identity rotation at the position.
+        local zero = CFrame.new(7, 8, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        assert(zero == CFrame.new(7, 8, 9), "zero matrix")
+        local flat = CFrame.new(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1)
+        assert(flat == CFrame.new(), "parallel columns")
+    "#);
+    assert_eq!(lines, ["print:ok"]);
+}

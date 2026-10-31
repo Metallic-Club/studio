@@ -449,18 +449,20 @@ fn pivot_offset_is_made_orthonormal() {
         -- A scaled rotation (2 on the diagonal) is stored as the plain rotation.
         p.PivotOffset = CFrame.new(1, 2, 3, 2, 0, 0, 0, 2, 0, 0, 0, 2)
         same(p.PivotOffset, CFrame.new(1, 2, 3), "scaled matrix")
-        -- A skewed one: right (1, 0, 0), up (1, 1, 0); Gram-Schmidt keeps right, fixes up.
+        -- A skewed one: right (1, 0, 0), up (1, 1, 0), back (0, 0, 1). Gram-Schmidt keeps the
+        -- look vector and up's direction across it, so the frame turns -45 degrees about Z.
         p.PivotOffset = CFrame.new(0, -1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1)
-        same(p.PivotOffset, CFrame.new(0, -1, 0), "skewed matrix")
+        same(p.PivotOffset, CFrame.new(0, -1, 0) * CFrame.Angles(0, 0, -math.pi / 4), "skewed matrix")
         local target = CFrame.new(5, 6, 7) * CFrame.Angles(0.3, 0.6, 0.9)
         p:PivotTo(target)
         same(p:GetPivot(), target, "round trip")
-        -- A skewed target lands as its orthonormal version.
-        local skewed = CFrame.new(1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1)
+        -- A skewed target (fromMatrix keeps its axes as given) lands as its orthonormal version.
+        local skewed = CFrame.fromMatrix(V(1, 1, 1), V(1, 0, 0), V(1, 1, 0), V(0, 0, 1))
         p:PivotTo(skewed)
         same(p:GetPivot(), skewed:Orthonormalize(), "skewed target")
-        print(pcall(function() p.PivotOffset = CFrame.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) end))
-        print(pcall(function() p:PivotTo(CFrame.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) end))
+        local zero = CFrame.fromMatrix(V(0, 0, 0), V(0, 0, 0), V(0, 0, 0), V(0, 0, 0))
+        print(pcall(function() p.PivotOffset = zero end))
+        print(pcall(function() p:PivotTo(zero) end))
     "#);
     assert_eq!(lines.len(), 3, "{lines:?}");
     for line in &lines[..2] {
