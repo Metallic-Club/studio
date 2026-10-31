@@ -29,6 +29,7 @@ struct Globals {
     moon_disc: vec4<f32>,      // xyz: toward the moon, w: cos(disc radius)
     celestial: vec4<f32>,      // x: sun disc scale, y: moon radiance, z: bodies shown, w: night
     light_toon: vec4<f32>,     // x: toon light of the default lighting (reference), y: auto exposure
+    debug: vec4<f32>,          // x: debug view (src/debug_views.rs `shader_mode`; 0 off)
 }
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -45,6 +46,11 @@ fn sky_gradient(d: vec3<f32>) -> vec3<f32> {
     return select(above, below, up < 0.0);
 }
 
+// The debug view (#23): 0 off, 1 wireframe, 2 normals, 3 overdraw, 4 shadow cascades, 5 exposure.
+fn debug_mode() -> i32 {
+    return i32(g.debug.x + 0.5);
+}
+
 // The scene colour that the finish pass maps to the display-linear colour `y` (0..1), before
 // grading: the inverse of the tone curve and exposure. Toon shading picks display colours
 // directly and goes through this, so it lands in the HDR target like any other light.
@@ -54,4 +60,16 @@ fn unfinish(y: vec3<f32>) -> vec3<f32> {
         m = 1.0;
     }
     return invert_curve(y, u32(g.params.y + 0.5)) / max(g.params.z * m, 1e-6);
+}
+
+// The sky behind a debug view: dark graphite behind wireframes, black behind overdraw.
+fn debug_background(col: vec3<f32>) -> vec3<f32> {
+    let mode = debug_mode();
+    if (mode == 1) {
+        return unfinish(vec3<f32>(0.035, 0.037, 0.045));
+    }
+    if (mode == 3) {
+        return vec3<f32>(0.0);
+    }
+    return col;
 }

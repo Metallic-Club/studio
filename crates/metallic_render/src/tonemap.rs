@@ -214,6 +214,8 @@ pub(crate) struct FinishUniform {
     tint_exposure: [f32; 4],
     grade: [f32; 4],
     mode: [f32; 4],
+    /// x: 1 shows the exposure light meter instead of the image (#23).
+    debug: [f32; 4],
 }
 
 impl FinishUniform {
@@ -221,7 +223,13 @@ impl FinishUniform {
     pub(crate) const AUTO_OFFSET: u64 = (std::mem::offset_of!(FinishUniform, mode) + 12) as u64;
 
     /// `exposure` is the scene exposure (the sky's), multiplied with the settings' own.
-    pub(crate) fn new(s: &FinishSettings, exposure: f32, output_srgb: bool) -> FinishUniform {
+    /// `light_meter` replaces the image with the exposure false colour (#23 debug view).
+    pub(crate) fn new(
+        s: &FinishSettings,
+        exposure: f32,
+        output_srgb: bool,
+        light_meter: bool,
+    ) -> FinishUniform {
         let e = exposure * s.total_exposure();
         FinishUniform {
             tint_exposure: [s.tint[0], s.tint[1], s.tint[2], e],
@@ -233,6 +241,7 @@ impl FinishUniform {
                 // Auto exposure multiplier; the meter's GPU copy overwrites it.
                 1.0,
             ],
+            debug: [f32::from(u8::from(light_meter)), 0.0, 0.0, 0.0],
         }
     }
 }

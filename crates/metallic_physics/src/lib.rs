@@ -31,6 +31,7 @@ mod alloc_count;
 mod avatar;
 mod body;
 mod character;
+mod debug_draw;
 mod sync;
 mod touched;
 
@@ -40,6 +41,10 @@ pub use character::{
     CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT,
     MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, SupportContact, WORLD_LIMIT,
     place_character, spawn_character,
+};
+pub use debug_draw::{
+    DebugBody, DebugCapsule, DebugContact, DebugDraw, DebugDrawOptions, DebugShape, DebugShapeKind,
+    DebugVelocity,
 };
 pub use sync::{MaterialProps, material_props};
 

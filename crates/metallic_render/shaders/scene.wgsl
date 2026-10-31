@@ -223,5 +223,6 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
     var col = direct + ambient;
     col = apply_fog(col, in.world_pos);
+    col = debug_scene(col, n, ndl * sh, view_depth);
     return vec4<f32>(col, in.color.a);
 }

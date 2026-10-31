@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 /// Usage text printed for bad arguments.
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
-[--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
+[--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--debug-view NAME] [--debug-physics] [--frames N] \
 [--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist|touch] \
 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]";
 
@@ -27,6 +27,11 @@ pub struct Args {
     /// Play without a person: run forward in a circle and jump every few seconds (to measure the
     /// frame rate with the character animating).
     pub autopilot: bool,
+    /// Debug view to start in (`--debug-view wireframe|normals|overdraw|cascades|exposure`;
+    /// F4 cycles them).
+    pub debug_view: metallic_render::DebugView,
+    /// Start with the physics debug draw on (F6 toggles it).
+    pub debug_physics: bool,
     /// Frames to save as PNG: (frame number, path).
     pub captures: Vec<(u64, PathBuf)>,
     /// Camera position and look-at point for captured frames instead of the game camera (for
@@ -62,6 +67,8 @@ impl Args {
             quality: Quality::High,
             fps: false,
             autopilot: false,
+            debug_view: metallic_render::DebugView::Off,
+            debug_physics: false,
             captures: Vec::new(),
             capture_view: None,
             input_script: None,
@@ -102,6 +109,12 @@ impl Args {
                     args.menu = Some(v);
                 }
                 "--autopilot" => args.autopilot = true,
+                "--debug-view" => {
+                    let v = value("--debug-view")?;
+                    args.debug_view = metallic_render::DebugView::from_name(&v)
+                        .ok_or(format!("unknown debug view `{v}`"))?;
+                }
+                "--debug-physics" => args.debug_physics = true,
                 "--frames" => {
                     let v = value("--frames")?;
                     args.frames = Some(v.parse().map_err(|_| format!("bad frame count `{v}`"))?);

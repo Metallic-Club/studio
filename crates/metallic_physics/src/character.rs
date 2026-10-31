@@ -658,6 +658,29 @@ impl CharacterController {
             .map_or_else(|| BodyPose::rest(yaw), |b| b.volumes.pose(yaw))
     }
 
+    /// Adds every character's touch volumes, placed as the last step placed them and grown by
+    /// the touch margin, to `out` (#23 debug draw). A volume touching a part is marked.
+    pub fn debug_touch_volumes(&self, world: &World, out: &mut Vec<crate::DebugCapsule>) {
+        for (character, body) in &self.bodies {
+            let Some(Ok(Value::Vector3(root))) = body.ids.root().map(|r| world.get(r, "Position"))
+            else {
+                continue;
+            };
+            let pose = self.body_pose(*character);
+            let margin = TOUCH_MARGIN;
+            for part in BodyPart::ALL {
+                let (a, b) = pose.world_ends(part, root);
+                let hit = part.index() as crate::body::Hit;
+                out.push(crate::DebugCapsule {
+                    a,
+                    b,
+                    radius: part.radius() + margin,
+                    touching: body.volumes.touching.iter().any(|c| c.hit == hit),
+                });
+            }
+        }
+    }
+
     /// What touches `part` after the character's last step, in [`BodyPart::ALL`] order with the
     /// movement capsule (`None`, reported as the `HumanoidRootPart`) last.
     pub fn touching(&self, character: InstanceId, part: InstanceId) -> Vec<Option<BodyPart>> {

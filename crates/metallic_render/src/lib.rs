@@ -14,6 +14,7 @@
 
 pub mod bloom;
 pub mod camera;
+pub mod debug_views;
 pub mod exposure;
 pub mod lighting;
 pub mod materials;
@@ -30,6 +31,7 @@ mod renderer;
 
 pub use camera::Camera;
 pub use context::{RenderContext, RenderError};
+pub use debug_views::{DebugShape, DebugView};
 pub use exposure::{AutoExposure, ExposureMode, ExposureState};
 pub use glam;
 pub use lighting::LightingInputs;

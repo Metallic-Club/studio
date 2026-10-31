@@ -190,6 +190,14 @@ impl PlayView for LocalPlaySession {
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World)) {
         let _ = self.inspect_world(|world| inspect(world));
     }
+
+    fn set_debug_draw(&mut self, options: metallic_runtime::DebugDrawOptions) {
+        if let Some(game) = &mut self.game
+            && game.0.debug_draw() != options
+        {
+            game.0.set_debug_draw(options);
+        }
+    }
 }
 
 #[cfg(test)]

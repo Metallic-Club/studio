@@ -3,6 +3,7 @@
 use crate::bloom::{BLOOM_PASS, BloomPass};
 use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
+use crate::debug_views::{DebugShape, DebugView, coarse_mesh, edge_indices};
 use crate::exposure::{AutoExposure, ExposureGpu, ExposureState};
 use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_exposure};
 use crate::meshes::{MeshKind, Vertex};
@@ -34,6 +35,7 @@ const LIGHTING_WGSL: &str = include_str!("../shaders/lighting.wgsl");
 const SHADOW_WGSL: &str = include_str!("../shaders/shadow.wgsl");
 const SKIN_COMMON_WGSL: &str = include_str!("../shaders/skin_common.wgsl");
 const SKINNED_WGSL: &str = include_str!("../shaders/skinned.wgsl");
+const DEBUG_WGSL: &str = include_str!("../shaders/debug.wgsl");
 
 // The WGSL files each shader module is joined from.
 const SCENE_PARTS: &[&str] = &[
@@ -44,6 +46,7 @@ const SCENE_PARTS: &[&str] = &[
     SKIN_COMMON_WGSL,
     SCENE_WGSL,
     SKINNED_WGSL,
+    DEBUG_WGSL,
 ];
 const SKY_PARTS: &[&str] = &[
     COLOR_WGSL,
@@ -116,6 +119,8 @@ struct Globals {
     params: [f32; 4],
     viewport: [f32; 4],
     lighting: LightingUniform,
+    /// x: the debug view (`DebugView::shader_mode`).
+    debug: [f32; 4],
 }
 
 const MESH_ATTRS: [wgpu::VertexAttribute; 2] =
@@ -143,6 +148,9 @@ struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// Line list of the mesh's edges (wireframe and debug shapes).
+    edges: wgpu::Buffer,
+    edge_count: u32,
 }
 
 /// A growable GPU buffer of instances.
@@ -187,6 +195,12 @@ struct Pipelines {
     skinned_toon: wgpu::RenderPipeline,
     skinned_outline: wgpu::RenderPipeline,
     skinned_shadow: wgpu::RenderPipeline,
+    /// Part edges, depth tested (the Wireframe view).
+    wire: wgpu::RenderPipeline,
+    /// Debug shapes, drawn over everything.
+    wire_overlay: wgpu::RenderPipeline,
+    /// One additive layer per surface (the Overdraw view).
+    overdraw: wgpu::RenderPipeline,
 }
 
 /// Size-dependent targets. `hdr[0]` receives the scene; `hdr[1]` and `ldr` are made on demand
@@ -389,6 +403,14 @@ pub struct Renderer {
     /// The skinned instances given to the last [`Renderer::set_skinned`].
     skinned_draws: Vec<SkinnedDraw>,
     skin_scratch: Vec<u8>,
+    /// The whole-frame debug view (#23).
+    debug_view: DebugView,
+    /// Debug shapes per mesh kind, uploaded by [`Renderer::set_debug_shapes`].
+    debug_shapes: Vec<InstanceBuffer>,
+    /// The coarser unit meshes debug shapes are drawn with.
+    debug_meshes: Vec<GpuMesh>,
+    /// Scratch for grouping debug shapes by kind (kept between frames).
+    debug_scratch: Vec<Vec<InstanceRaw>>,
 }
 
 impl Renderer {
@@ -407,22 +429,11 @@ impl Renderer {
         let queue = ctx.queue.clone();
         let meshes = MeshKind::ALL
             .iter()
-            .map(|k| {
-                let data = k.build();
-                GpuMesh {
-                    vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("metallic mesh vertices"),
-                        contents: bytemuck::cast_slice(&data.vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-                    indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("metallic mesh indices"),
-                        contents: bytemuck::cast_slice(&data.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    }),
-                    index_count: data.indices.len() as u32,
-                }
-            })
+            .map(|k| upload_mesh(&device, &k.build()))
+            .collect();
+        let debug_meshes = MeshKind::ALL
+            .iter()
+            .map(|k| upload_mesh(&device, &coarse_mesh(*k)))
             .collect();
         let opaque = MeshKind::ALL
             .iter()
@@ -558,6 +569,10 @@ impl Renderer {
             skin_slots: Vec::new(),
             skinned_draws: Vec::new(),
             skin_scratch: Vec::new(),
+            debug_view: DebugView::Off,
+            debug_shapes: Vec::new(),
+            debug_meshes,
+            debug_scratch: Vec::new(),
         };
         renderer.meter_supported = crate::exposure::supported(&renderer.device);
         renderer.post.push(Box::new(BloomPass::default()));
@@ -659,6 +674,41 @@ impl Renderer {
             &self.skin_layout,
         );
         self.attachments = None;
+    }
+
+    /// Switches the whole-frame debug view (#23); [`DebugView::Off`] is the normal image.
+    pub fn set_debug_view(&mut self, view: DebugView) {
+        self.debug_view = view;
+    }
+
+    /// The debug view in use.
+    pub fn debug_view(&self) -> DebugView {
+        self.debug_view
+    }
+
+    /// Replaces the wireframe overlays drawn over the frame (#23); an empty slice draws none.
+    /// Buffers grow as needed and are reused, so calling this every frame allocates nothing
+    /// once warm.
+    pub fn set_debug_shapes(&mut self, shapes: &[DebugShape]) {
+        if shapes.is_empty() && self.debug_shapes.iter().all(|b| b.count == 0) {
+            return;
+        }
+        if self.debug_shapes.is_empty() {
+            self.debug_shapes = MeshKind::ALL
+                .iter()
+                .map(|_| InstanceBuffer::new(&self.device, 64))
+                .collect();
+            self.debug_scratch = MeshKind::ALL.iter().map(|_| Vec::new()).collect();
+        }
+        for list in &mut self.debug_scratch {
+            list.clear();
+        }
+        for shape in shapes {
+            self.debug_scratch[shape.kind.index()].push(shape.instance());
+        }
+        for (buffer, list) in self.debug_shapes.iter_mut().zip(&self.debug_scratch) {
+            buffer.upload(&self.device, &self.queue, list);
+        }
     }
 
     /// Number of parts currently known to the renderer (drawn or not).
@@ -912,6 +962,7 @@ impl Renderer {
                 1.0 / size.1.max(1) as f32,
             ],
             lighting: self.light_uniform,
+            debug: [self.debug_view.shader_mode(), 0.0, 0.0, 0.0],
         }
     }
 
@@ -1053,19 +1104,35 @@ impl Renderer {
             pass.set_bind_group(0, &self.global_group, &[]);
             pass.set_pipeline(&self.pipelines.sky);
             pass.draw(0..3, 0..1);
-            pass.set_pipeline(&self.pipelines.opaque);
-            self.draw_opaque(&mut pass);
-            pass.set_pipeline(&self.pipelines.skinned);
-            self.draw_skinned(&mut pass, Some(SkinStyle::Standard));
-            pass.set_pipeline(&self.pipelines.skinned_toon);
-            self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
-            pass.set_pipeline(&self.pipelines.skinned_outline);
-            self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
-            self.draw_blended(&mut pass);
+            match self.debug_view {
+                DebugView::Wireframe => {
+                    pass.set_pipeline(&self.pipelines.wire);
+                    self.draw_edges(&mut pass, &self.opaque, &self.meshes);
+                    self.draw_blended_edges(&mut pass);
+                    self.draw_characters(&mut pass);
+                }
+                DebugView::Overdraw => {
+                    pass.set_pipeline(&self.pipelines.overdraw);
+                    self.draw_opaque(&mut pass);
+                    self.draw_blended(&mut pass, &self.pipelines.overdraw);
+                }
+                _ => {
+                    pass.set_pipeline(&self.pipelines.opaque);
+                    self.draw_opaque(&mut pass);
+                    self.draw_characters(&mut pass);
+                    self.draw_blended(&mut pass, &self.pipelines.blended);
+                }
+            }
+            if self.debug_shapes.iter().any(|b| b.count > 0) {
+                pass.set_pipeline(&self.pipelines.wire_overlay);
+                self.draw_edges(&mut pass, &self.debug_shapes, &self.debug_meshes);
+            }
         }
         // Meter the scene before the HDR passes: they may rewrite alpha, which marks toon
-        // pixels the meter must skip.
-        self.meter_frame(&mut encoder);
+        // pixels the meter must skip. Views that replace the light hold the exposure.
+        if self.debug_view.meters() {
+            self.meter_frame(&mut encoder);
+        }
         self.post_and_finish(&mut encoder, target, camera, keep_depth);
         self.queue.submit(Some(encoder.finish()));
     }
@@ -1175,7 +1242,12 @@ impl Renderer {
             Some(v) if ldr_count > 0 => (v, LDR_FORMAT),
             _ => (target, self.format),
         };
-        let uniform = FinishUniform::new(&self.finish, self.sky.exposure, finish_format.is_srgb());
+        let uniform = FinishUniform::new(
+            &self.finish,
+            self.sky.exposure,
+            finish_format.is_srgb(),
+            self.debug_view == DebugView::Exposure,
+        );
         self.queue
             .write_buffer(&self.finish_gpu.uniform, 0, bytemuck::bytes_of(&uniform));
         if let Some(group) = &att.finish_groups[cur] {
@@ -1245,6 +1317,49 @@ impl Renderer {
         }
     }
 
+    /// Draws the skinned characters in their styles (standard, toon and its outline).
+    fn draw_characters(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_pipeline(&self.pipelines.skinned);
+        self.draw_skinned(pass, Some(SkinStyle::Standard));
+        pass.set_pipeline(&self.pipelines.skinned_toon);
+        self.draw_skinned(pass, Some(SkinStyle::Toon));
+        pass.set_pipeline(&self.pipelines.skinned_outline);
+        self.draw_skinned(pass, Some(SkinStyle::Toon));
+    }
+
+    /// Draws the edges of every instance in `buffers` (one per [`MeshKind`]) of `meshes` with the
+    /// line pipeline already set.
+    fn draw_edges(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        buffers: &[InstanceBuffer],
+        meshes: &[GpuMesh],
+    ) {
+        for kind in MeshKind::ALL {
+            let Some(inst) = buffers.get(kind.index()).filter(|b| b.count > 0) else {
+                continue;
+            };
+            let mesh = &meshes[kind.index()];
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_vertex_buffer(1, inst.buffer.slice(..));
+            pass.set_index_buffer(mesh.edges.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..mesh.edge_count, 0, 0..inst.count as u32);
+        }
+    }
+
+    /// Draws the edges of the transparent parts with the line pipeline already set.
+    fn draw_blended_edges(&self, pass: &mut wgpu::RenderPass<'_>) {
+        let stride = std::mem::size_of::<InstanceRaw>() as u64;
+        for (i, kind) in self.blended_kinds.iter().enumerate() {
+            let mesh = &self.meshes[kind.index()];
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.edges.slice(..), wgpu::IndexFormat::Uint16);
+            let offset = i as u64 * stride;
+            pass.set_vertex_buffer(1, self.blended.buffer.slice(offset..offset + stride));
+            pass.draw_indexed(0..mesh.edge_count, 0, 0..1);
+        }
+    }
+
     /// Draws the skinned instances of `style` (all of them for `None`) with the pipeline already
     /// set.
     fn draw_skinned(&self, pass: &mut wgpu::RenderPass<'_>, style: Option<SkinStyle>) {
@@ -1262,11 +1377,11 @@ impl Renderer {
         }
     }
 
-    fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
+    fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline) {
         if self.blended.count == 0 {
             return;
         }
-        pass.set_pipeline(&self.pipelines.blended);
+        pass.set_pipeline(pipeline);
         let stride = std::mem::size_of::<InstanceRaw>() as u64;
         let mut bound: Option<MeshKind> = None;
         for (i, kind) in self.blended_kinds.iter().enumerate() {
@@ -1502,6 +1617,30 @@ fn make_depth(
         .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
+/// Uploads a unit mesh with its triangle indices and its edges (a line list).
+fn upload_mesh(device: &wgpu::Device, data: &crate::meshes::MeshData) -> GpuMesh {
+    let edges = edge_indices(data);
+    GpuMesh {
+        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("metallic mesh vertices"),
+            contents: bytemuck::cast_slice(&data.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        }),
+        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("metallic mesh indices"),
+            contents: bytemuck::cast_slice(&data.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        }),
+        index_count: data.indices.len() as u32,
+        edges: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("metallic mesh edges"),
+            contents: bytemuck::cast_slice(&edges),
+            usage: wgpu::BufferUsages::INDEX,
+        }),
+        edge_count: edges.len() as u32,
+    }
+}
+
 fn shader(device: &wgpu::Device, label: &str, parts: &[&str]) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -1705,8 +1844,81 @@ fn make_pipelines(
         "fs_outline",
         wgpu::Face::Front,
     );
+    let line_pipeline = |label: &str, compare: wgpu::CompareFunction, write: bool| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&main_layout),
+            vertex: wgpu::VertexState {
+                module: &scene_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &vertex_layouts().map(Some),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth(write, compare)),
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &scene_module,
+                entry_point: Some("fs_wire"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let additive = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    };
+    let overdraw = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("metallic overdraw"),
+        layout: Some(&main_layout),
+        vertex: wgpu::VertexState {
+            module: &scene_module,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &vertex_layouts().map(Some),
+        },
+        primitive: wgpu::PrimitiveState {
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        depth_stencil: Some(depth(false, wgpu::CompareFunction::Always)),
+        multisample,
+        fragment: Some(wgpu::FragmentState {
+            module: &scene_module,
+            entry_point: Some("fs_overdraw"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState {
+                    color: additive,
+                    alpha: additive,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
     Pipelines {
         sky,
+        wire: line_pipeline("metallic wireframe", wgpu::CompareFunction::Less, true),
+        wire_overlay: line_pipeline(
+            "metallic debug shapes",
+            wgpu::CompareFunction::Always,
+            false,
+        ),
+        overdraw,
         opaque: scene_pipeline("metallic opaque", None, true),
         blended: scene_pipeline(
             "metallic blended",

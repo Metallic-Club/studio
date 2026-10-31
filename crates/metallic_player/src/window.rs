@@ -105,6 +105,10 @@ pub fn run(
         menu_presses,
         dead: false,
     };
+    if args.debug_physics {
+        app.game
+            .set_debug_draw(metallic_runtime::DebugDrawOptions::ALL);
+    }
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: {e}");
         return ExitCode::from(1);
@@ -178,6 +182,34 @@ struct App {
 }
 
 impl App {
+    /// F4 cycles the render debug views, F6 turns the physics debug draw on and off (#23).
+    fn debug_key(&mut self, key: PhysicalKey) {
+        use metallic_runtime::DebugDrawOptions;
+        use winit::keyboard::KeyCode;
+        match key {
+            PhysicalKey::Code(KeyCode::F4) => {
+                if let Some(gfx) = self.gfx.as_mut() {
+                    let view = gfx.renderer.debug_view().next();
+                    gfx.renderer.set_debug_view(view);
+                    println!("metallic-player: debug view {}", view.label());
+                }
+            }
+            PhysicalKey::Code(KeyCode::F6) => {
+                let on = !self.game.debug_draw().any();
+                self.game.set_debug_draw(if on {
+                    DebugDrawOptions::ALL
+                } else {
+                    DebugDrawOptions::default()
+                });
+                println!(
+                    "metallic-player: physics debug draw {}",
+                    if on { "on" } else { "off" }
+                );
+            }
+            _ => {}
+        }
+    }
+
     fn create_gfx(&mut self, event_loop: &ActiveEventLoop) -> Result<Gfx, String> {
         // `--fps` measures at exactly 1920x1080, so that window cannot be resized. An emulated
         // device gets a window of its shape.
@@ -211,6 +243,7 @@ impl App {
             quality: self.args.quality,
         };
         let mut renderer = Renderer::with_settings(&ctx, config.format, settings);
+        renderer.set_debug_view(self.args.debug_view);
         if let Ok(world) = self.game.world().try_borrow() {
             renderer.sync(&world);
         }
@@ -652,6 +685,18 @@ impl ApplicationHandler for App {
                 self.touch.release_all(&mut self.input, now);
                 self.input.release_all(now);
                 self.set_captured(false);
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if matches!(
+                    event.physical_key,
+                    PhysicalKey::Code(winit::keyboard::KeyCode::F4 | winit::keyboard::KeyCode::F6)
+                ) =>
+            {
+                // Developer debug views (#23), never game controls: F4 cycles the render
+                // views, F6 shows the physics.
+                if event.state == ElementState::Pressed && !event.repeat {
+                    self.debug_key(event.physical_key);
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Every key, Escape included, is a control: Escape is the default binding of

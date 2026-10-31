@@ -110,6 +110,8 @@ pub trait PlayView {
     /// Lends the play world read-only for the duration of `inspect` (Explorer's play tree). Does
     /// nothing after Stop or while the world is borrowed.
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World));
+    /// Shows the physics debug draw over the game (#23); a view without physics ignores it.
+    fn set_debug_draw(&mut self, _options: metallic_runtime::DebugDrawOptions) {}
 }
 
 /// Something that happened to play state.

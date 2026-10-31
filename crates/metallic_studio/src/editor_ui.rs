@@ -99,6 +99,8 @@ pub struct EditorUi {
     pub header: ViewportHeader,
     /// The floating toolbar over the selection (spec 3.2).
     pub context_bar: ContextBar,
+    /// The physics debug draw shown while playing (#23, View > Debug views).
+    pub debug_physics: metallic_runtime::DebugDrawOptions,
     /// First-time hints (spec 14.1); in memory until the app loads the saved ones.
     pub hints: Hints,
     /// Selection and history revisions the hints last looked at.
@@ -140,6 +142,7 @@ impl EditorUi {
             properties: Properties::new(),
             header: ViewportHeader::new(),
             context_bar: ContextBar::new(),
+            debug_physics: metallic_runtime::DebugDrawOptions::default(),
             hints: Hints::in_memory(),
             hint_seen: (u64::MAX, 0),
             scripts: ScriptTabs::new(),
@@ -514,6 +517,7 @@ impl EditorUi {
         let (rect, hovered) = (self.viewport.rect(), self.viewport.play_hovered());
         let prompt = self.confirm.is_some();
         if let Some(view) = self.state.play.view_mut() {
+            view.set_debug_draw(self.debug_physics);
             if prompt {
                 self.play_input.release(view);
             } else {
@@ -647,6 +651,18 @@ impl EditorUi {
                         );
                         ui.separator();
                         ui.checkbox(&mut self.context_bar.enabled, "Contextual toolbar");
+                        let playing = self.state.play.view().is_some();
+                        let exposure = (self.viewport.debug_view()
+                            == metallic_render::DebugView::Exposure)
+                            .then(|| self.viewport.exposure())
+                            .flatten();
+                        crate::debugger::views_menu::menu(
+                            ui,
+                            &mut self.viewport,
+                            &mut self.debug_physics,
+                            playing,
+                            exposure,
+                        );
                     });
                     ui.menu_button("Build", |ui| {
                         self.actions.menu_items(

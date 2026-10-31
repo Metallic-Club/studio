@@ -16,7 +16,7 @@ use metallic_physics::{
     spawn_character,
 };
 use metallic_render::glam::Vec3 as GVec3;
-use metallic_render::{Camera, Renderer};
+use metallic_render::{Camera, DebugShape, Renderer};
 use metallic_script::{
     InputActionEvent, InputDevice, InputEventKind, InputValue, LOCAL_PLAYER_NAME, OutputSink,
     ScriptHost, TouchButtonInfo,
@@ -96,6 +96,8 @@ pub struct Game {
     gui_inset: f32,
     /// Hover and presses on the GUI (see [`Game::gui_pointer`]).
     gui_input: GuiInput,
+    /// Physics debug draw (#23, [`Game::set_debug_draw`]) and its reused buffers.
+    debug: RefCell<(crate::debug_draw::DebugOverlay, Vec<DebugShape>)>,
 }
 
 impl Game {
@@ -154,6 +156,7 @@ impl Game {
             input_device_changes: None,
             gui_inset: 0.0,
             gui_input: GuiInput::new(),
+            debug: RefCell::default(),
         }
     }
 
@@ -416,11 +419,42 @@ impl Game {
         renderer.render(target, camera, size);
     }
 
+    /// Shows the physics as wireframes over the game (#23): collider shapes, contacts,
+    /// velocities and the characters' touch volumes, as `options` asks. Off by default; while
+    /// off it costs nothing.
+    pub fn set_debug_draw(&mut self, options: metallic_physics::DebugDrawOptions) {
+        self.debug.get_mut().0.options = options;
+    }
+
+    /// The physics debug draw options in use.
+    pub fn debug_draw(&self) -> metallic_physics::DebugDrawOptions {
+        self.debug.borrow().0.options
+    }
+
+    /// The wireframes [`Game::set_debug_draw`] asks for, as of the last frame, into `out`
+    /// (cleared first).
+    pub fn debug_shapes(&self, out: &mut Vec<DebugShape>) {
+        let Ok(world) = self.world.try_borrow() else {
+            out.clear();
+            return;
+        };
+        let mut debug = self.debug.borrow_mut();
+        debug.0.shapes(&self.physics, &self.characters, &world, out);
+    }
+
     /// Brings `renderer` up to date with the world and the avatar without drawing (for
     /// [`Renderer::capture`]).
     pub fn sync_renderer(&self, renderer: &mut Renderer) {
         if let Ok(world) = self.world.try_borrow() {
             renderer.sync(&world);
+        }
+        if self.debug.borrow().0.options.any() {
+            let mut shapes = std::mem::take(&mut self.debug.borrow_mut().1);
+            self.debug_shapes(&mut shapes);
+            renderer.set_debug_shapes(&shapes);
+            self.debug.borrow_mut().1 = shapes;
+        } else {
+            renderer.set_debug_shapes(&[]);
         }
         match &self.avatar {
             Some((_, avatar)) => renderer.set_skinned(&[avatar.instance()]),

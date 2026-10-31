@@ -3,6 +3,7 @@
 //! ```text
 //! metallic-player <project dir> [--scene <file relative to project>] [--headless --frames N]
 //!                 [--quality low|high] [--fps] [--autopilot] [--frames N]
+//!                 [--debug-view NAME] [--debug-physics]
 //!                 [--capture FRAME:PNG]... [--input-script <file>]
 //!                 [--no-overrides] [--menu main|keyboard|gamepad|assist|touch]
 //!                 [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]

@@ -78,6 +78,9 @@ apps.
   `PhysicsWorld::scripted_pose` is the pose the next step gives a part; the controller adds the step from an
   anchored support's body pose to it as a final lead, so riders trail a Heartbeat-moved platform by one tick, not
   two (#374). `relative_velocity` is measured against the support's motion at the bottom-sphere centre.
+  Debug draw (#23, `debug_draw.rs`): `PhysicsWorld::debug_draw(DebugDrawOptions, &mut DebugDraw)` returns plain data,
+  one `DebugShape` per collider (shape, pose, size, `DebugBody` state, sensor), contact points with normals and the
+  velocities of moving bodies; `CharacterController::debug_touch_volumes` adds the 15 touch capsules per character.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_ui_theme** (S8): the render-free egui theme shared by Studio, `metallic_anim_editor` and `metallic_vfx_editor`:
@@ -130,6 +133,12 @@ apps.
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
   parts. The level of detail is picked from the projected height in pixels (LOD1 below 220 px, LOD2 below 80 px).
+  Debug views (#23, `debug_views.rs`, `shaders/debug.wgsl`): `set_debug_view(DebugView)` switches the frame to
+  wireframe (line lists of each unit mesh's edges), normals, overdraw (an additive pipeline), shadow cascade colours
+  or the exposure light meter (false colour per stop in the finish pass). The view travels in `Globals.debug`; views
+  that replace the light skip metering, so the exposure holds. `set_debug_shapes(&[DebugShape])` draws wireframe
+  overlays (unit meshes, any transform) over every view; `metallic_runtime::Game::set_debug_draw` fills them from
+  the physics debug draw. Off, the frame is unchanged apart from one uniform read per pixel.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
@@ -175,7 +184,9 @@ apps.
   it logs the overlay's draw time at the end of a windowed emulated run. `pacing.rs` sets the loop's pace (#271):
   every turn while focused (vsync paces it), 30 frames a second while unfocused, and `ControlFlow::Wait` with the
   game paused while minimised or occluded; automated runs (`--fps`, `--frames`, `--capture`, `--autopilot`,
-  `--input-script`) always run flat out.
+  `--input-script`) always run flat out. Developer debug views (#23): F4 cycles the renderer's `DebugView`s, F6
+  turns the physics debug draw on and off (neither reaches the game as a control); `--debug-view NAME` and
+  `--debug-physics` start with them, for captures.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -193,7 +204,9 @@ apps.
   `explorer.rs`, `properties.rs` (live preview while the pointer is held, one undo step on release),
   `script_editor.rs`, `transform.rs`, `expr.rs`. Seams: `actions.rs` (toolbar/menu/key actions as data, with
   accessories), `keymap.rs` (bindings as data), `output.rs` (`OutputSink::push(tag, level, text)` over a bounded
-  channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
+  channel, drops counted; `ScriptOutput` adapts it to Luau output), `debugger/views_menu.rs` (View > Debug views:
+  the viewport's `DebugView`, the exposure meter reading, and the physics overlays a play session draws through
+  `PlayView::set_debug_draw`), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
   `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
@@ -477,6 +490,10 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
   creators should create it.
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
+- **A debug view:** a `DebugView` variant (`metallic_render/src/debug_views.rs`), its branch in
+  `shaders/debug.wgsl` (or the finish pass), and a case in `tests/debug_views.rs`; Studio's View > Debug views and the
+  Player's F4 list `DebugView::ALL`. Physics overlays: `metallic_physics/src/debug_draw.rs` and their colours in
+  `metallic_runtime/src/debug_draw.rs`.
 - **A material:** the material list in `classes.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
   procedural detail), and density/friction in `metallic_physics`. Test `material_table_has_every_registry_material`
   must still pass.

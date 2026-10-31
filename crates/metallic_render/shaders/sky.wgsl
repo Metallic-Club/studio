@@ -18,6 +18,6 @@ fn vs_main(@builtin(vertex_index) i: u32) -> SkyOut {
 fn fs_main(in: SkyOut) -> @location(0) vec4<f32> {
     let far_h = g.inv_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
     let dir = normalize(far_h.xyz / far_h.w - g.camera_pos.xyz);
-    let col = sky_colour(dir);
+    let col = debug_background(sky_colour(dir));
     return vec4<f32>(col, 1.0);
 }

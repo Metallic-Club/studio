@@ -33,8 +33,9 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use eframe::egui_wgpu;
 use metallic_core::InstanceId;
+use metallic_render::exposure::ExposureState;
 use metallic_render::glam::{DQuat, DVec3};
-use metallic_render::{RenderContext, Renderer};
+use metallic_render::{DebugView, RenderContext, Renderer};
 
 use crate::camera::{EditorCamera, ViewProjection};
 use crate::commands::Command;
@@ -213,6 +214,8 @@ pub struct Viewport {
     finished: Option<FinishedDrag>,
     /// Collisions for the current drag (built when it starts).
     guard: Option<crate::collisions::Guard>,
+    /// The renderer's debug view (#23, View > Debug views).
+    debug_view: DebugView,
 }
 
 type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
@@ -261,6 +264,7 @@ impl Viewport {
             navigating: false,
             finished: None,
             guard: None,
+            debug_view: DebugView::Off,
         }
     }
 
@@ -799,6 +803,7 @@ impl Viewport {
             && let Some(gpu) = &mut self.gpu
         {
             gpu.ensure_target(px);
+            gpu.renderer.set_debug_view(self.debug_view);
             if first {
                 // A camera cut: meter the game's first frame afresh.
                 gpu.renderer.reset_exposure();
@@ -831,6 +836,25 @@ impl Viewport {
             egui::StrokeKind::Inside,
         );
         ui.ctx().request_repaint();
+    }
+
+    /// The renderer's debug view (#23).
+    pub fn debug_view(&self) -> DebugView {
+        self.debug_view
+    }
+
+    /// Switches the renderer's debug view (#23); the next frame redraws.
+    pub fn set_debug_view(&mut self, view: DebugView) {
+        if self.debug_view != view {
+            self.debug_view = view;
+            self.rendered = None;
+        }
+    }
+
+    /// The exposure meter's last reading (a small blocking readback; for the light meter while
+    /// its menu is open). `None` before the first metered frame or without a GPU.
+    pub fn exposure(&self) -> Option<ExposureState> {
+        self.gpu.as_ref()?.renderer.read_exposure()
     }
 
     /// Back from Play: the renderer still holds the play world and the avatar.
@@ -872,6 +896,7 @@ impl Viewport {
             return;
         }
         gpu.ensure_target(px);
+        gpu.renderer.set_debug_view(self.debug_view);
         gpu.renderer.sync(&state.world);
         if let Some((_, view, _)) = &gpu.target {
             gpu.renderer.render(view, &self.camera.to_render(), px);

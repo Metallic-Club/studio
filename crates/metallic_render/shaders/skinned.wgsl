@@ -69,7 +69,8 @@ fn fs_toon(in: VOut) -> @location(0) vec4<f32> {
     tone = mix(tone, base * TOON_SHADE * 1.18, 0.5 * rim);
     let c = unfinish(tone * toon_light());
     // Alpha 0 marks toon pixels: the exposure meter must not read them back.
-    return vec4<f32>(toon_fog(c, in.world_pos), 0.0);
+    let shown = debug_scene(toon_fog(c, in.world_pos), n, max(ndl, 0.0) * sh, 1.0 / in.clip.w);
+    return vec4<f32>(shown, 0.0);
 }
 
 struct OutlineOut {
