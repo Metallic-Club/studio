@@ -32,6 +32,16 @@ fn net_value() -> impl Strategy<Value = NetValue> {
         (finite(), finite(), finite(), finite())
             .prop_map(|(a, b, c, d)| NetValue::UDim2(UDim2::new(a, b, c, d))),
         proptest::option::of(net_id()).prop_map(NetValue::Ref),
+        (
+            finite(),
+            finite(),
+            finite(),
+            [finite(), finite(), finite(), finite()]
+        )
+            .prop_map(|(x, y, z, rotation)| NetValue::CFrame(Box::new(NetCFrame {
+                position: Vec3::new(x, y, z),
+                rotation,
+            }))),
     ];
     leaf.prop_recursive(4, 32, 6, |inner| {
         proptest::collection::vec((inner.clone(), inner), 0..6).prop_map(NetValue::Table)
@@ -502,8 +512,40 @@ fn values_convert_both_ways() {
             | ValueType::Color3
             | ValueType::UDim2
             | ValueType::Ref => {}
+            // Rebuilt from a quaternion, so it is checked to within rounding below.
+            ValueType::CFrame => {}
         }
     }
+    let cframes = [
+        CFrame::default(),
+        CFrame::from_position_orientation(
+            Vec3::new(10.0, -3.5, 1e5),
+            Vec3::new(30.0, -120.0, 75.0),
+        ),
+        CFrame::from_position_orientation(Vec3::new(0.0, 0.0, 0.0), Vec3::new(90.0, 180.0, -90.0)),
+        CFrame::from_euler_yxz(3.0, -2.0, 1.0),
+    ];
+    for cf in cframes {
+        let wire = NetValue::from_value(&Value::CFrame(Box::new(cf)), net);
+        let Some(Value::CFrame(back)) = wire.to_value(ValueType::CFrame, local) else {
+            panic!("{cf:?} did not convert back");
+        };
+        assert_eq!(back.position, cf.position);
+        for (a, b) in back.components().iter().zip(cf.components()) {
+            assert!((a - b).abs() < 1e-12, "{cf:?} -> {back:?}");
+        }
+    }
+    // A hostile CFrame: non-finite or a zero quaternion is refused.
+    let bad = |position: Vec3, rotation: [f64; 4]| {
+        NetValue::CFrame(Box::new(NetCFrame { position, rotation }))
+            .to_value(ValueType::CFrame, local)
+    };
+    assert_eq!(
+        bad(Vec3::new(f64::NAN, 0.0, 0.0), [0.0, 0.0, 0.0, 1.0]),
+        None
+    );
+    assert_eq!(bad(Vec3::default(), [0.0, 0.0, 0.0, 0.0]), None);
+    assert_eq!(bad(Vec3::default(), [f64::INFINITY, 0.0, 0.0, 1.0]), None);
     for (value, ty) in cases {
         let wire = NetValue::from_value(&value, net);
         assert_eq!(wire.to_value(ty, local), Some(value.clone()), "{value:?}");

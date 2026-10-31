@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use metallic_core::{Color3, InstanceId, UDim2, Value, ValueType, Vec3};
+use metallic_core::{CFrame, Color3, InstanceId, UDim2, Value, ValueType, Vec3};
 use serde::de::{self, DeserializeSeed, EnumAccess, SeqAccess, Unexpected, VariantAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -41,6 +41,40 @@ pub enum NetValue {
     Ref(Option<NetId>),
     /// A Luau table as key/value pairs in a stable order (remote arguments only).
     Table(Vec<(NetValue, NetValue)>),
+    /// A position and rotation (boxed, like [`Value::CFrame`], so the enum stays small).
+    CFrame(Box<NetCFrame>),
+}
+
+/// A `CFrame` on the wire: the position and the rotation as a unit quaternion, all `f64` (56 bytes instead of the
+/// 96 of the full matrix). Converting back gives the matrix to within about 1e-15 per component; CFrames are always
+/// orthonormal, so nothing else is lost.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NetCFrame {
+    /// Translation (studs).
+    pub position: Vec3,
+    /// Rotation as a quaternion `[x, y, z, w]` ([`CFrame::quaternion`]).
+    pub rotation: [f64; 4],
+}
+
+impl NetCFrame {
+    /// The wire form of a CFrame.
+    pub fn from_cframe(cf: &CFrame) -> NetCFrame {
+        NetCFrame {
+            position: cf.position,
+            rotation: cf.quaternion(),
+        }
+    }
+
+    /// The CFrame, or `None` when a component is not finite or the quaternion is far from unit length (a hostile or
+    /// corrupt value; a real one has length 1).
+    pub fn to_cframe(&self) -> Option<CFrame> {
+        let p = self.position;
+        let len = self.rotation.iter().map(|c| c * c).sum::<f64>().sqrt();
+        if !all_finite(&[p.x, p.y, p.z]) || !len.is_finite() || !(0.5..=2.0).contains(&len) {
+            return None;
+        }
+        Some(CFrame::from_quaternion(p, self.rotation))
+    }
 }
 
 impl NetValue {
@@ -56,6 +90,7 @@ impl NetValue {
             Value::Color3(c) => NetValue::Color3(*c),
             Value::UDim2(u) => NetValue::UDim2(*u),
             Value::Ref(id) => NetValue::Ref(id.and_then(net)),
+            Value::CFrame(cf) => NetValue::CFrame(Box::new(NetCFrame::from_cframe(cf))),
         }
     }
 
@@ -87,6 +122,7 @@ impl NetValue {
                 Value::UDim2(*u)
             }
             (NetValue::Ref(n), ValueType::Ref) => Value::Ref(n.and_then(local)),
+            (NetValue::CFrame(cf), ValueType::CFrame) => Value::CFrame(Box::new(cf.to_cframe()?)),
             _ => return None,
         };
         Some(value)
@@ -116,6 +152,7 @@ fn all_finite(xs: &[f64]) -> bool {
 /// Wire tags, in declaration order (the derived `Serialize` uses the same indices).
 const VARIANTS: &[&str] = &[
     "Nil", "Bool", "Number", "Str", "Vector3", "Vector2", "Color3", "UDim2", "Ref", "Table",
+    "CFrame",
 ];
 
 // Deserialize is written by hand so table nesting is capped: a derived impl recurses once per level and a 64 KiB
@@ -169,10 +206,11 @@ impl<'de> Visitor<'de> for ValueSeed {
                     depth: self.depth + 1,
                 })?)
             }
+            10 => NetValue::CFrame(v.newtype_variant()?),
             other => {
                 return Err(de::Error::invalid_value(
                     Unexpected::Unsigned(u64::from(other)),
-                    &"a NetValue tag 0..=9",
+                    &"a NetValue tag 0..=10",
                 ));
             }
         })

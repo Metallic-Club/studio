@@ -35,7 +35,7 @@ pub use quant::{
     QuantPos, QuantY, dequantize_orientation, dequantize_position, dequantize_velocity,
     quantize_orientation, quantize_position, quantize_velocity,
 };
-pub use value::{MAX_TABLE_DEPTH, NetValue};
+pub use value::{MAX_TABLE_DEPTH, NetCFrame, NetValue};
 pub use varint::{read_i64, read_u64, write_i64, write_u64, zigzag_decode, zigzag_encode};
 
 /// Why bytes could not be encoded or decoded.
