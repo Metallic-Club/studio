@@ -83,7 +83,7 @@ lib.rs re-export overlap; this module otherwise has its own files and adds no de
   completed all runtime/Parkour, Lua and Studio tests in the coordinator-reserved timing window.
 - The strict Clippy source is identical to this tested source; the remaining commit changes only this progress note.
 
-## Next
+## Historical publication next step
 
 Publish the reviewed, tested branch as the single PR for issue 301, attach it to the root task, and leave repository
 CI/lead review visible. No own merge or acceptance claim. Networking, persistence and Studio client integration remain
@@ -154,6 +154,26 @@ reordering or duplicated core mutation model remains in this helper.
 
 All 16 edit-kernel integration tests passed after the fix, including strict anchor rejection, late-batch rollback
 of order/cursor/original subscriptions, duplicate receipt stability, stable references, anchored creation and
-authority/replica convergence. The entire core suite passed 100 tests with zero failures or ignores. New full
-workspace/strict Clippy/license/format gates and independent review are pending on the refreshed source; no prior
-head's CI is substituted. Actual Lua/GPU execution remains held for the coordinator's timing grant.
+authority/replica convergence. The entire core suite passed 100 tests with zero failures or ignores.
+
+### Current exact-source verification
+
+Code checkpoint `4bf3ea20219a12eb352ae0e01960cf7e72acd593` contains exact main
+`a0bb1bfc0e84ffd637fe8d1759f4822322601cd8`. Independent source review found no actionable concern in the final-index
+calculation, delegated validation/journaling or preserved append semantics. No runtime files were changed by the
+feature; the main merge is inherited source.
+
+- Guarded lane116 `cargo test --locked --workspace --no-run -j 4`: passed.
+- Guarded lane116 `cargo clippy --locked --workspace --all-targets -j 4 -- -D warnings`: passed (41.80 seconds).
+- `cargo deny check licenses`, `cargo fmt --all --check`, and task-range whitespace: passed.
+- Guarded lane116 `cargo test --locked --workspace -j 4 -- --test-threads=1`: **1,864 passed, zero failed, eight
+  upstream ignored tests**, across 138 result groups. All 16 edit-kernel integration cases passed in this run.
+
+The lane guard verified this worktree/dev profile/no target override and performed a package-only reset before
+the first current-base core run. Lua/GPU execution ran only in the coordinator-granted sole actual window; it was
+explicitly released after exit. Source pins, both red logs, focused/core/workspace outputs and log hashes are
+stored in external task evidence. This documentation update does not change the tested crate/manifests tree.
+
+Normal-push this append-only refresh to the existing PR #317 and inspect exact-head CI. The old 1,005-test and
+1,239-test green proofs remain historical, not this source's CI. No own merge, rebase, force-push, available Team
+Create session or milestone acceptance is claimed.
