@@ -383,6 +383,11 @@ impl Simulation {
             self.scripts.touched(a, b);
             self.scripts.touched(b, a);
         }
+        // Drained every tick (#417): undrained part-part TouchEnded pairs would pile up on a server.
+        for (a, b) in self.physics.drain_touch_ended() {
+            self.scripts.touch_ended(a, b);
+            self.scripts.touch_ended(b, a);
+        }
     }
 
     /// Re-syncs changed part signatures and character membership; pose-only changes need no sync.
