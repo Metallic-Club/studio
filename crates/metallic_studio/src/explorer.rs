@@ -162,8 +162,10 @@ impl Explorer {
         if let Some(target) = self.scroll_to.take()
             && let Some(i) = self.rows.iter().position(|r| r.id == target)
         {
-            let y = i as f32 * (ui_tokens().row_height + ui.spacing().item_spacing.y);
-            scroll = scroll.vertical_scroll_offset((y - 80.0).max(0.0));
+            let step = ui_tokens().row_height + ui.spacing().item_spacing.y;
+            // Whole rows only, so no half row shows under the filter box.
+            let top = (i as f32 - 3.0).max(0.0).floor();
+            scroll = scroll.vertical_scroll_offset(top * step);
         }
         let rows = self.rows.clone();
         scroll.show_rows(ui, ui_tokens().row_height, rows.len(), |ui, range| {

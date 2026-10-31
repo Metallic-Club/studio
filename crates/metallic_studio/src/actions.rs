@@ -175,11 +175,16 @@ impl ActionRegistry {
             let enabled = a.is_enabled(state);
             let checked = a.is_checked(state);
             let shortcut = keymap.label(a.id);
-            let tip = if shortcut.is_empty() {
+            let mut tip = if shortcut.is_empty() {
                 a.label.clone()
             } else {
                 format!("{} ({shortcut})", a.label)
             };
+            if a.id == "play.start" && !enabled && !state.play.is_playing() {
+                tip.push_str(
+                    "\nPlay is not connected yet: no play mode is registered in this build.",
+                );
+            }
             // Tools, Play and Stop show their key as a cap; the rest are icon buttons whose
             // tooltip names the key.
             let labelled = matches!(a.group, ToolbarGroup::Tools | ToolbarGroup::Play);

@@ -216,3 +216,59 @@ pub fn tab_strip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.advance_cursor_after_rect(rect);
     out
 }
+
+/// A filter chip (Output): 26 px tall, `bg-active` with `text-1` when on, an outline with `text-2`
+/// when off. `dot` is a small colour mark before the label (a tag colour), so the label itself
+/// always uses a text role that meets contrast on the chip.
+pub fn chip(ui: &mut Ui, text: &str, on: &mut bool, dot: Option<Color32>) -> bool {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), fonts::caption(), theme::text_1());
+    let lead = if dot.is_some() { 14.0 } else { 0.0 };
+    let size = vec2(galley.size().x + 20.0 + lead, 26.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, *on, text));
+    let hover = resp.hovered();
+    let painter = ui.painter();
+    let radius = CornerRadius::same(theme::R_SM);
+    if *on {
+        painter.rect_filled(rect, radius, theme::bg_active());
+    } else if hover {
+        painter.rect_filled(rect, radius, theme::bg_hover());
+    }
+    painter.rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0, theme::line_control()),
+        egui::StrokeKind::Inside,
+    );
+    if let Some(c) = dot {
+        painter.circle_filled(egui::pos2(rect.left() + 13.0, rect.center().y), 3.5, c);
+    }
+    let ink = if *on || hover {
+        theme::text_1()
+    } else {
+        theme::text_2()
+    };
+    painter.galley_with_override_text_color(
+        egui::pos2(
+            rect.left() + 10.0 + lead,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        ink,
+    );
+    if resp.has_focus() {
+        painter.rect_stroke(
+            rect.expand(2.0),
+            radius,
+            Stroke::new(2.0, theme::focus()),
+            egui::StrokeKind::Outside,
+        );
+    }
+    if resp.clicked() {
+        *on = !*on;
+        return true;
+    }
+    false
+}

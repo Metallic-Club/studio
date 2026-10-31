@@ -402,10 +402,7 @@ impl EditorUi {
                         };
                         ui.label(small(save.to_string()).color(colour));
                         let n = self.state.selection.len();
-                        let mut text = match n {
-                            0 => "Nothing selected".to_string(),
-                            n => format!("{n} selected"),
-                        };
+                        let mut text = selection_label(&self.state);
                         ui.label(small("·".into()).color(dim));
                         if n > 0
                             && let Some(b) = self.state.selection_bounds()
@@ -419,10 +416,6 @@ impl EditorUi {
                             ));
                         }
                         ui.label(small(text).monospace().color(theme::text_2()));
-                        if let Some(h) = self.viewport.hovered() {
-                            ui.label(small("·".into()).color(dim));
-                            ui.label(small(self.state.display_name(h)).color(theme::text_2()));
-                        }
                     });
                 });
             });
@@ -533,5 +526,51 @@ fn fmt(v: f64) -> String {
         format!("{r:.0}")
     } else {
         format!("{r}")
+    }
+}
+
+/// The status bar's selection text: the selected instance's name, "N selected" for several,
+/// "Nothing selected" for none. (It never names the part under the pointer.)
+fn selection_label(state: &EditorState) -> String {
+    match state.selection.len() {
+        0 => "Nothing selected".to_string(),
+        1 => state
+            .selection
+            .active()
+            .map_or_else(|| "1 selected".to_string(), |id| state.display_name(id)),
+        n => format!("{n} selected"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::selection_label;
+    use crate::editor::EditorState;
+    use crate::output::OutputPanel;
+    use metallic_core::World;
+
+    #[test]
+    fn status_names_the_selection_not_the_hover() {
+        let mut world = World::new_with_services();
+        let ws = world.root("Workspace").unwrap();
+        let a = world.create("Part", Some(ws)).unwrap();
+        let b = world.create("Part", Some(ws)).unwrap();
+        world
+            .set(a, "Name", metallic_core::Value::String("Jump1".to_string()))
+            .unwrap();
+        let output = OutputPanel::new();
+        let mut state = EditorState::new(
+            world,
+            std::path::Path::new("."),
+            std::path::Path::new("unused.mscene"),
+            "Test",
+            output.log.sink(),
+        );
+        assert_eq!(selection_label(&state), "Nothing selected");
+        state.selection.select_only(a);
+        assert_eq!(selection_label(&state), "Jump1");
+        state.selection.select_only(a);
+        state.selection.toggle(b);
+        assert_eq!(selection_label(&state), "2 selected");
     }
 }

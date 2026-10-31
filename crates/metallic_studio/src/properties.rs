@@ -20,6 +20,18 @@ use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
 use metallic_core::transform::clamp_part_size;
 
+/// Formats a number field like egui does, but never as "-0" (a negative zero or a tiny negative
+/// value that rounds to zero shows as "0").
+fn fmt_drag(n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
+    let text = egui::emath::format_with_decimals_in_range(n, decimals.clone());
+    match text.strip_prefix('-') {
+        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => {
+            egui::emath::format_with_decimals_in_range(0.0, decimals)
+        }
+        _ => text,
+    }
+}
+
 /// Section of a property, in display order.
 fn section(prop: &str) -> usize {
     match prop {
@@ -249,6 +261,7 @@ impl Properties {
                             egui::DragValue::new(&mut v)
                                 .speed(drag_speed(p.name))
                                 .max_decimals(3)
+                                .custom_formatter(fmt_drag)
                                 .custom_parser(move |s| eval_relative(s, cur)),
                         );
                         if r.changed() {
@@ -300,6 +313,7 @@ impl Properties {
                                 egui::DragValue::new(&mut x)
                                     .speed(drag_speed(p.name))
                                     .max_decimals(3)
+                                    .custom_formatter(fmt_drag)
                                     .custom_parser(move |s| eval_relative(s, c)),
                             );
                             if r.changed() {
@@ -329,6 +343,7 @@ impl Properties {
                                             egui::DragValue::new(&mut x)
                                                 .speed(if base == 0 { 0.1 } else { 1.0 })
                                                 .max_decimals(3)
+                                                .custom_formatter(fmt_drag)
                                                 .custom_parser(move |s| eval_relative(s, c)),
                                         );
                                         if r.changed() {
@@ -370,6 +385,7 @@ impl Properties {
                                 egui::DragValue::new(&mut x)
                                     .speed(speed)
                                     .max_decimals(3)
+                                    .custom_formatter(fmt_drag)
                                     .custom_parser(move |s| eval_relative(s, c)),
                             );
                             if r.changed() {
@@ -544,5 +560,14 @@ mod tests {
         assert_eq!(section("Position"), section("Size"));
         assert_eq!(SECTION_NAMES[section("Anchored")], "Physics");
         assert_eq!(SECTION_NAMES[section("Name")], "Data");
+    }
+
+    #[test]
+    fn negative_zero_shows_as_zero() {
+        assert_eq!(fmt_drag(-0.0, 0..=3), "0");
+        assert_eq!(fmt_drag(-0.0001, 0..=3), "0");
+        assert_eq!(fmt_drag(-0.5, 0..=3), "-0.5");
+        assert_eq!(fmt_drag(8.0, 1..=3), "8.0");
+        assert_eq!(fmt_drag(-22.0, 1..=3), "-22.0");
     }
 }

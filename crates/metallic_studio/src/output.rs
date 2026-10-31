@@ -308,9 +308,6 @@ impl OutputPanel {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.log.drain();
         ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT + 4.0;
-        // Filter toggles mark "on" with a neutral fill: violet is for place and action.
-        ui.visuals_mut().selection.bg_fill = crate::theme::bg_active();
-        ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, crate::theme::text_1());
         ui.horizontal(|ui| {
             let mut changed = false;
             for (i, (label, level)) in [
@@ -322,14 +319,13 @@ impl OutputPanel {
             .enumerate()
             {
                 let text = format!("{label} {}", self.log.count(level));
-                changed |= ui.toggle_value(&mut self.show[i], text).changed();
+                changed |= crate::panel::chip(ui, &text, &mut self.show[i], None);
             }
             ui.separator();
             let tags: Vec<Tag> = self.log.tags().to_vec();
             for tag in tags {
                 let mut on = !self.hidden_tags.contains(&tag);
-                let chip = RichText::new(tag.to_string()).color(tag.colour());
-                if ui.toggle_value(&mut on, chip).changed() {
+                if crate::panel::chip(ui, &tag.to_string(), &mut on, Some(tag.colour())) {
                     changed = true;
                     if on {
                         self.hidden_tags.retain(|t| t != &tag);
