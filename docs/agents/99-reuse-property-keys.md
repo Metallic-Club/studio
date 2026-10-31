@@ -34,3 +34,12 @@ timing window. Counts measure successful allocator requests, not RSS or peak/ret
 Next: compile and execute this test-only baseline with the granted pure-core slot, retain exact counts/red,
 then implement the narrow get_mut branch and rerun. All mandatory workspace, strict Clippy and license gates
 remain required before a PR. Full Lua and paired timings are held until the conductor releases those windows.
+
+## Initial baseline observation
+
+The first test-only run returned Cargo 101. The allocation matrix reached its real postcondition checks and
+printed changed/no-op Position at 1,000 allocations / 8,000 requested bytes each; default resets at zero;
+unrelated/matching listener rows at 2,000 / 16,000 each. Its desired zero-key-allocation assertion failed.
+A separate semantic fixture also failed because it incorrectly assumed Part.Transparency has a registry range.
+That is a test-fixture error, not a product red. It is corrected to the actually ranged Lighting.ExposureCompensation
+property before rerunning the baseline. Both logs will be retained. Production remains unchanged.

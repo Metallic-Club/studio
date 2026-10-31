@@ -228,11 +228,14 @@ fn warmed_property_write_allocation_matrix() {
 
 #[test]
 fn validation_clamping_and_callback_order_stay_unchanged() {
-    let (mut world, part) = fixture();
+    let mut world = World::new_with_services();
+    let part = world.create("Part", None).unwrap();
+    world.set(part, "Position", position(1.0)).unwrap();
+    let lighting = world.root("Lighting").unwrap();
     let values = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen = Arc::clone(&values);
     world
-        .property_changed(part, "Transparency")
+        .property_changed(lighting, "ExposureCompensation")
         .connect(move |value| {
             seen.lock().unwrap().push(value.clone());
         });
@@ -256,21 +259,28 @@ fn validation_clamping_and_callback_order_stay_unchanged() {
     assert_eq!(world.change_cursor(), before);
     assert_eq!(world.get(part, "Position").unwrap(), position(1.0));
     assert!(values.lock().unwrap().is_empty());
-    world.set(part, "Transparency", Value::Number(2.0)).unwrap();
-    assert_eq!(world.get(part, "Transparency").unwrap(), Value::Number(1.0));
+    world
+        .set(lighting, "ExposureCompensation", Value::Number(10.0))
+        .unwrap();
+    assert_eq!(
+        world.get(lighting, "ExposureCompensation").unwrap(),
+        Value::Number(4.0)
+    );
     let clamped = world.change_cursor();
-    world.set(part, "Transparency", Value::Number(3.0)).unwrap();
+    world
+        .set(lighting, "ExposureCompensation", Value::Number(20.0))
+        .unwrap();
     assert_eq!(world.change_cursor(), clamped);
     world
-        .set(part, "Transparency", Value::Number(-1.0))
+        .set(lighting, "ExposureCompensation", Value::Number(0.0))
         .unwrap();
     assert!(std::ptr::eq(
-        world.get_ref(part, "Transparency").unwrap(),
-        default_value_ref("Part", "Transparency").unwrap()
+        world.get_ref(lighting, "ExposureCompensation").unwrap(),
+        default_value_ref("Lighting", "ExposureCompensation").unwrap()
     ));
     assert_eq!(
         *values.lock().unwrap(),
-        vec![Value::Number(1.0), Value::Number(0.0)]
+        vec![Value::Number(4.0), Value::Number(0.0)]
     );
 }
 
