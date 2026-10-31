@@ -243,6 +243,16 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  Command palette (#128): `palette.rs` (`CommandPalette`) searches objects (one row per name and class, Enter
+  selects all), game-folder files, every registered action with its keymap shortcut plus "Insert <class>", guides
+  given with `set_guides`, and an always-last "Ask Litha" row. It returns a `palette::Choice` that `EditorUi`
+  carries out through actions and `EditorState::insert`, so undo is unchanged. Actions `palette.open` (Ctrl+K),
+  `palette.commands` (Ctrl+Shift+P, opens with `>`) and `insert.at_cursor` (Shift+A over the viewport, an Insert
+  list at the cursor that places at `EditorState::insert_point`). Entry points for the title bar and Litha:
+  `EditorUi::open_command_palette`, `open_command_palette_with`, `take_litha_question`. Grid snap moved from Ctrl+K
+  to G (viewport). Objects parked for undo are skipped. `palette::Matcher` scores many texts in one pass each with
+  no allocation (`fuzzy_score` is the one-off form); the file index is built on a background thread and reused
+  for `ASSET_INDEX_AGE` (`is_indexing`, `poll_index`).
   `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
   and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
   Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one

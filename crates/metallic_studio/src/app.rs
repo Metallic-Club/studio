@@ -41,6 +41,8 @@ pub enum Scene {
     Editor,
     /// The same editor with Play running (the game drawn in the viewport).
     Playing,
+    /// The same editor with the Ctrl+K palette open on a query.
+    Palette,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
     Colour,
     /// Every Studio widget in every state (design review).
@@ -70,7 +72,7 @@ pub struct Options {
 
 impl Options {
     /// Parses `--screenshot <path>`,
-    /// `--scene splash|start|firstrun|error|editor|playing|colour|components|settings|licences|licences-crates`,
+    /// `--scene splash|start|firstrun|error|editor|playing|palette|colour|components|settings|licences|licences-crates`,
     /// `--theme graphite|titanium|light|system`, `--location <dir>` and `--size <width>x<height>`.
     /// Unknown arguments are reported in the returned message.
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -96,6 +98,7 @@ impl Options {
                         "error" => Scene::Error,
                         "editor" => Scene::Editor,
                         "playing" => Scene::Playing,
+                        "palette" => Scene::Palette,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
                         "settings" => Scene::Settings,
@@ -208,6 +211,12 @@ impl StudioApp {
             Scene::Playing if shot => {
                 EditorUi::demo(&templates_dir().join("parkour")).map_or(Phase::Start, |mut e| {
                     e.state.start_play("play.start");
+                    Phase::Opened(Box::new(e))
+                })
+            }
+            Scene::Palette if shot => {
+                EditorUi::demo(&templates_dir().join("parkour")).map_or(Phase::Start, |mut e| {
+                    e.open_command_palette_with("check");
                     Phase::Opened(Box::new(e))
                 })
             }
