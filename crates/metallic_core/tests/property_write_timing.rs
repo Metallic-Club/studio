@@ -24,7 +24,9 @@ fn fixture() -> (World, InstanceId) {
 #[test]
 #[ignore = "manual release get/set timing observations; run in a coordinated quiet window"]
 fn release_get_set_observations() {
-    assert!(!cfg!(debug_assertions), "run with --release");
+    if cfg!(debug_assertions) {
+        panic!("run with --release");
+    }
     let (mut world, part) = fixture();
     const OPERATIONS: usize = 100_000;
     let start = Instant::now();

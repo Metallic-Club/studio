@@ -94,3 +94,16 @@ clean-host or universal wall-time pass is claimed. CPU samples were 38.8%/34.5% 
 See `docs/research/2026-10-30-property-write-allocations.md` and its linked complete JSON evidence. Root's
 independent read-only review of `b64bd23` found no actionable concern; it ran no tests. Mandatory full workspace,
 strict Clippy/licenses/fmt remain next, after an explicit build/timing-window grant. No own merge or force push.
+
+## Mandatory-gate checkpoint
+
+The conductor explicitly released warm lane123 from completed PR #305; its prior logs/source evidence are
+saved and there is no binary-retention requirement. The guard cleaned only its local workspace packages,
+retaining third-party dependencies; no artifact copying. This supersedes the earlier `99-dev` full-gate plan,
+while all named baseline/fixed release targets remain frozen. Workspace no-run passed in 2m36s at `c2b2009`.
+
+Strict Clippy then returned Cargo 101 for `assert!(!cfg!(debug_assertions))` in the ignored manual probe. The
+pre-loop guard now explicitly panics in debug mode; no lint suppression or measured-loop change. Original
+timing results stay pinned to `56d4585`/`b64bd23` and their original identical probe fingerprint. No release
+artifact is rebuilt or result relabeled. Next: refresh no-run, rerun strict Clippy, then the sole actual full
+workspace window granted after #356's release. Licenses/fmt/diff already passed before this guard-only change.

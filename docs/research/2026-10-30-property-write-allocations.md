@@ -42,6 +42,11 @@ The original allocator-instrumented timing definition never executed. Separate r
 later workspace/profile changes from overwriting these executables; their hashes were checked before and after
 every invocation. No compiler artifacts were copied.
 
+After these observations, strict Clippy rejected the manual test's constant assertion for release mode.
+The final probe expresses that same pre-loop guard as an explicit debug-mode panic, without changing the
+measured loops. Timing results/fingerprints remain attributed to the original matching probe and source
+checkpoints above; the frozen executables were not rebuilt or relabeled, and no timing repeats were run.
+
 The bounded run used one recorded warm-up per side, then exactly eight alternating baseline/fixed and
 fixed/baseline pairs, with 100,000 operations per loop. Setup and journal warmup precede each loop. Owned and
 borrowed Position reads are unchanged controls. All 18 invocations passed; no pass-seeking repeats were run.
