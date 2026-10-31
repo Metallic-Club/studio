@@ -24,7 +24,7 @@ fails before requesting a context. The dedicated GL post-chain case always uses
 explicit GL, irrespective of this test-only override. Compare the logged actual
 backend and driver instead of inferring them from the request.
 
-wgpu30.0.1's `Instance::default()` does not opt into descriptor environment
+wgpu 30.0.1's `Instance::default()` does not opt into descriptor environment
 overrides. Setting `WGPU_BACKEND` alone therefore does not select this test's
 backend. Environment control requires the corresponding
 [`InstanceDescriptor` environment APIs](https://docs.rs/wgpu/30.0.1/wgpu/struct.InstanceDescriptor.html).
@@ -57,15 +57,15 @@ child failure or captured output. Windows children use CREATE_NO_WINDOW.
 `results.json` records source HEAD, executable hash, requested test override,
 actual adapter lines per trial, raw exit status, signed/hex32 representation and
 POSIX signal information separately. A status-like Windows value is only a
-candidate native status; ordinary exits139/127 are not relabeled as native crash
+candidate native status; ordinary exits 139/127 are not relabeled as native crash
 proof. Full stdout/stderr are preserved for each child. The runner stops at any
 nonzero exit or timeout instead of hiding it behind a successful rerun.
 
-Exit0 means all six children returned zero and all four GPU contexts were observed
+Exit 0 means all six children returned zero and all four GPU contexts were observed
 in each. Its outcome is deliberately `no_crash_observed`, not root cause or a
-validated fix. Missing/partial adapter coverage returns exit2 with an inconclusive
+validated fix. Missing/partial adapter coverage returns exit 2 with an inconclusive
 outcome, even if Rust's harness reported success. A child failure/timeout returns
-exit1. Keep evidence outside git and inspect logs for private paths before sharing.
+exit 1. Keep evidence outside git and inspect logs for private paths before sharing.
 
 If a native failure occurs, preserve the first status/logs and obtain a stack or
 dump scoped to that owned test executable using available native debugging tools.
@@ -73,3 +73,13 @@ dump scoped to that owned test executable using available native debugging tools
 Do not change global Windows crash settings or assign a driver cause without
 evidence. Any controlled CPU-load/backend matrix comes after reviewing the first
 bounded run; none is implicit in this tool.
+
+## First recorded sample
+
+At checkpoint `1126893` (Rust test tree unchanged from `b68455f`), the fixed
+six-child matrix completed with all raw exits zero, four observed GPU contexts
+per child, no unavailable-adapter skips, no timeout and unchanged post-child
+executable hashes. All 24 case executions used Vulkan on an NVIDIA GeForce
+RTX 3060 Ti, driver 610.88. This differs from the AMD RX 6650 XT hardware reported
+in #276. No artificial load was introduced. The result is a bounded
+non-reproduction on different hardware, not a crash fix or a performance claim.

@@ -51,9 +51,50 @@ on the last trial; an unreadable/changed image cannot produce no_crash_observed.
 Logs are `metallic-353-last-mutation-red.log` and
 `metallic-353-runner-green.log` in the local temporary directory.
 
-Issue349's actual window is released; the first bounded six-child GPU matrix is
+Issue #349's actual window is released; the first bounded six-child GPU matrix is
 granted after this Python-only checkpoint. Rust sources remain exactly b68455f;
 no new Rust build is required. Record source/toolchain/executable provenance before
 execution, preserve every observation, then run the remaining required gates in
 coordinated windows. No renderer crash has been reproduced or hidden in this task.
 No own-PR merge or remote-machine action is permitted.
+
+## Actual observations and final gates
+
+Final runner checkpoint `1126893` preserves the reviewed/prebuilt Rust render
+tree from `b68455f`; its extra Python-only append keeps Git metadata probes
+windowless as well. Three adapter-independent Rust policy tests passed. The first
+matrix at `1126893` executed all six fresh children in order 1,4,4,1,1,4. Every
+child returned raw 0 / signed 0 / hex 0x00000000; each recorded four ready GPU
+contexts, no adapter skips, no timeout and unchanged post-child executable hashes
+(24 actual case executions). All adapter records identify Vulkan / NVIDIA GeForce
+RTX 3060 Ti / driver 610.88. This is different hardware from #276's AMD RX 6650 XT
+report. No artificial load was introduced; this is bounded non-reproduction,
+not a fix, root cause, performance measurement or proof of general stability.
+
+Evidence is retained outside git at `integration-evidence/353-gpu-diagnostics`:
+`first-matrix-provenance.json`, `first-matrix/results.json`, all per-child stdout/
+stderr, policy output and `first-matrix-evidence-hashes.json`. Executable SHA256:
+`456a170bc3337fd4dbcf3227650d94343b0ad4402e58edb38a34c39f97d8de08`.
+Provenance includes source/Rust-tree identity, rustc/Cargo, build-log and guarded
+lane-owner fingerprints. Gate logs and hashes are also copied into its `gates/`.
+
+At source `8c3bf0a` (CI-only append; Rust/runner unchanged):
+
+- Full workspace no-run passed in 1m56s; strict all-target workspace Clippy passed
+  in 57.83s, using guarded lane121 and four build jobs.
+- Full serial workspace suite exited zero: 1,573 passed, zero failed, seven
+  upstream ignores across 121 result groups including doc tests. Render groups:
+  four headless, three policy, four lighting and seven post-chain cases passed.
+  All three Parkour routes passed. No test or case was newly ignored by this task.
+- Nine standard-library runner tests passed; both Windows and POSIX CI sections
+  now run them. License, format and task-range whitespace checks passed.
+- The root worker coordinator's Rust/Python reviews found no remaining actionable
+  concern after the reproduced/corrected runner findings above.
+
+The seven upstream ignores are three window-opening tests, two manual getter
+probes, a manual real-budget pattern probe and a Studio actions doc example.
+Actual Lua/GPU work used coordinated exclusive windows. The source remains pinned
+at `c914767`; object-only merging with later main `238c6fb` is clean (tree
+`f35dfaad`), which is source compatibility evidence, not an execution of that tree.
+The publication append only records evidence after these gates. Exact-head CI
+is inspected after publication. #276 stays open and unresolved.
