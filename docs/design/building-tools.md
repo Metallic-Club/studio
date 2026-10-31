@@ -78,9 +78,14 @@ Not here:
   project keeps its grid when you switch to a 1-stud project. Assistant's call.
 - Roblox's increments sit in the toolbar with Shift+2 and Alt+R to focus them (R2.2); the Roblox Studio keymap
   preset keeps those keys (section 15).
-- The grid's origin is world zero. A part's position snaps by its **bounding-box min corner**, not its centre, when
-  its size along the axis is not a multiple of the increment; otherwise by its centre. This keeps a 1 x 1 x 1 cube and
-  a 4 x 1 x 2 plate both flush with grid lines (the Build Sandbox `Grid` module uses the same rule).
+- The grid's origin is world zero. On each axis, a part (or selection) snaps its **bounding-box min corner** to the
+  grid, so its faces sit on grid lines whenever its size is a multiple of the increment. This applies to surface
+  placement, Snap to grid and the "Off grid" indicator. Arrow-key and handle drags snap the amount moved, not the
+  position.
+- Why not the centre: an earlier rule snapped the centre when the size was a multiple of the increment. For an odd
+  multiple (a 1-stud cube on a 1-stud grid) that put the faces half a step off the grid lines, contradicting the
+  "flush" goal, and flagged the templates' flush parts as off grid. The min-corner rule gives the same result for even
+  multiples and is right for odd ones and for sizes that are not multiples.
 
 ### 2.3 What counts as the selection
 
@@ -195,8 +200,8 @@ This section defines behaviour.
   Roblox users still press Shift for uniform scale out of old habit (R2.12), so the preset follows current Roblox.
 - **Corner handle** (one, on the +X+Y+Z corner in local space, a 9 px square): uniform scale of the whole selection
   about the pivot. Models scale with `Model:ScaleTo` semantics (positions and sizes of children together).
-- Size floor 0.05 studs on each axis (the move increment floor). A part never flips inside out; dragging past zero
-  clamps.
+- Sizes stay inside core's part limits, 0.001 to 2048 studs on each axis (`metallic_core::transform`), so grabbing a
+  handle never changes a size by itself. A part never flips inside out; dragging past zero clamps.
 - Ball parts keep equal axes; any face handle scales all three (Roblox behaviour).
 
 ### 4.4 Pivot

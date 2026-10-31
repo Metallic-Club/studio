@@ -30,11 +30,27 @@ fn editor() -> (EditorUi, InstanceId, InstanceId) {
     (EditorUi::new(state, output), model, part)
 }
 
+/// The panels use the bundled font families, which the theme installs for the next pass: the
+/// first pass only installs them. Returns true on that first pass (draw nothing).
+fn install_theme(ui: &egui::Ui, themed: &mut bool) -> bool {
+    if *themed {
+        return false;
+    }
+    metallic_studio::theme::apply(ui.ctx(), metallic_studio::theme::ThemeId::Graphite);
+    *themed = true;
+    ui.ctx().request_repaint();
+    true
+}
+
 fn harness(ui: EditorUi) -> Harness<'static, EditorUi> {
+    let mut themed = false;
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(
-            |ui, editor: &mut EditorUi| {
+            move |ui, editor: &mut EditorUi| {
+                if install_theme(ui, &mut themed) {
+                    return;
+                }
                 editor.ui(ui, None);
             },
             ui,
@@ -216,10 +232,14 @@ fn dirty_shell(scene: std::path::PathBuf) -> (Harness<'static, Shell>, InstanceI
     ui.state
         .set_property(&[part], "Transparency", Value::Number(0.5));
     assert!(ui.state.is_dirty());
+    let mut themed = false;
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(
-            |ui, shell: &mut Shell| {
+            move |ui, shell: &mut Shell| {
+                if install_theme(ui, &mut themed) {
+                    return;
+                }
                 let exit = shell.editor.ui(ui, None);
                 if exit != EditorExit::Stay {
                     shell.exit = exit;
@@ -292,6 +312,72 @@ fn save_from_the_prompt_closes_only_when_the_save_worked() {
 }
 
 #[test]
+fn dragging_the_body_moves_the_part_as_one_step() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.tool = Tool::Select;
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    let grab = h
+        .state()
+        .viewport
+        .screen_pos(DVec3::new(0.0, 0.0, 2.0))
+        .unwrap();
+    h.hover_at(grab);
+    h.run_steps(2);
+    press(&mut h, grab, true);
+    for i in 1..=6 {
+        h.hover_at(grab + egui::vec2(15.0 * i as f32, 0.0));
+        h.run_steps(1);
+    }
+    assert!(h.state().viewport.is_dragging());
+    press(&mut h, grab + egui::vec2(90.0, 0.0), false);
+    let s = &h.state().state;
+    let Value::Vector3(p) = s.world.get(part, "Position").unwrap() else {
+        panic!()
+    };
+    assert!(p.x > 0.5, "moved right: {p:?}");
+    assert!((p.x - p.x.round()).abs() < 1e-9, "on the grid: {p:?}");
+    assert!(p.y.abs() < 1e-9, "stays on its start height: {p:?}");
+    assert_eq!(s.history.len(), 1);
+    assert_eq!(
+        s.history.undo_name(&s.world).as_deref(),
+        Some("Move 1 part")
+    );
+    assert_eq!(s.selection.ids(), &[part]);
+}
+
+#[test]
+fn typing_during_a_drag_sets_the_exact_amount() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.select_only(part);
+    h.state_mut().state.tool = Tool::Move;
+    h.run_steps(2);
+    let origin = h.state().viewport.screen_pos(DVec3::ZERO).unwrap();
+    let grab = origin - egui::vec2(0.0, 54.0);
+    h.hover_at(grab);
+    h.run_steps(2);
+    press(&mut h, grab, true);
+    h.hover_at(grab - egui::vec2(0.0, 30.0));
+    h.run_steps(2);
+    for c in ["3", "*", "4"] {
+        h.event(Event::Text(c.into()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(!h.state().viewport.is_dragging(), "Enter ends the drag");
+    press(&mut h, grab - egui::vec2(0.0, 30.0), false);
+    let s = &h.state().state;
+    assert_eq!(
+        s.world.get(part, "Position").unwrap(),
+        Value::Vector3(Vec3::new(0.0, 12.0, 0.0))
+    );
+    assert_eq!(s.history.len(), 1);
+}
+
+#[test]
 fn closing_with_unsaved_script_text_asks_first() {
     use egui::accesskit::Role;
     let (mut ui, _model, _part) = editor();
@@ -329,4 +415,123 @@ fn ctrl_comma_asks_for_the_settings_dialog() {
     h.run_steps(3);
     assert!(h.state_mut().take_settings_request());
     assert!(!h.state_mut().take_settings_request(), "asked once");
+}
+
+#[test]
+fn global_keys_wait_during_a_properties_scrub_and_esc_cancels_it() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    // One earlier step, so a stray Ctrl+Z would show.
+    {
+        let e = h.state_mut();
+        let _ = e.state.apply(metallic_studio::commands::Command::set(
+            part,
+            "Transparency",
+            Value::Number(0.0),
+            Value::Number(0.25),
+        ));
+    }
+    // Hold the pointer (as a scrub does) over the status bar, away from the viewport.
+    let held = egui::pos2(640.0, 796.0);
+    h.hover_at(held);
+    press(&mut h, held, true);
+    {
+        let e = h.state_mut();
+        let EditorUi {
+            properties, state, ..
+        } = e;
+        properties.scrub(state, "Transparency", Value::Number(0.75));
+    }
+    h.run_steps(1);
+    assert!(h.state().properties.in_gesture());
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    let s = &h.state().state;
+    assert_eq!(s.history.len(), 1, "Ctrl+Z waits for the scrub");
+    assert_eq!(
+        s.world.get(part, "Transparency").unwrap(),
+        Value::Number(0.75)
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().properties.in_gesture());
+    assert_eq!(
+        h.state().state.world.get(part, "Transparency").unwrap(),
+        Value::Number(0.25),
+        "Esc puts the value back"
+    );
+    assert_eq!(
+        h.state().state.selection.ids(),
+        &[part],
+        "Esc did not also run a global action"
+    );
+    press(&mut h, held, false);
+    h.run_steps(2);
+    let s = &h.state().state;
+    assert_eq!(s.history.len(), 1, "a cancelled scrub records nothing");
+    assert_eq!(
+        s.world.get(part, "Transparency").unwrap(),
+        Value::Number(0.25)
+    );
+}
+
+#[test]
+fn losing_focus_cancels_a_drag() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    let origin = h.state().viewport.screen_pos(DVec3::ZERO).unwrap();
+    let grab = origin - egui::vec2(0.0, 54.0);
+    h.hover_at(grab);
+    h.run_steps(2);
+    press(&mut h, grab, true);
+    h.hover_at(grab - egui::vec2(0.0, 120.0));
+    h.run_steps(2);
+    assert!(h.state().viewport.is_dragging());
+    h.event(Event::WindowFocused(false));
+    h.run_steps(2);
+    assert!(!h.state().viewport.is_dragging());
+    let s = &h.state().state;
+    assert_eq!(
+        s.world.get(part, "Position").unwrap(),
+        Value::Vector3(Vec3::new(0.0, 0.0, 0.0))
+    );
+    assert!(s.history.is_empty());
+    assert!(!s.preview.is_active());
+}
+
+#[test]
+fn ctrl_d_before_an_alt_drag_moves_keeps_the_selection_on_live_parts() {
+    let (ui, _model, part) = editor();
+    let mut h = harness(ui);
+    h.state_mut().state.tool = Tool::Select;
+    h.state_mut().state.selection.select_only(part);
+    h.run_steps(2);
+    let grab = h
+        .state()
+        .viewport
+        .screen_pos(DVec3::new(0.0, 0.0, 2.0))
+        .unwrap();
+    h.hover_at(grab);
+    h.run_steps(2);
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    press(&mut h, grab, true);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+    assert!(
+        h.state().viewport.is_dragging(),
+        "Alt on the body drags a copy"
+    );
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(2);
+    press(&mut h, grab, false);
+    h.run_steps(2);
+    let s = &h.state().state;
+    assert!(!s.selection.ids().is_empty());
+    for &id in s.selection.ids() {
+        assert!(s.is_live(id), "selection on a live part");
+    }
 }

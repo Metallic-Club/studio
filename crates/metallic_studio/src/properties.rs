@@ -4,22 +4,35 @@
 //! Behaviour. Values that differ across a multi-selection show "Mixed". Number fields scrub on
 //! drag and accept expressions (`3*4`, `+2` adds to the current value, see [`crate::expr`]).
 //!
-//! **One gesture, one undo step:** while the pointer is held (scrubbing a number) changes write
-//! the world directly as a live preview, and the first value of each touched property is
-//! remembered. When the pointer is released the whole gesture is recorded as one step. Typed
-//! values and toggles apply at once as one step each. A Color3 row's swatch opens the colour
-//! popover ([`crate::editor_colour`]), which previews and commits the same way.
+//! **One gesture, one undo step:** while the pointer is held (scrubbing a number) changes go
+//! through the editor's [`crate::preview::PreviewOverlay`], which writes them as a live preview
+//! and remembers the first value of each touched property. When the pointer is released the
+//! whole gesture is recorded as one `SetProperties` step. Typed values and toggles apply at once
+//! as one step each. A Color3 row's swatch opens the colour popover ([`crate::editor_colour`]),
+//! which previews and commits as one step the same way.
 use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
 use metallic_core::classes::{PropDef, all_properties, find_property};
 use metallic_core::{CFrame, InstanceId, UDim2, Value, Vec3};
 
-use crate::commands::Command;
+use crate::commands::{Command, PropName};
 use crate::editor::{EditorState, UiRequest};
 use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
-use metallic_core::transform::clamp_part_size;
+use metallic_core::transform::{clamp_part_size, orthonormal};
+
+/// Formats a number field like egui does, but never as "-0" (a negative zero or a tiny negative
+/// value that rounds to zero shows as "0").
+fn fmt_drag(n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
+    let text = egui::emath::format_with_decimals_in_range(n, decimals.clone());
+    match text.strip_prefix('-') {
+        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => {
+            egui::emath::format_with_decimals_in_range(0.0, decimals)
+        }
+        _ => text,
+    }
+}
 
 /// Section of a property, in display order.
 fn section(prop: &str) -> usize {
@@ -47,8 +60,10 @@ const SECTION_NAMES: [&str; 5] = ["Data", "Appearance", "Transform", "Physics", 
 #[derive(Default)]
 pub struct Properties {
     filter: String,
-    /// Live-preview gesture: first value of every (instance, property) touched.
-    gesture: Vec<(InstanceId, String, Value)>,
+    /// The property of the open live-preview gesture (its values live in the overlay).
+    gesture: Option<String>,
+    /// Esc cancelled the gesture; ignore the widget until the pointer is released.
+    cancelled: bool,
     /// Text being typed into a string field, by property name.
     text: HashMap<String, String>,
     /// A Color3 row was clicked: the property and the swatch's rectangle.
@@ -77,35 +92,49 @@ impl Properties {
 
     /// True while a live-preview gesture is open.
     pub fn in_gesture(&self) -> bool {
-        !self.gesture.is_empty()
+        self.gesture.is_some()
+    }
+
+    /// True while a scrub is open or was cancelled with the pointer still held: global keys wait.
+    pub fn is_busy(&self) -> bool {
+        self.gesture.is_some() || self.cancelled
+    }
+
+    /// Esc during a scrub: every previewed value goes back and no step is recorded.
+    pub fn cancel_gesture(&mut self, state: &mut EditorState) {
+        if self.gesture.take().is_some() {
+            state.preview.cancel(&mut state.world);
+            self.cancelled = true;
+        }
+    }
+
+    /// Shows `value` for `prop` on the selection as a live scrub would (pointer held): it is
+    /// previewed, and recorded as one step when the pointer is released. For scripted checks.
+    pub fn scrub(&mut self, state: &mut EditorState, prop: &str, value: Value) {
+        let ids = state.selection.ids().to_vec();
+        self.commit(state, &ids, Edit::Set(prop.to_string(), value), true);
     }
 
     fn finish_gesture(&mut self, state: &mut EditorState) {
-        if self.gesture.is_empty() {
+        let Some(prop) = self.gesture.take() else {
             return;
+        };
+        let n = state.preview.len();
+        let name = if n == 1 {
+            format!("Set {prop}")
+        } else {
+            format!("Set {prop} ({n} changes)")
+        };
+        if let Some(cmd) = state.preview.commit(name) {
+            state.record(cmd);
         }
-        let mut commands: Vec<Command> = self
-            .gesture
-            .drain(..)
-            .filter_map(|(id, prop, old)| {
-                let new = state.world.get(id, &prop).ok()?;
-                (new != old).then(|| Command::set(id, &prop, old, new))
-            })
-            .collect();
-        match commands.len() {
-            0 => {}
-            1 => state.record(commands.remove(0)),
-            n => {
-                let prop = match &commands[0] {
-                    Command::SetProperty { prop, .. } => prop.clone(),
-                    _ => String::new(),
-                };
-                state.record(Command::Batch {
-                    name: format!("Set {prop} ({n} changes)"),
-                    commands,
-                });
-            }
-        }
+    }
+
+    /// Sets `prop` to `value` on every selected instance as one step, exactly as typing the value
+    /// into the panel does (clamps and pivot rules included). For scripted checks and commands.
+    pub fn set(&mut self, state: &mut EditorState, prop: &str, value: Value) {
+        let ids = state.selection.ids().to_vec();
+        self.commit(state, &ids, Edit::Set(prop.to_string(), value), false);
     }
 
     /// Draws the panel.
@@ -113,6 +142,9 @@ impl Properties {
         let pointer_down = ui.input(|i| i.pointer.primary_down());
         if !pointer_down {
             self.finish_gesture(state);
+            self.cancelled = false;
+        } else if self.gesture.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.cancel_gesture(state);
         }
         let ids: Vec<InstanceId> = state.selection.ids().to_vec();
         let Some(&active) = ids.last() else {
@@ -158,6 +190,9 @@ impl Properties {
         props.retain(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter));
 
         let mut edits: Vec<Edit> = Vec::new();
+        // Inputs in the property column are 24 px rows (spec 4.3).
+        ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT;
+        ui.spacing_mut().item_spacing.y = 2.0;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -170,13 +205,17 @@ impl Properties {
                     if in_section.is_empty() {
                         continue;
                     }
-                    egui::CollapsingHeader::new(RichText::new(*title).strong())
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            for p in in_section {
-                                self.row(ui, state, &ids, active, p, &mut edits);
-                            }
-                        });
+                    egui::CollapsingHeader::new(
+                        RichText::new(*title)
+                            .font(crate::theme::fonts::strong())
+                            .color(crate::theme::text_2()),
+                    )
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for p in in_section {
+                            self.row(ui, state, &ids, active, p, &mut edits);
+                        }
+                    });
                 }
             });
 
@@ -194,181 +233,234 @@ impl Properties {
         p: &PropDef,
         edits: &mut Vec<Edit>,
     ) {
-        let Ok(value) = state.world.get(active, p.name) else {
+        let Some(value) = read(&state.world, active, p.name) else {
             return;
         };
-        let mixed = ids
-            .iter()
-            .any(|&id| state.world.get_ref(id, p.name).ok() != Some(&value));
-        ui.horizontal(|ui| {
-            let label = ui.add_sized(
-                [ui_tokens().label_width, 20.0],
-                egui::Label::new(RichText::new(p.name).color(ui_tokens().text_dim)).truncate(),
+        let mixed = if p.name == "WorldPivot" {
+            ids.iter()
+                .any(|&id| read(&state.world, id, p.name).as_ref() != Some(&value))
+        } else {
+            ids.iter()
+                .any(|&id| state.world.get_ref(id, p.name).ok() != Some(&value))
+        };
+        let playing = state.play.is_playing();
+        let hover_bg = ui.painter().add(egui::Shape::Noop);
+        let numeric = matches!(
+            value,
+            Value::Number(_) | Value::Vector3(_) | Value::CFrame(_) | Value::UDim2(_)
+        );
+        let row = ui.horizontal(|ui| {
+            ui.set_min_height(crate::theme::ROW_HEIGHT);
+            // Names sit left aligned in a fixed column (about 40 % of the default panel).
+            let label_w = ui_tokens().label_width;
+            ui.allocate_ui_with_layout(
+                egui::vec2(label_w, crate::theme::ROW_HEIGHT),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_size(egui::vec2(label_w, crate::theme::ROW_HEIGHT));
+                    let label = ui.add(
+                        egui::Label::new(RichText::new(p.name).color(crate::theme::text_2()))
+                            .truncate(),
+                    );
+                    label.on_hover_text(format!(
+                        "{}.{}",
+                        state.world.class_name(active).unwrap_or(""),
+                        p.name
+                    ));
+                },
             );
-            label.on_hover_text(format!(
-                "{}.{}",
-                state.world.class_name(active).unwrap_or(""),
-                p.name
-            ));
             if mixed {
                 ui.label(RichText::new("Mixed").color(ui_tokens().text_dim).italics());
             }
             let name = p.name.to_string();
-            match (&value, p.allowed) {
-                (Value::Bool(b), _) => {
-                    let mut v = *b;
-                    if ui.checkbox(&mut v, "").changed() {
-                        edits.push(Edit::Set(name, Value::Bool(v)));
-                    }
+            // While playing, values are read-only and drawn disabled.
+            ui.add_enabled_ui(!playing, |ui| {
+                if numeric {
+                    ui.style_mut()
+                        .text_styles
+                        .insert(egui::TextStyle::Button, ui_tokens().mono());
                 }
-                (Value::Number(n), _) => {
-                    let mut v = *n;
-                    let cur = *n;
-                    let r = ui.add(
-                        egui::DragValue::new(&mut v)
-                            .speed(drag_speed(p.name))
-                            .max_decimals(3)
-                            .custom_parser(move |s| eval_relative(s, cur)),
-                    );
-                    if r.changed() {
-                        edits.push(Edit::Set(name, Value::Number(v)));
-                    }
-                }
-                (Value::String(s), Some(allowed)) => {
-                    let mut chosen = s.clone();
-                    egui::ComboBox::from_id_salt(p.name)
-                        .selected_text(&chosen)
-                        .show_ui(ui, |ui| {
-                            for &a in allowed {
-                                ui.selectable_value(&mut chosen, a.to_string(), a);
-                            }
-                        });
-                    if &chosen != s {
-                        edits.push(Edit::Set(name, Value::String(chosen)));
-                    }
-                }
-                (Value::String(s), None) if p.name == "Source" => {
-                    let lines = s.lines().count();
-                    if ui.button(format!("Edit script ({lines} lines)")).clicked() {
-                        state.request(UiRequest::OpenScript(active));
-                    }
-                }
-                (Value::String(s), None) => {
-                    let buf = self.text.entry(name.clone()).or_insert_with(|| s.clone());
-                    let r = ui.add(egui::TextEdit::singleline(buf).desired_width(f32::INFINITY));
-                    if r.lost_focus() {
-                        if buf != s {
-                            edits.push(Edit::Set(name.clone(), Value::String(buf.clone())));
+                match (&value, p.allowed) {
+                    (Value::Bool(b), _) => {
+                        let mut v = *b;
+                        if ui.checkbox(&mut v, "").changed() {
+                            edits.push(Edit::Set(name, Value::Bool(v)));
                         }
-                        self.text.remove(&name);
-                    } else if !r.has_focus() {
-                        *buf = s.clone();
                     }
-                }
-                (Value::Vector3(v), _) => {
-                    let comps = [v.x, v.y, v.z];
-                    for (axis, &c) in comps.iter().enumerate() {
-                        ui.label(
-                            RichText::new(["X", "Y", "Z"][axis])
-                                .color(ui_tokens().axis[axis])
-                                .strong(),
-                        );
-                        let mut x = c;
+                    (Value::Number(n), _) => {
+                        let mut v = *n;
+                        let cur = *n;
                         let r = ui.add(
-                            egui::DragValue::new(&mut x)
+                            egui::DragValue::new(&mut v)
                                 .speed(drag_speed(p.name))
                                 .max_decimals(3)
-                                .custom_parser(move |s| eval_relative(s, c)),
+                                .custom_formatter(fmt_drag)
+                                .custom_parser(move |s| eval_relative(s, cur)),
                         );
                         if r.changed() {
-                            edits.push(Edit::Component(name.clone(), axis, x));
+                            edits.push(Edit::Set(name, Value::Number(v)));
                         }
                     }
-                }
-                (Value::CFrame(cf), _) => {
-                    // Shown and edited as position plus orientation (degrees, Y then X then Z).
-                    let o = cf.orientation_degrees();
-                    let rows = [
-                        ("Position", [cf.position.x, cf.position.y, cf.position.z], 0),
-                        ("Rotation", [o.x, o.y, o.z], 3),
-                    ];
-                    ui.vertical(|ui| {
-                        for (label, comps, base) in rows {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(label).color(ui_tokens().text_dim));
-                                for (axis, &c) in comps.iter().enumerate() {
-                                    ui.label(
-                                        RichText::new(["X", "Y", "Z"][axis])
-                                            .color(ui_tokens().axis[axis])
-                                            .strong(),
-                                    );
-                                    let mut x = c;
-                                    let r = ui.add(
-                                        egui::DragValue::new(&mut x)
-                                            .speed(if base == 0 { 0.1 } else { 1.0 })
-                                            .max_decimals(3)
-                                            .custom_parser(move |s| eval_relative(s, c)),
-                                    );
-                                    if r.changed() {
-                                        edits.push(Edit::Component(name.clone(), base + axis, x));
-                                    }
+                    (Value::String(s), Some(allowed)) => {
+                        let mut chosen = s.clone();
+                        egui::ComboBox::from_id_salt(p.name)
+                            .selected_text(&chosen)
+                            .show_ui(ui, |ui| {
+                                for &a in allowed {
+                                    ui.selectable_value(&mut chosen, a.to_string(), a);
                                 }
                             });
+                        if &chosen != s {
+                            edits.push(Edit::Set(name, Value::String(chosen)));
                         }
-                    });
-                }
-                (Value::Color3(c), _) => {
-                    let rgb = [to_u8(c.r), to_u8(c.g), to_u8(c.b)];
-                    // The swatch shows the property's own colour; a click opens the colour popover.
-                    let swatch = egui::Button::new("")
-                        .fill(egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
-                        .min_size(egui::vec2(36.0, 18.0));
-                    let r = ui
-                        .add(swatch)
-                        .on_hover_text(format!("Edit {name} in the colour popover"));
-                    let label = format!("{name} swatch");
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-                    if r.clicked() && !state.play.is_playing() {
-                        self.colour_request = Some((name.clone(), r.rect));
                     }
-                    ui.label(
-                        RichText::new(format!("{}, {}, {}", rgb[0], rgb[1], rgb[2]))
-                            .monospace()
-                            .color(ui_tokens().text_dim),
-                    );
-                }
-                (Value::UDim2(u), _) => {
-                    let comps = [u.x_scale, u.x_offset, u.y_scale, u.y_offset];
-                    for (i, &c) in comps.iter().enumerate() {
-                        let mut x = c;
-                        let speed = if i % 2 == 0 { 0.01 } else { 1.0 };
-                        let r = ui.add(
-                            egui::DragValue::new(&mut x)
-                                .speed(speed)
-                                .max_decimals(3)
-                                .custom_parser(move |s| eval_relative(s, c)),
+                    (Value::String(s), None) if p.name == "Source" => {
+                        let lines = s.lines().count();
+                        if ui.button(format!("Edit script ({lines} lines)")).clicked() {
+                            state.request(UiRequest::OpenScript(active));
+                        }
+                    }
+                    (Value::String(s), None) => {
+                        let buf = self.text.entry(name.clone()).or_insert_with(|| s.clone());
+                        let r =
+                            ui.add(egui::TextEdit::singleline(buf).desired_width(f32::INFINITY));
+                        if r.lost_focus() {
+                            if buf != s {
+                                edits.push(Edit::Set(name.clone(), Value::String(buf.clone())));
+                            }
+                            self.text.remove(&name);
+                        } else if !r.has_focus() {
+                            *buf = s.clone();
+                        }
+                    }
+                    (Value::Vector3(v), _) => {
+                        let comps = [v.x, v.y, v.z];
+                        for (axis, &c) in comps.iter().enumerate() {
+                            ui.label(
+                                RichText::new(["X", "Y", "Z"][axis])
+                                    .color(ui_tokens().axis[axis])
+                                    .strong(),
+                            );
+                            let mut x = c;
+                            let r = ui.add(
+                                egui::DragValue::new(&mut x)
+                                    .speed(drag_speed(p.name))
+                                    .max_decimals(3)
+                                    .custom_formatter(fmt_drag)
+                                    .custom_parser(move |s| eval_relative(s, c)),
+                            );
+                            if r.changed() {
+                                edits.push(Edit::Component(name.clone(), axis, x));
+                            }
+                        }
+                    }
+                    (Value::CFrame(cf), _) => {
+                        // Shown and edited as position plus orientation (degrees, Y then X then Z).
+                        let o = cf.orientation_degrees();
+                        let rows = [
+                            ("Position", [cf.position.x, cf.position.y, cf.position.z], 0),
+                            ("Rotation", [o.x, o.y, o.z], 3),
+                        ];
+                        ui.vertical(|ui| {
+                            for (label, comps, base) in rows {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(label).color(ui_tokens().text_dim));
+                                    for (axis, &c) in comps.iter().enumerate() {
+                                        ui.label(
+                                            RichText::new(["X", "Y", "Z"][axis])
+                                                .color(ui_tokens().axis[axis])
+                                                .strong(),
+                                        );
+                                        let mut x = c;
+                                        let r = ui.add(
+                                            egui::DragValue::new(&mut x)
+                                                .speed(if base == 0 { 0.1 } else { 1.0 })
+                                                .max_decimals(3)
+                                                .custom_formatter(fmt_drag)
+                                                .custom_parser(move |s| eval_relative(s, c)),
+                                        );
+                                        if r.changed() {
+                                            edits.push(Edit::Component(
+                                                name.clone(),
+                                                base + axis,
+                                                x,
+                                            ));
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    }
+                    (Value::Color3(c), _) => {
+                        let rgb = [to_u8(c.r), to_u8(c.g), to_u8(c.b)];
+                        // The swatch shows the property's own colour; a click opens the popover.
+                        let swatch = egui::Button::new("")
+                            .fill(egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+                            .min_size(egui::vec2(36.0, 18.0));
+                        let r = ui
+                            .add(swatch)
+                            .on_hover_text(format!("Edit {name} in the colour popover"));
+                        let label = format!("{name} swatch");
+                        r.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &label)
+                        });
+                        if r.clicked() && !playing {
+                            self.colour_request = Some((name.clone(), r.rect));
+                        }
+                        ui.label(
+                            RichText::new(format!("{}, {}, {}", rgb[0], rgb[1], rgb[2]))
+                                .monospace()
+                                .color(ui_tokens().text_dim),
                         );
-                        if r.changed() {
-                            edits.push(Edit::Component(name.clone(), i, x));
+                    }
+                    (Value::UDim2(u), _) => {
+                        let comps = [u.x_scale, u.x_offset, u.y_scale, u.y_offset];
+                        for (i, &c) in comps.iter().enumerate() {
+                            let mut x = c;
+                            let speed = if i % 2 == 0 { 0.01 } else { 1.0 };
+                            let r = ui.add(
+                                egui::DragValue::new(&mut x)
+                                    .speed(speed)
+                                    .max_decimals(3)
+                                    .custom_formatter(fmt_drag)
+                                    .custom_parser(move |s| eval_relative(s, c)),
+                            );
+                            if r.changed() {
+                                edits.push(Edit::Component(name.clone(), i, x));
+                            }
                         }
                     }
+                    (Value::Ref(r), _) => {
+                        let text = match r {
+                            Some(id) if state.world.is_alive(*id) => state.display_name(*id),
+                            _ => "None".to_string(),
+                        };
+                        ui.label(RichText::new(text).color(ui_tokens().text_dim));
+                    }
+                    (Value::Nil, _) => {
+                        ui.label(RichText::new("nil").color(ui_tokens().text_dim));
+                    }
                 }
-                (Value::Ref(r), _) => {
-                    let text = match r {
-                        Some(id) if state.world.is_alive(*id) => state.display_name(*id),
-                        _ => "None".to_string(),
-                    };
-                    ui.label(RichText::new(text).color(ui_tokens().text_dim));
-                }
-                (Value::Nil, _) => {
-                    ui.label(RichText::new("nil").color(ui_tokens().text_dim));
-                }
-            }
+            });
         });
+        if !playing && ui.rect_contains_pointer(row.response.rect) {
+            ui.painter().set(
+                hover_bg,
+                egui::Shape::rect_filled(
+                    row.response.rect.expand2(egui::vec2(4.0, 1.0)),
+                    egui::CornerRadius::same(crate::theme::R_XS),
+                    crate::theme::bg_hover(),
+                ),
+            );
+        }
     }
 
     fn commit(&mut self, state: &mut EditorState, ids: &[InstanceId], edit: Edit, live: bool) {
-        if state.play.is_playing() {
+        if state.play.is_playing() || (live && self.cancelled) {
+            return;
+        }
+        // A viewport drag owns the overlay; a Properties edit waits for it.
+        if !live && state.preview.is_active() {
             return;
         }
         let (prop, values): (String, Vec<(InstanceId, Value)>) = match edit {
@@ -380,7 +472,7 @@ impl Properties {
                 let vals = ids
                     .iter()
                     .filter_map(|&id| {
-                        let old = state.world.get(id, &prop).ok()?;
+                        let old = read(&state.world, id, &prop)?;
                         Some((id, with_component(&old, axis, x)?))
                     })
                     .collect();
@@ -388,27 +480,51 @@ impl Properties {
             }
         };
         // Part sizes stay inside the engine's limits, as a script's write would.
+        let mut refused = None;
         let values: Vec<(InstanceId, Value)> = values
             .into_iter()
-            .map(|(id, v)| match v {
+            .filter_map(|(id, v)| match v {
                 Value::Vector3(s) if prop == "Size" && state.world.is_a(id, "BasePart") => {
-                    (id, Value::Vector3(clamp_part_size(s)))
+                    Some((id, Value::Vector3(clamp_part_size(s))))
                 }
-                v => (id, v),
+                // A Model's WorldPivot is made orthonormal like core's `set_world_pivot`; one that
+                // cannot be (degenerate axes, not finite) is refused, as core refuses it.
+                Value::CFrame(cf) if prop == "WorldPivot" => match orthonormal(*cf, "WorldPivot") {
+                    Ok(cf) => Some((id, Value::CFrame(Box::new(cf)))),
+                    Err(e) => {
+                        refused = Some(e.to_string());
+                        None
+                    }
+                },
+                v => Some((id, v)),
             })
             .collect();
+        if let Some(why) = refused {
+            state.note(format!("WorldPivot not set: {why}"));
+        }
+        // Setting WorldPivot also marks it set (`WorldPivotSet`), as core's `set_world_pivot`
+        // does; without that the pivot keeps following the bounding box.
+        let marks: Vec<InstanceId> = if prop == "WorldPivot" {
+            values
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|&id| state.world.is_a(id, "Model"))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if live {
+            let name: PropName = prop.as_str().into();
+            let set: PropName = "WorldPivotSet".into();
             for (id, v) in values {
-                if !self
-                    .gesture
-                    .iter()
-                    .any(|(gid, gp, _)| *gid == id && *gp == prop)
-                    && let Ok(old) = state.world.get(id, &prop)
-                {
-                    self.gesture.push((id, prop.clone(), old));
-                }
-                let _ = state.world.set(id, &prop, v);
+                let _ = state.preview.set(&mut state.world, id, &name, v);
             }
+            for id in marks {
+                let _ = state
+                    .preview
+                    .set(&mut state.world, id, &set, Value::Bool(true));
+            }
+            self.gesture = Some(prop);
             return;
         }
         let mut commands: Vec<Command> = values
@@ -418,6 +534,13 @@ impl Properties {
                 (old != v).then(|| Command::set(id, &prop, old, v))
             })
             .collect();
+        for id in marks {
+            if let Ok(old) = state.world.get(id, "WorldPivotSet")
+                && old != Value::Bool(true)
+            {
+                commands.push(Command::set(id, "WorldPivotSet", old, Value::Bool(true)));
+            }
+        }
         match commands.len() {
             0 => {}
             1 => {
@@ -431,6 +554,16 @@ impl Properties {
             }
         }
     }
+}
+
+/// The value Properties shows and edits: a Model's `WorldPivot` is its pivot as Luau reads it
+/// (the bounding-box centre until set); everything else is the stored value.
+fn read(world: &metallic_core::World, id: InstanceId, prop: &str) -> Option<Value> {
+    if prop == "WorldPivot" && world.is_a(id, "Model") {
+        let cf = metallic_core::transform::world_pivot(world, id).ok()?;
+        return Some(Value::CFrame(Box::new(cf)));
+    }
+    world.get(id, prop).ok()
 }
 
 fn drag_speed(prop: &str) -> f64 {
@@ -509,5 +642,14 @@ mod tests {
         assert_eq!(section("Position"), section("Size"));
         assert_eq!(SECTION_NAMES[section("Anchored")], "Physics");
         assert_eq!(SECTION_NAMES[section("Name")], "Data");
+    }
+
+    #[test]
+    fn negative_zero_shows_as_zero() {
+        assert_eq!(fmt_drag(-0.0, 0..=3), "0");
+        assert_eq!(fmt_drag(-0.0001, 0..=3), "0");
+        assert_eq!(fmt_drag(-0.5, 0..=3), "-0.5");
+        assert_eq!(fmt_drag(8.0, 1..=3), "8.0");
+        assert_eq!(fmt_drag(-22.0, 1..=3), "-22.0");
     }
 }

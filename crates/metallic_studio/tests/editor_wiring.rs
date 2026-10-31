@@ -77,11 +77,23 @@ fn editor() -> (EditorUi, Scene) {
     (EditorUi::new(state, output), Scene { base, a, b, c })
 }
 
+/// The panels use the bundled font families, which the theme installs for the next pass: the
+/// first pass only installs them.
 fn harness(ui: EditorUi) -> Harness<'static, EditorUi> {
+    let mut themed = false;
     let mut h = Harness::builder()
         .with_size(egui::vec2(1600.0, 900.0))
         .build_ui_state(
-            |ui, editor: &mut EditorUi| {
+            move |ui, editor: &mut EditorUi| {
+                if !themed {
+                    metallic_studio::theme::apply(
+                        ui.ctx(),
+                        metallic_studio::theme::ThemeId::Graphite,
+                    );
+                    themed = true;
+                    ui.ctx().request_repaint();
+                    return;
+                }
                 editor.ui(ui, None);
             },
             ui,

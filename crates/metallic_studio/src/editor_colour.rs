@@ -5,10 +5,12 @@
 //! turns its events into edits:
 //!
 //! - [`ColourEvent::Preview`] / [`ColourEvent::PreviewHueShift`]: write the colour to every
-//!   target as a live preview (no undo step), the way Properties previews a drag.
-//! - [`ColourEvent::Commit`] / [`ColourEvent::CommitHueShift`]: one undo step from the colours
-//!   before the gesture to the new ones, named by the popover ("Colour: #5280CC (3 parts)").
-//! - [`ColourEvent::Cancel`]: put the colours from before the gesture back.
+//!   target through the editor's [`crate::preview::PreviewOverlay`] (no undo step yet), the way
+//!   Properties previews a drag.
+//! - [`ColourEvent::Commit`] / [`ColourEvent::CommitHueShift`]: the overlay becomes one
+//!   `SetProperties` step from the colours before the gesture to the new ones, named by the
+//!   popover ("Colour: #5280CC (3 parts)").
+//! - [`ColourEvent::Cancel`]: the overlay puts the colours from before the gesture back.
 //! - [`ColourEvent::EyedropperClick`]: the `Color` of the part under the cursor, or with Alt (or
 //!   over no part) the window's pixel.
 //!
@@ -21,7 +23,7 @@ use metallic_core::{Color3, InstanceId, Value};
 
 use crate::actions::{Action, ActionRegistry, ToolbarGroup};
 use crate::colour::{ColourEvent, ColourLibrary, ColourPopover, PaletteStore, RecentColours, Rgb8};
-use crate::commands::Command;
+use crate::commands::PropName;
 use crate::editor::EditorState;
 use crate::icons::Icon;
 
@@ -30,7 +32,7 @@ pub const OPEN_ID: &str = "colour.open";
 
 /// What the open popover edits.
 struct Target {
-    prop: String,
+    prop: PropName,
     /// Each target and its colour before the current gesture.
     base: Vec<(InstanceId, Rgb8)>,
     selection_revision: u64,
@@ -129,7 +131,7 @@ impl ColourDock {
         let mixed = base.iter().any(|(_, c)| *c != active);
         self.popover.open(active, base.len(), mixed, pos);
         self.target = Some(Target {
-            prop: prop.to_string(),
+            prop: prop.into(),
             base,
             selection_revision: state.selection.revision(),
         });
@@ -159,38 +161,37 @@ impl ColourDock {
             self.handle(ctx, state, hovered_part, event);
         }
         if !self.popover.is_open() {
-            self.target = None;
+            // Closed without a commit (selection change, Play): drop an open preview.
+            if self.target.take().is_some() && state.preview.is_active() {
+                state.preview.cancel(&mut state.world);
+            }
         }
     }
 
+    /// Writes `colour(start)` to every target through the preview overlay.
     fn write(&self, state: &mut EditorState, colour: impl Fn(Rgb8) -> Rgb8) {
         let Some(t) = &self.target else { return };
         for &(id, before) in &t.base {
-            let _ = state.world.set(id, &t.prop, to_color3(colour(before)));
+            let _ = state
+                .preview
+                .set(&mut state.world, id, &t.prop, to_color3(colour(before)));
         }
     }
 
     /// One undo step from the gesture's start colours to `colour(start)`.
     fn commit(&mut self, state: &mut EditorState, name: String, colour: impl Fn(Rgb8) -> Rgb8) {
+        self.write(state, &colour);
         let Some(t) = &mut self.target else { return };
-        let mut commands = Vec::new();
-        for (id, before) in t.base.iter_mut() {
-            let after = colour(*before);
-            let _ = state.world.set(*id, &t.prop, to_color3(after));
-            if after != *before {
-                commands.push(Command::set(
-                    *id,
-                    &t.prop,
-                    to_color3(*before),
-                    to_color3(after),
-                ));
-            }
-            *before = after;
+        for (_, before) in t.base.iter_mut() {
+            *before = colour(*before);
         }
-        // A batch even for one target, so the step keeps the popover's name.
-        if !commands.is_empty() {
-            state.record(Command::Batch { name, commands });
+        if let Some(step) = state.preview.commit(name) {
+            state.record(step);
         }
+    }
+
+    fn cancel(&mut self, state: &mut EditorState) {
+        state.preview.cancel(&mut state.world);
     }
 
     fn handle(
@@ -213,7 +214,7 @@ impl ColourDock {
                     crate::colour::maths::shift_hue(before, degrees)
                 });
             }
-            ColourEvent::Cancel => self.write(state, |before| before),
+            ColourEvent::Cancel => self.cancel(state),
             ColourEvent::Closed => {}
             ColourEvent::EyedropperClick { pos, alt, .. } => {
                 let picked = hovered_part.filter(|_| !alt).and_then(|id| {

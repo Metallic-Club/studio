@@ -182,6 +182,12 @@ impl EditorTools {
             ("tool.move", "Move", Icon::Move, Tool::Move),
             ("tool.rotate", "Rotate", Icon::Rotate, Tool::Rotate),
             ("tool.scale", "Scale", Icon::Scale, Tool::Scale),
+            (
+                "tool.transform",
+                "Transform",
+                Icon::Text("T"),
+                Tool::Transform,
+            ),
         ] {
             let (a, b) = (sh.clone(), sh.clone());
             r.register(
@@ -200,7 +206,8 @@ impl EditorTools {
         ] {
             let (a, b) = (sh.clone(), sh.clone());
             r.register(
-                Action::new(id, label, icon, ToolbarGroup::Tools, move |s| {
+                // Icon buttons with the building actions: the labelled Tools group is full.
+                Action::new(id, label, icon, ToolbarGroup::Build, move |s| {
                     let mut t = a.borrow_mut();
                     t.measure.clear();
                     if t.modal == Some(modal) {

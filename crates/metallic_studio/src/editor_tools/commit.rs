@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 
-use crate::commands::{Command, Placement, placement};
+use crate::commands::{Command, Placement, PropName, placement};
 use crate::editor::EditorState;
 use crate::tools::arrange::{CopiedPart, Plan};
 
@@ -61,11 +61,20 @@ impl Undoable {
     }
 
     fn into_commands(self, world: &World) -> Vec<Command> {
-        let mut out: Vec<Command> = self
-            .sets
-            .into_iter()
-            .map(|(id, prop, old, new)| Command::set(id, prop, old, new))
-            .collect();
+        // Property changes first, as one `SetProperties` (the same step a gesture's preview
+        // overlay commits).
+        let mut out: Vec<Command> = Vec::new();
+        if !self.sets.is_empty() {
+            let changes = self
+                .sets
+                .into_iter()
+                .map(|(id, prop, old, new)| (id, PropName::from(prop), old, new))
+                .collect();
+            out.push(Command::SetProperties {
+                name: String::new(),
+                changes,
+            });
+        }
         for (class, id, props) in self.created {
             if let Some(parent) = world.parent(id) {
                 out.push(Command::Create {

@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let template = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/parkour");
     let editor = EditorUi::demo(&template).ok_or("the Parkour template did not open")?;
     editor.input_actions.set_open(true);
+    let mut themed = false;
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1600.0, 900.0))
         .with_pixels_per_point(1.0)
@@ -29,9 +30,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_accessibility_check(false)
         .wgpu()
         .build_ui_state(
-            |ui, editor: &mut EditorUi| {
-                // Fonts and colours first; they take effect from the next frame.
-                metallic_studio::theme::apply(ui.ctx(), metallic_studio::theme::ThemeId::Graphite);
+            move |ui, editor: &mut EditorUi| {
+                // Fonts and colours first; they take effect from the next pass.
+                if !themed {
+                    metallic_studio::theme::apply(
+                        ui.ctx(),
+                        metallic_studio::theme::ThemeId::Graphite,
+                    );
+                    themed = true;
+                    ui.ctx().request_repaint();
+                    return;
+                }
                 editor.ui(ui, None);
             },
             editor,
