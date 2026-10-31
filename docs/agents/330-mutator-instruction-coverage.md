@@ -2,16 +2,20 @@
 
 ## Current status
 
-Source checkpoint `c5f2f5ad64e58b232b887358d5b1eecc5075e038`, based on pinned main `d1eecce`.
-Focused checks passed: 13 Python policy/storage tests, three Rust example tests, five native release modes,
-matching local PDB symbols, real native collector completion and refusal of wall-time substitution. Independent
-read-only review found no actionable issue. Earlier artifact/source hashes remain pinned to `5211155`; the core
-and benchmark source did not change during the main refresh. Only the later progress prose is uncommitted.
+Current integration is normal merge `7b67a95282e0755070cc05b04020bd699de8af29` of exact main `b4909b5`.
+Its engine core source tree exactly equals that base (`f6eed2302ea5182b0e05680c344f521fb72f9f40`), and owned
+workload/tool source is unchanged. The first real five-workload CI artifacts are retained, but their engine
+snapshots differ and must not be called identical-engine calibration.
 
-Required workspace prebuild, strict all-target Clippy, licenses and formatting have passed on the pinned source.
-Actual serial workspace tests passed: **1,224 passed, zero failures, six existing ignored tests**. Lane114 is
-idle and the timing window has been released. All required local gates are green; PR publication and real Linux
-instruction evidence remain next. No instruction or wall-time performance pass is claimed from local checks.
+Last local source validation remains pinned to `c5f2f5a` on `d1eecce`: 1,224 workspace tests, strict Clippy,
+licenses and formatting passed. Focused checks also passed: 13 Python tests, three Rust example tests, five
+native release modes, matching local PDB symbols and native collector refusal of wall-time substitution.
+Independent read-only review found no actionable issue. Earlier native artifacts remain pinned to `5211155`;
+the core/benchmark source did not change in the initial unpublished refresh, before this later normal merge.
+
+Cargo is held after integration pending the conductor's resource plan. New-head CI is next after append-only
+push; no merged-source local gate or wall-time pass is claimed. Lane114 is idle. PR #338 and issue #330 remain
+in review, with historical source/results preserved.
 
 ## Goal and scope
 
@@ -150,3 +154,25 @@ workspace count. Required prebuild/Clippy/licenses/format checks are complete. C
 validation record, push the owned branch, open/attach one PR and set issue #330 to review. Real five-workload
 Callgrind artifacts remain pending CI; no new source commit or rerun is needed just to record later CI metadata.
 Keep the named native artifact and all old #318 evidence intact. The wall-time target remains unresolved.
+
+
+## Exact-main normal merge for attributable CI
+
+PR #338 was published at `c2c9556ab860cc47c8ed36f5093574549b5b6ea5`, with actual base
+`b4909b582241cd1f5c946aa69a7e91021a8271d4`. Main had acquired real core lighting/class/instance changes after
+local pin `d1eecce`; the engine source trees differed. The first real Callgrind run completed all five workloads
+and passed the unchanged gate, but it compares those different snapshots: reads -0.94%, writes -0.94%, clone
+0.00%, create 310,696/310,696 Ir, destroy 4,447,067/4,447,067 Ir. It is not identical-engine calibration, isolated
+measurement-change cost or a wall-time pass. Full reports/profiles/comparison are retained in
+`integration-evidence/330-mutator-instructions/ci-first-c2c9556`; the PR body explicitly recorded this caveat.
+
+At the conductor's request, normal merge `7b67a95` integrated that exact main without conflicts. Before committing,
+the staged tree was `4890520edb1138f52bfcb7f9378b30a21b34b520`. Verification showed its core src tree exactly
+matches base `f6eed2302ea5182b0e05680c344f521fb72f9f40`; `perf_ci.rs`, `measure.py`, `test_measure.py` and
+`docs/performance-ci.md` match the prior published head byte-for-byte. The check is retained in
+`main-integration-before-commit.json`. No production engine changes were handwritten and no old source result
+was relabelled. No threshold, workflow or dependency policy was relaxed.
+
+Record this integration, push append-only and inspect the next real CI comparison. It is attributable as a
+harness calibration only if that CI event uses the same engine core baseline. Any future mismatch must remain
+explicit rather than trigger a silent main chase. Cargo stays held after integration; no new local Rust build.
