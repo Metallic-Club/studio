@@ -249,7 +249,8 @@ fn gui_class_prefix_and_normalized_look_values_match_current_main() {
         ("GuiButton", 34),
         ("TextButton", 35),
         ("ImageButton", 36),
-        ("ServerStorage", 37),
+        ("ModuleScript", 37),
+        ("ServerStorage", 38),
     ] {
         assert_eq!(classes::registry_classes()[index].name, name);
     }
@@ -283,7 +284,7 @@ fn gui_class_prefix_and_normalized_look_values_match_current_main() {
 /// refuse each other with `UpdateRequired`). If the change was not intended, fix the registry.
 #[test]
 fn registry_hash_is_pinned() {
-    const GOLDEN: &str = "6699764a6ca5e949b9070b4f21f11dd23848220de244f1eb52eac44366697392";
+    const GOLDEN: &str = "99e3dd4376927a0647604f95900922de7b678f76805f6d2e16e333af8b823cbc";
     let hash = registry_hash().expect("the built-in registry is well formed");
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(

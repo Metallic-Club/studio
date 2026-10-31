@@ -739,8 +739,8 @@ static CLASSES: &[ClassDef] = &[
             }),
         ],
     ),
-    // Appended to retain existing registry class order. Runtime APIs are separate work.
-    class("ServerStorage", "Instance", &[]),
+    // Last, with the other appended classes: `require(moduleScript)` runs its `Source` once per
+    // script VM. It never runs by itself, so it has no `Enabled`.
     class(
         "ModuleScript",
         "Instance",
@@ -748,6 +748,9 @@ static CLASSES: &[ClassDef] = &[
             Value::String(String::new())
         })],
     ),
+    // Appended after ModuleScript to retain existing registry class order (replication, #293).
+    // Runtime APIs are separate work.
+    class("ServerStorage", "Instance", &[]),
     class("RemoteFunction", "Instance", &[]),
     class("UnreliableRemoteEvent", "Instance", &[]),
     class("PlayerScripts", "Instance", &[]),
@@ -817,8 +820,8 @@ fn class_slot(name: &str) -> Option<usize> {
         "GuiButton" => 34,
         "TextButton" => 35,
         "ImageButton" => 36,
-        "ServerStorage" => 37,
-        "ModuleScript" => 38,
+        "ModuleScript" => 37,
+        "ServerStorage" => 38,
         "RemoteFunction" => 39,
         "UnreliableRemoteEvent" => 40,
         "PlayerScripts" => 41,

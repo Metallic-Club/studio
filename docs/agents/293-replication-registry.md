@@ -176,6 +176,6 @@ authority. No live multiplayer, Team Create or broader milestone acceptance is c
 
 Codex's branch was idle; this branch merges it unchanged and fixes the lead's FIX-FIRST items:
 - `hash_schema`/`registry_hash` return `Result<_, SchemaError>`; no `expect`/`assert!`/`panic!` outside tests.
-- `tests/replication.rs::registry_hash_is_pinned` pins `6699764a...97392`; update it with the `registry_hash` example.
+- `tests/replication.rs::registry_hash_is_pinned` pins `99e3dd43...23cbc` (after main #387 put ModuleScript at index 37); update it with the `registry_hash` example.
 - Added `classes::class_index`/`class_at` and core `orientation_to_quat`/`quat_to_orientation` (physics re-exports them).
 - Follow-ups: attributes (#391) and tags (#395) are not in the schema hash; the spec does not require them yet.

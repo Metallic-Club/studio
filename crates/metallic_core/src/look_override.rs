@@ -116,8 +116,9 @@ fn inherited(world: &World, id: InstanceId) -> Option<&'static str> {
 
 /// The resolved style of every `BasePart`, kept current from the change journal.
 ///
-/// Only parts with an effective override and Models with their own value are stored, so a
-/// world without overrides costs nothing but the journal scan.
+/// Only parts with an effective override and Models with their own value are stored. While no
+/// Model has a value, a journaled part reads only its own property (no ancestor walk), so a
+/// world without Model overrides costs one property read per changed part.
 #[derive(Debug, Default, Clone)]
 pub struct LookOverrides {
     parts: HashMap<InstanceId, &'static str>,
@@ -159,11 +160,12 @@ impl LookOverrides {
         id: InstanceId,
         from_above: Option<&'static str>,
     ) -> Option<&'static str> {
-        let mine = own(world, id);
+        // Class first: reading a property the class lacks builds an error (two Strings).
         if world.is_a(id, "BasePart") {
-            set_or_clear(&mut self.parts, id, mine.or(from_above));
+            set_or_clear(&mut self.parts, id, own(world, id).or(from_above));
             from_above
         } else if world.is_a(id, "Model") {
+            let mine = own(world, id);
             set_or_clear(&mut self.models, id, mine);
             mine.or(from_above)
         } else {
@@ -203,7 +205,12 @@ impl LookOverrides {
                 continue;
             }
             if world.is_a(id, "BasePart") {
-                let now = resolve(world, id);
+                // No Model passes a style down while none has a value: skip the ancestor walk.
+                let now = if self.models.is_empty() {
+                    own(world, id)
+                } else {
+                    resolve(world, id)
+                };
                 if self.parts.get(&id).copied() != now {
                     set_or_clear(&mut self.parts, id, now);
                     changed.push(id);
