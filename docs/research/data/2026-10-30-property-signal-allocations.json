@@ -1,0 +1,80 @@
+{
+  "base": "238c6fb8af7a05f031cb29930e59c8afe57cf0fa",
+  "operations_per_row": 1000,
+  "probe_blob": "ace12098326f5886f8beec3cda792f9635f2daa0",
+  "metrics": "successful allocator calls and requested bytes, not RSS or elapsed time",
+  "samples": [
+    {
+      "label": "baseline",
+      "source": "964cd18422f715de82dfc469e444b40cdfa66ed2",
+      "profile": "dev",
+      "rows": {
+        "None": {
+          "calls": 0,
+          "requested_bytes": 0
+        },
+        "Unrelated": {
+          "calls": 1000,
+          "requested_bytes": 8000
+        },
+        "Matching": {
+          "calls": 1000,
+          "requested_bytes": 8000
+        },
+        "known_registration": {
+          "calls": 1000,
+          "requested_bytes": 8000
+        }
+      },
+      "raw_log_sha256": "66d316adf54c47d78e4990c363e320a04b66336fe1f47ed06f2271d4c0946654"
+    },
+    {
+      "label": "fixed",
+      "source": "a4c167dc9168a6d6cd4aef3c4156efe59eb2b8c7",
+      "profile": "dev",
+      "rows": {
+        "None": {
+          "calls": 0,
+          "requested_bytes": 0
+        },
+        "Unrelated": {
+          "calls": 0,
+          "requested_bytes": 0
+        },
+        "Matching": {
+          "calls": 0,
+          "requested_bytes": 0
+        },
+        "known_registration": {
+          "calls": 0,
+          "requested_bytes": 0
+        }
+      },
+      "raw_log_sha256": "f3b836254d9eff7f4a72db652a6d720f5031f68cbeadaa5e59eab8f0993ca3d7"
+    },
+    {
+      "label": "fixed",
+      "source": "a4c167dc9168a6d6cd4aef3c4156efe59eb2b8c7",
+      "profile": "release",
+      "rows": {
+        "None": {
+          "calls": 0,
+          "requested_bytes": 0
+        },
+        "Unrelated": {
+          "calls": 0,
+          "requested_bytes": 0
+        },
+        "Matching": {
+          "calls": 0,
+          "requested_bytes": 0
+        },
+        "known_registration": {
+          "calls": 0,
+          "requested_bytes": 0
+        }
+      },
+      "raw_log_sha256": "c9fa1f80ef59b121a90c76f8e402bd6c4089f5b50bf4dbd00355a4b0d20910d1"
+    }
+  ]
+}
