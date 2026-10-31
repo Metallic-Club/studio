@@ -60,8 +60,7 @@ A 1% error injected into `fog_depth` fails the GPU fog check. The moonlight chec
 
 - Fixed: between 1 and 2 degrees below the horizon the moon took the table's interpolated light column, which
   ran toward the setting sun (up to 500x the moon, sunset-red). The moon now holds the -2 degree row.
-- Reported, not changed: Atmosphere `Offset` limits the fog differently. The reference scales the opacity,
-  `1 - (1 - T) (1 - 0.75 Offset)`; the engine clamps it, `min(1 - T, 1 - 0.75 Offset)`. They agree only at
-  Offset 0. With Offset above 0 the engine keeps thin fog at full strength where the reference thins it.
-  Changing it would change the reviewed preset looks (Cartoon Bright uses Offset 0.5), so it is left for a
-  lighting decision.
+- Decided (coordinator, 2026-10-30): the engine keeps its clamp for Atmosphere `Offset`. The reference scales
+  the opacity, `1 - (1 - T) (1 - 0.75 Offset)`; the engine clamps it, `min(1 - T, 1 - 0.75 Offset)`, so with
+  Offset above 0 the engine keeps thin fog at full strength where the reference thins it. Cartoon Bright
+  (Offset 0.5) is reviewed with the clamp. **The fog reference holds at Offset 0 only.**
