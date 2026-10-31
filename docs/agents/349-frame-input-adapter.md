@@ -2,11 +2,15 @@
 
 ## Current status
 
-Test-only checkpoint `f60529420218a92788eaacd33ddae9d664ca0b14` retains the pre-implementation tests for a
-reproducible missing-method baseline. A thin adapter and API/architecture docs are now implemented in the working
-tree, but no Rust build or test has run. Cargo remains held. The first focused grant can check the historical
-test-only baseline, return to the implementation and validate both adapter and pure quantization cases without
-claiming an unexecuted result. No Game behavior, wire rule, trigonometry or dependency changed.
+Implementation source `21aedd518087441f6c5b42e2baf839eddd8b327e`, on pinned main `d34c50f`.
+Historical test-only `f605294` produced the expected compile-only missing-method failure: Cargo 101, seven
+E0599 errors and no runtime test execution. The branch was restored before green checks. Four real adapter
+unit tests and all 11 pure LocalInput tests then passed. No Lua test ran in either focused command.
+
+Workspace prebuild, strict all-target Clippy, licenses and formatting passed. The final serial workspace suite
+also passed: 1,540 tests, zero failures and seven existing ignored tests. The actual timing window was released. All output uses the dedicated `lane114/349-input` target; old journal,
+benchmark and release artifacts remain untouched, with no compiler artifact copying. No Game/driver/wire/trig
+or dependency change. No CPU feature-graph, performance or live-session acceptance claim is made. PR publication and CI are next.
 
 ## Goal and ownership
 
@@ -32,7 +36,7 @@ PR #309's actual feature is `presentation`, which gates the whole input module, 
 unconditional. Nested adapter unit tests inherit that module boundary rather than referencing a feature absent
 from current main. After #309 lands, the CPU-only graph therefore does not need this adapter.
 
-## Test-first checkpoint
+## Test-first definitions (before execution)
 
 Added four adapter unit tests before implementation, plus six pure regressions: every canonical axis code,
 every yaw code, exact/adjacent half-step floats, yaw seam, non-finite move_z and 10,000 seeded float-bit patterns.
@@ -55,3 +59,46 @@ PR #309's presentation gate will also gate the adapter tests. Root local_input r
 The six additional pure tests cover every canonical axis, all 65,536 yaw codes, representable half-step neighbors,
 turn seams, non-finite second-axis input and bounded seeded float-bit invariants. These are test definitions,
 not observed results yet. No dependency, global manifest, Game tick, Simulation, driver or codec file changed.
+
+
+## Executed focused red and green
+
+With the granted non-Lua compile slot, the owned worktree temporarily checked out test-only `f605294` and ran
+`test --locked -p metallic_runtime --lib --no-run -j 4 input::local_input::tests` through cargo_lane. It returned
+Cargo 101 with exactly the E0599 missing `LocalInput::from_frame` category (seven call sites); no test harness ran.
+The command's finally block restored branch head `21aedd5`. `baseline-adapter-build.log` and
+`baseline-result.json` retain source IDs, the raw failure and checksum. This red is a compiler failure, not a
+runtime/behavioral failure or a malformed test fixture.
+
+At restored `21aedd5`, the filtered adapter unit command passed all four cases (10.64s build, 0.01s harness):
+keyboard composite/flags, one analog deadzone, absolute camera yaw with ignored orbit/zoom, and independently
+invalid components. The pure `--test local_input` command then passed all 11 cases (19.44s build, 0.04s harness),
+including the six new exhaustive/boundary/property-style cases. Those durations are command observations, not
+latency benchmarks. Logs: `adapter-tests.log`, `quantization-tests.log` under
+`integration-evidence/349-frame-input-adapter`. No Lua or window test executed during these focused checks.
+
+Root's independent read-only source review at `21aedd5` found no actionable concern in movement/held-flag
+semantics, one-pass delegation, no orphan CPU import, unchanged Game behavior and test expectations. The review
+ran no tests. The same dedicated target is now prebuilding full workspace binaries; actual Lua execution is
+still reserved for its separately granted window. No threshold or safety budget is changed.
+
+
+## Full required gates
+
+At unchanged implementation `21aedd5`/main `d34c50f`, the guarded full workspace prebuild passed in 6m00s.
+Strict `clippy --workspace --all-targets --locked -j 4 -- -D warnings` passed in 2m34s. Licenses (`licenses ok`),
+formatting and whitespace checks passed. Logs: `workspace-prebuild.log`, `clippy.log`, `licenses.log` in the same
+retained integration evidence directory. The dedicated output target remained `lane114/349-input`; neither the
+old performance outputs nor the offered warm lane121 were used or copied.
+
+After the conductor released the earlier actual suites, the guarded full workspace command
+`test --workspace --locked -j 4 -- --test-threads=1` exited zero: **1,540 passed, zero failed, seven existing ignored
+tests across 119 summaries**. It included both the new adapter and pure cases alongside all default Lua and
+Parkour checks. No failure was retried or excluded, no budget changed, and this task added no ignore. The actual
+window was released immediately after verified exit/totals. `workspace-tests.log` and `workspace-result.json`
+retain the command result and checksum. No CPU-only feature result is inferred before #309's gate lands.
+
+Commit the final validation prose, push only this branch, open/attach one PR that closes #349 (not #340), and
+set #349 to review. Check current-head CI and describe later main integration separately if required. Source
+review remains the independent `21aedd5` review; the final commit adds documentation only. No own merge,
+force push, visual UI, protocol change or live multiplayer/Team Create acceptance.
