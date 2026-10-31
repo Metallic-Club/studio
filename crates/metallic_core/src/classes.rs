@@ -21,6 +21,11 @@ pub const MATERIALS: &[&str] = &[
     "Sand",
 ];
 
+/// How a ScreenGui orders its elements (`Enum.ZIndexBehavior`, in Roblox's value order):
+/// `Global` sorts all of them by `ZIndex`, `Sibling` sorts siblings and draws children above
+/// their parent.
+pub const ZINDEX_BEHAVIORS: &[&str] = &["Global", "Sibling"];
+
 /// Shapes a part may have.
 pub const SHAPES: &[&str] = &["Block", "Ball", "Cylinder", "Wedge"];
 
@@ -163,7 +168,13 @@ pub struct ClassDef {
     pub superclass: Option<&'static str>,
     /// Properties declared by this class (not inherited ones).
     pub props: &'static [PropDef],
+    /// Other defaults for inherited properties in this class and its subclasses (a GuiButton is
+    /// `Active`). The property keeps its declaring class's type and rules.
+    pub defaults: &'static [DefaultOverride],
 }
+
+/// A class's own default for an inherited property: its name and the value.
+pub type DefaultOverride = (&'static str, fn() -> Value);
 
 const fn p(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef {
     PropDef {
@@ -203,6 +214,7 @@ const fn class(
         name,
         superclass: Some(superclass),
         props,
+        defaults: &[],
     }
 }
 
@@ -256,6 +268,7 @@ static CLASSES: &[ClassDef] = &[
             ValueType::String,
             || Value::String(String::new()),
         )],
+        defaults: &[],
     },
     class(
         "Workspace",
@@ -436,6 +449,17 @@ static CLASSES: &[ClassDef] = &[
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
             // Higher draws (and takes clicks) above lower; equal orders keep tree order.
             p("DisplayOrder", ValueType::Number, || Value::Number(0.0)),
+            PropDef {
+                name: "ZIndexBehavior",
+                ty: ValueType::String,
+                default: || Value::String("Sibling".into()),
+                allowed: Some(ZINDEX_BEHAVIORS),
+                range: None,
+                hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::Replicated,
+            },
         ],
     ),
     class(
@@ -712,11 +736,15 @@ static CLASSES: &[ClassDef] = &[
     ),
     // Clickable GUI (#79). Roblox's GuiButton derives from GuiObject; here `Frame` plays that
     // role, so a button is also a Frame.
-    class(
-        "GuiButton",
-        "Frame",
-        &[p("AutoButtonColor", ValueType::Bool, || Value::Bool(true))],
-    ),
+    ClassDef {
+        // Like Roblox, a button is `Active` (it fires `Activated`) unless set otherwise.
+        defaults: &[("Active", || Value::Bool(true))],
+        ..class(
+            "GuiButton",
+            "Frame",
+            &[p("AutoButtonColor", ValueType::Bool, || Value::Bool(true))],
+        )
+    },
     class(
         "TextButton",
         "GuiButton",
@@ -877,7 +905,7 @@ static DEFAULT_VALUES: LazyLock<HashMap<&'static str, HashMap<&'static str, Valu
                 let value = if property.name == "Name" {
                     Value::String(class.name.to_owned())
                 } else {
-                    (property.default)()
+                    class_default(class.name, property)
                 };
                 properties.insert(property.name, value);
             }
@@ -902,7 +930,37 @@ pub fn default_value(class: &str, property: &str) -> Option<Value> {
     if property == "Name" {
         return class_def(class).map(|c| Value::String(c.name.to_string()));
     }
-    find_property(class, property).map(|d| (d.default)())
+    // One walk up the chain, as `find_property` (this runs on every read of an unset property):
+    // the nearest override on the way wins, else the declaring class's default.
+    let mut overridden: Option<fn() -> Value> = None;
+    let mut cur = class_def(class);
+    while let Some(c) = cur {
+        if overridden.is_none() && !c.defaults.is_empty() {
+            overridden = c
+                .defaults
+                .iter()
+                .find(|(n, _)| *n == property)
+                .map(|(_, f)| *f);
+        }
+        if let Some(d) = c.props.iter().find(|d| d.name == property) {
+            return Some(overridden.unwrap_or(d.default)());
+        }
+        cur = c.superclass.and_then(class_def);
+    }
+    None
+}
+
+/// The default of `property` in `class`: the nearest override ([`ClassDef::defaults`]) on the
+/// way up from `class`, else the property's own.
+fn class_default(class: &str, property: &PropDef) -> Value {
+    let mut cur = class_def(class);
+    while let Some(c) = cur {
+        if let Some((_, default)) = c.defaults.iter().find(|(n, _)| *n == property.name) {
+            return default();
+        }
+        cur = c.superclass.and_then(class_def);
+    }
+    (property.default)()
 }
 
 /// Classes in canonical registry order. Protocol fingerprints include this order.
@@ -963,6 +1021,23 @@ mod tests {
         assert!(class_index("NotAClass").is_none());
         assert!(class_at(u16::try_from(CLASSES.len()).unwrap()).is_none());
         assert!(class_def("part").is_none());
+    }
+
+    #[test]
+    fn default_overrides_name_inherited_properties_of_their_type() {
+        for c in CLASSES {
+            for (name, default) in c.defaults {
+                let inherited = c.superclass.and_then(|s| find_property(s, name));
+                let def = inherited.unwrap_or_else(|| panic!("{}.{name} is not inherited", c.name));
+                assert_eq!(default().value_type(), def.ty, "{}.{name}", c.name);
+            }
+        }
+        let active = |class| default_value_ref(class, "Active").cloned();
+        assert_eq!(active("Frame"), Some(Value::Bool(false)));
+        for class in ["GuiButton", "TextButton", "ImageButton"] {
+            assert_eq!(active(class), Some(Value::Bool(true)), "{class}");
+            assert_eq!(default_value(class, "Active"), Some(Value::Bool(true)));
+        }
     }
 
     #[test]

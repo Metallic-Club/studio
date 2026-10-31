@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use metallic_core::classes::{find_property, is_subclass};
 use metallic_core::transform;
-use metallic_core::{CoreError, InstanceId, Value as CoreValue};
+use metallic_core::{CoreError, InstanceId, Value as CoreValue, ValueType};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, Table, Thread, UserData, UserDataFields,
     UserDataMethods, UserDataRef, Value,
@@ -324,6 +324,14 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             let cf = transform::world_pivot(&*state.world()?, this.id).map_err(core_error)?;
             return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
         }
+        // Stored as its name; read back as the `Enum.ZIndexBehavior` item, as in Roblox.
+        "ZIndexBehavior" if is_subclass(class, "ScreenGui") => {
+            let stored = state.world()?.get(this.id, key).map_err(core_error)?;
+            return Ok(match stored {
+                CoreValue::String(name) => state.enum_value("ZIndexBehavior", &name),
+                _ => Value::Nil,
+            });
+        }
         "LocalPlayer" if class == "Players" => {
             let player = match state.context {
                 crate::vm::Context::Client => state.shared.local_player.get(),
@@ -406,7 +414,15 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
                     Err(not_a_member(key, class))
                 };
             };
-            let mut converted = lua_to_value(value, def.ty, key)?;
+            // An enum-valued property (`ZIndexBehavior`) takes its `Enum` item or the item's name.
+            let mut converted = match super::input::enum_item(value) {
+                Some((enum_name, name, _))
+                    if enum_name == key && def.ty == ValueType::String && def.allowed.is_some() =>
+                {
+                    CoreValue::String(name.to_string())
+                }
+                _ => lua_to_value(value, def.ty, key)?,
+            };
             // Like Roblox, a part's Size is clamped to 0.001..=2048 studs per axis.
             if key == "Size"
                 && let CoreValue::Vector3(size) = converted

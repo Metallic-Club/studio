@@ -365,6 +365,9 @@ impl Game {
         for event in self.gui_input.drain_events() {
             self.scripts.gui_event(event);
         }
+        for input in self.gui_input.drain_pointer_inputs() {
+            self.scripts.pointer_input(input);
+        }
         let mut ticks = 0;
         if self.running {
             // Capped so time kept by skipped ticks (see below) never piles up into a burst.

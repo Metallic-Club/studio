@@ -284,7 +284,7 @@ fn gui_class_prefix_and_normalized_look_values_match_current_main() {
 /// refuse each other with `UpdateRequired`). If the change was not intended, fix the registry.
 #[test]
 fn registry_hash_is_pinned() {
-    const GOLDEN: &str = "99e3dd4376927a0647604f95900922de7b678f76805f6d2e16e333af8b823cbc";
+    const GOLDEN: &str = "16e0e1aa6948aa16099aed89f1f240d760ec6d5d4ee4ce33f130deb8706698dc";
     let hash = registry_hash().expect("the built-in registry is well formed");
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(

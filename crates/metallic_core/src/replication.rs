@@ -182,10 +182,15 @@ fn hash_schema(classes: &[ClassDef]) -> Result<[u8; 32], SchemaError> {
                     field(&mut hash, value.as_bytes());
                 }
             }
+            // The class's own default: the nearest per-class override up the chain
+            // (`ClassDef::defaults`, a GuiButton is `Active`), else the property's.
             let value = if property.name == "Name" {
                 Value::String(class.name.into())
             } else {
-                (property.default)()
+                chain
+                    .iter()
+                    .find_map(|c| c.defaults.iter().find(|(n, _)| *n == property.name))
+                    .map_or_else(|| (property.default)(), |(_, f)| f())
             };
             hash_value(&mut hash, &value);
         }
@@ -307,6 +312,7 @@ mod tests {
             name: "Fixture",
             superclass: None,
             props: Box::leak(vec![prop].into_boxed_slice()),
+            defaults: &[],
         }
     }
 
@@ -362,7 +368,8 @@ mod tests {
                 ClassDef {
                     name: "Added",
                     superclass: None,
-                    props: &[]
+                    props: &[],
+                    defaults: &[],
                 }
             ])
         );
@@ -439,11 +446,28 @@ mod tests {
     }
 
     #[test]
+    fn a_per_class_default_override_changes_the_hash() {
+        let derived = |defaults: &'static [crate::classes::DefaultOverride]| ClassDef {
+            name: "Derived",
+            superclass: Some("Fixture"),
+            props: &[],
+            defaults,
+        };
+        const ON: &[crate::classes::DefaultOverride] = &[("Flag", || Value::Bool(true))];
+        const OFF: &[crate::classes::DefaultOverride] = &[("Flag", || Value::Bool(false))];
+        let plain = ok_hash(&[base(prop()), derived(&[])]);
+        assert_ne!(plain, ok_hash(&[base(prop()), derived(ON)]));
+        // An override equal to the inherited default is the same schema.
+        assert_eq!(plain, ok_hash(&[base(prop()), derived(OFF)]));
+    }
+
+    #[test]
     fn malformed_inheritance_is_an_error_not_a_panic() {
         let orphan = ClassDef {
             name: "Orphan",
             superclass: Some("Missing"),
             props: &[],
+            defaults: &[],
         };
         assert_eq!(
             hash_schema(&[orphan]),
@@ -456,11 +480,13 @@ mod tests {
             name: "A",
             superclass: Some("B"),
             props: &[],
+            defaults: &[],
         };
         let b = ClassDef {
             name: "B",
             superclass: Some("A"),
             props: &[],
+            defaults: &[],
         };
         assert_eq!(
             hash_schema(&[a, b]),
@@ -559,6 +585,7 @@ mod tests {
             name: "Fixture",
             superclass: None,
             props: Box::leak(vec![prop(), extra].into_boxed_slice()),
+            defaults: &[],
         };
         let pair_hash = ok_hash(&[pair]);
         assert_ne!(single, pair_hash);
@@ -568,6 +595,7 @@ mod tests {
             name: "Fixture",
             superclass: None,
             props: Box::leak(vec![extra, prop()].into_boxed_slice()),
+            defaults: &[],
         };
         assert_ne!(pair_hash, ok_hash(&[reversed]));
         let schema = |parent| {
@@ -577,11 +605,13 @@ mod tests {
                     name: "OtherBase",
                     superclass: None,
                     props: &[],
+                    defaults: &[],
                 },
                 ClassDef {
                     name: "Derived",
                     superclass: Some(parent),
                     props: &[],
+                    defaults: &[],
                 },
             ]
         };

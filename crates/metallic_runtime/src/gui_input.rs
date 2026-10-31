@@ -6,16 +6,24 @@
 //!   element). When there is one, the GUI keeps the press: the caller must not pass it, its moves
 //!   or its release to the game, so a click on a button never also turns the camera or jumps.
 //! - Releasing a button press over the same button fires `MouseButton1Up`, `MouseButton1Click`
-//!   and `Activated`, in that order; a release elsewhere only ends the press. `InputEnded` goes
-//!   to the elements that saw `InputBegan`.
+//!   and, when the button is `Active` (a button's default), `Activated`, in that order; a release
+//!   elsewhere only ends the press. `InputEnded` goes to the elements that saw `InputBegan`.
+//!   Roblox's docs give no order for these; this one follows their descriptions (the button is
+//!   released, which completes a click, which activates it).
+//! - At most [`MAX_PRESSES`] presses are held: a new one past that ends the oldest (no click),
+//!   so a lost release can never make later presses go untracked and leak to the game.
 //! - The mouse (not a finger) hovers: `MouseEnter` and `MouseLeave` as the set of elements under
 //!   it changes, `InputChanged` (at most one per element per frame) while it moves over them.
+//!
+//! - Every press and release also goes to `UserInputService.InputBegan`/`InputEnded`
+//!   ([`GuiInput::drain_pointer_inputs`]) with `gameProcessed` true when the GUI took the press,
+//!   as in Roblox; a release only when its press was seen.
 //!
 //! Hit-testing respects `Visible`, `Enabled`, `ZIndex`, `DisplayOrder` and `ClipsDescendants`
 //! through the layout. A step allocates nothing once its buffers have grown (a press copies the
 //! short list of elements it began on).
-use metallic_core::{InstanceId, World};
-use metallic_script::{GuiEvent, GuiEventKind, GuiPointer};
+use metallic_core::{InstanceId, Value, World};
+use metallic_script::{GuiEvent, GuiEventKind, GuiPointer, PointerInput};
 
 use crate::gui::{self, GuiItem, LayoutScratch, Pointer, Shade};
 
@@ -41,8 +49,9 @@ pub enum PointerPhase {
     Cancel,
 }
 
-/// Most presses held at once (a mouse and nine fingers); more are not tracked.
-pub const MAX_PRESSES: usize = 10;
+/// Most presses held at once (a mouse and fifteen fingers). A new press past that ends the
+/// oldest, without a click.
+pub const MAX_PRESSES: usize = 16;
 
 /// One held press that began on the GUI.
 #[derive(Debug, Clone)]
@@ -52,6 +61,8 @@ struct Press {
     target: Option<InstanceId>,
     /// The target is a GuiButton.
     button: bool,
+    /// The button is `Active`, so a click fires `Activated`.
+    activates: bool,
     /// The elements that saw `InputBegan`, front to back.
     began: Vec<InstanceId>,
 }
@@ -66,6 +77,9 @@ pub struct GuiInput {
     under: Vec<InstanceId>,
     presses: Vec<Press>,
     events: Vec<GuiEvent>,
+    /// Pointers pressed and not yet released, oldest first, for `UserInputService`.
+    down: Vec<PointerId>,
+    pointer_inputs: Vec<PointerInput>,
 }
 
 impl GuiInput {
@@ -79,6 +93,8 @@ impl GuiInput {
         self.hovered.clear();
         self.presses.clear();
         self.events.clear();
+        self.down.clear();
+        self.pointer_inputs.clear();
     }
 
     /// Handles one event of `pointer` at `at` (GUI points from the top-left of a `screen` of
@@ -86,6 +102,48 @@ impl GuiInput {
     /// [`gui::layout`]). Returns true when the GUI took it: the caller must not give it to the
     /// game's input. A move or release returns what the press's `Down` returned.
     pub fn pointer(
+        &mut self,
+        world: &World,
+        screen: [f32; 2],
+        inset: f32,
+        pointer: PointerId,
+        phase: PointerPhase,
+        at: [f32; 2],
+    ) -> bool {
+        let taken = self.pointer_gui(world, screen, inset, pointer, phase, at);
+        let kind = match pointer {
+            PointerId::Mouse => GuiPointer::Mouse,
+            PointerId::Touch(_) => GuiPointer::Touch,
+        };
+        let began = match phase {
+            PointerPhase::Move => return taken,
+            PointerPhase::Down => {
+                if !self.down.contains(&pointer) {
+                    if self.down.len() >= MAX_PRESSES {
+                        self.down.remove(0);
+                    }
+                    self.down.push(pointer);
+                }
+                true
+            }
+            PointerPhase::Up | PointerPhase::Cancel => {
+                let Some(i) = self.down.iter().position(|&p| p == pointer) else {
+                    return taken;
+                };
+                self.down.remove(i);
+                false
+            }
+        };
+        self.pointer_inputs.push(PointerInput {
+            pointer: kind,
+            began,
+            position: at,
+            game_processed: taken,
+        });
+        taken
+    }
+
+    fn pointer_gui(
         &mut self,
         world: &World,
         screen: [f32; 2],
@@ -141,12 +199,19 @@ impl GuiInput {
                     self.events
                         .push(event(id, GuiEventKind::MouseButton1Down, kind, at));
                 }
-                if (target.is_some() || !self.under.is_empty()) && self.presses.len() < MAX_PRESSES
-                {
+                if target.is_some() || !self.under.is_empty() {
+                    if self.presses.len() >= MAX_PRESSES {
+                        // The oldest press is the likeliest to have lost its release.
+                        let oldest = self.presses.remove(0);
+                        self.end_press(oldest, None, at);
+                    }
+                    let activates = target
+                        .is_some_and(|id| matches!(world.get(id, "Active"), Ok(Value::Bool(true))));
                     self.presses.push(Press {
                         pointer,
                         target,
                         button,
+                        activates,
                         began: self.under.clone(),
                     });
                 }
@@ -215,6 +280,11 @@ impl GuiInput {
         self.events.drain(..)
     }
 
+    /// Takes the `UserInputService` presses and releases since the last call, oldest first.
+    pub fn drain_pointer_inputs(&mut self) -> std::vec::Drain<'_, PointerInput> {
+        self.pointer_inputs.drain(..)
+    }
+
     /// Updates the hover set for the mouse at `at`.
     fn hover(&mut self, at: [f32; 2], moved: bool) {
         gui::under(&self.items, at, &mut self.under);
@@ -242,7 +312,17 @@ impl GuiInput {
     /// Ends press `i`. `released_over` is `Some(the element that takes clicks at the release
     /// point)` for a release, `None` for a cancel. Returns whether the GUI had taken the press.
     fn end(&mut self, i: usize, released_over: Option<Option<InstanceId>>, at: [f32; 2]) -> bool {
-        let press = self.presses.swap_remove(i);
+        // Kept in press order, so the oldest is first (see MAX_PRESSES).
+        let press = self.presses.remove(i);
+        self.end_press(press, released_over, at)
+    }
+
+    fn end_press(
+        &mut self,
+        press: Press,
+        released_over: Option<Option<InstanceId>>,
+        at: [f32; 2],
+    ) -> bool {
         let kind = match press.pointer {
             PointerId::Mouse => GuiPointer::Mouse,
             PointerId::Touch(_) => GuiPointer::Touch,
@@ -254,12 +334,14 @@ impl GuiInput {
         if let (Some(target), true, Some(over)) = (press.target, press.button, released_over)
             && over == Some(target)
         {
-            for k in [
+            let clicks = [
                 GuiEventKind::MouseButton1Up,
                 GuiEventKind::MouseButton1Click,
                 GuiEventKind::Activated,
-            ] {
-                self.events.push(event(target, k, kind, at));
+            ];
+            let n = if press.activates { 3 } else { 2 };
+            for k in &clicks[..n] {
+                self.events.push(event(target, *k, kind, at));
             }
         }
         press.target.is_some()

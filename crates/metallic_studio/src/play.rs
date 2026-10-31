@@ -36,6 +36,7 @@ use std::path::Path;
 use eframe::egui;
 use metallic_core::World;
 use metallic_render::Renderer;
+use metallic_runtime::gui_input::{PointerId, PointerPhase};
 use metallic_runtime::input::RawEvent;
 
 use crate::output::{Level, OutputSink, Tag};
@@ -107,6 +108,24 @@ pub trait PlayView {
     fn render(&self, renderer: &mut Renderer, target: &wgpu::TextureView, size: (u32, u32));
     /// Paints the local player's ScreenGuis into `painter`'s clip rectangle.
     fn paint_gui(&self, painter: &egui::Painter);
+    /// Gives a pointer event to the game's GUI before the game's input (#79), like the Player:
+    /// `at` in points from the viewport's top-left, `screen` the viewport's size in points.
+    /// True when the GUI took it; that press, its moves and its release must then not be
+    /// pushed with [`PlayView::push_input`]. The default has no GUI and takes nothing.
+    fn gui_pointer(
+        &mut self,
+        pointer: PointerId,
+        phase: PointerPhase,
+        at: [f32; 2],
+        screen: [f32; 2],
+    ) -> bool {
+        let _ = (pointer, phase, at, screen);
+        false
+    }
+    /// The pointer left the viewport: GUI elements under it get `MouseLeave`.
+    fn gui_mouse_left(&mut self, at: [f32; 2]) {
+        let _ = at;
+    }
     /// Lends the play world read-only for the duration of `inspect` (Explorer's play tree). Does
     /// nothing after Stop or while the world is borrowed.
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World));
