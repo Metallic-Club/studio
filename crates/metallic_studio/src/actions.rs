@@ -730,6 +730,7 @@ pub fn default_actions() -> ActionRegistry {
         .enabled(|s| s.play.is_playing()),
     );
     lock_while_playing(&mut r);
+    crate::debugger::register(&mut r);
     r
 }
 

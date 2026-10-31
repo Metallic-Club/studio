@@ -25,6 +25,9 @@
 //! [`LocalPlayMode`] is Play (#11, F5): a [`LocalPlaySession`] runs the real Game in this
 //! process, client and server combined like the Player, and is its own [`PlayView`].
 //! [`input::PlayInput`] turns the editor's egui input into the game's raw events.
+//!
+//! The script debugger (#22) reaches an in-Studio game through [`PlayView::debugger`]; a mode
+//! gets the editor's breakpoints in [`PlayStart::debug`] so they apply from the first line.
 pub mod input;
 mod local;
 
@@ -37,6 +40,7 @@ use eframe::egui;
 use metallic_core::World;
 use metallic_render::Renderer;
 use metallic_runtime::input::RawEvent;
+use metallic_script::Debugger;
 
 use crate::output::{Level, OutputSink, Tag};
 
@@ -48,6 +52,8 @@ pub struct PlayStart<'a> {
     pub project_dir: &'a Path,
     /// Where the session's log lines go.
     pub output: OutputSink,
+    /// The script debugger's breakpoints and options, applied before any script runs.
+    pub debug: &'a crate::debugger::DebugSettings,
 }
 
 /// Status of a running session, as shown in the toolbar.
@@ -110,6 +116,14 @@ pub trait PlayView {
     /// Lends the play world read-only for the duration of `inspect` (Explorer's play tree). Does
     /// nothing after Stop or while the world is borrowed.
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World));
+    /// The game's script debugger (`None` when the game has none or has stopped).
+    fn debugger(&mut self) -> Option<Debugger<'_>> {
+        None
+    }
+    /// True while the script debugger has the game paused (cheap: asked every frame).
+    fn is_paused(&self) -> bool {
+        false
+    }
 }
 
 /// Something that happened to play state.
@@ -294,10 +308,12 @@ mod tests {
         c.on_event(move |e| e2.borrow_mut().push(e.clone()));
         let world = World::new_with_services();
         let log = crate::output::OutputLog::new(10);
+        let debug = crate::debugger::DebugSettings::default();
         let start = || PlayStart {
             world: &world,
             project_dir: Path::new("."),
             output: log.sink(),
+            debug: &debug,
         };
         assert!(c.start("play.fake", start()));
         assert!(!c.start("play.fake", start()), "only one session at a time");

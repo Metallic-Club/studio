@@ -15,7 +15,7 @@ fn main() -> eframe::Result {
         Ok(o) => o,
         Err(message) => {
             eprintln!(
-                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|firstrun|error|editor|playing|colour|components|settings --theme graphite|titanium|light --location <dir> --size <w>x<h>]"
+                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|firstrun|error|editor|playing|debugging|colour|components|settings --theme graphite|titanium|light --location <dir> --size <w>x<h>]"
             );
             std::process::exit(2);
         }

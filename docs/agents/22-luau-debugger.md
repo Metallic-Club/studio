@@ -24,7 +24,18 @@ Branch `studio/22-luau-debugger`. Two PRs: (1) VM hooks and the pause/step/inspe
   no script benches.
 - Tests: `crates/metallic_script/tests/debugger.rs` (18), `crates/metallic_runtime/tests/debugger_pause.rs`.
 
-## PR 2: Studio UI
+## PR 2: Studio UI (`metallic_studio`)
 
-Planned: gutter breakpoints in the script editor (click toggles, right-click condition/log), F5 continue, F9
-toggle, F10 over, F11 into, Shift+F11 out, Call Stack / Variables / Watch panels, Output lines, Stop while paused.
+Done, in `crates/metallic_studio/src/debugger/`:
+
+- Breakpoints live in `EditorState::debug` (`DebugSettings`), survive Stop and reach the next Play through
+  `PlayStart::debug` before any script runs; during Play they also go to the game via `PlayView::debugger`.
+- Gutter: click toggles, right-click adds a condition or log message; the paused line gets an arrow and a band.
+- Keys: F9 toggle (cursor line), F5 continue when paused (Play otherwise), F10 over, F11 into, Shift+F11 out.
+  The step keys are in the Play context, so when not paused they still reach the game.
+- Debugger pane under the viewport during Play: status and step buttons, Break on errors, Call Stack (click a
+  frame to select it and show its line), Variables (Locals/Upvalues/Globals tree, Set value on a local), Watch.
+- Hovering a name or field chain in the script while paused shows its value.
+- Output gets a Studio line per pause; log breakpoints print through the game's output.
+- Screenshot: `metallic-studio --screenshot out.png --scene debugging` (Parkour, paused in the checkpoint
+  script); see `22-luau-debugger-ui.png`.

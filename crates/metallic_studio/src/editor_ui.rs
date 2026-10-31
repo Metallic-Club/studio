@@ -17,6 +17,7 @@ use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
+use crate::debugger::DebugPanel;
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
 use crate::explorer::{Explorer, PlayTree};
 use crate::keymap::{KeyContext, Keymap};
@@ -77,6 +78,8 @@ pub struct EditorUi {
     play_input: PlayInput,
     /// Explorer's read-only tree of the play world.
     play_tree: PlayTree,
+    /// The script debugger's pane and its cached view of the paused game.
+    debug: DebugPanel,
 }
 
 impl EditorUi {
@@ -97,6 +100,7 @@ impl EditorUi {
             settings_requested: false,
             play_input: PlayInput::new(),
             play_tree: PlayTree::new(),
+            debug: DebugPanel::new(),
         };
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
@@ -177,6 +181,35 @@ impl EditorUi {
         self.save_error.as_deref()
     }
 
+    /// The Playing demo paused at a breakpoint in the Parkour checkpoint script, with two
+    /// watches, for screenshots of the script debugger.
+    pub fn debug_demo(template: &std::path::Path) -> Option<EditorUi> {
+        let mut editor = EditorUi::demo(template)?;
+        let world = &editor.state.world;
+        let mut stack = world.roots().to_vec();
+        let mut found = None;
+        while let Some(id) = stack.pop() {
+            if let Ok(metallic_core::Value::String(src)) = world.get_ref(id, "Source")
+                && src.starts_with("-- Tells a player")
+            {
+                let line = src
+                    .lines()
+                    .position(|l| l.contains("if checkpoint:IsA(\"Checkpoint\")"))?;
+                found = Some((id, line as u32 + 1));
+                break;
+            }
+            stack.extend_from_slice(world.children(id));
+        }
+        let (script, line) = found?;
+        editor.state.toggle_breakpoint(script, line);
+        editor.debug.watches = vec![
+            "checkpoint.Name".into(),
+            "#checkpointFolder:GetChildren()".into(),
+        ];
+        editor.state.start_play("play.start");
+        Some(editor)
+    }
+
     /// Saves now (script buffers first). On failure the error goes to Output and is returned.
     pub fn save(&mut self) -> Result<(), String> {
         self.scripts.flush(&mut self.state);
@@ -198,6 +231,13 @@ impl EditorUi {
         }
         if id == "output.clear" {
             self.output.log.clear();
+            return;
+        }
+        if id == "debug.toggle_breakpoint" {
+            // The script editor's cursor line, or the paused line when no script has focus.
+            if let Some((script, line)) = self.scripts.cursor() {
+                self.state.toggle_breakpoint(script, line);
+            }
             return;
         }
         self.actions.run(id, &mut self.state);
@@ -234,17 +274,33 @@ impl EditorUi {
         if busy {
             pressed.clear();
         } else if typing {
-            // Only Save and Play keys work while a text field has focus (Ctrl+W must not close the game).
+            // Continue and the step keys also work from a text field (Watch) while paused; they
+            // go first so F5 continues instead of reaching Play.
+            let mut steps = Vec::new();
+            if playing {
+                let (actions, state) = (&self.actions, &self.state);
+                self.keymap
+                    .pressed_where(ctx, &[KeyContext::Play], &mut steps, |id| {
+                        id.starts_with("debug.")
+                            && actions.get(id).is_some_and(|a| a.is_enabled(state))
+                    });
+            }
+            // Only Save, Play and debugger keys work while a text field has focus (Ctrl+W must
+            // not close the game).
             self.keymap
                 .pressed(ctx, &[KeyContext::Global], &mut pressed);
-            pressed.retain(|a| *a == "file.save" || a.starts_with("play."));
+            pressed
+                .retain(|a| *a == "file.save" || a.starts_with("play.") || a.starts_with("debug."));
+            pressed.extend(steps);
         } else if playing {
             // Studio keeps F5, Shift+F5, Esc and Ctrl+S; a disabled action leaves its key to the
             // game.
             let (actions, state) = (&self.actions, &self.state);
             self.keymap
                 .pressed_where(ctx, contexts, &mut pressed, |id| {
-                    id.starts_with("play.") || actions.get(id).is_some_and(|a| a.is_enabled(state))
+                    // While paused F5 is Continue, not Play.
+                    (id.starts_with("play.") && !(id == "play.start" && state.is_paused()))
+                        || actions.get(id).is_some_and(|a| a.is_enabled(state))
                 });
         } else {
             self.keymap.pressed(ctx, contexts, &mut pressed);
@@ -346,6 +402,14 @@ impl EditorUi {
         }
         self.state.play.update(dt);
         let playing = self.state.play.is_playing();
+        self.debug.poll(&mut self.state);
+        if let Some((script, line)) = self.debug.take_reveal() {
+            self.scripts.reveal(script, line, &self.state);
+        }
+        if self.state.is_paused() {
+            // A paused game does not ask for frames; keep the panes live anyway.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
         let mut exit = early.unwrap_or(EditorExit::Stay);
 
         egui::Panel::top("menu")
@@ -639,6 +703,21 @@ impl EditorUi {
             .show(ui, |ui| {
                 panel::show(ui, "Output", |_| {}, |ui| self.output.ui(ui));
             });
+        if self.state.play.view().is_some() {
+            egui::Panel::bottom("debugger")
+                .default_size(260.0)
+                .min_size(140.0)
+                .resizable(true)
+                .frame(panel::frame())
+                .show(ui, |ui| {
+                    panel::show(
+                        ui,
+                        "Debugger",
+                        |_| {},
+                        |ui| self.debug.ui(ui, &mut self.state),
+                    );
+                });
+        }
 
         self.drag_keys(&ctx);
         let mut viewport_hovered = false;
@@ -653,7 +732,7 @@ impl EditorUi {
                     self.viewport.ui(ui, &mut self.state, render_state);
                     viewport_hovered = ui.rect_contains_pointer(before);
                 } else {
-                    self.scripts.editor(ui, &mut self.state);
+                    self.scripts.editor(ui, &mut self.state, &mut self.debug);
                 }
             });
 
@@ -664,6 +743,7 @@ impl EditorUi {
         if let Some(done) = self.requests(&ctx) {
             exit = done;
         }
+        self.debug.edit_window(&ctx, &mut self.state);
 
         if let Some(leave) = self.confirm {
             let done = match leave {

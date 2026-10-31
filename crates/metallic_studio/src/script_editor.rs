@@ -1,5 +1,8 @@
 //! Script tabs: a Luau text editor with line numbers and syntax colouring.
 //!
+//! The gutter holds the script debugger's breakpoints (click toggles, right-click adds a
+//! condition or log message) and the paused-line arrow; see [`crate::debugger`].
+//!
 //! Each open script keeps a text buffer. The buffer is written to the script's `Source` as one
 //! undo step when the editor loses focus, when its tab closes, and before Save, so typing does
 //! not flood the undo history with one step per key.
@@ -18,6 +21,10 @@ const KEYWORDS: &[&str] = &[
 struct OpenScript {
     id: InstanceId,
     buffer: String,
+    /// The text cursor's line (1-based), for F9.
+    cursor_line: Option<u32>,
+    /// A line to scroll into view on the next frame.
+    scroll_to: Option<u32>,
 }
 
 /// The open script tabs.
@@ -44,8 +51,29 @@ impl ScriptTabs {
             Ok(Value::String(s)) => s.clone(),
             _ => return,
         };
-        self.open.push(OpenScript { id, buffer });
+        self.open.push(OpenScript {
+            id,
+            buffer,
+            cursor_line: None,
+            scroll_to: None,
+        });
         self.current = Some(self.open.len() - 1);
+    }
+
+    /// Opens `id` and scrolls `line` into view (the debugger paused there).
+    pub fn reveal(&mut self, id: InstanceId, line: u32, state: &EditorState) {
+        self.open(id, state);
+        if let Some(s) = self.current.and_then(|i| self.open.get_mut(i))
+            && s.id == id
+        {
+            s.scroll_to = Some(line);
+        }
+    }
+
+    /// The shown script and its cursor line (F9 toggles a breakpoint there).
+    pub fn cursor(&self) -> Option<(InstanceId, u32)> {
+        let s = self.open.get(self.current?)?;
+        Some((s.id, s.cursor_line?))
     }
 
     /// Writes every changed buffer to its script (before Save and Play).
@@ -105,7 +133,12 @@ impl ScriptTabs {
     }
 
     /// Draws the current script.
-    pub fn editor(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
+    pub fn editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut EditorState,
+        debug: &mut crate::debugger::DebugPanel,
+    ) {
         let Some(i) = self.current else { return };
         let Some(s) = self.open.get_mut(i) else {
             self.current = None;
@@ -130,24 +163,38 @@ impl ScriptTabs {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
-                    let numbers: String = (1..=lines).map(|n| format!("{n:>4}\n")).collect();
-                    ui.label(
-                        RichText::new(numbers)
-                            .font(ui_tokens().mono())
-                            .color(ui_tokens().text_dim),
-                    );
-                    let r = ui
-                        .add(
-                            egui::TextEdit::multiline(&mut s.buffer)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(30)
-                                .lock_focus(true)
-                                .interactive(editable)
-                                .layouter(&mut layouter),
-                        )
-                        .labelled_by(title.id);
+                    let gutter = crate::debugger::gutter(ui, s.id, lines);
+                    let out = egui::TextEdit::multiline(&mut s.buffer)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(30)
+                        .lock_focus(true)
+                        .interactive(editable)
+                        .layouter(&mut layouter)
+                        .show(ui);
+                    let r = out.response.response.labelled_by(title.id);
                     lost_focus = r.lost_focus();
+                    if let Some(range) = out.cursor_range {
+                        let at = range.primary.index.0;
+                        let line = s.buffer.chars().take(at).filter(|&c| c == '\n').count();
+                        s.cursor_line = Some(line as u32 + 1);
+                    }
+                    let left = r.rect.left();
+                    let rows = crate::debugger::line_rows(&out.galley, out.galley_pos, left);
+                    gutter.show(ui, &rows, state, debug);
+                    crate::debugger::hover(
+                        &r,
+                        &out.galley,
+                        out.galley_pos,
+                        &s.buffer,
+                        state,
+                        debug,
+                    );
+                    if let Some(line) = s.scroll_to.take()
+                        && let Some(row) = rows.iter().find(|r| r.line == line)
+                    {
+                        ui.scroll_to_rect(row.rect, Some(egui::Align::Center));
+                    }
                 });
             });
         if lost_focus {
@@ -155,6 +202,11 @@ impl ScriptTabs {
             commit(state, id, &text);
         }
     }
+}
+
+/// True for a Luau keyword (not a name to show a value for).
+pub fn is_keyword(word: &str) -> bool {
+    KEYWORDS.contains(&word)
 }
 
 fn commit(state: &mut EditorState, id: InstanceId, text: &str) {
