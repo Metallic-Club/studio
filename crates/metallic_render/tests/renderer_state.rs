@@ -118,3 +118,64 @@ fn msaa_sample_count_is_supported() {
     assert!([1, 2, 4].contains(&r.msaa_samples()));
     assert!(r.capture(&cam, SIZE).is_ok());
 }
+
+/// One changed part uploads one instance (96 bytes), not the whole buffer; an unchanged frame
+/// uploads nothing (#105).
+#[test]
+fn one_changed_part_uploads_one_instance() {
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let stride = std::mem::size_of::<metallic_render::scene::InstanceRaw>() as u64;
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").expect("workspace");
+    let mut opaque = Vec::new();
+    let mut glass = Vec::new();
+    for i in 0..200 {
+        let p = w.create("Part", Some(ws)).expect("part");
+        let x = f64::from(i % 20) * 4.0 - 40.0;
+        let z = f64::from(i / 20) * 4.0 - 20.0;
+        w.set(p, "Position", Value::Vector3(V3::new(x, 1.0, z)))
+            .expect("pos");
+        if i % 10 == 0 {
+            w.set(p, "Transparency", Value::Number(0.5))
+                .expect("transparency");
+            glass.push(p);
+        } else {
+            opaque.push(p);
+        }
+    }
+    let mut r = renderer(&ctx, Quality::Low);
+    r.sync(&w);
+    let cam = Camera::default();
+    r.capture(&cam, SIZE).expect("capture");
+    let first = r.uploaded_instance_bytes();
+    assert_eq!(
+        first,
+        200 * stride,
+        "the first frame uploads every instance"
+    );
+
+    // Nothing changed: nothing uploaded, also for the re-sorted blended list.
+    r.sync(&w);
+    r.capture(&cam, SIZE).expect("capture");
+    assert_eq!(r.uploaded_instance_bytes(), first);
+
+    let mut last = first;
+    let mut changed = |w: &mut World, r: &mut Renderer, id, what: &str| {
+        w.set(
+            id,
+            "Color",
+            Value::Color3(metallic_core::Color3::new(200.0, 10.0, 10.0)),
+        )
+        .expect("color");
+        r.sync(w);
+        r.capture(&cam, SIZE).expect("capture");
+        let now = r.uploaded_instance_bytes();
+        assert_eq!(now - last, stride, "{what}: one instance");
+        last = now;
+    };
+    changed(&mut w, &mut r, opaque[57], "opaque part");
+    changed(&mut w, &mut r, glass[7], "transparent part");
+}

@@ -203,11 +203,38 @@ struct GpuMesh {
     index_count: u32,
 }
 
-/// A growable GPU buffer of instances.
+/// Changed instances closer together than this are written in one `write_buffer` call (the
+/// unchanged ones between them are rewritten, which is cheaper than another call).
+const MERGE_GAP: usize = 4;
+
+/// The index ranges of `new` that differ byte for byte from `old` (or lie past its end), with
+/// runs less than [`MERGE_GAP`] apart merged. Uploading these ranges of `new` over a buffer that
+/// holds `old` leaves it holding `new`.
+fn changed_ranges(old: &[InstanceRaw], new: &[InstanceRaw]) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    for (i, n) in new.iter().enumerate() {
+        let same = old
+            .get(i)
+            .is_some_and(|o| bytemuck::bytes_of(o) == bytemuck::bytes_of(n));
+        if same {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if i - last.end < MERGE_GAP => last.end = i + 1,
+            _ => out.push(i..i + 1),
+        }
+    }
+    out
+}
+
+/// A growable GPU buffer of instances with a CPU copy of its contents, so an upload writes only
+/// the instances that changed.
 struct InstanceBuffer {
     buffer: wgpu::Buffer,
     capacity: usize,
     count: usize,
+    /// What the buffer holds (its first `count` instances).
+    mirror: Vec<InstanceRaw>,
 }
 
 impl InstanceBuffer {
@@ -222,18 +249,40 @@ impl InstanceBuffer {
             }),
             capacity,
             count: 0,
+            mirror: Vec::new(),
         }
     }
 
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[InstanceRaw]) {
+    /// Makes the buffer hold `data`, writing only the ranges that differ from what it holds
+    /// (everything after it grew). Returns the bytes written.
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[InstanceRaw]) -> u64 {
         if data.len() > self.capacity {
             *self = InstanceBuffer::new(device, data.len().next_power_of_two());
         }
-        if !data.is_empty() {
-            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(data));
+        let stride = std::mem::size_of::<InstanceRaw>();
+        let mut written = 0;
+        for range in changed_ranges(&self.mirror, data) {
+            let bytes: &[u8] = bytemuck::cast_slice(&data[range.clone()]);
+            queue.write_buffer(&self.buffer, (range.start * stride) as u64, bytes);
+            written += bytes.len() as u64;
         }
+        self.mirror.clear();
+        self.mirror.extend_from_slice(data);
         self.count = data.len();
+        written
     }
+}
+
+/// Consecutive runs of the same mesh in `kinds`, as instance ranges for one draw each.
+fn kind_runs(kinds: &[MeshKind]) -> impl Iterator<Item = (MeshKind, std::ops::Range<u32>)> + '_ {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let kind = *kinds.get(start)?;
+        let len = kinds[start..].iter().take_while(|k| **k == kind).count();
+        let run = (kind, start as u32..(start + len) as u32);
+        start += len;
+        Some(run)
+    })
 }
 
 struct Pipelines {
@@ -416,6 +465,8 @@ pub struct Renderer {
     targets: u64,
     scene: Scene,
     uploaded_version: Option<u64>,
+    /// Instance bytes written to the GPU so far ([`Renderer::uploaded_instance_bytes`]).
+    uploaded_instance_bytes: u64,
     meshes: Vec<GpuMesh>,
     opaque: Vec<InstanceBuffer>,
     blended: InstanceBuffer,
@@ -582,6 +633,7 @@ impl Renderer {
             targets: 0,
             scene: Scene::new(),
             uploaded_version: None,
+            uploaded_instance_bytes: 0,
             meshes,
             opaque,
             blended,
@@ -705,11 +757,27 @@ impl Renderer {
     /// and its lighting (the `Lighting` service and its effect children, see
     /// [`Renderer::set_lighting`]).
     ///
-    /// Only parts whose data changed are re-uploaded; an unchanged world costs one read per
-    /// property and no GPU work.
+    /// The first call reads every part. Later calls re-read only the instances named by the
+    /// world's change journal (all parts again after the journal overflowed or for another
+    /// world), so an unchanged world costs a journal check, a read of the lighting and no GPU
+    /// work.
+    ///
+    /// The upload happens in the next [`Renderer::render`]: each per-shape instance buffer is
+    /// compared with what the GPU holds and only the changed instance ranges are written, so a
+    /// few changed parts cost a few instances of upload. Adding or removing parts, or moving one
+    /// between the opaque and the blended list (Transparency crossing 0), shifts the later
+    /// entries and uploads most of that buffer again. The blended list is re-sorted every frame
+    /// and uploaded the same way, so a moving camera rewrites the entries whose order changed.
     pub fn sync(&mut self, world: &World) {
         self.scene.sync(world);
         self.set_lighting(&LightingInputs::read(world));
+    }
+
+    /// Instance bytes written to the GPU since the renderer was made (opaque and blended), for
+    /// tests of the partial upload.
+    #[doc(hidden)]
+    pub fn uploaded_instance_bytes(&self) -> u64 {
+        self.uploaded_instance_bytes
     }
 
     /// Applies lighting properties: sets [`Renderer::sky`], [`Renderer::finish`], the bloom
@@ -801,7 +869,8 @@ impl Renderer {
                     .filter(|p| !p.is_invisible())
                     .map(|p| p.instance),
             );
-            self.opaque[kind.index()].upload(&self.device, &self.queue, &data);
+            self.uploaded_instance_bytes +=
+                self.opaque[kind.index()].upload(&self.device, &self.queue, &data);
         }
         self.scratch_instances = data;
         self.uploaded_version = Some(self.scene.version());
@@ -977,7 +1046,7 @@ impl Renderer {
         instances.extend(sorted.iter().map(|s| s.2));
         self.blended_kinds.clear();
         self.blended_kinds.extend(sorted.iter().map(|s| s.1));
-        self.blended.upload(&self.device, &self.queue, &instances);
+        self.uploaded_instance_bytes += self.blended.upload(&self.device, &self.queue, &instances);
         self.scratch_instances = instances;
         self.scratch_blended = sorted;
 
@@ -1244,20 +1313,20 @@ impl Renderer {
     }
 
     /// Draws the blended instances far to near with the pipeline already set (the blended
-    /// pipeline, or the shadow pipeline for their shadows).
+    /// pipeline, or the shadow pipeline for their shadows): one instanced draw per run of
+    /// same-shape neighbours in the sorted list, its `first_instance` range indexing the one
+    /// bound instance buffer. Within a draw, instances are rasterised in order, so blending
+    /// stays far to near.
     fn draw_blended_instances(&self, pass: &mut wgpu::RenderPass<'_>) {
-        let stride = std::mem::size_of::<InstanceRaw>() as u64;
-        let mut bound: Option<MeshKind> = None;
-        for (i, kind) in self.blended_kinds.iter().enumerate() {
+        if self.blended.count == 0 {
+            return;
+        }
+        pass.set_vertex_buffer(1, self.blended.buffer.slice(..));
+        for (kind, instances) in kind_runs(&self.blended_kinds) {
             let mesh = &self.meshes[kind.index()];
-            if bound != Some(*kind) {
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
-                bound = Some(*kind);
-            }
-            let offset = i as u64 * stride;
-            pass.set_vertex_buffer(1, self.blended.buffer.slice(offset..offset + stride));
-            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..mesh.index_count, 0, instances);
         }
     }
 
@@ -1709,6 +1778,48 @@ mod tests {
         validate_wgsl("sky", SKY_PARTS);
         validate_wgsl("shadow", SHADOW_PARTS);
         validate_wgsl("finish", FINISH_PARTS);
+    }
+
+    fn inst(x: f32) -> InstanceRaw {
+        InstanceRaw {
+            model: [[x; 4]; 4],
+            color: [1.0; 4],
+            material: [0.0; 4],
+        }
+    }
+
+    #[test]
+    fn changed_ranges_cover_exactly_what_differs() {
+        let old: Vec<InstanceRaw> = (0..20).map(|i| inst(i as f32)).collect();
+        assert!(changed_ranges(&old, &old).is_empty());
+        // Everything is new against an empty buffer.
+        assert_eq!(changed_ranges(&[], &old), vec![0..20]);
+        let mut new = old.clone();
+        new[5] = inst(-1.0);
+        assert_eq!(changed_ranges(&old, &new), vec![5..6]);
+        // Close changes merge (gap below MERGE_GAP); far ones stay apart.
+        new[7] = inst(-1.0);
+        new[15] = inst(-1.0);
+        assert_eq!(changed_ranges(&old, &new), vec![5..8, 15..16]);
+        // Growth uploads the new tail; shrinking needs no write for the dropped entries.
+        let mut grown = old.clone();
+        grown.push(inst(99.0));
+        assert_eq!(changed_ranges(&old, &grown), vec![20..21]);
+        assert!(changed_ranges(&old, &old[..10]).is_empty());
+        // Compared as bytes: NaN equals itself, 0.0 and -0.0 differ.
+        let nan = vec![inst(f32::NAN)];
+        assert!(changed_ranges(&nan, &nan).is_empty());
+        assert_eq!(changed_ranges(&[inst(0.0)], &[inst(-0.0)]), vec![0..1]);
+    }
+
+    #[test]
+    fn blended_runs_group_same_shape_neighbours_in_order() {
+        use MeshKind::{Box, Sphere};
+        let runs: Vec<_> = kind_runs(&[Box, Box, Sphere, Box, Box, Box]).collect();
+        assert_eq!(runs, vec![(Box, 0..2), (Sphere, 2..3), (Box, 3..6)]);
+        assert_eq!(kind_runs(&[]).count(), 0);
+        let runs: Vec<_> = kind_runs(&[Sphere]).collect();
+        assert_eq!(runs, vec![(Sphere, 0..1)]);
     }
 
     #[test]
