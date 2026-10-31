@@ -1,11 +1,12 @@
 //! [`Game`]: one running game and its frame loop.
 use crate::RuntimeError;
 use crate::avatar::{Avatar, default_model};
+use crate::body_pose::{CharacterBodies, locomotion_input};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
+use crate::gui_input::{GuiInput, PointerId, PointerPhase};
 use crate::input::{
     ActionEvent, ActionEventKind, ActionId, ActionValue, DeviceKind, FrameInput, InputRuntime,
 };
-use crate::locomotion::{LocomotionInput, Support};
 use crate::physics_sync::PhysicsSyncCache;
 use crate::project::ProjectConfig;
 use metallic_core::{InstanceId, Value, Vec3, World, load_scene};
@@ -82,6 +83,8 @@ pub struct Game {
     physics_sync: PhysicsSyncCache,
     /// The local character's skinned avatar and the character Model it belongs to.
     avatar: Option<(InstanceId, Avatar)>,
+    /// CPU body animation of the stepped characters, which drives their touch volumes.
+    bodies: CharacterBodies,
     running: bool,
     /// The copies of `StarterGui` made by the last [`Game::start`] (removed by the next one).
     gui_copies: Vec<InstanceId>,
@@ -91,6 +94,8 @@ pub struct Game {
     input_device_changes: Option<u64>,
     /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
     gui_inset: f32,
+    /// Hover and presses on the GUI (see [`Game::gui_pointer`]).
+    gui_input: GuiInput,
 }
 
 impl Game {
@@ -142,11 +147,13 @@ impl Game {
             accumulator: 0.0,
             physics_sync: PhysicsSyncCache::default(),
             avatar: None,
+            bodies: CharacterBodies::default(),
             running: false,
             gui_copies: Vec::new(),
             character_gone: 0.0,
             input_device_changes: None,
             gui_inset: 0.0,
+            gui_input: GuiInput::new(),
         }
     }
 
@@ -214,6 +221,7 @@ impl Game {
         self.time = 0.0;
         self.accumulator = 0.0;
         self.character_gone = 0.0;
+        self.gui_input.reset();
         self.running = true;
         Ok(())
     }
@@ -240,6 +248,7 @@ impl Game {
     /// Stops the scripts. The world keeps its last state; the game can be dropped afterwards.
     pub fn stop(&mut self) {
         self.scripts.stop();
+        self.gui_input.reset();
         self.running = false;
     }
 
@@ -332,16 +341,19 @@ impl Game {
     /// Camera orbit and zoom apply every frame. The simulation runs in fixed ticks of [`TICK`]
     /// (an accumulator carries the remainder; `dt` is clamped to [`MAX_FRAME_DT`], a negative or
     /// non-finite `dt` counts as 0). Each tick, in order:
-    /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches);
+    /// 1. character controller (movement from `input`, death, respawn, checkpoints, touches),
+    ///    then the character's CPU body animation, whose pose the touch volumes use next tick;
     /// 2. physics step (movers, loose parts); then a character that was destroyed or taken out
     ///    of the Workspace respawns after [`RESPAWN_DELAY`];
     /// 3. events fed to the scripts: part-part touches both ways, character touches as
-    ///    `part.Touched(HumanoidRootPart)`, `Humanoid.Died`, `CharacterAdded` on respawn;
+    ///    `part.Touched(hit)` and `part.TouchEnded(hit)` with the touching body part (`LeftHand`,
+    ///    ...) or the `HumanoidRootPart`, `Humanoid.Died`, `CharacterAdded` on respawn;
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
     /// Then the skinned avatar follows the character (pose, smoothed facing, animation over `dt`)
-    /// and the camera follows too. Draw with [`Game::render`] and [`crate::gui::paint`].
+    /// and the camera follows too. (The touch volumes follow the tick-rate body animation of
+    /// step 1, which the avatar's animation matches.) Draw with [`Game::render`] and [`crate::gui::paint`].
     pub fn frame(&mut self, input: &FrameInput, dt: f64) -> FrameOutput {
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_FRAME_DT)
@@ -349,6 +361,10 @@ impl Game {
             0.0
         };
         self.camera.apply_input(input);
+        // The GUI events since the last frame, for the first tick's script step.
+        for event in self.gui_input.drain_events() {
+            self.scripts.gui_event(event);
+        }
         let mut ticks = 0;
         if self.running {
             // Capped so time kept by skipped ticks (see below) never piles up into a burst.
@@ -365,7 +381,7 @@ impl Game {
         }
         self.scripts.end_frame();
         let state = self.character.and_then(|c| self.characters.state(c));
-        self.update_avatar(state, dt as f32);
+        self.update_avatar(dt as f32);
         if state != Some(HumanoidState::Dead)
             && let Some(root) = self.root_position()
         {
@@ -440,10 +456,42 @@ impl Game {
         self.gui_inset
     }
 
-    /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
+    /// Draws the local player's GUI with `painter` (see [`crate::gui`]), buttons shaded by
+    /// hover and press.
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.world.try_borrow() {
-            crate::gui::paint(&world, painter, self.gui_inset);
+            let input = &self.gui_input;
+            crate::gui::paint_shaded(&world, painter, self.gui_inset, &|id| input.shade(id));
+        }
+    }
+
+    /// Gives a pointer event to the GUI before the game's input: the left mouse button and
+    /// position, or a finger, at `at` GUI points (window pixels over the scale factor) on a
+    /// `screen` of width x height points. Returns true when the GUI took it; the caller must
+    /// then not pass it (nor that press's moves and release) to the [`InputRuntime`], so a
+    /// click on a button never also drives the camera or a jump. The events reach the client
+    /// scripts in the next [`Game::frame`]'s first tick. Does nothing (false) while stopped.
+    pub fn gui_pointer(
+        &mut self,
+        pointer: PointerId,
+        phase: PointerPhase,
+        at: [f32; 2],
+        screen: [f32; 2],
+    ) -> bool {
+        if !self.running {
+            return false;
+        }
+        let Ok(world) = self.world.try_borrow() else {
+            return false;
+        };
+        self.gui_input
+            .pointer(&world, screen, self.gui_inset, pointer, phase, at)
+    }
+
+    /// The mouse left the window: the GUI elements under it get `MouseLeave`.
+    pub fn gui_mouse_left(&mut self, at: [f32; 2]) {
+        if self.running {
+            self.gui_input.mouse_left(at);
         }
     }
 
@@ -462,6 +510,10 @@ impl Game {
             if let Some(character) = self.character {
                 self.characters
                     .step(&mut world, &self.physics, character, move_input, TICK);
+                // The body animation advances with the simulation, so the touch volumes follow
+                // the limbs on any host, headless or not.
+                self.bodies
+                    .animate(&mut self.characters, &world, character, TICK as f32);
             }
             self.physics.step(&mut world, TICK);
             respawned = respawn_if_gone(
@@ -487,15 +539,15 @@ impl Game {
     fn feed_events(&mut self) {
         for event in self.characters.drain_events() {
             match event {
-                CharacterEvent::Touched { character, part } => {
-                    let hit = self
-                        .world
-                        .try_borrow()
-                        .ok()
-                        .and_then(|w| w.find_first_child(character, ROOT_PART));
-                    if let Some(hit) = hit {
-                        self.scripts.touched(part, hit);
-                    }
+                // Both sides fire, as for part-part touches: `part.Touched(limb)` and
+                // `limb.Touched(part)`.
+                CharacterEvent::Touched { part, hit, .. } => {
+                    self.scripts.touched(part, hit);
+                    self.scripts.touched(hit, part);
+                }
+                CharacterEvent::TouchEnded { part, hit, .. } => {
+                    self.scripts.touch_ended(part, hit);
+                    self.scripts.touch_ended(hit, part);
                 }
                 CharacterEvent::Died { humanoid, .. } => self.scripts.humanoid_died(humanoid),
                 CharacterEvent::Respawned {
@@ -519,6 +571,10 @@ impl Game {
             self.scripts.touched(a, b);
             self.scripts.touched(b, a);
         }
+        for (a, b) in self.physics.drain_touch_ended() {
+            self.scripts.touch_ended(a, b);
+            self.scripts.touch_ended(b, a);
+        }
     }
 
     /// Re-syncs changed part signatures and character membership; pose-only changes need no sync.
@@ -540,7 +596,7 @@ impl Game {
 
     /// Moves and animates the local character's avatar; a new character (after a respawn) gets a
     /// fresh one.
-    fn update_avatar(&mut self, state: Option<HumanoidState>, dt: f32) {
+    fn update_avatar(&mut self, dt: f32) {
         let (Some(character), Some((root, yaw))) = (self.character, self.root_pose()) else {
             self.avatar = None;
             return;
@@ -553,21 +609,7 @@ impl Game {
         let Some((_, avatar)) = self.avatar.as_mut() else {
             return;
         };
-        let support = match state {
-            Some(HumanoidState::Running) | None => Support::Grounded,
-            Some(HumanoidState::Jumping) => Support::Rising,
-            Some(HumanoidState::Freefall) => Support::Falling,
-            Some(HumanoidState::Dead) => Support::Frozen,
-        };
-        let v = self
-            .characters
-            .relative_velocity(character)
-            .unwrap_or_default();
-        let speed = (v.x * v.x + v.z * v.z).sqrt() as f32;
-        let input = LocomotionInput {
-            vertical: v.y as f32,
-            ..LocomotionInput::new(speed, support)
-        };
+        let input = locomotion_input(&self.characters, character);
         avatar.update(root, yaw, input, dt);
     }
 

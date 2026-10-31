@@ -260,6 +260,20 @@ impl InputActionsPanel {
         }
     }
 
+    /// The selected scene instance (context, action or binding), if one is selected.
+    pub fn selected_instance(&self) -> Option<InstanceId> {
+        match &self.selection {
+            Some(Selection::Instance(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// True when finished steps go to the panel's own history ([`Self::show`]); false while a
+    /// host's sink owns undo ([`Self::show_with_sink`]).
+    pub fn owns_history(&self) -> bool {
+        self.history_is_own()
+    }
+
     /// The scene was saved: from now on renames are measured against the saved names.
     pub fn mark_saved(&mut self, world: &World) {
         self.baseline = NameBaseline::capture(world);
@@ -2897,7 +2911,7 @@ fn pad_picker(ui: &mut Ui, glyphs: GlyphStyle, inputs: &mut Vec<CaptureInput>) {
 
 /// egui's key to our physical control name. Keys egui does not report (Shift, Ctrl, Alt) come
 /// from the modifier state instead.
-pub(super) fn egui_key_to_control(k: Key) -> Option<Control> {
+pub(crate) fn egui_key_to_control(k: Key) -> Option<Control> {
     use Control as C;
     Some(match k {
         Key::A => C::A,

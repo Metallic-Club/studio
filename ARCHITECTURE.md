@@ -33,6 +33,10 @@ apps.
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
+  attributes (`instance/extras.rs`: a boxed side record per node, so instances without any pay one pointer and the
+  property paths never look at them; changes go to the change journal and to a bounded attribute log read with
+  `attribute_changes_since`) and tags (same record, plus a tag-to-instances index so `tagged` never scans the tree, and a
+  tag log for the instance-added/removed signals; reparent and destroy only walk a subtree while some tag exists);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
@@ -44,6 +48,13 @@ apps.
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
+  `PropDef::normalize` converts a String write outside `allowed` to its stored form (a display name to an id).
+  `look_override` (#222): `BasePart.LookOverride` and `Model.LookOverride` (String, default `inherit`; ids
+  `realistic`, `soft`, `toon`, `low-poly`, `voxel`, `pixel-3d`, `retro-32`; display names such as "Retro / PS1" are
+  accepted on write). `resolve(world, id)` gives the effective style: own value, else the nearest ancestor Model's
+  non-`inherit` value, else `None` (the place Look). `LookOverrides` caches it per part and is kept current with
+  `apply(world, &changes)` from the change journal, returning the parts whose style changed (including parts below a
+  Model whose own value changed). The renderer's `Scene` holds one; `PartDraw::style` carries the resolved id.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
@@ -53,9 +64,16 @@ apps.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
+  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here. The controller records its support contact
+  and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
+  R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
+  that never push. Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every
+  tick with `CharacterController::set_body_pose` (else `BodyPose::rest`). The capsules are controller queries: one
+  broad-phase lookup per step, at most `MAX_TOUCH_CANDIDATES` parts (existing contacts first, then the nearest; the rest
+  are counted in `TouchQueryCost`), nothing allocated once warm. They report `CharacterEvent::Touched`/`TouchEnded
+  { part, hit }` per body part, including when a character is destroyed or replaced; the movement capsule reports as
+  the root. Nothing is matched by name, so NPC Models keep their own physics. The controller records its support contact
   (`SupportContact`, part of `CharacterState`) in body-local coordinates and carries the capsule's bottom-sphere
   centre through the support's next observed pose change, so riders keep their radius on tilted spinners. Idle
   facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum
@@ -92,7 +110,7 @@ apps.
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
-  PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio).
+  PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio). Headless contexts (tests, screenshots) use Vulkan, DX12 or Metal and fall back to OpenGL only without them. Every instance, adapter and device `context.rs` makes is set up under one process-wide lock: wgpu's Windows OpenGL (WGL) setup crashes the process (access violation, heap corruption) when threads do it at once (#276, upstream gfx-rs/wgpu#9760); rendering and teardown stay parallel.
   Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the
   post chain (`post.rs`: `PostChain` of `PostPass`es in an `Hdr` and an `Ldr` slot, run in list order; most passes
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
@@ -116,11 +134,24 @@ apps.
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
   parts. The level of detail is picked from the projected height in pixels (LOD1 below 220 px, LOD2 below 80 px).
+  Shading models (#63, `shading.rs`): one surface shader (`fs_main` in `scene.wgsl`) switches on the model id in a
+  row of the material table, a 96-row uniform buffer (8 style slots x 12 rows of 64 B: the 10 materials, the
+  Character row, one reserved). `ShadingModel` is Lit, Toon, Unlit or Flat; `ModelParams` holds the look-spec
+  parameters (wrap, roughness floor, bands, softness, shade tint, flatten, highlight, rim, light steps). A `Shading`
+  is a default model plus material overrides and the Character row; `Renderer::set_shading` sets style slot 0 (the
+  place Look), `set_style_shading` the per-part slots, and the table uploads only when a slot changed.
+  `InstanceRaw.material` is four u32: [0] row, [1] flags (reserved for hull, vertex snap, affine, nearest and the
+  style slot), [2] material id for procedural detail, [3] reserved. Standard skinned meshes use the Character row
+  with their slot's own roughness and metalness; `SkinStyle::Toon` (#320) keeps its own pipeline.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
-  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
-  egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
+  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel and the
+  TextButton/ImageButton of #79 drawn with an egui painter with egui's bundled fonts; their licence texts are in
+  `LICENSES/`). Clicks: the host gives the left mouse button, the cursor and fingers to `Game::gui_pointer` before
+  the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
+  and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
+  never reaches the game's input.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
@@ -131,7 +162,10 @@ apps.
   The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
-  physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
+  avatar is animated by a `BodyAnimator` (`body_pose.rs`), which needs only `metallic_asset` and `metallic_anim` (no
+  renderer). The tick loop runs one per stepped character (`CharacterBodies`) and hands its pose to
+  `CharacterController::set_body_pose`, so a headless server computes the same limb touch volumes; each body part's
+  capsule is skinned rigidly by one VRM bone. `locomotion.rs` is a small built-in controller
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
@@ -175,6 +209,27 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
+  and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
+  Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one
+  combined `play` tag (`PLAY_TAG`) because Game supplies one sink for both VMs. Snapshot copying is O(world);
+  callers through the current borrowed PlayStart/clean_world seam copy twice. Independent #92/#275 still tracks
+  recursive clone_subtree behavior reached by Game's StarterGui copying.
+  Play and Stop (#11): `EditorState::new` registers `play::LocalPlayMode` (`play.start`, F5; client and server in
+  one process like the Player). The session owns an `InputRuntime` and is a `play::PlayView`
+  (`PlaySession::view`): the viewport draws it every frame with the game camera, avatar and ScreenGuis,
+  `play::input::PlayInput` turns egui keys and mouse into `RawEvent`s, and Explorer shows its world read-only
+  (`explorer::PlayTree`, only visible rows drawn). Studio keys go first each frame (keymap context `Play`: Esc,
+  plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
+  `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
+  While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
+  Stop, Save, Close game, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout
+  are off, Properties and the script editor are read-only, the status bar shows the session's `PlayStatus`
+  ("Playing", theme `success`) and the viewport a `success` frame. Quit and Close game (Ctrl+W) stop Play before
+  the unsaved-changes prompt opens; Esc answers the prompt. Exposure adaptation resets when Play starts and after
+  Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
+  and Studio stays in edit mode.
   Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
   to the world so renderer and Properties need no change; commit gives one `Command::SetProperties`, cancel restores),
   `gizmo.rs` (handles for Move/Rotate/Scale/Transform, body drags over surfaces, axis locks, R/T turns, typed values,
@@ -182,22 +237,44 @@ apps.
   and glyphs, `Surface` placement in the hit part's grid, virtual surface, soft snap), `pivot.rs` (`Pivot`, `Rigid`,
   27 pivot snap points; pivots are core properties, `PivotOffset` and `WorldPivot`
   plus hidden `WorldPivotSet`, written through the preview overlay as one `SetProperties`, so they are undoable and saved). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
-  Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
+  Building surfaces (#226): `viewport_header.rs` (tools, increment chips, space, pivot, snap chips, Collisions; a pure
+  `fit()` keeps items by priority from measured widths and moves the rest into a "»" menu, never scrolling), `collisions.rs` (oriented-box overlap test and a per-drag `Guard`: a uniform-grid broadphase of the
+  parts not moving, ignoring parts the selection overlaps at the start, failing safe past a work cap;
+  `GizmoDrag::limit` sweeps each frame's motion and bisects to stop at contact), `context_bar.rs` (the floating bar over the selection: pure `place()` above, below or
+  docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
+  `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
+  drag, Play or camera flight; shown ids in `hints.ron` in the config folder; Settings "Show tips"/"Reset tips").
+  Arrange core (#217, #218): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
-  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; #10's
-  `History` and #213's preview turn a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
+  "Array" Model). Inputs must be finite; arrays create at most 10,000 parts. It never writes the world; `editor_tools` turns a plan into one undo step. Notes: `docs/agents/217-218-arrange.md`.
+  Editor wiring (#319): `editor_tools/` registers the building tools as actions and keys (Build menu and toolbar:
+  align A, distribute, mirror Ctrl+M / Ctrl+Shift+M, array Ctrl+Shift+D with ghosts, a drag handle and Ctrl+wheel count, scatter brush
+  B, measure Shift+M, select similar Shift+G, lasso/paint select modes on Q). Each op reads
+  `tools::geom::snapshot` and commits one `History` step (`editor_tools/commit.rs`); errors go to Output. Overlays
+  paint over the viewport (`viewport.capture_pointer` hands the pointer to a modal tool). `editor_colour.rs` opens the
+  colour popover from a Properties Color3 swatch or C: live preview, one step on commit, Esc restores.
+  `editor_input_actions.rs` docks the Input Actions panel (View > Input actions): its `EditStep`s become
+  `Command::Step` in the editor's history, and `History::take_remaps()` feeds every rebuilt-id map to
+  `InputActionsPanel::follow_remap`. `toolbar.rs` draws the top bar's Edit, Play, View and Build groups (Tools, Settings and Snap are in #384's viewport header) in order and collapses whole groups that
+  do not fit into a "»" overflow menu, lowest priority first (`PRIORITY`); a new action only needs a `ToolbarGroup`.
+  `ActionRegistry::register` locks every action outside `PLAY_SAFE` while playing, whoever registers it. The
+  contextual toolbar hides while a building tool has the pointer; the hint card waits for `gesture_active()`.
+  One gesture flag: `EditorState::gesture_active()` (preview overlay, or a `Gesture` reported by the viewport,
+  Properties or a tool) makes Save, Play, Undo, `apply` and tool commits (`edit_refusal()`) wait. Tool keys are keymap
+  rows in `KeyContext::Popover` and `KeyContext::Tool`, checked before Global and Viewport, so Esc reaches the
+  colour popover, then a building popover, then the tool, then the selection.
   Updater (Task 13): `updater.rs` and `github_auth.rs` re-export the shared `metallic_update` crate; Studio builds its
   checker with `UpdateChecker::new(STUDIO_FEED, channel, tokens)`. Release pipeline: `tools/release.py`,
   `.github/workflows/release.yml`, `docs/releasing.md`.
-  Input Actions panel (#253): `input_actions/` is self-contained until the editor shell (#10) exists. It edits
+  Input Actions panel (#253): `input_actions/` (docked by `editor_input_actions.rs`, see above). It edits
   `InputContext` > `InputAction` > `InputBinding` instances; every change is one `EditStep` (built by `StepBuilder`,
-  handed to a `CommandSink`; `History` is the stand-in undo stack). Logic modules: `capture`, `checks`, `presets`,
+  handed to a `CommandSink`; its own `History` is used only by the standalone demo). Logic modules: `capture`, `checks`, `presets`,
   `touch` (device presets, automatic touch layout, custom `TouchPosition`), `preview`. View: `InputActionsPanel::show`
   or `show_with_sink`. Demo: `cargo run -p metallic_studio --example input_actions`.
   Colour (#221): `colour/` holds `ColourPopover` (ring + square, Hex/RGB/HSV, eyedropper hook, recent, palettes,
   OKLCh harmonies). It returns `ColourEvent`s (preview, commit with undo name, cancel) and never edits the scene;
-  the Properties panel and preview overlay will consume them (#10, #213). Recent colours live in the user config
+  `editor_colour.rs` consumes them for the editor. Recent colours live in the user config
   (`recent-colours.toml`), saved palettes in the project (`palettes/<name>.palette.ron`). Demo: `--scene colour`.
 - **metallic_update** (Launcher L1 Task 1): no UI. `http.rs` (`HttpClient`, `UreqClient`, redacting `Token`; `get_to_writer` streams a download and drops `Authorization` when a redirect leaves the host), `feed.rs`
   (`ReleaseFeed`, `STUDIO_FEED`, `LAUNCHER_FEED`, `UpdateChecker::check/check_quietly/download/apply_and_restart/apply_after_exit`,
@@ -215,7 +292,7 @@ apps.
   Task 4 adds `bridge.rs` (`Bridge::handle/deliver/event_script`, `BridgeCommand`, `allowed`, `BridgeHost`, `BridgeEvent`,
   `BridgeErrorCode`) and `assets/bridge.js` (`window.metallic`, main frame only): the checked path from a page to the Launcher. Only the
   site (and the development origin) and bundled pages may call it; commands are a typed enum with unknown fields refused, 16 KiB
-  message limit, 32 calls in flight, one Player start per 2 s; an answer goes only to a page of the same origin as the asker. The
+  message limit, 32 calls in flight (Play starts are limited by the shell's `LaunchGate`, see Task 9); an answer goes only to a page of the same origin as the asker. The
   shell implements `BridgeHost` (`ShellHost`); the Metallic sign-in answers `notAvailable` until Task 7. A call counts toward the 32
   only while the host runs it (long work goes to background threads and reports by events), never while its answer waits.
   Task 5 adds `single_instance.rs` (hand-over message `HandoffMessage`, `encode`/`decode`, 4096-byte limit checked before the body is
@@ -233,9 +310,11 @@ apps.
   start and every `CHECK_INTERVAL`, background download, `on_quit` applies silently without restart only when `ProcessTracker`
   counts no running Player, `restart_to_update` answers `Busy` instead, a `required` update makes `allow_play` fail with
   `UpdateRequired`; `StartedPlayers`, `UpdateSource`). `settings.rs` gains `channel` (local-only: the site may not change it).
-  The tray shows "Restart to update" once an update is downloaded.
+  The tray shows "Restart to update" once an update is downloaded, and "Open Studio" once Studio is installed (`TrayMenuState`,
+  no restart needed). `getInfo.channel` is the channel this run started on (`LauncherInfo::running`); a changed setting
+  applies from the next start. `--hidden` (autostart) starts in the tray (`show_on_start`; shown anyway without a tray icon).
   Task 7 adds `platform_auth.rs` (`PlatformAuth`: OAuth device flow against `<site>/v1/oauth/*` with client `metallic-launcher`, scopes
-  `profile play`. Only the refresh token is stored (UTF-8 bytes, Credential Manager entry `Metallic`/`platform`, 2560-byte check); the
+  `profile play`. Only the refresh token is stored (UTF-8 bytes, Credential Manager service `MetallicLauncher`, account `platform`, shown by Windows as `platform.MetallicLauncher`; 2560-byte check); the
   access token stays in memory; tokens over 256 bytes are refused; refreshes are serialised, the new refresh token is stored before use.
   `platform_sign_in` answers `{state:"pending"}` at once and a worker emits `signIn` events `pending` (with `userCode`, `verificationUri`),
   then `signedIn|denied|expired|failed`; a second call returns the running flow's code; a signed-in Launcher skips the browser. The
@@ -249,9 +328,12 @@ apps.
   Task 9 (release and hardening; product name **Metallic Play**, owner choice 2026-10-30, used for the window title, tray, pack title and bundled pages; ids, folders and `Metallic.exe` keep their names): `tools/release.py --app launcher` packs `Metallic.exe` + `metallic-player.exe` as Velopack
   `MetallicLauncher` (`--framework webview2`, channel `launcher-<channel>`, tag `launcher-v<version>-<channel>`; see
   `docs/releasing.md`). `play_limit.rs` (`PlayLimiter`, burst 3 then one per 2 s; `LaunchGate`) is one gate for every program start: Play and
-  Studio links (pipe, protocol handler, page clicks, start argument), the bridge `play`/`openStudio` and the tray (the bridge also keeps its own one-per-2-s Play limit). `url_policy::remote_content_allowed`: if
+  Studio links (pipe, protocol handler, page clicks, start argument), the bridge `play`/`openStudio` and the tray (the bridge has no limit of its own). The single-instance pipe client sends only
+  to a server of the same user whose image is this very executable, full path (`same_program`; a copy in another folder does not hand over). The GitHub sign-in page opens through the
+  same https-only browser opener as other links, after `github_auth::is_github_page`. `url_policy::remote_content_allowed`: if
   the WebView2 `FrameNavigationStarting` handler cannot be registered, iframes would be unpoliced, so the Launcher shows the bundled
-  offline page and loads no remote page (fail closed). Own data folders (`data_dirs.rs`): `%LOCALAPPDATA%\MetallicLauncher\data` (`Downloads`, `WebView2`) and `%APPDATA%\MetallicLauncher` (settings), never under `Metallic\` (another app may own it); each holds a `.metallic-launcher` marker written when the Launcher creates it, and the uninstall hook deletes only marked folders. Keyring service `MetallicLauncher`. The view starts on `about:blank`; the start page loads only after registration. CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
+  offline page and loads no remote page (fail closed). Own data folders (`data_dirs.rs`): `%LOCALAPPDATA%\MetallicLauncher\data` (`Downloads`, `WebView2`) and `%APPDATA%\MetallicLauncher` (settings), never under `Metallic\` (another app may own it); each holds a `.metallic-launcher` marker written when the Launcher creates it, and the uninstall hook deletes only marked folders. Keyring service `MetallicLauncher`, accounts `platform` and `github`
+  (Windows shows `platform.MetallicLauncher`, `github.MetallicLauncher`); the uninstall hook deletes both (`forget_saved_sign_ins`). The view starts on `about:blank`; the start page loads only after registration. CI job `launcher-linux-check` compiles the Launcher on Ubuntu.
   Template creation preserves project metadata (`metallic.toml`, including `[[setting]]`) while setting the new name;
   legacy settings migrate from `template.toml`, with conflicting dual definitions rejected and rolled back. Catalog
   metadata, preview files and root `tests/` stay in the template; tutorials and nested game assets are copied.
@@ -357,8 +439,12 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills). A
    character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
-3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
-   touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
+3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`, and every
+   `drain_touch_ended` pair as `touch_ended(a, b)` and `touch_ended(b, a)`; a character
+   touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
+   touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model
+   (`TouchEnded` still fires on the touched part when the character was destroyed first, with the destroyed limb);
+   `Died` -> `humanoid_died`;
    `Respawned` -> `physics.sync_from` and `character_added(player, model)`.
 4. **script step** (`ScriptHost::step`: new scripts, remotes, the inputs above, `RunService.Heartbeat`, resumed waits).
 5. **physics re-sync** when the change journal shows a BasePart under Workspace was created, destroyed, reparented or
@@ -406,7 +492,8 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
 - **A material:** the material list in `classes.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
-  procedural detail), and density/friction in `metallic_physics`. Test `material_table_has_every_registry_material`
+  procedural detail), and density/friction in `metallic_physics`. The material table has one spare row per style
+  (`ROWS_PER_STYLE` in `shading.rs`, and `CHARACTER_ROW` in `scene.wgsl`, moves up by one). Test `material_table_has_every_registry_material`
   must still pass.
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.

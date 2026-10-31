@@ -10,6 +10,7 @@ use crate::touch_overlay::{TouchOverlay, emulation_window};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
 use metallic_runtime::HumanoidState;
+use metallic_runtime::gui_input::{PointerId, PointerPhase};
 use metallic_runtime::input::{
     ActionId, Control, Device, DeviceKind, FingerEvent, MENU_ACTION, RawEvent, ScriptedSource,
 };
@@ -266,6 +267,27 @@ impl App {
                 self.touch.finger(&mut self.input, f, clock);
             }
         }
+    }
+
+    /// Gives a pointer event at window pixel `px` to the game's GUI (not while the menu is
+    /// open). True when the GUI took it: it must not reach the game's input (#79).
+    fn gui_pointer(&mut self, pointer: PointerId, phase: PointerPhase, px: [f32; 2]) -> bool {
+        if self.menu.is_open() {
+            return false;
+        }
+        let Some(gfx) = self.gfx.as_ref() else {
+            return false;
+        };
+        let scale = gfx.window.scale_factor() as f32;
+        if !(scale.is_finite() && scale > 0.0) {
+            return false;
+        }
+        let at = [px[0] / scale, px[1] / scale];
+        let screen = [
+            gfx.config.width as f32 / scale,
+            gfx.config.height as f32 / scale,
+        ];
+        self.game.gui_pointer(pointer, phase, at, screen)
     }
 
     /// Sends a raw event to the menu while it is open, else to the game's input.
@@ -647,6 +669,17 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => {
                 let time = self.input_clock();
                 let down = state == ElementState::Pressed;
+                // The GUI first: a click on a button is not the game's (#79).
+                let phase = if down {
+                    PointerPhase::Down
+                } else {
+                    PointerPhase::Up
+                };
+                if button == winit::event::MouseButton::Left
+                    && self.gui_pointer(PointerId::Mouse, phase, self.touch.cursor())
+                {
+                    return;
+                }
                 // In device emulation the mouse is a finger (but a mouse in the menu).
                 let finger = !self.menu.is_open()
                     && self.touch.mouse_button(&mut self.input, button, down, time);
@@ -659,6 +692,8 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let time = self.input_clock();
                 let pos = [position.x as f32, position.y as f32];
+                // Hover; the game keeps getting the position either way.
+                self.gui_pointer(PointerId::Mouse, PointerPhase::Move, pos);
                 if !self.menu.is_open() && self.touch.cursor_moved(&mut self.input, pos, time) {
                     return;
                 }
@@ -672,8 +707,27 @@ impl ApplicationHandler for App {
                     // The menu is used like a mouse: a finger points and taps.
                     self.menu_touch(t.phase, px, time);
                 } else {
-                    self.touch.touch(&mut self.input, t.id, t.phase, px, time);
+                    use winit::event::TouchPhase as P;
+                    let phase = match t.phase {
+                        P::Started => PointerPhase::Down,
+                        P::Moved => PointerPhase::Move,
+                        P::Ended => PointerPhase::Up,
+                        P::Cancelled => PointerPhase::Cancel,
+                    };
+                    // The overlay's own buttons first, then the game's GUI, then the controls.
+                    let overlay = phase == PointerPhase::Down && self.touch.has_button_at(px);
+                    if overlay || !self.gui_pointer(PointerId::Touch(t.id), phase, px) {
+                        self.touch.touch(&mut self.input, t.id, t.phase, px, time);
+                    }
                 }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                let [x, y] = self.touch.cursor();
+                let scale = self
+                    .gfx
+                    .as_ref()
+                    .map_or(1.0, |g| g.window.scale_factor() as f32);
+                self.game.gui_mouse_left([x / scale, y / scale]);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let notches = match delta {

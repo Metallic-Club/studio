@@ -8,6 +8,7 @@ use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_expos
 use crate::meshes::{MeshKind, Vertex};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
 use crate::scene::{InstanceRaw, Scene};
+use crate::shading::{MAX_ROWS, MaterialRow, MaterialTable, Shading};
 use crate::shadows::{
     Cascade, MAX_CASCADES, SHADOW_DISTANCE, SHADOW_FORMAT, ShadowMap, cascade_splits, fit_cascade,
 };
@@ -121,7 +122,7 @@ struct Globals {
 const MESH_ATTRS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
 const INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
-    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4
+    2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Uint32x4
 ];
 
 fn vertex_layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
@@ -143,6 +144,19 @@ struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+}
+
+/// Device features GPU frame timing needs ([`Renderer::enable_gpu_timing`]).
+pub(crate) const GPU_TIMING_FEATURES: wgpu::Features =
+    wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
+
+/// Two timestamps around a frame's commands, resolved into a buffer the caller maps on demand.
+struct GpuTimer {
+    set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    period_ns: f32,
+    recorded: bool,
 }
 
 /// A growable GPU buffer of instances.
@@ -371,6 +385,10 @@ pub struct Renderer {
     blended: InstanceBuffer,
     blended_kinds: Vec<MeshKind>,
     scratch_instances: Vec<InstanceRaw>,
+    gpu_timer: Option<GpuTimer>,
+    /// The GPU material table (`materials` in scene.wgsl) and its CPU copy.
+    material_buffer: wgpu::Buffer,
+    material_table: MaterialTable,
     scratch_blended: Vec<(f32, MeshKind, InstanceRaw)>,
     scratch_cascades: Vec<Cascade>,
     globals: wgpu::Buffer,
@@ -463,6 +481,16 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -492,7 +520,19 @@ impl Renderer {
             }],
         });
         let shadow_map = ShadowMap::new(&device, settings.shadow_resolution(), settings.cascades());
-        let global_group = make_global_group(&device, &global_layout, &globals, &shadow_map);
+        let material_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("metallic material table"),
+            size: std::mem::size_of::<[MaterialRow; MAX_ROWS]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let global_group = make_global_group(
+            &device,
+            &global_layout,
+            &globals,
+            &shadow_map,
+            &material_buffer,
+        );
         let cascade_slots = make_cascade_slots(&device, &shadow_layout, settings.cascades());
         let hdr_features = ctx
             .adapter
@@ -543,6 +583,9 @@ impl Renderer {
             blended,
             blended_kinds: Vec::new(),
             scratch_instances: Vec::new(),
+            gpu_timer: None,
+            material_buffer,
+            material_table: MaterialTable::default(),
             scratch_blended: Vec::new(),
             scratch_cascades: Vec::new(),
             globals,
@@ -586,6 +629,7 @@ impl Renderer {
             &self.global_layout,
             &self.globals,
             &self.shadow_map,
+            &self.material_buffer,
         );
         self.cascade_slots =
             make_cascade_slots(&self.device, &self.shadow_layout, settings.cascades());
@@ -701,6 +745,24 @@ impl Renderer {
             }
         }
         self.lighting = Some(inputs.clone());
+    }
+
+    /// Sets how the place Look shades (style slot 0 of the material table): its default model,
+    /// material overrides and the Character row. Uploaded with the next frame, only if it
+    /// changed.
+    pub fn set_shading(&mut self, shading: &Shading) {
+        let _ = self.material_table.set_style(0, shading);
+    }
+
+    /// Sets the shading of a per-part style slot (1 to 7; #223 assigns slots to styles). A slot
+    /// of 8 or more is ignored with a warning and returns false.
+    pub fn set_style_shading(&mut self, slot: usize, shading: &Shading) -> bool {
+        self.material_table.set_style(slot, shading)
+    }
+
+    /// The material table the renderer draws with.
+    pub fn material_table(&self) -> &MaterialTable {
+        &self.material_table
     }
 
     /// Sets the skinned instances (characters) to draw from the next [`Renderer::render`] on.
@@ -924,6 +986,13 @@ impl Renderer {
         }
         self.ensure_attachments(size);
         self.upload_scene();
+        if self.material_table.take_dirty() {
+            self.queue.write_buffer(
+                &self.material_buffer,
+                0,
+                bytemuck::cast_slice(self.material_table.rows().as_slice()),
+            );
+        }
         self.select_skinned_lods(camera, size.1);
 
         // Blended parts are re-sorted every frame because the order depends on the camera.
@@ -984,6 +1053,9 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("metallic frame"),
             });
+        if let Some(t) = &self.gpu_timer {
+            encoder.write_timestamp(&t.set, 0);
+        }
         self.apply_exposure(&mut encoder);
 
         for (i, slot) in self.cascade_slots.iter().enumerate() {
@@ -1067,7 +1139,71 @@ impl Renderer {
         // pixels the meter must skip.
         self.meter_frame(&mut encoder);
         self.post_and_finish(&mut encoder, target, camera, keep_depth);
+        if let Some(t) = &mut self.gpu_timer {
+            encoder.write_timestamp(&t.set, 1);
+            encoder.resolve_query_set(&t.set, 0..2, &t.resolve, 0);
+            encoder.copy_buffer_to_buffer(&t.resolve, 0, &t.readback, 0, 16);
+            t.recorded = true;
+        }
         self.queue.submit(Some(encoder.finish()));
+    }
+
+    /// Turns on GPU frame timing: every [`Renderer::render`] then writes a timestamp before its
+    /// first and after its last command. Returns false when the device lacks timestamp queries
+    /// (it needs `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS`; [`RenderContext`]
+    /// asks for both where the adapter has them). For tools and benchmarks.
+    pub fn enable_gpu_timing(&mut self) -> bool {
+        if !self.device.features().contains(GPU_TIMING_FEATURES) {
+            return false;
+        }
+        if self.gpu_timer.is_none() {
+            let buffer = |label, usage| {
+                self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: 16,
+                    usage,
+                    mapped_at_creation: false,
+                })
+            };
+            self.gpu_timer = Some(GpuTimer {
+                set: self.device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some("metallic frame timer"),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: 2,
+                }),
+                resolve: buffer(
+                    "metallic frame timer resolve",
+                    wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                ),
+                readback: buffer(
+                    "metallic frame timer readback",
+                    wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                ),
+                period_ns: self.queue.get_timestamp_period(),
+                recorded: false,
+            });
+        }
+        true
+    }
+
+    /// GPU time of the last rendered frame in milliseconds, from its two timestamps. Waits for
+    /// the GPU; `None` when timing is off or no frame was rendered since it was turned on.
+    pub fn read_gpu_time_ms(&mut self) -> Option<f64> {
+        let t = self.gpu_timer.as_mut()?;
+        if !t.recorded {
+            return None;
+        }
+        let slice = t.readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        let ticks: Option<[u64; 2]> = slice
+            .get_mapped_range()
+            .ok()
+            .map(|data| bytemuck::pod_read_unaligned(&data[..16]));
+        t.readback.unmap();
+        let ticks = ticks?;
+        let ns = ticks[1].wrapping_sub(ticks[0]) as f64 * f64::from(t.period_ns);
+        Some(ns / 1e6)
     }
 
     /// Copies the meter's multiplier into this frame's uniforms (recorded before any pass).
@@ -1425,6 +1561,7 @@ fn make_global_group(
     layout: &wgpu::BindGroupLayout,
     globals: &wgpu::Buffer,
     shadow: &ShadowMap,
+    materials: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic globals group"),
@@ -1441,6 +1578,10 @@ fn make_global_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(&shadow.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: materials.as_entire_binding(),
             },
         ],
     })

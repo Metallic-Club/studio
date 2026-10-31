@@ -1,8 +1,10 @@
 //! CPU side of the renderer: turns the parts of a [`World`] into draw lists.
-use crate::materials::{material_index, material_params};
+use crate::materials::material_index;
 use crate::meshes::MeshKind;
+use crate::shading::MaterialTable;
 use bytemuck::{Pod, Zeroable};
 use glam::{EulerRot, Mat4, Vec3};
+use metallic_core::look_override::LookOverrides;
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value, World};
 use std::collections::HashMap;
 
@@ -14,8 +16,10 @@ pub struct InstanceRaw {
     pub model: [[f32; 4]; 4],
     /// Linear RGB colour and alpha (`1 - Transparency`).
     pub color: [f32; 4],
-    /// Roughness, metalness, material id, unused.
-    pub material: [f32; 4],
+    /// [0] material table row ([`MaterialTable::row`]), [1] flags (bit 0 hull, 1 vertex snap,
+    /// 2 affine, 3 nearest, bits 4-7 style slot; none used yet), [2] material id for the
+    /// procedural detail, [3] reserved.
+    pub material: [u32; 4],
 }
 
 /// One part ready to draw.
@@ -27,6 +31,9 @@ pub struct PartDraw {
     pub kind: MeshKind,
     /// GPU data.
     pub instance: InstanceRaw,
+    /// Resolved `LookOverride` (a Look id such as `"retro-32"`); `None` draws with the place
+    /// Look. #223 turns it into material rows and instance flags.
+    pub style: Option<&'static str>,
 }
 
 impl PartDraw {
@@ -62,6 +69,7 @@ pub struct Scene {
     cursor: Option<ChangeCursor>,
     version: u64,
     full_rebuilds: u64,
+    looks: LookOverrides,
 }
 
 impl Scene {
@@ -78,8 +86,11 @@ impl Scene {
         let journal = self.cursor.map(|c| world.changes_since(c));
         match journal {
             Some((Changes::Ids(ids), cursor)) => {
+                // Parts below a Model whose LookOverride changed are not in the journal; the
+                // style cache names them.
+                let restyled = self.looks.apply_ids(world, &ids);
                 let mut changed = false;
-                for id in ids {
+                for id in ids.into_iter().chain(restyled) {
                     changed |= self.update(world, id);
                 }
                 self.cursor = Some(cursor);
@@ -99,7 +110,8 @@ impl Scene {
         self.slots.clear();
         self.free.clear();
         self.index.clear();
-        for part in collect_parts(world) {
+        self.looks.rebuild(world);
+        for part in collect_parts(world, &self.looks) {
             self.index.insert(part.id, self.slots.len());
             self.slots.push(Some(part));
         }
@@ -111,7 +123,7 @@ impl Scene {
     /// Re-reads one instance; true when the scene changed.
     fn update(&mut self, world: &World, id: InstanceId) -> bool {
         let want = if world.is_a(id, "BasePart") && in_render_tree(world, id) {
-            read_part(world, id)
+            read_part(world, id, self.looks.get(id))
         } else {
             None
         };
@@ -209,7 +221,7 @@ fn in_render_tree(world: &World, id: InstanceId) -> bool {
     false
 }
 
-fn collect_parts(world: &World) -> Vec<PartDraw> {
+fn collect_parts(world: &World, looks: &LookOverrides) -> Vec<PartDraw> {
     let mut out = Vec::new();
     let roots: Vec<InstanceId> = match world.root("Workspace") {
         Some(w) => vec![w],
@@ -218,7 +230,7 @@ fn collect_parts(world: &World) -> Vec<PartDraw> {
     let mut stack: Vec<InstanceId> = roots.into_iter().rev().collect();
     while let Some(id) = stack.pop() {
         if world.is_a(id, "BasePart")
-            && let Some(p) = read_part(world, id)
+            && let Some(p) = read_part(world, id, looks.get(id))
         {
             out.push(p);
         }
@@ -234,7 +246,7 @@ fn vec3_prop(world: &World, id: InstanceId, name: &str, default: Vec3) -> Vec3 {
     }
 }
 
-fn read_part(world: &World, id: InstanceId) -> Option<PartDraw> {
+fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Option<PartDraw> {
     let position = vec3_prop(world, id, "Position", Vec3::ZERO);
     let rot = vec3_prop(world, id, "Orientation", Vec3::ZERO);
     let size = vec3_prop(world, id, "Size", Vec3::ONE).max(Vec3::splat(0.001));
@@ -262,7 +274,7 @@ fn read_part(world: &World, id: InstanceId) -> Option<PartDraw> {
         rot.z.to_radians(),
     );
     let model = Mat4::from_translation(position) * rotation * Mat4::from_scale(size);
-    let params = material_params(&material);
+    let index = material_index(&material);
     Some(PartDraw {
         id,
         kind: MeshKind::from_shape(&shape),
@@ -274,13 +286,10 @@ fn read_part(world: &World, id: InstanceId) -> Option<PartDraw> {
                 srgb_to_linear(color[2] / 255.0),
                 1.0 - transparency,
             ],
-            material: [
-                params.roughness,
-                params.metalness,
-                material_index(&material) as f32,
-                0.0,
-            ],
+            // Style slot 0 (the place Look) until #223 maps resolved styles to slots.
+            material: [MaterialTable::row(0, index), 0, index as u32, 0],
         },
+        style,
     })
 }
 
@@ -463,6 +472,33 @@ mod tests {
         if !cfg!(debug_assertions) {
             assert!(best < std::time::Duration::from_millis(1), "took {best:?}");
         }
+    }
+
+    #[test]
+    fn parts_carry_their_resolved_look_override() {
+        let mut w = World::new_with_services();
+        let ws = w.root("Workspace").unwrap();
+        let m = w.create("Model", Some(ws)).unwrap();
+        let a = w.create("Part", Some(m)).unwrap();
+        let b = w.create("Part", Some(m)).unwrap();
+        w.set(b, "LookOverride", Value::String("Pixel 3D".into()))
+            .unwrap();
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        let style = |scene: &Scene, id| scene.parts().find(|p| p.id == id).unwrap().style;
+        assert_eq!(style(&scene, a), None);
+        assert_eq!(style(&scene, b), Some("pixel-3d"));
+
+        // Only the Model is in the journal; its parts are re-read anyway, without a rebuild.
+        w.set(m, "LookOverride", Value::String("Retro / PS1".into()))
+            .unwrap();
+        assert!(scene.sync(&w));
+        assert_eq!(style(&scene, a), Some("retro-32"));
+        assert_eq!(style(&scene, b), Some("pixel-3d"), "own value wins");
+        w.set_parent(a, Some(ws)).unwrap();
+        scene.sync(&w);
+        assert_eq!(style(&scene, a), None, "out of the Model: the place Look");
+        assert_eq!(scene.full_rebuilds(), 1);
     }
 
     #[test]

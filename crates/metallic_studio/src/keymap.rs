@@ -17,6 +17,17 @@ pub enum KeyContext {
     /// While a gizmo or body drag is held: Esc cancels, X/Y/Z lock axes, R/T turn, Ctrl+D
     /// stamps. These keys mean nothing else during a drag.
     Drag,
+    /// While a building-tool popover (Align, Array, Select similar) is open, wherever the
+    /// pointer is: Esc closes it, Enter makes the array, letters pick a Select similar key.
+    /// Checked before every other context.
+    Popover,
+    /// While the brush or Measure is on and the pointer is over the viewport (or a tool gesture
+    /// is held): Esc cancels the stroke or clears, `[` / `]` change the brush radius. Checked
+    /// before Global and Viewport.
+    Tool,
+    /// While a play session runs: Studio keys that win over the game (Esc stops). Viewport
+    /// keys are off then; the game gets them.
+    Play,
 }
 
 /// A key with modifiers, e.g. Ctrl+Shift+Z.
@@ -71,10 +82,10 @@ impl KeyChord {
         if self.shift {
             s.push_str("Shift+");
         }
-        s.push_str(if self.key == Key::Comma {
-            ","
-        } else {
-            self.key.name()
+        s.push_str(match self.key {
+            Key::Comma => ",",
+            Key::Period => ".",
+            key => key.name(),
         });
         s
     }
@@ -132,10 +143,36 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("hold.summon", "Space", KeyContext::Viewport),
     ("view.frame_selection", "F", KeyContext::Viewport),
     ("view.frame_all", "Home", KeyContext::Viewport),
+    ("view.focus_context_bar", "Ctrl+.", KeyContext::Global),
+    // Building tools (building-tools spec, shortcut table) and the colour popover.
+    ("tool.brush", "B", KeyContext::Viewport),
+    ("tool.measure", "Shift+M", KeyContext::Viewport),
+    ("build.align", "A", KeyContext::Viewport),
+    ("build.mirror", "Ctrl+M", KeyContext::Global),
+    ("build.mirror_copy", "Ctrl+Shift+M", KeyContext::Global),
+    ("build.array", "Ctrl+Shift+D", KeyContext::Global),
+    ("select.similar", "Shift+G", KeyContext::Viewport),
+    ("colour.open", "C", KeyContext::Viewport),
+    // Open building-tool popovers and the brush/measure tool (checked first, see KeyContext).
+    ("popover.close", "Escape", KeyContext::Popover),
+    ("array.make", "Enter", KeyContext::Popover),
+    ("similar.color", "C", KeyContext::Popover),
+    ("similar.material", "M", KeyContext::Popover),
+    ("similar.style", "L", KeyContext::Popover),
+    ("similar.size", "S", KeyContext::Popover),
+    ("similar.class", "K", KeyContext::Popover),
+    ("similar.name", "N", KeyContext::Popover),
+    ("similar.tags", "T", KeyContext::Popover),
+    ("similar.parent", "P", KeyContext::Popover),
+    ("tool.cancel", "Escape", KeyContext::Tool),
+    ("brush.radius_down", "[", KeyContext::Tool),
+    ("brush.radius_up", "]", KeyContext::Tool),
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
+    ("play.stop", "Escape", KeyContext::Play),
     ("output.clear", "Ctrl+L", KeyContext::Global),
-    // Esc never closes anything: it clears the selection, or cancels a gizmo drag.
+    // Esc never closes the game: it closes a building popover or cancels a tool (above), clears
+    // the selection, or cancels a gizmo drag.
     ("edit.deselect", "Escape", KeyContext::Viewport),
     ("drag.cancel", "Escape", KeyContext::Drag),
     ("drag.lock_x", "X", KeyContext::Drag),
@@ -221,9 +258,23 @@ impl Keymap {
     }
 
     /// Actions whose chord was pressed this frame in one of `active` contexts. Modifiers must
-    /// match exactly (Ctrl+Shift+Z is not Ctrl+Z). Matching key presses are consumed so egui
-    /// widgets do not also react. `out` is cleared first.
+    /// match exactly (Ctrl+Shift+Z is not Ctrl+Z). When a chord is bound in several active
+    /// contexts, the context listed first in `active` wins. Matching key presses are consumed so
+    /// egui widgets do not also react. `out` is cleared first.
     pub fn pressed(&self, ctx: &egui::Context, active: &[KeyContext], out: &mut Vec<&'static str>) {
+        self.pressed_where(ctx, active, out, |_| true);
+    }
+
+    /// Like [`Keymap::pressed`], but only bindings whose action `owns` claims are matched; any
+    /// other key, bound or not, stays in egui's event list. While playing, a disabled editing
+    /// shortcut (Ctrl+Z, Delete, F2...) is thereby left for the game instead of being swallowed.
+    pub fn pressed_where(
+        &self,
+        ctx: &egui::Context,
+        active: &[KeyContext],
+        out: &mut Vec<&'static str>,
+        owns: impl Fn(&'static str) -> bool,
+    ) {
         out.clear();
         ctx.input_mut(|input| {
             input.events.retain(|event| {
@@ -236,10 +287,13 @@ impl Keymap {
                 else {
                     return true;
                 };
-                let Some(b) = self.bindings.iter().find(|b| {
-                    active.contains(&b.context)
-                        && b.chord.key == *key
-                        && b.chord.matches_modifiers(*modifiers)
+                let Some(b) = active.iter().find_map(|c| {
+                    self.bindings.iter().find(|b| {
+                        b.context == *c
+                            && b.chord.key == *key
+                            && b.chord.matches_modifiers(*modifiers)
+                            && owns(b.action)
+                    })
                 }) else {
                     return true;
                 };
@@ -267,6 +321,44 @@ mod tests {
         let map = Keymap::metallic();
         assert_eq!(map.bindings().len(), METALLIC_PRESET.len());
         assert!(map.conflicts().is_empty(), "{:?}", map.conflicts());
+    }
+
+    #[test]
+    fn keys_of_actions_not_owned_stay_in_the_event_list() {
+        let map = Keymap::metallic();
+        let ctx = egui::Context::default();
+        let ctrl_z = egui::Event::Key {
+            key: egui::Key::Z,
+            physical_key: Some(egui::Key::Z),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        };
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let raw = egui::RawInput {
+            events: vec![ctrl_z, escape],
+            ..Default::default()
+        };
+        let mut pressed = Vec::new();
+        let mut left = 0;
+        let mut out = ctx.run_ui(raw, |ui| {
+            map.pressed_where(
+                ui.ctx(),
+                &[KeyContext::Global, KeyContext::Play],
+                &mut pressed,
+                |id| id.starts_with("play."),
+            );
+            left = ui.ctx().input(|i| i.events.len());
+        });
+        out.textures_delta.clear();
+        assert_eq!(pressed, ["play.stop"]);
+        assert_eq!(left, 1, "Ctrl+Z is left for the game");
     }
 
     #[test]

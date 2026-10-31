@@ -53,4 +53,4 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 metallic_core.workspace = true
 tempfile = "3"
-egui_kittest = "0.37.0"
+egui_kittest = { version = "0.37.0", features = ["wgpu"] }

@@ -30,4 +30,5 @@ mod view;
 mod view_touch;
 
 pub use commands::{CommandSink, EditStep, History, StepBuilder};
+pub(crate) use view::egui_key_to_control;
 pub use view::{InputActionsPanel, Tab};

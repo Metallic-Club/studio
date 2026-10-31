@@ -52,7 +52,9 @@ const CLASS_METHODS: &[(&str, &str)] = &[
 /// The event named `name` on an instance of `class`, if there is one.
 fn event_kind(class: &str, name: &str) -> Option<EventKind> {
     match name {
+        "AttributeChanged" => Some(EventKind::AttributeChanged(0)),
         "Touched" if is_subclass(class, "BasePart") => Some(EventKind::Touched),
+        "TouchEnded" if is_subclass(class, "BasePart") => Some(EventKind::TouchEnded),
         "Died" if class == "Humanoid" => Some(EventKind::Died),
         "CharacterAdded" if class == "Player" => Some(EventKind::CharacterAdded),
         "PlayerAdded" if class == "Players" => Some(EventKind::PlayerAdded),
@@ -63,7 +65,7 @@ fn event_kind(class: &str, name: &str) -> Option<EventKind> {
         "Released" if class == "InputAction" => Some(EventKind::Released),
         "Triggered" if class == "InputAction" => Some(EventKind::Triggered),
         "StateChanged" if class == "InputAction" => Some(EventKind::StateChanged),
-        _ => None,
+        _ => super::gui::GuiEventKind::of(class, name).map(EventKind::Gui),
     }
 }
 
@@ -90,6 +92,11 @@ fn core_error(e: CoreError) -> mlua::Error {
 }
 
 impl LuaInstance {
+    /// Errors when the instance has been destroyed.
+    pub(crate) fn ensure_alive(&self) -> mlua::Result<()> {
+        self.live()
+    }
+
     fn live(&self) -> mlua::Result<()> {
         if self.state.world()?.is_alive(self.id) {
             Ok(())
