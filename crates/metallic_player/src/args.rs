@@ -27,7 +27,7 @@ pub struct Args {
     /// Play without a person: run forward in a circle and jump every few seconds (to measure the
     /// frame rate with the character animating).
     pub autopilot: bool,
-    /// Start with the developer overlay (F3) shown.
+    /// Start with the developer overlay (Ctrl+Shift+F3) shown.
     pub dev_overlay: bool,
     /// Frames to save as PNG: (frame number, path).
     pub captures: Vec<(u64, PathBuf)>,

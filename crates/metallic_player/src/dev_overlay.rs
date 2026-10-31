@@ -1,17 +1,28 @@
-//! The developer overlay (F3, or `--dev-overlay`; #23): frame time and fps, GPU time, the time
-//! per subsystem and a graph of the last frames, in the top-left corner over the game.
+//! The developer overlay (Ctrl+Shift+F3, or `--dev-overlay`; #23): frame time and fps, GPU time,
+//! the time per subsystem and a graph of the last frames, in the top-left corner over the game.
 //!
 //! Turning it on enables the profiler (`metallic_profiler`); turning it off disables it again,
-//! so the overlay costs nothing while hidden.
+//! so the overlay costs nothing while hidden. The numbers are formatted and laid out four times a
+//! second, not every frame; only the graph is drawn fresh each frame. Colours are the Graphite
+//! theme's tokens (`metallic_ui_theme`), since the overlay always sits over the game.
+use std::sync::Arc;
+
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Id, LayerId, Order, Pos2, Rect, Stroke, pos2, vec2,
+    Align2, Color32, CornerRadius, FontId, Galley, Id, LayerId, Order, Rect, Stroke, pos2, vec2,
 };
 use metallic_profiler::{FrameRecord, Profiler, Subsystem};
+use metallic_ui_theme::{Palette, ThemeId, palette_of};
 
 /// Frames averaged for the numbers (one second at 60 fps).
 const AVERAGE: usize = 60;
 /// Frames in the graph.
 const GRAPH: usize = 180;
+/// Frames between two layouts of the numbers (a quarter of a second at 60 fps).
+const REFRESH: u32 = 15;
+/// Height of one text row.
+const ROW: f32 = 16.0;
+/// Text rows: fps, GPU, then one per subsystem. The panel keeps this height so it never jumps.
+const ROWS: usize = 2 + Subsystem::ALL.len();
 
 /// The numbers the overlay shows, averaged over recent frames.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,12 +81,24 @@ impl Summary {
     }
 }
 
+/// One text row, laid out at the last refresh.
+#[derive(Debug)]
+struct Row {
+    mark: Option<Color32>,
+    name: Arc<Galley>,
+    value: Arc<Galley>,
+}
+
 /// The overlay's on/off state.
 #[derive(Debug, Default)]
 pub struct DevOverlay {
     on: bool,
     /// Frame times of the graph, reused from frame to frame.
     graph: Vec<f32>,
+    /// The text rows, laid out at the last refresh.
+    rows: Vec<Row>,
+    /// Frames painted since `rows` was laid out.
+    age: u32,
 }
 
 impl DevOverlay {
@@ -88,13 +111,14 @@ impl DevOverlay {
     /// Shows or hides it (and starts or stops the profiler with it).
     pub fn set_on(&mut self, on: bool) {
         self.on = on;
+        self.rows.clear();
         Profiler::set_enabled(on);
         if !on {
             Profiler::clear();
         }
     }
 
-    /// Flips it (F3).
+    /// Flips it (Ctrl+Shift+F3).
     pub fn toggle(&mut self) {
         self.set_on(!self.on);
     }
@@ -104,8 +128,15 @@ impl DevOverlay {
         if !self.on {
             return;
         }
+        // The same layer every frame: `Id::unique` hashes its source, it is not random (egui 0.37
+        // renamed `Id::new` to it).
+        let painter = ctx.layer_painter(LayerId::new(
+            Order::Tooltip,
+            Id::unique("metallic_dev_overlay"),
+        ));
         let graph = &mut self.graph;
         graph.clear();
+        let refresh = self.rows.is_empty() || self.age >= REFRESH;
         let summary = Profiler::with_frames(|frames| {
             graph.extend(
                 frames
@@ -114,55 +145,100 @@ impl DevOverlay {
                     .take(GRAPH)
                     .map(|f| f.frame_ns() as f32 / 1e6),
             );
-            Summary::of(frames.iter().rev().take(AVERAGE))
+            refresh.then(|| Summary::of(frames.iter().rev().take(AVERAGE)))
         });
         graph.reverse();
-        let painter = ctx.layer_painter(LayerId::new(
-            Order::Tooltip,
-            Id::unique("metallic_dev_overlay"),
-        ));
-        draw(&painter, summary.as_ref(), graph);
+        if let Some(summary) = summary {
+            lay_out(&painter, summary.as_ref(), &mut self.rows);
+            self.age = 0;
+        }
+        self.age += 1;
+        draw(&painter, &self.rows, &self.graph);
     }
 }
 
-/// Restrained marks per subsystem (graphite UI, violet accent).
-fn colour(s: Subsystem) -> Color32 {
+/// The overlay's colours.
+fn palette() -> &'static Palette {
+    palette_of(ThemeId::Graphite)
+}
+
+/// The mark of each subsystem: the same roles as Studio's profiler panel.
+fn colour(p: &Palette, s: Subsystem) -> Color32 {
     match s {
-        Subsystem::Script => Color32::from_rgb(139, 108, 214),
-        Subsystem::Physics => Color32::from_rgb(110, 150, 196),
-        Subsystem::Character => Color32::from_rgb(120, 170, 140),
-        Subsystem::Render => Color32::from_rgb(206, 170, 100),
-        Subsystem::Gui => Color32::from_rgb(170, 176, 186),
-        Subsystem::Net => Color32::from_rgb(196, 120, 120),
-        Subsystem::Other => Color32::from_rgb(120, 124, 132),
+        Subsystem::Script => p.accent,
+        Subsystem::Physics => p.info,
+        Subsystem::Character => p.success,
+        Subsystem::Render => p.warning,
+        Subsystem::Gui => p.text_2,
+        Subsystem::Net => p.error,
+        Subsystem::Other => p.text_3,
     }
 }
 
-const PANEL: Color32 = Color32::from_rgba_premultiplied(18, 19, 22, 225);
-const TEXT: Color32 = Color32::from_rgb(222, 224, 228);
-const DIM: Color32 = Color32::from_rgb(150, 154, 162);
-const LINE: Color32 = Color32::from_rgb(64, 66, 72);
-
-fn draw(painter: &egui::Painter, summary: Option<&Summary>, graph: &[f32]) {
+/// Formats and lays out the text rows for `summary` into `rows`.
+fn lay_out(painter: &egui::Painter, summary: Option<&Summary>, rows: &mut Vec<Row>) {
+    let p = palette();
     let font = FontId::monospace(12.0);
+    rows.clear();
+    let mut add = |name: String, value: String, mark: Option<Color32>, ink: Color32| {
+        rows.push(Row {
+            mark,
+            name: painter.layout_no_wrap(name, font.clone(), ink),
+            value: painter.layout_no_wrap(value, font.clone(), ink),
+        });
+    };
+    let Some(s) = summary else {
+        add("Profiler".into(), "recording...".into(), None, p.text_1);
+        return;
+    };
+    add(
+        format!("{:.0} fps", s.fps()),
+        format!("{:.2} ms (max {:.1})", s.frame_ms, s.max_ms),
+        None,
+        p.text_1,
+    );
+    add(
+        "GPU".into(),
+        s.gpu_ms
+            .map_or("not measured".into(), |g| format!("{g:.2} ms")),
+        None,
+        p.text_1,
+    );
+    for (sub, ms) in Subsystem::ALL.iter().zip(s.subsystems_ms) {
+        let ink = if ms > 0.0 { p.text_1 } else { p.text_3 };
+        add(
+            sub.label().into(),
+            format!("{ms:.2} ms"),
+            Some(colour(p, *sub)),
+            ink,
+        );
+    }
+}
+
+fn draw(painter: &egui::Painter, rows: &[Row], graph: &[f32]) {
+    let p = palette();
     let width = 260.0;
-    let rows = 2 + Subsystem::ALL.len();
     let graph_h = 48.0;
-    let height = 12.0 + rows as f32 * 16.0 + graph_h + 12.0;
+    let height = 12.0 + ROWS as f32 * ROW + graph_h + 12.0;
     let rect = Rect::from_min_size(pos2(8.0, 8.0), vec2(width, height));
-    painter.rect_filled(rect, CornerRadius::same(4), PANEL);
+    painter.rect_filled(
+        rect,
+        CornerRadius::same(metallic_ui_theme::R_XS),
+        p.bg_panel.gamma_multiply(0.9),
+    );
     painter.rect_stroke(
         rect,
-        CornerRadius::same(4),
-        Stroke::new(1.0, LINE),
+        CornerRadius::same(metallic_ui_theme::R_XS),
+        Stroke::new(1.0, p.line),
         egui::StrokeKind::Inside,
     );
-    let mut y = rect.top() + 8.0;
+    let top = rect.top() + 8.0;
     let left = rect.left() + 10.0;
     let right = rect.right() - 10.0;
-    let mut line = |text: String, value: String, colour: Option<Color32>, ink: Color32| {
+    for (i, row) in rows.iter().enumerate() {
+        let y = top + i as f32 * ROW;
         let mut x = left;
-        if let Some(c) = colour {
+        if let Some(c) = row.mark {
             painter.rect_filled(
                 Rect::from_min_size(pos2(x, y + 4.0), vec2(8.0, 8.0)),
                 CornerRadius::same(2),
@@ -170,44 +246,16 @@ fn draw(painter: &egui::Painter, summary: Option<&Summary>, graph: &[f32]) {
             );
             x += 14.0;
         }
-        painter.text(Pos2::new(x, y), Align2::LEFT_TOP, text, font.clone(), ink);
-        painter.text(
-            Pos2::new(right, y),
-            Align2::RIGHT_TOP,
-            value,
-            font.clone(),
-            ink,
-        );
-        y += 16.0;
-    };
-    let Some(s) = summary else {
-        line("Profiler".into(), "recording...".into(), None, TEXT);
-        return;
-    };
-    line(
-        format!("{:.0} fps", s.fps()),
-        format!("{:.2} ms (max {:.1})", s.frame_ms, s.max_ms),
-        None,
-        TEXT,
-    );
-    line(
-        "GPU".into(),
-        s.gpu_ms
-            .map_or("not measured".into(), |g| format!("{g:.2} ms")),
-        None,
-        TEXT,
-    );
-    for (sub, ms) in Subsystem::ALL.iter().zip(s.subsystems_ms) {
-        let ink = if ms > 0.0 { TEXT } else { DIM };
-        line(
-            sub.label().into(),
-            format!("{ms:.2} ms"),
-            Some(colour(*sub)),
-            ink,
-        );
+        painter.galley(pos2(x, y), row.name.clone(), p.text_1);
+        let value = Align2::RIGHT_TOP.anchor_size(pos2(right, y), row.value.size());
+        painter.galley(value.min, row.value.clone(), p.text_1);
     }
+    if graph.is_empty() {
+        return;
+    }
+    let y = top + ROWS as f32 * ROW;
     let g = Rect::from_min_max(pos2(left, y + 4.0), pos2(right, y + 4.0 + graph_h));
-    painter.rect_filled(g, CornerRadius::same(2), Color32::from_rgb(10, 11, 13));
+    painter.rect_filled(g, CornerRadius::same(2), p.bg_deep);
     let peak = graph
         .iter()
         .copied()
@@ -217,7 +265,7 @@ fn draw(painter: &egui::Painter, summary: Option<&Summary>, graph: &[f32]) {
         let gy = g.bottom() - guide / peak * g.height();
         painter.line_segment(
             [pos2(g.left(), gy), pos2(g.right(), gy)],
-            Stroke::new(1.0, LINE),
+            Stroke::new(1.0, p.line),
         );
     }
     let bar = g.width() / GRAPH as f32;
@@ -225,11 +273,11 @@ fn draw(painter: &egui::Painter, summary: Option<&Summary>, graph: &[f32]) {
         let x = g.right() - (graph.len() - i) as f32 * bar;
         let h = (ms / peak).min(1.0) * g.height();
         let c = if *ms > 1000.0 / 30.0 {
-            Color32::from_rgb(206, 120, 110)
+            p.error
         } else if *ms > 1000.0 / 58.0 {
-            Color32::from_rgb(206, 170, 100)
+            p.warning
         } else {
-            Color32::from_rgb(139, 108, 214)
+            p.accent
         };
         painter.rect_filled(
             Rect::from_min_max(pos2(x, g.bottom() - h), pos2(x + bar.max(1.0), g.bottom())),

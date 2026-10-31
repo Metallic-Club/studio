@@ -25,7 +25,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// How long `--fps` measures.
@@ -107,6 +107,7 @@ pub fn run(
         menu_presses,
         dead: false,
         dev: DevOverlay::default(),
+        modifiers: ModifiersState::empty(),
     };
     if args.dev_overlay {
         app.dev.set_on(true);
@@ -181,8 +182,10 @@ struct App {
     menu_presses: u32,
     /// The character was dead last frame (toggles clear on death).
     dead: bool,
-    /// The developer overlay (F3).
+    /// The developer overlay (Ctrl+Shift+F3).
     dev: DevOverlay,
+    /// Modifier keys held now, for the developer chords ([`dev_chord`]).
+    modifiers: ModifiersState,
 }
 
 impl App {
@@ -661,15 +664,18 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(true) => self.focused = true,
             WindowEvent::Focused(false) => {
                 self.focused = false;
+                self.modifiers = ModifiersState::empty();
                 let now = self.input_clock();
                 self.touch.release_all(&mut self.input, now);
                 self.input.release_all(now);
                 self.set_captured(false);
             }
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::KeyboardInput { event, .. }
-                if event.physical_key == PhysicalKey::Code(winit::keyboard::KeyCode::F3) =>
+                if dev_chord(self.modifiers, event.physical_key) == Some(KeyCode::F3) =>
             {
-                // F3 is the developer overlay's, never a game control.
+                // Ctrl+Shift+F3 is the developer overlay's. Plain F3 (bindable) reaches the game
+                // like any key; only the chord is taken.
                 if event.state == ElementState::Pressed && !event.repeat {
                     self.dev.toggle();
                 }
@@ -790,5 +796,34 @@ impl ApplicationHandler for App {
         {
             gfx.window.request_redraw();
         }
+    }
+}
+
+/// The function key of a developer chord (Ctrl+Shift+F3 and friends), or `None` for any other
+/// key. Function keys are bindable game controls, so the developer tools only take them with
+/// Ctrl and Shift held; Ctrl and Shift alone still reach the game.
+fn dev_chord(modifiers: ModifiersState, key: PhysicalKey) -> Option<KeyCode> {
+    let PhysicalKey::Code(code) = key else {
+        return None;
+    };
+    let chord = modifiers.control_key() && modifiers.shift_key() && !modifiers.alt_key();
+    (chord && matches!(code, KeyCode::F3 | KeyCode::F4 | KeyCode::F6)).then_some(code)
+}
+
+#[cfg(test)]
+mod dev_chord_tests {
+    use super::*;
+
+    #[test]
+    fn only_ctrl_shift_takes_function_keys() {
+        let f3 = PhysicalKey::Code(KeyCode::F3);
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(dev_chord(cs, f3), Some(KeyCode::F3));
+        assert_eq!(dev_chord(ModifiersState::empty(), f3), None);
+        assert_eq!(dev_chord(ModifiersState::CONTROL, f3), None);
+        assert_eq!(dev_chord(ModifiersState::SHIFT, f3), None);
+        assert_eq!(dev_chord(cs | ModifiersState::ALT, f3), None);
+        assert_eq!(dev_chord(cs, PhysicalKey::Code(KeyCode::F5)), None);
+        assert_eq!(dev_chord(cs, PhysicalKey::Code(KeyCode::KeyW)), None);
     }
 }

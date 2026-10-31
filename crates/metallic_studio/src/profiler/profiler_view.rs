@@ -6,7 +6,8 @@
 //! while off). Clicking a frame pauses the capture on it, so the history stops moving while it
 //! is inspected; Resume records again. Script names come from the Play world while it runs and
 //! are kept after Stop.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use metallic_core::{InstanceId, World};
@@ -41,6 +42,9 @@ struct Bar {
     totals: [u64; Subsystem::ALL.len()],
 }
 
+/// How long a script id missing from the Play world waits before it is looked up again.
+const MISSING_RETRY: Duration = Duration::from_secs(1);
+
 /// The Profiler panel's state.
 pub struct ProfilerPanel {
     recording: bool,
@@ -49,6 +53,9 @@ pub struct ProfilerPanel {
     order: ScriptOrder,
     /// Script ids (`InstanceId::to_bits`) to full names, filled from the Play world.
     names: HashMap<u64, String>,
+    /// Script ids not in the Play world when last looked up (destroyed), and when that was:
+    /// looked up again after [`MISSING_RETRY`], not on every repaint.
+    missing: (HashSet<u64>, Option<Instant>),
     bars: Vec<Bar>,
     /// Pause on this frame when it is drawn (screenshots).
     pause_at: Option<u64>,
@@ -68,6 +75,7 @@ impl ProfilerPanel {
             selected: None,
             order: ScriptOrder::Time,
             names: HashMap::new(),
+            missing: (HashSet::new(), None),
             bars: Vec::new(),
             pause_at: None,
         }
@@ -227,16 +235,18 @@ impl ProfilerPanel {
                 self.bars.clear();
                 self.selected = None;
                 self.names.clear();
+                self.missing.0.clear();
                 self.apply();
             }
             ui.add_space(8.0);
             if let Some(f) = shown {
-                let mut text = format!("Frame {} · {}", f.index(), ms(f.frame_ns()));
+                use std::fmt::Write as _;
+                let mut text = format!("Frame {} · {:.2} ms", f.index(), f.frame_ns() as f64 / 1e6);
                 if f.frame_ns() > 0 {
-                    text.push_str(&format!(" · {:.0} fps", 1e9 / f.frame_ns() as f64));
+                    let _ = write!(text, " · {:.0} fps", 1e9 / f.frame_ns() as f64);
                 }
                 if let Some(gpu) = f.gpu_ns() {
-                    text.push_str(&format!(" · GPU {}", ms(gpu)));
+                    let _ = write!(text, " · GPU {:.2} ms", gpu as f64 / 1e6);
                 }
                 ui.label(
                     egui::RichText::new(text)
@@ -338,22 +348,35 @@ impl ProfilerPanel {
         }
     }
 
+    /// Names the frame's scripts that have no name yet, by looking each id up in the Play world
+    /// (no walk over the tree, and nothing at all once every script is named).
     fn learn_names(&mut self, frame: &FrameRecord, view: &dyn PlayView) {
-        if frame
+        if self.missing.1.is_some_and(|t| t.elapsed() >= MISSING_RETRY) {
+            self.missing = (HashSet::new(), None);
+        }
+        let (names, missing) = (&mut self.names, &mut self.missing);
+        let unknown = |names: &HashMap<u64, String>, missing: &HashSet<u64>, id: u64| {
+            !names.contains_key(&id) && !missing.contains(&id)
+        };
+        if !frame
             .scripts()
             .iter()
-            .all(|s| self.names.contains_key(&s.script))
+            .any(|s| unknown(names, &missing.0, s.script))
         {
             return;
         }
-        let names = &mut self.names;
         view.inspect_world(&mut |world| {
-            let mut stack: Vec<InstanceId> = world.roots().to_vec();
-            while let Some(id) = stack.pop() {
-                if world.class_name(id).is_some_and(|c| c.ends_with("Script")) {
-                    names.insert(id.to_bits(), world.full_name(id));
+            for s in frame.scripts() {
+                if !unknown(names, &missing.0, s.script) {
+                    continue;
                 }
-                stack.extend(world.children(id).iter().copied());
+                let id = InstanceId::from_bits(s.script);
+                if world.is_alive(id) {
+                    names.insert(s.script, world.full_name(id));
+                } else {
+                    missing.0.insert(s.script);
+                    missing.1.get_or_insert_with(Instant::now);
+                }
             }
         });
     }
@@ -421,7 +444,7 @@ pub fn colour(subsystem: Subsystem) -> Color32 {
         Subsystem::Physics => theme::info(),
         Subsystem::Character => theme::success(),
         Subsystem::Render => theme::warning(),
-        Subsystem::Gui => theme::highlight(),
+        Subsystem::Gui => theme::text_2(),
         Subsystem::Net => theme::error(),
         Subsystem::Other => theme::text_3(),
     }

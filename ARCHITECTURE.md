@@ -30,7 +30,7 @@ apps.
 
 ## Crates
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
-  `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
+  `InstanceId` (`to_bits` / `from_bits` pack it into one u64); `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
   attributes (`instance/extras.rs`: a boxed side record per node, so instances without any pay one pointer and the
@@ -212,7 +212,7 @@ apps.
   it logs the overlay's draw time at the end of a windowed emulated run. `pacing.rs` sets the loop's pace (#271):
   every turn while focused (vsync paces it), 30 frames a second while unfocused, and `ControlFlow::Wait` with the
   game paused while minimised or occluded; automated runs (`--fps`, `--frames`, `--capture`, `--autopilot`,
-  `--input-script`) always run flat out. `dev_overlay.rs` is the developer overlay (F3 or `--dev-overlay`, #23):
+  `--input-script`) always run flat out. `dev_overlay.rs` is the developer overlay (Ctrl+Shift+F3 or `--dev-overlay`, #23; plain F3 is a bindable game key and reaches the game):
   fps, frame and GPU time, time per subsystem and a frame graph; showing it turns the profiler on, hiding it
   turns it off.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends

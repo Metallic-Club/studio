@@ -4,7 +4,7 @@ Status: in progress, split into three PRs (all branches from main).
 
 1. **Core scopes and capture** (`studio/23-profiler-core`, Part of #23): `metallic_profiler` crate, per-script time,
    GPU stage timing, `Game` and host frame marks.
-2. **Studio Profiler panel and the player's F3 overlay** (Part of #23).
+2. **Studio Profiler panel and the player's Ctrl+Shift+F3 overlay** (Part of #23).
 3. **Debug views** (Closes #23): wireframe, collision shapes, touch volumes, contacts, light and exposure meter,
    overdraw.
 
@@ -26,7 +26,7 @@ Status: in progress, split into three PRs (all branches from main).
   pause or resume, stop, clear; a frame graph stacked by subsystem with 60 and 30 fps lines (a click pauses on that
   frame); subsystem and GPU stage times, a scope timeline, and script times sorted by time or name. Colours come
   from theme tokens. `--scene profiler` plays the demo Parkour and pauses at frame 150 for review screenshots.
-- Player: `dev_overlay.rs`, F3 (never passed to the game as a control) or `--dev-overlay`. fps, mean and max frame
+- Player: `dev_overlay.rs`, Ctrl+Shift+F3 (function keys are bindable game controls, so plain F3 reaches the game; only the chord is taken) or `--dev-overlay`. fps, mean and max frame
   time, GPU time and time per subsystem over the last 60 frames, plus a 180-frame graph. Showing it enables the
   profiler; hiding it disables and clears it, so it costs nothing while hidden.
 - Tests: `metallic_studio/tests/profiler_panel.rs` (kittest: records, clicks the graph to pause, resumes);
@@ -53,3 +53,13 @@ Status: in progress, split into three PRs (all branches from main).
 - GPU timestamps come from empty compute passes between stages, so only `TIMESTAMP_QUERY` is needed (not
   `TIMESTAMP_QUERY_INSIDE_ENCODERS`, which some backends lack).
 - A Studio frame runs from one `ui` call to the next (it includes rendering and the wait for the next frame).
+
+## Review fixes (#416 FIX-FIRST)
+
+- Overlay colours are the Graphite theme tokens (`metallic_ui_theme::palette_of(ThemeId::Graphite)`), with the same
+  subsystem roles as the Studio panel. GUI is `text-2` in both (`highlight` is a 6% white overlay, invisible as a mark). The layer Id was already stable (`Id::unique` hashes its source; it is egui 0.37's name for `Id::new`); a comment says so. The numbers are formatted and laid out four times a
+  second (galleys cached), the graph each frame.
+- Ctrl+Shift+F3 toggles the overlay. Function keys are bindable game controls, so plain F3 reaches the game
+  (`window::dev_chord`, test `only_ctrl_shift_takes_function_keys`).
+- Studio names scripts by looking each unknown id up (`InstanceId::from_bits`, `World::is_alive`), not by walking the
+  world; ids missing from the Play world are retried once a second, not on every repaint.

@@ -258,3 +258,14 @@ fn player_gui_is_a_registered_class_with_unique_bits() {
     let again = w.create("PlayerGui", Some(player)).unwrap();
     assert_ne!(again.to_bits(), gui.to_bits());
 }
+
+#[test]
+fn ids_round_trip_through_bits() {
+    let mut w = world();
+    let part = w.create("Part", Some(ws(&w))).unwrap();
+    assert_eq!(InstanceId::from_bits(part.to_bits()), part);
+    w.destroy(part);
+    assert!(!w.is_alive(InstanceId::from_bits(part.to_bits())));
+    let again = w.create("Part", Some(ws(&w))).unwrap();
+    assert_eq!(InstanceId::from_bits(again.to_bits()), again);
+}
