@@ -1,6 +1,6 @@
 # 371 (item 2): limb-against-limb touches between characters
 
-Issue #371, item 2 (item 1, part-to-part `TouchEnded`, is #381). Before this change one character's limbs met
+Issue #371, item 2 (item 1, part-to-part `TouchEnded`, is #417, which took over #381). Before this change one character's limbs met
 another character only as scene parts: its parts' boxes, posed a step late. A pointing hand touched the other's
 `HumanoidRootPart` but not its limbs, and both characters' steps reported the same contact, so scripts got it twice.
 
