@@ -24,10 +24,11 @@ fn flat_sky_on(ctx: &RenderContext, quality: Quality, value: f32) -> Renderer {
         wgpu::TextureFormat::Rgba8UnormSrgb,
         RenderSettings { quality },
     );
-    // These tests check the finish pass and the chain alone: no lighting curve, grade, fog or
-    // bloom.
+    // These tests check the finish pass and the chain alone: no lighting curve, grade, fog,
+    // bloom or auto exposure.
     r.set_lighting(&LightingInputs {
         atmosphere: None,
+        auto_exposure: false,
         ..LightingInputs::default()
     });
     r.finish = FinishSettings::default();

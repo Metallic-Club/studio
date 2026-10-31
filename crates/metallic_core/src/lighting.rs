@@ -80,7 +80,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         overrides: &[
             ("Lighting", "ClockTime", Number(17.25)),
             ("Lighting", "Brightness", Number(1.15)),
-            ("Lighting", "ExposureCompensation", Number(0.2)),
+            ("Lighting", "ExposureCompensation", Number(-0.1)),
             ("Lighting", "OutdoorAmbient", Color(18.0, 14.0, 34.0)),
             ("Lighting", "ShadowSoftness", Number(0.3)),
             ("Atmosphere", "Density", Number(0.3)),
@@ -98,7 +98,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         summary: "Even grey daylight under full cloud: no hard shadows, quiet colour.",
         overrides: &[
             ("Lighting", "ClockTime", Number(13.0)),
-            ("Lighting", "ExposureCompensation", Number(0.2)),
+            ("Lighting", "ExposureCompensation", Number(-0.2)),
             ("Lighting", "ShadowSoftness", Number(1.0)),
             ("Atmosphere", "Density", Number(0.32)),
             ("Atmosphere", "Color", Color(205.0, 208.0, 214.0)),
@@ -119,6 +119,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         summary: "Late evening under a violet city glow; fog lit from below, few stars.",
         overrides: &[
             ("Lighting", "ClockTime", Number(22.5)),
+            ("Lighting", "ExposureCompensation", Number(-0.7)),
             ("Lighting", "Ambient", Color(62.0, 52.0, 82.0)),
             ("Lighting", "OutdoorAmbient", Color(12.0, 12.0, 22.0)),
             ("Lighting", "NightAdaptation", Number(0.5)),
@@ -140,7 +141,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         summary: "Full moon on a clear night: cool silver light, crisp shadows, many stars.",
         overrides: &[
             ("Lighting", "ClockTime", Number(1.0)),
-            ("Lighting", "ExposureCompensation", Number(0.6)),
+            ("Lighting", "ExposureCompensation", Number(0.3)),
             ("Lighting", "ShadowSoftness", Number(0.15)),
             ("Lighting", "MoonBrightness", Number(1.5)),
             ("Atmosphere", "Density", Number(0.15)),
@@ -157,7 +158,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         overrides: &[
             ("Lighting", "ClockTime", Number(18.15)),
             ("Lighting", "Brightness", Number(0.4)),
-            ("Lighting", "ExposureCompensation", Number(-0.3)),
+            ("Lighting", "ExposureCompensation", Number(-1.0)),
             ("Lighting", "ShadowSoftness", Number(0.8)),
             ("Atmosphere", "Density", Number(0.9)),
             ("Atmosphere", "Offset", Number(0.0)),
@@ -185,7 +186,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         overrides: &[
             ("Lighting", "ClockTime", Number(12.0)),
             ("Lighting", "Brightness", Number(0.55)),
-            ("Lighting", "ExposureCompensation", Number(0.2)),
+            ("Lighting", "ExposureCompensation", Number(-0.2)),
             ("Lighting", "Ambient", Color(64.0, 78.0, 104.0)),
             ("Lighting", "EnvironmentDiffuseScale", Number(0.5)),
             ("Lighting", "ShadowSoftness", Number(0.35)),
@@ -208,7 +209,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         overrides: &[
             ("Lighting", "ClockTime", Number(13.0)),
             ("Lighting", "Brightness", Number(1.2)),
-            ("Lighting", "ExposureCompensation", Number(-0.3)),
+            ("Lighting", "ExposureCompensation", Number(-0.2)),
             ("Lighting", "OutdoorAmbient", Color(40.0, 44.0, 64.0)),
             ("Lighting", "ColorShift_Top", Color(20.0, 12.0, 0.0)),
             ("Lighting", "EnvironmentDiffuseScale", Number(0.7)),
@@ -230,6 +231,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         summary: "Peach light, violet shadows, hard edges and a big sun, for pixel styles.",
         overrides: &[
             ("Lighting", "ClockTime", Number(17.55)),
+            ("Lighting", "ExposureCompensation", Number(-0.5)),
             ("Lighting", "OutdoorAmbient", Color(40.0, 22.0, 72.0)),
             ("Lighting", "ShadowSoftness", Number(0.0)),
             ("Atmosphere", "Color", Color(255.0, 176.0, 130.0)),
@@ -249,7 +251,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         overrides: &[
             ("Lighting", "ClockTime", Number(13.0)),
             ("Lighting", "Brightness", Number(0.6)),
-            ("Lighting", "ExposureCompensation", Number(0.3)),
+            ("Lighting", "ExposureCompensation", Number(-0.5)),
             ("Lighting", "ShadowSoftness", Number(0.6)),
             ("Atmosphere", "Density", Number(0.9)),
             ("Atmosphere", "Offset", Number(0.0)),
@@ -273,7 +275,7 @@ pub static PRESETS: [LightingPreset; 12] = [
             ("Lighting", "ClockTime", Number(12.3)),
             ("Lighting", "GeographicLatitude", Number(25.0)),
             ("Lighting", "Brightness", Number(1.5)),
-            ("Lighting", "ExposureCompensation", Number(-0.4)),
+            ("Lighting", "ExposureCompensation", Number(0.2)),
             ("Lighting", "ShadowSoftness", Number(0.1)),
             ("Atmosphere", "Color", Color(240.0, 214.0, 176.0)),
             ("Atmosphere", "Decay", Color(170.0, 152.0, 132.0)),
@@ -294,6 +296,7 @@ pub static PRESETS: [LightingPreset; 12] = [
         summary: "Sunset on another world: amber sky, teal shade, a cold blue glow toward the sun.",
         overrides: &[
             ("Lighting", "ClockTime", Number(17.0)),
+            ("Lighting", "ExposureCompensation", Number(-0.1)),
             ("Lighting", "OutdoorAmbient", Color(40.0, 120.0, 130.0)),
             ("Lighting", "EnvironmentDiffuseScale", Number(0.35)),
             ("Lighting", "ColorShift_Top", Color(0.0, 120.0, 255.0)),

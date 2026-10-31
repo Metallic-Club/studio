@@ -69,9 +69,11 @@ impl ToneCurve {
 
     /// Maps linear scene light to linear display light (0..1), pre-scale included. CPU mirror
     /// of `apply_curve` in `finish.wgsl`.
+    /// NaN and negative light count as black and infinity as the largest half float, like the
+    /// shader.
     pub fn map(self, c: [f32; 3]) -> [f32; 3] {
         let s = self.prescale();
-        let x = [c[0] * s, c[1] * s, c[2] * s];
+        let x = sanitize(c).map(|v| v * s);
         let out = match self {
             ToneCurve::Filmic => x.map(narkowicz),
             ToneCurve::Agx => agx(x, false),
@@ -81,6 +83,73 @@ impl ToneCurve {
             ToneCurve::Clamp => x,
         };
         out.map(|v| v.clamp(0.0, 1.0))
+    }
+}
+
+/// Largest finite half float: the HDR target's ceiling.
+pub const HALF_MAX: f32 = 65504.0;
+
+/// Scene light as the finish pass reads it: NaN and negatives become 0, infinities and
+/// anything above [`HALF_MAX`] become [`HALF_MAX`]. CPU mirror of `finite_light` in
+/// `finish.wgsl`.
+pub fn sanitize(c: [f32; 3]) -> [f32; 3] {
+    c.map(|v| if v > 0.0 { v.min(HALF_MAX) } else { 0.0 })
+}
+
+/// How a Look sets exposure and the curve (`docs/design/look-presets.md` 3.3). The rest of a
+/// Look (shading, post stack, palette) is the Look presets' work (#64).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LookTone {
+    /// The curve `TonemapperPreset.Default` gives.
+    pub curve: ToneCurve,
+    /// Metered, fixed, or display (1:1) exposure.
+    pub exposure: crate::exposure::ExposureMode,
+    /// EV added to `ExposureCompensation`.
+    pub compensation: f32,
+}
+
+impl LookTone {
+    /// The Realistic Look: AgX Punchy with auto exposure.
+    pub const REALISTIC: LookTone = LookTone {
+        curve: ToneCurve::AgxPunchy,
+        exposure: crate::exposure::ExposureMode::Auto,
+        compensation: 0.0,
+    };
+
+    /// The tone settings of a built-in Look, by id (`pixel-3d`) or display name (`Pixel 3D`),
+    /// ignoring case. Empty and unknown ids (custom Looks until #64 loads them) give Realistic.
+    pub fn for_look(id: &str) -> LookTone {
+        use crate::exposure::ExposureMode::{Auto, Display, Fixed};
+        let key: String = id
+            .trim()
+            .chars()
+            .map(|c| {
+                if c == ' ' || c == '_' {
+                    '-'
+                } else {
+                    c.to_ascii_lowercase()
+                }
+            })
+            .collect();
+        let (curve, exposure, compensation) = match key.as_str() {
+            "soft" | "toon" | "comic" | "painterly" | "low-poly" | "voxel" => {
+                (ToneCurve::Neutral, Auto, 0.0)
+            }
+            "ink" => (ToneCurve::Neutral, Auto, 0.3),
+            "pixel-3d" => (ToneCurve::Neutral, Fixed, 0.0),
+            "retro-32" | "retro-32-bit" | "1-bit" | "1-bit-dither" => {
+                (ToneCurve::Clamp, Fixed, 0.0)
+            }
+            "hd-2d" => (ToneCurve::AgxPunchy, Auto, 0.0),
+            "2d-pixel" => (ToneCurve::Clamp, Display, 0.0),
+            "2d-smooth" => (ToneCurve::Neutral, Display, 0.0),
+            _ => return LookTone::REALISTIC,
+        };
+        LookTone {
+            curve,
+            exposure,
+            compensation,
+        }
     }
 }
 
@@ -105,6 +174,21 @@ pub struct FinishSettings {
     pub vignette: f32,
     /// Adds +-0.5/255 of noise before 8-bit quantisation against banding.
     pub dither: bool,
+    /// Apply the curve's [`ToneCurve::prescale`]; off for the `Display` exposure mode, where
+    /// scene 1.0 becomes display 1.0.
+    pub curve_prescale: bool,
+}
+
+impl FinishSettings {
+    /// Exposure the finish applies before the grade: `exposure` times the curve pre-scale.
+    pub fn total_exposure(&self) -> f32 {
+        let pre = if self.curve_prescale {
+            self.curve.prescale()
+        } else {
+            1.0
+        };
+        self.exposure * pre
+    }
 }
 
 impl Default for FinishSettings {
@@ -118,6 +202,7 @@ impl Default for FinishSettings {
             brightness: 0.0,
             vignette: 0.0,
             dither: true,
+            curve_prescale: true,
         }
     }
 }
@@ -132,9 +217,12 @@ pub(crate) struct FinishUniform {
 }
 
 impl FinishUniform {
+    /// Byte offset of the auto exposure multiplier (`mode.w`), which the meter writes on the GPU.
+    pub(crate) const AUTO_OFFSET: u64 = (std::mem::offset_of!(FinishUniform, mode) + 12) as u64;
+
     /// `exposure` is the scene exposure (the sky's), multiplied with the settings' own.
     pub(crate) fn new(s: &FinishSettings, exposure: f32, output_srgb: bool) -> FinishUniform {
-        let e = exposure * s.exposure * s.curve.prescale();
+        let e = exposure * s.total_exposure();
         FinishUniform {
             tint_exposure: [s.tint[0], s.tint[1], s.tint[2], e],
             grade: [s.saturation, s.contrast, s.brightness, s.vignette],
@@ -142,7 +230,8 @@ impl FinishUniform {
                 s.curve.index() as f32,
                 if output_srgb { 1.0 } else { 0.0 },
                 if s.dither { 1.0 } else { 0.0 },
-                0.0,
+                // Auto exposure multiplier; the meter's GPU copy overwrites it.
+                1.0,
             ],
         }
     }

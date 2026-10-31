@@ -84,6 +84,14 @@ apps.
   (`LightingInputs::read`) and `evaluate`s them into the sky, the finish settings, a lighting block in the globals
   uniform (ambient, fog, shadow filter, sun / moon discs, stars) and the `bloom` post pass (`bloom.rs`).
   `set_lighting` applies inputs directly. Presets live in `metallic_core::lighting` (`docs/lighting/presets.md`).
+  Auto exposure (#151, `exposure.rs`, `shaders/exposure.wgsl`): after the finish pass two compute passes meter the HDR
+  image it read (centre-weighted 256-bin log histogram, 30-95% band, EV100 clamp, adaptation, night bias) into a GPU
+  state buffer; the next frame copies its multiplier into the finish uniform and the globals (`light_toon.y`, for
+  toon's `unfinish`), so nothing is read back. `Renderer::auto_exposure` holds the settings (`Lighting.AutoExposure`,
+  `ExposureMin`, `ExposureMax`, `ExposureCompensation`, `NightAdaptation`); `capture` meters the still first so it is
+  deterministic; `reset_exposure`, `set_frame_time`, `read_exposure`. Off without compute shaders (WebGL2).
+  `LookTone::for_look` maps a Look id to its curve and exposure mode (Auto, Fixed, Display); `Lighting.Look` itself
+  comes with #64.
   Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as

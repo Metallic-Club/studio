@@ -7,8 +7,9 @@
 //! by the physical-sky reference (`docs/agents/37-lighting/m1_sky_table.md`); the GPU sky LUTs
 //! replace it later. All light is pre-exposed on the CPU, so the HDR target holds display-scale
 //! values even at night. Property meanings: `docs/research/2026-10-30-lighting.md` section 5.
+use crate::exposure::{AutoExposure, ExposureMode};
 use crate::sky::Sky;
-use crate::tonemap::{FinishSettings, ToneCurve};
+use crate::tonemap::{FinishSettings, LookTone, ToneCurve};
 use glam::Vec3;
 use metallic_core::classes::{default_value, find_property};
 use metallic_core::lighting::lighting_child;
@@ -55,6 +56,16 @@ pub struct LightingInputs {
     pub night_adaptation: f32,
     /// `Lighting.MoonBrightness`.
     pub moon_brightness: f32,
+    /// `Lighting.AutoExposure`: histogram metering on (where the Look allows it).
+    pub auto_exposure: bool,
+    /// `Lighting.ExposureMin`, EV100: the darkest scene the meter still brightens.
+    pub exposure_min: f32,
+    /// `Lighting.ExposureMax`, EV100: the brightest scene the meter still darkens.
+    pub exposure_max: f32,
+    /// `Lighting.Look` (a Look id such as `toon`; empty or unknown = Realistic). Picks the
+    /// tone curve, exposure mode and compensation ([`LookTone::for_look`]). The property itself
+    /// arrives with the Look presets (#64); until then a place reads as Realistic.
+    pub look: String,
     /// The `Atmosphere` child. A place without one reads its defaults, so a fresh place and
     /// the Clear Day preset look the same; `None` (set from code) turns the atmosphere off.
     pub atmosphere: Option<AtmosphereInputs>,
@@ -239,6 +250,10 @@ impl LightingInputs {
             fog_end: l("FogEnd", self.fog_end),
             night_adaptation: l("NightAdaptation", self.night_adaptation),
             moon_brightness: l("MoonBrightness", self.moon_brightness),
+            auto_exposure: self.auto_exposure,
+            exposure_min: l("ExposureMin", self.exposure_min),
+            exposure_max: l("ExposureMax", self.exposure_max),
+            look: self.look.clone(),
             atmosphere: self.atmosphere.as_ref().map(|a| {
                 let n = |p: &str, x: f32| sane("Atmosphere", p, x);
                 let c = |p: &str, x: [f32; 3]| sane_colour("Atmosphere", p, x);
@@ -319,6 +334,10 @@ impl LightingInputs {
             fog_end: l.num("FogEnd"),
             night_adaptation: l.num("NightAdaptation"),
             moon_brightness: l.num("MoonBrightness"),
+            auto_exposure: l.flag("AutoExposure"),
+            exposure_min: l.num("ExposureMin"),
+            exposure_max: l.num("ExposureMax"),
+            look: l.text("Look"),
             atmosphere: Some(AtmosphereInputs {
                 density: atmo.num("Density"),
                 offset: atmo.num("Offset"),
@@ -630,6 +649,12 @@ pub struct LightingFrame {
     pub finish: FinishSettings,
     /// Bloom, or `None` for off.
     pub bloom: Option<BloomInputs>,
+    /// The fixed exposure the CPU already applied to every light and sky colour (the sky
+    /// table's value for the sun elevation, compensation and night bias). Auto exposure meters
+    /// the image relative to it.
+    pub exposure: f32,
+    /// Histogram metering settings (`enabled` is off when the property or the Look says so).
+    pub auto_exposure: AutoExposure,
     pub(crate) uniform: LightingUniform,
 }
 
@@ -668,6 +693,7 @@ pub(crate) struct LightingUniform {
     pub celestial: [f32; 4],
     /// x: the toon light reference (`toon_light` of the default lighting), so toon shading is
     /// 1 under a fresh place and follows the scene's displayed brightness otherwise.
+    /// y: the auto exposure multiplier (the meter's GPU copy overwrites it; 1 = fixed exposure).
     pub toon: [f32; 4],
 }
 
@@ -690,12 +716,21 @@ fn toon_reference() -> f32 {
 /// Turns lighting properties into a frame's settings.
 pub fn evaluate(inp: &LightingInputs) -> LightingFrame {
     let mut frame = evaluate_base(inp);
-    frame.uniform.toon = [toon_reference(), 0.0, 0.0, 0.0];
+    frame.uniform.toon = [toon_reference(), 1.0, 0.0, 0.0];
     frame
+}
+
+/// The fixed exposure of the default lighting: auto exposure calls it EV100 15
+/// ([`crate::exposure::REFERENCE_EV100`]).
+pub(crate) fn reference_exposure() -> f32 {
+    static REF: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *REF.get_or_init(|| evaluate_base(&LightingInputs::default()).exposure)
 }
 
 fn evaluate_base(inp: &LightingInputs) -> LightingFrame {
     let inp = &inp.sanitized();
+    let look = LookTone::for_look(&inp.look);
+    let compensation = inp.exposure_compensation + look.compensation;
     let to_sun = sun_direction(inp.clock_time, inp.latitude);
     let elevation = to_sun.y.clamp(-1.0, 1.0).asin().to_degrees();
     let t = sky_at(elevation);
@@ -738,22 +773,24 @@ fn evaluate_base(inp: &LightingInputs) -> LightingFrame {
     // Exposure: the table's metered value times the scene key, compensation, and a night bias
     // so night stays dark.
     let night_bias = night * inp.night_adaptation.clamp(0.0, 1.0);
-    let exposure =
-        t.exposure * EXPOSURE_KEY * 2f32.powf(inp.exposure_compensation - 0.9 * night_bias);
+    let exposure = t.exposure * EXPOSURE_KEY * 2f32.powf(compensation - 0.9 * night_bias);
     let pre = |c: [f32; 3]| scale(c, exposure);
 
-    let curve = match (inp.tonemapper.as_str(), inp.soft_style) {
-        ("Retro", _) => ToneCurve::Clamp,
-        ("AgX", _) => ToneCurve::Agx,
-        ("Neutral", _) => ToneCurve::Neutral,
-        ("ACES", _) => ToneCurve::Aces,
-        ("Filmic", _) => ToneCurve::Filmic,
-        (_, true) => ToneCurve::Neutral,
-        _ => ToneCurve::AgxPunchy,
+    // `Default` follows the Look; under Realistic the Soft style picks Neutral like the Soft Look.
+    let curve = match inp.tonemapper.as_str() {
+        "Retro" => ToneCurve::Clamp,
+        "AgX" => ToneCurve::Agx,
+        "AgXPunchy" => ToneCurve::AgxPunchy,
+        "Neutral" => ToneCurve::Neutral,
+        "ACES" => ToneCurve::Aces,
+        "Filmic" => ToneCurve::Filmic,
+        _ if inp.soft_style && look == LookTone::REALISTIC => ToneCurve::Neutral,
+        _ => look.curve,
     };
 
     let mut finish = FinishSettings {
         curve,
+        curve_prescale: look.exposure != ExposureMode::Display,
         ..FinishSettings::default()
     };
     if let Some(cc) = inp.color_correction {
@@ -892,12 +929,21 @@ fn evaluate_base(inp: &LightingInputs) -> LightingFrame {
             if shown { 1.0 } else { 0.0 },
             night,
         ],
-        toon: [1.0, 0.0, 0.0, 0.0],
+        toon: [1.0, 1.0, 0.0, 0.0],
     };
     LightingFrame {
         sky,
         finish,
         bloom: inp.bloom,
+        exposure,
+        auto_exposure: AutoExposure {
+            enabled: inp.auto_exposure && look.exposure == ExposureMode::Auto,
+            min_ev100: inp.exposure_min.min(inp.exposure_max),
+            max_ev100: inp.exposure_max.max(inp.exposure_min),
+            compensation,
+            night_adaptation: inp.night_adaptation,
+            ..AutoExposure::default()
+        },
         uniform,
     }
 }
@@ -984,6 +1030,10 @@ mod tests {
             fog_end: x,
             night_adaptation: x,
             moon_brightness: x,
+            auto_exposure: true,
+            exposure_min: x,
+            exposure_max: x,
+            look: String::new(),
             atmosphere: Some(AtmosphereInputs {
                 density: x,
                 offset: x,
@@ -1055,6 +1105,11 @@ mod tests {
                 f.finish.contrast,
                 f.finish.brightness,
                 f.finish.vignette,
+                f.exposure,
+                f.auto_exposure.min_ev100,
+                f.auto_exposure.max_ev100,
+                f.auto_exposure.compensation,
+                f.auto_exposure.night_adaptation,
             ];
             assert!(
                 scalars.iter().all(|v| v.is_finite()),

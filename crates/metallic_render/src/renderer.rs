@@ -3,7 +3,8 @@
 use crate::bloom::{BLOOM_PASS, BloomPass};
 use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
-use crate::lighting::{LightingInputs, LightingUniform, evaluate};
+use crate::exposure::{AutoExposure, ExposureGpu, ExposureState};
+use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_exposure};
 use crate::meshes::{MeshKind, Vertex};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
 use crate::scene::{InstanceRaw, Scene};
@@ -91,6 +92,11 @@ impl RenderSettings {
         }
     }
 }
+
+/// Byte offset of the auto exposure multiplier (`light_toon.y`) in [`Globals`].
+const GLOBALS_AUTO_OFFSET: u64 = (std::mem::offset_of!(Globals, lighting)
+    + std::mem::offset_of!(LightingUniform, toon)
+    + 4) as u64;
 
 /// Uniform block shared by all shaders; mirrors `Globals` in `common.wgsl`.
 #[repr(C)]
@@ -335,6 +341,20 @@ pub struct Renderer {
     pub finish: FinishSettings,
     post: PostChain,
     finish_gpu: FinishGpu,
+    /// Histogram metering; [`Renderer::set_lighting`] sets it from the `Lighting` properties.
+    /// Change fields at any time.
+    pub auto_exposure: AutoExposure,
+    /// The fixed exposure already applied to the lights (the lighting's), metered against.
+    pre_exposure: f32,
+    /// Whether the device runs compute shaders (not WebGL2); without them exposure stays fixed.
+    meter_supported: bool,
+    /// Created on the first metered frame.
+    meter: Option<ExposureGpu>,
+    /// The next metered frame jumps to its target.
+    meter_reset: bool,
+    /// Time step for the next metered frame ([`Renderer::set_frame_time`]); measured otherwise.
+    meter_dt: Option<f32>,
+    meter_last: Option<std::time::Instant>,
     /// The lighting last applied by [`Renderer::set_lighting`].
     lighting: Option<LightingInputs>,
     light_uniform: LightingUniform,
@@ -500,6 +520,16 @@ impl Renderer {
             sky: Sky::default(),
             finish: FinishSettings::default(),
             post: PostChain::default(),
+            auto_exposure: AutoExposure {
+                enabled: false,
+                ..AutoExposure::default()
+            },
+            pre_exposure: 1.0,
+            meter_supported: false,
+            meter: None,
+            meter_reset: true,
+            meter_dt: None,
+            meter_last: None,
             lighting: None,
             light_uniform: LightingUniform::zeroed(),
             finish_gpu,
@@ -529,6 +559,7 @@ impl Renderer {
             skinned_draws: Vec::new(),
             skin_scratch: Vec::new(),
         };
+        renderer.meter_supported = crate::exposure::supported(&renderer.device);
         renderer.post.push(Box::new(BloomPass::default()));
         renderer.set_lighting(&LightingInputs::default());
         renderer
@@ -568,6 +599,30 @@ impl Renderer {
             &self.skin_layout,
         );
         self.attachments = None;
+    }
+
+    /// Whether frames are metered: [`Renderer::auto_exposure`] is on and the device runs
+    /// compute shaders.
+    pub fn auto_exposure_active(&self) -> bool {
+        self.auto_exposure.enabled && self.meter_supported
+    }
+
+    /// Forgets the adapted exposure (after a camera cut or teleport): the next frame meters
+    /// straight to its target instead of adapting.
+    pub fn reset_exposure(&mut self) {
+        self.meter_reset = true;
+    }
+
+    /// Time step in seconds for the next frame's exposure adaptation. Without it the renderer
+    /// measures the time since the last metered frame (at most 0.25 s).
+    pub fn set_frame_time(&mut self, dt: f32) {
+        self.meter_dt = Some(dt);
+    }
+
+    /// What the meter last wrote (blocking GPU readback; tests and tools). `None` before the
+    /// first metered frame.
+    pub fn read_exposure(&self) -> Option<ExposureState> {
+        self.meter.as_ref()?.read(&self.device, &self.queue)
     }
 
     /// The post chain, to add, remove or reorder full-screen passes (see [`crate::post`]).
@@ -633,6 +688,8 @@ impl Renderer {
         self.sky = frame.sky;
         self.finish = frame.finish;
         self.light_uniform = frame.uniform;
+        self.auto_exposure = frame.auto_exposure;
+        self.pre_exposure = frame.exposure;
         if let Some(bloom) = self.post.get_mut::<BloomPass>(BLOOM_PASS) {
             match frame.bloom {
                 Some(b) => {
@@ -845,7 +902,7 @@ impl Renderer {
             params: [
                 count as f32,
                 self.finish.curve.index() as f32,
-                self.sky.exposure * self.finish.exposure * self.finish.curve.prescale(),
+                self.sky.exposure * self.finish.total_exposure(),
                 self.shadow_map.resolution as f32,
             ],
             viewport: [
@@ -927,6 +984,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("metallic frame"),
             });
+        self.apply_exposure(&mut encoder);
 
         for (i, slot) in self.cascade_slots.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1005,22 +1063,81 @@ impl Renderer {
             self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
             self.draw_blended(&mut pass);
         }
-        self.post_and_finish(&mut encoder, target, camera, keep_depth);
+        let metered = self.post_and_finish(&mut encoder, target, camera, keep_depth);
+        self.meter_frame(&mut encoder, metered);
         self.queue.submit(Some(encoder.finish()));
     }
 
+    /// Copies the meter's multiplier into this frame's uniforms (recorded before any pass).
+    fn apply_exposure(&self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.auto_exposure_active() {
+            return;
+        }
+        if let Some(meter) = &self.meter {
+            encoder.copy_buffer_to_buffer(&meter.state, 0, &self.globals, GLOBALS_AUTO_OFFSET, 4);
+            encoder.copy_buffer_to_buffer(
+                &meter.state,
+                0,
+                &self.finish_gpu.uniform,
+                FinishUniform::AUTO_OFFSET,
+                4,
+            );
+        }
+    }
+
+    /// Meters HDR target `index` (the image the finish pass read) for the next frame.
+    fn meter_frame(&mut self, encoder: &mut wgpu::CommandEncoder, index: Option<usize>) {
+        let Some(index) = index else {
+            return;
+        };
+        if !self.auto_exposure_active() {
+            self.meter_last = None;
+            return;
+        }
+        let Some((hdr, size)) = self
+            .attachments
+            .as_ref()
+            .and_then(|a| Some((a.hdr[index].clone()?, a.size)))
+        else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let dt = self.meter_dt.take().unwrap_or_else(|| {
+            self.meter_last
+                .map_or(0.0, |t| now.duration_since(t).as_secs_f32().min(0.25))
+        });
+        self.meter_last = Some(now);
+        let reset = std::mem::take(&mut self.meter_reset);
+        let meter = self
+            .meter
+            .get_or_insert_with(|| ExposureGpu::new(&self.device));
+        meter.record(
+            &self.device,
+            &self.queue,
+            encoder,
+            &hdr,
+            index,
+            self.targets,
+            size,
+            &self.auto_exposure,
+            self.pre_exposure,
+            self.sky.exposure * self.finish.exposure,
+            reference_exposure(),
+            dt,
+            reset,
+        );
+    }
+
     /// Runs the HDR passes, the finish pass and the LDR passes; the last of them writes
-    /// `target`.
+    /// `target`. Returns the HDR target the finish pass read (`None` when it did not run).
     fn post_and_finish(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         camera: &Camera,
         keep_depth: bool,
-    ) {
-        let Some(att) = self.attachments.as_ref() else {
-            return;
-        };
+    ) -> Option<usize> {
+        let att = self.attachments.as_ref()?;
         let size = att.size;
         let samples = self.settings.samples();
         let mut chain = std::mem::take(&mut self.post);
@@ -1056,6 +1173,7 @@ impl Renderer {
         let uniform = FinishUniform::new(&self.finish, self.sky.exposure, finish_format.is_srgb());
         self.queue
             .write_buffer(&self.finish_gpu.uniform, 0, bytemuck::bytes_of(&uniform));
+        let finished = att.finish_groups[cur].as_ref().map(|_| cur);
         if let Some(group) = &att.finish_groups[cur] {
             let pipeline = self.finish_gpu.pipeline(&self.device, finish_format);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1107,6 +1225,7 @@ impl Renderer {
             cur = 1 - cur;
         }
         self.post = chain;
+        finished
     }
 
     fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -1208,6 +1327,13 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        if self.auto_exposure_active() {
+            // A still: meter this view first, then render it with the converged exposure, so
+            // the same inputs always give the same image.
+            self.meter_reset = true;
+            self.render(&view, camera, size);
+            self.meter_dt = Some(0.0);
+        }
         self.render(&view, camera, size);
 
         let row_bytes = w * 4;

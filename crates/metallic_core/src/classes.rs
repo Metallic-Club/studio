@@ -59,8 +59,18 @@ pub const TOUCH_LAYOUTS: &[&str] = &["Auto", "Custom"];
 pub const LIGHTING_STYLES: &[&str] = &["Realistic", "Soft"];
 
 /// `ColorGradingEffect.TonemapperPreset` values. `Default` and `Retro` are Roblox's names; the
-/// rest are Metallic additions (`docs/research/2026-10-30-lighting.md` 5.4).
-pub const TONEMAPPER_PRESETS: &[&str] = &["Default", "Retro", "AgX", "Neutral", "ACES", "Filmic"];
+/// rest are Metallic additions (`docs/research/2026-10-30-lighting.md` 5.4). `Default` follows
+/// the Look's curve (AgX Punchy under Realistic); `AgXPunchy` names that curve explicitly
+/// (`docs/design/look-presets.md` conflict 14).
+pub const TONEMAPPER_PRESETS: &[&str] = &[
+    "Default",
+    "Retro",
+    "AgX",
+    "Neutral",
+    "ACES",
+    "Filmic",
+    "AgXPunchy",
+];
 
 /// Definition of one property of a class.
 pub struct PropDef {
@@ -233,7 +243,7 @@ static CLASSES: &[ClassDef] = &[
             },
             num("GeographicLatitude", || Value::Number(41.73), -90.0, 90.0),
             num("Brightness", || Value::Number(1.0), 0.0, 10.0),
-            num("ExposureCompensation", || Value::Number(0.0), -4.0, 4.0),
+            num("ExposureCompensation", || Value::Number(0.0), -5.0, 5.0),
             color("Ambient", || Value::Color3(BLACK)),
             color("OutdoorAmbient", || Value::Color3(BLACK)),
             color("ColorShift_Top", || Value::Color3(BLACK)),
@@ -257,6 +267,11 @@ static CLASSES: &[ClassDef] = &[
             num("FogEnd", || Value::Number(100000.0), 0.0, 1e7),
             num("NightAdaptation", || Value::Number(1.0), 0.0, 1.0),
             num("MoonBrightness", || Value::Number(1.0), 0.0, 10.0),
+            // Histogram metering (#151; lighting doc 3.9 and 5.5). Off: the fixed exposure from
+            // the sun elevation. EV100 limits of the meter.
+            p("AutoExposure", ValueType::Bool, || Value::Bool(true)),
+            num("ExposureMin", || Value::Number(-4.0), -10.0, 20.0),
+            num("ExposureMax", || Value::Number(16.0), -10.0, 20.0),
         ],
     ),
     class("RunService", "Instance", &[]),
