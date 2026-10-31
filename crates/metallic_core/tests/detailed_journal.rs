@@ -356,3 +356,34 @@ fn construction_and_deep_clone_start_with_empty_independent_history() {
         DetailedChanges::Overflow
     );
 }
+
+#[test]
+fn attributes_and_tags_are_coarse_only_and_clones_journal_once_in_order() {
+    let mut world = World::new_with_services();
+    let ws = world.root("Workspace").unwrap();
+    let model = world.create("Model", Some(ws)).unwrap();
+    let kid = world.create("Part", Some(model)).unwrap();
+    world.add_tag(kid, "Lava").unwrap();
+    let cursor = world.change_cursor();
+    world
+        .set_attribute(model, "Score", Value::Number(1.0))
+        .unwrap();
+    world.add_tag(model, "Boss").unwrap();
+    world.remove_tag(model, "Boss").unwrap();
+    assert_eq!(coarse(&world, cursor), vec![model]);
+    assert!(entries(&world, cursor).is_empty());
+
+    let cursor = world.change_cursor();
+    let copy = world.clone_subtree(model).unwrap();
+    let copy_kid = world.children(copy)[0];
+    assert_eq!(
+        entries(&world, cursor),
+        vec![
+            change(copy, ChangeKind::Created),
+            change(copy_kid, ChangeKind::Created)
+        ]
+    );
+    assert_eq!(coarse(&world, cursor), vec![copy, copy_kid]);
+    world.set_parent(copy, Some(ws)).unwrap();
+    assert!(world.tagged("Lava").contains(&copy_kid));
+}
