@@ -81,7 +81,7 @@ impl<'a> BitReader<'a> {
         self.bytes.len() * 8 - self.pos
     }
 
-    /// Reads a field of `bits` bits (1 to 64).
+    /// Reads a field of `bits` bits (0 to 64; 0 reads nothing and returns 0).
     ///
     /// Errors: [`WireError::Truncated`] past the end, [`WireError::BadValue`] for more than 64 bits.
     pub fn read(&mut self, bits: u8) -> Result<u64, WireError> {

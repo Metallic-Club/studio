@@ -83,7 +83,8 @@ pub fn encode_client(m: &ClientMsg) -> Result<Vec<u8>, WireError> {
 }
 
 /// Decodes one frame from a client. Refuses frames over [`MAX_CLIENT_FRAME`] (64 KiB) before reading them; the body
-/// must decode completely.
+/// must decode completely. The source byte is returned as sent: a client has no reason to send anything but 0, so the
+/// server may refuse or ignore other values.
 pub fn decode_client(bytes: &[u8]) -> Result<Decoded<ClientMsg>, WireError> {
     let (kind, source, body) = split(bytes, MAX_CLIENT_FRAME)?;
     Ok(match ClientMsg::from_body(kind, body)? {

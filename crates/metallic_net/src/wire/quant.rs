@@ -104,8 +104,10 @@ pub fn dequantize_position(q: &QuantPos) -> Vec3 {
 }
 
 /// Quantizes an `Orientation` (degrees, applied Y then X then Z) as smallest-three: the index of the largest
-/// quaternion component in the top 2 bits, then the other three in 10 bits each (worst rotation error about 0.14
-/// degrees). Non-finite angles count as 0.
+/// quaternion component in the top 2 bits, then the other three in 10 bits each. Each kept component is rounded down
+/// or up, and of the 8 combinations the encoder keeps the one whose decoded rotation is closest to the input: plain
+/// rounding reaches about 0.27 degrees near `[0.5, 0.5, 0.5, 0.5]` (the rebuilt fourth component adds the three
+/// rounding errors), the best combination stays under about 0.16 degrees. Non-finite angles count as 0.
 pub fn quantize_orientation(degrees: Vec3) -> u32 {
     let clean = |a: f64| if a.is_finite() { a } else { 0.0 };
     let o = Vec3::new(clean(degrees.x), clean(degrees.y), clean(degrees.z));
@@ -121,23 +123,37 @@ pub fn quantize_orientation(degrees: Vec3) -> u32 {
     }
     // q and -q are the same rotation: make the dropped component positive so it can be rebuilt as a square root.
     let sign = if q[largest] < 0.0 { -1.0 } else { 1.0 };
-    let mut code = (largest as u32) << (3 * ROT_BITS);
-    let mut shift = 2 * ROT_BITS;
-    for (i, c) in q.iter().enumerate() {
-        if i == largest {
-            continue;
-        }
-        // The other components lie in [-1/sqrt 2, 1/sqrt 2].
+    // Floor of each kept component's code; the components lie in [-1/sqrt 2, 1/sqrt 2].
+    let mut floors = [0u32; 3];
+    for (slot, c) in floors.iter_mut().zip(
+        q.iter()
+            .enumerate()
+            .filter(|(i, _)| *i != largest)
+            .map(|(_, c)| *c),
+    ) {
         let unit = (c * sign * std::f64::consts::SQRT_2 + 1.0) * 0.5;
-        let n = (unit.clamp(0.0, 1.0) * ROT_MAX).round() as u32;
-        code |= n << shift;
-        shift = shift.saturating_sub(ROT_BITS);
+        *slot = (unit.clamp(0.0, 1.0) * ROT_MAX).floor() as u32;
     }
-    code
+    let top = ROT_MAX as u32;
+    let mut best = (f64::NEG_INFINITY, 0u32);
+    for combo in 0..8u32 {
+        let mut code = (largest as u32) << (3 * ROT_BITS);
+        for (k, floor) in floors.iter().enumerate() {
+            let n = (floor + ((combo >> k) & 1)).min(top);
+            code |= n << (ROT_BITS * (2 - k as u32));
+        }
+        // |q . decoded| grows as the angle between the two rotations shrinks.
+        let d = decode_quaternion(code);
+        let dot = (q[0] * d[0] + q[1] * d[1] + q[2] * d[2] + q[3] * d[3]).abs();
+        if dot > best.0 {
+            best = (dot, code);
+        }
+    }
+    best.1
 }
 
-/// The `Orientation` (degrees) a [`quantize_orientation`] code stands for. Any 32-bit code gives finite angles.
-pub fn dequantize_orientation(code: u32) -> Vec3 {
+/// The unit quaternion `[x, y, z, w]` a smallest-three code stands for.
+fn decode_quaternion(code: u32) -> [f64; 4] {
     let largest = (code >> (3 * ROT_BITS)) as usize;
     let mut q = [0.0f64; 4];
     let mut shift = 2 * ROT_BITS;
@@ -152,11 +168,17 @@ pub fn dequantize_orientation(code: u32) -> Vec3 {
         sum += c * c;
         shift = shift.saturating_sub(ROT_BITS);
     }
-    // A hostile code can make the three exceed length 1; the clamp keeps the root real and from_quaternion normalises.
+    // A hostile code can make the three exceed length 1: the clamp keeps the root real, then normalise.
     if let Some(slot) = q.get_mut(largest) {
         *slot = (1.0 - sum).max(0.0).sqrt();
     }
-    CFrame::from_quaternion(Vec3::default(), q).orientation_degrees()
+    let n = q.iter().map(|c| c * c).sum::<f64>().sqrt();
+    q.map(|c| c / n)
+}
+
+/// The `Orientation` (degrees) a [`quantize_orientation`] code stands for. Any 32-bit code gives finite angles.
+pub fn dequantize_orientation(code: u32) -> Vec3 {
+    CFrame::from_quaternion(Vec3::default(), decode_quaternion(code)).orientation_degrees()
 }
 
 /// Quantizes a velocity to 1/8 stud/s per axis, clamped to +-255.875 (12-bit signed). NaN gives 0.

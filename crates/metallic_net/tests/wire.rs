@@ -763,3 +763,30 @@ fn hello_debug_redacts_the_ticket() {
     assert!(!text.contains("secret-ticket-bytes"), "{text}");
     assert!(text.contains("<redacted>") && text.contains("0.1.1"));
 }
+
+/// Worst orientation error over quaternions near the corner where all four components are equal (plain rounding of
+/// the three kept components reaches about 0.27 degrees there).
+#[test]
+fn orientation_error_under_quarter_degree_near_equal_components() {
+    let check = |q: [f64; 4]| {
+        let o = CFrame::from_quaternion(Vec3::default(), q).orientation_degrees();
+        rotation_angle(o, dequantize_orientation(quantize_orientation(o))).to_degrees()
+    };
+    let corner = check([0.499053, 0.499053, 0.499053, 0.502831]);
+    assert!(corner < 0.25, "corner: {corner} degrees");
+    let mut worst: f64 = 0.0;
+    let steps = 16;
+    for signs in 0..8u32 {
+        let s = |k: u32| if (signs >> k) & 1 == 1 { -1.0 } else { 1.0 };
+        for i in -steps..=steps {
+            for j in -steps..=steps {
+                for k in -steps..=steps {
+                    let d = |n: i32| 0.5 + f64::from(n) * 0.0005;
+                    worst = worst.max(check([s(0) * d(i), s(1) * d(j), s(2) * d(k), 0.5]));
+                }
+            }
+        }
+    }
+    assert!(worst < 0.25, "worst near the corner: {worst} degrees");
+    println!("worst near the corner: {worst:.4} degrees, corner case {corner:.4}");
+}

@@ -36,7 +36,9 @@ pub enum DatagramKind {
 pub struct InputCmd {
     /// The client tick this input is for.
     pub tick: u32,
-    /// Move direction X, -127..=127 is -1..=1 (the server checks the length).
+    /// Move direction X, -127..=127 is -1..=1. The wire allows -128 and any pair (a per-axis keyboard diagonal is
+    /// (127, 127), length about 1.41), so the server's "move length <= 1" check needs a rule (clamp the dequantized
+    /// vector or allow a tolerance) agreed between A3 and A9.
     pub move_x: i8,
     /// Move direction Z, -127..=127 is -1..=1.
     pub move_z: i8,

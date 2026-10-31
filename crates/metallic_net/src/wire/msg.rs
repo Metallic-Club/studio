@@ -385,13 +385,22 @@ pub fn decompress_join(zstd: &[u8]) -> Result<Vec<Create>, WireError> {
     let bad = |_| WireError::BadValue("join snapshot is not valid zstd");
     let mut decoder = zstd::stream::read::Decoder::with_buffer(zstd).map_err(bad)?;
     decoder.window_log_max(JOIN_WINDOW_LOG_MAX).map_err(bad)?;
+    // Read in chunks and grow the buffer by hand: `read_to_end` doubles capacity and could reach 32 MiB at the cap.
     let mut raw = Vec::new();
-    decoder
-        .take(MAX_JOIN_SNAPSHOT as u64 + 1)
-        .read_to_end(&mut raw)
-        .map_err(bad)?;
-    if raw.len() > MAX_JOIN_SNAPSHOT {
-        return Err(WireError::TooLarge);
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        let n = decoder.read(&mut chunk).map_err(bad)?;
+        if n == 0 {
+            break;
+        }
+        if raw.len() + n > MAX_JOIN_SNAPSHOT {
+            return Err(WireError::TooLarge);
+        }
+        if raw.capacity() - raw.len() < n {
+            let want = (raw.capacity() * 2).clamp(raw.len() + n, MAX_JOIN_SNAPSHOT);
+            raw.reserve_exact(want - raw.len());
+        }
+        raw.extend_from_slice(chunk.get(..n).unwrap_or_default());
     }
     postcard_exact(&raw)
 }
