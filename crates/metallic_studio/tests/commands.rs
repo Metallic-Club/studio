@@ -278,3 +278,86 @@ fn undoing_everything_after_the_cap_is_still_dirty() {
     s.undo();
     assert!(!s.is_dirty());
 }
+
+#[test]
+fn attribute_commands_undo_and_redo_with_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    let add = Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Nil,
+        new: Value::Number(3.0),
+    };
+    assert_eq!(add.name(&s.world), "Set attribute Speed of A");
+    s.apply(add).unwrap();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(3.0)));
+    s.apply(Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Number(3.0),
+        new: Value::Number(4.0),
+    })
+    .unwrap();
+    let remove = Command::SetAttribute {
+        id: a,
+        name: "Speed".into(),
+        old: Value::Number(4.0),
+        new: Value::Nil,
+    };
+    assert_eq!(remove.name(&s.world), "Remove attribute Speed of A");
+    s.apply(remove).unwrap();
+    assert_eq!(s.world.attribute(a, "Speed"), None);
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(4.0)));
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), Some(&Value::Number(3.0)));
+    s.undo();
+    assert_eq!(s.world.attribute(a, "Speed"), None);
+    s.redo();
+    s.redo();
+    s.redo();
+    assert_eq!(s.world.attribute(a, "Speed"), None);
+    // A bad name is refused and leaves nothing on the undo stack.
+    let before = s.history.len();
+    assert!(
+        s.apply(Command::SetAttribute {
+            id: a,
+            name: "bad name".into(),
+            old: Value::Nil,
+            new: Value::Bool(true),
+        })
+        .is_err()
+    );
+    assert_eq!(s.history.len(), before);
+}
+
+#[test]
+fn attributes_follow_delete_undo_and_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _log) = state_in(dir.path());
+    let a = named(&s, "A");
+    s.apply(Command::SetAttribute {
+        id: a,
+        name: "Team".into(),
+        old: Value::Nil,
+        new: Value::String("Red".into()),
+    })
+    .unwrap();
+    s.selection.select_only(a);
+    s.duplicate_selection();
+    let copy = s.selection.ids()[0];
+    assert_ne!(copy, a);
+    assert_eq!(
+        s.world.attribute(copy, "Team"),
+        Some(&Value::String("Red".into()))
+    );
+    s.selection.select_only(a);
+    s.delete_selection();
+    s.undo();
+    assert_eq!(
+        s.world.attribute(a, "Team"),
+        Some(&Value::String("Red".into()))
+    );
+}

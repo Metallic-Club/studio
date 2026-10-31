@@ -1,0 +1,190 @@
+//! Attributes: `SetAttribute`, `GetAttribute`, `GetAttributes`, `GetAttributeChangedSignal` and
+//! the `AttributeChanged` event.
+//!
+//! The values live in the world (`World::set_attribute`), so every VM and the editor see the
+//! same ones. Changes reach scripts through the world's attribute log: once per `step` each VM
+//! reads what changed since its own cursor and fires the signals. A handler therefore runs in
+//! the next step after the change, whoever made it (this VM, the other VM or the editor), like
+//! the other signals.
+//!
+//! A signal's key holds an interned name id (`EventKind::AttributeChanged(id)`): 0 is the
+//! instance-wide `AttributeChanged(name)` event, any other id is
+//! `GetAttributeChangedSignal(name)`, which fires without arguments.
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use metallic_core::{AttributeChanges, AttributeCursor, CoreError, Value as CoreValue};
+use mlua::{Function, Lua, Table, UserDataRef, Value};
+
+use super::cframe::cframe;
+use super::datatypes::{color, udim2, vector};
+use super::instance::LuaInstance;
+use super::signals::{EventKind, LuaSignal};
+use super::{ApiState, errors, lua_error};
+
+/// Most distinct attribute names one VM makes signals for.
+const MAX_SIGNAL_NAMES: usize = 4096;
+
+/// Per-VM attribute state.
+pub(crate) struct AttributeState {
+    /// Interned names of `GetAttributeChangedSignal`, 1-based.
+    names: RefCell<HashMap<String, u32>>,
+    /// Where this VM has read the world's attribute log up to.
+    cursor: Cell<AttributeCursor>,
+}
+
+impl AttributeState {
+    pub(crate) fn new(cursor: AttributeCursor) -> AttributeState {
+        AttributeState {
+            names: RefCell::new(HashMap::new()),
+            cursor: Cell::new(cursor),
+        }
+    }
+}
+
+/// The attribute value of a Luau value, or an error naming what is wrong.
+fn to_attribute(value: &Value) -> mlua::Result<CoreValue> {
+    Ok(match value {
+        Value::Nil => CoreValue::Nil,
+        Value::Boolean(b) => CoreValue::Bool(*b),
+        Value::Integer(i) => CoreValue::Number(*i as f64),
+        Value::Number(n) => CoreValue::Number(*n),
+        Value::String(s) => CoreValue::String(String::from_utf8_lossy(&s.as_bytes()).into_owned()),
+        Value::UserData(_) => {
+            if let Some(v) = vector(value) {
+                CoreValue::Vector3(v)
+            } else if let Some(c) = color(value) {
+                CoreValue::Color3(c)
+            } else if let Some(u) = udim2(value) {
+                CoreValue::UDim2(u)
+            } else if let Some(cf) = cframe(value) {
+                CoreValue::CFrame(Box::new(cf))
+            } else {
+                return Err(unsupported(value));
+            }
+        }
+        other => return Err(unsupported(other)),
+    })
+}
+
+fn unsupported(value: &Value) -> mlua::Error {
+    lua_error(format!(
+        "attributes cannot hold a {} value (use a boolean, number, string, Vector3, Color3, UDim2, CFrame or nil)",
+        value.type_name()
+    ))
+}
+
+/// The reason text of a core error, without the property wording.
+fn reason(e: CoreError) -> mlua::Error {
+    match e {
+        CoreError::InvalidValue { property, reason } => {
+            lua_error(format!("attribute '{property}': {reason}"))
+        }
+        other => lua_error(other),
+    }
+}
+
+/// An instance argument that must be alive.
+fn live(this: &UserDataRef<LuaInstance>) -> mlua::Result<()> {
+    this.ensure_alive()
+}
+
+pub(crate) fn methods(lua: &Lua) -> mlua::Result<Vec<(&'static str, Function)>> {
+    let set = lua.create_function(
+        |_, (this, name, value): (UserDataRef<LuaInstance>, String, Value)| {
+            live(&this)?;
+            let value = to_attribute(&value)?;
+            this.state
+                .world_mut()?
+                .set_attribute(this.id, &name, value)
+                .map_err(reason)
+        },
+    )?;
+    let get = lua.create_function(|lua, (this, name): (UserDataRef<LuaInstance>, String)| {
+        live(&this)?;
+        let value = this.state.world()?.attribute(this.id, &name).cloned();
+        match value {
+            Some(v) => this.state.value_to_lua(lua, v),
+            None => Ok(Value::Nil),
+        }
+    })?;
+    let get_all = lua.create_function(|lua, this: UserDataRef<LuaInstance>| {
+        live(&this)?;
+        let all: Vec<(String, CoreValue)> = this
+            .state
+            .world()?
+            .attributes(this.id)
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        let table: Table = lua.create_table()?;
+        for (k, v) in all {
+            table.set(k, this.state.value_to_lua(lua, v)?)?;
+        }
+        Ok(table)
+    })?;
+    let signal = lua.create_function(|lua, (this, name): (UserDataRef<LuaInstance>, String)| {
+        live(&this)?;
+        let id = this.state.attribute_name_id(&name)?;
+        lua.create_userdata(LuaSignal {
+            state: this.state.clone(),
+            key: (this.id, EventKind::AttributeChanged(id)),
+        })
+    })?;
+    Ok(vec![
+        ("SetAttribute", errors::guarded(lua, set)?),
+        ("GetAttribute", errors::guarded(lua, get)?),
+        ("GetAttributes", errors::guarded(lua, get_all)?),
+        ("GetAttributeChangedSignal", errors::guarded(lua, signal)?),
+    ])
+}
+
+impl ApiState {
+    /// The id of `name` for attribute signals, made on first use.
+    fn attribute_name_id(&self, name: &str) -> mlua::Result<u32> {
+        let mut names = self.attributes.names.borrow_mut();
+        if let Some(&id) = names.get(name) {
+            return Ok(id);
+        }
+        if names.len() >= MAX_SIGNAL_NAMES {
+            return Err(lua_error("too many different attribute signals"));
+        }
+        let id = names.len() as u32 + 1;
+        names.insert(name.to_string(), id);
+        Ok(id)
+    }
+
+    /// Fires `AttributeChanged` and `GetAttributeChangedSignal` handlers for what changed in the
+    /// world since this VM last looked. Called once per `step`.
+    pub(crate) fn deliver_attribute_changes(self: &Rc<Self>) {
+        let list = {
+            let Ok(world) = self.world() else { return };
+            let cursor = self.attributes.cursor.get();
+            if cursor == world.attribute_cursor() {
+                return;
+            }
+            let (changes, next) = world.attribute_changes_since(cursor);
+            self.attributes.cursor.set(next);
+            match changes {
+                // Too many changes since the last step: the individual events are lost.
+                AttributeChanges::Overflow => return,
+                AttributeChanges::Changes(list) => list
+                    .into_iter()
+                    .filter(|c| world.is_alive(c.id))
+                    .collect::<Vec<_>>(),
+            }
+        };
+        for change in list {
+            self.fire((change.id, EventKind::AttributeChanged(0)), &|lua| {
+                Ok(vec![Value::String(lua.create_string(&change.name)?)])
+            });
+            let named = self.attributes.names.borrow().get(&change.name).copied();
+            if let Some(id) = named {
+                self.fire((change.id, EventKind::AttributeChanged(id)), &|_| {
+                    Ok(Vec::new())
+                });
+            }
+        }
+    }
+}

@@ -6,6 +6,7 @@
 //! keeps a `World` borrow while Lua code runs: handlers may change the world, so the host
 //! collects what to call, releases the borrow and only then calls into Lua.
 
+mod attributes;
 mod cframe;
 mod datatypes;
 mod errors;
@@ -78,6 +79,8 @@ pub(crate) struct ApiState {
     bind_wrapper: Function,
     /// `UserInputService` and `ContextActionService`.
     input_services: input::InputServices,
+    /// Attribute signal names and this VM's read position in the world's attribute log.
+    attributes: attributes::AttributeState,
 }
 
 impl ApiState {
@@ -134,6 +137,7 @@ fn build(
     raw.extend(remote::methods(lua)?);
     raw.extend(pivot::methods(lua)?);
     raw.extend(input::action_methods(lua)?);
+    raw.extend(attributes::methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
         let function = if name == "WaitForChild" {
@@ -146,6 +150,7 @@ fn build(
 
     let enums = input::Enums::install(lua)?;
     let bind_wrapper = input::bind_wrapper(lua, &enums)?;
+    let world_cursor = world.borrow().attribute_cursor();
     let state = Rc::new(ApiState {
         world,
         context: vm.context(),
@@ -166,6 +171,7 @@ fn build(
         pending_destroy: RefCell::new(Vec::new()),
         bind_wrapper,
         input_services: input::InputServices::new(),
+        attributes: attributes::AttributeState::new(world_cursor),
     });
     input::install_services(lua, &state)?;
 

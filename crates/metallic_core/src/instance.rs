@@ -7,6 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod extras;
+pub use extras::{
+    AttributeChange, AttributeChanges, AttributeCursor, MAX_ATTRIBUTE_NAME, MAX_ATTRIBUTE_STRING,
+    MAX_ATTRIBUTES, check_attribute_name, check_attribute_value,
+};
+use extras::{AttributeLog, Extras};
+
 /// Most journal entries kept before the oldest half is dropped.
 const JOURNAL_LIMIT: usize = 16384;
 static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
@@ -60,6 +67,8 @@ struct Node {
     /// Only values that were set; everything else uses the class default.
     props: BTreeMap<String, Value>,
     builtin: bool,
+    /// Attributes (and later tags); `None` for the common instance that has none.
+    extras: Option<Box<Extras>>,
 }
 
 #[derive(Clone)]
@@ -93,6 +102,7 @@ pub struct World {
     journal: Vec<(u64, InstanceId)>,
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
+    attribute_log: AttributeLog,
 }
 
 impl World {
@@ -108,6 +118,7 @@ impl World {
             revision: 0,
             journal: Vec::new(),
             journal_floor: 0,
+            attribute_log: AttributeLog::default(),
         }
     }
 
@@ -185,6 +196,7 @@ impl World {
             children: Vec::new(),
             props,
             builtin,
+            extras: None,
         };
         if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
@@ -562,11 +574,19 @@ impl World {
         parent: Option<InstanceId>,
         map: &mut HashMap<InstanceId, InstanceId>,
     ) -> InstanceId {
-        let (class, props, kids) = match self.node(id) {
-            Some(n) => (n.class, n.props.clone(), n.children.clone()),
+        let (class, props, kids, extras) = match self.node(id) {
+            Some(n) => (
+                n.class,
+                n.props.clone(),
+                n.children.clone(),
+                n.extras.clone(),
+            ),
             None => return id,
         };
         let copy = self.alloc(class, parent, props, false);
+        if let Some(node) = self.node_mut(copy) {
+            node.extras = extras;
+        }
         map.insert(id, copy);
         for k in kids {
             let kc = self.clone_rec(k, Some(copy), map);
@@ -587,6 +607,7 @@ impl World {
             revision: 0,
             journal: Vec::new(),
             journal_floor: 0,
+            attribute_log: AttributeLog::default(),
         }
     }
 }

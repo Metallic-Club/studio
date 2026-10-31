@@ -60,6 +60,9 @@ pub(crate) enum EventKind {
     StateChanged,
     /// `UserInputService.LastInputTypeChanged(type)`
     LastInputTypeChanged,
+    /// `Instance.AttributeChanged(name)` for id 0, `GetAttributeChangedSignal(name)` for the
+    /// interned name id of that attribute (no arguments).
+    AttributeChanged(u32),
 }
 
 /// One signal: an event of one instance.

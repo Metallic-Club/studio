@@ -48,6 +48,25 @@ part.Position = Vector3.new(0, 10, 0)
 print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
 ```
 
+## Attributes
+Any instance (parts, models, services, scripts) can carry named values outside its class properties.
+
+- `inst:SetAttribute(name, value)`; a `nil` value removes it. `inst:GetAttribute(name)` is `nil` when unset.
+  `inst:GetAttributes()` returns a new table `name -> value`.
+- Value types: boolean, number, string, `Vector3`, `Color3`, `UDim2`, `CFrame`, `nil`. Numbers must be finite; a string is at
+  most 65536 bytes; one instance holds at most 1024 attributes.
+- Names: 1 to 100 characters, ASCII letters, digits and `_`, and not starting with `RBX` (any case). A bad name or value
+  raises an error naming the problem. Setting the value an attribute already has changes and fires nothing.
+- `inst.AttributeChanged:Connect(function(name) ... end)` and `inst:GetAttributeChangedSignal(name):Connect(function() ... end)`
+  fire for a set, change or removal. Like the other signals they run in the next `step`, whoever made the change (this VM, the
+  other VM or the editor); the handler reads the current value with `GetAttribute`, so two changes in one step fire twice and
+  both see the last value. A VM can make signals for at most 4096 different attribute names.
+- `Clone()` copies attributes; scene files store them (`attributes: [("Name", Value), ...]` per instance, written only when
+  there are any, so older files and older Studios keep working); Studio shows them under **Attributes** in Properties (add,
+  edit Bool/Number/String, remove; every change is one undo step).
+- Core: `World::set_attribute`, `attribute`, `attributes`, and the bounded attribute log (`attribute_cursor`,
+  `attribute_changes_since`) that readers such as the script VMs and, later, replication (#305) follow.
+
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,
   unary `-`, `==`.

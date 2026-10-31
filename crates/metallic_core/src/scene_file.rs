@@ -56,6 +56,9 @@ struct SceneNode {
     builtin: bool,
     #[serde(default)]
     props: Vec<(String, SceneValue)>,
+    /// Attributes, sorted by name. Absent in files written before attributes existed.
+    #[serde(default)]
+    attributes: Vec<(String, SceneValue)>,
     #[serde(default)]
     children: Vec<SceneNode>,
 }
@@ -113,6 +116,21 @@ fn write_node(
     if !lines.is_empty() {
         let _ = writeln!(out, "{pad}    props: [");
         for l in lines {
+            let _ = writeln!(out, "{l}");
+        }
+        let _ = writeln!(out, "{pad}    ],");
+    }
+    let attributes: Vec<String> = world
+        .attributes(id)
+        .map(|(name, v)| {
+            let name = ron::to_string(name).map_err(err)?;
+            let val = ron::to_string(&to_scene(v.clone(), index_of)).map_err(err)?;
+            Ok(format!("{pad}        ({name}, {val}),"))
+        })
+        .collect::<Result<_, CoreError>>()?;
+    if !attributes.is_empty() {
+        let _ = writeln!(out, "{pad}    attributes: [");
+        for l in attributes {
             let _ = writeln!(out, "{l}");
         }
         let _ = writeln!(out, "{pad}    ],");
@@ -233,6 +251,24 @@ impl Loader {
                 }
             };
             self.world.set(id, &name, value)?;
+        }
+        for (name, v) in node.attributes {
+            let value = match v {
+                SceneValue::Nil => Value::Nil,
+                SceneValue::Bool(b) => Value::Bool(b),
+                SceneValue::Number(n) => Value::Number(n),
+                SceneValue::String(s) => Value::String(s),
+                SceneValue::Vector3(x) => Value::Vector3(x),
+                SceneValue::Color3(x) => Value::Color3(x),
+                SceneValue::UDim2(x) => Value::UDim2(x),
+                SceneValue::CFrame(x) => Value::CFrame(Box::new(x)),
+                SceneValue::Ref(_) => {
+                    return Err(CoreError::Scene(format!(
+                        "attribute `{name}` cannot hold an instance reference"
+                    )));
+                }
+            };
+            self.world.set_attribute(id, &name, value)?;
         }
         for c in node.children {
             self.add(c, Some(id))?;
