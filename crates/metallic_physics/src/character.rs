@@ -16,10 +16,29 @@
 //! - gravity is [`crate::GRAVITY`] (196.2), integrated exactly for constant acceleration;
 //! - surfaces up to `Humanoid.MaxSlopeAngle` are walkable and never slid down; steps up to
 //!   [`MAX_STEP_HEIGHT`] (1.5) are climbed; walking down steps and slopes snaps to the ground;
-//! - standing on a part adds that part's velocity ([`PhysicsWorld::velocity`]); leaving it keeps
-//!   its horizontal velocity until landing;
+//! - standing follows the support's last completed pose change, rotation included: the centre
+//!   of the capsule's bottom sphere moves rigidly with the support (so the rider neither drifts
+//!   in nor out on a tilted spinner) and idle facing turns by that same pose change's turn
+//!   around world up (so position and facing agree whatever the step lengths). Explicit input
+//!   still faces the world-space movement direction. Jumping keeps the foot contact's horizontal
+//!   point velocity (`linear + angular × lever arm`) until landing;
 //! - a part that moved into the character pushes it out, at most [`MAX_PUSH`] (0.5) studs per
 //!   step so it can never be shoved through a thin wall in one frame.
+//!
+//! Support carry assumes one controller step before each physics step (the runtime's fixed
+//! tick order, kept by the M2 server). It is deterministic and lives in the controller: the
+//! contact ([`SupportContact`]) is part of [`CharacterState`], so a replay from a saved state
+//! carries exactly like the original run. The carry is applied first and swept against every
+//! part but the support itself, so another part can stop it; the character is not rigidly
+//! parented to the support. Then pushes apply. The capsule/avatar stay upright on tilted
+//! supports, and support pitch/roll never tilt the camera. Removed/rebuilt bodies or a root
+//! position changed by a script discard the old contact. Rotating support restores the
+//! skin clearance under the same push cap, preventing numerical floor interference from
+//! clipping the next move. Anchored support rates come from PhysicsWorld's cache, because
+//! Rapier's mover velocity is reset after landing at its target pose. Teleport classification
+//! belongs to PhysicsWorld; this controller does not introduce another cutoff. A rider follows
+//! the support's collision pose, which is one physics step behind a pose a script set this
+//! tick (#273).
 //!
 //! Touches: after moving, the controller overlaps the movement capsule and the 15 bone-attached
 //! body volumes (see [`crate::body`]), each grown by 0.1 stud, with the scene, sensors included.
@@ -55,7 +74,7 @@ use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::parry::shape::{Capsule, Shape};
-use rapier3d::prelude::{ColliderHandle, Pose, QueryFilter, Vector};
+use rapier3d::prelude::{ColliderHandle, Pose, QueryFilter, RigidBodyHandle, Vector};
 use std::collections::HashMap;
 
 /// Seconds between a character's death and its respawn (the Roblox default).
@@ -191,6 +210,115 @@ pub enum CharacterEvent {
     },
 }
 
+/// Where a standing character met its support after its last step, so the next step can carry
+/// it through the support's pose change. Part of [`CharacterState`], so a replay from a saved
+/// state carries exactly like the original run. Opaque: the body handle and poses only mean
+/// something to the [`PhysicsWorld`] the contact was sampled from.
+///
+/// The carried point is the centre of the capsule's bottom sphere, which sits straight below
+/// the root because the capsule stays upright. Moving it rigidly with the support keeps the
+/// sphere at the same distance from a tilted surface; the foot contact itself sits off to the
+/// side of the root on a tilt, so carrying it would drift on a tilted spinner. The foot contact
+/// is kept only as the lever arm for the velocity a jump inherits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SupportContact {
+    part: InstanceId,
+    body: RigidBodyHandle,
+    /// Bottom-sphere centre in the support's local frame.
+    local_anchor: Vector,
+    /// Foot contact in the support's local frame.
+    local_contact: Vector,
+    /// The support's pose when sampled.
+    pose: Pose,
+    /// The root position when sampled; a different root (a script moved it) drops the contact.
+    root: Vec3,
+}
+
+/// What the support did since its contact was sampled.
+#[derive(Debug, Clone, Copy, Default)]
+struct SupportMotion {
+    /// Displacement of the carried point (and so of the root).
+    step: Vec3,
+    /// Current velocity of the foot contact point.
+    velocity: Vec3,
+    /// Turn of the support around world up over the same pose change, in radians.
+    yaw: f64,
+}
+
+/// Centre of the capsule's bottom sphere for a root position.
+fn bottom_sphere_centre(root: Vec3) -> Vec3 {
+    root - Vec3::new(0.0, CAPSULE_DROP + HALF_SEGMENT, 0.0)
+}
+
+impl SupportContact {
+    /// The part the character stands on.
+    pub fn part(&self) -> InstanceId {
+        self.part
+    }
+
+    fn sample(
+        physics: &PhysicsWorld,
+        handle: ColliderHandle,
+        point: Vec3,
+        root: Vec3,
+    ) -> Option<Self> {
+        let part = physics.owner_of(handle)?;
+        let entry = physics.entries.get(&part)?;
+        let pose = *physics.rapier.bodies.get(entry.body)?.position();
+        Some(Self {
+            part,
+            body: entry.body,
+            local_anchor: pose.inverse_transform_point(to_vector(bottom_sphere_centre(root))),
+            local_contact: pose.inverse_transform_point(to_vector(point)),
+            pose,
+            root,
+        })
+    }
+
+    /// The support's completed pose change since sampling, applied to the carried point; the
+    /// contact's current velocity; and the pose change's turn around world up. Position and
+    /// facing come from the same pose change, so they agree whatever the step lengths.
+    fn motion(self, physics: &PhysicsWorld) -> SupportMotion {
+        let Some(entry) = physics
+            .entries
+            .get(&self.part)
+            .filter(|e| e.body == self.body)
+        else {
+            return SupportMotion::default();
+        };
+        let Some(body) = physics.rapier.bodies.get(entry.body) else {
+            return SupportMotion::default();
+        };
+        let angular = physics.angular_velocity(self.part).unwrap_or_default();
+        let linear = physics.velocity(self.part).unwrap_or_default();
+        // Anchored movers have been reset to fixed/zero Rapier velocities by PhysicsWorld.
+        // Respect its cached rates, including a zero-rate move classified as a teleport.
+        if linear.magnitude() == 0.0 && angular.magnitude() == 0.0 {
+            return SupportMotion::default();
+        }
+        let pose = body.position();
+        let contact = pose.transform_point(self.local_contact);
+        let velocity = if body.is_dynamic() {
+            // Rapier accounts for the dynamic body's world centre of mass.
+            body.velocity_at_point(contact)
+        } else {
+            to_vector(linear) + to_vector(angular).cross(contact - body.translation())
+        };
+        let step =
+            pose.transform_point(self.local_anchor) - self.pose.transform_point(self.local_anchor);
+        // Twist of the rotation change around +Y (swing-twist decomposition).
+        let turn = pose.rotation * self.pose.rotation.inverse();
+        let yaw = 2.0 * f64::from(turn.y).atan2(f64::from(turn.w));
+        let yaw =
+            (yaw + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+        SupportMotion {
+            step: from_vector(step),
+            velocity: from_vector(velocity),
+            yaw,
+        }
+    }
+}
+
 /// Per-character movement state kept between frames.
 #[derive(Debug, Clone, Copy)]
 struct Motion {
@@ -199,8 +327,8 @@ struct Motion {
     vertical: f64,
     /// Horizontal velocity inherited from the part the character left, kept while airborne.
     inherited: Vec3,
-    /// The part stood on after the last step.
-    ground: Option<InstanceId>,
+    /// The contact stood on after the last step.
+    ground: Option<SupportContact>,
     /// Facing in degrees around +Y (0 looks along -Z).
     yaw: f64,
     /// Seconds since death.
@@ -253,8 +381,11 @@ pub struct CharacterState {
     pub inherited: Vec3,
     /// What the character is doing.
     pub state: HumanoidState,
-    /// The part stood on after the last step.
+    /// The part stood on after the last step (the part of `support`).
     pub ground: Option<InstanceId>,
+    /// Where the character stood on `ground`, used to carry it through that part's next pose
+    /// change. `restore_state` ignores it unless its part is `ground`.
+    pub support: Option<SupportContact>,
     /// Facing in degrees around +Y (0 looks along -Z).
     pub yaw: f64,
     /// Seconds since death.
@@ -530,7 +661,8 @@ impl CharacterController {
             vertical: m.vertical,
             inherited: m.inherited,
             state: m.state,
-            ground: m.ground,
+            ground: m.ground.map(|s| s.part),
+            support: m.ground,
             yaw: m.yaw,
             dead_time: m.dead_time,
             velocity: m.velocity,
@@ -553,7 +685,7 @@ impl CharacterController {
                 state: state.state,
                 vertical: state.vertical,
                 inherited: state.inherited,
-                ground: state.ground,
+                ground: state.support.filter(|s| Some(s.part) == state.ground),
                 yaw: state.yaw,
                 dead_time: state.dead_time,
                 velocity: state.velocity,
@@ -828,27 +960,80 @@ fn move_capsule(
     let queries = physics.queries(filter);
     let shape = capsule();
 
-    // 1. Parts that moved into the character push it out.
-    let root = root + push_out(&queries, &shape, root);
+    // 1. Carry: the support's completed pose change moves the bottom-sphere centre, and so the
+    // root, rigidly with it. The sweep skips the support itself (the character moves with it)
+    // but another part can still stop the carry.
+    let sampled_root = root;
+    let grounded = m.state == HumanoidState::Running;
+    let jumping = grounded && input.jump;
+    let support = m.ground.filter(|s| grounded && s.root == sampled_root);
+    let motion = match support {
+        Some(support) if dt > 0.0 => support.motion(physics),
+        _ => SupportMotion::default(),
+    };
+    let mut root = root;
+    if !jumping
+        && let Some(support) = support
+        && motion.step.magnitude() > 1e-9
+    {
+        let skip_support = |h: ColliderHandle, _: &rapier3d::prelude::Collider| {
+            !own.contains(&h) && physics.owner_of(h) != Some(support.part)
+        };
+        let carry_queries = physics.queries(
+            QueryFilter::default()
+                .exclude_sensors()
+                .predicate(&skip_support),
+        );
+        let kcc = KinematicCharacterController {
+            offset: CharacterLength::Absolute(SKIN as f32),
+            autostep: None,
+            snap_to_ground: None,
+            ..KinematicCharacterController::default()
+        };
+        let moved = kcc.move_shape(
+            dt as f32,
+            &carry_queries,
+            &shape,
+            &capsule_pose(root),
+            to_vector(motion.step),
+            |_| {},
+        );
+        root = root + from_vector(moved.translation);
+    }
 
-    // 2. Velocity for this frame.
+    // 2. Parts that moved into the character push it out. A rotating support also restores
+    // its skin gap; otherwise tiny numerical drift lets a floor clip the next move.
+    let push = push_out(&queries, &shape, root);
+    let mut pushed = push;
+    if dt > 0.0
+        && let Some(support) = support
+        && physics
+            .angular_velocity(support.part)
+            .is_some_and(|angular| angular.magnitude() > 0.0)
+        && let Some((handle, normal, point)) = probe_ground(&queries, &shape, root + push)
+        && physics.owner_of(handle) == Some(support.part)
+        && normal.y >= t.max_slope.to_radians().cos()
+    {
+        let sole = to_vector(bottom_sphere_centre(root + push)) - to_vector(normal) * RADIUS as f32;
+        let gap = f64::from((sole - to_vector(point)).dot(to_vector(normal)));
+        if gap >= -1e-4 {
+            let correction = (SKIN - gap).clamp(0.0, (MAX_PUSH - push.magnitude()).max(0.0));
+            pushed = pushed + normal * correction;
+        }
+    }
+    let root = root + pushed;
+
+    // Velocity for this frame.
     let mut wish = Vec3::new(input.dir.x, 0.0, input.dir.z);
     if wish.magnitude() > 1.0 {
         wish = wish.unit();
     }
     let walk = wish * t.walk_speed;
-    let grounded = m.state == HumanoidState::Running;
-    let carry = if grounded {
-        m.ground
-            .and_then(|g| physics.velocity(g))
-            .unwrap_or_default()
-    } else {
-        Vec3::default()
-    };
-    let jumping = grounded && input.jump;
+    let carry = motion.velocity;
     let dy = if grounded && !jumping {
         m.vertical = 0.0;
-        carry.y * dt
+        m.yaw += motion.yaw.to_degrees();
+        0.0
     } else {
         if jumping {
             m.vertical = t.jump_power;
@@ -867,11 +1052,11 @@ fn move_capsule(
         m.inherited
     };
     let horizontal = if grounded && !jumping {
-        walk + Vec3::new(carry.x, 0.0, carry.z)
+        walk * dt
     } else {
-        walk + m.inherited
+        (walk + m.inherited) * dt
     };
-    let desired = Vec3::new(horizontal.x * dt, dy, horizontal.z * dt);
+    let desired = Vec3::new(horizontal.x, dy, horizontal.z);
 
     // 3. Sweep.
     let slope = (t.max_slope as f32).to_radians();
@@ -913,10 +1098,10 @@ fn move_capsule(
     // 5. Ground under the feet.
     m.ground = None;
     if m.vertical <= 0.0
-        && let Some((handle, normal)) = probe_ground(&queries, &shape, new_root)
+        && let Some((handle, normal, point)) = probe_ground(&queries, &shape, new_root)
         && normal.y >= t.max_slope.to_radians().cos()
     {
-        m.ground = physics.owner_of(handle);
+        m.ground = SupportContact::sample(physics, handle, point, new_root);
         m.vertical = 0.0;
         m.inherited = Vec3::default();
     }
@@ -930,7 +1115,8 @@ fn move_capsule(
         };
     }
     m.velocity = if dt > 0.0 {
-        (new_root - root) * (1.0 / dt)
+        // Pushes are not the character's or the support's motion.
+        (new_root - sampled_root - pushed) * (1.0 / dt)
     } else {
         Vec3::default()
     };
@@ -975,12 +1161,12 @@ fn push_out(queries: &rapier3d::prelude::QueryPipeline, shape: &Capsule, root: V
     total
 }
 
-/// The solid part right under the capsule at `root` and its surface normal.
+/// The solid part under the capsule, its world-space surface normal and contact point.
 fn probe_ground(
     queries: &rapier3d::prelude::QueryPipeline,
     shape: &Capsule,
     root: Vec3,
-) -> Option<(ColliderHandle, Vec3)> {
+) -> Option<(ColliderHandle, Vec3, Vec3)> {
     let (handle, hit) = queries.cast_shape(
         &capsule_pose(root),
         Vector::new(0.0, -1.0, 0.0),
@@ -992,5 +1178,11 @@ fn probe_ground(
             compute_impact_geometry_on_penetration: true,
         },
     )?;
-    Some((handle, from_vector(hit.normal1)))
+    // A penetrating cast can choose different coplanar witnesses on a broad flat face.
+    // Project the capsule's lowest support point onto that contact plane instead, so an
+    // arbitrary tangential witness shift cannot change the rotation lever arm each tick.
+    let sole = to_vector(root - Vec3::new(0.0, CAPSULE_DROP + HALF_SEGMENT, 0.0))
+        - hit.normal1 * RADIUS as f32;
+    let point = sole - hit.normal1 * (sole - hit.witness1).dot(hit.normal1);
+    Some((handle, from_vector(hit.normal1), from_vector(point)))
 }

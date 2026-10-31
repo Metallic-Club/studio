@@ -54,7 +54,8 @@ pub struct EditorUi {
     /// 3D view.
     pub viewport: Viewport,
     explorer: Explorer,
-    properties: Properties,
+    /// Properties panel.
+    pub properties: Properties,
     scripts: ScriptTabs,
     pressed: Vec<&'static str>,
     /// Open while the unsaved-changes prompt shows.
@@ -83,7 +84,31 @@ impl EditorUi {
             settings_requested: false,
         };
         ui.viewport.frame_all(&ui.state);
+        ui.sync_hold_keys();
         ui
+    }
+
+    /// Copies the held keys (V, Space) from the keymap into the viewport.
+    fn sync_hold_keys(&mut self) {
+        if let Some(c) = self.keymap.chord("hold.vertex") {
+            self.viewport.holds.vertex = c.key;
+        }
+        if let Some(c) = self.keymap.chord("hold.summon") {
+            self.viewport.holds.summon = c.key;
+        }
+    }
+
+    /// Drag-context keys (Esc, X/Y/Z, R/T, Ctrl+D) go to the drag before the viewport runs.
+    fn drag_keys(&mut self, ctx: &egui::Context) {
+        if !self.viewport.is_dragging() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let mut pressed = std::mem::take(&mut self.pressed);
+        self.keymap.pressed(ctx, &[KeyContext::Drag], &mut pressed);
+        for &id in &pressed {
+            self.viewport.drag_action(id, &mut self.state);
+        }
+        self.pressed = pressed;
     }
 
     /// Opens a game folder in a new editor.
@@ -164,24 +189,27 @@ impl EditorUi {
     }
 
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
-        let typing = ctx.egui_wants_keyboard_input();
+        let typing = ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta();
+        // A gesture holds values in the preview overlay: no global action runs until it ends
+        // (Esc cancels it in the viewport or in Properties).
+        let busy = self.viewport.is_dragging() || self.properties.is_busy();
         let mut contexts: Vec<KeyContext> = Vec::with_capacity(2);
         if !typing {
             contexts.push(KeyContext::Global);
-            if viewport_hovered && !right_down && !self.viewport.is_dragging() {
+            if viewport_hovered && !right_down && !busy {
                 contexts.push(KeyContext::Viewport);
             }
         }
         let mut pressed = std::mem::take(&mut self.pressed);
-        if typing {
+        if busy {
+            pressed.clear();
+        } else if typing {
             // Only Save and Play keys work while a text field has focus.
             self.keymap
                 .pressed(ctx, &[KeyContext::Global], &mut pressed);
             pressed.retain(|a| a.starts_with("file.") || a.starts_with("play."));
-        } else if !self.viewport.is_dragging() {
-            self.keymap.pressed(ctx, &contexts, &mut pressed);
         } else {
-            pressed.clear();
+            self.keymap.pressed(ctx, &contexts, &mut pressed);
         }
         for &id in &pressed {
             self.run_action(id);
@@ -294,11 +322,24 @@ impl EditorUi {
                             &mut self.state,
                             &self.keymap,
                         );
+                        ui.separator();
+                        self.actions.menu_items(
+                            ui,
+                            &[
+                                "build.rotate90",
+                                "build.tilt90",
+                                "build.drop",
+                                "build.snap_to_grid",
+                                "pivot.reset",
+                            ],
+                            &mut self.state,
+                            &self.keymap,
+                        );
                     });
                     ui.menu_button("View", |ui| {
                         self.actions.menu_items(
                             ui,
-                            &["view.frame_selection", "view.frame_all"],
+                            &["view.frame_selection", "view.frame_all", "snap.soft"],
                             &mut self.state,
                             &self.keymap,
                         );
@@ -358,6 +399,9 @@ impl EditorUi {
                         .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
                     ui.separator();
                     self.actions
+                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
+                    ui.separator();
+                    self.actions
                         .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
                     ui.separator();
                     self.actions
@@ -387,6 +431,20 @@ impl EditorUi {
                         Some(crate::play::PlayStatus::Ended(t)) => (t, theme::text_2()),
                     };
                     ui.label(small(play).color(colour));
+                    // The drag readout (spec 4.5): the amount, editable for a few seconds after
+                    // release (accent), and what the drag snapped to.
+                    if let Some(st) = self.viewport.status(&self.state) {
+                        ui.label(small("·".into()).color(dim));
+                        let colour = if st.editing {
+                            theme::accent()
+                        } else {
+                            theme::text_1()
+                        };
+                        ui.label(small(st.text).monospace().color(colour));
+                        if let Some(snap) = st.snap {
+                            ui.label(small(snap).color(dim));
+                        }
+                    }
                     if let Some(note) = self.state.current_note() {
                         ui.label(small("·".into()).color(dim));
                         ui.label(small(note.to_string()).color(theme::text_1()));
@@ -455,6 +513,7 @@ impl EditorUi {
                 panel::show(ui, "Output", |_| {}, |ui| self.output.ui(ui));
             });
 
+        self.drag_keys(&ctx);
         let mut viewport_hovered = false;
         egui::CentralPanel::default()
             .frame(Frame::new().fill(theme::bg_deep()))
