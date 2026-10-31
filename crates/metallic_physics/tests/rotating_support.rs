@@ -315,12 +315,27 @@ fn small_tilts_carry_the_bottom_sphere_and_keep_the_capsule_upright() {
                     "root velocity {:?}",
                     sim.velocity()
                 );
-                // ...while the velocity a jump would keep uses the foot contact lever arm.
+                // ...and a still rider reads as still relative to it (#374).
                 let character = sim.character();
-                let carried = sim.velocity() - sim.controller.relative_velocity(character).unwrap();
-                assert!((carried.x + w).abs() < 0.15, "contact velocity {carried:?}");
+                let relative = sim.controller.relative_velocity(character).unwrap();
+                assert!(relative.magnitude() < 1e-6, "relative {relative:?}");
             }
         }
+        // The velocity a jump keeps uses the foot contact lever arm (1 stud above the pivot).
+        let mut jumper = Sim::new();
+        jumper.rotate(Vec3::new(0.0, 0.0, rate / 60.0), MoveInput::default());
+        jumper.rotate(
+            Vec3::new(0.0, 0.0, rate * 2.0 / 60.0),
+            MoveInput {
+                jump: true,
+                ..MoveInput::default()
+            },
+        );
+        assert!(
+            (jumper.velocity().x + rate.to_radians()).abs() < 0.15,
+            "jump velocity {:?}",
+            jumper.velocity()
+        );
         sim.stop();
         let (sine, cosine) = rate.to_radians().sin_cos();
         let up = ROOT_HEIGHT - (anchor_lever - 1.0);
@@ -532,4 +547,92 @@ fn facing_and_position_agree_under_variable_dt() {
         sim.position()
     );
     assert!(yaw_error(sim.vector("Orientation").y, rate * time) < 0.01);
+}
+
+/// #374: a rider standing still on a tilted spinner must read as still (the animation's idle
+/// threshold is 0.05 stud/s). Measuring against the foot contact's velocity gave 0.18 stud/s at
+/// 20 degrees, because the contact sits beside the carried bottom-sphere centre on a tilt.
+#[test]
+fn still_rider_on_tilted_spinner_has_no_relative_speed() {
+    for tilt in [8.0, 20.0] {
+        let mut sim = Sim::new();
+        for frame in 1..=30 {
+            sim.rotate(
+                Vec3::new(tilt * frame as f64 / 30.0, 0.0, 0.0),
+                MoveInput::default(),
+            );
+        }
+        sim.stop();
+        let mut worst: f64 = 0.0;
+        for frame in 1..=300 {
+            let t = frame as f64 * DT;
+            sim.rotate(Vec3::new(tilt, 30.0 * t, 0.0), MoveInput::default());
+            sim.assert_standing();
+            let relative = sim.controller.relative_velocity(sim.character()).unwrap();
+            worst = worst.max(relative.x.hypot(relative.z));
+        }
+        assert!(worst < 0.01, "tilt {tilt}: relative speed {worst} stud/s");
+    }
+}
+
+/// A frame in the runtime's order: characters, physics, then scripts (`Heartbeat`), which
+/// move the support for the next tick.
+fn scripted_frame(sim: &mut Sim, position: Vec3, orientation: Vec3) {
+    sim.frame(MoveInput::default());
+    for (name, value) in [("Position", position), ("Orientation", orientation)] {
+        sim.world
+            .set(sim.platform, name, Value::Vector3(value))
+            .unwrap();
+    }
+}
+
+/// #374 / #273: a support a script moves every tick after physics used to carry its rider two
+/// ticks behind the pose the script set. Carrying from the scripted pose keeps it within one.
+#[test]
+fn script_moved_support_keeps_rider_within_one_tick() {
+    let base = Vec3::new(0.0, -1.0, 0.0);
+    // (name, platform pose at time t, speed of the rider's point in studs per second)
+    type Path = fn(f64) -> (Vec3, Vec3);
+    let cases: [(&str, Path, f64); 4] = [
+        (
+            "slide",
+            |t| (Vec3::new(4.0 * t, -1.0, 0.0), Vec3::default()),
+            4.0,
+        ),
+        (
+            "lift",
+            |t| (Vec3::new(0.0, -1.0 + 6.0 * t, 0.0), Vec3::default()),
+            6.0,
+        ),
+        (
+            "drop",
+            |t| (Vec3::new(0.0, -1.0 - 6.0 * t, 0.0), Vec3::default()),
+            6.0,
+        ),
+        (
+            "spin",
+            |t| (Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 90.0 * t, 0.0)),
+            8.0 * std::f64::consts::FRAC_PI_2,
+        ),
+    ];
+    for (name, path, speed) in cases {
+        let mut sim = Sim::new();
+        let start = sim.position();
+        let mut worst: f64 = 0.0;
+        for tick in 1..=120 {
+            let (position, orientation) = path(tick as f64 * DT);
+            scripted_frame(&mut sim, position, orientation);
+            sim.assert_standing();
+            // Where the rider belongs on the support as the script has now placed it.
+            let expected = rotate_y(start - base, orientation.y) + position;
+            if tick > 3 {
+                worst = worst.max((sim.position() - expected).magnitude());
+            }
+        }
+        let one_tick = speed * DT;
+        assert!(
+            worst <= one_tick + 0.01,
+            "{name}: rider {worst:.4} stud behind, one tick is {one_tick:.4}"
+        );
+    }
 }
