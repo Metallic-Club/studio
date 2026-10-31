@@ -18,6 +18,9 @@ Status: implemented, tested.
   - When an enabled pass `reads_geometry`, a 1x geometry prepass draws parts and skinned meshes into one
     `Rgba16Float` target: world normal in rgb, linear view depth in a. Background is 0.
   - Toon skinned meshes, which #320 already outlines with a hull, write negative depth.
+  - The depth is clip w passed as a varying, not read from the fragment `position.w`: that builtin held 1/w on
+    Vulkan and w on DX12 here, which flipped the near-side test on DX12 (CI on WARP) and drew lines around toon
+    figures.
   - The `edges` HDR pass (before bloom, off by default) draws:
     - silhouettes from the second difference of 1/z, which is 0 on any plane, so floors seen at grazing angles get
       no lines; only the near side of a depth step draws;

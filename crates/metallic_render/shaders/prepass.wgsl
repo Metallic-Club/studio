@@ -5,6 +5,9 @@
 struct PreOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) n: vec3<f32>,
+    // Linear view depth (clip w), passed explicitly: the fragment `position.w` builtin is 1/w on
+    // some backends and w on others.
+    @location(1) depth: f32,
 }
 
 struct PartIn {
@@ -23,6 +26,7 @@ fn vs_part(v: PartIn) -> PreOut {
     var out: PreOut;
     out.clip = g.view_proj * (model * vec4<f32>(v.pos, 1.0));
     out.n = cof * v.normal;
+    out.depth = out.clip.w;
     return out;
 }
 
@@ -32,17 +36,18 @@ fn vs_skin(v: SkinIn) -> PreOut {
     var out: PreOut;
     out.clip = g.view_proj * (m * vec4<f32>(v.pos, 1.0));
     out.n = (m * vec4<f32>(v.normal, 0.0)).xyz;
+    out.depth = out.clip.w;
     return out;
 }
 
 // Gets post edges.
 @fragment
 fn fs_edges(in: PreOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(normalize(in.n), 1.0 / in.clip.w);
+    return vec4<f32>(normalize(in.n), in.depth);
 }
 
 // Outlined by its own hull: no post edges on it.
 @fragment
 fn fs_hull(in: PreOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(normalize(in.n), -1.0 / in.clip.w);
+    return vec4<f32>(normalize(in.n), -in.depth);
 }
