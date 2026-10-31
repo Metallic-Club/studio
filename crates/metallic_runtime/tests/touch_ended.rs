@@ -122,3 +122,64 @@ print("ready")
         lines(&output)
     );
 }
+
+#[test]
+fn destroying_a_touching_part_fires_touch_ended_on_the_other() {
+    let mut world = World::new_with_services();
+    part(&mut world, "Sensor", 0.0, false);
+    let target = part(&mut world, "Target", 10.0, true);
+    let script = world
+        .create("Script", world.root("ServerScriptService"))
+        .unwrap();
+    world
+        .set(
+            script,
+            "Source",
+            Value::String(
+                r#"
+local sensor = workspace.Sensor
+sensor.Touched:Connect(function(hit) print("touched by " .. hit.Name) end)
+sensor.TouchEnded:Connect(function(hit) print("ended by " .. typeof(hit)) end)
+"#
+                .to_owned(),
+            ),
+        )
+        .unwrap();
+    let output = Rc::new(Captured::default());
+    let mut game = Game::from_world("touch-ended-destroy".to_owned(), world, output.clone());
+    game.start().unwrap();
+    // Two resting anchored parts never pair; the anchored target moves in until it touches.
+    for step in 1..=90 {
+        game.world()
+            .borrow_mut()
+            .set(
+                target,
+                "Position",
+                Value::Vector3(Vec3::new(10.0 - f64::from(step) * 0.1, 10.0, 0.0)),
+            )
+            .unwrap();
+        game.frame(&FrameInput::default(), TICK);
+    }
+    assert_eq!(
+        count(&output, "touched by Target"),
+        1,
+        "{:?}",
+        lines(&output)
+    );
+    game.world().borrow_mut().destroy(target);
+    for _ in 0..3 {
+        game.frame(&FrameInput::default(), TICK);
+    }
+    assert_eq!(
+        count(&output, "ended by Instance"),
+        1,
+        "{:?}",
+        lines(&output)
+    );
+    assert_eq!(
+        count(&output, "touched by Target"),
+        1,
+        "{:?}",
+        lines(&output)
+    );
+}
