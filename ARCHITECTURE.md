@@ -212,7 +212,7 @@ apps.
   it logs the overlay's draw time at the end of a windowed emulated run. `pacing.rs` sets the loop's pace (#271):
   every turn while focused (vsync paces it), 30 frames a second while unfocused, and `ControlFlow::Wait` with the
   game paused while minimised or occluded; automated runs (`--fps`, `--frames`, `--capture`, `--autopilot`,
-  `--input-script`) always run flat out. `dev_overlay.rs` is the developer overlay (Ctrl+Shift+F3 or `--dev-overlay`, #23; plain F3 is a bindable game key and reaches the game):
+  `--input-script`) always run flat out. `dev_overlay.rs` is the developer overlay (Ctrl+Shift+F3 or `--dev-overlay`, #23; function keys are bindable, so the key still reaches the game, chord or not):
   fps, frame and GPU time, time per subsystem and a frame graph; showing it turns the profiler on, hiding it
   turns it off.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends

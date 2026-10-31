@@ -671,16 +671,15 @@ impl ApplicationHandler for App {
                 self.set_captured(false);
             }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
-            WindowEvent::KeyboardInput { event, .. }
-                if dev_chord(self.modifiers, event.physical_key) == Some(KeyCode::F3) =>
-            {
-                // Ctrl+Shift+F3 is the developer overlay's. Plain F3 (bindable) reaches the game
-                // like any key; only the chord is taken.
-                if event.state == ElementState::Pressed && !event.repeat {
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Ctrl+Shift+F3 also toggles the developer overlay. The key still goes to the game
+                // below: function keys are bindable, and the game never loses a key to a tool.
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && dev_chord(self.modifiers, event.physical_key) == Some(KeyCode::F3)
+                {
                     self.dev.toggle();
                 }
-            }
-            WindowEvent::KeyboardInput { event, .. } => {
                 // Every key, Escape included, is a control: Escape is the default binding of
                 // the `Menu` action, which opens the Player menu.
                 if let PhysicalKey::Code(code) = event.physical_key
@@ -800,8 +799,8 @@ impl ApplicationHandler for App {
 }
 
 /// The function key of a developer chord (Ctrl+Shift+F3 and friends), or `None` for any other
-/// key. Function keys are bindable game controls, so the developer tools only take them with
-/// Ctrl and Shift held; Ctrl and Shift alone still reach the game.
+/// key. Function keys are bindable game controls, so a tool reacts only with Ctrl and Shift held,
+/// and the key is still passed to the game: no key is ever taken from it.
 fn dev_chord(modifiers: ModifiersState, key: PhysicalKey) -> Option<KeyCode> {
     let PhysicalKey::Code(code) = key else {
         return None;
@@ -815,7 +814,7 @@ mod dev_chord_tests {
     use super::*;
 
     #[test]
-    fn only_ctrl_shift_takes_function_keys() {
+    fn only_ctrl_shift_makes_a_dev_chord() {
         let f3 = PhysicalKey::Code(KeyCode::F3);
         let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
         assert_eq!(dev_chord(cs, f3), Some(KeyCode::F3));

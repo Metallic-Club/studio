@@ -26,7 +26,7 @@ Status: in progress, split into three PRs (all branches from main).
   pause or resume, stop, clear; a frame graph stacked by subsystem with 60 and 30 fps lines (a click pauses on that
   frame); subsystem and GPU stage times, a scope timeline, and script times sorted by time or name. Colours come
   from theme tokens. `--scene profiler` plays the demo Parkour and pauses at frame 150 for review screenshots.
-- Player: `dev_overlay.rs`, Ctrl+Shift+F3 (function keys are bindable game controls, so plain F3 reaches the game; only the chord is taken) or `--dev-overlay`. fps, mean and max frame
+- Player: `dev_overlay.rs`, Ctrl+Shift+F3 (function keys are bindable game controls, so the key always reaches the game too) or `--dev-overlay`. fps, mean and max frame
   time, GPU time and time per subsystem over the last 60 frames, plus a 180-frame graph. Showing it enables the
   profiler; hiding it disables and clears it, so it costs nothing while hidden.
 - Tests: `metallic_studio/tests/profiler_panel.rs` (kittest: records, clicks the graph to pause, resumes);
@@ -59,7 +59,9 @@ Status: in progress, split into three PRs (all branches from main).
 - Overlay colours are the Graphite theme tokens (`metallic_ui_theme::palette_of(ThemeId::Graphite)`), with the same
   subsystem roles as the Studio panel. GUI is `text-2` in both (`highlight` is a 6% white overlay, invisible as a mark). The layer Id was already stable (`Id::unique` hashes its source; it is egui 0.37's name for `Id::new`); a comment says so. The numbers are formatted and laid out four times a
   second (galleys cached), the graph each frame.
-- Ctrl+Shift+F3 toggles the overlay. Function keys are bindable game controls, so plain F3 reaches the game
-  (`window::dev_chord`, test `only_ctrl_shift_takes_function_keys`).
+- Ctrl+Shift+F3 toggles the overlay, and the key still reaches the game: no bindable key is ever taken from a
+  game (#446 ruling) (`window::dev_chord`, test `only_ctrl_shift_makes_a_dev_chord`).
+- The Studio action is `dev.profiler` (was `view.profiler`), so it joins #446's Developer menu and `dev.` gating.
+  It stays in the View menu until #446 lands; then the panel's graph moves to #446's shared frame-graph widget.
 - Studio names scripts by looking each unknown id up (`InstanceId::from_bits`, `World::is_alive`), not by walking the
   world; ids missing from the Play world are retried once a second, not on every repaint.

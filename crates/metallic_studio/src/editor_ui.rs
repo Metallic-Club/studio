@@ -659,7 +659,7 @@ impl EditorUi {
                                 "view.frame_all",
                                 "snap.soft",
                                 crate::editor_input_actions::TOGGLE_ID,
-                                "view.profiler",
+                                "dev.profiler",
                             ],
                             &mut self.state,
                             &self.keymap,

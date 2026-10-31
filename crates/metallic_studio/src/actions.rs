@@ -867,7 +867,7 @@ pub fn default_actions() -> ActionRegistry {
         |s| s.request(UiRequest::FrameSelection),
     ));
     r.register(Action::new(
-        "view.profiler",
+        "dev.profiler",
         "Profiler",
         Icon::Text("P"),
         ToolbarGroup::Hidden,
