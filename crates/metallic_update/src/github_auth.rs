@@ -6,15 +6,21 @@
 //! other repository. No `scope` is sent, because GitHub Apps ignore it.
 //!
 //! The session (access token, plus refresh token and expiry when the app has user-token expiration
-//! on) is kept as one JSON value in the Windows Credential Manager (Studio: `MetallicStudio/github`),
-//! behind the [`SecretStore`] trait so tests use memory instead. [`GithubAuth::valid_token`]
+//! on) is kept as one JSON value in the Windows Credential Manager, behind the [`SecretStore`]
+//! trait so tests use memory instead. The `keyring` crate names a Windows entry
+//! `<account>.<service>` (Studio: `github.MetallicStudio`) and stores it with
+//! `CRED_PERSIST_ENTERPRISE`, so it roams with a roaming profile. [`GithubAuth::valid_token`]
 //! refreshes an expiring access token on its own.
+//!
+//! Every network call here blocks (a sign-in polls for up to 15 minutes, a refresh retries), so
+//! a UI calls them on a worker thread; [`GithubAuth::device_sign_in_until`] can be cancelled.
 //!
 //! The app's client ID is not secret. It is committed in `config/github_app_client_id.txt` and
 //! compiled in; until the owner registers the app, the file holds a placeholder and
 //! [`embedded_client_id`] reports a clear error.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -143,9 +149,15 @@ impl<F: FnMut(&str, &str)> DeviceFlowUi for BrowserUi<F> {
     }
 }
 
-/// Opens a GitHub page in the default browser. Refuses any other address.
+/// True for an address on `https://github.com/`: the only pages the sign-in opens.
+pub fn is_github_page(url: &str) -> bool {
+    url.starts_with("https://github.com/")
+}
+
+/// Opens a GitHub page in the default browser. Refuses any other address. (The Launcher
+/// opens it with its own browser opener after [`is_github_page`].)
 pub fn open_in_browser(url: &str) -> std::io::Result<()> {
-    if !url.starts_with("https://github.com/") {
+    if !is_github_page(url) {
         return Err(std::io::Error::other(
             "refusing to open a non-GitHub address",
         ));
@@ -312,14 +324,24 @@ impl GithubAuth {
             log::info!("stored GitHub token expired and cannot be refreshed; sign in again");
             return Ok(None);
         };
-        let body = self.post_retrying(
+        let refreshed = self.post_retrying(
             ACCESS_TOKEN_URL,
             &[
                 ("client_id", self.client_id.as_str()),
                 ("grant_type", REFRESH_GRANT),
                 ("refresh_token", refresh_token.as_str()),
             ],
-        )?;
+        );
+        let body = match refreshed {
+            Ok(body) => body,
+            // A network blip in the refresh window is not a reason to sign in again: the
+            // current token still works until it expires (#206).
+            Err(AuthError::Network(message)) if session.expires_at.is_some_and(|at| at > now) => {
+                log::warn!("could not refresh the GitHub token ({message}); using the current one");
+                return Ok(Some(Token::new(session.access_token)));
+            }
+            Err(error) => return Err(error),
+        };
         let answer: TokenAnswer =
             serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
         if let Some(code) = answer.error.as_deref() {
@@ -375,6 +397,18 @@ impl GithubAuth {
     /// user approves. Blocks the calling thread, so run it off the UI thread. On success the
     /// session is stored and the access token returned.
     pub fn device_sign_in(&self, ui: &mut dyn DeviceFlowUi) -> Result<Token, AuthError> {
+        self.device_sign_in_until(ui, &AtomicBool::new(false))
+    }
+
+    /// [`device_sign_in`](Self::device_sign_in) that ends with [`AuthError::Cancelled`] soon
+    /// after `cancel` is set (it is checked between polls and while waiting). A token that
+    /// arrives after the cancel is not stored.
+    pub fn device_sign_in_until(
+        &self,
+        ui: &mut dyn DeviceFlowUi,
+        cancel: &AtomicBool,
+    ) -> Result<Token, AuthError> {
+        let cancelled = || cancel.load(Ordering::SeqCst);
         let body =
             self.post_retrying(DEVICE_CODE_URL, &[("client_id", self.client_id.as_str())])?;
         let code: DeviceCodeAnswer =
@@ -386,11 +420,21 @@ impl GithubAuth {
         let lifetime = Duration::from_secs(code.expires_in);
         let mut interval = code.interval.max(MIN_POLL_SECONDS);
         loop {
+            if cancelled() {
+                return Err(AuthError::Cancelled);
+            }
             if started.elapsed() >= lifetime {
                 return Err(AuthError::Expired);
             }
             if self.sleeping {
-                std::thread::sleep(Duration::from_secs(interval));
+                // In short slices, so a cancel is noticed within a fraction of a second.
+                let until = Instant::now() + Duration::from_secs(interval);
+                while !cancelled() && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+            if cancelled() {
+                return Err(AuthError::Cancelled);
             }
             let body = self.post_retrying(
                 ACCESS_TOKEN_URL,
@@ -403,6 +447,9 @@ impl GithubAuth {
             let answer: TokenAnswer =
                 serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
             if let Some(value) = answer.access_token.clone() {
+                if cancelled() {
+                    return Err(AuthError::Cancelled);
+                }
                 self.save(&Session::from_answer(value.clone(), &answer, unix_now()))?;
                 log::info!("GitHub sign-in finished; session stored");
                 return Ok(Token::new(value));

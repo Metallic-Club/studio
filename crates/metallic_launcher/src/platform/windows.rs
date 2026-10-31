@@ -283,6 +283,25 @@ fn user_of_process(pid: u32) -> Result<UserSid, LauncherError> {
     UserSid::of_token(&OwnedHandle(token))
 }
 
+/// The image path of process `pid`, or `None` when it cannot be read.
+fn image_of_process(pid: u32) -> Option<PathBuf> {
+    // SAFETY: opens a limited query handle, closed by OwnedHandle; the name buffer is passed
+    // with its real length.
+    unsafe {
+        let process = OwnedHandle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?);
+        let mut name = vec![0u16; 1024];
+        let mut length = name.len() as u32;
+        QueryFullProcessImageNameW(
+            process.0,
+            PROCESS_NAME_WIN32,
+            PWSTR(name.as_mut_ptr()),
+            &mut length,
+        )
+        .ok()?;
+        Some(PathBuf::from(OsString::from_wide(&name[..length as usize])))
+    }
+}
+
 // ---- Single instance: a named pipe --------------------------------------------------------
 
 /// The listening end. One pipe instance serves one client at a time. The pipe is opened for
@@ -540,6 +559,18 @@ fn connect(name: &str, user: &UserSid) -> Result<PipeSender, LauncherError> {
             "the pipe belongs to another user",
         ));
     }
+    // And it must be a Launcher: a link can hold a join ticket.
+    let own =
+        std::env::current_exe().map_err(|e| platform_error("could not find this program", e))?;
+    match image_of_process(pid) {
+        Some(server) if metallic_launcher::same_program(&server, &own) => {}
+        _ => {
+            return Err(platform_error(
+                "refused to send",
+                "the pipe does not belong to a Launcher",
+            ));
+        }
+    }
     Ok(PipeSender(handle))
 }
 
@@ -700,6 +731,13 @@ fn clean_up_this_copy() {
         base("LOCALAPPDATA").as_deref(),
         base("APPDATA").as_deref(),
     );
+    // The saved sign-ins (Metallic and GitHub) go too: nothing of the Launcher stays behind.
+    use metallic_launcher::platform_auth::{
+        GITHUB_KEYRING_ACCOUNT, KEYRING_ACCOUNT, KEYRING_SERVICE,
+    };
+    let platform = metallic_update::KeyringSecretStore::new(KEYRING_SERVICE, KEYRING_ACCOUNT);
+    let github = metallic_update::KeyringSecretStore::new(KEYRING_SERVICE, GITHUB_KEYRING_ACCOUNT);
+    metallic_launcher::forget_saved_sign_ins(&[&platform, &github]);
 }
 
 /// Velopack's start-up logic with the Launcher's hooks. These run inside the installer's

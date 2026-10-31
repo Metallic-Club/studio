@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use metallic_update::github_auth::{DeviceFlowUi, GithubAuth, parse_client_id};
+use metallic_update::github_auth::{AuthError, DeviceFlowUi, GithubAuth, parse_client_id};
 use metallic_update::{
     Channel, HttpClient, HttpError, HttpResponse, LAUNCHER_FEED, MemorySecretStore, ReleaseAsset,
     STUDIO_FEED, SecretStore, Token, UpdateChecker, UpdateError, UreqClient, download_verified,
@@ -296,17 +296,21 @@ fn empty_last_page_preserves_the_newest_version() {
     assert_eq!(http.requests.lock().unwrap().len(), 2);
 }
 
+/// #240 follow-up: more than 250 releases behind, the check cannot see every skipped release,
+/// so it fails closed: the newest version is offered as required (not a permanent error).
 #[test]
-fn truncated_history_cannot_certify_an_optional_update() {
+fn truncated_history_offers_the_newest_update_as_required() {
     let http = MockHttp::with(
         (0..5)
             .map(|page| ok(&feed(&fifty_newer_dev_releases(page))))
             .collect(),
     );
-    assert!(matches!(
-        checker(Channel::Dev, "0.1.0", http.clone()).check(),
-        Err(UpdateError::BadResponse(_))
-    ));
+    let update = checker(Channel::Dev, "0.1.0", http.clone())
+        .check()
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.version, Version::new(0, 1, 1_000));
+    assert!(update.required, "an unproven history counts as required");
     assert_eq!(
         http.requests.lock().unwrap().len(),
         5,
@@ -682,6 +686,70 @@ fn expired_without_refresh_token_asks_to_sign_in_again() {
         .unwrap();
     let auth = GithubAuth::new("abc".into(), MockHttp::with(vec![]), store);
     assert!(auth.valid_token().unwrap().is_none());
+}
+
+/// #206: a network blip while refreshing a token that still works keeps the token instead of
+/// asking to sign in again. An already expired token still needs the refresh.
+#[test]
+fn refresh_network_blip_keeps_the_still_valid_token() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let store = Arc::new(MemorySecretStore::default());
+    store
+        .set(&format!(
+            r#"{{"access_token":"old","refresh_token":"r1","expires_at":{}}}"#,
+            now + 120
+        ))
+        .unwrap();
+    let offline = || Err(HttpError::new("offline"));
+    let http = MockHttp::with(vec![offline(), offline(), offline(), offline()]);
+    let auth = GithubAuth::new("abc".into(), http.clone(), store.clone()).without_sleeping();
+    assert_eq!(auth.valid_token().unwrap().unwrap().expose(), "old");
+    assert_eq!(
+        http.requests.lock().unwrap().len(),
+        4,
+        "it did try to refresh"
+    );
+    assert!(
+        store.get().unwrap().unwrap().contains("r1"),
+        "the session is kept"
+    );
+
+    store
+        .set(r#"{"access_token":"old","refresh_token":"r1","expires_at":1}"#)
+        .unwrap();
+    let http = MockHttp::with(vec![offline(), offline(), offline(), offline()]);
+    let auth = GithubAuth::new("abc".into(), http, store).without_sleeping();
+    assert!(matches!(auth.valid_token(), Err(AuthError::Network(_))));
+}
+
+/// Sets the cancel flag when the code is shown, as a user pressing Cancel would.
+struct CancelOnCode<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl DeviceFlowUi for CancelOnCode<'_> {
+    fn show_code(&mut self, _: &str, _: &str) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// #206: a device sign-in can be cancelled; it stops polling and stores nothing.
+#[test]
+fn device_sign_in_can_be_cancelled() {
+    let store = Arc::new(MemorySecretStore::default());
+    let http = MockHttp::with(vec![
+        device_code_answer(),
+        ok(r#"{"access_token":"tok","token_type":"bearer"}"#),
+    ]);
+    let auth = GithubAuth::new("abc".into(), http.clone(), store.clone());
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let started = std::time::Instant::now();
+    let result = auth.device_sign_in_until(&mut CancelOnCode(&cancel), &cancel);
+    assert!(matches!(result, Err(AuthError::Cancelled)), "{result:?}");
+    assert!(started.elapsed() < Duration::from_secs(1), "no poll wait");
+    assert_eq!(http.requests.lock().unwrap().len(), 1, "no poll was sent");
+    assert!(store.get().unwrap().is_none());
 }
 
 /// Counts refresh calls and answers slowly, so two racing callers overlap.

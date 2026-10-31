@@ -6,6 +6,8 @@
 //! the text, never more than [`MAX_HANDOFF_BYTES`], and is checked before the body is read.
 //! The first Launcher parses every link again with `DeepLink::parse`; nothing here trusts it.
 
+use std::path::Path;
+
 use crate::error::LauncherError;
 
 /// The longest message body (tag and text) a Launcher will read.
@@ -95,4 +97,16 @@ pub enum Acquired {
     Primary(Box<dyn HandoffListener>),
     /// Another Launcher of this user runs; hand it the request.
     Secondary(Box<dyn HandoffSender>),
+}
+
+/// Whether the program at the other end of the pipe (`server`, its image path) is a Launcher
+/// like this one (`own`): the same file name, ignoring case. The pipe is already limited to
+/// this user; this also keeps a link (which may hold a join ticket) away from some other
+/// program of the user's that took the pipe name. An installed copy and a development build
+/// live in different folders, so only the name is compared.
+pub fn same_program(server: &Path, own: &Path) -> bool {
+    match (server.file_name(), own.file_name()) {
+        (Some(server), Some(own)) => server.eq_ignore_ascii_case(own),
+        _ => false,
+    }
 }

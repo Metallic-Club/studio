@@ -264,9 +264,32 @@ impl UpdateChecker {
     }
 
     /// Asks GitHub for the newest release of the channel. `Ok(None)` means "up to date".
+    ///
+    /// A history longer than the check reads (more than 250 releases behind) cannot prove that
+    /// no skipped release was required, so the newest version is then offered as required: the
+    /// client fails closed instead of reporting an update error forever (#240). Blocks for up
+    /// to a few requests; call it off the UI thread.
     pub fn check(&self) -> Result<Option<UpdateInfo>, UpdateError> {
-        let releases = self.fetch_releases()?;
-        Ok(self.pick_update(&releases))
+        let (releases, complete) = self.fetch_releases()?;
+        let update = self.pick_update(&releases);
+        if complete {
+            return Ok(update);
+        }
+        match update {
+            Some(update) => {
+                log::warn!(
+                    "release history is longer than the check reads; the update is required"
+                );
+                Ok(Some(UpdateInfo {
+                    required: true,
+                    ..update
+                }))
+            }
+            None => Err(UpdateError::BadResponse(
+                "release history exceeds the update-check limit; required status is incomplete"
+                    .into(),
+            )),
+        }
     }
 
     /// The newest release of this feed and channel that has a file called `file_name`, with the
@@ -274,7 +297,7 @@ impl UpdateChecker {
     /// whose `digest` is missing or is not `sha256:<64 hex digits>` is refused with
     /// [`UpdateError::BadResponse`], because a download could not be checked.
     pub fn latest_asset(&self, file_name: &str) -> Result<Option<ReleaseAsset>, UpdateError> {
-        let releases = self.fetch_releases()?;
+        let (releases, complete) = self.fetch_releases()?;
         let mut candidates: Vec<(Version, &GithubRelease)> = releases
             .iter()
             .filter(|r| !r.draft)
@@ -307,10 +330,18 @@ impl UpdateChecker {
                 size: asset.size,
             }));
         }
+        if !complete {
+            // The file may be in a release the check did not read.
+            return Err(UpdateError::BadResponse(
+                "release history exceeds the update-check limit".into(),
+            ));
+        }
         Ok(None)
     }
 
-    fn fetch_releases(&self) -> Result<Vec<GithubRelease>, UpdateError> {
+    /// The releases through the installed-version boundary, and whether that boundary (or the
+    /// end of the list) was reached within [`MAX_RELEASE_PAGES`].
+    fn fetch_releases(&self) -> Result<(Vec<GithubRelease>, bool), UpdateError> {
         let token = self.tokens.token().ok_or(UpdateError::Unauthorized)?;
         let authorization = format!("Bearer {}", token.expose());
         let headers = [
@@ -347,16 +378,10 @@ impl UpdateChecker {
             let reached_end = page_releases.len() < RELEASES_PER_PAGE as usize;
             releases.extend(page_releases);
             if reached_installed || reached_end {
-                break;
-            }
-            if page == MAX_RELEASE_PAGES {
-                return Err(UpdateError::BadResponse(
-                    "release history exceeds the update-check limit; required status is incomplete"
-                        .into(),
-                ));
+                return Ok((releases, true));
             }
         }
-        Ok(releases)
+        Ok((releases, false))
     }
 
     /// Like [`check`](Self::check), but a failure is logged and answered with `None`, so a bad

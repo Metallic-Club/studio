@@ -49,3 +49,18 @@ fn oversized_handoff_rejected() {
     frame.extend(std::iter::repeat_n(b'a', MAX_HANDOFF_BYTES - 1));
     assert!(decode(&frame).is_ok());
 }
+
+/// #289: the pipe client sends only to a program named like this one (any folder, any case).
+#[test]
+fn the_pipe_server_must_be_a_launcher() {
+    use metallic_launcher::same_program;
+    use std::path::Path;
+    let own = Path::new(r"C:\Apps\MetallicLauncher\current\Metallic.exe");
+    assert!(same_program(
+        Path::new(r"D:\src\target\debug\metallic.EXE"),
+        own
+    ));
+    assert!(same_program(own, own));
+    assert!(!same_program(Path::new(r"C:\Tools\Other.exe"), own));
+    assert!(!same_program(Path::new(""), own));
+}
