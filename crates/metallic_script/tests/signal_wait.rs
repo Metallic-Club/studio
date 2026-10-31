@@ -354,3 +354,33 @@ fn wait_outside_a_yieldable_thread_fails_like_task_wait() {
     assert!(lines[1].contains("yield"), "{lines:?}");
     assert_eq!(rig.host.signal_waiters(), 0);
 }
+
+/// Tag events only fire when something listens: a thread in `:Wait()` counts as a listener.
+#[test]
+fn wait_on_a_tag_added_signal_resumes() {
+    let (mut rig, _pad, _ball) = pad_rig();
+    rig.server_script(
+        "Waiter",
+        r#"
+        local cs = game:GetService("CollectionService")
+        local part = cs:GetInstanceAddedSignal("Hot"):Wait()
+        print("tagged", part.Name)
+        "#,
+    );
+    rig.server_script(
+        "Tagger",
+        r#"
+        task.wait()
+        workspace.Ball:AddTag("Hot")
+        "#,
+    );
+    rig.host.start().unwrap();
+    assert_eq!(rig.host.signal_waiters(), 1);
+    rig.run(0.0, 5);
+    let lines = rig.lines();
+    assert!(
+        lines.contains(&"print:tagged Ball".to_string()),
+        "{lines:?}"
+    );
+    assert_eq!(rig.host.signal_waiters(), 0);
+}
