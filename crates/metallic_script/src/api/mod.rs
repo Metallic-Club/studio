@@ -29,6 +29,7 @@ pub use input::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
 };
+pub(crate) use instance::LuaInstance;
 pub(crate) use remote::{QueuedRemote, RemoteTarget};
 pub(crate) use signals::{EventKind, Hub, Pacing};
 

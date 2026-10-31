@@ -18,6 +18,7 @@
 #![warn(missing_docs)]
 
 mod api;
+mod debug;
 mod host;
 mod pattern;
 mod task_lib;
@@ -27,6 +28,7 @@ pub use api::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
 };
+pub use debug::{Breakpoint, DebugState, Debugger, Frame, PauseReason, Scope, VarHandle, VarNode};
 pub use host::{LOCAL_PLAYER_NAME, ScriptHost};
 pub use vm::{
     Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,

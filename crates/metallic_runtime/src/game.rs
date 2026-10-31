@@ -188,6 +188,17 @@ impl Game {
         self.running
     }
 
+    /// The script debugger (breakpoints, pause, step, inspection). While it has the game
+    /// paused, [`Game::frame`] runs no ticks.
+    pub fn debugger(&mut self) -> metallic_script::Debugger<'_> {
+        self.scripts.debugger()
+    }
+
+    /// True while the script debugger has the game paused.
+    pub fn is_paused(&self) -> bool {
+        self.scripts.is_paused()
+    }
+
     /// Starts the game: runs the scripts (which creates the local player `Player1`), copies the
     /// contents of `StarterGui` into the player's `PlayerGui` (once per start; M1 has no
     /// ResetOnSpawn; a restart after [`Game::stop`] replaces the copies of the last start),
@@ -345,6 +356,8 @@ impl Game {
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
+    /// No ticks run while the script debugger has the game paused ([`Game::is_paused`]).
+    ///
     /// Then the skinned avatar follows the character (pose, smoothed facing, animation over `dt`)
     /// and the camera follows too. (The touch volumes follow the tick-rate body animation of
     /// step 1, which the avatar's animation matches.) Draw with [`Game::render`] and [`crate::gui::paint`].
@@ -356,7 +369,9 @@ impl Game {
         };
         self.camera.apply_input(input);
         let mut ticks = 0;
-        if self.running {
+        // Paused in the script debugger: the simulation (physics, characters, scripts) holds
+        // still and no time accumulates; the camera and drawing go on.
+        if self.running && !self.scripts.is_paused() {
             // Capped so time kept by skipped ticks (see below) never piles up into a burst.
             self.accumulator = (self.accumulator + dt).min(MAX_FRAME_DT + TICK);
             while self.accumulator + 1e-9 >= TICK {

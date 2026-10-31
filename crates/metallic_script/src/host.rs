@@ -8,7 +8,7 @@
 //! [`ScriptHost::character_added`] and reach the scripts on the next `step`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -19,24 +19,25 @@ use crate::api::{
     self, ApiState, BoundResult, EventKind, HostShared, InputActionEvent, InputDevice, InputValue,
     RemoteTarget, TouchButtonInfo,
 };
+use crate::debug::{Breakpoint, Debugger};
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
 /// Name of the one local player created by the default combined [`ScriptHost::start`].
 pub const LOCAL_PLAYER_NAME: &str = "Player1";
 
 /// One VM together with the API state that drives it.
-struct Side {
-    vm: ScriptVm,
-    state: Rc<ApiState>,
+pub(crate) struct Side {
+    pub(crate) vm: ScriptVm,
+    pub(crate) state: Rc<ApiState>,
 }
 
 /// A script that was started: where it runs.
-struct RunningScript {
+pub(crate) struct RunningScript {
     context: Context,
 }
 
 /// The owner id a script's threads and connections carry (never 0).
-fn owner_id(id: InstanceId) -> u64 {
+pub(crate) fn owner_id(id: InstanceId) -> u64 {
     id.to_bits() + 1
 }
 
@@ -65,7 +66,7 @@ enum HostEvent {
 /// Runs a world's scripts: server `Script`s and, in the default combined mode, `LocalScript`s.
 pub struct ScriptHost {
     world: Rc<RefCell<World>>,
-    output: Rc<dyn OutputSink>,
+    pub(crate) output: Rc<dyn OutputSink>,
     shared: Rc<HostShared>,
     server: Option<Side>,
     client: Option<Side>,
@@ -73,13 +74,21 @@ pub struct ScriptHost {
     run_client: bool,
     inputs: Vec<HostEvent>,
     /// Scripts that were started and not stopped since (each runs once per `start`).
-    running: HashMap<InstanceId, RunningScript>,
+    pub(crate) running: HashMap<InstanceId, RunningScript>,
     /// Where the world's change journal was when scripts were last looked for.
     cursor: Option<ChangeCursor>,
     /// Resume budget of both VMs (see [`ScriptVm::set_resume_budget`]).
     resume_budget: Duration,
     /// `dispatch_input_now` already delivered this frame's action events.
     input_dispatched: bool,
+    /// Debugger breakpoints by script and line; they apply to every start.
+    pub(crate) breakpoints: BTreeMap<InstanceId, BTreeMap<u32, Breakpoint>>,
+    /// The debugger pauses at errors no `pcall` handles.
+    pub(crate) break_on_error: bool,
+    /// Paused by [`Debugger::pause`] while no script was running.
+    pub(crate) manual_pause: bool,
+    /// Scripts found while paused (or after a start paused): started once the game runs.
+    pending_starts: Vec<(InstanceId, Context, String, String)>,
 }
 
 impl ScriptHost {
@@ -98,6 +107,10 @@ impl ScriptHost {
             cursor: None,
             resume_budget: RESUME_BUDGET,
             input_dispatched: false,
+            breakpoints: BTreeMap::new(),
+            break_on_error: false,
+            manual_pause: false,
+            pending_starts: Vec::new(),
         }
     }
 
@@ -128,6 +141,23 @@ impl ScriptHost {
     /// True between `start` and `stop`.
     pub fn is_running(&self) -> bool {
         self.server.is_some()
+    }
+
+    /// The script debugger: breakpoints, pause and step, and the paused frames.
+    pub fn debugger(&mut self) -> Debugger<'_> {
+        Debugger { host: self }
+    }
+
+    /// True while the debugger has the game paused: [`Self::step`] then runs nothing and
+    /// the runtime stops physics and characters too.
+    pub fn is_paused(&self) -> bool {
+        // No allocation: the runtime asks every frame.
+        self.manual_pause
+            || self
+                .server
+                .iter()
+                .chain(self.client.iter())
+                .any(|side| side.vm.sched().debug.is_paused())
     }
 
     /// In the default combined host, creates local player `Player1` (UserId 0, with a
@@ -178,7 +208,7 @@ impl ScriptHost {
     /// `RunService.Heartbeat(dt)`, then resumes `WaitForChild` and `task.wait` threads.
     /// Does nothing before `start`.
     pub fn step(&mut self, now: f64, dt: f64) {
-        if !self.is_running() {
+        if !self.is_running() || self.is_paused() {
             return;
         }
         for side in self.sides() {
@@ -189,10 +219,16 @@ impl ScriptHost {
         for side in self.sides() {
             side.state.run_deferred();
         }
+        if self.is_paused() {
+            return;
+        }
         // Remotes first: one fired by a handler in this step waits for the next one.
         self.deliver_remotes();
         self.deliver_inputs();
         self.deliver_input_actions();
+        if self.is_paused() {
+            return;
+        }
 
         let run_service = self
             .world
@@ -210,6 +246,9 @@ impl ScriptHost {
             side.state.wake_waiters();
             side.state.prune_hub();
             side.state.end_step();
+        }
+        if self.is_paused() {
+            return;
         }
         for side in self.sides_mut() {
             side.vm.step(now);
@@ -232,6 +271,8 @@ impl ScriptHost {
         self.shared.input.clear();
         self.running.clear();
         self.cursor = None;
+        self.manual_pause = false;
+        self.pending_starts.clear();
     }
 
     /// Queues an event of an `InputAction` instance for the client scripts: the next `step`
@@ -334,7 +375,7 @@ impl ScriptHost {
         self.sides().iter().map(|s| s.state.args_built()).sum()
     }
 
-    fn sides(&self) -> Vec<&Side> {
+    pub(crate) fn sides(&self) -> Vec<&Side> {
         self.server.iter().chain(self.client.iter()).collect()
     }
 
@@ -354,7 +395,9 @@ impl ScriptHost {
             self.shared.clone(),
             self.output.clone(),
         )?;
-        Ok(Side { vm, state })
+        let side = Side { vm, state };
+        self.push_breakpoints(&side, None);
+        Ok(side)
     }
 
     fn side_for(&mut self, context: Context) -> Option<&mut Side> {
@@ -461,8 +504,19 @@ impl ScriptHost {
                 side.state.stop_owner(owner_id(id));
             }
         }
+        let mut starts = starts;
+        if !self.pending_starts.is_empty() {
+            let mut all = std::mem::take(&mut self.pending_starts);
+            all.extend(starts);
+            starts = all;
+        }
         for (id, context, chunk_name, source) in starts {
             if self.running.contains_key(&id) {
+                continue;
+            }
+            if self.is_paused() {
+                // A script start paused in the debugger: the rest start once it runs.
+                self.pending_starts.push((id, context, chunk_name, source));
                 continue;
             }
             self.running.insert(id, RunningScript { context });
@@ -579,6 +633,9 @@ impl ScriptHost {
     /// `step` of the same frame then delivers no more action events and continues the time
     /// budget started here; call [`ScriptHost::end_frame`] when the frame is done.
     pub fn dispatch_input_now(&mut self, now: f64) {
+        if self.is_paused() {
+            return;
+        }
         let Some(client) = &self.client else { return };
         client.state.now.set(now);
         client.state.restart_step();

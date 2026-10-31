@@ -98,6 +98,12 @@ apps.
   starts only the server VM and server-eligible Scripts, without creating a local Player/PlayerGui or PlayerAdded.
   The role is fixed at construction, preserves pre-existing world state and filters client script candidates before
   running-script bookkeeping. This adds no transport, player admission, server executable or M2 acceptance.
+  Script debugger (Task 15, `src/debug/`, `ScriptHost::debugger`): breakpoints (plain, condition, logpoint) are
+  patched into script bytecode with `lua_breakpoint`; a paused thread *breaks* (`lua_break`) instead of blocking, so
+  Studio's UI keeps running. Breaks travel outward through `coroutine.resume` and `task.spawn`; Continue resumes the
+  chain innermost first with fresh budgets. Luau's debug callbacks are installed only while armed (breakpoints, break on
+  error, a pending step or pause), so a game without breakpoints runs unhooked. While paused the host runs no script
+  code and `Game::frame` runs no ticks.
   The host exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
