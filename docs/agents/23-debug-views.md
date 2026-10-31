@@ -24,7 +24,7 @@ are separate PRs; this branch starts from main and does not depend on them.
 - `metallic_runtime`: `Game::set_debug_draw` / `debug_shapes`; `sync_renderer` hands the shapes to the renderer.
   Colours are in `debug_draw.rs`.
 - Player: F4 cycles the views, F6 toggles the physics overlay; `--debug-view NAME`, `--debug-physics`.
-- Studio: View > Debug views (`debugger/views_menu.rs`) for the render view, a light meter reading (EV100 and
+- Studio: View > Debug views (`debug_views/views_menu.rs`) for the render view, a light meter reading (EV100 and
   multiplier) and the physics overlays while playing.
 
 ## Cost when off

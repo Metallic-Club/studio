@@ -5,7 +5,7 @@ use egui_kittest::kittest::Queryable;
 use metallic_render::DebugView;
 use metallic_render::exposure::ExposureState;
 use metallic_runtime::DebugDrawOptions;
-use metallic_studio::debugger::views_menu::{menu, meter_text};
+use metallic_studio::debug_views::views_menu::{menu, meter_text};
 use metallic_studio::viewport::Viewport;
 
 type State = (Viewport, DebugDrawOptions);

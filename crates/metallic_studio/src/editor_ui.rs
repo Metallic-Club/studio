@@ -656,7 +656,7 @@ impl EditorUi {
                             == metallic_render::DebugView::Exposure)
                             .then(|| self.viewport.exposure())
                             .flatten();
-                        crate::debugger::views_menu::menu(
+                        crate::debug_views::views_menu::menu(
                             ui,
                             &mut self.viewport,
                             &mut self.debug_physics,

@@ -204,7 +204,7 @@ apps.
   `explorer.rs`, `properties.rs` (live preview while the pointer is held, one undo step on release),
   `script_editor.rs`, `transform.rs`, `expr.rs`. Seams: `actions.rs` (toolbar/menu/key actions as data, with
   accessories), `keymap.rs` (bindings as data), `output.rs` (`OutputSink::push(tag, level, text)` over a bounded
-  channel, drops counted; `ScriptOutput` adapts it to Luau output), `debugger/views_menu.rs` (View > Debug views:
+  channel, drops counted; `ScriptOutput` adapts it to Luau output), `debug_views/views_menu.rs` (View > Debug views:
   the viewport's `DebugView`, the exposure meter reading, and the physics overlays a play session draws through
   `PlayView::set_debug_draw`), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
