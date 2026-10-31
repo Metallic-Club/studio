@@ -3,13 +3,13 @@
 //! split by the three checkpoints and getting harder bit by bit:
 //!
 //! 1. Sandstone: the spawn island, five easy 4-stud jumps, four 3-stud steps, a zigzag of four
-//!    pads, a plank bridge and three more hops, up to Checkpoint 1 (y = 13.5).
+//!    pads, a plank bridge and three more hops, up to Checkpoint 1 (y = 14).
 //! 2. Slate blue: the lava walk (floor tiles and lava strips; each strip leaves a safe lane that
 //!    changes side), a moving platform over a 23-stud gap, two 3-stud-wide beams over a lava
 //!    river and a second, mirrored lava walk, up to Checkpoint 2.
 //! 3. Moss green: the spinning bar arena (jump the bar as it sweeps), ledges and a 2-stud beam,
 //!    stepping stones over a lava pool, then a tower climb: fourteen pads spiralling up a column
-//!    (a wide base catches anyone who slips), up to Checkpoint 3 (y = 54.5).
+//!    (a wide base catches anyone who slips), up to Checkpoint 3 (y = 55).
 //! 4. Ice: four long jumps (5 to 7 studs; running helps), a second moving platform and a slalom
 //!    of small pads, up to the Finish (y = 66).
 //!
@@ -415,62 +415,62 @@ impl Builder {
         let jumps = [
             (0.0, 0.0, -22.0),
             (3.0, 0.0, -34.0),
-            (-2.0, 1.5, -46.0),
+            (-2.0, 2.0, -46.0),
             (2.0, 3.0, -58.0),
-            (0.0, 4.5, -70.0),
+            (0.0, 5.0, -70.0),
         ];
         for (i, (x, top, z)) in jumps.into_iter().enumerate() {
             self.platform(&format!("Jump{}", i + 1), SAND, x, top, z, 8.0, 8.0)?;
         }
-        let steps = [(6.0, -80.0), (7.5, -89.0), (9.0, -98.0), (10.5, -107.0)];
+        let steps = [(6.0, -80.0), (8.0, -89.0), (9.0, -98.0), (11.0, -107.0)];
         for (i, (top, z)) in steps.into_iter().enumerate() {
             self.platform(&format!("Step{}", i + 1), SAND, 0.0, top, z, 6.0, 6.0)?;
         }
         let zigzag = [
-            (-5.0, 10.5, -118.0),
+            (-5.0, 11.0, -118.0),
             (3.0, 12.0, -129.0),
             (-3.0, 12.0, -141.0),
-            (2.0, 13.5, -152.0),
+            (2.0, 14.0, -152.0),
         ];
         for (i, (x, top, z)) in zigzag.into_iter().enumerate() {
             self.platform(&format!("Zigzag{}", i + 1), SAND, x, top, z, 6.0, 6.0)?;
         }
-        self.platform("PlankBridge", SAND, 0.0, 13.5, -170.0, 4.0, 26.0)?;
+        self.platform("PlankBridge", SAND, 0.0, 14.0, -170.0, 4.0, 26.0)?;
         let hops = [
             (-4.0, 15.0, -190.0),
             (3.0, 15.0, -201.0),
-            (-2.0, 13.5, -212.0),
+            (-2.0, 14.0, -212.0),
         ];
         for (i, (x, top, z)) in hops.into_iter().enumerate() {
             self.platform(&format!("Hop{}", i + 1), SAND, x, top, z, 6.0, 6.0)?;
         }
-        self.checkpoint(checkpoints, SAND, 1, 0.0, 13.5, -228.0)
+        self.checkpoint(checkpoints, SAND, 1, 0.0, 14.0, -228.0)
     }
 
     /// Section 2: the lava walk, the first moving platform, the beams over the lava river and the
     /// mirrored second lava walk, up to Checkpoint 2.
     fn slate(&mut self, checkpoints: InstanceId) -> Result<(), CoreError> {
-        self.lava_walk(13.5, -175.0, &FIRST_WALK)?;
+        self.lava_walk(14.0, -175.0, &FIRST_WALK)?;
         // The mover crosses the 23-stud gap from the walk's end (z -229) to the dock (z -252),
         // stopping 0.5 studs from each.
-        self.mover("MovingPlatform", 0.0, 13.5, -240.5)?;
-        self.platform("Dock", SLATE, 0.0, 13.5, -258.0, 12.0, 12.0)?;
+        self.mover("MovingPlatform", 0.0, 14.0, -240.5)?;
+        self.platform("Dock", SLATE, 0.0, 14.0, -258.0, 12.0, 12.0)?;
         self.lava_river()?;
-        self.lava_walk(13.5, -300.0, &SECOND_WALK)?;
-        self.checkpoint(checkpoints, SLATE, 2, 0.0, 13.5, -362.0)
+        self.lava_walk(14.0, -300.0, &SECOND_WALK)?;
+        self.checkpoint(checkpoints, SLATE, 2, 0.0, 14.0, -362.0)
     }
 
     /// Section 3: the spinning bar arena, ledges, a beam, stepping stones over lava and the
     /// tower climb, up to Checkpoint 3.
     fn moss(&mut self, checkpoints: InstanceId) -> Result<(), CoreError> {
         let (ws, scenery) = (self.ws, self.scenery);
-        self.platform("Arena", MOSS, 0.0, 13.5, -334.0, 30.0, 30.0)?;
+        self.platform("Arena", MOSS, 0.0, 14.0, -334.0, 30.0, 30.0)?;
         self.part(
             "Part",
             scenery,
             "BarHub",
             [3.0, 5.0, 3.0],
-            [0.0, 16.0, -334.0],
+            [0.0, 16.5, -334.0],
             MOSS.rim,
             "SmoothPlastic",
         )?;
@@ -479,18 +479,18 @@ impl Builder {
             ws,
             "SpinningBar",
             [28.0, 1.2, 1.2],
-            [0.0, 14.9, -334.0],
+            [0.0, 15.4, -334.0],
             STEEL,
             "Metal",
         )?;
         self.script("Script", bar, "Spin", scripts::SPINNING_BAR)?;
         self.platform("Ledge1", MOSS, 4.0, 15.0, -356.0, 6.0, 6.0)?;
-        self.platform("Ledge2", MOSS, -3.0, 16.5, -367.0, 6.0, 6.0)?;
+        self.platform("Ledge2", MOSS, -3.0, 17.0, -367.0, 6.0, 6.0)?;
         self.platform("Beam", MOSS, -3.0, 18.0, -385.0, 2.0, 20.0)?;
         self.platform("Ledge3", MOSS, -3.0, 18.0, -403.0, 6.0, 6.0)?;
         self.lava_pool()?;
         self.tower_climb()?;
-        self.checkpoint(checkpoints, MOSS, 3, 0.0, 54.5, -474.0)
+        self.checkpoint(checkpoints, MOSS, 3, 0.0, 55.0, -474.0)
     }
 
     /// Section 4: long jumps, the second moving platform and a slalom up to the Finish.
@@ -498,7 +498,7 @@ impl Builder {
         let ws = self.ws;
         let long_jumps = [
             (4.0, 46.0, -490.0),
-            (-2.0, 47.5, -502.0),
+            (-2.0, 48.0, -502.0),
             (3.0, 49.0, -515.0),
             (-1.0, 50.0, -528.0),
         ];
@@ -642,7 +642,7 @@ impl Builder {
             lava,
             "LavaRiver",
             [16.0, 1.0, 36.0],
-            [0.0, 11.0, -282.0],
+            [0.0, 11.5, -282.0],
             LAVA,
             "SmoothPlastic",
         )?;
@@ -651,18 +651,18 @@ impl Builder {
             course,
             "LavaRiverRim",
             [16.6, 1.4, 36.6],
-            [0.0, 10.6, -282.0],
+            [0.0, 11.1, -282.0],
             SLATE.rim,
             "SmoothPlastic",
         )?;
-        self.support(SLATE, 0.0, 9.9, -282.0, 4.0)?;
-        self.slab("RiverBeam1", SLATE, -2.0, 13.5, -271.0, 3.0, 14.0)?;
-        self.slab("RiverRest", SLATE, 0.0, 13.5, -281.0, 6.0, 6.0)?;
-        self.slab("RiverBeam2", SLATE, 2.0, 13.5, -292.0, 3.0, 16.0)?;
+        self.support(SLATE, 0.0, 10.4, -282.0, 4.0)?;
+        self.slab("RiverBeam1", SLATE, -2.0, 14.0, -271.0, 3.0, 14.0)?;
+        self.slab("RiverRest", SLATE, 0.0, 14.0, -281.0, 6.0, 6.0)?;
+        self.slab("RiverBeam2", SLATE, 2.0, 14.0, -292.0, 3.0, 16.0)?;
         Ok(())
     }
 
-    /// A lava pool (z -410 to -434, top y = 18.5) crossed on four stepping stones (top y = 20).
+    /// A lava pool (z -410 to -434, top y = 19) crossed on four stepping stones (top y = 20).
     fn lava_pool(&mut self) -> Result<(), CoreError> {
         let (lava, course) = (self.lava, self.course);
         self.part(
@@ -670,7 +670,7 @@ impl Builder {
             lava,
             "LavaPool",
             [16.0, 1.0, 24.0],
-            [0.0, 18.0, -422.0],
+            [0.0, 18.5, -422.0],
             LAVA,
             "SmoothPlastic",
         )?;
@@ -679,11 +679,11 @@ impl Builder {
             course,
             "LavaPoolRim",
             [16.6, 1.4, 24.6],
-            [0.0, 17.6, -422.0],
+            [0.0, 18.1, -422.0],
             MOSS.rim,
             "SmoothPlastic",
         )?;
-        self.support(MOSS, 0.0, 16.9, -422.0, 4.0)?;
+        self.support(MOSS, 0.0, 17.4, -422.0, 4.0)?;
         for (i, (x, z)) in [(-3.0, -413.0), (2.0, -419.0), (-2.0, -425.0), (3.0, -431.0)]
             .into_iter()
             .enumerate()
@@ -854,7 +854,9 @@ fn tower_pad(i: usize) -> (f64, f64, f64) {
     let angle = (TOWER_FIRST_ANGLE + TOWER_ANGLE_STEP * i as f64).to_radians();
     (
         cx + TOWER_RADIUS * angle.sin(),
-        TOWER_FIRST_TOP + TOWER_RISE * i as f64,
+        // Whole-stud tops, so 1-stud pads have their faces on the grid (spec 2.2): the rise
+        // alternates 3 and 2 studs (2.5 on average).
+        (TOWER_FIRST_TOP + TOWER_RISE * i as f64).ceil(),
         cz + TOWER_RADIUS * angle.cos(),
     )
 }
