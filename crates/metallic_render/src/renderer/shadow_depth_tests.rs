@@ -25,7 +25,7 @@ fn context(backends: wgpu::Backends) -> Option<RenderContext> {
             );
             Some(ctx)
         }
-        Err(error) => {
+        Err(error @ RenderError::NoAdapter(_)) => {
             eprintln!("shadow-depth probe UNAVAILABLE: {backends:?}: {error}");
             assert!(
                 std::env::var_os("METALLIC_REQUIRE_SHADOW_PROBE").is_none(),
@@ -33,6 +33,7 @@ fn context(backends: wgpu::Backends) -> Option<RenderContext> {
             );
             None
         }
+        Err(error) => panic!("shadow-depth probe device setup failed: {error}"),
     }
 }
 

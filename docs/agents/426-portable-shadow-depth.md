@@ -47,6 +47,13 @@ the requested DX12 and Vulkan backends were reported by the actual adapters.
    `03cb0b2f24fbcf3057de7bf848924a32ffca51fd`. All four tests passed, including
    both 44-observation matrices, the original DX12 case and CPU shader validation.
 
+After that unchanged-probe proof, independent review tightened only adapter-error
+classification: default runs may skip `RenderError::NoAdapter`, but device setup
+errors always fail. The required-adapter proof already failed on either error.
+This policy-only delta changes the final Rust probe blob; numeric shader, fixture,
+oracle and tolerances remain unchanged. The four focused controls must pass again
+before the final-source workspace suite.
+
 The matrices cover both sides of every actual split, the beyond-last count sentinel,
 exact uniform equality independently of raster rounding, and tilted triangles with
 unequal vertex depths. Their independently calculated perspective oracle differs
