@@ -266,3 +266,30 @@ retain exact source/tree/blobs and checksums; focused baseline/green logs remain
 and other earlier results above keep their original bases. The final commit records validation prose only.
 Push append-only to the existing branch/PR, return #311 to review, and inspect current-head CI. No aggregate
 PR, main merge, authentication, admission, complete runtime-driver or live multiplayer acceptance is claimed.
+
+
+## Second pinned-main refresh: ModuleScript compatibility (source preparation)
+
+The conductor assigned a normal append-only merge of exact main
+`995f880ced789284354ccbb1e64b6bf841382abc` into published
+`65c4c99644e36a6ba8f20a0b752414235b558db2`. Merge checkpoint:
+`990874b139ea627cefffb521830d14588ad6679a`. The only textual conflict was in
+`docs/luau-api.md`: retain explicit roles/roster/lifecycle/GUI cleanup documentation and
+main's complete ModuleScript/require section; remove the obsolete claim that this branch
+has no loader. No production source needed manual conflict resolution. The loader,
+script environment helper and stop_owner -> require.release_owner hook match pinned main.
+All earlier validation above remains tied to its original source, not this merge.
+
+New public controls in `tests/require_roles.rs` cover Combined/Server/Client module
+visibility and per-VM caching, completed Client cache retention across rebind versus fresh
+cache on restart, suspended-loader release on rebind with no stale wake, and transfer of a
+PlayerGui loader to another player while an eligible waiter takes over. This main has no
+ServerStorage class/service, so the visibility fixture uses actual ServerScriptService;
+no replacement class is fabricated. Existing require cycle/error/deadline/sandbox cases
+are preserved untouched. No new timeout value, ignore or protected-call replacement.
+
+All Cargo is held pending the conductor's grant. No new test result is claimed. The
+released lane124 is the eventual guard-owned target; lane122 belongs to physics408 and
+lane123 to root305. Next: inspect the frozen source, run focused role/require plus GUI and
+server controls when granted, then mandatory full gates and append-only PR update. No
+transport, admission, blocked #336 implementation or multiplayer acceptance is included.

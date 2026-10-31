@@ -77,7 +77,9 @@ M2 epic #15 acceptance is unchanged.
 `ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
 sandboxed Luau under the requiring thread's deadline (it may `task.wait`), and returns the module's single return value to every
 caller; `script` inside the module is the ModuleScript. The cache is scoped to the VM, so the server VM and the client VM of a
-host each run a module once. Rules, as in Roblox:
+host each run a module once. Explicit Server and Client hosts use the same loader rules. A Client rebind retains completed
+module values in its existing VM, while stopping that Client script releases any unfinished load it owns. Restarting the
+host creates a fresh cache. Rules, as in Roblox:
 
 - the module must return exactly one value (`nil` counts): otherwise `<Full.Name>: Module code did not return exactly one value`;
 - a cyclic require errors with `Requested module was required recursively` instead of hanging;
