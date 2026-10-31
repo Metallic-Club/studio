@@ -62,7 +62,14 @@ apps.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here. The controller records its support contact
+  and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
+  R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
+  that never push. Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every
+  tick with `CharacterController::set_body_pose` (else `BodyPose::rest`). The capsules are controller queries: one
+  broad-phase lookup per step, at most `MAX_TOUCH_CANDIDATES` parts (existing contacts first, then the nearest; the rest
+  are counted in `TouchQueryCost`), nothing allocated once warm. They report `CharacterEvent::Touched`/`TouchEnded
+  { part, hit }` per body part, including when a character is destroyed or replaced; the movement capsule reports as
+  the root. Nothing is matched by name, so NPC Models keep their own physics. The controller records its support contact
   (`SupportContact`, part of `CharacterState`) in body-local coordinates and carries the capsule's bottom-sphere
   centre through the support's next observed pose change, so riders keep their radius on tilted spinners. Idle
   facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum
@@ -138,7 +145,10 @@ apps.
   The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
-  physics body parts stay as invisible collision and touch proxies. `locomotion.rs` is a small built-in controller
+  avatar is animated by a `BodyAnimator` (`body_pose.rs`), which needs only `metallic_asset` and `metallic_anim` (no
+  renderer). The tick loop runs one per stepped character (`CharacterBodies`) and hands its pose to
+  `CharacterController::set_body_pose`, so a headless server computes the same limb touch volumes; each body part's
+  capsule is skinned rigidly by one VRM bone. `locomotion.rs` is a small built-in controller
   (idle / walk_slow / walk / run blended by speed with the clip rate following the distance covered, jump, fall, land,
   0.1-0.2 s crossfades); its only interface is `Locomotion::update(model, LocomotionInput { speed, support }, dt,
   &mut Pose)`, which the animation system (#40) replaces. `examples/avatar_shots.rs` renders review screenshots.
@@ -385,7 +395,10 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
-   touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
+   touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
+   touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model
+   (`TouchEnded` still fires on the touched part when the character was destroyed first, with the destroyed limb);
+   `Died` -> `humanoid_died`;
    `Respawned` -> `physics.sync_from` and `character_added(player, model)`.
 4. **script step** (`ScriptHost::step`: new scripts, remotes, the inputs above, `RunService.Heartbeat`, resumed waits).
 5. **physics re-sync** when the change journal shows a BasePart under Workspace was created, destroyed, reparented or
