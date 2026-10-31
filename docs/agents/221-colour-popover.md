@@ -26,6 +26,12 @@ are still open, so nothing is wired into a Properties panel yet; a demo screen s
   `CommitHueShift`, `Cancel` (Esc), `Closed`.
 - `demo.rs` + `--scene colour`: a demo Part and a Properties-style Color row; shows the undo names.
 
+## Review follow-ups (branch `studio/221-popover-fixes`, after #312)
+
+- Alt-drag on the ring shifts by the pointer's turn since the press; a press with no net turn adds no undo step.
+- Palette drag-to-reorder drops on the slot nearest by x and y (`nearest_slot`), so it also works in wrapped or grid
+  layouts.
+
 ## Next (after #10 and #213)
 
 - Open from the contextual toolbar, Properties `Color` row and C; map events to the overlay and `SetProperties`.

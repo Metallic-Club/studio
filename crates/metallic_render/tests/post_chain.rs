@@ -269,36 +269,45 @@ fn passes_run_in_slot_order_around_the_finish_pass() {
 fn check_chain_order(ctx: &RenderContext) {
     for quality in [Quality::Low, Quality::High] {
         let mut r = flat_sky_on(ctx, quality, 0.18);
-        // Linear red 1.0 through the default curve: Filmic(1.0) = 0.8037, sRGB 231.
-        r.post_mut().push(Box::new(Fill::new([1.0, 0.0, 0.0, 0.0])));
-        let red = centre(&r.capture(&camera(), SIZE).expect("capture"));
-        assert!(near(red, [231, 0, 0]), "{quality:?} hdr fill: {red:?}");
-        assert!(
-            r.post_mut()
-                .get_mut::<Fill>("fill")
-                .expect("fill")
-                .saw_depth,
-            "depth not offered"
-        );
-
-        r.post_mut().push(Box::new(Ldr::new("invert", "1.0 - c")));
-        let inv = centre(&r.capture(&camera(), SIZE).expect("capture"));
-        assert!(near(inv, [24, 255, 255]), "{quality:?} invert: {inv:?}");
-
-        // Two LDR passes: invert, then halve (ping-pong through both intermediates).
-        r.post_mut().push(Box::new(Ldr::new("halve", "c * 0.5")));
-        let half = centre(&r.capture(&camera(), SIZE).expect("capture"));
-        assert!(near(half, [12, 128, 128]), "{quality:?} halve: {half:?}");
-        assert_eq!(
-            r.post().names(PostSlot::Ldr).collect::<Vec<_>>(),
-            ["invert", "halve"]
-        );
-
-        r.post_mut().remove("invert");
-        r.post_mut().remove("fill");
-        let only_half = centre(&r.capture(&camera(), SIZE).expect("capture"));
-        assert!(near(only_half, [70, 70, 70]), "{quality:?}: {only_half:?}");
+        check_chain_order_on(&mut r, quality);
     }
+}
+
+/// The chain order checks on `r` (a flat 0.18 sky).
+fn check_chain_order_on(r: &mut Renderer, quality: Quality) {
+    r.sky.zenith = [0.18; 3];
+    r.sky.horizon = [0.18; 3];
+    r.sky.ground = [0.18; 3];
+    r.finish.dither = true;
+    // Linear red 1.0 through the default curve: Filmic(1.0) = 0.8037, sRGB 231.
+    r.post_mut().push(Box::new(Fill::new([1.0, 0.0, 0.0, 0.0])));
+    let red = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    assert!(near(red, [231, 0, 0]), "{quality:?} hdr fill: {red:?}");
+    assert!(
+        r.post_mut()
+            .get_mut::<Fill>("fill")
+            .expect("fill")
+            .saw_depth,
+        "depth not offered"
+    );
+
+    r.post_mut().push(Box::new(Ldr::new("invert", "1.0 - c")));
+    let inv = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    assert!(near(inv, [24, 255, 255]), "{quality:?} invert: {inv:?}");
+
+    // Two LDR passes: invert, then halve (ping-pong through both intermediates).
+    r.post_mut().push(Box::new(Ldr::new("halve", "c * 0.5")));
+    let half = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    assert!(near(half, [12, 128, 128]), "{quality:?} halve: {half:?}");
+    assert_eq!(
+        r.post().names(PostSlot::Ldr).collect::<Vec<_>>(),
+        ["invert", "halve"]
+    );
+
+    r.post_mut().remove("invert");
+    r.post_mut().remove("fill");
+    let only_half = centre(&r.capture(&camera(), SIZE).expect("capture"));
+    assert!(near(only_half, [70, 70, 70]), "{quality:?}: {only_half:?}");
 }
 
 /// The GL backend (when the machine has one) renders through the same HDR target, finish pass
@@ -357,5 +366,40 @@ impl PostPass for DepthCopy {
     fn record(&mut self, ctx: &mut PostContext<'_>) {
         assert!(ctx.depth.is_some());
         self.0.draw(ctx, &[]);
+    }
+}
+
+/// The 8-bit fallback scene target (adapters without float render targets) still renders the
+/// chain: mid-grey within the fallback's quantisation, light above 1 clipped (not wrapped or
+/// black), and passes still run.
+#[test]
+fn ldr_scene_target_fallback_renders() {
+    let Ok(ctx) = RenderContext::new_headless() else {
+        return;
+    };
+    for quality in [Quality::Low, Quality::High] {
+        let mut r = flat_sky_on(&ctx, quality, 0.18);
+        r.force_ldr_scene_target();
+        assert_eq!(r.hdr_format(), metallic_render::post::LDR_FORMAT);
+        r.finish.dither = false;
+        let px = r.capture(&camera(), SIZE).expect("capture");
+        let want = old_output([0.18; 3], r.sky.exposure);
+        assert!(
+            (i32::from(px[1]) - i32::from(want[1])).abs() <= 4,
+            "{quality:?}: {:?} vs {want:?}",
+            &px[..3]
+        );
+        // Linear 4.0 is stored as 1.0: the result is the curve at 1.0 x exposure.
+        r.sky.zenith = [4.0; 3];
+        r.sky.horizon = [4.0; 3];
+        r.sky.ground = [4.0; 3];
+        let px = r.capture(&camera(), SIZE).expect("capture");
+        let clipped = old_output([1.0; 3], r.sky.exposure);
+        assert!(
+            (i32::from(px[1]) - i32::from(clipped[1])).abs() <= 2,
+            "{quality:?}: {:?} vs {clipped:?}",
+            &px[..3]
+        );
+        check_chain_order_on(&mut r, quality);
     }
 }

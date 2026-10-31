@@ -2,9 +2,7 @@
 //!
 //! The math is [`metallic_core::CFrame`]; this module only converts arguments and results.
 
-use metallic_core::{
-    CFrame, CoreError, InstanceId, RotationOrder, Value as CoreValue, Vec3, World,
-};
+use metallic_core::{CFrame, RotationOrder, Vec3};
 use mlua::{
     Lua, MetaMethod, MultiValue, Table, UserData, UserDataFields, UserDataMethods, UserDataRef,
     Value, Variadic,
@@ -27,37 +25,7 @@ pub(crate) fn cframe(v: &Value) -> Option<CFrame> {
     }
 }
 
-/// `BasePart.CFrame`: the part's `Position` and `Orientation` as one frame.
-pub(crate) fn part_cframe(world: &World, id: InstanceId) -> Result<CFrame, CoreError> {
-    let read = |name| match world.get(id, name)? {
-        CoreValue::Vector3(v) => Ok(v),
-        _ => Err(CoreError::InvalidInstance),
-    };
-    Ok(CFrame::from_position_orientation(
-        read("Position")?,
-        read("Orientation")?,
-    ))
-}
-
-/// Writes `BasePart.CFrame` as `Position` and `Orientation`; nothing changes if it is not finite.
-pub(crate) fn set_part_cframe(
-    world: &mut World,
-    id: InstanceId,
-    cf: CFrame,
-) -> Result<(), CoreError> {
-    if !cf.is_finite() {
-        return Err(CoreError::InvalidValue {
-            property: "CFrame".into(),
-            reason: "all numeric components must be finite".into(),
-        });
-    }
-    world.set(id, "Position", CoreValue::Vector3(cf.position))?;
-    world.set(
-        id,
-        "Orientation",
-        CoreValue::Vector3(cf.orientation_degrees()),
-    )
-}
+pub(crate) use metallic_core::transform::{part_cframe, set_part_cframe};
 
 fn number(v: &Value) -> Option<f64> {
     match v {

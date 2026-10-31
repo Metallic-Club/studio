@@ -342,6 +342,8 @@ pub struct Renderer {
     hdr_features: Option<wgpu::TextureFormatFeatures>,
     /// The HDR target format in use (see [`hdr_format_for`]).
     hdr_format: wgpu::TextureFormat,
+    /// Bumped whenever the attachments are rebuilt ([`PostContext::targets`]).
+    targets: u64,
     scene: Scene,
     uploaded_version: Option<u64>,
     meshes: Vec<GpuMesh>,
@@ -503,6 +505,7 @@ impl Renderer {
             finish_gpu,
             hdr_features,
             hdr_format,
+            targets: 0,
             scene: Scene::new(),
             uploaded_version: None,
             meshes,
@@ -581,6 +584,26 @@ impl Renderer {
     /// cannot render to it (see [`crate::post::hdr_format_for`]).
     pub fn hdr_format(&self) -> wgpu::TextureFormat {
         self.hdr_format
+    }
+
+    /// Uses the 8-bit fallback scene target even where float targets work, so tests can check
+    /// the fallback path on any machine.
+    #[doc(hidden)]
+    pub fn force_ldr_scene_target(&mut self) {
+        self.hdr_features = Some(wgpu::TextureFormatFeatures {
+            allowed_usages: wgpu::TextureUsages::empty(),
+            flags: wgpu::TextureFormatFeatureFlags::empty(),
+        });
+        self.hdr_format = hdr_format_for(self.hdr_features, self.settings.samples());
+        self.pipelines = make_pipelines(
+            &self.device,
+            self.settings.samples(),
+            self.hdr_format,
+            &self.global_layout,
+            &self.shadow_layout,
+            &self.skin_layout,
+        );
+        self.attachments = None;
     }
 
     /// Number of parts currently known to the renderer (drawn or not).
@@ -726,6 +749,7 @@ impl Renderer {
                 })
                 .create_view(&wgpu::TextureViewDescriptor::default())
         });
+        self.targets += 1;
         self.attachments = Some(Attachments {
             size,
             msaa_color,
@@ -1015,6 +1039,7 @@ impl Renderer {
                 output,
                 output_format: self.hdr_format,
                 hdr_format: self.hdr_format,
+                targets: self.targets,
                 size,
                 depth: keep_depth.then_some(&att.depth),
                 depth_samples: samples,
@@ -1073,6 +1098,7 @@ impl Renderer {
                 output,
                 output_format,
                 hdr_format: self.hdr_format,
+                targets: self.targets,
                 size,
                 depth: keep_depth.then_some(&att.depth),
                 depth_samples: samples,

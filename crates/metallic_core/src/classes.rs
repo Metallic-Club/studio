@@ -1,6 +1,7 @@
 //! The class registry: every class, its superclass and its properties with defaults.
 //!
 //! To add a class, add one [`ClassDef`] entry to `CLASSES` below and its index to [`class_def`].
+use crate::cframe::CFrame;
 use crate::value::{Color3, UDim2, Value, ValueType, Vec3};
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -71,6 +72,9 @@ pub struct PropDef {
     pub default: fn() -> Value,
     /// When set, a String value must be one of these.
     pub allowed: Option<&'static [&'static str]>,
+    /// Engine bookkeeping that Luau and the Properties panel do not show (for example the scale
+    /// behind `Model:GetScale`). Saved and cloned like any other property.
+    pub hidden: bool,
     /// When set, Number values and every Color3 component are brought into this range on
     /// write (and so on load and from scripts).
     pub range: Option<NumRange>,
@@ -130,6 +134,19 @@ const fn p(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef
         ty,
         default,
         allowed: None,
+        range: None,
+        hidden: false,
+    }
+}
+
+/// A property that only the engine reads and writes (see [`PropDef::hidden`]).
+const fn hidden(name: &'static str, ty: ValueType, default: fn() -> Value) -> PropDef {
+    PropDef {
+        name,
+        ty,
+        default,
+        allowed: None,
+        hidden: true,
         range: None,
     }
 }
@@ -231,6 +248,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Realistic".into()),
                 allowed: Some(LIGHTING_STYLES),
                 range: None,
+                hidden: false,
             },
             color("FogColor", || {
                 Value::Color3(Color3::new(192.0, 192.0, 192.0))
@@ -243,7 +261,21 @@ static CLASSES: &[ClassDef] = &[
     ),
     class("RunService", "Instance", &[]),
     class("Folder", "Instance", &[]),
-    class("Model", "Instance", &[]),
+    // Pivots and scale (docs/design/building-tools.md section 4.4, `metallic_core::transform`).
+    class(
+        "Model",
+        "Instance",
+        &[
+            p("PrimaryPart", ValueType::Ref, || Value::Ref(None)),
+            p("WorldPivot", ValueType::CFrame, || {
+                Value::CFrame(Box::new(CFrame::IDENTITY))
+            }),
+            // False until WorldPivot is first set: the pivot is then the bounding-box centre.
+            hidden("WorldPivotSet", ValueType::Bool, || Value::Bool(false)),
+            // What `GetScale` returns; `ScaleTo` changes it.
+            hidden("ScaleFactor", ValueType::Number, || Value::Number(1.0)),
+        ],
+    ),
     class(
         "BasePart",
         "Instance",
@@ -264,6 +296,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Plastic".into()),
                 allowed: Some(MATERIALS),
                 range: None,
+                hidden: false,
             },
             p("Anchored", ValueType::Bool, || Value::Bool(false)),
             p("CanCollide", ValueType::Bool, || Value::Bool(true)),
@@ -274,7 +307,12 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Block".into()),
                 allowed: Some(SHAPES),
                 range: None,
+                hidden: false,
             },
+            // Last, so lookups of the older properties scan no further than before.
+            p("PivotOffset", ValueType::CFrame, || {
+                Value::CFrame(Box::new(CFrame::IDENTITY))
+            }),
         ],
     ),
     class("Part", "BasePart", &[]),
@@ -373,6 +411,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Bool".into()),
                 allowed: Some(INPUT_ACTION_TYPES),
                 range: None,
+                hidden: false,
             },
             p("Enabled", ValueType::Bool, || Value::Bool(true)),
             p("DisplayName", ValueType::String, || {
@@ -384,6 +423,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Press".into()),
                 allowed: Some(INPUT_TRIGGERS),
                 range: None,
+                hidden: false,
             },
             p("HoldTime", ValueType::Number, || Value::Number(500.0)),
             p("TapTime", ValueType::Number, || Value::Number(200.0)),
@@ -398,6 +438,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("None".into()),
                 allowed: Some(INPUT_ROLES),
                 range: None,
+                hidden: false,
             },
             p("Rebindable", ValueType::Bool, || Value::Bool(true)),
             p("Required", ValueType::Bool, || Value::Bool(false)),
@@ -410,6 +451,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Auto".into()),
                 allowed: Some(TOUCH_SLOTS),
                 range: None,
+                hidden: false,
             },
             p("TouchLabel", ValueType::String, || Value::String("".into())),
             p("TouchImage", ValueType::String, || Value::String("".into())),
@@ -419,6 +461,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Auto".into()),
                 allowed: Some(TOUCH_LAYOUTS),
                 range: None,
+                hidden: false,
             },
             p("TouchPosition", ValueType::UDim2, || {
                 Value::UDim2(UDim2::new(0.0, 0.0, 0.0, 0.0))
@@ -548,6 +591,7 @@ static CLASSES: &[ClassDef] = &[
                 default: || Value::String("Default".into()),
                 allowed: Some(TONEMAPPER_PRESETS),
                 range: None,
+                hidden: false,
             },
         ],
     ),

@@ -38,6 +38,13 @@ The `Lighting` service with Roblox property names, applied live in the renderer,
   get the same fog and soft shadows; the toon headless test runs without bloom (bloom lifts the 2 px ink by ~15/255).
 - Bloom uses the renderer's HDR format (`PostContext::hdr_format`); bloom and lighting shaders validate with naga.
 
+- Merged main after #310: `PropDef` keeps both main's `hidden` (#313) and `range`.
+- 8-bit fallback scene target: documented on `HDR_FORMAT` (light above 1 clips, darks band) and tested through
+  the chain (`ldr_scene_target_fallback_renders`, forced with `Renderer::force_ldr_scene_target`).
+- `RenderContext::from_eframe` takes the host's adapter, so the HDR format check runs in Studio too.
+- `FullscreenPass` drops cached bind groups when the renderer rebuilds its targets (`PostContext::targets`),
+  so a quality change no longer keeps the old HDR textures alive.
+
 ## Tuning notes
 
 Four render / critique rounds on the reference scene. Main changes: exposure key -0.6 EV (sunlit grey baseplate no

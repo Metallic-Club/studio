@@ -23,8 +23,10 @@ use std::borrow::Cow;
 
 /// Format of the scene target and of every HDR pass's input and output, where the adapter can
 /// render to it, filter it and (with MSAA) resolve into it. Otherwise (some GL / WebGL2
-/// adapters) the renderer falls back to [`LDR_FORMAT`]: the frame still works but light above
-/// 1 clips before the finish pass. [`PostContext::hdr_format`] is the one in use.
+/// adapters) the renderer falls back to [`LDR_FORMAT`] and stores linear light in 8 bits: the
+/// frame still works, but light above 1 clips before the finish pass and the darkest tones
+/// band (about 1/255 linear steps). `tests/post_chain.rs` renders through the fallback.
+/// [`PostContext::hdr_format`] is the one in use.
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// The HDR target format for an adapter whose [`HDR_FORMAT`] support is `features` (`None`
@@ -83,6 +85,9 @@ pub struct PostContext<'a> {
     /// Format of the HDR targets: [`HDR_FORMAT`], or [`LDR_FORMAT`] on adapters that cannot
     /// render to it. Passes that make their own HDR textures use this.
     pub hdr_format: wgpu::TextureFormat,
+    /// Changes whenever the renderer rebuilds its targets (resize, quality change). Passes that
+    /// cache bind groups of `input` / `output` drop them when it changes.
+    pub targets: u64,
     /// Size of `input` and `output` in pixels.
     pub size: (u32, u32),
     /// The scene depth (`Depth32Float`, 0 near .. 1 far), present when any pass in the chain
@@ -253,8 +258,9 @@ pub struct FullscreenPass {
     params_size: u64,
     gpu: Option<FullscreenGpu>,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
-    /// Bind groups by (input, aux), kept across frames; cleared when the frame size changes.
+    /// Bind groups by (input, aux), kept across frames; cleared when the targets change.
     groups: Vec<CachedGroup>,
+    groups_targets: Option<u64>,
     groups_size: (u32, u32),
 }
 
@@ -278,6 +284,7 @@ impl FullscreenPass {
             gpu: None,
             pipelines: Vec::new(),
             groups: Vec::new(),
+            groups_targets: None,
             groups_size: (0, 0),
         }
     }
@@ -323,8 +330,11 @@ impl FullscreenPass {
             debug_assert_eq!(params.len() as u64, self.params_size);
             ctx.queue.write_buffer(buf, 0, params);
         }
-        if self.groups_size != ctx.size {
+        // Drop cached groups (and the textures they hold) when the renderer's targets or the
+        // frame size change.
+        if self.groups_targets != Some(ctx.targets) || self.groups_size != ctx.size {
             self.groups.clear();
+            self.groups_targets = Some(ctx.targets);
             self.groups_size = ctx.size;
         }
         let aux = d.aux.unwrap_or(d.input);

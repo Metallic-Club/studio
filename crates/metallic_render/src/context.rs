@@ -77,14 +77,20 @@ impl RenderContext {
         pollster::block_on(Self::from_instance(&instance, None))
     }
 
-    /// Wraps the device and queue of a host that already owns them (the eframe/egui
-    /// Studio editor passes the ones from its `wgpu_render_state`).
-    pub fn from_eframe(device: wgpu::Device, queue: wgpu::Queue) -> RenderContext {
+    /// Wraps the device, queue and adapter of a host that already owns them (the eframe/egui
+    /// Studio editor passes the ones from its `wgpu_render_state`). The adapter lets the
+    /// renderer check which HDR target format it can use.
+    pub fn from_eframe(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter: wgpu::Adapter,
+    ) -> RenderContext {
+        let adapter_name = adapter.get_info().name;
         RenderContext {
             device,
             queue,
-            adapter: None,
-            adapter_name: String::from("host-provided"),
+            adapter: Some(adapter),
+            adapter_name,
         }
     }
 
