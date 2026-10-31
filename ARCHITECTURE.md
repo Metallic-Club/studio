@@ -12,11 +12,12 @@ graph LR
   asset[metallic_asset] --> render
   physics --> runtime[metallic_runtime]
   script --> runtime
-  render --> runtime
+  render -- presentation --> runtime
   audio[metallic_audio] -.-> runtime
   runtime --> player[metallic_player]
   runtime --> studio[metallic_studio]
   anim[metallic_anim] --> runtime
+  asset --> runtime
   anim --> animed[metallic_anim_editor]
   animed --> studio
   egui[egui] --> uitheme[metallic_ui_theme]
@@ -160,6 +161,16 @@ apps.
   the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
   and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
   never reaches the game's input.
+  `Simulation` owns the shared CPU kernel (World, physics, characters, server/Combined ScriptHost, membership cache,
+  CPU skeletal body animation and fixed-step clock). Public constructors use server-only scripts without creating
+  a synthetic player; Game
+  delegates through a private Combined constructor. Trusted `PlayerInput` keys are world-local Player InstanceIds,
+  not backend/wire identities; inputs are world-space, missing samples are idle and repeated samples use the last
+  value. Character references resolve each server tick so respawn keeps the same Player input key. Each Player is
+  visited once per tick. Game retains its existing camera mapping, avatar, GUI and client input behavior.
+  Default feature `presentation` preserves existing APIs. Without default features, Simulation and `metallic-sim`
+  have no renderer/wgpu/window/GUI/gamepad dependency. `metallic-sim` runs a trusted project for finite explicit ticks,
+  then stops; it does not listen, admit players, register joinability, deploy a server or establish M2 acceptance.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.

@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! Plays the whole Parkour course with a simple bot that uses only player input (move, run,
 //! jump), so every jump in the level is proven reachable with the real character controller.
 //!
