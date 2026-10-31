@@ -12,12 +12,49 @@
 //! | `pos x y` | pointer position |
 //! | `delta a [b]` | mouse movement (`a b`) or wheel notches (`a`) |
 //!
+//! Fingers on the touch screen use `touch0` to `touch9` (the finger), a phase `Down`, `Move`,
+//! `Up` or `Cancel` in place of the control, and `pos x y` in dp from the top-left of the screen.
+//! They go to the touch overlay ([`TouchControls`](super::touch::TouchControls)), which decides
+//! what the finger presses, through [`poll_fingers`](ScriptedSource::poll_fingers).
+//!
 //! ```text
 //! 30  keyboard  Space       down
 //! 36  keyboard  Space       up
 //! 40  gamepad0  Thumbstick1 axis  0.0 1.0
+//! 90  touch0    Down        pos   140 300
 //! ```
 use super::control::{Control, ControlKind, Device, RawEvent, RawSource};
+use super::touch::TouchPhase;
+
+/// One finger event of a script: finger `finger` did `phase` at `pos` dp.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FingerEvent {
+    /// The finger, 0 to 9.
+    pub finger: u64,
+    /// What it did.
+    pub phase: TouchPhase,
+    /// Where, in dp from the top-left of the screen.
+    pub pos: [f32; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FingerLine {
+    frame: u64,
+    event: FingerEvent,
+}
+
+fn finger_line(words: &[&str]) -> Option<(u64, TouchPhase)> {
+    let n = words[1].to_ascii_lowercase();
+    let finger: u64 = n.strip_prefix("touch")?.parse().ok()?;
+    let phase = match words[2] {
+        "Down" => TouchPhase::Down,
+        "Move" => TouchPhase::Move,
+        "Up" => TouchPhase::Up,
+        "Cancel" => TouchPhase::Cancel,
+        _ => return None,
+    };
+    (finger < 10 && words[3] == "pos").then_some((finger, phase))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Line {
@@ -33,6 +70,8 @@ struct Line {
 pub struct ScriptedSource {
     lines: Vec<Line>,
     next: usize,
+    fingers: Vec<FingerLine>,
+    next_finger: usize,
     frame: u64,
     frame_dt: f64,
 }
@@ -54,6 +93,7 @@ impl ScriptedSource {
     /// Parses a script. Event times are `frame * frame_dt` seconds.
     pub fn parse(text: &str, frame_dt: f64) -> Result<Self, String> {
         let mut lines = Vec::new();
+        let mut fingers = Vec::new();
         for (n, raw) in text.lines().enumerate() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -67,6 +107,22 @@ impl ScriptedSource {
             let frame: u64 = words[0]
                 .parse()
                 .map_err(|_| at(format!("bad frame `{}`", words[0])))?;
+            if let Some((finger, phase)) = finger_line(&words) {
+                let nums: Vec<f32> = words[4..].iter().filter_map(|w| w.parse().ok()).collect();
+                let ok = nums.len() == 2 && words.len() == 6 && nums.iter().all(|v| v.is_finite());
+                if !ok {
+                    return Err(at("a finger wants `pos x y`".into()));
+                }
+                fingers.push(FingerLine {
+                    frame,
+                    event: FingerEvent {
+                        finger,
+                        phase,
+                        pos: [nums[0], nums[1]],
+                    },
+                });
+                continue;
+            }
             let dev =
                 device(words[1]).ok_or_else(|| at(format!("unknown device `{}`", words[1])))?;
             let control = Control::from_name(words[2])
@@ -109,9 +165,12 @@ impl ScriptedSource {
             });
         }
         lines.sort_by_key(|l| l.frame);
+        fingers.sort_by_key(|l| l.frame);
         Ok(Self {
             lines,
             next: 0,
+            fingers,
+            next_finger: 0,
             frame: 0,
             frame_dt,
         })
@@ -119,7 +178,25 @@ impl ScriptedSource {
 
     /// Frame of the last line (0 for an empty script).
     pub fn last_frame(&self) -> u64 {
-        self.lines.last().map_or(0, |l| l.frame)
+        let raw = self.lines.last().map_or(0, |l| l.frame);
+        raw.max(self.fingers.last().map_or(0, |l| l.frame))
+    }
+
+    /// True when the script has finger lines (it needs the touch overlay).
+    pub fn has_fingers(&self) -> bool {
+        !self.fingers.is_empty()
+    }
+
+    /// Appends every finger event up to and including `frame` not emitted yet, in file order.
+    pub fn poll_fingers(&mut self, frame: u64, out: &mut Vec<FingerEvent>) {
+        while let Some(l) = self
+            .fingers
+            .get(self.next_finger)
+            .filter(|l| l.frame <= frame)
+        {
+            out.push(l.event);
+            self.next_finger += 1;
+        }
     }
 
     /// Appends every event up to and including `frame` that has not been emitted yet, stamped

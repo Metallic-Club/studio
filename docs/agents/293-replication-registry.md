@@ -71,3 +71,15 @@ The full workspace prebuild took 11m37s in the owned guarded lane123. Two indepe
 c422e66b55f8ac4e354427bdfa7f7034110f65747fc855a15f8449dd7bbffaeb. This v2 value supersedes the historical
 v1 diagnostic above. Logs: <TEMP>/metallic-293-v2-{core,workspace-build,workspace-tests,clippy,licenses}.log.
 Normal append-only push and exact-head CI/review follow; no own PR merge.
+
+## Lighting registry integration (fresh gates pending)
+
+The latest normal merge pins b4909b5, whose lighting work adds NumRange and six registered classes. Both normal
+and hidden constructors now retain range, hidden and Repl independently. Existing main class indices0..33 stay
+intact; the five replication-only classes append at34..38. Published-preview indices are valid only under an
+equal fingerprint and must not be reused across these schema changes.
+
+Encoding v3 includes range presence, min/max f64 bits and clamp-versus-wrap, in addition to v2's hidden/CFrame
+fields. The independently recomputed Bool fixture is f99a35223a1f029c7fb6a434291443c692c5e3fde105abbb814b322a76bd4809.
+Tests cover range presence/bounds/wrap/signed-zero, existing lighting indices and authoritative ClockTime wrapping.
+The earlier v2 checks above remain historical. This merge's core/workspace/strict-Clippy checks are not yet run.

@@ -214,3 +214,31 @@ fn boxed_pivot_values_and_hidden_bookkeeping_are_replicated_as_owned_data() {
         world.get(model, bookkeeping.name).ok()
     );
 }
+#[test]
+fn lighting_bookkeeping_ranges_preserve_authoritative_values() {
+    let mut world = World::new_with_services();
+    let lighting = world.root("Lighting").unwrap();
+    world
+        .set(lighting, "ClockTime", Value::Number(25.0))
+        .unwrap();
+    assert_eq!(
+        property_value(&world, lighting, "ClockTime", None),
+        Some(Value::Number(1.0))
+    );
+    for (name, expected) in [("Atmosphere", 28), ("ColorGradingEffect", 33)] {
+        assert_eq!(classes::registry_classes()[expected].name, name);
+    }
+    let classes = classes::registry_classes();
+    let lighting_end = classes
+        .iter()
+        .position(|class| class.name == "ColorGradingEffect")
+        .unwrap();
+    let storage = classes
+        .iter()
+        .position(|class| class.name == "ServerStorage")
+        .unwrap();
+    assert!(
+        storage > lighting_end,
+        "existing main class indices stay intact"
+    );
+}

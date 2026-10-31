@@ -131,6 +131,37 @@ impl Role {
     }
 }
 
+/// Which touch control a Direction2D action with `ShowOnTouch` uses (`Enum.TouchSlot`, spec 3.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchSlot {
+    /// The first such action gets the stick, the second the look pad.
+    Auto,
+    /// The left thumbstick.
+    Stick,
+    /// The look pad (the right half of the screen).
+    Look,
+}
+
+impl TouchSlot {
+    fn from_name(s: &str) -> Self {
+        match s {
+            "Stick" => Self::Stick,
+            "Look" => Self::Look,
+            _ => Self::Auto,
+        }
+    }
+}
+
+/// Where a touch control goes when `TouchLayout = Custom` (spec 3.3, 7.3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TouchPlacement {
+    /// `TouchPosition`: the control's top-left corner as a fraction of the safe area plus an
+    /// offset in dp: `[x scale, x offset, y scale, y offset]`.
+    pub position: [f32; 4],
+    /// `TouchSize`: diameter in dp; 0 keeps the automatic size.
+    pub size: f32,
+}
+
 /// One `InputBinding`: how a control (or a composite of controls) feeds its action.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BindingDef {
@@ -294,6 +325,14 @@ pub struct ActionDef {
     pub show_on_touch: bool,
     /// Lower comes first among touch buttons.
     pub touch_order: f32,
+    /// Direction2D: stick or look pad.
+    pub touch_slot: TouchSlot,
+    /// Text under the touch button; empty uses `display_name`, then `name`.
+    pub touch_label: String,
+    /// Image on the touch button (a PNG path inside the project); empty draws the role's icon.
+    pub touch_image: String,
+    /// `TouchLayout = Custom`: where the control goes; `None` places it automatically.
+    pub touch_custom: Option<TouchPlacement>,
     /// The bindings, in tree order.
     pub bindings: Vec<BindingDef>,
     /// The instance this came from (`None` for built-in actions).
@@ -321,6 +360,10 @@ impl ActionDef {
             toggle: false,
             show_on_touch: false,
             touch_order: 0.0,
+            touch_slot: TouchSlot::Auto,
+            touch_label: String::new(),
+            touch_image: String::new(),
+            touch_custom: None,
             bindings: Vec::new(),
             instance: None,
         }
@@ -485,6 +528,8 @@ pub fn system_context() -> ContextDef {
         .with_binding(BindingDef::key(Control::ButtonStart));
     menu.required = true;
     menu.can_toggle = false;
+    // Phones have no Escape or Start: the touch overlay's menu button (spec 7.2).
+    menu.show_on_touch = true;
     ctx.actions = vec![menu];
     ctx
 }
@@ -519,8 +564,11 @@ pub fn default_character_controls() -> ContextDef {
         .with_binding(BindingDef::key(C::ButtonL3));
     run.show_on_touch = true;
     run.touch_order = 1.0;
-    let look = ActionDef::new("Look", ActionType::Direction2D)
-        .with_role(Role::Look)
+    let mut look = ActionDef::new("Look", ActionType::Direction2D).with_role(Role::Look);
+    // The look pad: drag on the right half of the screen (spec 6.1, 7.1).
+    look.show_on_touch = true;
+    look.touch_slot = TouchSlot::Look;
+    let look = look
         .with_binding(
             BindingDef::key(C::MouseDelta)
                 .with_modifier(C::MouseButton2)
@@ -627,6 +675,20 @@ fn read_action(w: &World, id: InstanceId, context: &str, warnings: &mut Vec<Stri
     a.can_toggle = prop_bool(w, id, "CanToggle", true);
     a.show_on_touch = prop_bool(w, id, "ShowOnTouch", false);
     a.touch_order = prop_num(w, id, "TouchOrder", 0.0) as f32;
+    a.touch_slot = TouchSlot::from_name(&prop_str(w, id, "TouchSlot"));
+    a.touch_label = prop_str(w, id, "TouchLabel");
+    a.touch_image = prop_str(w, id, "TouchImage");
+    if prop_str(w, id, "TouchLayout") == "Custom" {
+        let position = match w.get(id, "TouchPosition") {
+            Ok(Value::UDim2(u)) => [u.x_scale, u.x_offset, u.y_scale, u.y_offset],
+            _ => [0.0; 4],
+        };
+        let finite = |v: f64| if v.is_finite() { v as f32 } else { 0.0 };
+        a.touch_custom = Some(TouchPlacement {
+            position: position.map(finite),
+            size: finite(prop_num(w, id, "TouchSize", 0.0)).max(0.0),
+        });
+    }
     a.instance = Some(id);
     for &child in w.children(id) {
         if w.class_name(child) == Some("InputBinding") {

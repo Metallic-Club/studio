@@ -5,7 +5,9 @@
 use super::glyph_paint::{Ink, glyph_width, paint_glyph};
 use super::theme;
 use egui::{Align2, Color32, FontId, LayerId, Order, Rect, Shape, Stroke, pos2, vec2};
-use metallic_runtime::input::{ActionId, CHARACTER_CONTROLS, InputRuntime, MENU_ACTION};
+use metallic_runtime::input::{
+    ActionId, CHARACTER_CONTROLS, DeviceKind, InputRuntime, MENU_ACTION,
+};
 
 /// Seconds the plate stays.
 const SHOW_SECONDS: f64 = 8.0;
@@ -26,7 +28,7 @@ impl ControlsHint {
         Self::default()
     }
 
-    /// Paints the hint over the game (not while the menu is open).
+    /// Paints the hint over the game (not while the menu is open, not on touch).
     pub fn paint(&mut self, ctx: &egui::Context, rt: &InputRuntime, now: f64) {
         let changes = rt.glyph_changes();
         if self.seen != Some(changes) {
@@ -37,6 +39,10 @@ impl ControlsHint {
                 rt.find_action(&format!("{CHARACTER_CONTROLS}/Run")),
                 rt.find_action(MENU_ACTION),
             ];
+        }
+        // On touch the overlay's buttons carry their own labels (#252).
+        if rt.last_device() == DeviceKind::Touch {
+            return;
         }
         let Some(at) = self.shown_at else { return };
         let age = now - at;

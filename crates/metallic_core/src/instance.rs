@@ -443,8 +443,8 @@ impl World {
     /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`],
     /// [`CoreError::TypeMismatch`] (wrong value type), [`CoreError::InvalidValue`] (e.g. unknown
     /// material or a non-finite Number/Vector3/Color3/UDim2 component). Rejected writes change
-    /// neither properties, the change journal, nor signals. Numeric ranges remain defined by
-    /// existing registry constraints. Fires `property_changed` when an accepted value changes.
+    /// neither properties, the change journal, nor signals. Properties with a registry range
+    /// ([`crate::classes::NumRange`]) are clamped (or wrapped) into it. Fires `property_changed` when an accepted value changes.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
         let class = self.node(id).ok_or(CoreError::InvalidInstance)?.class;
         let def = find_property(class, prop).ok_or_else(|| CoreError::UnknownProperty {
@@ -464,6 +464,12 @@ impl World {
                 reason: "all numeric components must be finite".into(),
             });
         }
+        // Lighting and effect numbers are brought into their sane range (1e39 would overflow
+        // the renderer's f32 math).
+        let value = match def.range {
+            Some(range) => range.apply(value),
+            None => value,
+        };
         if let (Some(allowed), Value::String(s)) = (def.allowed, &value)
             && !allowed.contains(&s.as_str())
         {

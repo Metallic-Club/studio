@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 /// Fingerprint of class order, inheritance, effective property order/types/defaults, enums and
-/// replication/hidden metadata. Version 2 encodes boxed CFrames by their 12 row-major
+/// replication/hidden metadata. Version 3 also encodes numeric clamp/wrap ranges and encodes boxed CFrames by their 12 row-major
 /// components, never their allocation address. All lengths and numeric bits use little endian.
 ///
 /// Protocol peers must compare this hash before interpreting class-relative property indices.
@@ -66,7 +66,7 @@ fn hash_value(hash: &mut Sha256, value: &Value) {
 
 fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"metallic-registry-v2\0");
+    hash.update(b"metallic-registry-v3\0");
     hash.update((classes.len() as u64).to_le_bytes());
     for class in classes {
         field(&mut hash, class.name.as_bytes());
@@ -99,6 +99,12 @@ fn hash_schema(classes: &[ClassDef]) -> [u8; 32] {
                 Repl::ServerOnly => 1,
             }]);
             hash.update([u8::from(property.hidden)]);
+            hash.update([u8::from(property.range.is_some())]);
+            if let Some(range) = property.range {
+                hash.update(range.min.to_bits().to_le_bytes());
+                hash.update(range.max.to_bits().to_le_bytes());
+                hash.update([u8::from(range.wrap)]);
+            }
             hash.update([u8::from(property.allowed.is_some())]);
             if let Some(values) = property.allowed {
                 hash.update((values.len() as u64).to_le_bytes());
@@ -238,6 +244,7 @@ mod tests {
             allowed: None,
             repl: Repl::Replicated,
             hidden: false,
+            range: None,
         }
     }
 
@@ -245,13 +252,13 @@ mod tests {
     fn fingerprint_covers_property_metadata_defaults_order_and_class_identity() {
         let original = hash_schema(&[base(prop())]);
         assert_eq!(original, hash_schema(&[base(prop())]));
-        // Independent SHA-256 fixture from the documented byte encoding.
+        // Independent Python SHA-256 fixture for version 3's explicit byte encoding.
         assert_eq!(
             original,
             [
-                0x6c, 0xd1, 0xb0, 0x03, 0xb2, 0x74, 0x25, 0x55, 0x78, 0x15, 0xbe, 0x76, 0xec, 0xf1,
-                0x15, 0x41, 0x7f, 0x19, 0xdf, 0xe2, 0xe8, 0xfe, 0xd1, 0x12, 0xbe, 0x80, 0x64, 0x95,
-                0x5d, 0x39, 0xc3, 0xf9
+                0xf9, 0x9a, 0x35, 0x22, 0x3a, 0x1f, 0x02, 0x9c, 0x7f, 0xb6, 0xa4, 0x34, 0x29, 0x14,
+                0x43, 0xc6, 0x92, 0xc5, 0xe3, 0xfd, 0xe1, 0x05, 0xab, 0xbb, 0x81, 0x4b, 0x32, 0x2a,
+                0x76, 0xbd, 0x48, 0x09
             ]
         );
         let mut changed = prop();
@@ -286,6 +293,38 @@ mod tests {
         let mut changed = base(prop());
         changed.name = "Changed";
         assert_ne!(original, hash_schema(&[changed]));
+    }
+
+    #[test]
+    fn numeric_range_bounds_wrap_and_presence_are_fingerprinted() {
+        use crate::classes::NumRange;
+        let schema = |range| {
+            let mut definition = prop();
+            definition.ty = ValueType::Number;
+            definition.default = || Value::Number(0.0);
+            definition.range = range;
+            hash_schema(&[base(definition)])
+        };
+        let range = NumRange {
+            min: -1.0,
+            max: 1.0,
+            wrap: false,
+        };
+        let original = schema(Some(range));
+        assert_ne!(schema(None), original);
+        assert_ne!(schema(Some(NumRange { min: -2.0, ..range })), original);
+        assert_ne!(schema(Some(NumRange { max: 2.0, ..range })), original);
+        assert_ne!(
+            schema(Some(NumRange {
+                wrap: true,
+                ..range
+            })),
+            original
+        );
+        assert_ne!(
+            schema(Some(NumRange { min: 0.0, ..range })),
+            schema(Some(NumRange { min: -0.0, ..range }))
+        );
     }
 
     #[test]
