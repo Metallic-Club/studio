@@ -64,7 +64,7 @@ apps.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
+  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
   R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
@@ -439,7 +439,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
    `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills). A
    character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
-3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
+3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`, and every
+   `drain_touch_ended` pair as `touch_ended(a, b)` and `touch_ended(b, a)`; a character
    touch as `touched(part, hit)` and `touched(hit, part)` and its end as `touch_ended` both ways, with `hit` the
    touching body part (or the `HumanoidRootPart` for the movement capsule), so `hit.Parent` is the character Model
    (`TouchEnded` still fires on the touched part when the character was destroyed first, with the destroyed limb);
