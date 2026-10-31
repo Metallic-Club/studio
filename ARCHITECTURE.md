@@ -92,7 +92,8 @@ apps.
   convex polygons, edge chains and merged tilemaps; one-way platforms, sensors, collision groups, revolute/prismatic/
   distance/weld joints. Platformer characters (`add_character`, `CharacterConfig`: coyote time, jump buffer, variable
   jump, wall slide/jump, drop-through, platform carry) run inside the fixed tick. Backend choice and the proposed 2D
-  Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
+  Structural sync refreshes queries/contacts through a zero-time Rapier physics step, linking persistent islands
+  before later real ticks without advancing simulation time. Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost::new` runs server and client scripts over a shared `World`; additive `new_server`
   starts only the server VM and server-eligible Scripts, without creating a local Player/PlayerGui or PlayerAdded.
