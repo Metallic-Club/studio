@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use metallic_core::{InstanceId, World};
 use metallic_runtime::input::{
-    ActionDef, ActionType, BindingDef, ContextDef, Control, Role, Trigger,
+    ActionDef, ActionType, BindingDef, ContextDef, Control, Role, SYSTEM_CONTEXT, Trigger,
 };
 
 use super::model::{
@@ -268,7 +268,8 @@ pub fn run_checks(world: &World, baseline: &NameBaseline) -> Vec<Finding> {
                 });
             }
             for b in &a.bindings {
-                if b.reads(Control::Escape) {
+                // The engine's own Menu action is the one thing that owns Esc.
+                if b.reads(Control::Escape) && ctx.name != SYSTEM_CONTEXT {
                     out.push(Finding {
                         id: CheckId::EscBound,
                         level: Level::Error,
@@ -405,7 +406,7 @@ mod tests {
     use crate::input_actions::commands::StepBuilder;
     use crate::input_actions::model::context_snapshot;
     use metallic_core::{UDim2, Value};
-    use metallic_runtime::input::default_character_controls;
+    use metallic_runtime::input::{default_character_controls, system_context};
 
     /// Parkour's controls as scene instances.
     fn sample() -> (World, InstanceId) {
@@ -630,6 +631,24 @@ mod tests {
         assert!(fires(&w, &base, CheckId::NoToggle));
         w.set(run, "CanToggle", Value::Bool(true)).unwrap();
         assert!(!fires(&w, &base, CheckId::NoToggle));
+    }
+
+    #[test]
+    fn a_scene_with_the_system_menu_is_clean() {
+        let (mut w, _) = sample();
+        let rs = w.root("ReplicatedStorage").unwrap();
+        let mut b = StepBuilder::new(&mut w);
+        let sys = b.create(rs, context_snapshot(&system_context())).unwrap();
+        let _ = b.finish("system");
+        let base = NameBaseline::capture(&w);
+        let f = run_checks(&w, &base);
+        assert!(f.is_empty(), "{f:#?}");
+        // Game actions on Esc are still flagged.
+        let ctx = w.find_first_child(rs, "CharacterControls").unwrap();
+        let jump = action(&w, ctx, "Jump");
+        add_binding(&mut w, jump, "Escape");
+        assert!(fires(&w, &base, CheckId::EscBound));
+        let _ = sys;
     }
 
     #[test]

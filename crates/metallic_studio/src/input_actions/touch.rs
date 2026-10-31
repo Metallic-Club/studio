@@ -9,7 +9,7 @@
 //! device preview is the only user of this module.
 
 use metallic_core::{InstanceId, UDim2, Value, World};
-use metallic_runtime::input::ActionType;
+use metallic_runtime::input::{ActionType, SYSTEM_CONTEXT};
 
 use super::commands::StepBuilder;
 use super::model::{InputModel, TouchSlot, touch_props};
@@ -307,7 +307,8 @@ pub fn touch_actions(world: &World) -> Vec<TouchAction> {
     let mut sticks_seen = 0;
     let mut buttons: Vec<(f32, usize, TouchAction)> = Vec::new();
     for (i, (ctx, a)) in model.actions().enumerate() {
-        if !ctx.enabled || !a.enabled || !a.show_on_touch {
+        // The engine's own Menu has the always-present menu button (spec 7.2): not a game button.
+        if !ctx.enabled || !a.enabled || !a.show_on_touch || ctx.name == SYSTEM_CONTEXT {
             continue;
         }
         let props = touch_props(world, a.instance);
@@ -369,12 +370,18 @@ pub fn touch_actions(world: &World) -> Vec<TouchAction> {
     out
 }
 
-/// Number of enabled Bool actions with `ShowOnTouch` (before the [`MAX_BUTTONS`] cut).
+/// Number of enabled Bool actions of the game with `ShowOnTouch`, not counting the system Menu (before the [`MAX_BUTTONS`] cut).
 pub fn touch_button_count(world: &World) -> usize {
     let model = InputModel::read(world);
     model
         .actions()
-        .filter(|(c, a)| c.enabled && a.enabled && a.show_on_touch && a.ty == ActionType::Bool)
+        .filter(|(c, a)| {
+            c.enabled
+                && a.enabled
+                && a.show_on_touch
+                && a.ty == ActionType::Bool
+                && c.name != SYSTEM_CONTEXT
+        })
         .count()
 }
 
