@@ -492,7 +492,10 @@ impl World {
     ///
     /// Errors: [`CoreError::InvalidInstance`], [`CoreError::UnknownProperty`],
     /// [`CoreError::TypeMismatch`] (wrong value type), [`CoreError::InvalidValue`] (e.g. unknown
-    /// material or a non-finite Number/Vector3/Color3/UDim2 component). Rejected writes change
+    /// material, a non-finite Number/Vector3/Color3/UDim2/CFrame component, or a CFrame rotation
+    /// that cannot be orthonormalised). A CFrame is stored through
+    /// [`crate::CFrame::try_orthonormalize`]: an already orthonormal one bit for bit, a scaled or
+    /// skewed one re-orthonormalised keeping its right axis. Rejected writes change
     /// neither properties, the change journal, nor signals. Properties with a registry range
     /// ([`crate::classes::NumRange`]) are clamped (or wrapped) into it. Fires `property_changed` when an accepted value changes.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
@@ -514,6 +517,24 @@ impl World {
                 reason: "all numeric components must be finite".into(),
             });
         }
+        // A stored CFrame keeps a right-handed orthonormal rotation (`CFrame::inverse` relies on
+        // it): scaled or skewed matrices are fixed, degenerate ones refused.
+        let value = match value {
+            Value::CFrame(mut cf) => match cf.try_orthonormalize() {
+                // Reuse the incoming box: no extra allocation per CFrame write.
+                Some(fixed) => {
+                    *cf = fixed;
+                    Value::CFrame(cf)
+                }
+                None => {
+                    return Err(CoreError::InvalidValue {
+                        property: prop.to_string(),
+                        reason: "the rotation is degenerate".into(),
+                    });
+                }
+            },
+            other => other,
+        };
         // Lighting and effect numbers are brought into their sane range (1e39 would overflow
         // the renderer's f32 math).
         let mut value = match def.range {

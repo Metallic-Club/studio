@@ -70,6 +70,30 @@ class StagedBinaryTests(unittest.TestCase):
             self.assertIn(built.removesuffix(".exe"), bins)
 
 
+class BuildCommandTests(unittest.TestCase):
+    """Shipped builds use [profile.dist] and its output folder, never target/release."""
+
+    def test_build_lines(self):
+        self.assertEqual(release.build_command("studio", 4),
+                         ["cargo", "build", "--locked", "--profile", "dist", "-p", "metallic_studio", "-j", "4"])
+        self.assertEqual(release.build_command("launcher", 2),
+                         ["cargo", "build", "--locked", "--profile", "dist", "-p", "metallic_launcher",
+                          "-p", "metallic_player", "-j", "2"])
+
+    def test_dist_profile_exists_and_keeps_unwinding(self):
+        import tomllib
+        profiles = tomllib.loads(release.CARGO_TOML.read_text(encoding="utf-8"))["profile"]
+        dist = profiles[release.CARGO_PROFILE]
+        self.assertEqual(dist["inherits"], "release")
+        # metallic_asset catches glTF parser panics and mlua turns callback panics into Lua errors.
+        self.assertEqual(dist["panic"], "unwind")
+        self.assertEqual(release.BUILD_DIR, release.ROOT / "target" / "dist")
+
+    def test_symbol_file_names(self):
+        self.assertEqual(release.symbol_file("metallic-studio.exe"), "metallic_studio.pdb")
+        self.assertEqual(release.symbol_file("Metallic.exe"), "Metallic.pdb")
+
+
 class PackCommandTests(unittest.TestCase):
     ARGS = ("vpk", "STAGE", "ICON", "NOTES")
 
@@ -107,7 +131,8 @@ class PackCommandTests(unittest.TestCase):
         out = subprocess.run([sys.executable, str(script), "--app", "launcher", "--channel", "dev",
                               "--version", release.workspace_version(release.CARGO_TOML.read_text(encoding="utf-8")),
                               "--dry-run"], capture_output=True, text=True, check=True).stdout
-        self.assertIn("-p metallic_launcher -p metallic_player", out)
+        self.assertIn("+ cargo build --locked --profile dist -p metallic_launcher -p metallic_player -j 4", out)
+        self.assertIn("+ keep metallic_player.pdb in ", out)
         self.assertIn("--framework webview2", out)
         self.assertIn("--packId MetallicLauncher", out)
         self.assertIn("--channel launcher-dev", out)
@@ -120,7 +145,8 @@ class PackCommandTests(unittest.TestCase):
         version = release.workspace_version(release.CARGO_TOML.read_text(encoding="utf-8"))
         out = subprocess.run([sys.executable, str(Path(release.__file__)), "--channel", "dev",
                               "--version", version, "--dry-run"], capture_output=True, text=True, check=True).stdout
-        self.assertIn("+ cargo build --release -p metallic_studio -j 4", out)
+        self.assertIn("+ cargo build --locked --profile dist -p metallic_studio -j 4", out)
+        self.assertIn("+ keep metallic_studio.pdb in ", out)
         self.assertIn("+ stage metallic-studio.exe as Metallic Studio.exe in ", out)
         self.assertIn(f"--tag v{version}-dev --releaseName \"Metallic Studio {version} (dev)\" --publish --token <token> --pre", out)
         self.assertNotIn("--framework", out)

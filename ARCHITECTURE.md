@@ -39,9 +39,18 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  Change journal (#59): each mutation (`create`, `destroy`, `set_parent` to a new parent, a `set_parent_at` reorder,
+  `set` with a new value, `clone_subtree`) appends the instance id to a per-world journal, bounded at 16,384 entries
+  (`JOURNAL_LIMIT`; the oldest half is dropped when it is full). `World::change_cursor()` marks a position, and
+  `changes_since(cursor)` returns `Changes::Ids` (deduplicated, in order of first change, destroyed ids included) plus
+  a new cursor, or `Changes::Overflow` when the journal no longer reaches back or the cursor is from another world:
+  then re-read everything. It needs only `&World`; the renderer's `Scene::sync`, physics re-sync, `LookOverrides`,
+  audio and input mirroring read it.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
-  `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
+  `Model.WorldPivot`. `World::set` (so also the scene loader) stores every CFrame through `CFrame::try_orthonormalize`:
+  an orthonormal rotation is kept bit for bit, a scaled or skewed one is re-orthonormalised keeping its right axis, and
+  a degenerate one (zero or parallel columns) is refused like a NaN. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
   `PropDef::normalize` converts a String write outside `allowed` to its stored form (a display name to an id).
@@ -106,8 +115,13 @@ apps.
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
-  PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio). Headless contexts (tests, screenshots) use Vulkan, DX12 or Metal and fall back to OpenGL only without them. Every instance, adapter and device `context.rs` makes is set up under one process-wide lock: wgpu's Windows OpenGL (WGL) setup crashes the process (access violation, heap corruption) when threads do it at once (#276, upstream gfx-rs/wgpu#9760); rendering and teardown stay parallel.
-  Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the
+  PBR materials, cascaded shadows (every part below Transparency 1 casts one, as in Roblox), sky, fog. `render` draws
+  with `Camera::sanitized` (a non-finite eye or field of view falls back to a finite one). `RenderContext` is built for a
+  window (player) or from eframe (Studio). Headless contexts (tests, screenshots) use Vulkan, DX12 or Metal and fall back to OpenGL only without them. Every instance, adapter and device `context.rs` makes is set up under one process-wide lock: wgpu's Windows OpenGL (WGL) setup crashes the process (access violation, heap corruption) when threads do it at once (#276, upstream gfx-rs/wgpu#9760); rendering and teardown stay parallel. Uploads (#105): `sync` re-reads only journalled instances; `render` writes
+  only the changed ranges of each instance buffer (a CPU mirror is diffed), and blended parts draw as one instanced
+  draw per run of same-shape neighbours in the far-to-near list (`first_instance` ranges).
+  Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it: 4x on
+  High, lowered to the highest count the target and depth formats support, see `msaa_samples`), then the
   post chain (`post.rs`: `PostChain` of `PostPass`es in an `Hdr` and an `Ldr` slot, run in list order; most passes
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
   vignette, sRGB encode, dither). Add a pass with `renderer.post_mut().push(Box::new(pass))`; a pass that returns

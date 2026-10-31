@@ -4,6 +4,10 @@
 //! axes in world space, so the look direction is minus the third column. Euler angles are in
 //! radians here; `BasePart.Orientation` stores degrees applied as Y, then X, then Z, which is
 //! [`CFrame::from_euler_yxz`].
+//!
+//! A stored CFrame always has a right-handed orthonormal rotation (`inverse` relies on it):
+//! `World::set` and the scene loader pass every CFrame through [`CFrame::try_orthonormalize`],
+//! which keeps the right axis (Gram-Schmidt on right, then up), and refuse the ones it cannot fix.
 use crate::value::Vec3;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
@@ -122,6 +126,19 @@ pub(crate) fn cross(a: Vec3, b: Vec3) -> Vec3 {
 pub(crate) fn dot(a: Vec3, b: Vec3) -> f64 {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
+
+/// Rotations within this of orthonormal (largest entry of `R^T R - I`) and right-handed are kept
+/// bit for bit by [`CFrame::try_orthonormalize`]. Float drift from composing CFrames or an `f32`
+/// round trip (about 1e-7) stays under it.
+pub const ORTHONORMAL_TOLERANCE: f64 = 1e-6;
+
+/// An axis column shorter than this counts as zero: [`CFrame::try_orthonormalize`] refuses it.
+pub const MIN_AXIS_LENGTH: f64 = 1e-9;
+
+/// [`CFrame::try_orthonormalize`] refuses a rotation whose columns are this close to parallel or
+/// coplanar: `|det R| / (|right| |up| |back|)`, which is scale-free (1 for an orthonormal basis,
+/// 0 for a flat one).
+pub const DEGENERATE_EPSILON: f64 = 1e-6;
 
 /// Below this `|sin|` of the middle angle the Euler decomposition treats the rotation as
 /// gimbal-locked and puts the whole remaining turn in the first angle.
@@ -474,13 +491,62 @@ impl CFrame {
         CFrame::from_quaternion(position, q)
     }
 
-    /// The rotation re-orthonormalised (Gram-Schmidt on the right and up axes) (`Orthonormalize`).
-    pub fn orthonormalize(self) -> CFrame {
-        let right = self.right_vector().unit();
-        let up = self.up_vector();
+    /// The rotation as a right-handed orthonormal basis, by the rule every stored CFrame follows
+    /// (`World::set`, the scene loader, Luau `CFrame.new` with 12 numbers).
+    ///
+    /// - A rotation that is already orthonormal and right-handed to within
+    ///   [`ORTHONORMAL_TOLERANCE`] comes back bit for bit, so round trips and saved scenes do not
+    ///   drift.
+    /// - Otherwise the right axis is kept, the up axis loses its part along right and is
+    ///   normalised (Gram-Schmidt), and back is `right x up` (the rule `Orthonormalize` has
+    ///   used since it was added). A scale on the axes is dropped; a mirrored (left-handed)
+    ///   matrix gets its back axis flipped.
+    /// - `None` when a component is not finite, an axis column is shorter than
+    ///   [`MIN_AXIS_LENGTH`], or the columns are (nearly) parallel or coplanar:
+    ///   `|det R| / (|right| |up| |back|)` below [`DEGENERATE_EPSILON`].
+    ///
+    /// The position is never changed.
+    pub fn try_orthonormalize(self) -> Option<CFrame> {
+        if !self.is_finite() {
+            return None;
+        }
+        let (right, up, back) = (self.right_vector(), self.up_vector(), self.back_vector());
+        let lengths = [right.magnitude(), up.magnitude(), back.magnitude()];
+        if lengths.iter().any(|l| *l < MIN_AXIS_LENGTH) {
+            return None;
+        }
+        let det = dot(right, cross(up, back));
+        if det.abs() / (lengths[0] * lengths[1] * lengths[2]) < DEGENERATE_EPSILON {
+            return None;
+        }
+        if det > 0.0 && self.is_orthonormal() {
+            return Some(self);
+        }
+        let right = right * (1.0 / lengths[0]);
         let up = (up - right * dot(up, right)).unit();
         let back = cross(right, up);
-        CFrame::from_axes(self.position, right, up, back)
+        let out = CFrame::from_axes(self.position, right, up, back);
+        out.is_finite().then_some(out)
+    }
+
+    /// True when every entry of `R^T R` is within [`ORTHONORMAL_TOLERANCE`] of the identity
+    /// (unit, perpendicular columns; a mirrored matrix also passes).
+    fn is_orthonormal(self) -> bool {
+        let r = self.rotation;
+        let rtr = mat_mul(&transpose(&r), &r);
+        (0..3).all(|i| {
+            (0..3).all(|j| {
+                let id = if i == j { 1.0 } else { 0.0 };
+                (rtr[i][j] - id).abs() <= ORTHONORMAL_TOLERANCE
+            })
+        })
+    }
+
+    /// The rotation re-orthonormalised by the stored-CFrame rule ([`CFrame::try_orthonormalize`],
+    /// which keeps the right axis) (`Orthonormalize`). A rotation that cannot be orthonormalised
+    /// (degenerate or not finite) comes back unchanged, so writing it to a property still fails.
+    pub fn orthonormalize(self) -> CFrame {
+        self.try_orthonormalize().unwrap_or(self)
     }
 
     /// True when every component is finite.
