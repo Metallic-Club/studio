@@ -106,7 +106,8 @@ the actual schema hash changes because Humanoid tuning now has bounds. Source cc
 passed a fresh workspace no-run build (1m58s), strict all-target Clippy (41.58s), licenses, format and whitespace.
 Two separate rebuilt example processes printed
 37ca80ce29f36fbecaee50550c68b3c242e9f3f4e3a903094957c7d3ee0b9839.
-The full actual workspace suite passed: 1,534 passed, zero failed, seven existing manual/window tests ignored,
+The full actual workspace suite passed: 1,534 passed, zero failed, six existing manual tests and one upstream
+Studio documentation example ignored,
 across 120 groups. These results include the newly merged Studio editing and character-limit tests; the earlier
 1,458-test result above belongs to b4909b5. The actual suite ran alone in the shared Lua test window.
 Logs for this refresh use <TEMP>/metallic-293-current-{workspace-build,workspace-tests,clippy,licenses}.log.
