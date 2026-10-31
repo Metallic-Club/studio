@@ -14,8 +14,8 @@ along X (length `Size.X`, diameter `min(Size.Y, Size.Z)`). Make the drawn shapes
   depend on physics). Both shape tests fail without the fix.
 
 ## Next
-- Push + PR (not done by this session). `docs/agents/m1-shots/stress.png` still shows the old egg-shaped
-  balls; it was not regenerated (needs a GPU run of the stress example `--screenshot`).
+- Shipped in batch PR `studio/1e-batch-20261031-1` with #102. `docs/agents/m1-shots/stress.png` regenerated there
+  (`cargo run -p metallic_render --example stress -- --screenshot <png>`, RX 6650 XT): balls are round now.
 
 ## Commands
 ```
