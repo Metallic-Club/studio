@@ -7,6 +7,7 @@ use crate::menu::{ControlsHint, Menu, MenuOutcome, UiLayer};
 use crate::overlay::Overlay;
 use crate::pacing::{Pace, WindowState};
 use crate::touch_overlay::{TouchOverlay, emulation_window};
+use metallic_profiler::{Profiler, Subsystem};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
 use metallic_runtime::HumanoidState;
@@ -408,6 +409,8 @@ impl App {
             self.paused = true;
             return;
         }
+        // Profiled hosts record one frame per redraw (see `metallic_profiler`).
+        let _frame = Profiler::frame();
         if std::mem::take(&mut self.paused) {
             // Back from minimised: the time away is not a frame.
             self.last = Instant::now();
@@ -534,6 +537,7 @@ impl App {
                     },
                 );
                 gfx.window.pre_present_notify();
+                let _present = Profiler::scope(Subsystem::Render, "present");
                 gfx.ctx.queue.present(frame);
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {

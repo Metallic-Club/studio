@@ -3549,12 +3549,17 @@ dependencies = [
  "egui-wgpu",
  "gilrs",
  "metallic_core",
+ "metallic_profiler",
  "metallic_render",
  "metallic_runtime",
  "png",
  "wgpu",
  "winit",
 ]
+
+[[package]]
+name = "metallic_profiler"
+version = "0.1.1"
 
 [[package]]
 name = "metallic_render"
@@ -3565,6 +3570,7 @@ dependencies = [
  "log",
  "metallic_asset",
  "metallic_core",
+ "metallic_profiler",
  "naga",
  "png",
  "pollster 1.0.1",
@@ -3584,6 +3590,7 @@ dependencies = [
  "metallic_asset",
  "metallic_core",
  "metallic_physics",
+ "metallic_profiler",
  "metallic_render",
  "metallic_script",
  "metallic_tokens",
@@ -3601,6 +3608,7 @@ name = "metallic_script"
 version = "0.1.1"
 dependencies = [
  "metallic_core",
+ "metallic_profiler",
  "mlua",
 ]
 
@@ -3614,6 +3622,7 @@ dependencies = [
  "glam 0.30.10",
  "log",
  "metallic_core",
+ "metallic_profiler",
  "metallic_render",
  "metallic_runtime",
  "metallic_script",

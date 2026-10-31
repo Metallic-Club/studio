@@ -6,6 +6,8 @@ use std::ffi::c_void;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use metallic_profiler::Profiler;
+
 use mlua::{
     AnyUserData, Error, Function, IntoLuaMulti, LightUserData, Lua, MultiValue, Result, Table,
     Thread, UserData, Value, WeakLua,
@@ -77,6 +79,9 @@ pub(crate) struct Scheduler {
     lua: RefCell<Option<WeakLua>>,
     /// The owner of the code that is running now; new threads and connections inherit it.
     current: Cell<u64>,
+    /// While the profiler records: time spent in nested owners' code inside the running one,
+    /// so each script is charged only its own time.
+    child_ns: Cell<u64>,
     seq: Cell<u64>,
     pub(crate) sink: Rc<dyn OutputSink>,
     /// Lua function `guard(f, ...)`: runs `f` under `xpcall` with the error normaliser.
@@ -96,6 +101,7 @@ impl Scheduler {
             threads: RefCell::new(None),
             lua: RefCell::new(None),
             current: Cell::new(0),
+            child_ns: Cell::new(0),
             seq: Cell::new(0),
             sink,
             guard: RefCell::new(None),
@@ -231,10 +237,27 @@ impl Scheduler {
     }
 
     /// Runs `run` with `owner` as the current owner, restoring the previous one after.
+    /// While the profiler records, the time `run` takes (less nested owners' time) is charged
+    /// to the owner's script.
     pub(crate) fn as_owner<T>(&self, owner: u64, run: impl FnOnce() -> T) -> T {
         let prev = self.current.replace(owner);
-        let out = run();
+        let out = if owner != 0 && Profiler::is_recording() {
+            self.timed(owner, run)
+        } else {
+            run()
+        };
         self.current.set(prev);
+        out
+    }
+
+    fn timed<T>(&self, owner: u64, run: impl FnOnce() -> T) -> T {
+        let outer_children = self.child_ns.replace(0);
+        let started = Instant::now();
+        let out = run();
+        let total = started.elapsed().as_nanos() as u64;
+        let own = total.saturating_sub(self.child_ns.get());
+        self.child_ns.set(outer_children.saturating_add(total));
+        Profiler::charge_script(crate::host::script_of_owner(owner), own);
         out
     }
 

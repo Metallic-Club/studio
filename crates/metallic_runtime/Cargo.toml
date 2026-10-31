@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+metallic_profiler.workspace = true
 metallic_anim = { path = "../metallic_anim" }
 # The avatar's skeleton and clips for the CPU body animation (no renderer needed).
 metallic_asset.workspace = true
