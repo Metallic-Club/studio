@@ -53,6 +53,7 @@ pub mod input_actions;
 pub mod keymap;
 pub mod licences;
 pub mod output;
+pub mod palette;
 pub mod panel;
 pub mod picking;
 pub mod pivot;
