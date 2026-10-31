@@ -591,6 +591,7 @@ fn concat_chunks_give_the_same_result_as_one_call() {
 #[test]
 fn huge_pack_formats_are_refused() {
     let (mut vm, _) = vm();
+    vm.set_resume_budget(Duration::from_secs(5));
     let start = Instant::now();
     for call in ["pack(f)", "packsize(f)", "unpack(f, 'abc')"] {
         let err = vm
@@ -655,4 +656,77 @@ fn huge_strings_are_refused_by_whole_string_passes() {
          assert(string.upper(5) == '5')",
     )
     .unwrap();
+}
+
+#[test]
+fn front_insert_into_a_huge_table_is_interruptible() {
+    // One shift over 8M elements was a single uninterruptible C call (220 ms in a debug build).
+    assert_stops_early(
+        "return table.create(8000000, 0)",
+        "table.insert(big, 1, 5)",
+        Duration::from_millis(100),
+    );
+}
+
+#[test]
+fn positional_insert_and_remove_match_the_plain_functions() {
+    let (mut vm, _) = vm();
+    vm.set_resume_budget(Duration::from_secs(20));
+    vm.run_script(
+        "T",
+        "local function fresh(n) local t = table.create(n, 0) for i = 1, n do t[i] = i end return t end
+         for _, n in {65535, 65536, 65537, 100000} do
+             for _, pos in {1, 2, 32768, 32769, n - 1, n, n + 1} do
+                 local t = fresh(n)
+                 table.insert(t, pos, 'x')
+                 assert(#t == n + 1 and t[pos] == 'x', n)
+                 for i = 1, pos - 1 do assert(t[i] == i) end
+                 for i = pos + 1, n + 1 do assert(t[i] == i - 1) end
+             end
+             for _, pos in {1, 2, 32768, 32769, n - 1, n} do
+                 local t = fresh(n)
+                 local got = table.remove(t, pos)
+                 assert(got == pos and #t == n - 1)
+                 for i = 1, pos - 1 do assert(t[i] == i) end
+                 for i = pos, n - 1 do assert(t[i] == i + 1) end
+             end
+         end
+         -- errors and special cases are the C function's own
+         local t = fresh(70000)
+         pcall(table.insert, t, 70003, 1) -- out of range: the C function decides
+         pcall(table.insert, t, 1.5, 1)
+         local ok3, e3 = pcall(table.insert, t, 1, 2, 3)
+         assert(not ok3, 'four arguments are an error')
+         table.insert(t, 2, nil)
+         assert(#t >= 70000 and t[1] == 1)
+         local fr = table.freeze(fresh(70000))
+         local ok4, e4 = pcall(table.insert, fr, 1, 9)
+         assert(not ok4 and e4:find('readonly'), e4)
+         assert(table.remove(fresh(70000)) == 70000)
+         assert(table.remove({}) == nil)",
+    )
+    .unwrap();
+}
+
+#[test]
+fn appends_and_pops_stay_fast() {
+    let (mut vm, _) = vm();
+    vm.set_resume_budget(Duration::from_secs(10));
+    let start = Instant::now();
+    vm.run_script(
+        "T",
+        "local t = {}
+         for i = 1, 100000 do table.insert(t, i) end
+         for i = 1, 100000 do table.remove(t) end
+         assert(#t == 0)
+         local u = {}
+         for i = 1, 100000 do table.insert(u, #u + 1, i) end
+         assert(#u == 100000)",
+    )
+    .unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
 }

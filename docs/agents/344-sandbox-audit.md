@@ -10,6 +10,7 @@ unoptimised in debug runs, so these numbers are about 3x a release build), memor
 ## Fixed
 | Function | Worst case before | Fix |
 |---|---|---|
+| `table.insert(t, pos, v)` (8M elements) | 220 to 260 ms | on tables of 65536+ elements the positional form shifts in 32768-element `table.move` chunks; appends `table.insert(t, v)` and everything else call the C function directly |
 | `table.concat` (millions of elements) | 2.5 s | ranges over 8192 elements join chunk by chunk; the Lua loop between chunks is interruptible; same result and errors |
 | `string.pack`, `packsize`, `unpack` (64 MB format) | 0.2 to 0.65 s | format strings over 64 KB are refused |
 | `string.upper`, `lower`, `reverse`, `utf8.len` (64 MB) | 0.1 to 0.26 s | strings over 32 MB are refused |
@@ -25,10 +26,10 @@ unoptimised in debug runs, so these numbers are about 3x a release build), memor
 | `utf8.offset`, `utf8.codes` | O(1) per call or per step |
 | `buffer.*` | one memset/memcpy of at most the buffer size (200 MB measured: 8 to 40 ms) |
 | `table.create`, `table.clone`, `table.freeze`, `table.find` | at most one pass over a table limited by the memory cap (12M elements: 65 ms; clone 8M: 23 ms; find 8M: 55 ms) |
-| `table.insert(t, 1, v)`, `table.remove(t, 1)` | one shift over the table: 8M elements took 220 ms (insert) and 19 ms (remove). Not wrapped: `table.insert(t, v)` is hot and a Lua wrapper would slow every append. A script can still lose up to about 0.2 s (debug build) in one call |
+| `table.remove(t, pos)` | one shift: 8M elements took 19 to 26 ms, so it is left alone |
 | `table.move` | covered by #275 |
 | `string.find/match/gmatch/gsub` | Rust matcher with steps and deadline (#166, #171) |
 | `math.*`, `bit32.*`, `os.clock/time`, `type`, `rawequal`, ... | O(1) |
 
 ## Open
-- `table.insert` at the front of a table with millions of elements (above).
+- Nothing known.

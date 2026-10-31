@@ -220,6 +220,37 @@ utf8.len = function(s, i, j, lax)
     end
     return utf8_len(s, i, j, lax)
 end
+
+-- table.insert(t, pos, v) shifts the tail of the array in one C call (table.remove(t, pos) does
+-- too, but it is a fast memmove-like loop: 26 ms for 8M elements, so it is left alone).
+-- On tables of SHIFT_BIG or more elements the shift is done in SHIFT_CHUNK pieces, so the
+-- deadline can fire between them. Only the positional form is wrapped; appends
+-- (table.insert(t, v)) go straight to the C function. Out-of-range and
+-- non-integer positions, frozen tables and everything else take the C function too, so results
+-- and errors are its own.
+local select, insert, move, isfrozen = select, table.insert, table.move, table.isfrozen
+local rawset = rawset
+local SHIFT_BIG = 65536
+local SHIFT_CHUNK = 32768
+table.insert = function(t, ...)
+    if select('#', ...) == 2 and type(t) == "table" then
+        local pos, v = ...
+        local n = rawlen(t)
+        if n >= SHIFT_BIG and type(pos) == "number" and pos >= 1 and pos <= n and pos % 1 == 0
+            and not isfrozen(t) then
+            local top = n
+            while top >= pos do
+                local first = top - SHIFT_CHUNK + 1
+                if first < pos then first = pos end
+                move(t, first, top, first + 1)
+                top = first - 1
+            end
+            rawset(t, pos, v)
+            return
+        end
+    end
+    return insert(t, ...)
+end
 "#;
 
 /// A cloneable handle for running Lua functions under the VM's execution budget (see
