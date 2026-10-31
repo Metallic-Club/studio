@@ -134,7 +134,8 @@ enum Item {
     Tool,
     Increment,
     Colour,
-    Action(&'static str, &'static str, &'static str),
+    /// Action id, label, default key, enabled.
+    Action(&'static str, &'static str, &'static str, bool),
     More,
 }
 
@@ -152,6 +153,9 @@ const ACTIONS: [(&str, &str, &str); 5] = [
 pub struct ContextBar {
     /// View > Contextual toolbar (on by default).
     pub enabled: bool,
+    /// Set by the editor each frame: a building tool has the pointer (brush, measure, lasso,
+    /// paint, array handle or path points), so the bar stays out of its way.
+    pub suppressed: bool,
     seen_revision: u64,
     armed: bool,
     still_since: Option<Instant>,
@@ -170,6 +174,7 @@ impl Default for ContextBar {
     fn default() -> Self {
         ContextBar {
             enabled: true,
+            suppressed: false,
             seen_revision: u64::MAX,
             armed: false,
             still_since: None,
@@ -199,6 +204,14 @@ impl ContextBar {
     pub fn focus(&mut self) {
         if self.last_rect.is_some() {
             self.focus = Some(0);
+            self.grab = true;
+        }
+    }
+
+    /// Keeps the focused button focused through this frame's Esc (egui drops focus on Esc):
+    /// a building-tool popover took that Esc, so the bar is not the one being dismissed.
+    pub fn keep_focus(&mut self) {
+        if self.focus.is_some() {
             self.grab = true;
         }
     }
@@ -244,6 +257,7 @@ impl ContextBar {
             }
         }
         let show = self.enabled
+            && !self.suppressed
             && self.armed
             && !state.selection.is_empty()
             && !state.play.is_playing()
@@ -259,7 +273,7 @@ impl ContextBar {
             self.last_rect = None;
             return;
         };
-        self.collect(actions);
+        self.collect(actions, state);
         let width = self.width(state);
         let gizmo = gizmo_screen_rect(viewport, state);
         let Some((rect, _)) = place(selection, gizmo, viewport.rect(), top, vec2(width, HEIGHT))
@@ -310,7 +324,17 @@ impl ContextBar {
         }
     }
 
-    fn collect(&mut self, actions: &ActionRegistry) {
+    /// The building actions registered right now, by id, in the spec's order (for tests and the
+    /// hint card).
+    pub fn shown_actions(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.items.iter().filter_map(|i| match i {
+            Item::Colour => Some("colour.open"),
+            Item::Action(id, ..) => Some(*id),
+            _ => None,
+        })
+    }
+
+    fn collect(&mut self, actions: &ActionRegistry, state: &EditorState) {
         self.items.clear();
         self.items.push(Item::Tool);
         self.items.push(Item::Increment);
@@ -318,8 +342,10 @@ impl ContextBar {
             self.items.push(Item::Colour);
         }
         for (id, label, key) in ACTIONS {
-            if actions.get(id).is_some() {
-                self.items.push(Item::Action(id, label, key));
+            if let Some(a) = actions.get(id) {
+                // A disabled action shows disabled (as on the toolbar).
+                self.items
+                    .push(Item::Action(id, label, key, a.is_enabled(state)));
             }
         }
         self.items.push(Item::More);
@@ -342,7 +368,7 @@ impl ContextBar {
                 }
             }
             Item::Colour => 44.0,
-            Item::Action(_, label, key) => 40.0 + 7.0 * (label.len() + key.len()) as f32,
+            Item::Action(_, label, key, _) => 40.0 + 7.0 * (label.len() + key.len()) as f32,
             Item::More => 56.0,
         };
         8.0 + self.items.iter().map(per).sum::<f32>() + 2.0 * self.items.len() as f32
@@ -423,13 +449,14 @@ impl ContextBar {
                 r
             }
             Item::Colour => self.swatch(ui, state, keymap, run),
-            Item::Action(id, label, key) => {
+            Item::Action(id, label, key, enabled) => {
                 let shown = keymap.label(id);
                 let key = if shown.is_empty() { key } else { &shown };
                 let tip = format!("{label} ({key})");
                 let r = ui
-                    .add(Button::ghost(label).compact().keycap(key))
-                    .on_hover_text(tip);
+                    .add_enabled(enabled, Button::ghost(label).compact().keycap(key))
+                    .on_hover_text(&tip)
+                    .on_disabled_hover_text(&tip);
                 if r.clicked() {
                     *run = Some(id);
                 }

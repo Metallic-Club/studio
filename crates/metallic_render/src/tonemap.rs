@@ -214,14 +214,21 @@ pub(crate) struct FinishUniform {
     tint_exposure: [f32; 4],
     grade: [f32; 4],
     mode: [f32; 4],
+    lut: [f32; 4],
 }
 
 impl FinishUniform {
     /// Byte offset of the auto exposure multiplier (`mode.w`), which the meter writes on the GPU.
     pub(crate) const AUTO_OFFSET: u64 = (std::mem::offset_of!(FinishUniform, mode) + 12) as u64;
 
-    /// `exposure` is the scene exposure (the sky's), multiplied with the settings' own.
-    pub(crate) fn new(s: &FinishSettings, exposure: f32, output_srgb: bool) -> FinishUniform {
+    /// `exposure` is the scene exposure (the sky's), multiplied with the settings' own. `lut`
+    /// is the LUT strength (0 = off) and edge length.
+    pub(crate) fn new(
+        s: &FinishSettings,
+        exposure: f32,
+        output_srgb: bool,
+        lut: (f32, u32),
+    ) -> FinishUniform {
         let e = exposure * s.total_exposure();
         FinishUniform {
             tint_exposure: [s.tint[0], s.tint[1], s.tint[2], e],
@@ -233,6 +240,7 @@ impl FinishUniform {
                 // Auto exposure multiplier; the meter's GPU copy overwrites it.
                 1.0,
             ],
+            lut: [lut.0.clamp(0.0, 1.0), lut.1 as f32, 0.0, 0.0],
         }
     }
 }

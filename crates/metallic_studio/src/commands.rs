@@ -28,10 +28,21 @@
 //! [`History::apply_pending`] and record `Batch[create, SetProperties]` on release, or
 //! [`History::abandon`] it on Esc. [`History::take_last`] reverts the newest step and hands it
 //! back, so the editable delta after a drag (spec 4.5) can change it without adding a step.
+//!
+//! # Steps from panels that build their own edits
+//!
+//! [`Command::Step`] holds an [`EditStep`] (the Input Actions panel's undo unit). A step destroys
+//! instances for real and rebuilds them with new ids on undo, so its undo and redo return an
+//! [`IdMap`]. History then rewrites the ids in every command it keeps and queues the map;
+//! [`History::take_remaps`] hands the maps to whoever holds ids (the Input Actions panel's
+//! `follow_remap`).
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
+
+use crate::input_actions::EditStep;
+use crate::input_actions::commands::IdMap;
 
 /// A property name inside a command; shared, so a 500-part drag names `Position` once.
 pub type PropName = Arc<str>;
@@ -42,6 +53,8 @@ pub type PropName = Arc<str>;
 pub struct Book {
     /// Detached instances kept alive for undo.
     pub parked: HashSet<InstanceId>,
+    /// Ids rebuilt by [`Command::Step`]s during the current apply or revert (`old -> new`).
+    pub remap: IdMap,
 }
 
 /// Most undo steps kept. Older steps are dropped (and their parked instances destroyed).
@@ -71,6 +84,30 @@ pub enum Command {
         old: Value,
         /// Value after.
         new: Value,
+    },
+    /// Sets, changes or removes one attribute. `Nil` stands for "no attribute" in `old` (the
+    /// attribute is added) and in `new` (it is removed).
+    SetAttribute {
+        /// Instance changed.
+        id: InstanceId,
+        /// Attribute name.
+        name: String,
+        /// Value before (`Nil`: there was none).
+        old: Value,
+        /// Value after (`Nil`: remove it).
+        new: Value,
+    },
+    /// Adds (`on`) or removes one tag.
+    SetTag {
+        /// Instance changed.
+        id: InstanceId,
+        /// The tag.
+        tag: String,
+        /// True to add it, false to remove it.
+        on: bool,
+        /// Filled by apply: whether the world changed. Undo does nothing when it did not (adding
+        /// a tag the instance already had must not remove it on undo).
+        changed: bool,
     },
     /// Many property changes as one undo step: (instance, property, old value, new value). A
     /// gesture's preview overlay turns into this on release.
@@ -128,6 +165,9 @@ pub enum Command {
         /// The Model; created by the first apply.
         model: Option<Placement>,
     },
+    /// A tree edit built by a panel (Input Actions), already applied when recorded. Undo and
+    /// redo may rebuild instances with new ids (see the module docs).
+    Step(EditStep),
 }
 
 /// Why a command could not run. The world is left as it was before the command.
@@ -180,6 +220,36 @@ impl Command {
                     .unwrap_or("instance");
                 format!("Set {prop} of {what}")
             }
+            Command::SetAttribute { id, name, new, .. } => {
+                let what = world
+                    .get_ref(*id, "Name")
+                    .ok()
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("instance");
+                if matches!(new, Value::Nil) {
+                    format!("Remove attribute {name} of {what}")
+                } else {
+                    format!("Set attribute {name} of {what}")
+                }
+            }
+            Command::SetTag { id, tag, on, .. } => {
+                let what = world
+                    .get_ref(*id, "Name")
+                    .ok()
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("instance");
+                if *on {
+                    format!("Add tag {tag} to {what}")
+                } else {
+                    format!("Remove tag {tag} from {what}")
+                }
+            }
             Command::Batch { name, .. } | Command::SetProperties { name, .. } => name.clone(),
             Command::Create { class, .. } => format!("Insert {class}"),
             Command::Delete { items } => format!("Delete {}", count(items.len(), "object")),
@@ -190,13 +260,97 @@ impl Command {
                 format!("Duplicate {}", count(sources.len(), "object"))
             }
             Command::Group { items, .. } => format!("Group {}", count(items.len(), "object")),
+            Command::Step(step) => step.label.clone(),
         }
     }
 
-    /// Runs the command. On error the world is unchanged.
+    /// Rewrites instance ids after an undo or redo rebuilt instances (`old -> new`).
+    pub fn remap(&mut self, map: &IdMap) {
+        if map.is_empty() {
+            return;
+        }
+        let fix = |id: &mut InstanceId| {
+            if let Some(&n) = map.get(id) {
+                *id = n;
+            }
+        };
+        let fix_opt = |id: &mut Option<InstanceId>| {
+            if let Some(i) = id {
+                fix(i);
+            }
+        };
+        let fix_place = |p: &mut Placement| {
+            fix(&mut p.id);
+            fix_opt(&mut p.parent);
+        };
+        match self {
+            Command::SetProperty { id, old, new, .. } => {
+                fix(id);
+                for v in [old, new] {
+                    if let Value::Ref(r) = v {
+                        fix_opt(r);
+                    }
+                }
+            }
+            Command::SetAttribute { id, .. } | Command::SetTag { id, .. } => fix(id),
+            Command::SetProperties { changes, .. } => {
+                for (id, _, old, new) in changes.iter_mut() {
+                    fix(id);
+                    for v in [old, new] {
+                        if let Value::Ref(r) = v {
+                            fix_opt(r);
+                        }
+                    }
+                }
+            }
+            Command::Batch { commands, .. } => commands.iter_mut().for_each(|c| c.remap(map)),
+            Command::Create { parent, id, .. } => {
+                fix(parent);
+                fix_opt(id);
+            }
+            Command::Delete { items } => items.iter_mut().for_each(fix_place),
+            Command::Reparent { from, to } => {
+                from.iter_mut().for_each(fix_place);
+                fix(to);
+            }
+            Command::Duplicate {
+                sources, copies, ..
+            } => {
+                sources.iter_mut().for_each(fix);
+                copies.iter_mut().for_each(fix_place);
+            }
+            Command::Group { items, model } => {
+                items.iter_mut().for_each(fix_place);
+                if let Some(m) = model {
+                    fix_place(m);
+                }
+            }
+            Command::Step(step) => step.remap(map),
+        }
+    }
+
+    /// Runs the command. On error the world is unchanged. Ids rebuilt by a [`Command::Step`] go
+    /// into `book.remap`; later commands of a batch are rewritten with it.
     fn apply(&mut self, world: &mut World, book: &mut Book) -> Result<(), CommandError> {
         match self {
             Command::SetProperty { id, prop, new, .. } => Ok(world.set(*id, prop, new.clone())?),
+            Command::SetAttribute { id, name, new, .. } => {
+                Ok(world.set_attribute(*id, name, new.clone())?)
+            }
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                *changed = world.has_tag(*id, tag) != *on;
+                if *on {
+                    world.add_tag(*id, tag)?;
+                } else {
+                    world.remove_tag(*id, tag)?;
+                }
+                Ok(())
+            }
             Command::SetProperties { changes, .. } => {
                 for i in 0..changes.len() {
                     let (id, prop, _, new) = &changes[i];
@@ -211,13 +365,20 @@ impl Command {
             }
             Command::Batch { commands, .. } => {
                 for i in 0..commands.len() {
+                    commands[i].remap(&book.remap);
                     if let Err(e) = commands[i].apply(world, book) {
                         for done in commands[..i].iter_mut().rev() {
+                            done.remap(&book.remap);
                             done.revert(world, book);
                         }
                         return Err(e);
                     }
                 }
+                Ok(())
+            }
+            Command::Step(step) => {
+                let fresh = step.redo(world)?;
+                book.remap.extend(fresh);
                 Ok(())
             }
             Command::Create {
@@ -350,12 +511,30 @@ impl Command {
         }
     }
 
-    /// Undoes the command. Best effort: a failure on one item does not stop the others.
+    /// Undoes the command. Best effort: a failure on one item does not stop the others. Ids
+    /// rebuilt by a [`Command::Step`] go into `book.remap`.
     fn revert(&mut self, world: &mut World, book: &mut Book) {
         let parked = &mut book.parked;
         match self {
             Command::SetProperty { id, prop, old, .. } => {
                 let _ = world.set(*id, prop, old.clone());
+            }
+            Command::SetAttribute { id, name, old, .. } => {
+                let _ = world.set_attribute(*id, name, old.clone());
+            }
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                if *changed {
+                    let _ = if *on {
+                        world.remove_tag(*id, tag)
+                    } else {
+                        world.add_tag(*id, tag)
+                    };
+                }
             }
             Command::SetProperties { changes, .. } => {
                 for (id, prop, old, _) in changes.iter().rev() {
@@ -364,9 +543,14 @@ impl Command {
             }
             Command::Batch { commands, .. } => {
                 for c in commands.iter_mut().rev() {
+                    c.remap(&book.remap);
                     c.revert(world, book);
                 }
             }
+            Command::Step(step) => match step.undo(world) {
+                Ok(fresh) => book.remap.extend(fresh),
+                Err(e) => log::warn!("undo of `{}` failed: {e}", step.label),
+            },
             Command::Create { id, .. } => {
                 if let Some(id) = *id {
                     let _ = park(world, parked, id);
@@ -550,6 +734,8 @@ pub struct History {
     floor: u64,
     /// Bumps on every apply, record, undo and redo.
     revision: u64,
+    /// Id maps from undo and redo of [`Command::Step`]s, oldest first, not yet taken.
+    remaps: Vec<IdMap>,
 }
 
 impl History {
@@ -564,7 +750,9 @@ impl History {
     /// Runs `cmd` on `world` and pushes it as one undo step. Clears the redo list.
     /// On error nothing is pushed and the world is unchanged.
     pub fn apply(&mut self, mut cmd: Command, world: &mut World) -> Result<&Command, CommandError> {
-        cmd.apply(world, &mut self.book)?;
+        let result = cmd.apply(world, &mut self.book);
+        self.after_rebuild();
+        result?;
         Ok(self.push(cmd, world))
     }
 
@@ -576,12 +764,15 @@ impl History {
         cmd: &mut Command,
         world: &mut World,
     ) -> Result<(), CommandError> {
-        cmd.apply(world, &mut self.book)
+        let result = cmd.apply(world, &mut self.book);
+        self.after_rebuild();
+        result
     }
 
     /// Undoes a pending command (see [`History::apply_pending`]) and destroys what it created.
     pub fn abandon(&mut self, mut cmd: Command, world: &mut World) {
         cmd.revert(world, &mut self.book);
+        self.after_rebuild();
         cmd.discard(world, &mut self.book, false);
         self.revision += 1;
     }
@@ -592,6 +783,7 @@ impl History {
     pub fn take_last(&mut self, world: &mut World) -> Option<Command> {
         let mut e = self.undo.pop()?;
         e.command.revert(world, &mut self.book);
+        self.after_rebuild();
         self.revision += 1;
         Some(e.command)
     }
@@ -627,6 +819,7 @@ impl History {
         let name = e.command.name(world);
         e.command.revert(world, &mut self.book);
         self.redo.push(e);
+        self.after_rebuild();
         self.revision += 1;
         Some(name)
     }
@@ -634,7 +827,9 @@ impl History {
     /// Redoes the newest undone step; returns its name.
     pub fn redo(&mut self, world: &mut World) -> Option<String> {
         let mut e = self.redo.pop()?;
-        if e.command.apply(world, &mut self.book).is_err() {
+        let result = e.command.apply(world, &mut self.book);
+        self.after_rebuild();
+        if result.is_err() {
             // The world changed under the step (should not happen while every edit goes
             // through History); drop it rather than leave a half-applied step.
             e.command.discard(world, &mut self.book, false);
@@ -645,6 +840,34 @@ impl History {
         self.undo.push(e);
         self.revision += 1;
         Some(name)
+    }
+
+    /// Rewrites every kept command with the ids the last apply or revert rebuilt, and queues
+    /// the map for [`History::take_remaps`].
+    fn after_rebuild(&mut self) {
+        let map = std::mem::take(&mut self.book.remap);
+        if map.is_empty() {
+            return;
+        }
+        for e in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            e.command.remap(&map);
+        }
+        self.remaps.push(map);
+    }
+
+    /// Id maps (old id to new id) from undo and redo steps that rebuilt instances, oldest first.
+    /// Whoever holds instance ids outside the history (a panel's selection) applies them.
+    pub fn take_remaps(&mut self) -> Vec<IdMap> {
+        std::mem::take(&mut self.remaps)
+    }
+
+    /// The newest undo step while nothing is undone, for folding a continuing gesture into it
+    /// (a value dragged over many frames). The command stays applied, as with [`History::record`].
+    pub fn last_mut(&mut self) -> Option<&mut Command> {
+        if !self.redo.is_empty() {
+            return None;
+        }
+        self.undo.last_mut().map(|e| &mut e.command)
     }
 
     /// The step Undo would revert.

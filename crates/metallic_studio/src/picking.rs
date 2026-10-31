@@ -153,6 +153,35 @@ impl PickCache {
         best
     }
 
+    /// Indices of the parts whose bounding sphere reaches within `radius` of `centre`, written
+    /// into `out` (cleared first). A cheap prefilter for many rays in one small region (the
+    /// brush): test those rays with [`PickCache::first_in`].
+    pub fn near(&self, centre: DVec3, radius: f64, out: &mut Vec<usize>) {
+        out.clear();
+        for (i, e) in self.entries.iter().enumerate() {
+            let reach = radius + e.transform.size.length() * 0.5;
+            if e.transform.position.distance_squared(centre) <= reach * reach {
+                out.push(i);
+            }
+        }
+    }
+
+    /// The nearest hit by `ray` among the parts `subset` (indices from [`PickCache::near`]).
+    pub fn first_in(&self, ray: &Ray, subset: &[usize]) -> Option<Hit> {
+        let mut best: Option<Hit> = None;
+        for e in subset.iter().filter_map(|&i| self.entries.get(i)) {
+            if let Some(d) = hit(e, ray)
+                && best.is_none_or(|b| d < b.distance)
+            {
+                best = Some(Hit {
+                    id: e.id,
+                    distance: d,
+                });
+            }
+        }
+        best
+    }
+
     /// Every cached part: id, transform and whether it is a Ball.
     pub fn iter(&self) -> impl Iterator<Item = (InstanceId, &PartTransform, bool)> {
         self.entries.iter().map(|e| (e.id, &e.transform, e.ball))
@@ -232,6 +261,25 @@ mod tests {
         let p = world.create("Part", Some(ws)).unwrap();
         world.set(p, "Position", Value::Vector3(pos)).unwrap();
         p
+    }
+
+    #[test]
+    fn near_prefilters_and_first_in_matches_first_on_the_subset() {
+        let mut w = World::new_with_services();
+        let close = part(&mut w, Vec3::new(0.0, 0.0, 0.0));
+        let _far = part(&mut w, Vec3::new(500.0, 0.0, 0.0));
+        let mut c = PickCache::new();
+        c.sync(&w);
+        let mut near = Vec::new();
+        c.near(DVec3::new(0.0, 5.0, 0.0), 8.0, &mut near);
+        assert_eq!(near.len(), 1, "only the close part");
+        let down = Ray {
+            origin: DVec3::new(0.0, 10.0, 0.0),
+            dir: DVec3::NEG_Y,
+        };
+        assert_eq!(c.first_in(&down, &near), c.first(&down, &[]));
+        assert_eq!(c.first_in(&down, &near).map(|h| h.id), Some(close));
+        assert_eq!(c.first_in(&down, &[]), None);
     }
 
     #[test]

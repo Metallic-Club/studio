@@ -20,6 +20,12 @@
 //! After any history change the selection drops ids that are no longer in the tree, and the undo
 //! name flashes in the status bar for 2 s.
 //!
+//! **One gesture flag.** [`EditorState::gesture_active`] is true while the preview overlay holds
+//! values or a UI part reports a [`Gesture`] in progress (a viewport drag, a Properties scrub, a
+//! brush stroke, a lasso, the array handle). Save, Play, Undo/Redo, [`EditorState::apply`] and
+//! every tool commit ([`EditorState::edit_refusal`]) refuse while it is set, so a half-finished
+//! gesture is never saved, played or interleaved with another step.
+//!
 //! **Play locks editing.** [`EditorState::new`] registers [`LocalPlayMode`] (Play, F5). While a
 //! session runs, [`EditorState::apply`], [`EditorState::record`], undo and redo refuse and leave
 //! the edit world, its history and the selection as they were; the session runs on its own copy,
@@ -60,6 +66,7 @@ pub const INSERTABLE: &[&str] = &[
     "Checkpoint",
     "Script",
     "LocalScript",
+    "ModuleScript",
     "Folder",
     "Model",
     "RemoteEvent",
@@ -244,6 +251,22 @@ pub struct EditorState {
     pub insert_point: Vec3,
     requests: Vec<UiRequest>,
     note: Option<(String, Instant)>,
+    gestures: [bool; Gesture::COUNT],
+}
+
+/// A UI part that holds a gesture in progress (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gesture {
+    /// A gizmo, body, box or pivot drag in the viewport.
+    Viewport,
+    /// A Properties scrub.
+    Properties,
+    /// A building tool: brush stroke, lasso or paint trail, array handle drag.
+    Tool,
+}
+
+impl Gesture {
+    const COUNT: usize = 3;
 }
 
 impl EditorState {
@@ -255,6 +278,9 @@ impl EditorState {
         name: &str,
         output: OutputSink,
     ) -> EditorState {
+        // Loading logged every attribute and tag; nothing reads the edit world's logs.
+        let mut world = world;
+        world.clear_change_logs();
         let mut play = PlayController::new();
         play.register(Box::new(LocalPlayMode));
         EditorState {
@@ -278,6 +304,7 @@ impl EditorState {
             insert_point: Vec3::new(0.0, 0.5, 0.0),
             requests: Vec::new(),
             note: None,
+            gestures: [false; Gesture::COUNT],
         }
     }
 
@@ -307,18 +334,39 @@ impl EditorState {
         ))
     }
 
+    /// Reports whether `part` holds a gesture now. The part calls this when the gesture starts
+    /// and ends (or once a frame with its current state).
+    pub fn set_gesture(&mut self, part: Gesture, on: bool) {
+        self.gestures[part as usize] = on;
+    }
+
+    /// True while a gesture is in progress anywhere (see the module docs).
+    pub fn gesture_active(&self) -> bool {
+        self.preview.is_active() || self.gestures.iter().any(|g| *g)
+    }
+
+    /// Why an edit cannot start now: the game is playing, or a gesture is open (its values are
+    /// in the world but not in History yet, so another step now would undo out of order).
+    /// `None` when edits may run. Every edit entry point checks this.
+    pub fn edit_refusal(&self) -> Option<&'static str> {
+        if self.play.is_playing() {
+            Some("edit while playing")
+        } else if self.gesture_active() {
+            Some("edit during a drag")
+        } else {
+            None
+        }
+    }
+
     /// Runs a command as one undo step.
     ///
     /// While playing it refuses with [`CommandError::Nothing`] and changes nothing.
     pub fn apply(&mut self, cmd: Command) -> Result<(), CommandError> {
-        if self.play.is_playing() {
-            self.note("Stop the game to edit".into());
-            return Err(CommandError::Nothing("edit while playing"));
-        }
-        if self.preview.is_active() {
-            // A gesture (drag, Properties scrub) is open: its values are in the world but not in
-            // History yet, so another step now would undo out of order.
-            return Err(CommandError::Nothing("edit during a drag"));
+        if let Some(why) = self.edit_refusal() {
+            if self.play.is_playing() {
+                self.note("Stop the game to edit".into());
+            }
+            return Err(CommandError::Nothing(why));
         }
         let result = self.history.apply(cmd, &mut self.world).map(|_| ());
         if let Err(e) = &result {
@@ -340,7 +388,7 @@ impl EditorState {
 
     /// Undo; shows the step name in the status bar.
     pub fn undo(&mut self) {
-        if self.play.is_playing() || self.preview.is_active() {
+        if self.edit_refusal().is_some() {
             return;
         }
         if let Some(name) = self.history.undo(&mut self.world) {
@@ -351,7 +399,7 @@ impl EditorState {
 
     /// Redo.
     pub fn redo(&mut self) {
-        if self.play.is_playing() || self.preview.is_active() {
+        if self.edit_refusal().is_some() {
             return;
         }
         if let Some(name) = self.history.redo(&mut self.world) {
@@ -361,6 +409,9 @@ impl EditorState {
     }
 
     fn after_history_change(&mut self) {
+        // No script VM reads the edit world's attribute and tag logs (Play runs a copy), so
+        // they would only grow: drop what the edit just logged.
+        self.world.clear_change_logs();
         self.selection.retain_live(&self.world, &self.history);
     }
 
@@ -395,6 +446,13 @@ impl EditorState {
 
     /// Writes the scene file and marks the history clean.
     pub fn save(&mut self) -> Result<(), StudioError> {
+        if self.gesture_active() {
+            // The world holds preview values that are not edits yet.
+            return Err(StudioError::Scene {
+                path: self.scene_path.clone(),
+                message: "finish or cancel the drag first".into(),
+            });
+        }
         if !self.can_save {
             self.note("Saving is off in this window".into());
             return Ok(());
@@ -557,8 +615,13 @@ impl EditorState {
 
     /// Starts the play mode `id` with a clean copy of the world (parked instances removed).
     /// Returns true when it runs. A mode that fails to start reports why in Output and Studio
-    /// stays in edit mode. Selection and history are not touched.
+    /// stays in edit mode. Selection and history are not touched. Refused (false) while a
+    /// gesture is open: its preview values are not edits.
     pub fn start_play(&mut self, id: &str) -> bool {
+        if self.gesture_active() {
+            self.note("Finish or cancel the drag first".into());
+            return false;
+        }
         let world = self.clean_world();
         let output = self.output.clone();
         let dir = self.project_dir.clone();
