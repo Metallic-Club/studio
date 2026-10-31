@@ -161,10 +161,8 @@ end
 -- C call of bounded size; the loop between chunks is interruptible). The chunking follows the
 -- range the C function would walk: bounds are read as it reads them (numbers and numeric
 -- strings truncated toward zero), so a fractional bound is chunked too. A bound that overflows
--- 32 bits, or is NaN or infinite, is converted by the platform: for the end of the range the
--- C function is asked (concat of one element) whether it reads an empty range or the largest
--- integer; for the start the C call is cheap whichever it reads (it fails at the first
--- missing element or walks nothing). Luau has no tail calls, so an error raised by the C function would carry this
+-- 32 bits, or is NaN or infinite, is converted by the platform, so the C function is asked
+-- which integer it reads (`c_int`) and the range is chunked from that. Luau has no tail calls, so an error raised by the C function would carry this
 -- wrapper's position: every call therefore runs under pcall, and a failure is run once more
 -- inside a closure (which gives the C function the same call-site name) and re-raised at the
 -- caller's position, so text, index and position are those of the plain function.
@@ -180,26 +178,30 @@ local function concat_failed(t, sep, i, j)
     error(e, 3) -- 1 = here, 2 = table.concat, 3 = its caller
 end
 local floor, ceil, tonumber = math.floor, math.ceil, tonumber
-local PROBE = { "a" }
-local function bound_int(x)
-    if type(x) == "string" then x = tonumber(x) end
-    if type(x) ~= "number" or x ~= x or x >= 2147483648 or x <= -2147483649 then return nil end
-    if x >= 0 then return floor(x) end
-    return ceil(x)
+-- Asks the C function which integer it reads for a bound that is NaN, infinite or outside 32
+-- bits (the conversion is up to the platform: x86 gives the smallest integer, ARM saturates
+-- and turns NaN into 0). A one-element range [x, x] over a table with a value at 0 and 1 and
+-- nothing elsewhere answers: "0" or "1", or an error that names the index it read.
+local PROBE = { [0] = "0", "1" }
+local function c_int(x)
+    local ok, r = pcall(concat, PROBE, "", x, x)
+    if ok then return r == "0" and 0 or 1 end
+    return type(r) == "string" and tonumber(r:match("at index (-?%d+)")) or nil
 end
-local function last_int(j)
-    local n = bound_int(j)
-    if n ~= nil then return n end
-    local v = j
-    if type(v) == "string" then v = tonumber(v) end
-    if type(v) ~= "number" then return nil end
-    if pcall(concat, PROBE, "", 1, j) then return nil end
-    return 2147483647
+-- The integer the C function reads for a bound (numbers and numeric strings, truncated toward
+-- zero), or nil when it is not a number and the C function is to report it.
+local function bound_int(x)
+    local n = x
+    if type(n) == "string" then n = tonumber(n) end
+    if type(n) ~= "number" then return nil end
+    if n ~= n or n >= 2147483648 or n <= -2147483649 then return c_int(x) end
+    if n >= 0 then return floor(n) end
+    return ceil(n)
 end
 table.concat = function(t, sep, i, j)
     if type(t) == "table" then
         local first = i == nil and 1 or bound_int(i)
-        local last = j == nil and rawlen(t) or last_int(j)
+        local last = j == nil and rawlen(t) or bound_int(j)
         if first and last and last - first >= CONCAT_CHUNK then
             local parts, count = {}, 0
             local from = first

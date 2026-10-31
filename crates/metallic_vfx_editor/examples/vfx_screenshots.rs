@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 type Error = Box<dyn std::error::Error>;
 
 fn setup(ctx: &egui::Context) {
-    theme::install_fonts(ctx);
     theme::apply(ctx);
 }
 
@@ -59,6 +58,7 @@ fn editor_shot(out: &Path, name: &str, view: View) -> Result<(), Error> {
     let mut harness = Harness::builder()
         .with_size(Vec2::new(1440.0, 900.0))
         .with_pixels_per_point(1.0)
+        .with_accessibility_check(false)
         .with_context_setup(setup)
         .wgpu()
         .build_ui_state(|ui, ed: &mut VfxEditor| ed.ui(ui), editor);
@@ -75,7 +75,7 @@ struct Sheet {
 
 fn sheet_ui(ui: &mut egui::Ui, sheet: &mut Sheet) {
     let painter = ui.painter().clone();
-    painter.rect_filled(ui.max_rect(), 0.0, theme::color::BG_DEEP);
+    painter.rect_filled(ui.max_rect(), 0.0, theme::color::bg_deep());
     let (cols, cell) = (sheet.columns, sheet.cell);
     for (i, (label, ed)) in sheet.cells.iter_mut().enumerate() {
         let x = (i % cols) as f32 * (cell.x + 6.0) + 6.0;
@@ -89,7 +89,7 @@ fn sheet_ui(ui: &mut egui::Ui, sheet: &mut Sheet) {
             egui::Align2::LEFT_TOP,
             label.as_str(),
             theme::semibold(12.0),
-            theme::color::TEXT,
+            theme::color::text(),
         );
     }
 }
@@ -103,6 +103,7 @@ fn render_sheet(out: &Path, name: &str, sheet: Sheet) -> Result<(), Error> {
     let mut harness = Harness::builder()
         .with_size(size)
         .with_pixels_per_point(1.0)
+        .with_accessibility_check(false)
         .with_context_setup(setup)
         .wgpu()
         .build_ui_state(sheet_ui, sheet);

@@ -27,7 +27,7 @@ pub fn curve_edit(
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
     let painter = ui.painter_at(rect.expand(4.0));
-    painter.rect_filled(rect, theme::R_SM, color::BG_DEEP);
+    painter.rect_filled(rect, theme::R_SM, color::bg_deep());
 
     let mut state: DragState = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let fitted = fit_range(curve);
@@ -57,7 +57,7 @@ pub fn curve_edit(
                 Pos2::new(x, rect.min.y + 2.0),
                 Pos2::new(x, rect.max.y - 2.0),
             ],
-            Stroke::new(1.0, color::LINE),
+            Stroke::new(1.0, color::line()),
         );
     }
     if lo < 0.0 && hi > 0.0 {
@@ -67,7 +67,7 @@ pub fn curve_edit(
                 Pos2::new(rect.min.x + 2.0, y),
                 Pos2::new(rect.max.x - 2.0, y),
             ],
-            Stroke::new(1.0, color::LINE_STRONG),
+            Stroke::new(1.0, color::line_strong()),
         );
     }
     let n = 96;
@@ -77,21 +77,21 @@ pub fn curve_edit(
             to_screen(t, curve.sample(t))
         })
         .collect();
-    painter.add(egui::Shape::line(pts, Stroke::new(1.5, color::TEXT)));
+    painter.add(egui::Shape::line(pts, Stroke::new(1.5, color::text())));
     let label = |v: f32| format!("{v:.2}");
     painter.text(
         rect.min + Vec2::new(4.0, 2.0),
         egui::Align2::LEFT_TOP,
         label(hi),
         egui::FontId::proportional(10.0),
-        color::TEXT_3,
+        color::text_3(),
     );
     painter.text(
         Pos2::new(rect.min.x + 4.0, rect.max.y - 2.0),
         egui::Align2::LEFT_BOTTOM,
         label(lo),
         egui::FontId::proportional(10.0),
-        color::TEXT_3,
+        color::text_3(),
     );
 
     let pointer = response.interact_pointer_pos().or(response.hover_pos());
@@ -153,7 +153,11 @@ pub fn curve_edit(
         let p = to_screen(k.t, k.v);
         let active = Some(i) == state.key || Some(i) == hovered_key;
         let r = Rect::from_center_size(p, Vec2::splat(if active { 8.0 } else { 6.0 }));
-        let fill = if active { color::ACCENT } else { color::TEXT };
+        let fill = if active {
+            color::accent()
+        } else {
+            color::text()
+        };
         painter.add(egui::Shape::convex_polygon(
             vec![
                 Pos2::new(r.center().x, r.min.y),
@@ -169,7 +173,7 @@ pub fn curve_edit(
         painter.rect_stroke(
             rect,
             theme::R_SM,
-            Stroke::new(1.0, color::LINE_STRONG),
+            Stroke::new(1.0, color::line_strong()),
             StrokeKind::Inside,
         );
     }
