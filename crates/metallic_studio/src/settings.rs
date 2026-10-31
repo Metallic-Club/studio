@@ -21,6 +21,8 @@ pub const SIZE_MAX: u16 = 150;
 pub const SIZE_STEP: u16 = 10;
 /// The interface size when nothing is saved.
 pub const SIZE_DEFAULT: u16 = 100;
+/// Largest `settings.toml` that is read (64 KiB); a bigger file counts as corrupt.
+pub const MAX_FILE_BYTES: u64 = 64 * 1024;
 /// The file name inside the config folder.
 pub const FILE_NAME: &str = "settings.toml";
 
@@ -171,7 +173,14 @@ impl Settings {
 
     /// Reads `file`; a missing, unreadable or corrupt file gives the defaults.
     pub fn load(file: &Path) -> Settings {
-        let Ok(text) = fs::read_to_string(file) else {
+        // A settings file is a few lines; refuse anything big before reading it.
+        let small = fs::metadata(file).is_ok_and(|m| m.len() <= MAX_FILE_BYTES);
+        let text = if small {
+            fs::read_to_string(file).ok()
+        } else {
+            None
+        };
+        let Some(text) = text else {
             return Settings::default();
         };
         Settings::parse(&text).unwrap_or_else(|| {
@@ -245,8 +254,19 @@ pub fn apply_settings(ctx: &egui::Context, settings: &Settings) {
         ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, Applied(*settings)));
     }
     if (ctx.zoom_factor() - settings.zoom_factor()).abs() > f32::EPSILON {
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(min_size_for_zoom(
+            ctx.zoom_factor(),
+            settings.zoom_factor(),
+        )));
         ctx.set_zoom_factor(settings.zoom_factor());
     }
+}
+
+/// The window's minimum size to send when the zoom goes from `old` to `new`. egui turns the size
+/// into pixels with the zoom still in force (the new zoom starts with the next pass), so it is
+/// scaled by `new / old`: the window then never gets smaller than the minimum in points.
+pub fn min_size_for_zoom(old: f32, new: f32) -> egui::Vec2 {
+    crate::splash::MAIN_MIN_SIZE * (new / old.max(f32::EPSILON))
 }
 
 /// The settings [`apply_settings`] last put into effect on a context.
@@ -300,6 +320,45 @@ mod tests {
             .filter(|n| n != crate::data_dirs::DATA_MARKER)
             .collect();
         assert_eq!(names, [FILE_NAME]);
+    }
+
+    #[test]
+    fn a_file_over_64_kib_gives_the_defaults() {
+        let (_dir, file) = temp_file();
+        fs::create_dir_all(file.parent().expect("dir")).expect("mkdir");
+        let padding = "# x
+"
+        .repeat(20_000);
+        fs::write(
+            &file,
+            format!(
+                "interface_size = 130
+{padding}"
+            ),
+        )
+        .expect("write");
+        assert!(fs::metadata(&file).expect("meta").len() > MAX_FILE_BYTES);
+        assert_eq!(Settings::load(&file), Settings::default());
+        fs::write(
+            &file,
+            "interface_size = 130
+",
+        )
+        .expect("write");
+        assert_eq!(Settings::load(&file).interface_size, 130);
+        // A folder where the file should be is a read error, not a panic.
+        let dir_as_file = file.parent().expect("dir").join("sub");
+        fs::create_dir_all(&dir_as_file).expect("mkdir");
+        assert_eq!(Settings::load(&dir_as_file), Settings::default());
+    }
+
+    #[test]
+    fn the_minimum_window_size_follows_the_zoom() {
+        let min = crate::splash::MAIN_MIN_SIZE;
+        assert_eq!(min_size_for_zoom(1.0, 1.0), min);
+        assert_eq!(min_size_for_zoom(1.0, 1.5), min * 1.5);
+        assert_eq!(min_size_for_zoom(1.5, 1.0), min / 1.5);
+        assert!(min_size_for_zoom(0.0, 1.5).x.is_finite());
     }
 
     #[test]
