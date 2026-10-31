@@ -1,6 +1,6 @@
 //! The instance tree: [`World`] and [`InstanceId`].
 use crate::CoreError;
-use crate::classes::{self, class_def, default_value, default_value_ref, find_property};
+use crate::classes::{self, PropDef, class_def, default_value, default_value_ref, find_property};
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
@@ -13,10 +13,30 @@ static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
 static NULL_REFERENCE: Value = Value::Ref(None);
 
 /// A position in a world's change journal; see [`World::changes_since`].
+///
+/// Cursors of one world are ordered (a later position is greater); cursors of different worlds
+/// are not comparable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChangeCursor {
     world: u64,
     revision: u64,
+}
+
+impl PartialOrd for ChangeCursor {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (self.world == other.world).then(|| self.revision.cmp(&other.revision))
+    }
+}
+
+/// One property write that changed a value, as [`World::property_changes_since`] reports it.
+#[derive(Clone, Copy)]
+pub struct PropertyChange {
+    /// The instance whose property changed.
+    pub id: InstanceId,
+    /// The registry entry of the property (its `name`, whether it is `hidden`, ...).
+    pub prop: &'static PropDef,
+    /// The journal position right after this change.
+    pub at: ChangeCursor,
 }
 
 /// What happened to a world since a [`ChangeCursor`] was taken.
@@ -90,7 +110,8 @@ pub struct World {
     prop_signals: HashMap<(InstanceId, String), Signal<Value>>,
     uid: u64,
     revision: u64,
-    journal: Vec<(u64, InstanceId)>,
+    /// `(revision, instance, property)`; the property is set for a `set` that changed a value.
+    journal: Vec<(u64, InstanceId, Option<&'static PropDef>)>,
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
 }
@@ -112,8 +133,12 @@ impl World {
     }
 
     fn record(&mut self, id: InstanceId) {
+        self.record_entry(id, None);
+    }
+
+    fn record_entry(&mut self, id: InstanceId, prop: Option<&'static PropDef>) {
         self.revision += 1;
-        self.journal.push((self.revision, id));
+        self.journal.push((self.revision, id, prop));
         if self.journal.len() > JOURNAL_LIMIT {
             let cut = self.journal.len() / 2;
             self.journal_floor = self.journal[cut - 1].0;
@@ -146,14 +171,45 @@ impl World {
         if cursor.world != self.uid || cursor.revision < self.journal_floor {
             return (Changes::Overflow, now);
         }
-        let start = self.journal.partition_point(|&(r, _)| r <= cursor.revision);
+        let start = self
+            .journal
+            .partition_point(|&(r, ..)| r <= cursor.revision);
         let mut seen = HashSet::new();
         let ids = self.journal[start..]
             .iter()
-            .filter(|(_, id)| seen.insert(*id))
-            .map(|&(_, id)| id)
+            .filter(|(_, id, _)| seen.insert(*id))
+            .map(|&(_, id, _)| id)
             .collect();
         (Changes::Ids(ids), now)
+    }
+
+    /// Every `set` that changed a value since `cursor`, oldest first, one entry per write (not
+    /// deduplicated: `A -> B -> A` is two changes). Same-value and rejected writes are not in
+    /// it, nor are hierarchy changes (`Parent`). `None` when the journal no longer reaches back
+    /// to `cursor` or `cursor` came from a different world. Walks only the journal entries
+    /// after `cursor`.
+    pub fn property_changes_since(
+        &self,
+        cursor: ChangeCursor,
+    ) -> Option<impl Iterator<Item = PropertyChange> + '_> {
+        if cursor.world != self.uid || cursor.revision < self.journal_floor {
+            return None;
+        }
+        let start = self
+            .journal
+            .partition_point(|&(r, ..)| r <= cursor.revision);
+        let world = self.uid;
+        Some(
+            self.journal[start..]
+                .iter()
+                .filter_map(move |&(revision, id, prop)| {
+                    prop.map(|prop| PropertyChange {
+                        id,
+                        prop,
+                        at: ChangeCursor { world, revision },
+                    })
+                }),
+        )
     }
 
     /// A world with the standard services (`Workspace`, `Players`, `ReplicatedStorage`,
@@ -544,7 +600,7 @@ impl World {
             }
         }
         if old != value {
-            self.record(id);
+            self.record_entry(id, Some(def));
             // The is_empty check skips allocating the lookup key when nothing listens at all.
             if !self.prop_signals.is_empty()
                 && let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string()))

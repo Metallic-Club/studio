@@ -62,6 +62,10 @@ pub(crate) enum EventKind {
     LastInputTypeChanged,
     /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
     Gui(super::gui::GuiEventKind),
+    /// `Instance.Changed(propertyName)`
+    Changed,
+    /// `Instance:GetPropertyChangedSignal(name)()`, by the registry's property name.
+    PropertyChanged(&'static str),
 }
 
 /// One signal: an event of one instance.

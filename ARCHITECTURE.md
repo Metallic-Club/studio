@@ -45,6 +45,9 @@ apps.
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
   `PropDef::normalize` converts a String write outside `allowed` to its stored form (a display name to an id).
+  The change journal (`change_cursor`, `changes_since`) also keeps which property a `set` changed:
+  `property_changes_since(cursor)` lists every real property change in order (not deduplicated); cursors of one world
+  are ordered. `metallic_script` builds `Instance.Changed` on it (#410).
   `look_override` (#222): `BasePart.LookOverride` and `Model.LookOverride` (String, default `inherit`; ids
   `realistic`, `soft`, `toon`, `low-poly`, `voxel`, `pixel-3d`, `retro-32`; display names such as "Retro / PS1" are
   accepted on write). `resolve(world, id)` gives the effective style: own value, else the nearest ancestor Model's
@@ -101,6 +104,10 @@ apps.
   The host exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
+  `Instance.Changed` and `GetPropertyChangedSignal` (#410, `api/property_signals.rs`) never run inside `World::set`:
+  each `step` reads `World::property_changes_since` for the instances that VM watches (from the first read of either
+  signal until destroy; nothing is read while none is watched), skips hidden properties and fires through the normal
+  dispatch, so a write inside a handler fires on the next step.
   Task queue ownership uses weak thread keys and fresh lease identities; task-created callbacks bind their
   function/arguments at creation. Coroutine admission adapters consume private scheduler markers while ordinary
   result/error tuples remain in Lua. Only finished/error threads lose ownership state; running/active parents

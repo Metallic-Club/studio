@@ -64,6 +64,7 @@ fn event_kind(class: &str, name: &str) -> Option<EventKind> {
         "Released" if class == "InputAction" => Some(EventKind::Released),
         "Triggered" if class == "InputAction" => Some(EventKind::Triggered),
         "StateChanged" if class == "InputAction" => Some(EventKind::StateChanged),
+        "Changed" => Some(EventKind::Changed),
         _ => super::gui::GuiEventKind::of(class, name).map(EventKind::Gui),
     }
 }
@@ -102,7 +103,7 @@ impl LuaInstance {
         }
     }
 
-    fn class(&self) -> mlua::Result<&'static str> {
+    pub(crate) fn class(&self) -> mlua::Result<&'static str> {
         self.state
             .world()?
             .class_name(self.id)
@@ -347,6 +348,7 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             (EventKind::OnClientEvent, Context::Server) => {
                 return Err(lua_error("OnClientEvent can only be used from the client"));
             }
+            (EventKind::Changed, _) => state.watch_properties(this.id)?,
             _ => {}
         }
         return Ok(Value::UserData(lua.create_userdata(LuaSignal {

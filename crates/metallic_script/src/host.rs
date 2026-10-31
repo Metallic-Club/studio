@@ -177,8 +177,10 @@ impl ScriptHost {
     }
 
     /// Advances the scripts to time `now` (seconds). In this order: starts scripts that
-    /// appeared since the last step, delivers the queued remotes and inputs, fires
-    /// `RunService.Heartbeat(dt)`, then resumes `WaitForChild` and `task.wait` threads.
+    /// appeared since the last step, delivers the queued remotes and inputs, fires the
+    /// property-changed signals (`Changed`, `GetPropertyChangedSignal`) for changes since the
+    /// last step, fires `RunService.Heartbeat(dt)`, then resumes `WaitForChild` and
+    /// `task.wait` threads.
     /// Does nothing before `start`.
     pub fn step(&mut self, now: f64, dt: f64) {
         if !self.is_running() {
@@ -197,6 +199,11 @@ impl ScriptHost {
         self.deliver_inputs();
         self.deliver_input_actions();
         self.deliver_gui_events();
+        // Property changes since the last step, Rust and script writes alike. Changes made by
+        // these handlers (or by Heartbeat below) fire on the next step.
+        for side in self.sides() {
+            side.state.deliver_property_changes();
+        }
 
         let run_service = self
             .world
@@ -330,6 +337,16 @@ impl ScriptHost {
         }
         self.inputs
             .push(HostEvent::CharacterAdded { player, model });
+    }
+
+    /// How many world-journal entries property-changed delivery has read so far (both VMs).
+    /// A test hook: it stays 0 while no script watches any instance's properties.
+    #[doc(hidden)]
+    pub fn property_changes_scanned(&self) -> u64 {
+        self.sides()
+            .iter()
+            .map(|s| s.state.property_changes_scanned())
+            .sum()
     }
 
     /// How many times signal handler arguments were built so far (both VMs). A test hook
