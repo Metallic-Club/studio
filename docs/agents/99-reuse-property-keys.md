@@ -43,3 +43,15 @@ unrelated/matching listener rows at 2,000 / 16,000 each. Its desired zero-key-al
 A separate semantic fixture also failed because it incorrectly assumed Part.Transparency has a registry range.
 That is a test-fixture error, not a product red. It is corrected to the actually ranged Lighting.ExposureCompensation
 property before rerunning the baseline. Both logs will be retained. Production remains unchanged.
+
+## Corrected baseline and implementation
+
+At test-only `97d2b70`, the corrected baseline returned Cargo 101 with exactly one allocation regression:
+two cases passed, one failed, one manual timing probe ignored. Semantic/value/cursor/callback checks passed.
+The five allocation rows repeated exactly. Baseline release compilation passed (1m11s); the executable remains
+in the owned #349 release output, with its path/source/hash in `baseline-provenance.json`. It has not run timings.
+
+The production change is an existing-key `get_mut` branch between default removal and first insertion. It
+replaces only the value, preserving every validation/range/old-value comparison and event path. It does not
+early-return on no-ops or change signal storage. API docs explicitly retain allocation caveats. Next: focused
+green and candidate release prebuild in a separate output directory, then coordinated timing/full gates.
