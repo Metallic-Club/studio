@@ -3596,6 +3596,7 @@ dependencies = [
 name = "metallic_script"
 version = "0.1.1"
 dependencies = [
+ "metallic_anim",
  "metallic_core",
  "mlua",
 ]

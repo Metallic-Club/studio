@@ -142,7 +142,7 @@ end)
 
 ## Services
 `game:GetService(name)` (or `game.Name`) for Workspace, Players, ReplicatedStorage, ServerScriptService, StarterPlayer,
-StarterGui, Lighting, RunService, UserInputService, ContextActionService. Others error: `'Foo' is not a valid Service name`.
+StarterGui, Lighting, RunService, UserInputService, ContextActionService, TweenService. Others error: `'Foo' is not a valid Service name`.
 
 - `Players.LocalPlayer` (client VM; nil on the server), `Players:GetPlayers()` (players whose `PlayerAdded` was delivered),
   `Players:GetPlayerFromCharacter(model)`.
@@ -159,6 +159,35 @@ StarterGui, Lighting, RunService, UserInputService, ContextActionService. Others
 game:GetService("Players").PlayerAdded:Connect(function(player)
     print(player.Name, game:GetService("RunService"):IsServer())
 end)
+```
+
+## TweenService
+`TweenService:Create(instance, TweenInfo.new(time, style, direction, repeatCount, reverses, delayTime), goals)` returns
+a `Tween`. `TweenInfo.new` defaults: 1 s, `Enum.EasingStyle.Quad`, `Enum.EasingDirection.Out`, 0 repeats, no reverse,
+no delay; the fields read back (`info.Time`, `info.EasingStyle`, ...). All 11 Roblox easing styles (Linear, Sine, Back,
+Quad, Quart, Quint, Bounce, Elastic, Exponential, Circular, Cubic) and the three directions;
+`TweenService:GetValue(alpha, style, direction)` returns the curve.
+
+- Tweenable goals: number, `Vector3`, `Color3`, `UDim2`, `CFrame` (a part's `CFrame`, a model's `WorldPivot`) and bool,
+  which keeps its start value until the tween ends and then snaps. Unknown, hidden or other-typed properties error in
+  `Create`. A part's `Size` is clamped as on assignment.
+- `Play()` starts from the values the properties have at that moment (a paused tween resumes); `Pause()`, `Cancel()`
+  (values stay where they are; a later `Play()` restarts from them over the full time), `Destroy()`. `PlaybackState`:
+  `Enum.PlaybackState.Begin/Delayed/Playing/Paused/Completed/Cancelled`.
+- `Completed(playbackState)` fires once per run: when the tween finishes (`Completed`), is cancelled or is overridden
+  (`Cancelled`), during the next step.
+- Playing a tween cancels the other playing tweens of the same instance that animate one of its properties (a part's
+  `CFrame` overlaps `Position` and `Orientation`).
+- Tweens advance on the host's step clock (`ScriptHost::step` `dt`), before `RunService.Heartbeat`, so a headless
+  host gives the same values every run. A step allocates nothing for playing tweens. At most 10,000 tweens play at
+  once per VM; `Play` beyond that errors.
+
+```lua
+local TweenService = game:GetService("TweenService")
+local door = workspace.Door
+local open = TweenService:Create(door, TweenInfo.new(0.5, Enum.EasingStyle.Back), {CFrame = door.CFrame * CFrame.Angles(0, math.rad(90), 0)})
+open.Completed:Connect(function(state) print("door", state.Name) end)
+open:Play()
 ```
 
 ## Tasks and coroutines
