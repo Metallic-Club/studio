@@ -15,6 +15,10 @@ use super::plan::ArrangeError;
 /// far under the 1% spacing tolerance.
 const SAMPLES_PER_SEGMENT: usize = 128;
 
+/// The most points a path may have. Each segment keeps a fixed-size arc-length table, so this
+/// bounds the table at about 130,000 samples.
+pub const MAX_PATH_POINTS: usize = 1024;
+
 /// A centripetal Catmull-Rom curve with an arc-length table.
 #[derive(Debug, Clone)]
 pub struct PathCurve {
@@ -27,8 +31,15 @@ pub struct PathCurve {
 impl PathCurve {
     /// Builds the curve through `points`. Repeated consecutive points are dropped.
     ///
-    /// Errors: [`ArrangeError::Invalid`] with fewer than two distinct points.
+    /// Errors: [`ArrangeError::Invalid`] with fewer than two distinct points or more than
+    /// [`MAX_PATH_POINTS`] points.
     pub fn new(points: &[DVec3]) -> Result<PathCurve, ArrangeError> {
+        if points.len() > MAX_PATH_POINTS {
+            return Err(ArrangeError::Invalid(format!(
+                "a path has at most {MAX_PATH_POINTS} points (got {})",
+                points.len()
+            )));
+        }
         if !points.iter().all(|p| p.is_finite()) {
             return Err(ArrangeError::Invalid(
                 "path points must be finite numbers".into(),

@@ -9,6 +9,8 @@
 //! skipped, so selecting a Model and one of its parts moves the Model once. Ids of other classes
 //! (scripts, services) are ignored.
 
+use std::collections::{HashMap, HashSet};
+
 use glam::{DMat3, DQuat, DVec3};
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 
@@ -157,16 +159,26 @@ pub fn centre(b: &Aabb) -> DVec3 {
     (b.min + b.max) * 0.5
 }
 
-/// Reads the objects for `ids` in selection order (the last one is the active object).
+/// Reads the objects for `ids`, in the order the user selected them.
+///
+/// The **last object returned is the active object**: the one that holds the last id in `ids`
+/// (the user's last click). That holds when the last id repeats an earlier one, and when it is a
+/// part inside a selected Model (the Model is then active). If the last id gives no object (a
+/// Script, or a Model with no parts), the last object that was read stays last.
+///
+/// Ids are looked up in hash sets, so the cost grows linearly with `ids` (plus tree depth per id).
 ///
 /// Errors: [`ArrangeError::Core`] for a destroyed id.
 pub fn read_objects(world: &World, ids: &[InstanceId]) -> Result<Vec<Object>, ArrangeError> {
+    let selected: HashSet<InstanceId> = ids.iter().copied().collect();
+    let mut seen: HashSet<InstanceId> = HashSet::with_capacity(ids.len());
+    let mut index_of: HashMap<InstanceId, usize> = HashMap::new();
     let mut out: Vec<Object> = Vec::new();
-    for (i, &id) in ids.iter().enumerate() {
+    for &id in ids {
         if !world.is_alive(id) {
             return Err(ArrangeError::Core(CoreError::InvalidInstance));
         }
-        if ids[..i].contains(&id) || has_selected_ancestor(world, id, ids) {
+        if !seen.insert(id) || has_selected_ancestor(world, id, &selected) {
             continue;
         }
         let (kind, part_ids) = if world.is_a(id, "BasePart") {
@@ -199,12 +211,29 @@ pub fn read_objects(world: &World, ids: &[InstanceId]) -> Result<Vec<Object>, Ar
             })
             .collect();
         if !parts.is_empty() {
+            index_of.insert(id, out.len());
             out.push(Object {
                 id,
                 parent: world.parent(id),
                 kind,
                 parts,
             });
+        }
+    }
+    // Move the object holding the user's last click to the end: the id itself, or its topmost
+    // selected ancestor (the object that id was folded into).
+    if let Some(&last) = ids.last() {
+        let mut holder = last;
+        let mut cur = world.parent(last);
+        while let Some(p) = cur {
+            if selected.contains(&p) {
+                holder = p;
+            }
+            cur = world.parent(p);
+        }
+        if let Some(&i) = index_of.get(&holder) {
+            let active = out.remove(i);
+            out.push(active);
         }
     }
     Ok(out)
@@ -227,13 +256,69 @@ pub fn selection_pivot(objects: &[Object]) -> DVec3 {
     }
 }
 
-fn has_selected_ancestor(world: &World, id: InstanceId, ids: &[InstanceId]) -> bool {
+fn has_selected_ancestor(world: &World, id: InstanceId, selected: &HashSet<InstanceId>) -> bool {
     let mut cur = world.parent(id);
     while let Some(p) = cur {
-        if ids.contains(&p) {
+        if selected.contains(&p) {
             return true;
         }
         cur = world.parent(p);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::arrange::testing::*;
+
+    fn order(objects: &[Object]) -> Vec<InstanceId> {
+        objects.iter().map(|o| o.id).collect()
+    }
+
+    #[test]
+    fn active_object_is_the_last_one_the_user_selected() {
+        let mut w = world();
+        let a = part(&mut w, v(0.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        let b = part(&mut w, v(3.0, 0.0, 0.0), v(1.0, 1.0, 1.0), v(0.0, 0.0, 0.0));
+        let (m, kids) = model(&mut w, &[(v(6.0, 0.0, 0.0), v(1.0, 1.0, 1.0))]);
+        let ws = w.root("Workspace").unwrap();
+        let script = w.create("Script", Some(ws)).unwrap();
+        // Plain order: the last id is active.
+        assert_eq!(order(&objs(&w, &[a, b])), vec![a, b]);
+        // The last click repeats an earlier id: that object is active, not b.
+        assert_eq!(order(&objs(&w, &[a, b, a])), vec![b, a]);
+        // The last click is a part inside a selected Model: the Model is active.
+        assert_eq!(order(&objs(&w, &[m, a, kids[0]])), vec![a, m]);
+        // The last id gives no object: the last object read stays last.
+        assert_eq!(order(&objs(&w, &[b, a, script])), vec![b, a]);
+    }
+
+    #[test]
+    fn large_selections_skip_duplicates_and_selected_descendants() {
+        let mut w = world();
+        let parts: Vec<(DVec3, DVec3)> = (0..2_000)
+            .map(|i| (v(i as f64, 0.0, 0.0), v(1.0, 1.0, 1.0)))
+            .collect();
+        let (m, kids) = model(&mut w, &parts);
+        let loose: Vec<InstanceId> = (0..3_000)
+            .map(|i| {
+                part(
+                    &mut w,
+                    v(0.0, i as f64, 0.0),
+                    v(1.0, 1.0, 1.0),
+                    v(0.0, 0.0, 0.0),
+                )
+            })
+            .collect();
+        // Every loose part twice, every Model child, and the Model itself.
+        let mut ids: Vec<InstanceId> = loose.iter().chain(loose.iter()).copied().collect();
+        ids.extend(&kids);
+        ids.push(m);
+        let objects = objs(&w, &ids);
+        assert_eq!(objects.len(), 3_001);
+        assert_eq!(objects.last().unwrap().id, m);
+        assert_eq!(objects.last().unwrap().parts.len(), 2_000);
+        assert_eq!(order(&objects[..3_000]), loose);
+    }
 }
