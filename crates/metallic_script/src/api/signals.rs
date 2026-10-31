@@ -63,6 +63,11 @@ pub(crate) enum EventKind {
     /// `Instance.AttributeChanged(name)` for id 0, `GetAttributeChangedSignal(name)` for the
     /// interned name id of that attribute (no arguments).
     AttributeChanged(u32),
+    /// `CollectionService:GetInstanceAddedSignal(tag)`: the interned tag id; the instance is the
+    /// argument.
+    TagAdded(u32),
+    /// `CollectionService:GetInstanceRemovedSignal(tag)`.
+    TagRemoved(u32),
 }
 
 /// One signal: an event of one instance.

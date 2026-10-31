@@ -4,15 +4,16 @@ use crate::classes::{self, class_def, default_value, default_value_ref, find_pro
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod extras;
 pub use extras::{
     AttributeChange, AttributeChanges, AttributeCursor, MAX_ATTRIBUTE_NAME, MAX_ATTRIBUTE_STRING,
-    MAX_ATTRIBUTES, MAX_EXTRAS_BYTES, check_attribute_name, check_attribute_value,
+    MAX_ATTRIBUTES, MAX_EXTRAS_BYTES, MAX_TAG, MAX_TAGS, TagChange, TagChanges, TagCursor,
+    check_attribute_name, check_attribute_value, check_tag,
 };
-use extras::{AttributeLog, Extras};
+use extras::{AttributeLog, Extras, TagLog};
 
 /// Most journal entries kept before the oldest half is dropped.
 const JOURNAL_LIMIT: usize = 16384;
@@ -103,6 +104,9 @@ pub struct World {
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
     attribute_log: AttributeLog,
+    /// Tag -> instances carrying it (detached ones too); `tagged` filters by game tree.
+    tag_index: HashMap<String, BTreeSet<InstanceId>>,
+    tag_log: TagLog,
     /// Bytes of attribute data held, against `MAX_EXTRAS_BYTES`.
     extras_bytes: usize,
 }
@@ -121,6 +125,8 @@ impl World {
             journal: Vec::new(),
             journal_floor: 0,
             attribute_log: AttributeLog::default(),
+            tag_index: HashMap::new(),
+            tag_log: TagLog::default(),
             extras_bytes: 0,
         }
     }
@@ -309,6 +315,12 @@ impl World {
         if !self.is_alive(id) {
             return;
         }
+        if !self.tag_index.is_empty() {
+            if self.is_in_tree(id) {
+                self.log_subtree_tags(id, false);
+            }
+            self.forget_subtree_tags(id);
+        }
         self.detach(id);
         let mut gone = Vec::new();
         let mut stack = vec![id];
@@ -379,6 +391,7 @@ impl World {
         if self.parent(id) == parent {
             return Ok(());
         }
+        let was_in_tree = !self.tag_index.is_empty() && self.is_in_tree(id);
         self.detach(id);
         if let Some(n) = self.node_mut(id) {
             n.parent = parent;
@@ -391,6 +404,10 @@ impl World {
             None => self.roots.push(id),
         }
         self.record_subtree(id);
+        // Tagged instances count as active while they are in the game tree.
+        if !self.tag_index.is_empty() && was_in_tree != self.is_in_tree(id) {
+            self.log_subtree_tags(id, !was_in_tree);
+        }
         Ok(())
     }
 
@@ -615,6 +632,7 @@ impl World {
         let copies: Vec<InstanceId> = map.values().copied().collect();
         for copy in copies {
             self.record(copy);
+            self.index_tags_of(copy);
         }
         for &copy in map.values() {
             if let Some(n) = self.node_mut(copy) {
@@ -670,6 +688,8 @@ impl World {
             journal: Vec::new(),
             journal_floor: 0,
             attribute_log: AttributeLog::default(),
+            tag_index: self.tag_index.clone(),
+            tag_log: TagLog::default(),
             extras_bytes: self.extras_bytes,
         }
     }

@@ -72,6 +72,28 @@ Any instance (parts, models, services, scripts) can carry named values outside i
 - Core: `World::set_attribute`, `attribute`, `attributes`, and the bounded attribute log (`attribute_cursor`,
   `attribute_changes_since`) that readers such as the script VMs and, later, replication (#305) follow.
 
+## Tags and CollectionService
+Tags are text labels on instances (Roblox's `CollectionService`). `game:GetService("CollectionService")` (or
+`game.CollectionService`):
+
+- `CS:AddTag(instance, tag)`, `CS:RemoveTag(instance, tag)`, `CS:HasTag(instance, tag)`, `CS:GetTags(instance)` (sorted array),
+  and the same as instance methods: `inst:AddTag(tag)`, `inst:RemoveTag(tag)`, `inst:HasTag(tag)`, `inst:GetTags()`.
+- `CS:GetTagged(tag)` returns the instances that carry the tag **and are in the game** (they descend from a service; a
+  detached instance, a fresh `Clone()` or an instance with no parent is not returned until it is parented). It looks the tag up
+  in an index, so its cost follows the number of tagged instances, not the size of the tree. Order: by instance id. Destroyed
+  instances are gone from every set. `CS:GetAllTags()` lists every tag some instance carries (sorted).
+- `CS:GetInstanceAddedSignal(tag)` and `CS:GetInstanceRemovedSignal(tag)` pass the instance. They fire when the tag is added or
+  removed on an instance in the game, when a tagged instance enters the game (parented under a service) or leaves it
+  (parented to nil), and, for removed, when a tagged instance is destroyed (the handler gets the destroyed instance). Like the
+  other signals they run in the next `step`, whoever made the change; connecting does not replay existing instances, so also
+  loop over `GetTagged(tag)`. `GetInstanceAddedSignal` and `GetInstanceRemovedSignal` check the tag like `AddTag` does, and a VM can make signals for at most 4096 different tags. Every change is delivered (destroying thousands of tagged instances fires one removal each; the world keeps changes until every VM has read them, and handler calls that do not fit in a step's time budget wait for later steps, a full queue warns). Tags share the 16 MiB attribute data budget of a world.
+- A tag is 1 to 255 bytes without control characters; an instance holds at most 256 tags. Tagging twice or removing a missing
+  tag does nothing. `Clone()` copies tags; scene files store them (`tags: ["A", "B"]` per instance, only when present, so older
+  files and older Studios keep working); Studio shows them under **Tags** in Properties (add and remove, one undo step each).
+- Core: `World::add_tag`, `remove_tag`, `has_tag`, `tags`, `tagged`, `all_tags`, `is_in_tree`, and the bounded tag log
+  (`tag_cursor`, `tag_changes_since`) the script VMs follow. Tagged-subtree bookkeeping on reparent and destroy only runs
+  while some tag exists in the world.
+
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,
   unary `-`, `==`.

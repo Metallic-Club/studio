@@ -16,6 +16,7 @@ mod pivot;
 mod remote;
 mod services;
 mod signals;
+mod tags;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
@@ -81,6 +82,8 @@ pub(crate) struct ApiState {
     input_services: input::InputServices,
     /// Attribute signal names and this VM's read position in the world's attribute log.
     attributes: attributes::AttributeState,
+    /// Tag signal names, this VM's read position in the world's tag log and `CollectionService`.
+    tags: tags::TagState,
 }
 
 impl ApiState {
@@ -138,6 +141,7 @@ fn build(
     raw.extend(pivot::methods(lua)?);
     raw.extend(input::action_methods(lua)?);
     raw.extend(attributes::methods(lua)?);
+    raw.extend(tags::methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
         let function = if name == "WaitForChild" {
@@ -150,7 +154,10 @@ fn build(
 
     let enums = input::Enums::install(lua)?;
     let bind_wrapper = input::bind_wrapper(lua, &enums)?;
-    let world_cursor = world.borrow().attribute_cursor();
+    let (world_cursor, tag_cursor) = {
+        let w = world.borrow();
+        (w.attribute_cursor(), w.tag_cursor())
+    };
     let state = Rc::new(ApiState {
         world,
         context: vm.context(),
@@ -172,7 +179,9 @@ fn build(
         bind_wrapper,
         input_services: input::InputServices::new(),
         attributes: attributes::AttributeState::new(world_cursor),
+        tags: tags::TagState::new(tag_cursor),
     });
+    tags::install_service(lua, &state)?;
     input::install_services(lua, &state)?;
 
     let set = |name: &str, value: mlua::Value| vm.set_global(name, value);

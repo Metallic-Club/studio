@@ -94,6 +94,8 @@ pub struct Properties {
     attr_new_kind: usize,
     /// A number attribute being scrubbed: its first value, so the whole drag is one undo step.
     attr_gesture: Option<AttrGesture>,
+    /// The Tags section: the tag being typed.
+    tag_new: String,
 }
 
 /// The open scrub of a number attribute.
@@ -304,7 +306,8 @@ impl Properties {
                 }
                 if ids.len() == 1 {
                     let (attr, scrub) = self.attributes_section(ui, state, active);
-                    attribute_edit = attr;
+                    let tag = self.tags_section(ui, state, active);
+                    attribute_edit = attr.or(tag);
                     attribute_scrub = scrub;
                 }
             });
@@ -323,6 +326,67 @@ impl Properties {
             self.end_attribute_scrub(state);
             let _ = state.apply(cmd);
         }
+    }
+
+    /// The Tags section of one instance: remove tags and add a new one. Returns the command for
+    /// the one change made this frame, if any.
+    fn tags_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &EditorState,
+        id: InstanceId,
+    ) -> Option<Command> {
+        let mut out = None;
+        let tags: Vec<String> = state.world.tags(id).map(str::to_string).collect();
+        egui::CollapsingHeader::new(
+            RichText::new("Tags")
+                .font(crate::theme::fonts::strong())
+                .color(crate::theme::text_2()),
+        )
+        .default_open(true)
+        .show(ui, |ui| {
+            for tag in &tags {
+                ui.horizontal(|ui| {
+                    ui.label(tag.as_str());
+                    if ui.small_button("Remove").clicked() {
+                        out = Some(Command::SetTag {
+                            id,
+                            tag: tag.clone(),
+                            on: false,
+                            changed: false,
+                        });
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.tag_new)
+                        .hint_text("New tag")
+                        .desired_width(140.0),
+                );
+                let tag = self.tag_new.trim().to_string();
+                let problem = metallic_core::check_tag(&tag).err().or_else(|| {
+                    state
+                        .world
+                        .has_tag(id, &tag)
+                        .then(|| "already tagged".into())
+                });
+                let add = ui.add_enabled(problem.is_none(), egui::Button::new("Add"));
+                let enter = response.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && problem.is_none();
+                if (add.clicked() || enter) && problem.is_none() {
+                    out = Some(Command::SetTag {
+                        id,
+                        tag,
+                        on: true,
+                        changed: false,
+                    });
+                    self.tag_new.clear();
+                }
+            });
+        });
+        out
     }
 
     /// The Attributes section of one instance: edit, remove and add attributes. Returns the

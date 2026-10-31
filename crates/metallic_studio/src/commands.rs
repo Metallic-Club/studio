@@ -84,6 +84,18 @@ pub enum Command {
         /// Value after (`Nil`: remove it).
         new: Value,
     },
+    /// Adds (`on`) or removes one tag.
+    SetTag {
+        /// Instance changed.
+        id: InstanceId,
+        /// The tag.
+        tag: String,
+        /// True to add it, false to remove it.
+        on: bool,
+        /// Filled by apply: whether the world changed. Undo does nothing when it did not (adding
+        /// a tag the instance already had must not remove it on undo).
+        changed: bool,
+    },
     /// Many property changes as one undo step: (instance, property, old value, new value). A
     /// gesture's preview overlay turns into this on release.
     SetProperties {
@@ -207,6 +219,21 @@ impl Command {
                     format!("Set attribute {name} of {what}")
                 }
             }
+            Command::SetTag { id, tag, on, .. } => {
+                let what = world
+                    .get_ref(*id, "Name")
+                    .ok()
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("instance");
+                if *on {
+                    format!("Add tag {tag} to {what}")
+                } else {
+                    format!("Remove tag {tag} from {what}")
+                }
+            }
             Command::Batch { name, .. } | Command::SetProperties { name, .. } => name.clone(),
             Command::Create { class, .. } => format!("Insert {class}"),
             Command::Delete { items } => format!("Delete {}", count(items.len(), "object")),
@@ -226,6 +253,20 @@ impl Command {
             Command::SetProperty { id, prop, new, .. } => Ok(world.set(*id, prop, new.clone())?),
             Command::SetAttribute { id, name, new, .. } => {
                 Ok(world.set_attribute(*id, name, new.clone())?)
+            }
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                *changed = world.has_tag(*id, tag) != *on;
+                if *on {
+                    world.add_tag(*id, tag)?;
+                } else {
+                    world.remove_tag(*id, tag)?;
+                }
+                Ok(())
             }
             Command::SetProperties { changes, .. } => {
                 for i in 0..changes.len() {
@@ -389,6 +430,20 @@ impl Command {
             }
             Command::SetAttribute { id, name, old, .. } => {
                 let _ = world.set_attribute(*id, name, old.clone());
+            }
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                if *changed {
+                    let _ = if *on {
+                        world.remove_tag(*id, tag)
+                    } else {
+                        world.add_tag(*id, tag)
+                    };
+                }
             }
             Command::SetProperties { changes, .. } => {
                 for (id, prop, old, _) in changes.iter().rev() {

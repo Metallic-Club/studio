@@ -59,6 +59,9 @@ struct SceneNode {
     /// Attributes, sorted by name. Absent in files written before attributes existed.
     #[serde(default)]
     attributes: Vec<(String, SceneValue)>,
+    /// Tags, sorted. Absent in files written before tags existed.
+    #[serde(default)]
+    tags: Vec<String>,
     #[serde(default)]
     children: Vec<SceneNode>,
 }
@@ -119,6 +122,14 @@ fn write_node(
             let _ = writeln!(out, "{l}");
         }
         let _ = writeln!(out, "{pad}    ],");
+    }
+    let tags: Vec<String> = world.tags(id).map(str::to_string).collect();
+    if !tags.is_empty() {
+        let list: Vec<String> = tags
+            .iter()
+            .map(|t| ron::to_string(t).map_err(err))
+            .collect::<Result<_, _>>()?;
+        let _ = writeln!(out, "{pad}    tags: [{}],", list.join(", "));
     }
     let attributes: Vec<String> = world
         .attributes(id)
@@ -269,6 +280,9 @@ impl Loader {
                 }
             };
             self.world.set_attribute(id, &name, value)?;
+        }
+        for tag in node.tags {
+            self.world.add_tag(id, &tag)?;
         }
         for c in node.children {
             self.add(c, Some(id))?;
