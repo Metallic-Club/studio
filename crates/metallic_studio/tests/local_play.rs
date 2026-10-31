@@ -280,7 +280,9 @@ fn explicit_frame_forwards_evaluated_input_to_the_real_game() {
 fn combined_output_preserves_server_client_and_error_text_without_false_attribution() {
     let mut log = OutputLog::new(64);
     let (mut world, _) = scene("print('server line'); warn('warning line'); error('boom')");
-    let starter = world.root("StarterPlayerScripts").unwrap();
+    let starter = world
+        .find_first_child(world.root("StarterPlayer").unwrap(), "StarterPlayerScripts")
+        .unwrap();
     add_script(
         &mut world,
         starter,
