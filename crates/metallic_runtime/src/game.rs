@@ -15,6 +15,7 @@ use metallic_physics::{
     CharacterController, CharacterEvent, HumanoidState, MoveInput, PhysicsWorld, RESPAWN_DELAY,
     spawn_character,
 };
+use metallic_profiler::{Profiler, Subsystem};
 use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
 use metallic_script::{
@@ -355,6 +356,7 @@ impl Game {
     /// and the camera follows too. (The touch volumes follow the tick-rate body animation of
     /// step 1, which the avatar's animation matches.) Draw with [`Game::render`] and [`crate::gui::paint`].
     pub fn frame(&mut self, input: &FrameInput, dt: f64) -> FrameOutput {
+        let _game = Profiler::scope(Subsystem::Other, "game");
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_FRAME_DT)
         } else {
@@ -381,7 +383,10 @@ impl Game {
         }
         self.scripts.end_frame();
         let state = self.character.and_then(|c| self.characters.state(c));
+        let avatar = Profiler::scope(Subsystem::Character, "avatar");
         self.update_avatar(dt as f32);
+        drop(avatar);
+        let _camera = Profiler::scope(Subsystem::Other, "camera");
         if state != Some(HumanoidState::Dead)
             && let Some(root) = self.root_position()
         {
@@ -412,7 +417,9 @@ impl Game {
         size: (u32, u32),
         camera: &Camera,
     ) {
+        let sync = Profiler::scope(Subsystem::Render, "render.sync");
         self.sync_renderer(renderer);
+        drop(sync);
         renderer.render(target, camera, size);
     }
 
@@ -459,6 +466,7 @@ impl Game {
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]), buttons shaded by
     /// hover and press.
     pub fn paint_gui(&self, painter: &egui::Painter) {
+        let _gui = Profiler::scope(Subsystem::Gui, "gui");
         if let Ok(world) = self.world.try_borrow() {
             let input = &self.gui_input;
             crate::gui::paint_shaded(&world, painter, self.gui_inset, &|id| input.shade(id));
@@ -497,6 +505,7 @@ impl Game {
 
     /// One fixed simulation tick. Returns false, having done nothing, when the world is borrowed.
     fn tick(&mut self, input: &FrameInput) -> bool {
+        let _tick = Profiler::scope(Subsystem::Other, "tick");
         let respawned;
         let move_input = MoveInput {
             dir: self.camera.move_direction(input.movement),
@@ -508,14 +517,19 @@ impl Game {
                 return false;
             };
             if let Some(character) = self.character {
+                let characters = Profiler::scope(Subsystem::Character, "characters");
                 self.characters
                     .step(&mut world, &self.physics, character, move_input, TICK);
+                drop(characters);
                 // The body animation advances with the simulation, so the touch volumes follow
                 // the limbs on any host, headless or not.
+                let _body = Profiler::scope(Subsystem::Character, "characters.body");
                 self.bodies
                     .animate(&mut self.characters, &world, character, TICK as f32);
             }
+            let physics = Profiler::scope(Subsystem::Physics, "physics.step");
             self.physics.step(&mut world, TICK);
+            drop(physics);
             respawned = respawn_if_gone(
                 &mut world,
                 &self.characters,
@@ -528,9 +542,14 @@ impl Game {
             self.sync_physics_now();
             self.scripts.character_added(player, character);
         }
+        let events = Profiler::scope(Subsystem::Script, "scripts.events");
         self.feed_events();
+        drop(events);
         self.time += TICK;
+        let scripts = Profiler::scope(Subsystem::Script, "scripts.step");
         self.scripts.step(self.time, TICK);
+        drop(scripts);
+        let _sync = Profiler::scope(Subsystem::Physics, "physics.sync");
         self.sync_physics_if_changed();
         true
     }

@@ -40,6 +40,11 @@ fn owner_id(id: InstanceId) -> u64 {
     id.to_bits() + 1
 }
 
+/// The script (`InstanceId::to_bits`) an owner id from [`owner_id`] belongs to.
+pub(crate) fn script_of_owner(owner: u64) -> u64 {
+    owner - 1
+}
+
 /// An input from another system, delivered on the next `step`.
 enum HostEvent {
     Touched {

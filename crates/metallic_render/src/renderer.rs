@@ -4,6 +4,7 @@ use crate::bloom::{BLOOM_PASS, BloomPass};
 use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
 use crate::exposure::{AutoExposure, ExposureGpu, ExposureState};
+use crate::gpu_timer::{GpuTimer, STAGES};
 use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_exposure};
 use crate::meshes::{MeshKind, Vertex};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
@@ -19,6 +20,7 @@ use crate::sky::Sky;
 use crate::tonemap::{FinishSettings, FinishUniform};
 use bytemuck::{Pod, Zeroable};
 use metallic_core::World;
+use metallic_profiler::{Profiler, Subsystem};
 use std::borrow::Cow;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -389,6 +391,9 @@ pub struct Renderer {
     /// The skinned instances given to the last [`Renderer::set_skinned`].
     skinned_draws: Vec<SkinnedDraw>,
     skin_scratch: Vec<u8>,
+    /// GPU stage timing for the profiler: made the first time a profiled frame is drawn,
+    /// `None` inside when the device has no timestamp queries.
+    gpu_timer: Option<Option<GpuTimer>>,
 }
 
 impl Renderer {
@@ -558,6 +563,7 @@ impl Renderer {
             skin_slots: Vec::new(),
             skinned_draws: Vec::new(),
             skin_scratch: Vec::new(),
+            gpu_timer: None,
         };
         renderer.meter_supported = crate::exposure::supported(&renderer.device);
         renderer.post.push(Box::new(BloomPass::default()));
@@ -922,6 +928,8 @@ impl Renderer {
         if size.0 == 0 || size.1 == 0 {
             return;
         }
+        let _render = Profiler::scope(Subsystem::Render, "render");
+        let prepare = Profiler::scope(Subsystem::Render, "render.prepare");
         self.ensure_attachments(size);
         self.upload_scene();
         self.select_skinned_lods(camera, size.1);
@@ -976,7 +984,20 @@ impl Renderer {
         self.scratch_cascades = cascades;
         self.ensure_post_targets();
 
+        drop(prepare);
+        let encode = Profiler::scope(Subsystem::Render, "render.encode");
+        // Taken out for the frame (the passes below borrow `self`) and put back at every exit.
+        let mut gpu_timer = self.gpu_timer.take();
+        if let Some(frame) = Profiler::current_frame() {
+            let timer = gpu_timer.get_or_insert_with(|| GpuTimer::new(&self.device, &self.queue));
+            if let Some(timer) = timer {
+                timer.begin(&self.device, frame);
+            }
+        }
+        let timer = gpu_timer.as_ref().and_then(Option::as_ref);
+
         let Some(att) = self.attachments.as_ref() else {
+            self.gpu_timer = gpu_timer;
             return;
         };
         let mut encoder = self
@@ -985,6 +1006,7 @@ impl Renderer {
                 label: Some("metallic frame"),
             });
         self.apply_exposure(&mut encoder);
+        mark(timer, &mut encoder, 0);
 
         for (i, slot) in self.cascade_slots.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1008,11 +1030,13 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.skinned_shadow);
             self.draw_skinned(&mut pass, None);
         }
+        mark(timer, &mut encoder, 1);
 
         let keep_depth = self.post.reads_depth();
         {
             // Made with the attachments; nothing to draw into otherwise.
             let Some(hdr) = att.hdr[0].as_ref() else {
+                self.gpu_timer = gpu_timer;
                 return;
             };
             let (view, resolve) = match &att.msaa_color {
@@ -1063,11 +1087,23 @@ impl Renderer {
             self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
             self.draw_blended(&mut pass);
         }
+        mark(timer, &mut encoder, 2);
         // Meter the scene before the HDR passes: they may rewrite alpha, which marks toon
         // pixels the meter must skip.
         self.meter_frame(&mut encoder);
+        mark(timer, &mut encoder, 3);
         self.post_and_finish(&mut encoder, target, camera, keep_depth);
+        mark(timer, &mut encoder, STAGES.len() as u32);
+        if let Some(timer) = timer {
+            timer.resolve(&mut encoder);
+        }
+        drop(encode);
+        let _submit = Profiler::scope(Subsystem::Render, "render.submit");
         self.queue.submit(Some(encoder.finish()));
+        if let Some(Some(timer)) = gpu_timer.as_mut() {
+            timer.submitted();
+        }
+        self.gpu_timer = gpu_timer;
     }
 
     /// Copies the meter's multiplier into this frame's uniforms (recorded before any pass).
@@ -1718,6 +1754,13 @@ fn make_pipelines(
         skinned_toon,
         skinned_outline,
         skinned_shadow,
+    }
+}
+
+/// Writes GPU timestamp `index` when this frame is timed.
+fn mark(timer: Option<&GpuTimer>, encoder: &mut wgpu::CommandEncoder, index: u32) {
+    if let Some(timer) = timer {
+        timer.mark(encoder, index);
     }
 }
 

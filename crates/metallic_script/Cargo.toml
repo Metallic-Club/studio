@@ -6,5 +6,6 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+metallic_profiler.workspace = true
 metallic_core.workspace = true
 mlua = { version = "0.12.2", features = ["luau", "vendored"] }
