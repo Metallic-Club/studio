@@ -209,8 +209,10 @@ impl EditorUi {
 
     /// The window is asked to close (close button, Alt+F4). Returns true when it may close now;
     /// with unsaved changes it opens the Save / Don't save / Cancel prompt instead and returns
-    /// false, and a later frame returns [`EditorExit::Quit`] if the user agrees.
+    /// false, and a later frame returns [`EditorExit::Quit`] if the user agrees. A running game
+    /// stops first, so it never keeps running behind the prompt.
     pub fn request_quit(&mut self) -> bool {
+        self.state.stop_play();
         // Unsaved script text counts: put the open tabs into the world first.
         self.scripts.flush(&mut self.state);
         if !self.state.is_dirty() {
@@ -456,7 +458,9 @@ impl EditorUi {
     }
 
     /// File > Close game and Ctrl+W: closes at once, or asks first when there are unsaved changes.
+    /// A running game stops first (Ctrl+W works while playing).
     fn close_game(&mut self) -> Option<EditorExit> {
+        self.state.stop_play();
         self.scripts.flush(&mut self.state);
         if self.state.is_dirty() {
             self.confirm = Some(Leave::Close);

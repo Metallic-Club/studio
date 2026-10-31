@@ -71,6 +71,8 @@ pub const INSERTABLE: &[&str] = &[
     "RemoteEvent",
     "ScreenGui",
     "TextLabel",
+    "TextButton",
+    "ImageButton",
 ];
 
 /// The active viewport tool.
