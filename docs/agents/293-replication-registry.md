@@ -65,4 +65,9 @@ must still reach a play replica. Repl, server container/source and owner visibil
 Both class constructors retain the independent Repl and hidden fields; default and enum constructors are preserved.
 Independent Python SHA-256 fixtures, all-component/signed-zero sensitivity and owned outgoing CFrame/hidden-state
 regressions were added. Independent source review found the encoding/constructor/policy logic coherent; it caught
-and prompted correction of an ambiguous documentation phrase. Fresh core/workspace/Clippy gates remain pending.
+and prompted correction of an ambiguous documentation phrase. Fresh checks on merge 3cf9632 / main d1eecce passed: 64 core tests; 1,236 workspace tests, zero failures,
+six existing manual ignores; strict full workspace/all-target Clippy (4m19s); licenses, format and whitespace.
+The full workspace prebuild took 11m37s in the owned guarded lane123. Two independent example processes printed
+c422e66b55f8ac4e354427bdfa7f7034110f65747fc855a15f8449dd7bbffaeb. This v2 value supersedes the historical
+v1 diagnostic above. Logs: <TEMP>/metallic-293-v2-{core,workspace-build,workspace-tests,clippy,licenses}.log.
+Normal append-only push and exact-head CI/review follow; no own PR merge.
