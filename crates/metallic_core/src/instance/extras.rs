@@ -24,7 +24,7 @@ pub const MAX_ATTRIBUTES: usize = 1024;
 /// Most attribute and tag changes a log keeps before the oldest half is dropped. Readers that
 /// follow the log trim it ([`World::trim_attribute_log`]), so this only matters when changes
 /// pile up unread (hundreds of thousands in one step).
-const LOG_LIMIT: usize = 262_144;
+pub(super) const LOG_LIMIT: usize = 262_144;
 /// A log with room for more entries than this is shrunk once it is mostly empty again.
 const SHRINK_ABOVE: usize = 4096;
 /// Most bytes of attribute data (names, values; tags too) one world holds, 16 MiB. Scripts
@@ -32,7 +32,7 @@ const SHRINK_ABOVE: usize = 4096;
 pub const MAX_EXTRAS_BYTES: usize = 16 * 1024 * 1024;
 
 /// What a node holds besides class, parent, children and registry properties.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct Extras {
     pub(super) attributes: BTreeMap<String, Value>,
     pub(super) tags: BTreeSet<String>,

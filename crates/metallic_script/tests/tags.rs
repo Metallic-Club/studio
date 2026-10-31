@@ -66,13 +66,19 @@ fn bad_arguments_raise_clear_errors() {
          try(function() return CS.Nope end)
          p:Destroy()
          try(function() p:AddTag('x') end)
-         try(function() CS:HasTag(p, 'x') end)",
+         try(function() return CS:HasTag(p, 'x') end)",
     );
     let falses: Vec<&String> = lines
         .iter()
         .filter(|l| l.starts_with("print:false"))
         .collect();
-    assert_eq!(falses.len(), 8, "{lines:?}");
+    // `HasTag` on the destroyed part answers with the tags it had (none).
+    assert_eq!(falses.len(), 7, "{lines:?}");
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("print:true false"),
+        "{lines:?}"
+    );
     assert!(falses[0].contains("cannot be empty"), "{}", falses[0]);
     assert!(falses[1].contains("255"));
     assert!(falses[2].contains("control"));
@@ -80,7 +86,6 @@ fn bad_arguments_raise_clear_errors() {
     assert!(falses[4].contains("Instance expected"));
     assert!(falses[5].contains("not a valid member of CollectionService"));
     assert!(falses[6].contains("has been destroyed"));
-    assert!(falses[7].contains("has been destroyed"));
 }
 
 #[test]
@@ -402,4 +407,52 @@ fn twenty_thousand_tagged_destroys_reach_the_manager_without_losing_one() {
             .any(|l| l.contains("lost") || l.contains("dropped")),
         "{lines:?}"
     );
+}
+
+#[test]
+fn deferred_removal_handlers_still_read_twenty_thousand_destroyed_instances() {
+    let mut rig = Rig::new();
+    // Made and destroyed by the engine: no Luau object of a part exists before its removal
+    // handler runs, so each handler reads the host's record of the destroyed part.
+    let model = rig.add("Model", "Crowd", rig.root("Workspace"));
+    {
+        let mut w = rig.world.borrow_mut();
+        for i in 0..20_000 {
+            let id = w.create("Part", Some(model)).unwrap();
+            w.set(id, "Name", metallic_core::Value::String(format!("P{i}")))
+                .unwrap();
+            w.set_attribute(id, "N", metallic_core::Value::Number(f64::from(i)))
+                .unwrap();
+            w.add_tag(id, "Managed").unwrap();
+        }
+    }
+    rig.server_script(
+        "Manager",
+        "local CS = game:GetService('CollectionService')
+         local steps, removed, readable, first, last = 0, 0, 0, nil, nil
+         game:GetService('RunService').Heartbeat:Connect(function() steps += 1 end)
+         CS:GetInstanceRemovedSignal('Managed'):Connect(function(i)
+             removed += 1
+             first = first or steps
+             last = steps
+             local n = i:GetAttribute('N')
+             if i.Name == 'P' .. n and i.ClassName == 'Part' and i.Parent == nil
+                 and i:HasTag('Managed') and #i:GetTags() == 1 and i:GetAttributes().N == n then
+                 readable += 1
+             end
+             if removed == 20000 then
+                 print('done', removed, readable, last - first > 2)
+             end
+         end)",
+    );
+    rig.host.start().unwrap();
+    let now = rig.run(0.0, 120);
+    rig.world.borrow_mut().destroy(model);
+    rig.run(now, 3000);
+    let lines = rig.lines();
+    assert!(
+        lines.contains(&"print:done 20000 20000 true".to_string()),
+        "{lines:?}"
+    );
+    assert_eq!(rig.host.destroyed_records(), 0, "kept after delivery");
 }

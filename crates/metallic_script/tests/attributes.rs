@@ -231,7 +231,7 @@ fn changes_made_outside_scripts_fire_signals_too() {
 }
 
 #[test]
-fn destroyed_instances_raise_the_usual_error_and_stop_firing() {
+fn destroyed_instances_keep_their_attributes_refuse_changes_and_stop_firing() {
     let mut rig = Rig::new();
     part(&rig, "P");
     let lines = run(
@@ -247,12 +247,14 @@ fn destroyed_instances_raise_the_usual_error_and_stop_firing() {
         !lines.contains(&"print:should not fire".to_string()),
         "{lines:?}"
     );
+    // Like Roblox, the last value stays readable; changing it errors (a documented deviation).
+    assert!(lines.contains(&"print:true 1".to_string()), "{lines:?}");
     assert_eq!(
         lines
             .iter()
             .filter(|l| l.starts_with("print:false") && l.contains("has been destroyed"))
             .count(),
-        2,
+        1,
         "{lines:?}"
     );
 }

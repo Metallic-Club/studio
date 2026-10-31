@@ -14,7 +14,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use metallic_core::{CoreError, TagChanges, TagCursor, check_tag};
+use metallic_core::{CoreError, DestroyedInstance, TagChanges, TagCursor, check_tag};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods,
     UserDataRef, Value,
@@ -76,6 +76,18 @@ fn instance(value: &Value, what: &str) -> mlua::Result<(Rc<ApiState>, metallic_c
     Ok((inst.state.clone(), inst.id))
 }
 
+/// What a destroyed instance argument was (see [`LuaInstance::last_values`]); `None` while it
+/// is alive or when the argument is not an instance (then [`instance`] reports it).
+fn last_values(value: &Value) -> mlua::Result<Option<Rc<DestroyedInstance>>> {
+    let Value::UserData(ud) = value else {
+        return Ok(None);
+    };
+    let Ok(inst) = ud.borrow::<LuaInstance>() else {
+        return Ok(None);
+    };
+    inst.last_values()
+}
+
 fn add_tag(state: &ApiState, id: metallic_core::InstanceId, tag: &str) -> mlua::Result<()> {
     state.world_mut()?.add_tag(id, tag).map_err(reason)
 }
@@ -84,11 +96,21 @@ fn remove_tag(state: &ApiState, id: metallic_core::InstanceId, tag: &str) -> mlu
     state.world_mut()?.remove_tag(id, tag).map_err(reason)
 }
 
-fn has_tag(state: &ApiState, id: metallic_core::InstanceId, tag: &str) -> mlua::Result<bool> {
+/// `HasTag`; a destroyed instance answers with the tags it had.
+fn has_tag(this: &Value, tag: &str) -> mlua::Result<bool> {
+    if let Some(kept) = last_values(this)? {
+        return Ok(kept.has_tag(tag));
+    }
+    let (state, id) = instance(this, "HasTag")?;
     Ok(state.world()?.has_tag(id, tag))
 }
 
-fn get_tags(lua: &Lua, state: &ApiState, id: metallic_core::InstanceId) -> mlua::Result<Table> {
+/// `GetTags`; a destroyed instance answers with the tags it had.
+fn get_tags(lua: &Lua, this: &Value) -> mlua::Result<Table> {
+    if let Some(kept) = last_values(this)? {
+        return lua.create_sequence_from(kept.tags());
+    }
+    let (state, id) = instance(this, "GetTags")?;
     let tags: Vec<String> = state.world()?.tags(id).map(str::to_string).collect();
     let table = lua.create_table()?;
     for (i, tag) in tags.iter().enumerate() {
@@ -107,14 +129,8 @@ pub(crate) fn methods(lua: &Lua) -> mlua::Result<Vec<(&'static str, Function)>> 
         let (state, id) = instance(&this, "RemoveTag")?;
         remove_tag(&state, id, &tag)
     })?;
-    let has = lua.create_function(|_, (this, tag): (Value, String)| {
-        let (state, id) = instance(&this, "HasTag")?;
-        has_tag(&state, id, &tag)
-    })?;
-    let get = lua.create_function(|lua, this: Value| {
-        let (state, id) = instance(&this, "GetTags")?;
-        get_tags(lua, &state, id)
-    })?;
+    let has = lua.create_function(|_, (this, tag): (Value, String)| has_tag(&this, &tag))?;
+    let get = lua.create_function(|lua, this: Value| get_tags(lua, &this))?;
     Ok(vec![
         ("AddTag", errors::guarded(lua, add)?),
         ("RemoveTag", errors::guarded(lua, remove)?),
@@ -150,16 +166,12 @@ impl LuaCollectionService {
         methods.insert(
             "HasTag",
             errors::guarded_fn(lua, |_, (_, this, tag): (Value, Value, String)| {
-                let (state, id) = instance(&this, "HasTag")?;
-                has_tag(&state, id, &tag)
+                has_tag(&this, &tag)
             })?,
         );
         methods.insert(
             "GetTags",
-            errors::guarded_fn(lua, |lua, (_, this): (Value, Value)| {
-                let (state, id) = instance(&this, "GetTags")?;
-                get_tags(lua, &state, id)
-            })?,
+            errors::guarded_fn(lua, |lua, (_, this): (Value, Value)| get_tags(lua, &this))?,
         );
         methods.insert(
             "GetTagged",

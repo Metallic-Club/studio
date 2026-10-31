@@ -59,7 +59,15 @@ loading`, and every later `require` raises that. A client VM cannot require a Mo
   replacement-character behavior for lookup and errors.
 - Wrong property type: `invalid value for property Position: expected Vector3, got number`. Numbers and vectors must be finite.
 - The same instance is always the same Lua object (`a == b`, usable as a table key).
-- A destroyed instance errors on use: `Brick has been destroyed`. Services cannot be destroyed, cloned or reparented.
+- A destroyed instance stays readable, like in Roblox: `Name`, `ClassName` and its other properties keep their last
+  values, `Parent` is `nil`, `FindFirstChild` returns `nil`, `GetChildren`/`GetDescendants` return `{}` and `IsA`
+  still answers. Setting `Parent` errors (`The Parent property of Brick is locked: it has been destroyed`); setting any
+  other property works and later reads see it, but the instance stays destroyed. `GetAttribute`, `GetAttributes`,
+  `HasTag` and `GetTags` return what it had when it was destroyed. Deviation: `SetAttribute`, `AddTag` and `RemoveTag`
+  on it error (Roblox changes the dead object). `Clone`, `WaitForChild` and its events error; `Destroy` again does
+  nothing. A destroyed instance that an event names later (a `GetInstanceRemovedSignal` handler deferred to a later
+  step, a `TouchEnded` in the next step) is just as readable: the host keeps the records until every VM has read the
+  tag log past the destroy (at most 65,536 records). Services cannot be destroyed, cloned or reparented.
 - `WaitForChild` yields; `step` resumes it. With a timeout it returns nil afterwards. Without one it warns once after 5 s.
 
 ```lua
@@ -194,7 +202,7 @@ local cf, size = door:GetBoundingBox()
 | Signal | Arguments | Fired when |
 |---|---|---|
 | `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
-| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced), and when two ordinary parts that reported `Touched` stop touching (they separated, one was destroyed, or one changed `Size`, `Shape` or `CanCollide`), on both parts that still exist, once. If the other part was destroyed by then, `hit` is the destroyed instance. Pairs with `Touched` |
+| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced), and when two ordinary parts that reported `Touched` stop touching (they separated, one was destroyed, or one changed `Size`, `Shape` or `CanCollide`), on both parts that still exist, once. If the other part was destroyed by then, `hit` is the destroyed instance, still readable (`hit.Name`; `hit.Parent` is nil). Pairs with `Touched` |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |

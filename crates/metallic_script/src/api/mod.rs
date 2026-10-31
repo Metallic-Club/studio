@@ -21,10 +21,10 @@ mod signals;
 mod tags;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
-use metallic_core::{InstanceId, World};
+use metallic_core::{DestroyedInstance, InstanceId, TagCursor, World};
 use mlua::{Error, Function, Table, WeakLua};
 
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
@@ -50,6 +50,43 @@ pub(crate) struct HostShared {
     pub(crate) local_player: Cell<Option<InstanceId>>,
     /// Input events, action states and device flags pushed by the host.
     pub(crate) input: input::InputShared,
+    /// What destroyed instances were (from [`World::take_destroyed`]), so a destroyed instance
+    /// stays readable to Luau objects made for it later (an event that names it). Each entry is
+    /// in one of `destroyed_batches` (or `destroyed_fresh`) and goes with it.
+    pub(crate) destroyed: RefCell<HashMap<InstanceId, Rc<DestroyedInstance>>>,
+    /// Ids taken into `destroyed` during this step, batched at its end.
+    pub(crate) destroyed_fresh: RefCell<Vec<InstanceId>>,
+    /// The steps' batches of `destroyed`, oldest first. A batch is kept one more step (an
+    /// instance destroyed during a step reaches scripts again in the next one, as a `TouchEnded`
+    /// of its character's limbs) and until every VM has read the tag log past its destroys (a
+    /// `GetInstanceRemovedSignal` handler deferred to a later step reads the instance).
+    pub(crate) destroyed_batches: RefCell<VecDeque<DestroyedBatch>>,
+    /// Steps ended so far, for `destroyed_batches`.
+    pub(crate) steps: Cell<u64>,
+    /// Reused buffer for [`World::take_destroyed`].
+    pub(crate) taken: RefCell<Vec<DestroyedInstance>>,
+}
+
+impl HostShared {
+    /// Forgets every destroyed-instance record (the host starts or stops).
+    pub(crate) fn forget_destroyed(&self) {
+        self.destroyed.borrow_mut().clear();
+        self.destroyed_fresh.borrow_mut().clear();
+        self.destroyed_batches.borrow_mut().clear();
+    }
+}
+
+/// Most destroyed-instance records the host keeps for events not yet delivered; past it the
+/// oldest steps' records go (their Luau objects keep their own copies).
+pub(crate) const MAX_DESTROYED_KEPT: usize = 65_536;
+
+/// Instances destroyed in one step; see [`HostShared::destroyed_batches`].
+pub(crate) struct DestroyedBatch {
+    pub(crate) ids: Vec<InstanceId>,
+    /// The step that took them.
+    pub(crate) step: u64,
+    /// The world's tag log position at the end of that step: its removals are before it.
+    pub(crate) tags: TagCursor,
 }
 
 /// Everything the API functions of one VM need.

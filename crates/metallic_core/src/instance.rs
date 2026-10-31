@@ -17,6 +17,11 @@ use extras::{AttributeLog, Extras, TagLog};
 
 /// Most journal entries kept before the oldest half is dropped.
 const JOURNAL_LIMIT: usize = 16384;
+/// Most destroyed instances [`World::take_destroyed`] keeps between two takes; later ones are
+/// not kept, so a world nobody drains holds at most this many. Instances destroyed with tags in
+/// the game tree are kept past it (up to the tag log's size): their removal is in the tag log, and
+/// whoever reads it later gets them.
+pub const DESTROYED_LIMIT: usize = 16384;
 static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
 static NULL_REFERENCE: Value = Value::Ref(None);
 
@@ -160,6 +165,67 @@ const SERVICES: &[&str] = &[
     "ServerStorage",
 ];
 
+/// What a destroyed instance was: its id, class, last property values, attributes and tags (see
+/// [`World::keep_destroyed`]).
+#[derive(Debug, Clone)]
+pub struct DestroyedInstance {
+    id: InstanceId,
+    class: &'static str,
+    props: BTreeMap<String, Value>,
+    extras: Option<Box<extras::Extras>>,
+}
+
+impl DestroyedInstance {
+    /// The id the instance had.
+    pub fn id(&self) -> InstanceId {
+        self.id
+    }
+
+    /// Its class name.
+    pub fn class_name(&self) -> &'static str {
+        self.class
+    }
+
+    /// Sets `prop` on the record only (the instance stays destroyed). The caller checks that the
+    /// class has the property and the value has its type.
+    pub fn set(&mut self, prop: &str, value: Value) {
+        self.props.insert(prop.to_string(), value);
+    }
+
+    /// The last value of `prop` (the class default if it was never set), `None` if the class
+    /// has no such property. References are returned as stored, live or not.
+    pub fn get(&self, prop: &str) -> Option<Value> {
+        match self.props.get(prop) {
+            Some(v) => Some(v.clone()),
+            None => default_value(self.class, prop),
+        }
+    }
+
+    /// The attribute `name` it had, `None` if it had none of that name.
+    pub fn attribute(&self, name: &str) -> Option<&Value> {
+        self.extras.as_ref()?.attributes.get(name)
+    }
+
+    /// The attributes it had, sorted by name.
+    pub fn attributes(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.extras
+            .iter()
+            .flat_map(|e| e.attributes.iter().map(|(k, v)| (k.as_str(), v)))
+    }
+
+    /// Whether it had `tag`.
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.extras.as_ref().is_some_and(|e| e.tags.contains(tag))
+    }
+
+    /// The tags it had, sorted.
+    pub fn tags(&self) -> impl Iterator<Item = &str> {
+        self.extras
+            .iter()
+            .flat_map(|e| e.tags.iter().map(String::as_str))
+    }
+}
+
 /// A whole game tree: owns all instances, their properties and events.
 pub struct World {
     slots: Vec<Slot>,
@@ -179,6 +245,8 @@ pub struct World {
     tag_log: TagLog,
     /// Bytes of attribute data held, against `MAX_EXTRAS_BYTES`.
     extras_bytes: usize,
+    /// Destroyed instances kept for [`World::take_destroyed`]; `None` keeps nothing.
+    destroyed: Option<Vec<DestroyedInstance>>,
 }
 
 impl World {
@@ -198,6 +266,26 @@ impl World {
             tag_index: HashMap::new(),
             tag_log: TagLog::default(),
             extras_bytes: 0,
+            destroyed: None,
+        }
+    }
+
+    /// Whether [`World::destroy`] keeps what it destroys (id, class, property values) for
+    /// [`World::take_destroyed`]. Off by default; turning it off drops what was kept. The script
+    /// host turns it on so scripts can still read a destroyed instance, like Roblox.
+    pub fn keep_destroyed(&mut self, keep: bool) {
+        match (keep, self.destroyed.is_some()) {
+            (true, false) => self.destroyed = Some(Vec::new()),
+            (false, true) => self.destroyed = None,
+            _ => {}
+        }
+    }
+
+    /// Moves the instances destroyed since the last take into `out` (appended), at most
+    /// [`DESTROYED_LIMIT`] of them. Nothing while [`World::keep_destroyed`] is off.
+    pub fn take_destroyed(&mut self, out: &mut Vec<DestroyedInstance>) {
+        if let Some(kept) = &mut self.destroyed {
+            out.append(kept);
         }
     }
 
@@ -430,9 +518,12 @@ impl World {
         if !self.is_alive(id) {
             return;
         }
+        // Whether the subtree's tags go to the tag log as removals (it leaves the game tree).
+        let mut tags_logged = false;
         if !self.tag_index.is_empty() {
             if self.is_in_tree(id) {
                 self.log_subtree_tags(id, false);
+                tags_logged = true;
             }
             self.forget_subtree_tags(id);
         }
@@ -451,6 +542,19 @@ impl World {
                 stack.extend(node.children);
                 slot.generation += 1;
                 self.free.push(cur.index);
+                if let Some(kept) = &mut self.destroyed {
+                    // A tagged one stays readable past the limit: its removal was logged.
+                    let tagged =
+                        tags_logged && node.extras.as_ref().is_some_and(|e| !e.tags.is_empty());
+                    if kept.len() < DESTROYED_LIMIT || (tagged && kept.len() < extras::LOG_LIMIT) {
+                        kept.push(DestroyedInstance {
+                            id: cur,
+                            class: node.class,
+                            props: node.props,
+                            extras: node.extras,
+                        });
+                    }
+                }
             }
         }
         // Keep only signals of live instances. Ids that never belonged to this world (out of range,
@@ -810,6 +914,7 @@ impl World {
             tag_index: self.tag_index.clone(),
             tag_log: TagLog::default(),
             extras_bytes: self.extras_bytes,
+            destroyed: None,
         }
     }
 }

@@ -166,6 +166,11 @@ impl ScriptHost {
             .collect();
         self.running.clear();
         self.cursor = None;
+        self.shared.forget_destroyed();
+        // Destroyed instances stay readable to scripts while they run (see `keep_destroyed`).
+        if let Ok(mut world) = self.world.try_borrow_mut() {
+            world.keep_destroyed(true);
+        }
 
         self.server = Some(self.make_side(Context::Server)?);
         self.client = self
@@ -233,6 +238,50 @@ impl ScriptHost {
         for side in self.sides_mut() {
             side.vm.step(now);
         }
+        self.keep_destroyed();
+    }
+
+    /// Hands what each instance destroyed in this step was to its live Luau objects, then
+    /// batches the step's records. A batch is kept one more step (a script may destroy a
+    /// character whose limbs reach the scripts again in the next step's `TouchEnded`) and while
+    /// a VM has not read the tag log past its destroys (`GetInstanceRemovedSignal` handlers run
+    /// in later steps when a step runs out of time). Then it is forgotten: the objects made for
+    /// those events hold their own copies.
+    fn keep_destroyed(&self) {
+        for side in self.sides() {
+            if let Err(e) = side.state.keep_destroyed() {
+                self.output.error(&crate::vm::format_error(&e));
+            }
+        }
+        let step = self.shared.steps.get();
+        self.shared.steps.set(step + 1);
+        let Ok(world) = self.world.try_borrow() else {
+            return;
+        };
+        let tags = world.tag_cursor();
+        drop(world);
+        let ids = std::mem::take(&mut *self.shared.destroyed_fresh.borrow_mut());
+        let mut batches = self.shared.destroyed_batches.borrow_mut();
+        if !ids.is_empty() {
+            batches.push_back(crate::api::DestroyedBatch { ids, step, tags });
+        }
+        let cursors: Vec<_> = self.sides().iter().map(|s| s.state.tag_cursor()).collect();
+        let mut destroyed = self.shared.destroyed.borrow_mut();
+        while let Some(batch) = batches.front() {
+            let read = cursors.iter().all(|c| c.changes_until(batch.tags) == 0);
+            let done = batch.step < step && read;
+            // A VM that never reads the tag log cannot pin records without end.
+            if !done && destroyed.len() <= crate::api::MAX_DESTROYED_KEPT {
+                break;
+            }
+            for id in &batch.ids {
+                destroyed.remove(id);
+            }
+            batches.pop_front();
+        }
+        if destroyed.is_empty() && destroyed.capacity() > 1024 {
+            destroyed.shrink_to(64);
+        }
     }
 
     /// Shuts active VMs down, dropping every connection and sleeping thread. `start` may be
@@ -249,6 +298,10 @@ impl ScriptHost {
         self.shared.queued.set([(0, 0); 2]);
         self.shared.joined.borrow_mut().clear();
         self.shared.input.clear();
+        self.shared.forget_destroyed();
+        if let Ok(mut world) = self.world.try_borrow_mut() {
+            world.keep_destroyed(false);
+        }
         self.running.clear();
         self.cursor = None;
         self.gui_events.clear();
@@ -345,6 +398,13 @@ impl ScriptHost {
         }
         self.inputs
             .push(HostEvent::CharacterAdded { player, model });
+    }
+
+    /// How many destroyed-instance records the host keeps for events not yet delivered. A test
+    /// hook that shows they go once delivered.
+    #[doc(hidden)]
+    pub fn destroyed_records(&self) -> usize {
+        self.shared.destroyed.borrow().len()
     }
 
     /// How many times signal handler arguments were built so far (both VMs). A test hook

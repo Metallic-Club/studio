@@ -106,22 +106,30 @@ pub(crate) fn methods(lua: &Lua) -> mlua::Result<Vec<(&'static str, Function)>> 
                 .map_err(reason)
         },
     )?;
+    // The reading methods answer for a destroyed instance too, with the attributes it had.
     let get = lua.create_function(|lua, (this, name): (UserDataRef<LuaInstance>, String)| {
-        live(&this)?;
-        let value = this.state.world()?.attribute(this.id, &name).cloned();
+        let value = match this.last_values()? {
+            Some(kept) => kept.attribute(&name).cloned(),
+            None => this.state.world()?.attribute(this.id, &name).cloned(),
+        };
         match value {
             Some(v) => this.state.value_to_lua(lua, v),
             None => Ok(Value::Nil),
         }
     })?;
     let get_all = lua.create_function(|lua, this: UserDataRef<LuaInstance>| {
-        live(&this)?;
-        let all: Vec<(String, CoreValue)> = this
-            .state
-            .world()?
-            .attributes(this.id)
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
+        let all: Vec<(String, CoreValue)> = match this.last_values()? {
+            Some(kept) => kept
+                .attributes()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            None => this
+                .state
+                .world()?
+                .attributes(this.id)
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        };
         let table: Table = lua.create_table()?;
         for (k, v) in all {
             table.set(k, this.state.value_to_lua(lua, v)?)?;

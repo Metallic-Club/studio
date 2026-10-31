@@ -258,3 +258,52 @@ fn player_gui_is_a_registered_class_with_unique_bits() {
     let again = w.create("PlayerGui", Some(player)).unwrap();
     assert_ne!(again.to_bits(), gui.to_bits());
 }
+
+#[test]
+fn destroyed_instances_are_kept_only_when_asked_and_bounded() {
+    use metallic_core::{DESTROYED_LIMIT, DestroyedInstance};
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").unwrap();
+    let mut kept: Vec<DestroyedInstance> = Vec::new();
+    // Off by default: nothing is kept.
+    let a = w.create("Part", Some(ws)).unwrap();
+    w.destroy(a);
+    w.take_destroyed(&mut kept);
+    assert!(kept.is_empty());
+
+    w.keep_destroyed(true);
+    let model = w.create("Model", Some(ws)).unwrap();
+    w.set(model, "Name", Value::String("Bob".into())).unwrap();
+    let part = w.create("Part", Some(model)).unwrap();
+    w.set(part, "Transparency", Value::Number(0.5)).unwrap();
+    w.destroy(model);
+    w.take_destroyed(&mut kept);
+    assert_eq!(kept.len(), 2, "the model and its part");
+    let m = kept.iter().find(|d| d.id() == model).unwrap();
+    assert_eq!(m.class_name(), "Model");
+    assert_eq!(m.get("Name"), Some(Value::String("Bob".into())));
+    let p = kept.iter().find(|d| d.id() == part).unwrap();
+    assert_eq!(p.get("Transparency"), Some(Value::Number(0.5)));
+    // Unset properties read their default; unknown ones nothing.
+    assert_eq!(p.get("Anchored"), Some(Value::Bool(false)));
+    assert_eq!(p.get("NoSuchProperty"), None);
+    // A take empties the store.
+    kept.clear();
+    w.take_destroyed(&mut kept);
+    assert!(kept.is_empty());
+
+    // Nobody draining: at most DESTROYED_LIMIT are kept.
+    for _ in 0..DESTROYED_LIMIT + 10 {
+        let p = w.create("Part", Some(ws)).unwrap();
+        w.destroy(p);
+    }
+    w.take_destroyed(&mut kept);
+    assert_eq!(kept.len(), DESTROYED_LIMIT);
+    // Turning it off drops what was kept and keeps nothing more.
+    let p = w.create("Part", Some(ws)).unwrap();
+    w.destroy(p);
+    w.keep_destroyed(false);
+    kept.clear();
+    w.take_destroyed(&mut kept);
+    assert!(kept.is_empty());
+}
