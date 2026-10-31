@@ -53,7 +53,8 @@ loading`, and every later `require` raises that. A client VM cannot require a Mo
 ## Instance
 - `Instance.new(class, parent?)`. Services cannot be created; an unknown class errors.
 - Members: `Name`, `Parent`, `ClassName` (read-only), `FindFirstChild(name, recursive?)`, `WaitForChild(name, timeout?)`,
-  `GetChildren()`, `GetDescendants()`, `IsA(class)`, `Destroy()`, `Clone()`, and every registry property of the class by name.
+  `GetChildren()`, `GetDescendants()`, `IsA(class)`, `Destroy()`, `Clone()`, `Changed`, `GetPropertyChangedSignal(name)`
+  (see "Property changes"), and every registry property of the class by name.
 - `instance.ChildName` finds a child. Unknown member: `<Name> is not a valid member of <ClassName>`.
 - Member keys must be strings; numeric keys are rejected. Invalid UTF-8 bytes in a string key keep the existing
   replacement-character behavior for lookup and errors.
@@ -208,6 +209,8 @@ local cf, size = door:GetBoundingBox()
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
 | `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |
 | `RunService.Heartbeat` | `dt` | every `step` |
+| `Instance.Changed` | `propertyName` | a property of the instance really changed (see "Property changes" below) |
+| `Instance:GetPropertyChangedSignal(name)` | none | that property really changed |
 
 ```lua
 workspace.Lava.Touched:Connect(function(hit)
@@ -218,6 +221,37 @@ end)
 local player = game:GetService("Players").PlayerAdded:Wait()
 local dt = game:GetService("RunService").Heartbeat:Wait()   -- wait one frame
 workspace.Door.Touched:Once(function(hit) print("first touch:", hit.Name) end)
+```
+
+### Property changes
+`inst:GetPropertyChangedSignal(name)` and `inst.Changed` are ordinary `RBXScriptSignal`s (every signal method works on
+them). Code: `crates/metallic_script/src/api/property_signals.rs`; tests: `crates/metallic_script/tests/property_changed.rs`.
+
+- They fire for a real change only: a write of the value the property already has fires nothing; `A -> B -> A` is two
+  changes. Writes from scripts and from the engine (physics, the character controller, Studio) count alike.
+- Delivery is on the next `step`, after inputs and GUI events and before `Heartbeat`, oldest change first; for one change
+  `GetPropertyChangedSignal(name)` handlers run before `Changed` handlers. A write made inside a handler fires on the
+  following `step`, so handlers that keep changing what they watch cannot recurse. Handlers share the step budget like
+  every other handler (deferred when it runs out).
+- `Changed` passes the property name as a string. Engine bookkeeping properties (`Model.WorldPivotSet`,
+  `Model.ScaleFactor`) never fire it, and asking for them by name errors like an unknown name:
+  `Nope is not a valid property name.` Names are case-sensitive, like Roblox.
+- Covered: every registry property of the class (what `inst.Name` style reads return). A `BasePart.CFrame` write fires
+  `Position` and `Orientation`. Not yet: `GetPropertyChangedSignal("Parent")` and `("CFrame")` error with
+  `... is not supported yet`, and `Changed` does not fire for `Parent`.
+- Changes made before a script first reads `inst.Changed` or calls `GetPropertyChangedSignal` are not delivered to it.
+  Destroying the instance drops its connections (`Connected` becomes false); a new instance never fires old ones.
+- Each VM gets the changes of instances its own scripts watch; both the server and the client VM see the shared world.
+  Watching costs nothing until a script asks for one of these signals, and a destroyed instance stops costing.
+- More than 16384 world changes between two steps while something is watched drops that step's property events with a
+  warning.
+
+```lua
+local hum = workspace.Npc.Humanoid
+hum:GetPropertyChangedSignal("Health"):Connect(function()
+    workspace.Npc.Bar.Size = Vector3.new(hum.Health / hum.MaxHealth * 4, 0.3, 0.3)
+end)
+workspace.Door.Changed:Connect(function(name) print("Door." .. name .. " changed") end)
 ```
 
 ## Services
