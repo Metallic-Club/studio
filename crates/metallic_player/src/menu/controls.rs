@@ -9,12 +9,13 @@ use metallic_runtime::input::glyph::{
     ControlGlyph, GamepadStyle, Glyph, control_glyph, slot_glyph,
 };
 use metallic_runtime::input::overrides::{
-    DEADZONE_RANGE, GamepadGlyphPref, HOLD_SCALE_RANGE, PlayerOverrides, SENSITIVITY_RANGE, Slot,
-    Stick, StickSettings,
+    CONTROL_SCALE_RANGE, DEADZONE_RANGE, GamepadGlyphPref, HOLD_SCALE_RANGE, PlayerOverrides,
+    SENSITIVITY_RANGE, Slot, Stick, StickSettings, TOUCH_OPACITY_RANGE, TouchSettings,
 };
 use metallic_runtime::input::rebind::{
     self, Conflict, LISTEN_TIMEOUT, RebindError, Resolution, SlotKind, SlotRef, UNDO_SECONDS,
 };
+use metallic_runtime::input::touch::StickMode;
 use metallic_runtime::input::{Control, ControlKind, DeviceKind, InputConfig, Role};
 
 /// Width of the page content in points.
@@ -53,11 +54,13 @@ pub enum Tab {
     Gamepad,
     /// Hold and toggle assists.
     Assist,
+    /// The touch controls: stick mode, opacity, button size (#333).
+    Touch,
 }
 
 impl Tab {
-    /// The tabs in order. (The Touch tab comes with the touch overlay, #252.)
-    pub const ALL: [Tab; 3] = [Tab::Keyboard, Tab::Gamepad, Tab::Assist];
+    /// The tabs in order.
+    pub const ALL: [Tab; 4] = [Tab::Keyboard, Tab::Gamepad, Tab::Assist, Tab::Touch];
 
     /// The title.
     pub fn title(self) -> &'static str {
@@ -65,6 +68,7 @@ impl Tab {
             Tab::Keyboard => "Keyboard and Mouse",
             Tab::Gamepad => "Gamepad",
             Tab::Assist => "Hold and Toggle",
+            Tab::Touch => "Touch",
         }
     }
 
@@ -73,7 +77,7 @@ impl Tab {
         match self {
             Tab::Keyboard => Some(DeviceKind::KeyboardMouse),
             Tab::Gamepad => Some(DeviceKind::Gamepad),
-            Tab::Assist => None,
+            Tab::Assist | Tab::Touch => None,
         }
     }
 
@@ -99,6 +103,8 @@ pub enum Item {
     Switch(SwitchId),
     /// The gamepad glyph style (Auto, Letters, Positions).
     GlyphStyle,
+    /// The touch stick: Floating or Fixed.
+    StickMode,
     /// "Reset this tab".
     ResetTab,
     /// "Reset all".
@@ -114,6 +120,10 @@ pub enum SliderId {
     Deadzone(Stick),
     /// The `HoldTime` scale.
     HoldScale,
+    /// Opacity of the touch controls.
+    TouchOpacity,
+    /// Size of the touch controls.
+    TouchSize,
 }
 
 /// The switches.
@@ -127,6 +137,8 @@ pub enum SwitchId {
     ToggleAll,
     /// "Replace holds with presses".
     ReplaceHolds,
+    /// The Large controls preset of the touch controls.
+    LargeControls,
 }
 
 /// What a cell shows.
@@ -303,7 +315,7 @@ pub struct ControlsPage {
     rows: Vec<Row>,
     focus: Option<(usize, usize)>,
     /// Remembered focus per tab.
-    tab_focus: [Option<Item>; 3],
+    tab_focus: [Option<Item>; 4],
     /// Content scrolled up by this many points.
     pub scroll: f32,
     /// Height of the visible part of the content, set by the painter.
@@ -472,9 +484,11 @@ impl ControlsPage {
     fn rebuild(&mut self) {
         let mut rows = Vec::new();
         let mut y = 0.0;
-        match self.tab.device() {
-            Some(device) => self.binding_rows(device, &mut rows, &mut y),
-            None => self.assist_rows(&mut rows, &mut y),
+        match self.tab {
+            Tab::Keyboard => self.binding_rows(DeviceKind::KeyboardMouse, &mut rows, &mut y),
+            Tab::Gamepad => self.binding_rows(DeviceKind::Gamepad, &mut rows, &mut y),
+            Tab::Assist => self.assist_rows(&mut rows, &mut y),
+            Tab::Touch => self.touch_rows(&mut rows, &mut y),
         }
         let footer = vec![
             Cell {
@@ -716,6 +730,54 @@ impl ControlsPage {
         );
     }
 
+    fn touch_rows(&self, rows: &mut Vec<Row>, y: &mut f32) {
+        Self::push(
+            rows,
+            y,
+            RowKind::Section("Touch controls"),
+            SECTION_H,
+            Vec::new(),
+        );
+        let cell = setting_cell(Item::StickMode, *y, SETTING_W);
+        Self::push(
+            rows,
+            y,
+            RowKind::Setting(
+                "Stick",
+                "Floating starts under your thumb; fixed stays in place",
+            ),
+            ROW_H,
+            vec![cell],
+        );
+        let cell = setting_cell(Item::Slider(SliderId::TouchOpacity), *y, SETTING_W);
+        Self::push(
+            rows,
+            y,
+            RowKind::Setting("Opacity", "How solid the controls look: 25% to 100%"),
+            ROW_H,
+            vec![cell],
+        );
+        let cell = setting_cell(Item::Slider(SliderId::TouchSize), *y, SETTING_W);
+        Self::push(
+            rows,
+            y,
+            RowKind::Setting("Button size", "80% to 150%, never smaller than 48 dp"),
+            ROW_H,
+            vec![cell],
+        );
+        let cell = setting_cell(Item::Switch(SwitchId::LargeControls), *y, 64.0);
+        Self::push(
+            rows,
+            y,
+            RowKind::Setting(
+                "Large controls",
+                "Every control at least 15 mm; some buttons may not fit",
+            ),
+            ROW_H,
+            vec![cell],
+        );
+    }
+
     fn assist_rows(&self, rows: &mut Vec<Row>, y: &mut f32) {
         Self::push(
             rows,
@@ -816,6 +878,14 @@ impl ControlsPage {
                 let v = self.overrides.assist.hold_time_scale;
                 (v, HOLD_SCALE_RANGE, format!("{:.2}x", v))
             }
+            SliderId::TouchOpacity => {
+                let v = self.overrides.touch.opacity;
+                (v, TOUCH_OPACITY_RANGE, format!("{:.0}%", v * 100.0))
+            }
+            SliderId::TouchSize => {
+                let v = self.overrides.touch.size;
+                (v, CONTROL_SCALE_RANGE, format!("{:.0}%", v * 100.0))
+            }
         }
     }
 
@@ -833,12 +903,18 @@ impl ControlsPage {
             SwitchId::InvertY(s) => self.overrides.stick(s).invert_y,
             SwitchId::ToggleAll => self.overrides.assist.toggle_all,
             SwitchId::ReplaceHolds => self.overrides.assist.replace_holds,
+            SwitchId::LargeControls => self.overrides.touch.large_controls,
         }
     }
 
     /// The glyph style setting.
     pub fn glyph_pref(&self) -> GamepadGlyphPref {
         self.overrides.gamepad_glyphs
+    }
+
+    /// The touch settings.
+    pub fn touch(&self) -> TouchSettings {
+        self.overrides.touch
     }
 
     /// True when the row toggles.
@@ -903,6 +979,12 @@ impl ControlsPage {
                 match self.focused_item().cloned() {
                     Some(Item::Slider(id)) => out.changed = self.step_slider(id, dir),
                     Some(Item::GlyphStyle) => out.changed = self.cycle_style(dir as i32),
+                    Some(Item::StickMode) => {
+                        out.changed = self.set_stick_mode(dir > 0.0);
+                        if out.changed {
+                            self.rebuild_keep_focus();
+                        }
+                    }
                     _ => self.move_horizontal(if dir < 0.0 { -1 } else { 1 }),
                 }
             }
@@ -997,10 +1079,21 @@ impl ControlsPage {
                     SwitchId::InvertY(s) => self.edit_stick(s, |st| st.invert_y = on),
                     SwitchId::ToggleAll => self.overrides.assist.toggle_all = on,
                     SwitchId::ReplaceHolds => self.overrides.assist.replace_holds = on,
+                    SwitchId::LargeControls => {
+                        let t = TouchSettings {
+                            large_controls: on,
+                            ..self.overrides.touch
+                        };
+                        self.overrides.set_touch(t);
+                    }
                 }
                 out.changed = true;
             }
             Item::GlyphStyle => out.changed = self.cycle_style(1),
+            Item::StickMode => {
+                let fixed = self.overrides.touch.stick_mode == StickMode::Fixed;
+                out.changed = self.set_stick_mode(!fixed);
+            }
             Item::ResetTab => {
                 self.mode = Mode::Confirm {
                     reset: ResetKind::Tab,
@@ -1020,6 +1113,19 @@ impl ControlsPage {
         out
     }
 
+    /// Sets the touch stick to Fixed (else Floating). True when it changed.
+    fn set_stick_mode(&mut self, fixed: bool) -> bool {
+        let mut t = self.overrides.touch;
+        t.stick_mode = if fixed {
+            StickMode::Fixed
+        } else {
+            StickMode::Floating
+        };
+        let changed = t != self.overrides.touch;
+        self.overrides.set_touch(t);
+        changed
+    }
+
     fn edit_stick(&mut self, s: Stick, f: impl FnOnce(&mut StickSettings)) {
         let mut st = self.overrides.stick(s);
         f(&mut st);
@@ -1032,6 +1138,8 @@ impl ControlsPage {
             SliderId::Sensitivity(_) => 0.05,
             SliderId::Deadzone(_) => 0.02,
             SliderId::HoldScale => 0.25,
+            SliderId::TouchOpacity => 0.05,
+            SliderId::TouchSize => 0.1,
         };
         let next = ((v + dir * step) / step).round() * step;
         let next = next.clamp(lo, hi);
@@ -1055,6 +1163,20 @@ impl ControlsPage {
             SliderId::HoldScale => {
                 self.overrides.assist.hold_time_scale =
                     value.clamp(HOLD_SCALE_RANGE.0, HOLD_SCALE_RANGE.1);
+            }
+            SliderId::TouchOpacity => {
+                let t = TouchSettings {
+                    opacity: value,
+                    ..self.overrides.touch
+                };
+                self.overrides.set_touch(t);
+            }
+            SliderId::TouchSize => {
+                let t = TouchSettings {
+                    size: value,
+                    ..self.overrides.touch
+                };
+                self.overrides.set_touch(t);
             }
         }
         Outcome {
@@ -1477,6 +1599,9 @@ impl ControlsPage {
             ResetKind::Tab => {
                 match self.tab.device() {
                     Some(d) => rebind::reset_device(&mut self.overrides, d),
+                    None if self.tab == Tab::Touch => {
+                        self.overrides.touch = TouchSettings::default()
+                    }
                     None => {
                         self.overrides.assist = Default::default();
                         for a in self.overrides.actions.values_mut() {

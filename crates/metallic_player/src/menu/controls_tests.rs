@@ -26,7 +26,7 @@ fn focus(p: &mut ControlsPage, want: &Item) {
     let moves = |p: &ControlsPage| {
         !matches!(
             p.focused_item(),
-            Some(Item::Slider(_)) | Some(Item::GlyphStyle)
+            Some(Item::Slider(_)) | Some(Item::GlyphStyle) | Some(Item::StickMode)
         )
     };
     for _ in 0..80 {
@@ -211,9 +211,11 @@ fn tabs_cycle_and_the_hold_switch_toggles() {
     p.nav(Nav::NextTab);
     assert_eq!(p.tab(), Tab::Assist);
     p.nav(Nav::NextTab);
+    assert_eq!(p.tab(), Tab::Touch);
+    p.nav(Nav::NextTab);
     assert_eq!(p.tab(), Tab::Keyboard);
     p.nav(Nav::PrevTab);
-    assert_eq!(p.tab(), Tab::Assist);
+    assert_eq!(p.tab(), Tab::Touch);
     p.set_tab(Tab::Keyboard);
     let hold = Item::Hold(RUN.into());
     focus(&mut p, &hold);
@@ -254,4 +256,67 @@ fn overrides_for_unknown_actions_never_break_the_rows() {
     }
     assert!(p.toggles(RUN), "toggle every hold applies to Run");
     assert!(!p.toggles("Gone/Action") || p.base().action("Gone/Action").is_none());
+}
+
+/// #333: the Touch tab, by keyboard or gamepad only: stick mode, opacity and button size.
+#[test]
+fn the_touch_tab_sets_stick_opacity_and_size() {
+    use metallic_runtime::input::touch::StickMode;
+    let mut p = page();
+    for _ in 0..3 {
+        p.nav(Nav::NextTab);
+    }
+    assert_eq!(p.tab(), Tab::Touch);
+    let settings: Vec<_> = p
+        .rows()
+        .iter()
+        .filter_map(|r| match r.kind {
+            RowKind::Setting(name, _) => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        settings,
+        ["Stick", "Opacity", "Button size", "Large controls"]
+    );
+    // Stick: Right picks Fixed, Accept flips back, Left keeps Floating.
+    focus(&mut p, &Item::StickMode);
+    assert!(p.nav(Nav::Right).changed);
+    assert_eq!(p.touch().stick_mode, StickMode::Fixed);
+    assert!(!p.nav(Nav::Right).changed, "already Fixed");
+    assert!(p.nav(Nav::Accept).changed);
+    assert_eq!(p.touch().stick_mode, StickMode::Floating);
+    assert!(p.nav(Nav::Right).changed);
+    // Opacity: 5% steps, 25% to 100%.
+    focus(&mut p, &Item::Slider(SliderId::TouchOpacity));
+    assert!(!p.nav(Nav::Right).changed, "starts at 100%");
+    assert!(p.nav(Nav::Left).changed);
+    let (v, _, text) = p.slider(SliderId::TouchOpacity);
+    assert!((v - 0.95).abs() < 1e-4 && text == "95%", "{v} {text}");
+    for _ in 0..40 {
+        p.nav(Nav::Left);
+    }
+    assert_eq!(p.touch().opacity, 0.25, "clamped");
+    // Button size: 10% steps, 80% to 150%.
+    focus(&mut p, &Item::Slider(SliderId::TouchSize));
+    assert!(p.nav(Nav::Right).changed);
+    assert!((p.touch().size - 1.1).abs() < 1e-4);
+    for _ in 0..20 {
+        p.nav(Nav::Right);
+    }
+    assert_eq!(p.touch().size, 1.5, "clamped");
+    // Large controls.
+    focus(&mut p, &Item::Switch(SwitchId::LargeControls));
+    assert!(p.nav(Nav::Accept).changed);
+    assert!(p.touch().large_controls);
+    // Saved with the other overrides.
+    let back = PlayerOverrides::from_json(&p.overrides().to_json("x")).unwrap();
+    assert_eq!(back.touch, p.touch());
+    // Reset this tab puts the touch settings back and nothing else.
+    focus(&mut p, &Item::ResetTab);
+    p.nav(Nav::Accept);
+    p.nav(Nav::Left);
+    assert!(p.nav(Nav::Accept).changed);
+    assert!(p.overrides().is_empty());
+    assert_eq!(p.toast().map(|t| t.text.as_str()), Some("Touch reset"));
 }

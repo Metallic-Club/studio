@@ -42,6 +42,17 @@ pub fn parse_emulation(name: &str) -> Option<DeviceProfile> {
     Some(if portrait { p.portrait() } else { p })
 }
 
+/// The GUI inset in points (#333): while the touch controls show, the ScreenGuis start below the
+/// menu button, with the usual 8 dp gap, so a top-centre game banner does not cover it.
+pub fn gui_inset(controls: &TouchControls, view: &Viewport, shown: bool, scale: f32) -> f32 {
+    let Some(menu) = controls.layout().menu.filter(|_| shown) else {
+        return 0.0;
+    };
+    let bottom_dp = menu.center[1] + menu.radius + 8.0;
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    (view.origin[1] + bottom_dp * view.px_per_dp) / scale
+}
+
 /// The window size for an emulated device, in physical pixels.
 pub fn emulation_window(profile: &DeviceProfile) -> (u32, u32) {
     let [w, h] = profile.size.map(f64::from);
@@ -321,8 +332,12 @@ impl TouchOverlay {
                 ..p
             }
         });
-        self.controls
-            .set_profile(profile.with_stick_mode(settings.stick_mode));
+        self.controls.set_profile(
+            profile
+                .with_stick_mode(settings.stick_mode)
+                .with_scale(settings.size)
+                .with_large(settings.large_controls),
+        );
         self.controls.set_px_per_dp(self.view.px_per_dp);
         self.controls.sync(rt, time);
         let shown = self.emulated.is_some() || rt.last_device() == DeviceKind::Touch;
@@ -338,6 +353,7 @@ impl TouchOverlay {
             self.controls.button_infos(shown, &mut self.infos);
             game.set_touch_buttons(&self.infos);
         }
+        game.set_gui_inset(gui_inset(&self.controls, &self.view, shown, scale));
     }
 
     /// A finger event in dp (input scripts, emulation).
@@ -577,6 +593,8 @@ mod tests {
         o.set_touch(TouchSettings {
             stick_mode: StickMode::Fixed,
             opacity: 0.5,
+            size: 1.2,
+            large_controls: true,
         });
         rt.set_overrides(o);
         let mut game = Game::from_world(
@@ -591,7 +609,46 @@ mod tests {
         );
         overlay.update(&mut rt, &mut game, (1600, 739), 1.0, 1.0, 0.016);
         assert_eq!(overlay.controls.profile().stick_mode, StickMode::Fixed);
+        assert!(overlay.controls.profile().large, "Large controls");
+        assert_eq!(overlay.controls.profile().scale, 1.2);
         assert_eq!(overlay.opacity, 0.5);
+    }
+
+    /// #333: while touch shows, the game's GUI starts below the menu button.
+    #[test]
+    fn the_gui_starts_below_the_menu_button_while_touch_shows() {
+        use metallic_runtime::input::InputConfig;
+        let game = || {
+            Game::from_world(
+                "t".into(),
+                metallic_core::World::new_with_services(),
+                std::rc::Rc::new(metallic_runtime::StdoutSink),
+            )
+        };
+        let mut rt = InputRuntime::new(&InputConfig::player_defaults());
+        let mut g = game();
+        let mut phone = TouchOverlay::new(
+            std::path::Path::new("."),
+            Some(DeviceProfile::phone()),
+            false,
+        );
+        phone.update(&mut rt, &mut g, (1600, 739), 2.0, 1.0, 0.016);
+        let menu = phone.controls.layout().menu.expect("the menu button");
+        let bottom = menu.center[1] + menu.radius + 8.0;
+        let want = (phone.view.origin[1] + bottom * phone.view.px_per_dp) / 2.0;
+        assert!(
+            (g.gui_inset() - want).abs() < 1e-3,
+            "{} vs {want}",
+            g.gui_inset()
+        );
+        assert!(g.gui_inset() > 0.0);
+        // On a desktop with the keyboard in use, the touch controls hide and the GUI has the
+        // whole screen.
+        let mut rt = InputRuntime::new(&InputConfig::player_defaults());
+        let mut g = game();
+        let mut desktop = TouchOverlay::new(std::path::Path::new("."), None, false);
+        desktop.update(&mut rt, &mut g, (1280, 720), 1.0, 1.0, 0.016);
+        assert_eq!(g.gui_inset(), 0.0);
     }
 
     #[test]

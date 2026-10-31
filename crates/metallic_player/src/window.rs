@@ -64,6 +64,7 @@ pub fn run(
             menu.show_tab(match page {
                 "gamepad" => crate::menu::Tab::Gamepad,
                 "assist" => crate::menu::Tab::Assist,
+                "touch" => crate::menu::Tab::Touch,
                 _ => crate::menu::Tab::Keyboard,
             });
         }

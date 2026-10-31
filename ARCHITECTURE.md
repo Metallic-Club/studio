@@ -263,8 +263,10 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
   screens). `TouchControls` captures each finger with the first thing it lands on and pushes `Device::Touch` events;
   sliding off a button sends `RawEvent::cancel` (Released without Triggered). `paint` draws it with egui in the
   visual-language colours. `ContextActionService:GetButton` reads the placed buttons (`Game::set_touch_buttons`).
-  The Controls page's touch settings (stick mode, opacity) drive the overlay; touch controls have their own glyphs.
-- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, a touch tab on the Controls page.
+  The Controls page's Touch tab (#333: stick mode, opacity, size 0.8x to 1.5x, Large controls) drives the overlay;
+  touch controls have their own glyphs. A held press whose action changes role is cancelled on reload. While touch
+  shows, `Game::set_gui_inset` moves the `ScreenGui` root below the menu button.
+- **Not yet** (later phases, spec section 15): Studio panel (#253), Luau glyph API, swap sides and Edit layout.
 
 ## Frame loop
 `Game::frame(input, dt)` applies camera orbit/zoom, then runs fixed 60 Hz ticks (an accumulator carries the remainder;

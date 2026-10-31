@@ -212,15 +212,22 @@ fn layout_keeps_every_rule_on_every_preset() {
     ];
     for (name, landscape) in presets {
         for (orient, profile) in [("landscape", landscape), ("portrait", landscape.portrait())] {
-            for large in [false, true] {
+            for (large, scale) in [(false, 1.0), (true, 1.0), (false, 0.8), (false, 1.5)] {
                 for n in 1..=6 {
                     let set = set_of(&config_n_buttons(n));
-                    let p = profile.with_large(large);
+                    let p = profile.with_large(large).with_scale(scale);
                     let l = layout(&p, &set);
-                    let what = format!("{name} {orient} large={large} buttons={n}");
+                    let what = format!("{name} {orient} large={large} x{scale} buttons={n}");
                     check_rules(&l, &what);
                     assert!(l.stick.is_some(), "{what}");
-                    if large {
+                    if scale != 1.0 {
+                        // Bigger controls may leave some out (spec 7.2); smaller ones all fit.
+                        assert!(!l.buttons.is_empty(), "{what}: the primary fits");
+                        assert_eq!(l.buttons.len() + l.unplaced.len(), n, "{what}");
+                        if scale < 1.0 {
+                            assert_eq!(l.buttons.len(), n, "{what}: all placed");
+                        }
+                    } else if large {
                         let min = if p.tablet { 151.0 } else { 94.0 };
                         for (_, r) in l.circles() {
                             assert!(2.0 * r >= min - 1e-3, "{what}: {} dp", 2.0 * r);
@@ -721,6 +728,49 @@ fn a_held_button_that_goes_away_is_cancelled() {
     assert!(r.events("Game/Fire").is_empty());
 }
 
+/// #333: a held button whose action changes its role is let go as a cancel, whether it stays a
+/// button (another icon) or becomes the menu button, and nothing stays pressed.
+#[test]
+fn a_role_change_cancels_a_held_press() {
+    use crate::input::Role;
+    use ActionEventKind::*;
+    for role in [Role::Menu, Role::Interact] {
+        let mut r = Rig::new(&fire_and_alt(0.0, ""));
+        let fire = r.button("Fire");
+        r.touch(1, TouchPhase::Down, fire.center);
+        r.events("Game/Fire");
+        let mut c = fire_and_alt(0.0, "");
+        c.contexts[1].actions[0].role = role;
+        r.relayout(&c);
+        assert_eq!(
+            r.events("Game/Fire"),
+            [Released, StateChanged],
+            "{role:?}: cancelled, no Triggered"
+        );
+        let id = r.rt.find_action("Game/Fire").unwrap();
+        assert!(!r.rt.bool(id), "{role:?}: not stuck");
+        assert_eq!(r.tc.capture_of(1), Some(Capture::Ignored));
+        assert!((0..TOUCH_BUTTON_SLOTS).all(|s| !r.tc.is_pressed(s)));
+        r.touch(1, TouchPhase::Up, fire.center);
+        assert!(
+            r.events("Game/Fire").is_empty(),
+            "{role:?}: the lift does nothing"
+        );
+        // The action works again from a new touch.
+        let b = match role {
+            Role::Menu => r.tc.layout().menu.unwrap(),
+            _ => r.button("Fire"),
+        };
+        r.touch(2, TouchPhase::Down, b.center);
+        r.touch(2, TouchPhase::Up, b.center);
+        assert!(
+            r.events("Game/Fire").contains(&Pressed),
+            "{role:?}: a new tap presses it"
+        );
+        assert!(!r.rt.bool(id));
+    }
+}
+
 #[test]
 fn a_stick_finger_sliding_over_a_button_keeps_the_stick() {
     let mut r = Rig::new(&InputConfig::character_controls());
@@ -945,14 +995,19 @@ fn touch_settings_are_saved_with_the_overrides() {
     use crate::input::PlayerOverrides;
     use crate::input::overrides::{TOUCH_OPACITY_RANGE, TouchSettings};
     let o = PlayerOverrides::from_json(
-        r#"{"version":1,"touch":{"stick":"Fixed","opacity":0.1,"later":true}}"#,
+        r#"{"version":1,"touch":{"stick":"Fixed","opacity":0.1,"size":9,"largeControls":true,"later":1}}"#,
     )
     .unwrap();
     assert_eq!(o.touch.stick_mode, StickMode::Fixed);
     assert_eq!(o.touch.opacity, TOUCH_OPACITY_RANGE.0, "clamped");
+    assert!(o.touch.large_controls);
+    assert_eq!(o.touch.size, 1.5, "clamped");
     let text = o.to_json("2026-10-30T00:00:00Z");
     assert!(
-        text.contains("\"stick\": \"Fixed\"") && text.contains("\"later\""),
+        text.contains("\"stick\": \"Fixed\"")
+            && text.contains("\"largeControls\": true")
+            && text.contains("\"size\": 1.5")
+            && text.contains("\"later\""),
         "{text}"
     );
     let mut p = PlayerOverrides::default();
@@ -960,6 +1015,7 @@ fn touch_settings_are_saved_with_the_overrides() {
     p.set_touch(TouchSettings {
         stick_mode: StickMode::Floating,
         opacity: 0.6,
+        ..TouchSettings::default()
     });
     assert!(!p.is_empty());
     let back = PlayerOverrides::from_json(&p.to_json("x")).unwrap();
