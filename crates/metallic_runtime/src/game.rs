@@ -17,7 +17,7 @@ use metallic_render::glam::Vec3 as GVec3;
 use metallic_render::{Camera, Renderer};
 use metallic_script::{
     InputActionEvent, InputDevice, InputEventKind, InputValue, LOCAL_PLAYER_NAME, OutputSink,
-    ScriptHost,
+    ScriptHost, TouchButtonInfo,
 };
 use std::cell::RefCell;
 use std::path::Path;
@@ -394,6 +394,18 @@ impl Game {
             Some((_, avatar)) => renderer.set_skinned(&[avatar.instance()]),
             None => renderer.set_skinned(&[]),
         }
+    }
+
+    /// Tells the scripts where the touch overlay's buttons are, for
+    /// `ContextActionService:GetButton` (see
+    /// [`TouchControls::button_infos`](crate::input::touch::TouchControls::button_infos)).
+    pub fn set_touch_buttons(&mut self, buttons: &[TouchButtonInfo]) {
+        self.scripts.set_touch_buttons(buttons);
+    }
+
+    /// Sets `UserInputService.TouchEnabled`, `KeyboardEnabled` and `GamepadEnabled`.
+    pub fn set_input_devices(&mut self, touch: bool, keyboard: bool, gamepad: bool) {
+        self.scripts.set_input_devices(touch, keyboard, gamepad);
     }
 
     /// Draws the local player's GUI with `painter` (see [`crate::gui`]).

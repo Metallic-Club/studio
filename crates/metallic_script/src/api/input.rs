@@ -21,7 +21,7 @@ use mlua::{
     UserDataRef, Value, Variadic,
 };
 
-use super::datatypes::{LuaVector2, LuaVector3, udim2};
+use super::datatypes::{LuaUDim2, LuaVector2, LuaVector3, udim2};
 use super::errors;
 use super::signals::{EventKind, LuaSignal};
 use super::{ApiState, lua_error};
@@ -150,6 +150,13 @@ pub const KEY_CODES: &[&str] = &[
     "TouchStick",
     "TouchLook",
     "TouchButton",
+    "TouchButton1",
+    "TouchButton2",
+    "TouchButton3",
+    "TouchButton4",
+    "TouchButton5",
+    "TouchButton6",
+    "TouchButton7",
 ];
 
 /// First and last keyboard key of [`KEY_CODES`] (what `UserInputType.Keyboard` binds).
@@ -254,6 +261,24 @@ pub struct BoundResult {
     pub sink: bool,
 }
 
+/// One on-screen touch button as the host's touch overlay placed it, for
+/// `ContextActionService:GetButton` (docs/design/input-actions.md section 7).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TouchButtonInfo {
+    /// The `InputAction` the button presses.
+    pub action: InstanceId,
+    /// Top-left corner in dp from the top-left of the screen.
+    pub position: [f32; 2],
+    /// Width and height in dp.
+    pub size: [f32; 2],
+    /// The text under the button.
+    pub title: String,
+    /// The button's image (`TouchImage`); empty when it draws an icon.
+    pub image: String,
+    /// The overlay is showing (the last input was touch).
+    pub visible: bool,
+}
+
 /// What the scripts may read about devices.
 pub(crate) struct InputInfo {
     pub(crate) last: &'static str,
@@ -285,10 +310,13 @@ pub(crate) struct InputShared {
     /// `LastInputTypeChanged` waiting for the next step.
     pub(crate) type_changes: RefCell<Vec<&'static str>>,
     pub(crate) results: RefCell<Vec<BoundResult>>,
+    /// The touch overlay's buttons, as the host last reported them.
+    pub(crate) touch_buttons: RefCell<Vec<TouchButtonInfo>>,
 }
 
 impl InputShared {
     pub(crate) fn clear(&self) {
+        self.touch_buttons.borrow_mut().clear();
         self.events.borrow_mut().clear();
         self.states.borrow_mut().clear();
         self.type_changes.borrow_mut().clear();
@@ -1135,12 +1163,31 @@ impl LuaCas {
                 },
             )?,
         );
-        // There is no touch overlay yet, so there is no button to return.
+        // The touch overlay's button of a bound action: nil when the action was bound without
+        // `createTouchButton` or the overlay did not place it.
         methods.insert(
             "GetButton",
-            errors::guarded_fn(lua, |_, (this, _name): (UserDataRef<LuaCas>, Value)| {
+            errors::guarded_fn(lua, |lua, (this, name): (UserDataRef<LuaCas>, Value)| {
                 this.state.require_cas()?;
-                Ok(Value::Nil)
+                let Value::String(name) = name else {
+                    return Ok(Value::Nil);
+                };
+                let name = name.to_str()?.to_string();
+                let action = this.state.bound.borrow().get(&name).map(|b| b.action);
+                let placed = action.is_some_and(|a| {
+                    let buttons = this.state.shared.input.touch_buttons.borrow();
+                    buttons.iter().any(|b| b.action == a)
+                });
+                match action {
+                    Some(action) if placed => {
+                        Ok(Value::UserData(lua.create_userdata(LuaTouchButton {
+                            state: this.state.clone(),
+                            action,
+                            name,
+                        })?))
+                    }
+                    _ => Ok(Value::Nil),
+                }
             })?,
         );
         Ok(LuaCas {
@@ -1174,6 +1221,63 @@ impl UserData for LuaCas {
         methods.add_meta_method(MetaMethod::ToString, |_, _, ()| {
             Ok("ContextActionService".to_string())
         });
+    }
+}
+
+/// What `ContextActionService:GetButton` returns: a read-only view of a touch overlay button.
+/// The overlay is drawn by the Player, not by GUI instances, so this is not an `ImageButton`;
+/// its members follow the GUI names and read the overlay's current placement.
+pub(crate) struct LuaTouchButton {
+    state: Rc<ApiState>,
+    action: InstanceId,
+    name: String,
+}
+
+impl UserData for LuaTouchButton {
+    fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
+        fields.add_meta_field(MetaMethod::Type, "TouchButton");
+        fields.add_meta_field_with(MetaMethod::Index, |lua| {
+            errors::guarded_fn(
+                lua,
+                |lua, (this, key): (UserDataRef<LuaTouchButton>, String)| {
+                    let buttons = this.state.shared.input.touch_buttons.borrow();
+                    let info = buttons.iter().find(|b| b.action == this.action);
+                    let pos = info.map_or([0.0; 2], |b| b.position);
+                    let size = info.map_or([0.0; 2], |b| b.size);
+                    let v2 = |v: [f32; 2]| -> mlua::Result<Value> {
+                        let v = LuaVector2([f64::from(v[0]), f64::from(v[1])]);
+                        Ok(Value::UserData(lua.create_userdata(v)?))
+                    };
+                    let ud = |v: [f32; 2]| -> mlua::Result<Value> {
+                        let u =
+                            metallic_core::UDim2::new(0.0, f64::from(v[0]), 0.0, f64::from(v[1]));
+                        Ok(Value::UserData(lua.create_userdata(LuaUDim2(u))?))
+                    };
+                    match key.as_str() {
+                        "Name" => Ok(Value::String(lua.create_string(&this.name)?)),
+                        "ClassName" => Ok(Value::String(lua.create_string("TouchButton")?)),
+                        "AbsolutePosition" => v2(pos),
+                        "AbsoluteSize" => v2(size),
+                        "Position" => ud(pos),
+                        "Size" => ud(size),
+                        "Text" | "Title" => Ok(Value::String(
+                            lua.create_string(info.map_or("", |b| b.title.as_str()))?,
+                        )),
+                        "Image" => Ok(Value::String(
+                            lua.create_string(info.map_or("", |b| b.image.as_str()))?,
+                        )),
+                        "Visible" => Ok(Value::Boolean(info.is_some_and(|b| b.visible))),
+                        other => Err(lua_error(format!(
+                            "{other} is not a valid member of TouchButton"
+                        ))),
+                    }
+                },
+            )
+        });
+    }
+
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method(MetaMethod::ToString, |_, this, ()| Ok(this.name.clone()));
     }
 }
 

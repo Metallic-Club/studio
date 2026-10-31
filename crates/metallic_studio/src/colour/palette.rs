@@ -78,7 +78,12 @@ impl RecentColours {
         };
         let result = toml::to_string(&body)
             .map_err(|e| e.to_string())
-            .and_then(|text| write_atomic(file, &text).map_err(|e| e.to_string()));
+            .and_then(|text| {
+                if let Some(parent) = file.parent() {
+                    crate::data_dirs::create_owned(parent).map_err(|e| e.to_string())?;
+                }
+                write_atomic(file, &text).map_err(|e| e.to_string())
+            });
         if let Err(e) = result {
             log::warn!("could not save recent colours: {e}");
         }
