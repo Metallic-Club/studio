@@ -18,7 +18,6 @@ use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
 use crate::context_bar::ContextBar;
-use crate::debugger::ProfilerPanel;
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
 use crate::explorer::{Explorer, PlayTree};
 use crate::hints::{HintEvent, Hints};
@@ -26,6 +25,7 @@ use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
 use crate::panel;
 use crate::play::input::PlayInput;
+use crate::profiler::ProfilerPanel;
 use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
 use crate::theme;

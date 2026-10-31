@@ -22,7 +22,7 @@ Status: in progress, split into three PRs (all branches from main).
 
 ## PR 2
 
-- Studio: `debugger/profiler_view.rs` (`ProfilerPanel`), a Profiler tab beside Output (View > Profiler). Record,
+- Studio: `profiler/profiler_view.rs` (`ProfilerPanel`), a Profiler tab beside Output (View > Profiler). Record,
   pause or resume, stop, clear; a frame graph stacked by subsystem with 60 and 30 fps lines (a click pauses on that
   frame); subsystem and GPU stage times, a scope timeline, and script times sorted by time or name. Colours come
   from theme tokens. `--scene profiler` plays the demo Parkour and pauses at frame 150 for review screenshots.

@@ -4,8 +4,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use metallic_core::World;
 use metallic_profiler::{Profiler, Subsystem};
-use metallic_studio::debugger::ProfilerPanel;
-use metallic_studio::debugger::profiler_view::ScriptOrder;
+use metallic_studio::profiler::ProfilerPanel;
+use metallic_studio::profiler::profiler_view::ScriptOrder;
 
 /// Records `n` frames on this thread: physics, scripts (one named script) and render scopes.
 fn record(n: usize, script: u64) {
