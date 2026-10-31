@@ -449,6 +449,7 @@ impl Enums {
             ("ContextActionPriority", CONTEXT_ACTION_PRIORITIES.to_vec()),
             ("RotationOrder", named(&ROTATION_ORDERS)),
             ("NormalId", named(&NORMAL_IDS)),
+            ("CameraType", named(metallic_core::classes::CAMERA_TYPES)),
         ];
         let table = lua.create_table()?;
         let mut items = HashMap::new();

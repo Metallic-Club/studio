@@ -336,6 +336,11 @@ pub(crate) fn lua_to_value(value: &Value, ty: ValueType, prop: &str) -> mlua::Re
         (ValueType::String, Value::String(s)) => Some(CoreValue::String(
             String::from_utf8_lossy(&s.as_bytes()).into_owned(),
         )),
+        // An enum item named like the property (`part.Material = Enum.Material.Glass`,
+        // `camera.CameraType = Enum.CameraType.Scriptable`) stores its name.
+        (ValueType::String, v) if super::input::enum_item(v).is_some_and(|(e, _, _)| e == prop) => {
+            super::input::enum_item(v).map(|(_, name, _)| CoreValue::String(name.to_string()))
+        }
         (ValueType::Vector3, v) => vector(v).map(CoreValue::Vector3),
         (ValueType::Color3, v) => color(v).map(CoreValue::Color3),
         (ValueType::UDim2, v) => udim2(v).map(CoreValue::UDim2),

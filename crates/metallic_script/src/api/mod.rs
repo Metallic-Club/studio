@@ -7,6 +7,7 @@
 //! collects what to call, releases the borrow and only then calls into Lua.
 
 mod attributes;
+mod camera;
 mod cframe;
 mod datatypes;
 mod errors;
@@ -50,6 +51,22 @@ pub(crate) struct HostShared {
     pub(crate) local_player: Cell<Option<InstanceId>>,
     /// Input events, action states and device flags pushed by the host.
     pub(crate) input: input::InputShared,
+    /// The viewport the camera maths use, in pixels (zero until the host reports it).
+    pub(crate) viewport: Cell<[f64; 2]>,
+    /// The GUI inset in pixels, for the `Screen` camera methods.
+    pub(crate) gui_inset: Cell<f64>,
+}
+
+impl HostShared {
+    /// The viewport size, [`camera::DEFAULT_VIEWPORT`] until the host reports one.
+    pub(crate) fn viewport_size(&self) -> [f64; 2] {
+        let v = self.viewport.get();
+        if v[0] > 0.0 && v[1] > 0.0 {
+            v
+        } else {
+            camera::DEFAULT_VIEWPORT
+        }
+    }
 }
 
 /// Everything the API functions of one VM need.
@@ -147,6 +164,7 @@ fn build(
     raw.extend(input::action_methods(lua)?);
     raw.extend(attributes::methods(lua)?);
     raw.extend(tags::methods(lua)?);
+    raw.extend(camera::methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
         let function = if name == "WaitForChild" {
@@ -198,6 +216,7 @@ fn build(
     )
     .map_err(to_err)?;
     set("CFrame", mlua::Value::Table(cframe::constructor(lua)?)).map_err(to_err)?;
+    set("Ray", mlua::Value::Table(camera::ray_constructor(lua)?)).map_err(to_err)?;
     for (name, table) in datatypes::constructors(lua)? {
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }

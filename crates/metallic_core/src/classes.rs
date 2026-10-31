@@ -59,6 +59,10 @@ pub const TOUCH_LAYOUTS: &[&str] = &["Auto", "Custom"];
 /// `Lighting.LightingStyle` values.
 pub const LIGHTING_STYLES: &[&str] = &["Realistic", "Soft"];
 
+/// `Camera.CameraType` values. `Custom` is the game's own camera; `Scriptable` and `Fixed` leave
+/// the camera to the script's `CFrame` and `FieldOfView`.
+pub const CAMERA_TYPES: &[&str] = &["Custom", "Scriptable", "Fixed"];
+
 /// `ColorGradingEffect.TonemapperPreset` values. `Default` and `Retro` are Roblox's names; the
 /// rest are Metallic additions (`docs/research/2026-10-30-lighting.md` 5.4). `Default` follows
 /// the Look's curve (AgX Punchy under Realistic); `AgXPunchy` names that curve explicitly
@@ -754,6 +758,37 @@ static CLASSES: &[ClassDef] = &[
     class("RemoteFunction", "Instance", &[]),
     class("UnreliableRemoteEvent", "Instance", &[]),
     class("PlayerScripts", "Instance", &[]),
+    // The camera `workspace.CurrentCamera` returns. While `CameraType` is `Custom` the game's
+    // own camera publishes its pose here every frame; with `Scriptable` (or `Fixed`) the
+    // script's `CFrame` and `FieldOfView` are the camera.
+    class(
+        "Camera",
+        "Instance",
+        &[
+            // Each client has its own camera: nothing here is sent to a player.
+            PropDef {
+                repl: Repl::ServerOnly,
+                ..p("CFrame", ValueType::CFrame, || {
+                    Value::CFrame(Box::new(CFrame::IDENTITY))
+                })
+            },
+            PropDef {
+                repl: Repl::ServerOnly,
+                ..num("FieldOfView", || Value::Number(70.0), 1.0, 120.0)
+            },
+            PropDef {
+                name: "CameraType",
+                ty: ValueType::String,
+                default: || Value::String("Custom".into()),
+                allowed: Some(CAMERA_TYPES),
+                range: None,
+                hidden: false,
+                normalize: None,
+                normalize_schema_id: None,
+                repl: Repl::ServerOnly,
+            },
+        ],
+    ),
 ];
 
 /// Looks up a class by name.
@@ -825,6 +860,7 @@ fn class_slot(name: &str) -> Option<usize> {
         "RemoteFunction" => 39,
         "UnreliableRemoteEvent" => 40,
         "PlayerScripts" => 41,
+        "Camera" => 42,
         _ => return None,
     })
 }
