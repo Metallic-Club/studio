@@ -258,6 +258,8 @@ fn luma(c: [f32; 3]) -> f32 {
     c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2]
 }
 
+// AgX minimal fit, ported from Benjamin Wrensch's "Minimal AgX Implementation" (MIT,
+// Copyright (c) 2024 Missing Deadlines (Benjamin Wrensch)); see LICENSES/THIRD-PARTY-CODE.md.
 const AGX_INSET: [[f32; 3]; 3] = [
     [0.842_479, 0.042_328_24, 0.042_375_65],
     [0.078_433_6, 0.878_468_6, 0.078_433_6],
@@ -292,6 +294,9 @@ fn agx(c: [f32; 3], punchy: bool) -> [f32; 3] {
     mul_cols(AGX_OUTSET, c).map(|v| v.clamp(0.0, 1.0).powf(2.2))
 }
 
+/// Khronos PBR Neutral, ported from the Khronos reference (KhronosGroup/ToneMapping,
+/// `PBR_Neutral/pbrNeutral.glsl`). Copyright (c) The Khronos Group Inc., Apache License 2.0
+/// (`LICENSES/Apache-2.0.txt`, notice in `LICENSES/THIRD-PARTY-CODE.md`). Modified: GLSL to Rust.
 fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
     const START: f32 = 0.8 - 0.04;
     const DESAT: f32 = 0.15;
@@ -311,6 +316,8 @@ fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
     })
 }
 
+// Stephen Hill's ACES fit, ported from Baking Lab (MIT, Copyright (c) 2016 MJP); see
+// LICENSES/THIRD-PARTY-CODE.md.
 const ACES_IN: [[f32; 3]; 3] = [
     [0.59719, 0.35458, 0.04823],
     [0.07600, 0.90834, 0.01566],

@@ -281,6 +281,8 @@ static CLASSES: &[ClassDef] = &[
             p("AutoExposure", ValueType::Bool, || Value::Bool(true)),
             num("ExposureMin", || Value::Number(-4.0), -10.0, 20.0),
             num("ExposureMax", || Value::Number(16.0), -10.0, 20.0),
+            // EV added only while metering, so a look can match with auto exposure on and off.
+            num("AutoExposureBias", || Value::Number(0.0), -5.0, 5.0),
         ],
     ),
     class("RunService", "Instance", &[]),

@@ -3,9 +3,11 @@
 //!
 //! The lighting already pre-exposes the scene on the CPU (the sky table's exposure for the sun
 //! elevation, `ExposureCompensation` and the night bias: the `Fixed` mode). With auto exposure
-//! on, two compute passes after each frame build a centre-weighted 256-bin log-luminance
-//! histogram of the HDR image the finish pass read, average the 30%..95% band, and turn it into
-//! an EV100 that adapts over time. The result is a multiplier on top of the CPU pre-exposure,
+//! on, two compute passes after the scene build a centre-weighted 256-bin log-luminance
+//! histogram of the HDR scene image (before bloom and the other HDR passes), average the
+//! 30%..95% band, and turn it into an EV100 that adapts over time. Pixels with alpha below 0.5
+//! are skipped: toon shading writes alpha 0, because it picks display colours through the
+//! exposure (`unfinish`), so its light depends on the meter's own output. The result is a multiplier on top of the CPU pre-exposure,
 //! which the next frame copies into its uniforms (the finish pass and toon shading read it), so
 //! metering never reads back to the CPU. `docs/research/2026-10-30-lighting.md` 3.9 and 5.5.
 /// Lowest histogram bin edge, log2 of pre-exposed luminance.
@@ -43,7 +45,7 @@ pub struct AutoExposure {
     pub min_ev100: f32,
     /// Highest metered EV100 (the brightest scene that still gets darker).
     pub max_ev100: f32,
-    /// EV added after metering.
+    /// EV added after metering (`ExposureCompensation` plus `AutoExposureBias`).
     pub compensation: f32,
     /// 0..1: strength of the night bias.
     pub night_adaptation: f32,
@@ -121,9 +123,11 @@ pub(crate) struct ExposureGpu {
     histogram: wgpu::Buffer,
     /// [`ExposureState`]; `multiplier` (offset 0) is copied into the frame uniforms.
     pub state: wgpu::Buffer,
-    /// Bind groups per HDR target index, for the targets generation in `groups_targets`.
-    groups: [Option<wgpu::BindGroup>; 2],
-    groups_targets: u64,
+    /// The live state while a capture meters its own still.
+    saved: wgpu::Buffer,
+    /// Bind group for the scene target of the targets generation in `group_targets`.
+    group: Option<wgpu::BindGroup>,
+    group_targets: u64,
 }
 
 impl ExposureGpu {
@@ -210,12 +214,41 @@ impl ExposureGpu {
                 std::mem::size_of::<ExposureState>() as u64,
                 U::STORAGE | U::COPY_SRC | U::COPY_DST,
             ),
-            groups: [None, None],
-            groups_targets: u64::MAX,
+            saved: buffer(
+                "metallic exposure saved state",
+                std::mem::size_of::<ExposureState>() as u64,
+                U::COPY_SRC | U::COPY_DST,
+            ),
+            group: None,
+            group_targets: u64::MAX,
         }
     }
 
-    /// Records the two compute passes on `hdr` (HDR target `index` of targets generation
+    fn copy(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        from: &wgpu::Buffer,
+        to: &wgpu::Buffer,
+    ) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("metallic exposure save"),
+        });
+        encoder.copy_buffer_to_buffer(from, 0, to, 0, std::mem::size_of::<ExposureState>() as u64);
+        queue.submit(Some(encoder.finish()));
+    }
+
+    /// Keeps the live state aside (before a capture meters its own still).
+    pub(crate) fn save(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.copy(device, queue, &self.state, &self.saved);
+    }
+
+    /// Puts the state kept by [`ExposureGpu::save`] back.
+    pub(crate) fn restore(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.copy(device, queue, &self.saved, &self.state);
+    }
+
+    /// Records the two compute passes on `hdr` (the scene target of targets generation
     /// `targets`). The image is pre-exposed by `base_exposure` (the lighting's fixed exposure)
     /// and the finish multiplies it by `image_scale` before the curve (sky and finish exposure,
     /// not the curve pre-scale); the multiplier comes on top of both.
@@ -226,7 +259,6 @@ impl ExposureGpu {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         hdr: &wgpu::TextureView,
-        index: usize,
         targets: u64,
         size: (u32, u32),
         settings: &AutoExposure,
@@ -236,11 +268,11 @@ impl ExposureGpu {
         dt: f32,
         reset: bool,
     ) {
-        if self.groups_targets != targets {
-            self.groups = [None, None];
-            self.groups_targets = targets;
+        if self.group_targets != targets {
+            self.group = None;
+            self.group_targets = targets;
         }
-        let group = self.groups[index].get_or_insert_with(|| {
+        let group = self.group.get_or_insert_with(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("metallic exposure"),
                 layout: &self.layout,

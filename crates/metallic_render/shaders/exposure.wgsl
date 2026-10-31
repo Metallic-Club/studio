@@ -1,7 +1,8 @@
 // Histogram auto exposure (#151), after the research prototype in
-// `docs/research/lighting-shaders/exposure_histogram.wgsl`. Two compute passes after the finish:
-//   1. build_histogram: 16x16 tiles over the HDR image the finish pass read, 256 log2-luminance
-//      bins, centre-weighted, workgroup atomics then one global add per bin.
+// `docs/research/lighting-shaders/exposure_histogram.wgsl`. Two compute passes after the scene:
+//   1. build_histogram: 16x16 tiles over the HDR scene image (before the HDR post passes), 256
+//      log2-luminance bins, centre-weighted, workgroup atomics then one global add per bin.
+//      Pixels with alpha below 0.5 (toon shading, whose light follows the exposure) are skipped.
 //   2. resolve_exposure: one 256-thread workgroup. Ignores the darkest 30% and the brightest 5% of
 //      the weighted pixels, log-averages the rest, turns it into EV100, clamps, adapts over time
 //      (faster toward bright), applies the night bias and compensation, and writes the multiplier
@@ -77,8 +78,11 @@ fn build_histogram(
 
     let size = textureDimensions(hdr_tex);
     if (gid.x < size.x && gid.y < size.y) {
-        let c = textureLoad(hdr_tex, vec2<i32>(gid.xy), 0).rgb;
-        let lum = dot(c, EXPOSURE_LUMA);
+        let px = textureLoad(hdr_tex, vec2<i32>(gid.xy), 0);
+        var lum = dot(px.rgb, EXPOSURE_LUMA);
+        if (!(px.a >= 0.5)) {
+            lum = 0.0;
+        }
         // Centre weight 1..4 (integers keep the atomics exact): players look at the middle.
         let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(size) - 0.5;
         let w = 1u + u32(3.0 * exp(-dot(uv, uv) / (2.0 * 0.25 * 0.25)) + 0.5);

@@ -1063,14 +1063,17 @@ impl Renderer {
             self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
             self.draw_blended(&mut pass);
         }
-        let metered = self.post_and_finish(&mut encoder, target, camera, keep_depth);
-        self.meter_frame(&mut encoder, metered);
+        // Meter the scene before the HDR passes: they may rewrite alpha, which marks toon
+        // pixels the meter must skip.
+        self.meter_frame(&mut encoder);
+        self.post_and_finish(&mut encoder, target, camera, keep_depth);
         self.queue.submit(Some(encoder.finish()));
     }
 
     /// Copies the meter's multiplier into this frame's uniforms (recorded before any pass).
+    /// Skipped while a reset is pending: that frame uses the fixed exposure, not a stale one.
     fn apply_exposure(&self, encoder: &mut wgpu::CommandEncoder) {
-        if !self.auto_exposure_active() {
+        if !self.auto_exposure_active() || self.meter_reset {
             return;
         }
         if let Some(meter) = &self.meter {
@@ -1085,19 +1088,20 @@ impl Renderer {
         }
     }
 
-    /// Meters HDR target `index` (the image the finish pass read) for the next frame.
-    fn meter_frame(&mut self, encoder: &mut wgpu::CommandEncoder, index: Option<usize>) {
-        let Some(index) = index else {
-            return;
-        };
+    /// Meters the scene image (HDR target 0, before the HDR passes) for the next frame. Toon
+    /// pixels (alpha 0) are skipped: their light is chosen through the exposure, so metering
+    /// them would feed the meter its own output.
+    fn meter_frame(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if !self.auto_exposure_active() {
+            // Turning metering back on starts from the target, not a stale state.
             self.meter_last = None;
+            self.meter_reset = true;
             return;
         }
         let Some((hdr, size)) = self
             .attachments
             .as_ref()
-            .and_then(|a| Some((a.hdr[index].clone()?, a.size)))
+            .and_then(|a| Some((a.hdr[0].clone()?, a.size)))
         else {
             return;
         };
@@ -1116,7 +1120,6 @@ impl Renderer {
             &self.queue,
             encoder,
             &hdr,
-            index,
             self.targets,
             size,
             &self.auto_exposure,
@@ -1129,15 +1132,17 @@ impl Renderer {
     }
 
     /// Runs the HDR passes, the finish pass and the LDR passes; the last of them writes
-    /// `target`. Returns the HDR target the finish pass read (`None` when it did not run).
+    /// `target`.
     fn post_and_finish(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         camera: &Camera,
         keep_depth: bool,
-    ) -> Option<usize> {
-        let att = self.attachments.as_ref()?;
+    ) {
+        let Some(att) = self.attachments.as_ref() else {
+            return;
+        };
         let size = att.size;
         let samples = self.settings.samples();
         let mut chain = std::mem::take(&mut self.post);
@@ -1173,7 +1178,6 @@ impl Renderer {
         let uniform = FinishUniform::new(&self.finish, self.sky.exposure, finish_format.is_srgb());
         self.queue
             .write_buffer(&self.finish_gpu.uniform, 0, bytemuck::bytes_of(&uniform));
-        let finished = att.finish_groups[cur].as_ref().map(|_| cur);
         if let Some(group) = &att.finish_groups[cur] {
             let pipeline = self.finish_gpu.pipeline(&self.device, finish_format);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1225,7 +1229,6 @@ impl Renderer {
             cur = 1 - cur;
         }
         self.post = chain;
-        finished
     }
 
     fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -1328,13 +1331,25 @@ impl Renderer {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         if self.auto_exposure_active() {
-            // A still: meter this view first, then render it with the converged exposure, so
-            // the same inputs always give the same image.
+            // A still: meter this view on its own state first, then render it with the
+            // converged exposure, so the same inputs always give the same image. The live
+            // adaptation is saved and restored around it.
+            let saved = (self.meter_reset, self.meter_dt, self.meter_last);
+            let meter = self
+                .meter
+                .get_or_insert_with(|| ExposureGpu::new(&self.device));
+            meter.save(&self.device, &self.queue);
             self.meter_reset = true;
             self.render(&view, camera, size);
             self.meter_dt = Some(0.0);
+            self.render(&view, camera, size);
+            if let Some(meter) = &self.meter {
+                meter.restore(&self.device, &self.queue);
+            }
+            (self.meter_reset, self.meter_dt, self.meter_last) = saved;
+        } else {
+            self.render(&view, camera, size);
         }
-        self.render(&view, camera, size);
 
         let row_bytes = w * 4;
         let padded = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);

@@ -1,30 +1,48 @@
-//! Auto exposure and tone curve tests (#151): the histogram meter converges on bright and dark
-//! scenes and adapts faster toward light, NaN and infinite light cannot poison it or the finish
-//! pass, the curves match their published references on the CPU and the GPU, and Looks pick
-//! their curve and exposure mode.
+//! Auto exposure and tone curve tests (#151):
+//! - the histogram meter converges on bright and dark scenes and adapts faster toward light;
+//! - toon pixels (whose light follows the exposure) never feed back into it;
+//! - re-enabling it and taking captures leave the live adaptation sane;
+//! - presets keep their #149 brightness with metering on and off;
+//! - NaN and infinite light cannot poison the meter or the finish pass;
+//! - the curves match their published references on the CPU and the GPU;
+//! - Looks pick their curve and exposure mode.
 //!
-//! References, written from the public descriptions (no code copied):
+//! The meter reads the scene, so its tests use a flat sky (every pixel the same linear value);
+//! the finish-pass tests replace the image with an HDR post pass ([`Source`]).
+//!
+//! Curve references, written from the public descriptions (no code copied; credits and licences
+//! in `LICENSES/THIRD-PARTY-CODE.md`):
 //! - AgX: Troy Sobotka's AgX, in the minimal polynomial form Benjamin Wrensch published for the
-//!   iolite engine ("Minimal AgX Implementation", 2023): inset matrix, log2 encoding over
+//!   iolite engine ("Minimal AgX Implementation", MIT): inset matrix, log2 encoding over
 //!   -12.47393..4.026069 EV, a 6th-order polynomial, outset matrix, 2.2 power. The Punchy look
 //!   is an ASC CDL power 1.35 and saturation 1.4 (ASC CDL v1.2: Rec. 709 luma of the
 //!   slope-offset-power result).
 //! - Khronos PBR Neutral: the specification in the KhronosGroup/ToneMapping repository
-//!   (start of compression 0.76, desaturation 0.15, toe offset 0.04 below 0.08).
+//!   (Apache-2.0; start of compression 0.76, desaturation 0.15, toe offset 0.04 below 0.08).
 //! - Clamp: identity, clipped to 0..1.
 mod support;
 
+use metallic_core::Value;
 use metallic_core::lighting::{PRESETS, apply_preset};
 use metallic_render::exposure::{METER_KEY_LOG2, REFERENCE_EV100};
+use metallic_render::glam::Vec3;
 use metallic_render::lighting::evaluate;
 use metallic_render::{
-    AutoExposure, Camera, ExposureMode, FinishSettings, FullscreenPass, LightingInputs, LookTone,
-    PostContext, PostPass, PostSlot, Quality, RenderContext, RenderSettings, Renderer, ToneCurve,
+    AutoExposure, Camera, ExposureMode, ExposureState, FinishSettings, FullscreenPass,
+    LightingInputs, LookTone, PostContext, PostPass, PostSlot, Quality, RenderContext,
+    RenderSettings, Renderer, ToneCurve,
 };
-use support::reference_scene::{reference_camera, reference_world};
+use support::reference_scene::{lumas, reference_camera, reference_world, stats};
 
 const SIZE: (u32, u32) = (160, 90);
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+/// One GPU test at a time: a GL device metering while other devices in the same process
+/// render deadlocks inside the driver stack (seen on Windows), so these tests take turns.
+fn gpu() -> std::sync::MutexGuard<'static, ()> {
+    static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GPU.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn context() -> Option<RenderContext> {
     match RenderContext::new_headless() {
@@ -46,8 +64,69 @@ fn renderer_on(ctx: &RenderContext) -> Renderer {
     )
 }
 
+/// Level with the horizon: under a flat sky every pixel is the sky value.
 fn camera() -> Camera {
-    reference_camera()
+    Camera {
+        position: Vec3::new(0.0, 5.0, 0.0),
+        look_at: Vec3::new(0.0, 5.0, -10.0),
+        fov_deg: 60.0,
+    }
+}
+
+/// Sky colours above the horizon (`zenith`) and at and below it (`rest`), sun out of view.
+fn set_sky(r: &mut Renderer, zenith: [f32; 3], rest: [f32; 3]) {
+    r.sky.zenith = zenith;
+    r.sky.horizon = rest;
+    r.sky.ground = rest;
+    r.sky.to_sun = Vec3::new(0.0, -1.0, 0.0);
+}
+
+fn flat(r: &mut Renderer, l: f32) {
+    set_sky(r, [l; 3], [l; 3]);
+}
+
+/// A renderer under the default lighting (no fog, no bloom) showing a flat sky of grey `l`.
+fn flat_renderer(ctx: &RenderContext, l: f32) -> Renderer {
+    let mut r = renderer_on(ctx);
+    r.set_lighting(&LightingInputs {
+        atmosphere: None,
+        ..LightingInputs::default()
+    });
+    r.post_mut().remove("bloom");
+    flat(&mut r, l);
+    r
+}
+
+/// Renders one frame (no capture) with time step `dt` at `size`.
+fn frame_at(ctx: &RenderContext, r: &mut Renderer, cam: &Camera, size: (u32, u32), dt: f32) {
+    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test frame"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    r.set_frame_time(dt);
+    r.render(&view, cam, size);
+}
+
+fn frame(ctx: &RenderContext, r: &mut Renderer, dt: f32) {
+    frame_at(ctx, r, &camera(), SIZE, dt);
+}
+
+/// Meters the current view from scratch (a cut) and returns the state.
+fn meter_now(ctx: &RenderContext, r: &mut Renderer) -> ExposureState {
+    r.reset_exposure();
+    frame(ctx, r, 1.0 / 30.0);
+    r.read_exposure().expect("metered")
 }
 
 // ---- A test HDR source ---------------------------------------------------------------------
@@ -55,8 +134,6 @@ fn camera() -> Camera {
 /// What [`Source`] writes into the HDR image (replacing the scene).
 #[derive(Clone, Copy, PartialEq)]
 enum Pattern {
-    /// Linear grey `l` everywhere.
-    Flat(f32),
     /// Horizontal ramp of exp2(lo..hi) in three bands: grey, orange, blue.
     Ramp(f32, f32),
     /// Grey `l`, except NaN on the left quarter, then thin strips of +inf and -inf.
@@ -114,7 +191,6 @@ impl PostPass for Source {
     }
     fn record(&mut self, ctx: &mut PostContext<'_>) {
         let (a, b) = match self.pattern {
-            Pattern::Flat(l) => ([l, l, l, 0.0], [0.0; 4]),
             Pattern::Ramp(lo, hi) => ([0.0, 0.0, 0.0, 1.0], [lo, hi, 0.0, 0.0]),
             Pattern::Poisoned(l) => ([l, l, l, 2.0], [0.0; 4]),
             Pattern::AllNan => ([0.0, 0.0, 0.0, 3.0], [0.0; 4]),
@@ -142,27 +218,6 @@ fn set_pattern(r: &mut Renderer, pattern: Pattern) {
         .get_mut::<Source>("source")
         .expect("source pass")
         .pattern = pattern;
-}
-
-/// Renders one frame (no capture reset) with time step `dt`.
-fn frame(ctx: &RenderContext, r: &mut Renderer, dt: f32) {
-    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("test frame"),
-        size: wgpu::Extent3d {
-            width: SIZE.0,
-            height: SIZE.1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    r.set_frame_time(dt);
-    r.render(&view, &camera(), SIZE);
 }
 
 // ---- The metering model, from the lighting doc 3.9 ------------------------------------------
@@ -193,14 +248,22 @@ fn pixel(px: &[u8], w: u32, x: u32, y: u32) -> [u8; 3] {
     [px[i], px[i + 1], px[i + 2]]
 }
 
+fn skip_without_compute(r: &Renderer) -> bool {
+    if r.auto_exposure_active() {
+        return false;
+    }
+    eprintln!("no compute shaders; skipping");
+    true
+}
+
 // ---- Exposure -------------------------------------------------------------------------------
 
 #[test]
 fn exposure_converges_on_bright_and_dark_scenes() {
+    let _gpu = gpu();
     let Some(ctx) = context() else { return };
-    let mut r = source_renderer(&ctx, Pattern::Flat(1.0));
-    if !r.auto_exposure_active() {
-        eprintln!("no compute shaders; skipping");
+    let mut r = flat_renderer(&ctx, 1.0);
+    if skip_without_compute(&r) {
         return;
     }
     let a = r.auto_exposure;
@@ -208,9 +271,8 @@ fn exposure_converges_on_bright_and_dark_scenes() {
     // Bright day, dim interior, and night (where the night bias keeps it darker than grey).
     let mut shown = Vec::new();
     for l in [0.3, 0.01, 0.0005] {
-        set_pattern(&mut r, Pattern::Flat(l));
-        let px = r.capture(&camera(), SIZE).expect("capture");
-        let s = r.read_exposure().expect("metered");
+        flat(&mut r, l);
+        let s = meter_now(&ctx, &mut r);
         let ev = target_ev(l, &a);
         assert!(
             (s.ev100 - ev).abs() < 0.06,
@@ -223,12 +285,11 @@ fn exposure_converges_on_bright_and_dark_scenes() {
             "L {l}: multiplier {} vs {m}",
             s.multiplier
         );
-        assert!(s.multiplier.is_finite());
-        shown.push((l, centre(&px)));
+        shown.push(centre(&r.capture(&camera(), SIZE).expect("capture")));
     }
     // Without the night bias, bright and dark land on the same display grey: the meter maps
     // the scene's mid-tone to the key, whatever it was.
-    let (bright, dark, night) = (shown[0].1, shown[1].1, shown[2].1);
+    let (bright, dark, night) = (shown[0], shown[1], shown[2]);
     for c in 0..3 {
         assert!(
             (i32::from(bright[c]) - i32::from(dark[c])).abs() <= 3,
@@ -251,17 +312,16 @@ fn exposure_converges_on_bright_and_dark_scenes() {
 
 #[test]
 fn adaptation_moves_toward_the_target_faster_for_light_than_dark() {
+    let _gpu = gpu();
     let Some(ctx) = context() else { return };
-    let mut r = source_renderer(&ctx, Pattern::Flat(0.01));
-    if !r.auto_exposure_active() {
-        eprintln!("no compute shaders; skipping");
+    let mut r = flat_renderer(&ctx, 0.01);
+    if skip_without_compute(&r) {
         return;
     }
     let a = r.auto_exposure;
     let (dark, bright) = (target_ev(0.01, &a), target_ev(0.3, &a));
-    r.capture(&camera(), SIZE).expect("capture");
+    assert!((meter_now(&ctx, &mut r).ev100 - dark).abs() < 0.06);
     let ev = |r: &Renderer| r.read_exposure().expect("metered").ev100;
-    assert!((ev(&r) - dark).abs() < 0.06);
 
     let dt = 1.0 / 30.0;
     let run = |r: &mut Renderer, seconds: f32| {
@@ -273,7 +333,7 @@ fn adaptation_moves_toward_the_target_faster_for_light_than_dark() {
         now
     };
 
-    set_pattern(&mut r, Pattern::Flat(0.3));
+    flat(&mut r, 0.3);
     let half = run(&mut r, 0.5);
     let up = (half - dark) / (bright - dark);
     // exp(-rate t): 1 - e^-1.5 = 0.78 of the way after half a second at 3/s.
@@ -284,7 +344,7 @@ fn adaptation_moves_toward_the_target_faster_for_light_than_dark() {
     let settled = run(&mut r, 3.0);
     assert!((settled - bright).abs() < 0.06, "{settled} vs {bright}");
 
-    set_pattern(&mut r, Pattern::Flat(0.01));
+    flat(&mut r, 0.01);
     let half = run(&mut r, 0.5);
     let down = (bright - half) / (bright - dark);
     assert!(
@@ -299,22 +359,66 @@ fn adaptation_moves_toward_the_target_faster_for_light_than_dark() {
     assert!((settled - dark).abs() < 0.06, "{settled} vs {dark}");
 
     // A cut jumps straight there.
-    set_pattern(&mut r, Pattern::Flat(0.3));
+    flat(&mut r, 0.3);
     r.reset_exposure();
     frame(&ctx, &mut r, dt);
     assert!((ev(&r) - bright).abs() < 0.06);
 }
 
 #[test]
-fn exposure_min_and_max_limit_the_meter() {
+fn re_enabling_auto_exposure_starts_from_the_new_scene() {
+    let _gpu = gpu();
     let Some(ctx) = context() else { return };
-    let mut r = source_renderer(&ctx, Pattern::Flat(50.0));
-    if !r.auto_exposure_active() {
-        eprintln!("no compute shaders; skipping");
+    let mut r = flat_renderer(&ctx, 0.01);
+    if skip_without_compute(&r) {
         return;
     }
-    r.capture(&camera(), SIZE).expect("capture");
+    let a = r.auto_exposure;
+    meter_now(&ctx, &mut r);
+    // Off for a while, during which the scene gets much brighter.
+    r.auto_exposure.enabled = false;
+    flat(&mut r, 0.3);
+    frame(&ctx, &mut r, 1.0 / 30.0);
+    // Back on: the first frame meters straight to the bright target instead of adapting
+    // from the stale dark state.
+    r.auto_exposure.enabled = true;
+    frame(&ctx, &mut r, 1.0 / 30.0);
     let s = r.read_exposure().expect("metered");
+    let want = target_ev(0.3, &a);
+    assert!((s.ev100 - want).abs() < 0.06, "{} vs {want}", s.ev100);
+}
+
+#[test]
+fn captures_leave_the_live_adaptation_alone() {
+    let _gpu = gpu();
+    let Some(ctx) = context() else { return };
+    let mut r = flat_renderer(&ctx, 0.01);
+    if skip_without_compute(&r) {
+        return;
+    }
+    let live = meter_now(&ctx, &mut r);
+    // A screenshot of a much brighter view, twice.
+    flat(&mut r, 0.3);
+    let a = r.capture(&camera(), SIZE).expect("capture");
+    let b = r.capture(&camera(), SIZE).expect("capture");
+    assert_eq!(a, b, "captures are repeatable");
+    let after = r.read_exposure().expect("metered");
+    assert_eq!(live, after, "the capture changed the live exposure");
+    // The live view keeps adapting from where it was.
+    frame(&ctx, &mut r, 1.0 / 30.0);
+    let next = r.read_exposure().expect("metered");
+    assert!(next.ev100 > live.ev100 && next.ev100 < target_ev(0.3, &r.auto_exposure) - 1.0);
+}
+
+#[test]
+fn exposure_min_and_max_limit_the_meter() {
+    let _gpu = gpu();
+    let Some(ctx) = context() else { return };
+    let mut r = flat_renderer(&ctx, 50.0);
+    if skip_without_compute(&r) {
+        return;
+    }
+    let s = meter_now(&ctx, &mut r);
     assert!(
         (s.ev100 - 16.0).abs() < 1e-3,
         "clamped to ExposureMax: {}",
@@ -322,16 +426,14 @@ fn exposure_min_and_max_limit_the_meter() {
     );
     assert!(s.target_ev100 <= 16.0);
     r.auto_exposure.max_ev100 = 20.0;
-    r.capture(&camera(), SIZE).expect("capture");
-    let s = r.read_exposure().expect("metered");
+    let s = meter_now(&ctx, &mut r);
     let want = target_ev(50.0, &r.auto_exposure);
     assert!((s.ev100 - want).abs() < 0.06, "{} vs {want}", s.ev100);
 
     // 2^-10 meters as EV100 7.2 under the default lighting.
-    set_pattern(&mut r, Pattern::Flat(2f32.powi(-10)));
+    flat(&mut r, 2f32.powi(-10));
     r.auto_exposure.min_ev100 = 10.0;
-    r.capture(&camera(), SIZE).expect("capture");
-    let s = r.read_exposure().expect("metered");
+    let s = meter_now(&ctx, &mut r);
     assert!(
         (s.ev100 - 10.0).abs() < 1e-3,
         "clamped to ExposureMin: {}",
@@ -339,52 +441,211 @@ fn exposure_min_and_max_limit_the_meter() {
     );
 }
 
+/// The default avatar, at rest, standing at the origin facing +Z (studs).
+fn avatar() -> (
+    std::sync::Arc<metallic_render::metallic_asset::SkinnedModel>,
+    Vec<metallic_render::glam::Mat4>,
+    f32,
+) {
+    use metallic_render::glam::Mat4;
+    use metallic_render::metallic_asset::{Pose, SkinnedModel};
+    let glb = include_bytes!("../../../art/avatar/out/default_avatar.glb");
+    let model = std::sync::Arc::new(SkinnedModel::from_glb(glb).expect("avatar"));
+    let scale = 1.0 / 0.28;
+    let mut joints = Vec::new();
+    Pose::rest(&model.skeleton).skin_matrices(
+        &model.skeleton,
+        Mat4::from_scale(Vec3::splat(scale)),
+        &mut joints,
+    );
+    (model, joints, scale)
+}
+
 #[test]
-fn the_default_lighting_meters_to_its_fixed_exposure() {
-    // The meter's key is calibrated on the reference scene: auto exposure leaves Clear Day
-    // where the fixed exposure (and the #149 review) put it, and every preset close to it.
+fn a_toon_avatar_filling_the_frame_does_not_move_the_exposure() {
+    let _gpu = gpu();
+    use metallic_render::{SkinStyle, SkinnedInstance};
     let Some(ctx) = context() else { return };
-    let mut r = renderer_on(&ctx);
-    if !r.auto_exposure_active() {
-        eprintln!("no compute shaders; skipping");
+    let mut r = flat_renderer(&ctx, 0.05);
+    if skip_without_compute(&r) {
         return;
     }
-    for preset in &PRESETS {
-        let mut world = reference_world();
-        apply_preset(&mut world, preset).expect("apply");
-        r.sync(&world);
-        r.capture(&camera(), SIZE).expect("capture");
-        let s = r.read_exposure().expect("metered");
-        let limit = if preset.id == "clear-day" { 0.1 } else { 1.0 };
-        assert!(
-            s.multiplier.log2().abs() < limit,
-            "{}: auto exposure moves it {} EV from the fixed exposure",
-            preset.id,
-            s.multiplier.log2()
-        );
+    let (model, joints, scale) = avatar();
+    // Close over the shoulder of a third-person camera: the torso fills the view.
+    let size = (64, 64);
+    let cam = Camera {
+        position: Vec3::new(0.0, 3.2, 1.6),
+        look_at: Vec3::new(0.0, 3.2, 0.0),
+        fov_deg: 60.0,
+    };
+    let show = |r: &mut Renderer, on: bool| {
+        let instance = SkinnedInstance {
+            model: &model,
+            joints: &joints,
+            slot_colors: &[],
+            center: Vec3::new(0.0, 2.75, 0.0),
+            height: 5.5,
+            detail_scale: scale,
+            style: SkinStyle::Toon,
+        };
+        r.set_skinned(if on {
+            std::slice::from_ref(&instance)
+        } else {
+            &[]
+        });
+    };
+
+    // Coverage, with the exposure fixed so only avatar pixels change.
+    r.auto_exposure.enabled = false;
+    let empty = r.capture(&cam, size).expect("capture");
+    show(&mut r, true);
+    let with = r.capture(&cam, size).expect("capture");
+    let changed = empty
+        .chunks(4)
+        .zip(with.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    let coverage = changed as f32 / (size.0 * size.1) as f32;
+    assert!(coverage > 0.8, "avatar covers only {coverage} of the frame");
+    r.auto_exposure.enabled = true;
+
+    show(&mut r, false);
+    r.reset_exposure();
+    frame_at(&ctx, &mut r, &cam, size, 1.0 / 30.0);
+    let base = r.read_exposure().expect("metered");
+
+    show(&mut r, true);
+    for i in 0..90 {
+        frame_at(&ctx, &mut r, &cam, size, 1.0 / 30.0);
+        if i % 10 == 9 {
+            let s = r.read_exposure().expect("metered");
+            assert!(
+                (s.ev100 - base.ev100).abs() < 0.1,
+                "frame {i}: EV100 {} drifted from {}",
+                s.ev100,
+                base.ev100
+            );
+        }
+    }
+    let a = r.capture(&cam, size).expect("capture");
+    let b = r.capture(&cam, size).expect("capture");
+    assert_eq!(a, b, "captures with the avatar are repeatable");
+}
+
+/// Mean luma of each preset on the reference scene at 320 x 180, High, as reviewed in #149
+/// (`docs/lighting/presets.md` before auto exposure).
+const REVIEWED: [(&str, f32); 12] = [
+    ("clear-day", 0.555),
+    ("golden-hour", 0.531),
+    ("overcast", 0.545),
+    ("night-city", 0.188),
+    ("moonlit", 0.288),
+    ("horror-fog", 0.366),
+    ("sci-fi-interior", 0.484),
+    ("cartoon-bright", 0.514),
+    ("pixel-dusk", 0.464),
+    ("underwater", 0.487),
+    ("desert-noon", 0.580),
+    ("alien-dusk", 0.526),
+];
+
+#[test]
+fn presets_keep_their_reviewed_brightness_with_metering_on_and_off() {
+    let _gpu = gpu();
+    let Some(ctx) = context() else { return };
+    let mut r = Renderer::with_settings(
+        &ctx,
+        FORMAT,
+        RenderSettings {
+            quality: Quality::High,
+        },
+    );
+    let metered = r.auto_exposure_active();
+    for (preset, (id, reviewed)) in PRESETS.iter().zip(REVIEWED) {
+        assert_eq!(preset.id, id);
+        for auto in [false, true] {
+            let mut world = reference_world();
+            apply_preset(&mut world, preset).expect("apply");
+            let lighting = world.root("Lighting").expect("lighting");
+            world
+                .set(lighting, "AutoExposure", Value::Bool(auto))
+                .expect("auto");
+            r.sync(&world);
+            let px = r.capture(&reference_camera(), (320, 180)).expect("capture");
+            let mean = stats(&lumas(&px)).0;
+            if auto && !metered {
+                continue;
+            }
+            let limit = if auto { 0.015 } else { 0.006 };
+            assert!(
+                (mean - reviewed).abs() < limit,
+                "{id} (auto exposure {auto}): mean luma {mean}, reviewed {reviewed}"
+            );
+        }
     }
 }
 
 #[test]
-fn nan_and_infinite_light_cannot_poison_the_meter_or_the_image() {
+fn nan_and_infinite_light_cannot_poison_the_meter() {
+    let _gpu = gpu();
     let Some(ctx) = context() else { return };
-    let mut r = source_renderer(&ctx, Pattern::Flat(0.1));
-    let metered = r.auto_exposure_active();
-    r.capture(&camera(), SIZE).expect("capture");
-    let clean = r.read_exposure();
-
-    set_pattern(&mut r, Pattern::Poisoned(0.1));
-    let px = r.capture(&camera(), SIZE).expect("capture");
-    if metered {
-        let (clean, s) = (clean.expect("metered"), r.read_exposure().expect("metered"));
-        assert!(s.multiplier.is_finite() && s.ev100.is_finite());
-        assert!(
-            (s.multiplier / clean.multiplier).log2().abs() < 0.1,
-            "NaN/inf moved the exposure: {} vs {}",
-            s.multiplier,
-            clean.multiplier
-        );
+    let mut r = flat_renderer(&ctx, 0.1);
+    if skip_without_compute(&r) {
+        return;
     }
+    let clean = meter_now(&ctx, &mut r);
+    // The upper half of the view NaN, the lower half 0.1: NaN is not metered.
+    set_sky(&mut r, [f32::NAN; 3], [0.1; 3]);
+    let s = meter_now(&ctx, &mut r);
+    assert!(s.multiplier.is_finite() && s.ev100.is_finite(), "{s:?}");
+    assert!(
+        (s.multiplier / clean.multiplier).log2().abs() < 0.15,
+        "a NaN sky moved the exposure: {} vs {}",
+        s.multiplier,
+        clean.multiplier
+    );
+    // An infinite sky is the brightest light there is: the meter darkens to ExposureMax and
+    // stays finite.
+    set_sky(&mut r, [f32::INFINITY; 3], [0.1; 3]);
+    let s = meter_now(&ctx, &mut r);
+    assert!(s.multiplier.is_finite() && s.multiplier > 0.0, "{s:?}");
+    assert!((s.ev100 - r.auto_exposure.max_ev100).abs() < 1e-3, "{s:?}");
+    // A frame of nothing but NaN holds the last exposure.
+    flat(&mut r, 0.1);
+    let before = meter_now(&ctx, &mut r);
+    flat(&mut r, f32::NAN);
+    frame(&ctx, &mut r, 1.0 / 30.0);
+    assert_eq!(before, r.read_exposure().expect("metered"));
+    // And a cut onto it gives no exposure at all, not NaN.
+    let s = meter_now(&ctx, &mut r);
+    assert!(s.multiplier.is_finite() && s.multiplier > 0.0, "{s:?}");
+
+    // Settings that are NaN or infinite are replaced before they reach the GPU.
+    flat(&mut r, 0.1);
+    r.auto_exposure = AutoExposure {
+        enabled: true,
+        min_ev100: f32::NAN,
+        max_ev100: f32::INFINITY,
+        compensation: f32::NAN,
+        night_adaptation: f32::NEG_INFINITY,
+        speed_up: f32::NAN,
+        speed_down: f32::INFINITY,
+    };
+    r.reset_exposure();
+    frame(&ctx, &mut r, f32::NAN);
+    frame(&ctx, &mut r, f32::NAN);
+    let s = r.read_exposure().expect("metered");
+    assert!(s.multiplier.is_finite() && s.ev100.is_finite(), "{s:?}");
+    assert!(centre(&r.capture(&camera(), SIZE).expect("capture"))[1] > 20);
+}
+
+#[test]
+fn nan_and_infinite_light_cannot_poison_the_image() {
+    let _gpu = gpu();
+    let Some(ctx) = context() else { return };
+    let mut r = source_renderer(&ctx, Pattern::Poisoned(0.1));
+    r.auto_exposure.enabled = false;
+    let px = r.capture(&camera(), SIZE).expect("capture");
     let y = SIZE.1 / 2;
     let x_of = |u: f32| (u * SIZE.0 as f32) as u32;
     let nan = pixel(&px, SIZE.0, x_of(0.1), y);
@@ -401,48 +662,20 @@ fn nan_and_infinite_light_cannot_poison_the_meter_or_the_image() {
         grey[1] > 40 && grey[1] < 230,
         "valid light shows as {grey:?}"
     );
-
-    // A frame of nothing but NaN holds the last exposure and renders black.
-    if metered {
-        let before = r.read_exposure().expect("metered");
-        set_pattern(&mut r, Pattern::AllNan);
-        frame(&ctx, &mut r, 1.0 / 30.0);
-        let after = r.read_exposure().expect("metered");
-        assert_eq!(before.multiplier, after.multiplier);
-        let px = r.capture(&camera(), SIZE).expect("capture");
-        let s = r.read_exposure().expect("metered");
-        assert!(s.multiplier.is_finite() && s.multiplier > 0.0);
-        assert!(px.chunks(4).all(|p| p[..3].iter().all(|&v| v <= 3)));
-    }
-
-    // Settings that are NaN or infinite are replaced before they reach the GPU.
-    set_pattern(&mut r, Pattern::Flat(0.1));
-    r.auto_exposure = AutoExposure {
-        enabled: true,
-        min_ev100: f32::NAN,
-        max_ev100: f32::INFINITY,
-        compensation: f32::NAN,
-        night_adaptation: f32::NEG_INFINITY,
-        speed_up: f32::NAN,
-        speed_down: f32::INFINITY,
-    };
-    r.set_frame_time(f32::NAN);
+    set_pattern(&mut r, Pattern::AllNan);
     let px = r.capture(&camera(), SIZE).expect("capture");
-    if metered {
-        let s = r.read_exposure().expect("metered");
-        assert!(s.multiplier.is_finite() && s.ev100.is_finite(), "{s:?}");
-    }
-    assert!(centre(&px)[1] > 20);
+    assert!(px.chunks(4).all(|p| p[..3].iter().all(|&v| v <= 3)));
 }
 
 #[test]
 fn auto_exposure_off_and_fixed_looks_keep_the_fixed_exposure() {
+    let _gpu = gpu();
     let Some(ctx) = context() else { return };
     let mut r = renderer_on(&ctx);
     let world = reference_world();
     r.sync(&world);
     r.auto_exposure.enabled = false;
-    let fixed = r.capture(&camera(), SIZE).expect("capture");
+    let fixed = r.capture(&reference_camera(), SIZE).expect("capture");
 
     for (prop_off, look) in [(true, ""), (false, "pixel-3d"), (false, "Retro 32-bit")] {
         let inputs = LightingInputs {
@@ -454,24 +687,26 @@ fn auto_exposure_off_and_fixed_looks_keep_the_fixed_exposure() {
         assert!(!r.auto_exposure.enabled, "{look}: metering should be off");
         assert!(!r.auto_exposure_active());
         if look.is_empty() {
-            assert_eq!(r.capture(&camera(), SIZE).expect("capture"), fixed);
+            assert_eq!(
+                r.capture(&reference_camera(), SIZE).expect("capture"),
+                fixed
+            );
         }
     }
 }
 
 #[test]
 fn the_meter_runs_on_the_gl_backend() {
+    let _gpu = gpu();
     let Ok(ctx) = RenderContext::new_headless_with_backends(wgpu::Backends::GL) else {
         eprintln!("no GL adapter; skipping");
         return;
     };
-    let mut r = source_renderer(&ctx, Pattern::Flat(0.01));
-    if !r.auto_exposure_active() {
-        eprintln!("GL adapter without compute shaders; exposure stays fixed");
+    let mut r = flat_renderer(&ctx, 0.01);
+    if skip_without_compute(&r) {
         return;
     }
-    r.capture(&camera(), SIZE).expect("capture");
-    let s = r.read_exposure().expect("metered");
+    let s = meter_now(&ctx, &mut r);
     let want = target_ev(0.01, &r.auto_exposure);
     assert!((s.ev100 - want).abs() < 0.06, "{} vs {want}", s.ev100);
 }
@@ -610,6 +845,7 @@ fn cpu_curves_are_safe_for_nan_and_infinity() {
 
 #[test]
 fn gpu_curves_match_the_published_references() {
+    let _gpu = gpu();
     let Some(ctx) = context() else { return };
     let (lo, hi) = (-8.0f32, 6.0f32);
     let size = (256u32, 24u32);

@@ -62,6 +62,9 @@ pub struct LightingInputs {
     pub exposure_min: f32,
     /// `Lighting.ExposureMax`, EV100: the brightest scene the meter still darkens.
     pub exposure_max: f32,
+    /// `Lighting.AutoExposureBias`, EV: added only while metering, so a place (or preset) can
+    /// look the same with auto exposure on and off.
+    pub auto_exposure_bias: f32,
     /// `Lighting.Look` (a Look id such as `toon`; empty or unknown = Realistic). Picks the
     /// tone curve, exposure mode and compensation ([`LookTone::for_look`]). The property itself
     /// arrives with the Look presets (#64); until then a place reads as Realistic.
@@ -253,6 +256,7 @@ impl LightingInputs {
             auto_exposure: self.auto_exposure,
             exposure_min: l("ExposureMin", self.exposure_min),
             exposure_max: l("ExposureMax", self.exposure_max),
+            auto_exposure_bias: l("AutoExposureBias", self.auto_exposure_bias),
             look: self.look.clone(),
             atmosphere: self.atmosphere.as_ref().map(|a| {
                 let n = |p: &str, x: f32| sane("Atmosphere", p, x);
@@ -337,6 +341,7 @@ impl LightingInputs {
             auto_exposure: l.flag("AutoExposure"),
             exposure_min: l.num("ExposureMin"),
             exposure_max: l.num("ExposureMax"),
+            auto_exposure_bias: l.num("AutoExposureBias"),
             look: l.text("Look"),
             atmosphere: Some(AtmosphereInputs {
                 density: atmo.num("Density"),
@@ -940,7 +945,7 @@ fn evaluate_base(inp: &LightingInputs) -> LightingFrame {
             enabled: inp.auto_exposure && look.exposure == ExposureMode::Auto,
             min_ev100: inp.exposure_min.min(inp.exposure_max),
             max_ev100: inp.exposure_max.max(inp.exposure_min),
-            compensation,
+            compensation: compensation + inp.auto_exposure_bias,
             night_adaptation: inp.night_adaptation,
             ..AutoExposure::default()
         },
@@ -1033,6 +1038,7 @@ mod tests {
             auto_exposure: true,
             exposure_min: x,
             exposure_max: x,
+            auto_exposure_bias: x,
             look: String::new(),
             atmosphere: Some(AtmosphereInputs {
                 density: x,
