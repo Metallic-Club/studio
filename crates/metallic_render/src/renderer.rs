@@ -22,6 +22,7 @@ use bytemuck::{Pod, Zeroable};
 use metallic_core::World;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use wgpu::util::DeviceExt;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -407,6 +408,8 @@ pub struct Renderer {
     /// The skinned instances given to the last [`Renderer::set_skinned`].
     skinned_draws: Vec<SkinnedDraw>,
     skin_scratch: Vec<u8>,
+    /// Draw calls issued by the last [`Renderer::render`] (developer overlay).
+    draws: AtomicU32,
 }
 
 impl Renderer {
@@ -601,6 +604,7 @@ impl Renderer {
             skin_slots: Vec::new(),
             skinned_draws: Vec::new(),
             skin_scratch: Vec::new(),
+            draws: AtomicU32::new(0),
         };
         renderer.meter_supported = crate::exposure::supported(&renderer.device);
         renderer.post.push(Box::new(BloomPass::default()));
@@ -984,6 +988,7 @@ impl Renderer {
         if size.0 == 0 || size.1 == 0 {
             return;
         }
+        self.draws.store(0, Ordering::Relaxed);
         self.ensure_attachments(size);
         self.upload_scene();
         if self.material_table.take_dirty() {
@@ -1125,6 +1130,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.global_group, &[]);
             pass.set_pipeline(&self.pipelines.sky);
             pass.draw(0..3, 0..1);
+            self.count_draw();
             pass.set_pipeline(&self.pipelines.opaque);
             self.draw_opaque(&mut pass);
             pass.set_pipeline(&self.pipelines.skinned);
@@ -1335,6 +1341,7 @@ impl Renderer {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, group, &[]);
             pass.draw(0..3, 0..1);
+            self.count_draw();
         }
 
         // LDR passes: ldr[0] -> ldr[1] -> ldr[0] ..., the last one into the target.
@@ -1367,6 +1374,16 @@ impl Renderer {
         self.post = chain;
     }
 
+    fn count_draw(&self) {
+        self.draws.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Draw calls the last [`Renderer::render`] issued (sky, scene and fullscreen passes; the
+    /// post chain is not counted).
+    pub fn draw_calls(&self) -> u32 {
+        self.draws.load(Ordering::Relaxed)
+    }
+
     fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
         for kind in MeshKind::ALL {
             let inst = &self.opaque[kind.index()];
@@ -1378,6 +1395,7 @@ impl Renderer {
             pass.set_vertex_buffer(1, inst.buffer.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..mesh.index_count, 0, 0..inst.count as u32);
+            self.count_draw();
         }
     }
 
@@ -1395,6 +1413,7 @@ impl Renderer {
             pass.set_vertex_buffer(0, lod.vertices.slice(..));
             pass.set_index_buffer(lod.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..lod.index_count, 0, 0..1);
+            self.count_draw();
         }
     }
 
@@ -1415,6 +1434,7 @@ impl Renderer {
             let offset = i as u64 * stride;
             pass.set_vertex_buffer(1, self.blended.buffer.slice(offset..offset + stride));
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            self.count_draw();
         }
     }
 

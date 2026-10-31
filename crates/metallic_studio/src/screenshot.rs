@@ -33,6 +33,20 @@ pub fn save_png(path: &Path, image: &ColorImage) -> Result<(), StudioError> {
     writer.write_image_data(&bytes).map_err(fail)
 }
 
+/// `image` encoded as an RGBA PNG in memory (bug reports).
+pub fn png_bytes(image: &ColorImage) -> Result<Vec<u8>, png::EncodingError> {
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, image.width() as u32, image.height() as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        let bytes: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+        writer.write_image_data(&bytes)?;
+    }
+    Ok(out)
+}
+
 /// Waits a few frames, requests one screenshot, saves it, then asks the window to close.
 pub struct ScreenshotJob {
     path: PathBuf,

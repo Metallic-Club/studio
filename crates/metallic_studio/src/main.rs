@@ -6,16 +6,22 @@ use eframe::egui;
 use metallic_studio::app::{Options, StudioApp, WINDOW_TITLE, icon_image};
 use metallic_studio::splash;
 
+/// Counts heap bytes for the developer overlay (#14); otherwise the system allocator.
+#[global_allocator]
+static ALLOCATOR: metallic_studio::devmode::overlay::CountingAlloc =
+    metallic_studio::devmode::overlay::CountingAlloc;
+
 fn main() -> eframe::Result {
     // Must run first: when the installer or an update starts Studio with a hook argument,
     // Velopack handles it here and exits.
     velopack::VelopackApp::build().run();
-    env_logger::init();
+    // The console logger as before (RUST_LOG), plus the capture behind Developer > Log.
+    metallic_studio::devmode::log_view::install();
     let options = match Options::parse(std::env::args().skip(1)) {
         Ok(o) => o,
         Err(message) => {
             eprintln!(
-                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|firstrun|error|editor|playing|colour|components|settings --theme graphite|titanium|light --location <dir> --size <w>x<h>]"
+                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|firstrun|error|editor|playing|devmode|devpanels|colour|components|settings --theme graphite|titanium|light --location <dir> --size <w>x<h>]"
             );
             std::process::exit(2);
         }

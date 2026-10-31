@@ -362,6 +362,26 @@ impl Budget {
     }
 }
 
+/// What one VM holds now, for the developer overlay.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VmStats {
+    /// Bytes the Luau heap uses.
+    pub memory_bytes: usize,
+    /// Threads waiting in the scheduler (`task.wait`, `task.delay`, `task.defer`).
+    pub waiting_threads: usize,
+}
+
+/// The server and client VMs of a [`crate::ScriptHost`], for the developer overlay.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScriptStats {
+    /// The server VM, once started.
+    pub server: Option<VmStats>,
+    /// The client VM, once started (combined hosts only).
+    pub client: Option<VmStats>,
+    /// Scripts started and not stopped since.
+    pub running_scripts: usize,
+}
+
 /// One sandboxed Luau VM with its own thread scheduler.
 pub struct ScriptVm {
     lua: Lua,
@@ -515,6 +535,14 @@ impl ScriptVm {
     /// (`lua_callbacks`: `debugbreak`, `debugstep`) are separate and do not conflict.
     pub fn lua(&self) -> &Lua {
         &self.lua
+    }
+
+    /// Memory and waiting threads now (developer overlay, #14).
+    pub fn stats(&self) -> VmStats {
+        VmStats {
+            memory_bytes: self.lua.used_memory(),
+            waiting_threads: self.sched.waiting(),
+        }
     }
 
     /// Sets how long one resume may run before it times out ([`RESUME_BUDGET`] by default).

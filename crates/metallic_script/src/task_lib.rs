@@ -103,6 +103,11 @@ impl Scheduler {
         }
     }
 
+    /// Threads waiting in `task.wait`, `task.delay` or `task.defer`.
+    pub(crate) fn waiting(&self) -> usize {
+        self.pending.borrow().len()
+    }
+
     /// Forgets every sleeping thread.
     pub(crate) fn clear(&self) {
         self.pending.borrow_mut().clear();

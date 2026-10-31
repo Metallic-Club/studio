@@ -211,6 +211,21 @@ apps.
   combined `play` tag (`PLAY_TAG`) because Game supplies one sink for both VMs. Snapshot copying is O(world);
   callers through the current borrowed PlayStart/clean_world seam copy twice. Independent #92/#275 still tracks
   recursive clone_subtree behavior reached by Game's StarterGui copying.
+  Developer mode (#14): `devmode/` (`DevMode::resolve(saved, channel)`: on by default for the `dev` build channel,
+  `devmode::build_channel()` reads `METALLIC_STUDIO_CHANNEL` at compile time, which `tools/release.py` sets;
+  Settings > Developer mode saves `developer_mode` in `settings.toml`). `EditorState::dev` (`DevState`: enabled,
+  overlay, log, inspector, flags) and `EditorState::flags` (`FeatureFlags::is_on(name)`, `flags.toml` in the config
+  folder). **Any action whose id starts with `dev.` is a developer tool**: `ActionRegistry::register` disables it
+  while developer mode is off and exempts it from the Play lock, and the Developer menu lists every such action, so
+  the Profiler (#23) and the script debugger (#22) join by registering `dev.*` actions. Built in: `dev.overlay`
+  (F3; fps, frame graph, heap from `devmode::overlay::CountingAlloc`, the Studio binary's global allocator,
+  instance and Part counts, `Viewport::draw_calls` from `Renderer::draw_calls`, and while playing
+  `PlayView::script_stats` from `Game::script_stats`/`ScriptHost::stats`/`ScriptVm::stats`), `dev.log`
+  (`log_view::install` replaces `env_logger::init` and keeps the last 2000 records), `dev.inspector` (raw ids and
+  every property, hidden ones too), `dev.flags`, and `dev.report_bug` (`UiRequest::ReportBug`: window capture, then
+  `bug_report::BugReport::write` makes a stored zip of version, log, Output and screenshot in
+  `%LOCALAPPDATA%\MetallicStudio\bug-reports`, with the stored GitHub session, token-shaped words and the home
+  folder redacted, and opens the folder).
   Play and Stop (#11): `EditorState::new` registers `play::LocalPlayMode` (`play.start`, F5; client and server in
   one process like the Player). The session owns an `InputRuntime` and is a `play::PlayView`
   (`PlaySession::view`): the viewport draws it every frame with the game camera, avatar and ScreenGuis,

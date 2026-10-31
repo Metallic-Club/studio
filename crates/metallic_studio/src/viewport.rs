@@ -316,6 +316,11 @@ impl Viewport {
         self.finished.take()
     }
 
+    /// Draw calls of the last rendered frame; `None` without a GPU (developer overlay, #14).
+    pub fn draw_calls(&self) -> Option<u32> {
+        self.gpu.as_ref().map(|g| g.renderer.draw_calls())
+    }
+
     /// True during a drag, a box selection or camera flight: floating UI (the contextual toolbar,
     /// hints) stays out of the way.
     pub fn is_busy(&self) -> bool {

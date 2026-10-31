@@ -193,6 +193,9 @@ def main():
 
     check_vpk_version(args.vpk, args.dry_run)
 
+    # Studio reads the channel at compile time (developer mode is on by default only for dev).
+    os.environ["METALLIC_STUDIO_CHANNEL"] = args.channel
+
     if launcher:
         cargo = ["cargo", "build", "--release"]
         for package in LAUNCHER_CARGO_PACKAGES:

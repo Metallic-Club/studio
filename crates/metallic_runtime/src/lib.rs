@@ -42,6 +42,7 @@ pub use game::{FrameOutput, Game, MAX_FRAME_DT, RUN_MULTIPLIER, StdoutSink, TICK
 pub use input::{FrameInput, InputRuntime};
 pub use local_input::{LocalInput, move_direction};
 pub use metallic_physics::HumanoidState;
+pub use metallic_script::{ScriptStats, VmStats};
 pub use project::ProjectConfig;
 
 use std::path::PathBuf;

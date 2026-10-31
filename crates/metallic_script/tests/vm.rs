@@ -424,3 +424,14 @@ fn parked_thread_resumes_through_budget_handle() {
     vm.budget().resume(&thread, 42).unwrap();
     assert_eq!(*sink.lines.borrow(), vec!["print:got 42".to_string()]);
 }
+
+#[test]
+fn stats_count_memory_and_waiting_threads() {
+    let (mut vm, _) = vm();
+    assert_eq!(vm.stats().waiting_threads, 0);
+    vm.run_script("a", "task.wait(5)").unwrap();
+    vm.run_script("b", "task.delay(5, function() end)").unwrap();
+    let stats = vm.stats();
+    assert_eq!(stats.waiting_threads, 2);
+    assert!(stats.memory_bytes > 0);
+}
