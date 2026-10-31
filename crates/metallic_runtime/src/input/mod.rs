@@ -35,6 +35,7 @@
 
 mod config;
 mod control;
+mod local_input;
 pub mod glyph;
 pub mod overrides;
 pub mod rebind;
