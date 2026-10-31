@@ -273,11 +273,13 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
         rot.x.to_radians(),
         rot.z.to_radians(),
     );
-    let model = Mat4::from_translation(position) * rotation * Mat4::from_scale(size);
+    let kind = MeshKind::from_shape(&shape);
+    let model =
+        Mat4::from_translation(position) * rotation * Mat4::from_scale(mesh_scale(kind, size));
     let index = material_index(&material);
     Some(PartDraw {
         id,
-        kind: MeshKind::from_shape(&shape),
+        kind,
         instance: InstanceRaw {
             model: model.to_cols_array_2d(),
             color: [
@@ -291,6 +293,21 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
         },
         style,
     })
+}
+
+/// Scale applied to the unit mesh so the drawn shape matches the physics collider
+/// (`build_collider` in `metallic_physics/src/sync.rs`) and Roblox: a Ball is a sphere whose
+/// diameter is the smallest axis; a Cylinder runs along local X with length `Size.X` and diameter
+/// `min(Size.Y, Size.Z)`. Box and Wedge fill the whole `Size`.
+fn mesh_scale(kind: MeshKind, size: Vec3) -> Vec3 {
+    match kind {
+        MeshKind::Sphere => Vec3::splat(size.min_element()),
+        MeshKind::Cylinder => {
+            let d = size.y.min(size.z);
+            Vec3::new(size.x, d, d)
+        }
+        _ => size,
+    }
 }
 
 /// Converts one sRGB encoded channel (0..=1) to linear light.
@@ -400,6 +417,49 @@ mod tests {
         let ball = scene.opaque(MeshKind::Sphere).next().unwrap();
         assert_eq!(ball.id, ids[0]);
         assert_eq!(ball.instance.model[0][0], 2.0);
+    }
+
+    /// Syncs one part with `shape` and `size` (no rotation) and returns its mesh kind and the
+    /// scale on its model matrix diagonal.
+    fn render_scale(shape: &str, size: CoreVec3) -> (MeshKind, Vec3) {
+        let (mut w, ids) = world_with_parts();
+        w.set(ids[0], "Shape", Value::String(shape.into())).unwrap();
+        w.set(ids[0], "Size", Value::Vector3(size)).unwrap();
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        let part = scene.parts().find(|p| p.id == ids[0]).unwrap();
+        let m = part.instance.model;
+        (part.kind, Vec3::new(m[0][0], m[1][1], m[2][2]))
+    }
+
+    // Expected values mirror `build_collider` in crates/metallic_physics/src/sync.rs:
+    // Ball = sphere of radius min(half extents); Cylinder = half height hx along X, radius
+    // min(hy, hz). metallic_render does not depend on metallic_physics, so they are written out.
+    #[test]
+    fn ball_render_scale_matches_physics() {
+        let (kind, scale) = render_scale("Ball", CoreVec3::new(8.0, 2.0, 2.0));
+        assert_eq!(kind, MeshKind::Sphere);
+        // Physics: radius min(4, 1, 1) = 1, so diameter 2 on every axis.
+        assert_eq!(scale, Vec3::splat(2.0));
+        let (_, scale) = render_scale("Ball", CoreVec3::new(3.0, 5.0, 4.0));
+        assert_eq!(scale, Vec3::splat(3.0));
+    }
+
+    #[test]
+    fn cylinder_render_scale_matches_physics() {
+        let (kind, scale) = render_scale("Cylinder", CoreVec3::new(4.0, 6.0, 2.0));
+        assert_eq!(kind, MeshKind::Cylinder);
+        // Physics: half height 2 along X (length 4), radius min(3, 1) = 1 (diameter 2). The unit
+        // cylinder mesh already runs along local X (meshes.rs), so X is the length axis.
+        assert_eq!(scale, Vec3::new(4.0, 2.0, 2.0));
+    }
+
+    #[test]
+    fn block_and_wedge_keep_full_size() {
+        for shape in ["Block", "Wedge"] {
+            let (_, scale) = render_scale(shape, CoreVec3::new(4.0, 6.0, 2.0));
+            assert_eq!(scale, Vec3::new(4.0, 6.0, 2.0), "{shape}");
+        }
     }
 
     #[test]

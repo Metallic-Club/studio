@@ -198,6 +198,19 @@ fn zone_around_resting_part() -> (World, PhysicsWorld, InstanceId) {
     (world, phys, zone)
 }
 
+/// Changing `prop` rebuilds the collider of the unanchored part resting on the baseplate; it
+/// keeps touching the baseplate, so neither a second `Touched` nor a `TouchEnded` fires (and
+/// Rapier's islands stay consistent, #423).
+fn rebuild_resting_part(prop: &str, value: Value) {
+    let (mut world, mut phys, _, p) = resting();
+    world.set(p, prop, value).unwrap();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.5);
+    assert!(phys.drain_touched().is_empty(), "{prop}: a second Touched");
+    assert!(phys.drain_touch_ended().is_empty(), "{prop}: a TouchEnded");
+    assert!(pos(&world, p).y > 2.0, "{prop}: fell into the baseplate");
+}
+
 /// Changing `prop` rebuilds the zone's collider; it keeps touching the part, so neither a
 /// second `Touched` nor a `TouchEnded` fires.
 fn rebuild_while_touching(prop: &str, value: Value) {
@@ -211,14 +224,21 @@ fn rebuild_while_touching(prop: &str, value: Value) {
 
 #[test]
 fn resizing_a_touching_part_fires_no_second_touched() {
-    rebuild_while_touching("Size", Value::Vector3(Vec3::new(7.0, 3.0, 7.0)));
+    rebuild_resting_part("Size", Value::Vector3(Vec3::new(4.0, 1.2, 2.0)));
 }
 
 #[test]
 fn reshaping_a_touching_part_fires_no_second_touched() {
-    rebuild_while_touching("Shape", Value::String("Ball".into()));
+    rebuild_resting_part("Shape", Value::String("Ball".into()));
 }
 
+#[test]
+fn changing_the_material_of_a_touching_part_fires_no_second_touched() {
+    rebuild_resting_part("Material", Value::String("Ice".into()));
+}
+
+/// An unanchored part with `CanCollide` off falls through the floor, so this one rebuilds an
+/// anchored zone instead.
 #[test]
 fn turning_on_can_collide_on_a_touching_part_fires_no_second_touched() {
     rebuild_while_touching("CanCollide", Value::Bool(true));

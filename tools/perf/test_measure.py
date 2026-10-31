@@ -1,4 +1,5 @@
 """Regression tests for the performance gate's failure policy and profile parsing."""
+import argparse
 import contextlib
 import copy
 import io
@@ -33,12 +34,25 @@ class ProfileParsing(unittest.TestCase):
 
 class GatePolicy(unittest.TestCase):
     def test_threshold_boundary_improvement_and_one_workload_regression(self):
-        for count, allowed in [(90, True), (105, True), (106, False)]:
-            head = report()
-            head["workloads"]["writes"]["samples"] = [count] * 3
-            passed, summary = measure.compare(report(), head, 5)
-            self.assertEqual(passed, allowed)
-            self.assertIn("writes", summary)
+        for name in ["reads", "writes", "clone", "create", "destroy"]:
+            for count, allowed in [(90, True), (105, True), (106, False)]:
+                head = report()
+                head["workloads"][name] = {"samples": [count] * 3}
+                with self.subTest(name=name, count=count):
+                    passed, summary = measure.compare(report(), head, 5)
+                    self.assertEqual(passed, allowed)
+                    self.assertIn(name, summary)
+
+    def test_old_three_workload_reports_and_each_missing_mutator_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "report.json"
+            for missing in [("create",), ("destroy",), ("create", "destroy")]:
+                data = report()
+                for name in missing:
+                    data["workloads"].pop(name, None)
+                path.write_text(json.dumps(data), encoding="utf-8")
+                with self.subTest(missing=missing), self.assertRaises(ValueError):
+                    measure.read_report(path)
 
     def test_invalid_threshold_and_different_measurement_context_refuse_comparison(self):
         for threshold in [-1, float("nan"), float("inf"), 101]:
@@ -88,6 +102,51 @@ class GatePolicy(unittest.TestCase):
         for value in head["workloads"].values():
             value["median"] = 1
         self.assertFalse(measure.compare(report(), head, 5)[0])
+
+
+class CollectionPolicy(unittest.TestCase):
+    def collect_fixture(self, root, failing=None):
+        binary, source = root / "perf_ci", root / "perf_ci.rs"
+        binary.write_bytes(b"fixture executable; never run")
+        source.write_text("fixture workload source", encoding="utf-8")
+        args = argparse.Namespace(binary=binary, source=source, output=root / "report.json",
+                                  repeats=3, metric="instructions", revision="fixture-revision")
+        calls = []
+
+        def fake_command(invocation):
+            if invocation == ["valgrind", "--version"]:
+                return "valgrind-fixture"
+            if invocation == ["rustc", "-Vv"]:
+                return "rustc-fixture"
+            name = invocation[-1]
+            calls.append((name, next(arg for arg in invocation if arg.startswith("--toggle-collect="))))
+            profile = next(arg.split("=", 1)[1] for arg in invocation if arg.startswith("--callgrind-out-file="))
+            Path(profile).write_text("events: Dr Ir\nsummary: 2 1234\n", encoding="utf-8")
+            return json.dumps({"completed": name != failing, "workload": name})
+
+        return args, calls, fake_command
+
+    def test_every_fixed_symbol_is_collected_and_retained_three_times(self):
+        expected = {name: f"metallic_perf_{name}" for name in ["reads", "writes", "clone", "create", "destroy"]}
+        self.assertEqual(measure.WORKLOADS, expected)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args, calls, command = self.collect_fixture(root)
+            with patch("measure.command", command), patch("measure.sys.platform", "linux"), contextlib.redirect_stdout(io.StringIO()):
+                measure.collect(args)
+            self.assertEqual(set(measure.read_report(args.output)["workloads"]), set(expected))
+            self.assertEqual(len(list(root.glob("*.callgrind"))), 15)
+            for name, symbol in expected.items():
+                self.assertEqual(calls.count((name, f"--toggle-collect={symbol}")), 3)
+
+    def test_failed_mutator_completion_cannot_publish_a_partial_report(self):
+        for name in ["create", "destroy"]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                args, _, command = self.collect_fixture(Path(temporary), failing=name)
+                with patch("measure.command", command), patch("measure.sys.platform", "linux"), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(ValueError, "workload did not complete"):
+                        measure.collect(args)
+                self.assertFalse(args.output.exists())
 
 
 if __name__ == "__main__":

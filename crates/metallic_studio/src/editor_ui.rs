@@ -30,6 +30,7 @@ use crate::explorer::{Explorer, PlayTree};
 use crate::hints::{HintEvent, Hints};
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
+use crate::palette::{Choice, CommandPalette};
 use crate::panel;
 use crate::play::input::PlayInput;
 use crate::properties::Properties;
@@ -117,6 +118,10 @@ pub struct EditorUi {
     play_input: PlayInput,
     /// Explorer's read-only tree of the play world.
     play_tree: PlayTree,
+    /// Ctrl+K command palette and Shift+A Insert palette.
+    pub palette: CommandPalette,
+    /// The last question asked of Litha from the palette, for the Litha panel to take.
+    litha_question: Option<String>,
 }
 
 impl EditorUi {
@@ -149,6 +154,8 @@ impl EditorUi {
             settings_requested: false,
             play_input: PlayInput::new(),
             play_tree: PlayTree::new(),
+            palette: CommandPalette::new(),
+            litha_question: None,
         };
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
@@ -436,6 +443,7 @@ impl EditorUi {
         for g in [Gesture::Viewport, Gesture::Properties, Gesture::Tool] {
             self.state.set_gesture(g, false);
         }
+        self.palette.close();
         if self.state.start_play(id) {
             self.scripts.show_scene();
             self.play_input = PlayInput::new();
@@ -471,6 +479,48 @@ impl EditorUi {
         }
     }
 
+    /// Opens the command palette (Ctrl+K). The title bar's search field calls this too.
+    pub fn open_command_palette(&mut self) {
+        self.open_command_palette_with("");
+    }
+
+    /// Opens the command palette with `text` typed (">" lists commands only). Not while playing
+    /// or during a gesture.
+    pub fn open_command_palette_with(&mut self, text: &str) {
+        // Not mid-gesture either (a drag, a gizmo, a Properties scrub or a tool): the palette's
+        // choices are edits, and an edit now would land inside the open gesture.
+        if self.state.play.is_playing() || self.viewport.is_busy() || self.state.gesture_active() {
+            return;
+        }
+        self.palette.open(text, &self.state.project_dir);
+    }
+
+    /// The question the creator last asked Litha from the palette (for the Litha panel).
+    pub fn take_litha_question(&mut self) -> Option<String> {
+        self.litha_question.take()
+    }
+
+    /// Carries out what was picked in the palette.
+    fn apply_palette(&mut self, ctx: &egui::Context, choice: Choice) {
+        match choice {
+            Choice::Select(ids) => self.state.selection.set(ids),
+            Choice::Run(id) => self.run_action(id),
+            Choice::Insert { class, parent, at } => {
+                self.state.insert(class, parent, Some(at));
+            }
+            Choice::Asset(rel) => {
+                ctx.copy_text(rel.clone());
+                self.state.note(format!("Copied the path {rel}"));
+            }
+            Choice::Learn(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            Choice::AskLitha(question) => {
+                self.state
+                    .note("Litha arrives in milestone 7; your question is kept for it".into());
+                self.litha_question = Some(question);
+            }
+        }
+    }
+
     fn requests(&mut self, ctx: &egui::Context) -> Option<EditorExit> {
         let mut exit = None;
         for r in self.state.take_requests() {
@@ -484,6 +534,15 @@ impl EditorUi {
                 UiRequest::OpenSettings => self.settings_requested = true,
                 UiRequest::StartPlay(id) => self.start_play(ctx, id),
                 UiRequest::CloseGame => exit = exit.or(self.close_game()),
+                UiRequest::OpenPalette(text) => self.open_command_palette_with(text),
+                UiRequest::InsertAtCursor => {
+                    let pos = ctx
+                        .input(|i| i.pointer.latest_pos())
+                        .unwrap_or_else(|| self.viewport.rect().center());
+                    let parent = crate::palette::insert_parent(&self.state);
+                    self.palette
+                        .open_insert(pos, self.state.insert_point, parent);
+                }
             }
         }
         exit
@@ -925,9 +984,16 @@ impl EditorUi {
         );
 
         self.watch_hints();
-        let blocked = self.hints_blocked();
+        let blocked = self.hints_blocked() || self.palette.is_open();
         self.hints.ui(&ctx, self.viewport.rect(), blocked);
 
+        // Last of the overlays, so it draws over the context bar and hints.
+        if let Some(choice) = self
+            .palette
+            .show(&ctx, &self.state, &self.actions, &self.keymap)
+        {
+            self.apply_palette(&ctx, choice);
+        }
         if !played {
             let right_down = ctx.input(|i| i.pointer.secondary_down());
             self.keys(&ctx, viewport_hovered, right_down);

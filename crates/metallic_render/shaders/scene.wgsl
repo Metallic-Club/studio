@@ -46,6 +46,9 @@ struct VOut {
     // Unlit rows: the colour through `unfinish`, once per vertex (the inverse curve is a
     // bisection, too costly per pixel). Zero for other models.
     @location(7) @interpolate(flat) unlit: vec3<f32>,
+    // Linear view depth (clip w), for the shadow cascade choice. Passed explicitly because the
+    // fragment `position.w` builtin is not portable: it reads 1/w on Vulkan but w on DX12 (#426).
+    @location(8) view_depth: f32,
 }
 
 // `VOut.unlit` for a colour shaded by `row`.
@@ -71,6 +74,7 @@ fn vs_main(v: VIn) -> VOut {
     let cof = mat3x3<f32>(cross(c1, c2), cross(c2, c0), cross(c0, c1));
     var out: VOut;
     out.clip = g.view_proj * wp;
+    out.view_depth = out.clip.w;
     out.world_pos = wp.xyz;
     out.world_n = normalize(cof * v.normal);
     out.local_p = v.pos * vec3<f32>(length(c0), length(c1), length(c2));
@@ -373,8 +377,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     if (model == MODEL_FLAT) {
         sn = nf;
     }
-    let view_depth = 1.0 / in.clip.w;
-    let sh = shadow_factor(in.world_pos, sn, view_depth, in.clip.xy);
+    let sh = shadow_factor(in.world_pos, sn, in.view_depth, in.clip.xy);
     var col: vec3<f32>;
     switch model {
         case MODEL_TOON: {

@@ -1458,3 +1458,222 @@ fn spawn_location_outside_the_world_is_skipped() {
     assert_eq!(sim.died_count(), 0);
     assert_eq!(respawned_count(&sim), 0);
 }
+
+/// B's spot: a little ahead of A's right shoulder, facing A.
+const FACING: Vec3 = Vec3::new(0.75, 3.0, -2.4);
+
+/// A (`Player1`) at the origin facing -Z with its right arm pointing forward, and B at
+/// [`FACING`]. With `stepped`, both are stepped once far apart first (a character the
+/// controller has not stepped yet is an ordinary scene part for one step).
+fn facing_pair(stepped: bool) -> (Sim, InstanceId, InstanceId) {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    let a = sim.character();
+    sim.ctl.set_body_pose(a, &pointing_pose());
+    let b = if stepped {
+        let b = second_character(&mut sim, "B", Vec3::new(0.75, 3.0, -40.0), 180.0);
+        step_all(&mut sim, &[a, b], 2);
+        metallic_physics::place_character(&mut sim.world, b, FACING, 180.0);
+        b
+    } else {
+        second_character(&mut sim, "B", FACING, 180.0)
+    };
+    (sim, a, b)
+}
+
+fn second_character(sim: &mut Sim, name: &str, at: Vec3, yaw: f64) -> InstanceId {
+    let players = sim.world.root("Players").unwrap();
+    let p = sim.world.create("Player", Some(players)).unwrap();
+    sim.world
+        .set(p, "Name", Value::String(name.into()))
+        .unwrap();
+    let c = spawn_character(&mut sim.world, p).unwrap();
+    metallic_physics::place_character(&mut sim.world, c, at, yaw);
+    sim.phys.sync_from(&sim.world);
+    c
+}
+
+/// Steps every character in `characters` once per frame, then the physics.
+fn step_all(sim: &mut Sim, characters: &[InstanceId], frames: usize) {
+    for _ in 0..frames {
+        for &c in characters {
+            sim.ctl
+                .step(&mut sim.world, &sim.phys, c, MoveInput::default(), DT);
+        }
+        sim.events.extend(sim.ctl.drain_events());
+        sim.phys.step(&mut sim.world, DT);
+    }
+}
+
+/// Every (part, hit) pair of the Touched (or TouchEnded) events, as an unordered pair.
+fn touch_pairs(sim: &Sim, start: bool) -> Vec<(InstanceId, InstanceId)> {
+    sim.events
+        .iter()
+        .filter_map(|e| match (*e, start) {
+            (CharacterEvent::Touched { part, hit, .. }, true)
+            | (CharacterEvent::TouchEnded { part, hit, .. }, false) => {
+                Some(if part.to_bits() < hit.to_bits() {
+                    (part, hit)
+                } else {
+                    (hit, part)
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn in_model(world: &World, part: InstanceId, model: InstanceId) -> bool {
+    world.parent(part) == Some(model)
+}
+
+fn name_of(world: &World, id: InstanceId) -> String {
+    match world.get(id, "Name") {
+        Ok(Value::String(s)) => s,
+        _ => String::new(),
+    }
+}
+
+#[test]
+fn stepped_characters_touch_limb_to_limb_once_per_contact() {
+    let (mut sim, a, b) = facing_pair(true);
+    step_all(&mut sim, &[a, b], 30);
+    let started = touch_pairs(&sim, true);
+    let between: Vec<_> = started
+        .iter()
+        .filter(|&&(x, y)| {
+            (in_model(&sim.world, x, a) && in_model(&sim.world, y, b))
+                || (in_model(&sim.world, x, b) && in_model(&sim.world, y, a))
+        })
+        .copied()
+        .collect();
+    let names: Vec<String> = between
+        .iter()
+        .map(|&(x, y)| format!("{}-{}", name_of(&sim.world, x), name_of(&sim.world, y)))
+        .collect();
+    // The pointing hand meets B's limbs, not only B's root box.
+    let hand = sim.world.find_first_child(a, "RightHand").unwrap();
+    assert!(
+        between.iter().any(|&(x, y)| {
+            let other = if x == hand {
+                y
+            } else if y == hand {
+                x
+            } else {
+                return false;
+            };
+            name_of(&sim.world, other) != "HumanoidRootPart"
+        }),
+        "{names:?}"
+    );
+    // Each contact is reported once, though both characters step.
+    let mut unique = between.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), between.len(), "duplicates: {names:?}");
+    assert_eq!(sim.ctl.touching_characters(a).len(), between.len());
+
+    // B walks off (placed away): every contact ends once.
+    metallic_physics::place_character(&mut sim.world, b, Vec3::new(30.0, 3.0, 0.0), 0.0);
+    step_all(&mut sim, &[a, b], 5);
+    let mut ended: Vec<_> = touch_pairs(&sim, false)
+        .into_iter()
+        .filter(|p| between.contains(p))
+        .collect();
+    ended.sort_unstable();
+    assert_eq!(ended, unique, "{names:?}");
+    assert!(sim.ctl.touching_characters(a).is_empty());
+}
+
+#[test]
+fn a_dying_character_ends_its_limb_contacts() {
+    let (mut sim, a, b) = facing_pair(true);
+    step_all(&mut sim, &[a, b], 20);
+    let touching = sim.ctl.touching_characters(b).len();
+    assert!(touching > 0);
+    let humanoid = sim.world.find_first_child(b, "Humanoid").unwrap();
+    sim.world
+        .set(humanoid, "Health", Value::Number(0.0))
+        .unwrap();
+    let before = sim.events.len();
+    step_all(&mut sim, &[a, b], 10);
+    let ends = sim.events[before..]
+        .iter()
+        .filter(|e| {
+            matches!(e, CharacterEvent::TouchEnded { part, hit, .. }
+            if in_model(&sim.world, *part, a) || in_model(&sim.world, *hit, a))
+        })
+        .count();
+    assert_eq!(ends, touching);
+    // Dead, it touches nobody until it respawns.
+    let restarted = sim.events[before..]
+        .iter()
+        .filter(|e| {
+            matches!(e, CharacterEvent::Touched { part, hit, .. }
+            if in_model(&sim.world, *part, b) || in_model(&sim.world, *hit, b))
+        })
+        .count();
+    assert_eq!(restarted, 0);
+    assert!(sim.ctl.touching_characters(a).is_empty());
+}
+
+#[test]
+fn a_destroyed_character_ends_its_limb_contacts() {
+    let (mut sim, a, b) = facing_pair(true);
+    step_all(&mut sim, &[a, b], 20);
+    let touching = sim.ctl.touching_characters(a).len();
+    assert!(touching > 0);
+    sim.world.destroy(b);
+    let before = sim.events.len();
+    step_all(&mut sim, &[a], 2);
+    let ends = sim.events[before..]
+        .iter()
+        .filter(|e| matches!(e, CharacterEvent::TouchEnded { character, .. } if *character == a))
+        .count();
+    assert_eq!(ends, touching);
+}
+
+#[test]
+fn touches_between_characters_have_a_bounded_cost() {
+    let mut world = World::new_with_services();
+    baseplate(&mut world);
+    let mut sim = Sim::start(world);
+    let mut all = vec![sim.character()];
+    // A crowd packed into 3 x 3 studs: every body overlaps every other.
+    for k in 0..40 {
+        let f = f64::from(k);
+        let at = Vec3::new((f * 0.37).sin() * 1.5, 3.0, (f * 0.53).cos() * 1.5);
+        all.push(second_character(&mut sim, &format!("P{k}"), at, f * 9.0));
+    }
+    step_all(&mut sim, &all, 3);
+    let mut dropped = 0;
+    for &c in &all {
+        let cost = sim.ctl.touch_query_cost(c);
+        assert!(
+            cost.characters <= metallic_physics::MAX_CHARACTER_PAIRS,
+            "{cost:?}"
+        );
+        assert!(cost.character_tests <= cost.characters * 256, "{cost:?}");
+        dropped += cost.characters_dropped;
+    }
+    assert!(dropped > 0, "the crowd should reach the cap");
+}
+
+#[test]
+fn an_unstepped_character_is_touched_like_scene_parts() {
+    // B is never stepped (an NPC, or a remote character on a client): its parts are ordinary
+    // scene parts, so A's hand still touches them.
+    let (mut sim, a, b) = facing_pair(false);
+    step_all(&mut sim, &[a], 20);
+    let hand = sim.world.find_first_child(a, "RightHand").unwrap();
+    assert!(
+        sim.events
+            .iter()
+            .any(|e| matches!(e, CharacterEvent::Touched { part, hit, .. }
+            if *hit == hand && in_model(&sim.world, *part, b))),
+        "{:?}",
+        sim.events
+    );
+    assert!(sim.ctl.touching_characters(a).is_empty());
+}
