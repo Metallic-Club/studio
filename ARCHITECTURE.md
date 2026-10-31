@@ -44,6 +44,13 @@ apps.
   `Model.WorldPivot`. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
+  `PropDef::normalize` converts a String write outside `allowed` to its stored form (a display name to an id).
+  `look_override` (#222): `BasePart.LookOverride` and `Model.LookOverride` (String, default `inherit`; ids
+  `realistic`, `soft`, `toon`, `low-poly`, `voxel`, `pixel-3d`, `retro-32`; display names such as "Retro / PS1" are
+  accepted on write). `resolve(world, id)` gives the effective style: own value, else the nearest ancestor Model's
+  non-`inherit` value, else `None` (the place Look). `LookOverrides` caches it per part and is kept current with
+  `apply(world, &changes)` from the change journal, returning the parts whose style changed (including parts below a
+  Model whose own value changed). The renderer's `Scene` holds one; `PartDraw::style` carries the resolved id.
 - **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
   skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
   per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
