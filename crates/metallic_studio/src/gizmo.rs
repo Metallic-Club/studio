@@ -30,6 +30,7 @@
 use std::collections::HashSet;
 
 use eframe::egui::{self, Color32, Pos2, Shape, Stroke};
+use metallic_core::transform::MAX_PART_SIZE;
 use metallic_core::{InstanceId, Value, World};
 use metallic_render::glam::{DQuat, DVec3};
 
@@ -50,7 +51,8 @@ use crate::transform::{PartTransform, Ray, from_d, quat_to_orientation, snap};
 pub const AXIS_PX: f64 = 90.0;
 /// Pointer distance (points) that still counts as on a handle.
 const HIT_PX: f64 = 8.0;
-/// Smallest part size in studs.
+/// Smallest size a resize handle gives, in studs (the move increment floor, spec 4.3). Core's
+/// limits ([`metallic_core::transform::MIN_PART_SIZE`] .. [`MAX_PART_SIZE`]) still apply.
 pub const MIN_SIZE: f64 = 0.05;
 /// Ring sample count.
 const RING_SEGMENTS: usize = 64;
@@ -811,7 +813,19 @@ impl GizmoDrag {
 
     fn set_uniform(&mut self, factor: f64) {
         self.resizes = true;
-        let f = factor.max(self.min_factor());
+        let largest = self
+            .parts
+            .iter()
+            .map(|p| p.start.size.max_element())
+            .fold(0.0, f64::max);
+        let max_factor = if largest > 0.0 {
+            MAX_PART_SIZE / largest
+        } else {
+            f64::INFINITY
+        };
+        // Uniform: the factor stops where the smallest axis hits the floor or the largest hits
+        // core's size limit.
+        let f = factor.max(self.min_factor()).min(max_factor);
         let o = self.about;
         for (cur, p) in self.current.iter_mut().zip(&self.parts) {
             cur.position = o + (p.start.position - o) * f;
@@ -1318,13 +1332,13 @@ fn resize_face(p: &DragPart, axis: DVec3, sign: f64, d: f64, both: bool) -> Part
     };
     if p.ball {
         let start = p.start.size.min_element();
-        let new = (start + grow).max(MIN_SIZE);
+        let new = (start + grow).clamp(MIN_SIZE, MAX_PART_SIZE);
         t.size = DVec3::splat(new);
         t.position = p.start.position + shift(start, new);
         return t;
     }
     let start = p.start.size[local];
-    let new = (start + grow).max(MIN_SIZE);
+    let new = (start + grow).clamp(MIN_SIZE, MAX_PART_SIZE);
     t.size[local] = new;
     t.position = p.start.position + shift(start, new);
     t
@@ -1696,6 +1710,9 @@ mod tests {
         let cur = d.update(&input(ray_down(1.0, 0.0), &s, alt))[0];
         assert!((cur.size.x - 6.0).abs() < 1e-9, "both faces: 4 + 2 * 1");
         assert!(cur.position.x.abs() < 1e-9, "centre stays");
+        // Core's largest part size caps the other end.
+        let cur = d.update(&input(ray_down(5000.0, 0.0), &s, none))[0];
+        assert!((cur.size.x - MAX_PART_SIZE).abs() < 1e-9);
     }
 
     #[test]

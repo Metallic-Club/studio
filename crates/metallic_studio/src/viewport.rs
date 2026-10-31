@@ -52,7 +52,8 @@ struct Gpu {
 
 impl Gpu {
     fn new(rs: &egui_wgpu::RenderState) -> Gpu {
-        let ctx = RenderContext::from_eframe(rs.device.clone(), rs.queue.clone());
+        let ctx =
+            RenderContext::from_eframe(rs.device.clone(), rs.queue.clone(), rs.adapter.clone());
         Gpu {
             renderer: Renderer::new(&ctx, TEXTURE_FORMAT),
             device: rs.device.clone(),

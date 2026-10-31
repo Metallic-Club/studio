@@ -108,7 +108,8 @@ impl ScriptTabs {
             self.current = None;
             return;
         };
-        ui.label(
+        // The path label also names the text field for screen readers.
+        let title = ui.label(
             RichText::new(state.world.full_name(s.id))
                 .color(ui_tokens().text_dim)
                 .small(),
@@ -130,14 +131,16 @@ impl ScriptTabs {
                             .font(ui_tokens().mono())
                             .color(ui_tokens().text_dim),
                     );
-                    let r = ui.add(
-                        egui::TextEdit::multiline(&mut s.buffer)
-                            .code_editor()
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(30)
-                            .lock_focus(true)
-                            .layouter(&mut layouter),
-                    );
+                    let r = ui
+                        .add(
+                            egui::TextEdit::multiline(&mut s.buffer)
+                                .code_editor()
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(30)
+                                .lock_focus(true)
+                                .layouter(&mut layouter),
+                        )
+                        .labelled_by(title.id);
                     lost_focus = r.lost_focus();
                 });
             });

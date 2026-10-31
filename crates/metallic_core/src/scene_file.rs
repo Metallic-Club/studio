@@ -17,6 +17,7 @@
 //! ```
 //! Instances are written in tree order. Built-in service instances are marked `builtin: true`
 //! and are matched with the ones `World::new_with_services` already made when loading.
+use crate::cframe::CFrame;
 use crate::classes::{all_properties, default_value};
 use crate::value::{Color3, UDim2, Value, Vec3};
 use crate::{CoreError, InstanceId, World};
@@ -39,6 +40,7 @@ enum SceneValue {
     Color3(Color3),
     UDim2(UDim2),
     Ref(Option<usize>),
+    CFrame(CFrame),
 }
 
 #[derive(Deserialize)]
@@ -68,6 +70,7 @@ fn to_scene(v: Value, index_of: &dyn Fn(InstanceId) -> Option<usize>) -> SceneVa
         Value::Color3(x) => SceneValue::Color3(x),
         Value::UDim2(x) => SceneValue::UDim2(x),
         Value::Ref(r) => SceneValue::Ref(r.and_then(index_of)),
+        Value::CFrame(cf) => SceneValue::CFrame(*cf),
     }
 }
 
@@ -223,6 +226,7 @@ impl Loader {
                 SceneValue::Vector3(x) => Value::Vector3(x),
                 SceneValue::Color3(x) => Value::Color3(x),
                 SceneValue::UDim2(x) => Value::UDim2(x),
+                SceneValue::CFrame(x) => Value::CFrame(Box::new(x)),
                 SceneValue::Ref(r) => {
                     self.pending.push((id, name, r));
                     continue;

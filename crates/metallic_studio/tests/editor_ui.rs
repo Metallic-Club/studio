@@ -356,3 +356,32 @@ fn typing_during_a_drag_sets_the_exact_amount() {
     );
     assert_eq!(s.history.len(), 1);
 }
+
+#[test]
+fn closing_with_unsaved_script_text_asks_first() {
+    use egui::accesskit::Role;
+    let (mut ui, _model, _part) = editor();
+    let ws = ui.state.world.root("Workspace").unwrap();
+    let script = ui.state.world.create("Script", Some(ws)).unwrap();
+    ui.state.history.mark_saved();
+    assert!(!ui.state.is_dirty());
+    ui.state
+        .request(metallic_studio::editor::UiRequest::OpenScript(script));
+    let mut h = harness(ui);
+    h.get_by_role(Role::MultilineTextInput).click();
+    h.run_steps(2);
+    h.event(Event::Text("print(1)".into()));
+    h.run_steps(2);
+    // The text is only in the tab so far; Alt+F4 (the window close) must still ask.
+    assert!(!h.state().state.is_dirty());
+    assert!(
+        !h.state_mut().request_quit(),
+        "unsaved script text holds the close"
+    );
+    h.run_steps(2);
+    assert!(h.state().is_confirming());
+    assert_eq!(
+        h.state().state.world.get(script, "Source").unwrap(),
+        Value::String("print(1)".into())
+    );
+}

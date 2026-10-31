@@ -43,3 +43,9 @@ METALLIC_TEMPLATES_DIR=templates target/debug/metallic-studio --screenshot out.p
   and Settings > Keyboard (#129), copy/paste, viewport grid, the renderer's outline pass (outlines are drawn as
   projected box edges with egui).
 - Building tools #213-#215 build on `EditorState::record`, `Selection`, `GizmoDrag`.
+
+## Merge with main 2804d761+ (re-review)
+- Properties shows CFrame values as position plus orientation and skips `hidden` properties.
+- Size writes from Properties and the scale handles stay inside core's 0.001-2048 limits
+  (`metallic_core::transform::clamp_part_size` / `MAX_PART_SIZE`).
+- Close game and the window close flush open script tabs before checking for unsaved changes.

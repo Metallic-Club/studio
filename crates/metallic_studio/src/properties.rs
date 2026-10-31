@@ -13,12 +13,13 @@ use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
 use metallic_core::classes::{PropDef, all_properties, find_property};
-use metallic_core::{Color3, InstanceId, UDim2, Value, Vec3};
+use metallic_core::{CFrame, Color3, InstanceId, UDim2, Value, Vec3};
 
 use crate::commands::{Command, PropName};
 use crate::editor::{EditorState, UiRequest};
 use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
+use metallic_core::transform::clamp_part_size;
 
 /// Section of a property, in display order.
 fn section(prop: &str) -> usize {
@@ -130,6 +131,8 @@ impl Properties {
             let c = state.world.class_name(id).unwrap_or("?");
             props.retain(|p| find_property(c, p.name).is_some());
         }
+        // Engine bookkeeping (for example a Model's scale) is not shown.
+        props.retain(|p| !p.hidden);
         let filter = self.filter.to_lowercase();
         props.retain(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter));
 
@@ -261,6 +264,38 @@ impl Properties {
                         }
                     }
                 }
+                (Value::CFrame(cf), _) => {
+                    // Shown and edited as position plus orientation (degrees, Y then X then Z).
+                    let o = cf.orientation_degrees();
+                    let rows = [
+                        ("Position", [cf.position.x, cf.position.y, cf.position.z], 0),
+                        ("Rotation", [o.x, o.y, o.z], 3),
+                    ];
+                    ui.vertical(|ui| {
+                        for (label, comps, base) in rows {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(label).color(ui_tokens().text_dim));
+                                for (axis, &c) in comps.iter().enumerate() {
+                                    ui.label(
+                                        RichText::new(["X", "Y", "Z"][axis])
+                                            .color(ui_tokens().axis[axis])
+                                            .strong(),
+                                    );
+                                    let mut x = c;
+                                    let r = ui.add(
+                                        egui::DragValue::new(&mut x)
+                                            .speed(if base == 0 { 0.1 } else { 1.0 })
+                                            .max_decimals(3)
+                                            .custom_parser(move |s| eval_relative(s, c)),
+                                    );
+                                    if r.changed() {
+                                        edits.push(Edit::Component(name.clone(), base + axis, x));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
                 (Value::Color3(c), _) => {
                     let mut rgb = [to_u8(c.r), to_u8(c.g), to_u8(c.b)];
                     if ui.color_edit_button_srgb(&mut rgb).changed() {
@@ -329,6 +364,16 @@ impl Properties {
                 (prop, vals)
             }
         };
+        // Part sizes stay inside the engine's limits, as a script's write would.
+        let values: Vec<(InstanceId, Value)> = values
+            .into_iter()
+            .map(|(id, v)| match v {
+                Value::Vector3(s) if prop == "Size" && state.world.is_a(id, "BasePart") => {
+                    (id, Value::Vector3(clamp_part_size(s)))
+                }
+                v => (id, v),
+            })
+            .collect();
         if live {
             let name: PropName = prop.as_str().into();
             for (id, v) in values {
@@ -371,7 +416,8 @@ fn to_u8(c: f64) -> u8 {
     c.round().clamp(0.0, 255.0) as u8
 }
 
-/// `value` with component `i` replaced by `x` (Vector3: x, y, z; UDim2: xs, xo, ys, yo).
+/// `value` with component `i` replaced by `x` (Vector3: x, y, z; UDim2: xs, xo, ys, yo;
+/// CFrame: position x, y, z then orientation x, y, z in degrees).
 fn with_component(value: &Value, i: usize, x: f64) -> Option<Value> {
     match *value {
         Value::Vector3(v) => {
@@ -384,6 +430,16 @@ fn with_component(value: &Value, i: usize, x: f64) -> Option<Value> {
             *c.get_mut(i)? = x;
             Some(Value::UDim2(UDim2::new(c[0], c[1], c[2], c[3])))
         }
+        // 0..3 position, 3..6 orientation in degrees.
+        Value::CFrame(ref cf) => {
+            let o = cf.orientation_degrees();
+            let mut c = [cf.position.x, cf.position.y, cf.position.z, o.x, o.y, o.z];
+            *c.get_mut(i)? = x;
+            Some(Value::CFrame(Box::new(CFrame::from_position_orientation(
+                Vec3::new(c[0], c[1], c[2]),
+                Vec3::new(c[3], c[4], c[5]),
+            ))))
+        }
         _ => None,
     }
 }
@@ -391,6 +447,23 @@ fn with_component(value: &Value, i: usize, x: f64) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cframe_edits_position_and_orientation_separately() {
+        let cf =
+            CFrame::from_position_orientation(Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 30.0, 0.0));
+        let v = Value::CFrame(Box::new(cf));
+        let Some(Value::CFrame(moved)) = with_component(&v, 1, 5.0) else {
+            panic!()
+        };
+        assert_eq!(moved.position, Vec3::new(1.0, 5.0, 3.0));
+        assert!((moved.orientation_degrees().y - 30.0).abs() < 1e-9);
+        let Some(Value::CFrame(turned)) = with_component(&v, 4, 90.0) else {
+            panic!()
+        };
+        assert_eq!(turned.position, Vec3::new(1.0, 2.0, 3.0));
+        assert!((turned.orientation_degrees().y - 90.0).abs() < 1e-9);
+    }
 
     #[test]
     fn component_edit_keeps_other_axes() {
