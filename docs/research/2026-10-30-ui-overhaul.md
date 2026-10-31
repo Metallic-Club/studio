@@ -150,7 +150,7 @@ shared JSON's empty `$themes`):
 | `bg-active` | pressed, pressed segment, keycaps | `#35323e` | `#43404d` | `#d8d5de` |
 | `select` / `select-weak` | selected row / multi-select | `#3a3354` / `#2a2638` | `#3a3354` / `#2f2b3b` | `#e4def8` / `#f3f0fc` |
 | `line` / `line-strong` | dividers / panel edges | `#2b2933` / `#43404d` | `#3a3744` / `#5f5b6b` | `#d8d5de` / `#c3c0ca` |
-| `line-control` | input borders (3:1 non-text) | `#6e6a79` (3.61) | `#8a8695` | `#7a7685` |
+| `line-control` | input borders (3:1 non-text) | `#6f6b7a` (3.66) | `#8a8695` | `#7a7685` |
 | `text-1` / `text-2` / `text-3` | body / secondary / hints | `#e6e4ea` / `#aeaab6` / `#8e8a97` | `#f4f3f7` / `#c3c0ca` / `#b3afbd` | `#16151b` / `#43404d` / `#57535f` |
 | `text-off` | disabled | `#5f5b6b` | `#6c6878` | `#a3a0ad` |
 | `icon` | default glyph | `#bdbac4` | `#cfccd6` | `#43404d` |
