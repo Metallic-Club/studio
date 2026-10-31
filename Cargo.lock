@@ -3556,6 +3556,8 @@ dependencies = [
  "metallic_script",
  "png",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "wgpu",
@@ -3575,6 +3577,7 @@ version = "0.1.1"
 dependencies = [
  "eframe",
  "env_logger",
+ "glam 0.30.10",
  "log",
  "metallic_core",
  "metallic_runtime",

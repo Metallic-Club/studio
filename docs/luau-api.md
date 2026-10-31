@@ -4,7 +4,7 @@ Scripts are sandboxed Luau with Roblox-style names. `Script`s run in the **serve
 (one local player, `Player1`, in the default combined host). Errors read `<Instance full name>:<line>: <message>` and go to the output sink; one failing
 script or handler never stops the others. Every call into a script (start, handler, Heartbeat, remote) has a 0.1 s budget.
 
-Code: `crates/metallic_script/src/api/`. Tests: `crates/metallic_script/tests/{api,remote,cframe}.rs`.
+Code: `crates/metallic_script/src/api/`. Tests: `crates/metallic_script/tests/{api,remote,cframe,pivot}.rs`.
 
 ## Where scripts run
 In combined mode, `ScriptHost::start` runs in tree order: every enabled `Script` under Workspace or ServerScriptService (server VM) and every
@@ -70,13 +70,55 @@ print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
     `tostring` gives the 12 components. Fields cannot be assigned.
 - `BasePart.CFrame` reads `Position` and `Orientation` as one frame and writes both. `Orientation` keeps degrees
   applied Y, then X, then Z, so `part.CFrame:ToOrientation()` is `Orientation` in radians. A non-finite CFrame is
-  refused and changes nothing. `CFrame` is not a stored property type: it is not in scene files or remote payloads.
+  refused and changes nothing. `BasePart.CFrame` itself is not stored; `PivotOffset` and `WorldPivot` are stored
+  CFrame properties (scene files keep them). Remote payloads do not carry CFrames yet.
 - `Color3.fromRGB(r, g, b)`: `R G B` read as 0..1.
 - `UDim2.new(xs, xo, ys, yo)`: `X` and `Y` read as `{Scale, Offset}`.
 
 ```lua
 part.Color = Color3.fromRGB(255, 80, 0)
 part.Size = Vector3.new(4, 1, 2) * 2
+```
+
+## Pivots, size and scale
+Roblox's `PVInstance` API on `BasePart` and `Model` (`IsA("PVInstance")` is true for both; it is not a registry class).
+Code: `metallic_core::transform`, shared with Studio's building tools. Spec: `docs/design/building-tools.md` sections 4.3,
+4.4 and 16.
+
+- `GetPivot()`: for a part `CFrame * PivotOffset`. For a Model, its `PrimaryPart`'s pivot when that is a BasePart inside
+  the model; otherwise `WorldPivot`.
+- `PivotTo(cframe)`: moves the part, or every BasePart descendant of the model (through Folders and nested Models),
+  so the pivot lands on `cframe`. The WorldPivots of nested Models move with them. On a Model without a PrimaryPart,
+  `WorldPivot` becomes `cframe`.
+- `BasePart.PivotOffset` (CFrame, default identity): the pivot relative to the part.
+- `Model.WorldPivot` (CFrame): until it is first set (directly or by `PivotTo`) it reads as the centre of the model's
+  bounding box with world axes, and follows the parts; after that it stays where it was put. It is ignored while a
+  valid `PrimaryPart` is set. `Model.PrimaryPart` (BasePart or nil) is ignored when it is not a BasePart inside the model.
+- `BasePart:Resize(face, delta)`: `face` is `Enum.NormalId` (`Right Top Back Left Bottom Front`, values 0 to 5; the number
+  or the name also work). The face moves `delta` studs along its normal and the opposite face stays; sizes stay within
+  0.001 to 2048 studs.
+  A Ball grows on all axes, a Cylinder's Y and Z together. Returns false and changes nothing when the part has
+  `CanCollide` and the grown part would newly overlap (by more than 0.0001 studs) another `CanCollide` part in
+  Workspace; true otherwise.
+- `Model:ScaleTo(scale)` / `GetScale()`: `scale` (positive, finite) is absolute, relative to the model's size at scale 1,
+  as in Roblox: `ScaleTo(2)` then `ScaleTo(0.5)` gives half the original size, and `ScaleTo(1)` (or
+  `ScaleTo(GetScale() * 0.5)` after `ScaleTo(2)`) restores it. Part positions and sizes scale about the pivot, which stays
+  put; orientations stay; `PivotOffset` positions and nested WorldPivots scale too; nested Models' `GetScale` multiplies.
+- **Limits.** A part's `Size` is 0.001 to 2048 studs per axis. Assigning `Size` clamps each axis, as Roblox does, and
+  so does `Resize`. `ScaleTo` and `PivotTo` compute and check every new value first. If a part would leave the size
+  limits, or a position would overflow, they error and change nothing (`GetScale` included).
+- **CFrame properties.** `PivotOffset`, `WorldPivot`, `BasePart.CFrame` and `PivotTo`'s target are made orthonormal on
+  write. A scaled or skewed matrix keeps its right axis and corrects the others (`CFrame:Orthonormalize`), so
+  `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate rotation (for example all zeros) errors.
+- `Model:GetBoundingBox()` returns `(CFrame, Vector3)`: the box around every BasePart descendant, oriented like the
+  PrimaryPart (or the pivot when there is none). An empty model returns its pivot and size 0.
+  `Model:GetExtentsSize()` returns that size.
+
+```lua
+local door = workspace.Door
+door.PrimaryPart = door.Hinge
+door:PivotTo(door:GetPivot() * CFrame.Angles(0, math.rad(90), 0))   -- swing about the hinge
+local cf, size = door:GetBoundingBox()
 ```
 
 ## Signals
@@ -173,7 +215,7 @@ Spec: `docs/design/input-actions.md` section 5. Everything here needs the client
 controls of the input runtime), `Enum.UserInputType` (`MouseButton1` to `3`, `MouseWheel`, `MouseMovement`, `Touch`, `Keyboard`,
 `Focus`, `Gamepad1` to `4`, `TextInput`, `None`), `Enum.UserInputState` (`Begin`, `Change`, `End`, `Cancel`, `None`),
 `Enum.InputActionType`, `Enum.InputTrigger`, `Enum.TouchSlot` (Metallic), `Enum.ContextActionResult` (`Sink`, `Pass`),
-`Enum.PreferredInput` (`KeyboardAndMouse`, `Gamepad`, `Touch`), `Enum.RotationOrder` (`XYZ`, `XZY`, `YZX`, `YXZ`, `ZXY`, `ZYX`; used by `CFrame`), `Enum.ContextActionPriority` (`Low` 1000, `Medium` 2000,
+`Enum.PreferredInput` (`KeyboardAndMouse`, `Gamepad`, `Touch`), `Enum.RotationOrder` (`XYZ`, `XZY`, `YZX`, `YXZ`, `ZXY`, `ZYX`; used by `CFrame`), `Enum.NormalId` (used by `Resize`), `Enum.ContextActionPriority` (`Low` 1000, `Medium` 2000,
 `High` 3000). Items have `Name` and `Value`, compare with `==` and print as `Enum.KeyCode.Space`. A wrong member errors
 (`Nope is not a valid member of Enum.KeyCode`). Raw `UserInputService` events (#80) will reuse these names.
 

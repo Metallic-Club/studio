@@ -146,6 +146,8 @@ pub struct GamepadSource {
     slots: [Option<GamepadId>; MAX_GAMEPADS],
     /// The last stick levels sent, per pad: left, right.
     sticks: [[[f32; 2]; 2]; MAX_GAMEPADS],
+    /// USB vendor id of the pad that sent the last event (for the Auto glyph style).
+    last_vendor: Option<u16>,
 }
 
 impl GamepadSource {
@@ -156,7 +158,18 @@ impl GamepadSource {
             started,
             slots: [None; MAX_GAMEPADS],
             sticks: [[[0.0; 2]; 2]; MAX_GAMEPADS],
+            last_vendor: None,
         }
+    }
+
+    /// USB vendor id of the pad used last, when gilrs knows it.
+    pub fn last_vendor(&self) -> Option<u16> {
+        self.last_vendor
+    }
+
+    /// Appends this frame's events to `out` (the same as [`RawSource::poll`]).
+    pub fn poll_into(&mut self, out: &mut Vec<RawEvent>) {
+        self.poll(out);
     }
 
     fn slot_of(&mut self, id: GamepadId) -> Option<u8> {
@@ -180,6 +193,9 @@ impl RawSource for GamepadSource {
                 continue;
             };
             let device = Device::Gamepad(slot);
+            if !matches!(event.event, EventType::Disconnected) {
+                self.last_vendor = gilrs.gamepad(event.id).vendor_id();
+            }
             match event.event {
                 // Analog triggers come through `ButtonChanged` only, so a press/release pair
                 // cannot contradict their level.

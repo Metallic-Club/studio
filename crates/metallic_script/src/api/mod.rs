@@ -11,6 +11,7 @@ mod datatypes;
 mod errors;
 mod input;
 mod instance;
+mod pivot;
 mod remote;
 mod services;
 mod signals;
@@ -131,6 +132,7 @@ fn build(
     let mut raw = instance::methods(lua, &waiters, &now)?;
     raw.extend(services::methods(lua)?);
     raw.extend(remote::methods(lua)?);
+    raw.extend(pivot::methods(lua)?);
     raw.extend(input::action_methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
