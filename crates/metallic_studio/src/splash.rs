@@ -244,18 +244,25 @@ pub fn viewport(builder: ViewportBuilder) -> ViewportBuilder {
         .with_resizable(false)
 }
 
-/// Turns the splash window into the normal Studio window, centred where the splash was.
+/// Where the main window's outer top-left goes so it is centred on the splash, in the same screen
+/// coordinates as the splash's outer rect. These can be negative: a monitor left of or above the
+/// primary one has negative coordinates, and clamping to zero would throw the window onto the
+/// primary monitor.
+pub fn main_window_position(splash_outer: Rect, main: Vec2) -> egui::Pos2 {
+    splash_outer.center() - main / 2.0
+}
+
+/// Turns the splash window into the normal Studio window, centred where the splash was (on the
+/// monitor the splash was on).
 pub fn become_main_window(ctx: &egui::Context) {
-    let centre = ctx.input(|i| i.viewport().outer_rect.map(|r| r.center()));
+    let outer = ctx.input(|i| i.viewport().outer_rect);
     ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
     ctx.send_viewport_cmd(ViewportCommand::Resizable(true));
     ctx.send_viewport_cmd(ViewportCommand::InnerSize(MAIN_SIZE));
     ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(MAIN_MIN_SIZE));
-    if let Some(centre) = centre {
-        let top_left = centre - MAIN_SIZE / 2.0;
-        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(
-            top_left.x.max(0.0),
-            top_left.y.max(0.0),
+    if let Some(outer) = outer {
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(main_window_position(
+            outer, MAIN_SIZE,
         )));
     }
 }
@@ -263,6 +270,24 @@ pub fn become_main_window(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_main_window_centres_on_the_splash_on_any_monitor() {
+        let splash = |x: f32, y: f32| Rect::from_min_size(egui::pos2(x, y), SIZE);
+        // Primary monitor: splash centred on a 1920x1080 screen.
+        let p = main_window_position(splash(600.0, 330.0), MAIN_SIZE);
+        assert_eq!(p, egui::pos2(320.0, 140.0));
+        // A monitor left of the primary has negative x: the window must stay there.
+        let p = main_window_position(splash(-1560.0, 330.0), MAIN_SIZE);
+        assert_eq!(p, egui::pos2(-1840.0, 140.0));
+        // A monitor above the primary has negative y.
+        let p = main_window_position(splash(600.0, -750.0), MAIN_SIZE);
+        assert_eq!(p, egui::pos2(320.0, -940.0));
+        // Same centre before and after.
+        let r = splash(-300.0, -200.0);
+        let p = main_window_position(r, MAIN_SIZE);
+        assert_eq!(p + MAIN_SIZE / 2.0, r.center());
+    }
 
     #[test]
     fn steps_advance_one_at_a_time_and_report_their_count() {

@@ -234,10 +234,10 @@ impl EditorUi {
         if busy {
             pressed.clear();
         } else if typing {
-            // Only Save and Play keys work while a text field has focus.
+            // Only Save and Play keys work while a text field has focus (Ctrl+W must not close the game).
             self.keymap
                 .pressed(ctx, &[KeyContext::Global], &mut pressed);
-            pressed.retain(|a| a.starts_with("file.") || a.starts_with("play."));
+            pressed.retain(|a| *a == "file.save" || a.starts_with("play."));
         } else if playing {
             // Studio keeps F5, Shift+F5, Esc and Ctrl+S; a disabled action leaves its key to the
             // game.
@@ -283,7 +283,20 @@ impl EditorUi {
         }
     }
 
-    fn requests(&mut self, ctx: &egui::Context) {
+    /// File > Close game and Ctrl+W: closes at once, or asks first when there are unsaved changes.
+    fn close_game(&mut self) -> Option<EditorExit> {
+        self.scripts.flush(&mut self.state);
+        if self.state.is_dirty() {
+            self.confirm = Some(Leave::Close);
+            self.save_error = None;
+            None
+        } else {
+            Some(EditorExit::Close)
+        }
+    }
+
+    fn requests(&mut self, ctx: &egui::Context) -> Option<EditorExit> {
+        let mut exit = None;
         for r in self.state.take_requests() {
             match r {
                 UiRequest::FrameSelection | UiRequest::FrameAll => {
@@ -294,8 +307,10 @@ impl EditorUi {
                 UiRequest::RunAction(id) => self.run_action(id),
                 UiRequest::OpenSettings => self.settings_requested = true,
                 UiRequest::StartPlay(id) => self.start_play(ctx, id),
+                UiRequest::CloseGame => exit = exit.or(self.close_game()),
             }
         }
+        exit
     }
 
     /// Draws one frame. `render_state` is eframe's wgpu state (None without a GPU).
@@ -314,10 +329,11 @@ impl EditorUi {
             self.save_error = None;
         }
         let played = self.state.play.is_playing();
+        let mut early = None;
         if played {
             // Studio keys first (Esc, Shift+F5, Ctrl+S); what is left belongs to the game.
             self.keys(&ctx, false, false);
-            self.requests(&ctx);
+            early = self.requests(&ctx);
         }
         let (rect, hovered) = (self.viewport.rect(), self.viewport.play_hovered());
         let prompt = self.confirm.is_some();
@@ -330,7 +346,7 @@ impl EditorUi {
         }
         self.state.play.update(dt);
         let playing = self.state.play.is_playing();
-        let mut exit = EditorExit::Stay;
+        let mut exit = early.unwrap_or(EditorExit::Stay);
 
         egui::Panel::top("menu")
             .frame(
@@ -357,13 +373,15 @@ impl EditorUi {
                             &mut self.state,
                             &self.keymap,
                         );
-                        if ui.button("Close game").clicked() {
-                            self.scripts.flush(&mut self.state);
-                            if self.state.is_dirty() {
-                                self.confirm = Some(Leave::Close);
-                                self.save_error = None;
-                            } else {
-                                exit = EditorExit::Close;
+                        if ui
+                            .add(
+                                egui::Button::new("Close game")
+                                    .shortcut_text(self.keymap.label("file.close")),
+                            )
+                            .clicked()
+                        {
+                            if let Some(done) = self.close_game() {
+                                exit = done;
                             }
                             ui.close();
                         }
@@ -643,7 +661,9 @@ impl EditorUi {
             let right_down = ctx.input(|i| i.pointer.secondary_down());
             self.keys(&ctx, viewport_hovered, right_down);
         }
-        self.requests(&ctx);
+        if let Some(done) = self.requests(&ctx) {
+            exit = done;
+        }
 
         if let Some(leave) = self.confirm {
             let done = match leave {

@@ -333,12 +333,13 @@ impl DemoApp {
 
     /// Draws the whole editor into `ui`.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        let t = self.theme;
         if !self.theme_applied {
-            t.apply(ui.ctx());
-            crate::theme::install_system_fonts(ui.ctx());
+            crate::theme::apply(ui.ctx());
             self.theme_applied = true;
         }
+        // Read the palette each frame so a theme switch shows at once.
+        self.theme = Theme::current();
+        let t = self.theme;
         let dt = ui.input(|i| i.stable_dt).min(0.1);
         self.state.tick(dt);
         if self.state.playing {
