@@ -425,6 +425,8 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool) -> Respons
     let color = if enabled { self::icon() } else { text_off() };
     paint_icon(ui.painter(), rect.shrink(4.0), icon, color);
     focus_ring(ui, &resp, rect, R_SM);
+    // The tooltip doubles as the accessible name (screen readers and UI tests find it).
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tip));
     let resp = resp.on_hover_text(tip);
     if enabled {
         resp
@@ -453,6 +455,7 @@ pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, text: &str) -> 
     let icon_w = if icon.is_some() { 16.0 + S3 } else { 0.0 };
     let size = vec2(galley.size().x + icon_w + 2.0 * S5, 28.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
     let down = resp.is_pointer_button_down_on();
     let hot = resp.hovered() || resp.has_focus();
     let (fill, fg) = match kind {
