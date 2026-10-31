@@ -130,6 +130,15 @@ apps.
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
   parts. The level of detail is picked from the projected height in pixels (LOD1 below 220 px, LOD2 below 80 px).
+  Shading models (#63, `shading.rs`): one surface shader (`fs_main` in `scene.wgsl`) switches on the model id in a
+  row of the material table, a 96-row uniform buffer (8 style slots x 12 rows of 64 B: the 10 materials, the
+  Character row, one reserved). `ShadingModel` is Lit, Toon, Unlit or Flat; `ModelParams` holds the look-spec
+  parameters (wrap, roughness floor, bands, softness, shade tint, flatten, highlight, rim, light steps). A `Shading`
+  is a default model plus material overrides and the Character row; `Renderer::set_shading` sets style slot 0 (the
+  place Look), `set_style_shading` the per-part slots, and the table uploads only when a slot changed.
+  `InstanceRaw.material` is four u32: [0] row, [1] flags (reserved for hull, vertex snap, affine, nearest and the
+  style slot), [2] material id for procedural detail, [3] reserved. Standard skinned meshes use the Character row
+  with their slot's own roughness and metalness; `SkinStyle::Toon` (#320) keeps its own pipeline.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
@@ -462,7 +471,8 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
 - **A material:** the material list in `classes.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
-  procedural detail), and density/friction in `metallic_physics`. Test `material_table_has_every_registry_material`
+  procedural detail), and density/friction in `metallic_physics`. The material table has one spare row per style
+  (`ROWS_PER_STYLE` in `shading.rs`, and `CHARACTER_ROW` in `scene.wgsl`, moves up by one). Test `material_table_has_every_registry_material`
   must still pass.
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
