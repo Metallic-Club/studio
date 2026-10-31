@@ -605,3 +605,5 @@ Current-main GUI classes retain indices 34..36; the five replication classes app
 indices are usable only after an equal fingerprint is negotiated.
 Lighting properties and class ordering from main are retained; replication-only classes append after those classes.
 Numeric normalization belongs to World::set; outgoing replication observes that authoritative normalized value.
+
+Server Simulation startup retains preexisting-character history before eager script execution, so startup character removal still enters the respawn timer (#429).
