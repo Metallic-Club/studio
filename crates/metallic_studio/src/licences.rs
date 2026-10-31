@@ -87,13 +87,61 @@ pub fn parse_crates(markdown: &str) -> Vec<CrateLicence> {
         .collect()
 }
 
-/// FNV-1a (64 bit) of `Cargo.lock` with line endings normalised; the same maths as the script.
-pub fn lock_hash(text: &str) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.replace("\r\n", "\n").bytes() {
-        h = (h ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+/// The registry crates (name and version) `metallic_studio` depends on, read from `Cargo.lock` by
+/// walking its dependency graph. Other crates in the workspace do not count.
+pub fn studio_dependencies(cargo_lock: &str) -> Vec<(String, String)> {
+    let Ok(lock) = cargo_lock.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let text = |p: &toml::Table, key: &str| {
+        p.get(key)
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let packages: Vec<&toml::Table> = lock
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .map(|a| a.iter().filter_map(toml::Value::as_table).collect())
+        .unwrap_or_default();
+    let Some(start) = packages
+        .iter()
+        .position(|p| text(p, "name") == "metallic_studio")
+    else {
+        return Vec::new();
+    };
+    let mut seen = vec![false; packages.len()];
+    let mut todo = vec![start];
+    while let Some(i) = todo.pop() {
+        if std::mem::replace(&mut seen[i], true) {
+            continue;
+        }
+        let deps = packages[i]
+            .get("dependencies")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str);
+        for dep in deps {
+            // "name", or "name version" when several versions exist.
+            let mut parts = dep.split_whitespace();
+            let (name, version) = (parts.next().unwrap_or_default(), parts.next());
+            let found = packages.iter().position(|p| {
+                text(p, "name") == name && version.is_none_or(|v| text(p, "version") == v)
+            });
+            if let Some(j) = found {
+                todo.push(j);
+            }
+        }
     }
-    format!("{h:016x}")
+    let mut out: Vec<(String, String)> = packages
+        .iter()
+        .zip(&seen)
+        .filter(|(p, seen)| **seen && p.contains_key("source"))
+        .map(|(p, _)| (text(p, "name"), text(p, "version")))
+        .collect();
+    out.sort();
+    out
 }
 
 /// Which list the screen shows.
@@ -320,18 +368,23 @@ mod tests {
         );
     }
 
-    /// Fails when `Cargo.lock` changed without `python -I tools/gen_third_party.py`.
+    /// Fails only when Studio's own dependencies changed without regenerating the list.
     #[test]
-    fn the_crate_list_matches_cargo_lock() {
+    fn the_crate_list_matches_studios_dependencies() {
         let lock =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
                 .expect("read Cargo.lock");
-        let want = format!("cargo-lock-fnv1a64: {}", lock_hash(&lock));
+        let want = studio_dependencies(&lock);
+        assert!(want.len() > 100, "found {} dependencies", want.len());
+        let mut have: Vec<(String, String)> = parse_crates(CRATES_MD)
+            .into_iter()
+            .map(|c| (c.name, c.version))
+            .collect();
+        have.sort();
         assert!(
-            CRATES_MD.contains(&want),
-            "assets/THIRD_PARTY.md is stale; run python -I tools/gen_third_party.py"
+            have == want,
+            "assets/THIRD_PARTY.md does not match metallic_studio's dependencies;              run: python tools/gen_third_party.py"
         );
-        assert!(parse_crates(CRATES_MD).len() > 100);
     }
 
     #[test]
