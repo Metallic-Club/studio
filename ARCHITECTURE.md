@@ -112,6 +112,14 @@ apps.
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,
   vignette, sRGB encode, dither). Add a pass with `renderer.post_mut().push(Box::new(pass))`; a pass that returns
   `reads_depth` gets the scene depth (multisampled when MSAA is on).
+  Post stack v1 (#65, `docs/agents/65-post-stack.md`): a pass that returns `reads_geometry` makes the renderer run a
+  1x geometry prepass (`shaders/prepass.wgsl`; world normal + linear view depth in one `Rgba16Float` target, negative
+  depth for hull-outlined toon skinned meshes) and gets it as `PostContext::geometry`. The `edges` HDR pass
+  (`edges.rs`, `EdgePass`, off by default) draws silhouette and crease lines from it and skips hull-outlined surfaces,
+  so toon characters keep one outline. The `smaa` LDR pass (`smaa.rs`, `SmaaPass`) is morphological AA, on while MSAA
+  is off. `Renderer::set_lut(Option<&Lut3d>, strength)` (`lut.rs`, `.cube` parsing) grades display colour in the
+  finish pass. GPU frame timing: `enable_gpu_timing` / `read_gpu_time_ms` (timestamp queries where the adapter has
+  them).
   Lighting (#149, `lighting.rs`, `shaders/lighting.wgsl`): `sync` also reads the `Lighting` service and its children
   (`LightingInputs::read`) and `evaluate`s them into the sky, the finish settings, a lighting block in the globals
   uniform (ambient, fog, shadow filter, sun / moon discs, stars) and the `bloom` post pass (`bloom.rs`).
