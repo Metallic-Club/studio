@@ -3,6 +3,7 @@ use crate::materials::{material_index, material_params};
 use crate::meshes::MeshKind;
 use bytemuck::{Pod, Zeroable};
 use glam::{EulerRot, Mat4, Vec3};
+use metallic_core::look_override::LookOverrides;
 use metallic_core::{ChangeCursor, Changes, InstanceId, Value, World};
 use std::collections::HashMap;
 
@@ -27,6 +28,9 @@ pub struct PartDraw {
     pub kind: MeshKind,
     /// GPU data.
     pub instance: InstanceRaw,
+    /// Resolved `LookOverride` (a Look id such as `"retro-32"`); `None` draws with the place
+    /// Look. #223 turns it into material rows and instance flags.
+    pub style: Option<&'static str>,
 }
 
 impl PartDraw {
@@ -62,6 +66,7 @@ pub struct Scene {
     cursor: Option<ChangeCursor>,
     version: u64,
     full_rebuilds: u64,
+    looks: LookOverrides,
 }
 
 impl Scene {
@@ -78,8 +83,11 @@ impl Scene {
         let journal = self.cursor.map(|c| world.changes_since(c));
         match journal {
             Some((Changes::Ids(ids), cursor)) => {
+                // Parts below a Model whose LookOverride changed are not in the journal; the
+                // style cache names them.
+                let restyled = self.looks.apply_ids(world, &ids);
                 let mut changed = false;
-                for id in ids {
+                for id in ids.into_iter().chain(restyled) {
                     changed |= self.update(world, id);
                 }
                 self.cursor = Some(cursor);
@@ -99,7 +107,8 @@ impl Scene {
         self.slots.clear();
         self.free.clear();
         self.index.clear();
-        for part in collect_parts(world) {
+        self.looks.rebuild(world);
+        for part in collect_parts(world, &self.looks) {
             self.index.insert(part.id, self.slots.len());
             self.slots.push(Some(part));
         }
@@ -111,7 +120,7 @@ impl Scene {
     /// Re-reads one instance; true when the scene changed.
     fn update(&mut self, world: &World, id: InstanceId) -> bool {
         let want = if world.is_a(id, "BasePart") && in_render_tree(world, id) {
-            read_part(world, id)
+            read_part(world, id, self.looks.get(id))
         } else {
             None
         };
@@ -209,7 +218,7 @@ fn in_render_tree(world: &World, id: InstanceId) -> bool {
     false
 }
 
-fn collect_parts(world: &World) -> Vec<PartDraw> {
+fn collect_parts(world: &World, looks: &LookOverrides) -> Vec<PartDraw> {
     let mut out = Vec::new();
     let roots: Vec<InstanceId> = match world.root("Workspace") {
         Some(w) => vec![w],
@@ -218,7 +227,7 @@ fn collect_parts(world: &World) -> Vec<PartDraw> {
     let mut stack: Vec<InstanceId> = roots.into_iter().rev().collect();
     while let Some(id) = stack.pop() {
         if world.is_a(id, "BasePart")
-            && let Some(p) = read_part(world, id)
+            && let Some(p) = read_part(world, id, looks.get(id))
         {
             out.push(p);
         }
@@ -251,7 +260,7 @@ fn transparency_of(t: f64) -> f32 {
     }
 }
 
-fn read_part(world: &World, id: InstanceId) -> Option<PartDraw> {
+fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Option<PartDraw> {
     let position = vec3_prop(world, id, "Position", Vec3::ZERO);
     let rot = vec3_prop(world, id, "Orientation", Vec3::ZERO);
     let size = vec3_prop(world, id, "Size", Vec3::ONE).max(Vec3::splat(0.001));
@@ -299,6 +308,7 @@ fn read_part(world: &World, id: InstanceId) -> Option<PartDraw> {
                 0.0,
             ],
         },
+        style,
     })
 }
 
@@ -484,6 +494,33 @@ mod tests {
     }
 
     #[test]
+    fn parts_carry_their_resolved_look_override() {
+        let mut w = World::new_with_services();
+        let ws = w.root("Workspace").unwrap();
+        let m = w.create("Model", Some(ws)).unwrap();
+        let a = w.create("Part", Some(m)).unwrap();
+        let b = w.create("Part", Some(m)).unwrap();
+        w.set(b, "LookOverride", Value::String("Pixel 3D".into()))
+            .unwrap();
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        let style = |scene: &Scene, id| scene.parts().find(|p| p.id == id).unwrap().style;
+        assert_eq!(style(&scene, a), None);
+        assert_eq!(style(&scene, b), Some("pixel-3d"));
+
+        // Only the Model is in the journal; its parts are re-read anyway, without a rebuild.
+        w.set(m, "LookOverride", Value::String("Retro / PS1".into()))
+            .unwrap();
+        assert!(scene.sync(&w));
+        assert_eq!(style(&scene, a), Some("retro-32"));
+        assert_eq!(style(&scene, b), Some("pixel-3d"), "own value wins");
+        w.set_parent(a, Some(ws)).unwrap();
+        scene.sync(&w);
+        assert_eq!(style(&scene, a), None, "out of the Model: the place Look");
+        assert_eq!(scene.full_rebuilds(), 1);
+    }
+
+    #[test]
     fn srgb_conversion_hits_the_ends() {
         assert_eq!(srgb_to_linear(0.0), 0.0);
         assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
@@ -510,9 +547,9 @@ mod tests {
     fn rereading_an_unchanged_part_is_not_a_change() {
         let (mut w, ids) = world_with_parts();
         w.set(ids[0], "Transparency", Value::Number(0.4)).unwrap();
-        let a = read_part(&w, ids[0]);
+        let a = read_part(&w, ids[0], None);
         assert!(a.is_some());
-        assert_eq!(a, read_part(&w, ids[0]));
+        assert_eq!(a, read_part(&w, ids[0], None));
         let mut scene = Scene::new();
         scene.sync(&w);
         assert!(!scene.update(&w, ids[0]));

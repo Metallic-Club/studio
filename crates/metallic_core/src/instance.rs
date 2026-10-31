@@ -493,17 +493,23 @@ impl World {
         };
         // Lighting and effect numbers are brought into their sane range (1e39 would overflow
         // the renderer's f32 math).
-        let value = match def.range {
+        let mut value = match def.range {
             Some(range) => range.apply(value),
             None => value,
         };
         if let (Some(allowed), Value::String(s)) = (def.allowed, &value)
             && !allowed.contains(&s.as_str())
         {
-            return Err(CoreError::InvalidValue {
-                property: prop.to_string(),
-                reason: format!("`{s}` is not one of {allowed:?}"),
-            });
+            // A display name (`"Retro / PS1"`) is stored as its id.
+            match def.normalize.and_then(|f| f(s)) {
+                Some(stored) => value = Value::String(stored.to_string()),
+                None => {
+                    return Err(CoreError::InvalidValue {
+                        property: prop.to_string(),
+                        reason: format!("`{s}` is not one of {allowed:?}"),
+                    });
+                }
+            }
         }
         let old = self.get(id, prop)?;
         let is_default = default_value(class, prop).as_ref() == Some(&value);

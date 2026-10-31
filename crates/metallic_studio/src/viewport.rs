@@ -17,6 +17,12 @@
 //!   editable for [`EDIT_DELTA_TIME`] (click it or press Enter).
 //! - **Pivot edit** (P): the gizmo moves the pivot; its 27 snap points show as dots, a click
 //!   puts the pivot on one.
+//! - **Play**: while a session with a [`PlayView`](crate::play::PlayView) runs, the viewport draws
+//!   that game every frame with the game camera, character and ScreenGuis instead of the edit
+//!   world, framed by a thin `success` line. Picking, gizmos, body drags, the editable drag
+//!   readout and the fly camera are off; the editor sends keyboard and mouse to the game
+//!   ([`crate::play::input`]). Exposure adaptation restarts when Play starts and after Stop. The
+//!   edit world is then drawn again from the editor camera, which Play never moved.
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +38,7 @@ use crate::editor::{EditorState, Space, Tool, UiRequest};
 use crate::gizmo::{self, DragInput, DragModifiers, GizmoDrag, GizmoFrame, Handle, Lock};
 use crate::picking::Hit;
 use crate::snapping::{self, SnapKind};
+use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::transform::{Aabb, from_d};
 
@@ -172,6 +179,10 @@ pub struct Viewport {
     /// Ray pick under the pointer, reused while pointer, world and camera are unchanged, so an
     /// idle pointer does not scan every part each frame.
     hover_pick: Option<(HoverKey, Option<Hit>)>,
+    /// The pointer was over the viewport in the last play frame (input goes to the game).
+    play_hovered: bool,
+    /// The last frame drew a play session (the renderer holds the play world and avatar).
+    showing_play: bool,
     delta_rect: Option<Rect>,
 }
 
@@ -214,8 +225,24 @@ impl Viewport {
             gpu_missing_logged: false,
             last_rect: Rect::NOTHING,
             hover_pick: None,
+            play_hovered: false,
+            showing_play: false,
             delta_rect: None,
         }
+    }
+
+    /// True when the pointer was over the viewport in the last play frame.
+    pub fn play_hovered(&self) -> bool {
+        self.showing_play && self.play_hovered
+    }
+
+    /// Cancels a gizmo or body drag in progress, putting the parts back, and closes the editable
+    /// readout of the last drag (Play starting: nothing may edit the world until Stop).
+    pub fn cancel_drag(&mut self, state: &mut EditorState) {
+        self.cancel(state);
+        self.last_drag = None;
+        self.delta_rect = None;
+        self.press = Press::None;
     }
 
     /// The part under the cursor last frame.
@@ -245,11 +272,14 @@ impl Viewport {
 
     /// True while the last drag's delta field takes typing.
     pub fn is_editing_delta(&self) -> bool {
-        self.last_drag.as_ref().is_some_and(|l| l.editing.is_some())
+        !self.showing_play && self.last_drag.as_ref().is_some_and(|l| l.editing.is_some())
     }
 
     /// Drag value and snap target for the status line.
     pub fn status(&self, state: &EditorState) -> Option<ViewportStatus> {
+        if state.play.is_playing() {
+            return None;
+        }
         if let Some(d) = &self.drag {
             let snap = d.snap.and_then(|s| {
                 let owner = s.owner?;
@@ -401,6 +431,13 @@ impl Viewport {
         state: &mut EditorState,
         render_state: Option<&egui_wgpu::RenderState>,
     ) {
+        if state.play.view().is_some() {
+            self.play_ui(ui, state, render_state);
+            return;
+        }
+        if self.showing_play {
+            self.leave_play();
+        }
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         self.last_rect = rect;
@@ -675,7 +712,79 @@ impl Viewport {
         last.editing = Some(text);
     }
 
-    fn render(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>, px: (u32, u32)) {
+    /// Draws the running game: every frame, from the game camera, GUI on top.
+    fn play_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &EditorState,
+        render_state: Option<&egui_wgpu::RenderState>,
+    ) {
+        let rect = ui.available_rect_before_wrap();
+        let response = ui.allocate_rect(rect, Sense::click_and_drag());
+        self.last_rect = rect;
+        self.play_hovered = response.hovered() || response.dragged();
+        let first = !self.showing_play;
+        self.showing_play = true;
+        self.rendered = None;
+        self.hovered_part = None;
+        self.hovered_handle = None;
+        let ppp = ui.ctx().pixels_per_point();
+        let px = (
+            ((rect.width() * ppp).round() as u32).max(1),
+            ((rect.height() * ppp).round() as u32).max(1),
+        );
+        if self.ensure_gpu(state, render_state)
+            && let Some(gpu) = &mut self.gpu
+        {
+            gpu.ensure_target(px);
+            if first {
+                // A camera cut: meter the game's first frame afresh.
+                gpu.renderer.reset_exposure();
+            }
+            if let (Some(view), Some((_, target, _))) = (state.play.view(), &gpu.target) {
+                view.render(&mut gpu.renderer, target, px);
+            }
+        }
+        let painter = ui.painter_at(rect);
+        match self.gpu.as_ref().and_then(|g| g.texture_id) {
+            Some(id) => {
+                painter.image(
+                    id,
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => {
+                painter.rect_filled(rect, 0.0, ui_tokens().deep);
+            }
+        }
+        if let Some(view) = state.play.view() {
+            view.paint_gui(&painter);
+        }
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            0.0,
+            Stroke::new(2.0, theme::success()),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().request_repaint();
+    }
+
+    /// Back from Play: the renderer still holds the play world and the avatar.
+    fn leave_play(&mut self) {
+        if let Some(gpu) = &mut self.gpu {
+            gpu.renderer.set_skinned(&[]);
+            gpu.renderer.reset_exposure();
+        }
+        self.rendered = None;
+        self.hover_pick = None;
+        self.showing_play = false;
+        self.play_hovered = false;
+    }
+
+    /// Creates the GPU side on first use; false (logged once) without a GPU.
+    fn ensure_gpu(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>) -> bool {
         if self.gpu.is_none() {
             match rs {
                 Some(rs) => self.gpu = Some(Gpu::new(rs)),
@@ -684,9 +793,16 @@ impl Viewport {
                         state.output.studio("No GPU renderer: the 3D view is off");
                         self.gpu_missing_logged = true;
                     }
-                    return;
+                    return false;
                 }
             }
+        }
+        true
+    }
+
+    fn render(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>, px: (u32, u32)) {
+        if !self.ensure_gpu(state, rs) {
+            return;
         }
         let Some(gpu) = &mut self.gpu else { return };
         let key = (state.world.change_cursor(), self.camera, px);

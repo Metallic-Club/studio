@@ -13,21 +13,29 @@
 //! linear and angular velocity derived from the move, so parts standing on it are carried along
 //! and parts in its way are pushed, by rotating movers too.
 //!
-//! Characters: [`spawn_character`] builds a Roblox-style character Model (invisible body parts
-//! that the runtime draws the skinned avatar over) for a Player and
-//! [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
+//! Characters: [`spawn_character`] builds a Roblox-style character Model (a `HumanoidRootPart`
+//! and 15 invisible R15 body parts that the runtime draws the skinned avatar over) for a Player
+//! and [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
 //! death and respawn, checkpoints, touches). Character parts are anchored, so the physics moves
-//! them as kinematic bodies (they push loose parts) but never reports their touches:
-//! [`PhysicsWorld::drain_touched`] skips every pair involving a character part, and the runtime
-//! gets character touches from [`CharacterEvent::Touched`] instead.
+//! them as kinematic bodies. The `HumanoidRootPart` is solid (it pushes loose parts); the body
+//! parts have CanCollide off, so they are sensors that never collide with or push anything. They
+//! hold the bone-attached touch volumes ([`BodyPart`], [`BodyPose`]), which are queries of the
+//! [`CharacterController`]. Nothing is special-cased by name: an NPC Model with R15-named solid
+//! parts keeps its collisions. [`PhysicsWorld::drain_touched`]
+//! skips every pair involving a character part, and the runtime gets character touches from
+//! [`CharacterEvent::Touched`] and [`CharacterEvent::TouchEnded`] instead.
 #![warn(missing_docs)]
 
+#[cfg(test)]
+mod alloc_count;
 mod avatar;
+mod body;
 mod character;
 mod sync;
 mod touched;
 
 pub use avatar::VIOLET;
+pub use body::{BODY_PART_COUNT, BodyPart, BodyPose, MAX_TOUCH_CANDIDATES, TouchQueryCost};
 pub use character::{
     CharacterController, CharacterEvent, CharacterState, HumanoidState, MAX_PUSH, MAX_STEP_HEIGHT,
     MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, SupportContact, WORLD_LIMIT,
