@@ -303,7 +303,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
 
 1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift sets
    `MoveInput::run`: 1.5 x `Humanoid.WalkSpeed`, which scripts still read unchanged); death, respawn, checkpoints and
-   character touches happen here.
+   character touches happen here. Humanoid tuning is clamped in the class registry (`metallic_core::classes`
+   `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills).
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
    touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
