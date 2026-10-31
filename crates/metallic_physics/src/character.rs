@@ -709,12 +709,16 @@ impl CharacterController {
     /// Sets the character's movement state and places the whole character at `state.position`
     /// and `state.yaw` (body parts in the current [`CharacterController::body_pose`]). The set of
     /// parts it touches is left alone, so no touch is reported twice.
+    /// A destroyed or invalid target is ignored without creating cached state.
     pub fn restore_state(
         &mut self,
         world: &mut World,
         character: InstanceId,
         state: &CharacterState,
     ) {
+        if !world.is_alive(character) {
+            return;
+        }
         self.motions.insert(
             character,
             Motion {
