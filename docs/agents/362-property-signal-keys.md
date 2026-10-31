@@ -53,3 +53,43 @@ still owns its name. Public docs clarify existing future-ID behavior proved by
 the passing baseline, rather than rejecting it. Focused fixed checks and required
 broad gates remain next. GPU/Lua execution is not needed for core probes; no
 own-PR merge or parent PR change.
+
+## Fixed verification and publication
+
+At production source `a4c167dc9168a6d6cd4aef3c4156efe59eb2b8c7`, all six focused
+tests passed in debug and release. The three default-reset rows and warmed known
+registration row all measured zero calls/zero requested bytes in each profile.
+The baseline is debug-only; the direct comparison is debug-to-debug, with release
+an additional contract check. Probe source bytes are identical across baseline
+and fixed samples; full source/profile data are recorded in the research JSON.
+
+- Release prebuild/checks completed in 52.15s; no elapsed-time benchmark was run.
+- Guarded full workspace no-run passed in 3m23s; strict workspace/all-target Clippy
+  passed in 1m27s. License, formatting and task-range whitespace checks passed.
+- Locked serial workspace tests exited zero: 1,588 passed, zero failed, seven
+  upstream ignores across 123 summaries including doc tests. All three complete
+  Parkour routes passed. No retry, budget change or new ignore was introduced.
+- Root worker-coordinator and studio_core source/fixture reviews found no
+  actionable concern. The original implementation and typed registration behavior
+  were reviewed without changing the frozen parent branch.
+
+The seven upstream ignores are three window-opening tests, two manual getter
+probes, one manual real-budget pattern probe and a Studio actions doc example.
+Builds used guarded lane121 with four jobs. The actual full suite had the
+coordinated sole managed Lua/GPU window. Local source remains pinned at `238c6fb`;
+object-only merging with later main `c507b98` is clean (tree `4dcc5411`), which is
+source compatibility evidence, not an execution of that composition.
+
+Eight independent baseline/fixed/gate logs and fingerprints are retained outside
+git at `integration-evidence/property-signal-keys`. The separately authorized
+private composition of PR #361/`0ff86473` and child/`a4c167d` passed nine pure-core
+tests at commit `0b02bedf877f660b9edc344728aa4dd2149b8385`, tree
+`d6437dced0364bc6c4df11ad7b417fe0c2df4224`: all measured Position rows were zero
+allocations/bytes. Its provenance/log/results remain separately under
+`integration-evidence/property-key-composition`. No parent assertion, historical
+measurement, public branch or repository acceptance changed. This is not a full
+workspace test or wall-time comparison of that combined tree.
+
+The final publication append changes only evidence/data after the frozen source
+gates. Exact-head remote CI is inspected after publication. No own merge or
+remote-machine action is performed.
