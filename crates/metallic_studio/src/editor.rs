@@ -243,6 +243,8 @@ pub struct EditorState {
     pub output: OutputSink,
     /// Play modes (Play is registered) and the running session.
     pub play: PlayController,
+    /// Script debugger breakpoints and options (kept across Play sessions).
+    pub debug: crate::debugger::DebugSettings,
     /// When false, nothing is written to disk (screenshot mode).
     pub can_save: bool,
     /// Where Insert puts a new part: the surface under the cursor, updated by the viewport.
@@ -298,6 +300,7 @@ impl EditorState {
             view_right: DVec3::X,
             output,
             play,
+            debug: crate::debugger::DebugSettings::default(),
             can_save: true,
             insert_point: Vec3::new(0.0, 0.5, 0.0),
             requests: Vec::new(),
@@ -629,6 +632,7 @@ impl EditorState {
                 world: &world,
                 project_dir: &dir,
                 output,
+                debug: &self.debug,
             },
         );
         if started {

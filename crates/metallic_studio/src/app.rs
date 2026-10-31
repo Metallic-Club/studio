@@ -41,6 +41,8 @@ pub enum Scene {
     Editor,
     /// The same editor with Play running (the game drawn in the viewport).
     Playing,
+    /// Play paused at a breakpoint in the checkpoint script (the script debugger).
+    Debugging,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
     Colour,
     /// Every Studio widget in every state (design review).
@@ -96,6 +98,7 @@ impl Options {
                         "error" => Scene::Error,
                         "editor" => Scene::Editor,
                         "playing" => Scene::Playing,
+                        "debugging" => Scene::Debugging,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
                         "settings" => Scene::Settings,
@@ -211,6 +214,8 @@ impl StudioApp {
                     Phase::Opened(Box::new(e))
                 })
             }
+            Scene::Debugging if shot => EditorUi::debug_demo(&templates_dir().join("parkour"))
+                .map_or(Phase::Start, |e| Phase::Opened(Box::new(e))),
             // The capture shows the second step running, like the mockup.
             Scene::Splash if shot => Phase::Splash(Splash::held_at(1)),
             _ if shot => Phase::Start,

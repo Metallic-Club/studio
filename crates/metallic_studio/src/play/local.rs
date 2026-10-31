@@ -35,7 +35,7 @@ impl PlayMode for LocalPlayMode {
     fn start(&mut self, start: PlayStart<'_>) -> Result<Box<dyn PlaySession>, String> {
         let name =
             ProjectConfig::read(start.project_dir).map_or_else(|_| "Play".into(), |c| c.name);
-        LocalPlaySession::start(name, start.world, start.output)
+        LocalPlaySession::start_debug(name, start.world, start.output, start.debug)
             .map(|s| Box::new(s) as Box<dyn PlaySession>)
             .map_err(|e| e.to_string())
     }
@@ -84,12 +84,29 @@ impl LocalPlaySession {
         snapshot: &World,
         output: OutputSink,
     ) -> Result<Self, RuntimeError> {
+        Self::start_debug(
+            name,
+            snapshot,
+            output,
+            &crate::debugger::DebugSettings::default(),
+        )
+    }
+
+    /// Like [`LocalPlaySession::start`], with the script debugger's breakpoints and options
+    /// set before any script runs (the play world keeps the edit world's instance ids).
+    pub fn start_debug(
+        name: impl Into<String>,
+        snapshot: &World,
+        output: OutputSink,
+        debug: &crate::debugger::DebugSettings,
+    ) -> Result<Self, RuntimeError> {
         let output = Rc::new(ScriptOutput {
             sink: output,
             tag: Tag::Other(Arc::from(PLAY_TAG)),
         });
         let input = InputRuntime::from_world(snapshot);
         let mut game = ActiveGame(Game::from_world(name.into(), snapshot.deep_clone(), output));
+        debug.apply(&mut game.0.debugger());
         game.0.start()?;
         Ok(Self {
             game: Some(game),
@@ -189,6 +206,14 @@ impl PlayView for LocalPlaySession {
 
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World)) {
         let _ = self.inspect_world(|world| inspect(world));
+    }
+
+    fn debugger(&mut self) -> Option<metallic_script::Debugger<'_>> {
+        self.game.as_mut().map(|game| game.0.debugger())
+    }
+
+    fn is_paused(&self) -> bool {
+        self.game.as_ref().is_some_and(|game| game.0.is_paused())
     }
 }
 

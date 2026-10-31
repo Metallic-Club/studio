@@ -170,6 +170,11 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
     ("play.stop", "Escape", KeyContext::Play),
+    ("debug.toggle_breakpoint", "F9", KeyContext::Global),
+    ("debug.continue", "F5", KeyContext::Play),
+    ("debug.step_over", "F10", KeyContext::Play),
+    ("debug.step_into", "F11", KeyContext::Play),
+    ("debug.step_out", "Shift+F11", KeyContext::Play),
     ("output.clear", "Ctrl+L", KeyContext::Global),
     // Esc never closes the game: it closes a building popover or cancels a tool (above), clears
     // the selection, or cancels a gizmo drag.

@@ -1,5 +1,10 @@
 //! Script tabs: a Luau text editor with line numbers and syntax colouring.
 //!
+//! The gutter holds the script debugger's breakpoints (click toggles, right-click adds a
+//! condition or log message) and the paused-line arrow; see [`crate::debugger`]. Breakpoints move
+//! with their lines as lines are typed or deleted above them. During Play the text is read-only
+//! but can still take focus and a cursor, for F9 and hover values.
+//!
 //! Each open script keeps a text buffer. The buffer is written to the script's `Source` as one
 //! undo step when the editor loses focus, when its tab closes, and before Save, so typing does
 //! not flood the undo history with one step per key.
@@ -18,6 +23,16 @@ const KEYWORDS: &[&str] = &[
 struct OpenScript {
     id: InstanceId,
     buffer: String,
+    /// The text as of the last edit, to move breakpoints with their lines on the next one.
+    before: String,
+    /// Lines in `buffer`.
+    lines: usize,
+    /// The text cursor's character index and line (1-based), for F9.
+    cursor: Option<(usize, u32)>,
+    /// The text field's height last frame (the gutter matches it).
+    height: f32,
+    /// A line to scroll into view on the next frame.
+    scroll_to: Option<u32>,
 }
 
 /// The open script tabs.
@@ -44,8 +59,26 @@ impl ScriptTabs {
             Ok(Value::String(s)) => s.clone(),
             _ => return,
         };
-        self.open.push(OpenScript { id, buffer });
+        self.open.push(OpenScript {
+            id,
+            lines: line_count(&buffer),
+            before: buffer.clone(),
+            buffer,
+            cursor: None,
+            height: 0.0,
+            scroll_to: None,
+        });
         self.current = Some(self.open.len() - 1);
+    }
+
+    /// Opens `id` and scrolls `line` into view (the debugger paused there).
+    pub fn reveal(&mut self, id: InstanceId, line: u32, state: &EditorState) {
+        self.open(id, state);
+        if let Some(s) = self.current.and_then(|i| self.open.get_mut(i))
+            && s.id == id
+        {
+            s.scroll_to = Some(line);
+        }
     }
 
     /// Writes every changed buffer to its script (before Save and Play).
@@ -105,7 +138,12 @@ impl ScriptTabs {
     }
 
     /// Draws the current script.
-    pub fn editor(&mut self, ui: &mut egui::Ui, state: &mut EditorState) {
+    pub fn editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut EditorState,
+        debug: &mut crate::debugger::DebugPanel,
+    ) {
         let Some(i) = self.current else { return };
         let Some(s) = self.open.get_mut(i) else {
             self.current = None;
@@ -122,7 +160,6 @@ impl ScriptTabs {
             job.wrap.max_width = wrap;
             ui.fonts_mut(|f| f.layout_job(job))
         };
-        let lines = s.buffer.lines().count().max(1);
         // Read-only while playing: the edit world cannot change until Stop.
         let editable = !state.play.is_playing();
         let mut lost_focus = false;
@@ -130,24 +167,58 @@ impl ScriptTabs {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
-                    let numbers: String = (1..=lines).map(|n| format!("{n:>4}\n")).collect();
-                    ui.label(
-                        RichText::new(numbers)
-                            .font(ui_tokens().mono())
-                            .color(ui_tokens().text_dim),
-                    );
-                    let r = ui
-                        .add(
-                            egui::TextEdit::multiline(&mut s.buffer)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(30)
-                                .lock_focus(true)
-                                .interactive(editable)
-                                .layouter(&mut layouter),
-                        )
-                        .labelled_by(title.id);
+                    let gutter = crate::debugger::gutter(ui, s.id, s.lines, s.height);
+                    // A `&str` buffer takes focus, a cursor and selection but no edits.
+                    let mut read_only = s.buffer.as_str();
+                    let text: &mut dyn egui::TextBuffer = if editable {
+                        &mut s.buffer
+                    } else {
+                        &mut read_only
+                    };
+                    let out = egui::TextEdit::multiline(text)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(30)
+                        .lock_focus(true)
+                        .layouter(&mut layouter)
+                        .show(ui);
+                    let r = out.response.response.labelled_by(title.id);
                     lost_focus = r.lost_focus();
+                    s.height = r.rect.height();
+                    if r.changed() {
+                        state.shift_breakpoints(s.id, &s.before, &s.buffer);
+                        s.before.clone_from(&s.buffer);
+                        s.lines = line_count(&s.buffer);
+                    }
+                    if let Some(range) = out.cursor_range {
+                        let at = range.primary.index.0;
+                        if r.changed() || s.cursor.is_none_or(|(i, _)| i != at) {
+                            let line = s.buffer.chars().take(at).filter(|&c| c == '\n').count();
+                            s.cursor = Some((at, line as u32 + 1));
+                        }
+                    }
+                    // F9's line: while editing, the shown script's cursor; during Play only
+                    // while this editor has focus, so a game keeps its F9.
+                    state.debug.cursor = s
+                        .cursor
+                        .filter(|_| editable || r.has_focus())
+                        .map(|(_, line)| (s.id, line));
+                    let left = r.rect.left();
+                    let rows = crate::debugger::line_rows(&out.galley, out.galley_pos, left);
+                    gutter.show(ui, &rows, state, debug);
+                    crate::debugger::hover(
+                        &r,
+                        &out.galley,
+                        out.galley_pos,
+                        (s.id, &s.buffer),
+                        state,
+                        debug,
+                    );
+                    if let Some(line) = s.scroll_to.take()
+                        && let Some(row) = rows.iter().find(|r| r.line == line)
+                    {
+                        ui.scroll_to_rect(row.rect, Some(egui::Align::Center));
+                    }
                 });
             });
         if lost_focus {
@@ -155,6 +226,16 @@ impl ScriptTabs {
             commit(state, id, &text);
         }
     }
+}
+
+/// Lines in `text` as the gutter numbers them (at least one).
+fn line_count(text: &str) -> usize {
+    text.lines().count().max(1)
+}
+
+/// True for a Luau keyword (not a name to show a value for).
+pub fn is_keyword(word: &str) -> bool {
+    KEYWORDS.contains(&word)
 }
 
 fn commit(state: &mut EditorState, id: InstanceId, text: &str) {

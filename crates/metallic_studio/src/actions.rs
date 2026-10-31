@@ -889,6 +889,7 @@ pub fn default_actions() -> ActionRegistry {
         )
         .enabled(|s| s.play.is_playing()),
     );
+    crate::debugger::register(&mut r);
     r
 }
 
@@ -941,14 +942,21 @@ pub fn increment_chips(ui: &mut egui::Ui, s: &mut EditorState) {
 }
 
 /// Actions that stay usable while a play session runs: the play controls, Save (it writes the
-/// edit world, which Play never changes), Settings, and Close game (it stops Play, then asks
-/// about unsaved changes).
+/// edit world, which Play never changes), Settings, Close game (it stops Play, then asks about
+/// unsaved changes) and the script debugger.
 pub const PLAY_SAFE: &[&str] = &[
     "play.start",
     "play.stop",
     "file.save",
     "file.close",
     "settings.open",
+    // The script debugger's actions are for Play; each says itself when it runs.
+    "debug.toggle_breakpoint",
+    "debug.continue",
+    "debug.step_over",
+    "debug.step_into",
+    "debug.step_out",
+    "debug.pause",
 ];
 
 /// Disables `a` while playing unless it is in [`PLAY_SAFE`] (tools, snapping, pivots, edit
