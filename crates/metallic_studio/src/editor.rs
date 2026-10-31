@@ -276,6 +276,9 @@ impl EditorState {
         name: &str,
         output: OutputSink,
     ) -> EditorState {
+        // Loading logged every attribute and tag; nothing reads the edit world's logs.
+        let mut world = world;
+        world.clear_change_logs();
         let mut play = PlayController::new();
         play.register(Box::new(LocalPlayMode));
         EditorState {
@@ -404,6 +407,9 @@ impl EditorState {
     }
 
     fn after_history_change(&mut self) {
+        // No script VM reads the edit world's attribute and tag logs (Play runs a copy), so
+        // they would only grow: drop what the edit just logged.
+        self.world.clear_change_logs();
         self.selection.retain_live(&self.world, &self.history);
     }
 

@@ -199,7 +199,7 @@ impl PhysicsWorld {
             .copied()
             .collect();
         for id in gone {
-            self.remove_entry(id);
+            self.remove_entry(id, touched::Removed::Gone);
         }
         for (id, character) in parts {
             let Some(state) = sync::read_part(world, id) else {
@@ -210,7 +210,7 @@ impl PhysicsWorld {
                 .get(&id)
                 .is_some_and(|e| e.signature != state.signature(character));
             if stale {
-                self.remove_entry(id);
+                self.remove_entry(id, touched::Removed::Rebuilt);
             }
             if !self.entries.contains_key(&id) {
                 self.add_entry(id, &state, character);
@@ -272,11 +272,11 @@ impl PhysicsWorld {
         }
     }
 
-    fn remove_entry(&mut self, id: InstanceId) {
+    fn remove_entry(&mut self, id: InstanceId, why: touched::Removed) {
         if let Some(e) = self.entries.remove(&id) {
             self.owners.remove(&e.collider);
             self.rapier.remove_body(e.body);
-            self.touches.forget(id);
+            self.touches.forget(id, why);
             self.characters.remove(&id);
         }
     }
@@ -402,6 +402,8 @@ impl PhysicsWorld {
             }
         }
         self.collect_touches();
+        // Rebuilt parts' pairs that did not touch again in this step end now.
+        self.touches.settle();
     }
 
     /// Current velocity of a part in studs per second: the body velocity for unanchored parts,
@@ -531,5 +533,17 @@ impl PhysicsWorld {
     /// [`CharacterEvent::Touched`].
     pub fn drain_touched(&mut self) -> Vec<(InstanceId, InstanceId)> {
         self.touches.drain()
+    }
+
+    /// Returns the part pairs that stopped touching since the last call: one entry for each pair
+    /// that [`Self::drain_touched`] reported, when its parts separate or one of them is removed
+    /// (destroyed, or out of the Workspace; the runtime fires `TouchEnded` on both, which reaches
+    /// scripts on the part that still exists). A part rebuilt in place (Size, Shape or
+    /// CanCollide changed) that still touches reports neither an end nor a new start. Pairs
+    /// involving a character part are never reported (see [`CharacterEvent::TouchEnded`]).
+    /// Drain [`Self::drain_touched`] first: a pair that started and stopped since the last
+    /// drain is in both.
+    pub fn drain_touch_ended(&mut self) -> Vec<(InstanceId, InstanceId)> {
+        self.touches.drain_ended()
     }
 }
