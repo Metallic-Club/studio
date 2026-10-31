@@ -208,7 +208,7 @@ pub fn paint_class(painter: &egui::Painter, rect: Rect, class: &str, c: Color32)
                 painter.circle_filled(o, 2.0, ui_tokens().icon_hole);
             }
         }
-        "Script" | "LocalScript" => {
+        "Script" | "LocalScript" | "ModuleScript" => {
             let page = Rect::from_center_size(o, vec2(10.0, 12.0));
             painter.rect_stroke(page, 1.0, s, egui::StrokeKind::Middle);
             for i in 0..3 {
