@@ -39,6 +39,13 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  Change journal (#59): each mutation (`create`, `destroy`, `set_parent` to a new parent, a `set_parent_at` reorder,
+  `set` with a new value, `clone_subtree`) appends the instance id to a per-world journal, bounded at 16,384 entries
+  (`JOURNAL_LIMIT`; the oldest half is dropped when it is full). `World::change_cursor()` marks a position, and
+  `changes_since(cursor)` returns `Changes::Ids` (deduplicated, in order of first change, destroyed ids included) plus
+  a new cursor, or `Changes::Overflow` when the journal no longer reaches back or the cursor is from another world:
+  then re-read everything. It needs only `&World`; the renderer's `Scene::sync`, physics re-sync, `LookOverrides`,
+  audio and input mirroring read it.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `World::set` (so also the scene loader) stores every CFrame through `CFrame::try_orthonormalize`:
@@ -140,8 +147,12 @@ apps.
 - **metallic_runtime** (Task 8): `Game::load(project_dir)` (reads `metallic.toml`: `name`, `main_scene`) or
   `Game::open(dir, scene, output)` / `Game::from_world(name, world, output)`, then `start`, `frame(&FrameInput, dt)`,
   `render(&mut Renderer, target, size)`, `paint_gui(&egui::Painter)` and `stop`. Ties world, physics, characters,
-  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel drawn with an
-  egui painter with egui's bundled fonts; their licence texts are in `LICENSES/`).
+  scripts, the third-person `CameraController` and the in-game GUI (`gui.rs`: ScreenGui/Frame/TextLabel and the
+  TextButton/ImageButton of #79 drawn with an egui painter with egui's bundled fonts; their licence texts are in
+  `LICENSES/`). Clicks: the host gives the left mouse button, the cursor and fingers to `Game::gui_pointer` before
+  the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
+  and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
+  never reaches the game's input.
   Input is actions (`input` module, design in `docs/design/input-actions.md`): see "Input flow" below. Shared by
   player and Studio; no window library in this crate.
   `LocalInput` is pure quantized command data: signed axes (-127..127), held jump/run and a u16 turn angle.
@@ -213,10 +224,11 @@ apps.
   plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
   `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
   While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
-  Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
-  Properties and the script editor are read-only, the status bar shows the session's `PlayStatus` ("Playing", theme
-  `success`) and the viewport a `success` frame. Esc with the unsaved-changes prompt open answers the prompt. Exposure
-  adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  Stop, Save, Close game, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout
+  are off, Properties and the script editor are read-only, the status bar shows the session's `PlayStatus`
+  ("Playing", theme `success`) and the viewport a `success` frame. Quit and Close game (Ctrl+W) stop Play before
+  the unsaved-changes prompt opens; Esc answers the prompt. Exposure adaptation resets when Play starts and after
+  Stop. Play is asked for with `UiRequest::StartPlay`, so open script
   tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
   and Studio stays in edit mode.
   Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through

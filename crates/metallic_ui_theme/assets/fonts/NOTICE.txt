@@ -30,6 +30,11 @@ NotoSans-Variable.ttf
   Used only as the fallback for Greek and Cyrillic, which Archivo does not cover. Extra ranges:
   Greek U+0370-03FF, U+1F00-1FFF; Cyrillic U+0400-052F, U+1C80-1C8F, U+2DE0-2DFF, U+A640-A69F.
 
+Archivo-Variable.woff2, JetBrainsMono-Variable.woff2
+  The two .ttf files above as WOFF2 (lossless Brotli compression, same glyphs and axes), for the
+  Metallic Play (Launcher) pages, which serve them from the program itself. Made by
+  tools/gen_web_fonts.py; `python tools/gen_web_fonts.py --check` fails if they are out of date.
+
 Phosphor.ttf, Phosphor-Fill.ttf
   Phosphor Icons, Version 2.1 (package @phosphor-icons/web v2.1.2), regular and fill weights,
   unmodified. Copyright (c) 2020-2021 Phosphor Icons. MIT License, see LICENSE-Phosphor.txt.

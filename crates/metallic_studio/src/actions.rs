@@ -898,8 +898,15 @@ pub fn increment_chips(ui: &mut egui::Ui, s: &mut EditorState) {
 }
 
 /// Actions that stay usable while a play session runs: the play controls, Save (it writes the
-/// edit world, which Play never changes) and Settings.
-pub const PLAY_SAFE: &[&str] = &["play.start", "play.stop", "file.save", "settings.open"];
+/// edit world, which Play never changes), Settings, and Close game (it stops Play, then asks
+/// about unsaved changes).
+pub const PLAY_SAFE: &[&str] = &[
+    "play.start",
+    "play.stop",
+    "file.save",
+    "file.close",
+    "settings.open",
+];
 
 /// Disables every action not in [`PLAY_SAFE`] while playing (tools, snapping, pivots, edit
 /// commands, selection, view framing). A disabled action also leaves its shortcut to the game.
@@ -1026,7 +1033,7 @@ mod tests {
                 "{id} runs while playing"
             );
         }
-        for id in ["file.save", "settings.open", "play.stop"] {
+        for id in ["file.save", "file.close", "settings.open", "play.stop"] {
             assert!(r.get(id).is_some_and(|a| a.is_enabled(&s)), "{id} is off");
         }
         assert!(!r.run("tool.rotate", &mut s));

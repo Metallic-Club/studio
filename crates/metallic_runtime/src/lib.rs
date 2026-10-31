@@ -30,6 +30,7 @@ mod body_pose;
 mod camera_controller;
 mod game;
 pub mod gui;
+pub mod gui_input;
 pub mod input;
 mod local_input;
 mod locomotion;
