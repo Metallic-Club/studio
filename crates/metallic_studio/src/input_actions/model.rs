@@ -263,6 +263,20 @@ impl Default for TouchProps {
     }
 }
 
+fn finite_or_zero(v: f64) -> f64 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
+/// A `TouchPosition` with every non-finite component replaced by 0 (scene files can carry them).
+pub fn sanitize_udim2(u: UDim2) -> UDim2 {
+    UDim2::new(
+        finite_or_zero(u.x_scale),
+        finite_or_zero(u.x_offset),
+        finite_or_zero(u.y_scale),
+        finite_or_zero(u.y_offset),
+    )
+}
+
 /// Reads the touch properties of an `InputAction` (defaults for built-in actions).
 pub fn touch_props(world: &World, id: Option<InstanceId>) -> TouchProps {
     let Some(id) = id else {
@@ -275,7 +289,7 @@ pub fn touch_props(world: &World, id: Option<InstanceId>) -> TouchProps {
     };
     let custom = matches!(world.get_ref(id, "TouchLayout"), Ok(Value::String(s)) if s == "Custom");
     let position = match world.get_ref(id, "TouchPosition") {
-        Ok(Value::UDim2(u)) => *u,
+        Ok(Value::UDim2(u)) => sanitize_udim2(*u),
         _ => UDim2::new(0.0, 0.0, 0.0, 0.0),
     };
     let size = match world.get_ref(id, "TouchSize") {
@@ -486,6 +500,35 @@ pub fn unique_child_name(world: &World, parent: InstanceId, base: &str) -> Strin
 mod tests {
     use super::*;
     use metallic_runtime::input::default_character_controls;
+
+    #[test]
+    fn non_finite_touch_position_reads_as_zero() {
+        let nan = f64::NAN;
+        let inf = f64::INFINITY;
+        assert_eq!(
+            sanitize_udim2(UDim2::new(nan, 12.0, 0.5, inf)),
+            UDim2::new(0.0, 12.0, 0.5, 0.0)
+        );
+        assert_eq!(
+            sanitize_udim2(UDim2::new(f64::NEG_INFINITY, nan, nan, nan)),
+            UDim2::new(0.0, 0.0, 0.0, 0.0)
+        );
+        // The world refuses non-finite values; a finite one passes through untouched.
+        let mut w = World::new_with_services();
+        let rs = w.root("ReplicatedStorage").unwrap();
+        let ctx = w.create("InputContext", Some(rs)).unwrap();
+        let a = w.create("InputAction", Some(ctx)).unwrap();
+        w.set(
+            a,
+            "TouchPosition",
+            Value::UDim2(UDim2::new(0.25, 4.0, 0.5, -8.0)),
+        )
+        .unwrap();
+        assert_eq!(
+            touch_props(&w, Some(a)).position,
+            UDim2::new(0.25, 4.0, 0.5, -8.0)
+        );
+    }
 
     #[test]
     fn devices_of_bindings() {

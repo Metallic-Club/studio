@@ -526,12 +526,14 @@ pub fn violations(profile: &DeviceProfile, placed: &[Placed]) -> Vec<Violation> 
     let inner = profile.safe_area().shrink(SAFE_MARGIN);
     let mut out = Vec::new();
     for (i, p) in placed.iter().enumerate() {
-        if p.size < MIN_SIZE - 0.01 {
+        if p.size.is_nan() || p.size < MIN_SIZE - 0.01 {
             out.push(Violation::TooSmall { control: i });
         }
         let r = p.radius();
         let eps = 0.01;
-        if p.center[0] - r < inner.x - eps
+        // A centre that is not finite compares false with everything: flag it explicitly.
+        if !p.center.iter().all(|c| c.is_finite())
+            || p.center[0] - r < inner.x - eps
             || p.center[0] + r > inner.right() + eps
             || p.center[1] - r < inner.y - eps
             || p.center[1] + r > inner.bottom() + eps
@@ -687,5 +689,21 @@ mod tests {
             v.iter()
                 .any(|x| matches!(x, Violation::TooClose { a: 1, b: 2, .. }))
         );
+    }
+
+    #[test]
+    fn non_finite_centres_are_violations() {
+        let p = DevicePreset::Phone.profile(Orientation::Landscape);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for axis in 0..2 {
+                let mut placed = layout(&p, &auto_actions(2));
+                assert!(violations(&p, &placed).is_empty());
+                placed[0].center[axis] = bad;
+                assert!(
+                    violations(&p, &placed).contains(&Violation::OutsideSafeArea { control: 0 }),
+                    "{bad} on axis {axis}"
+                );
+            }
+        }
     }
 }

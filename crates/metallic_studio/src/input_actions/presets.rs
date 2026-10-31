@@ -11,12 +11,13 @@
 //!
 //! Both are one undo step.
 
-use metallic_core::{CoreError, InstanceId, Value, World};
+use metallic_core::{CoreError, InstanceId, Value};
 use metallic_runtime::input::{
     ActionType, BindingDef, Control, PAD_ZOOM_SPEED, Role, STICK_ORBIT_SPEED,
     default_character_controls,
 };
 
+use super::checks::duplicate_control_findings;
 use super::commands::{Snapshot, StepBuilder};
 use super::model::{
     DeviceColumn, InputModel, action_type_name, binding_device, binding_snapshot, role_name,
@@ -221,17 +222,19 @@ pub struct PresetReport {
     pub changed: Vec<String>,
     /// Actions left as they were (no role, or the preset has nothing for the role).
     pub unchanged: Vec<String>,
+    /// Duplicate-control conflicts the preset would create that the scene does not have now
+    /// (the Checks strip message of each).
+    pub conflicts: Vec<String>,
 }
 
-/// Replaces the preset's device bindings of every scene action with a role.
-pub fn apply_preset(
-    b: &mut StepBuilder<'_>,
-    preset: BindingPreset,
-) -> Result<PresetReport, CoreError> {
-    let model = InputModel::read(b.world());
+/// One action's replacement: its id, the bindings it loses and the ones it gets.
+type PlanStep = (InstanceId, Vec<InstanceId>, Vec<BindingDef>);
+
+/// Works out what `preset` would do to the model, without touching anything.
+fn plan_preset(model: &InputModel, preset: BindingPreset) -> (PresetReport, Vec<PlanStep>) {
     let mut report = PresetReport::default();
     let device = preset.device();
-    let mut plan: Vec<(InstanceId, Vec<InstanceId>, Vec<BindingDef>)> = Vec::new();
+    let mut plan: Vec<PlanStep> = Vec::new();
     for (ctx, a) in model.actions() {
         let Some(id) = a.instance else { continue };
         let path = format!("{}/{}", ctx.name, a.name);
@@ -249,6 +252,36 @@ pub fn apply_preset(
             _ => report.unchanged.push(path),
         }
     }
+    // The bindings the scene would have afterwards, checked like the Checks strip does.
+    let mut contexts = model.config.contexts.clone();
+    for ctx in &mut contexts {
+        for a in &mut ctx.actions {
+            let Some((_, old, new)) = plan.iter().find(|(id, ..)| Some(*id) == a.instance) else {
+                continue;
+            };
+            a.bindings
+                .retain(|b| !b.instance.is_some_and(|i| old.contains(&i)));
+            a.bindings.extend(new.iter().cloned());
+        }
+    }
+    let before: Vec<String> = duplicate_control_findings(&model.config.contexts)
+        .into_iter()
+        .map(|f| f.message)
+        .collect();
+    report.conflicts = duplicate_control_findings(&contexts)
+        .into_iter()
+        .map(|f| f.message)
+        .filter(|m| !before.contains(m))
+        .collect();
+    (report, plan)
+}
+
+/// Replaces the preset's device bindings of every scene action with a role.
+pub fn apply_preset(
+    b: &mut StepBuilder<'_>,
+    preset: BindingPreset,
+) -> Result<PresetReport, CoreError> {
+    let (report, plan) = plan_preset(&InputModel::read(b.world()), preset);
     for (action, old, new) in plan {
         for id in old {
             b.destroy(id)?;
@@ -260,11 +293,11 @@ pub fn apply_preset(
     Ok(report)
 }
 
-/// The scene's actions that a preset would change and leave alone, without changing anything.
-pub fn preview_preset(world: &World, preset: BindingPreset) -> PresetReport {
-    let mut copy = world.deep_clone();
-    let mut b = StepBuilder::new(&mut copy);
-    apply_preset(&mut b, preset).unwrap_or_default()
+/// The scene's actions that a preset would change and leave alone, and the duplicate-control
+/// conflicts it would create, without changing anything. Reads the model only (no world copy),
+/// so it is cheap enough to ask for every preset while a menu is open.
+pub fn preview_preset(model: &InputModel, preset: BindingPreset) -> PresetReport {
+    plan_preset(model, preset).0
 }
 
 #[cfg(test)]
@@ -272,6 +305,7 @@ mod tests {
     use super::*;
     use crate::input_actions::commands::{CommandSink, History};
     use crate::input_actions::model::{binding_label, context_snapshot};
+    use metallic_core::World;
 
     fn sample() -> (World, InstanceId) {
         let mut w = World::new_with_services();
@@ -374,7 +408,7 @@ mod tests {
         let k = w.create("InputBinding", Some(dash)).unwrap();
         w.set(k, "KeyCode", Value::String("ButtonX".into()))
             .unwrap();
-        let report = preview_preset(&w, BindingPreset::GamepadLeftHand);
+        let report = preview_preset(&InputModel::read(&w), BindingPreset::GamepadLeftHand);
         assert!(
             report
                 .unchanged

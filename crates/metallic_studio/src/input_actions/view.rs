@@ -18,18 +18,21 @@ use metallic_runtime::input::{
 
 use super::capture::{
     CaptureInput, CaptureOutcome, Captured, Conflict, Listener, Resolution, capture_snapshot,
-    composite_snapshot, conflicts_for, resolve_conflicts, write_capture,
+    captured_of, composite_snapshot, conflicts_for, resolve_conflicts, write_capture,
 };
 use super::checks::{Finding, Level, NameBaseline, run_checks};
-use super::commands::{CommandSink, History, StepBuilder};
+use super::commands::{CommandSink, History, IdMap, StepBuilder};
 use super::model::{
     DeviceColumn, INPUT_FOLDER, InputModel, ROLES, binding_device, context_snapshot, prop_string,
     role_name, touch_props, unique_child_name,
 };
-use super::presets::{BindingPreset, add_role_action, apply_preset, preview_preset};
+use super::presets::{BindingPreset, PresetReport, add_role_action, apply_preset, preview_preset};
 use super::preview::{GlyphStyle, PreviewState};
 use super::style::{self as st, ButtonKind, Icon};
 use super::view_touch::TouchView;
+
+/// Most device events kept between frames (see [`InputActionsPanel::feed_raw`]).
+pub const MAX_RAW_EVENTS: usize = 1024;
 
 /// Which half of the panel shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -141,6 +144,8 @@ pub struct InputActionsPanel {
     text_edit: Option<(InstanceId, String, String)>,
     focus_row: Option<Selection>,
     raw_events: Vec<RawEvent>,
+    own_history: bool,
+    preset_cache: Option<(ChangeCursor, Vec<PresetReport>)>,
     prev_modifiers: Modifiers,
     checks_open: bool,
     pub(super) intents: Vec<Intent>,
@@ -165,6 +170,8 @@ impl InputActionsPanel {
             text_edit: None,
             focus_row: None,
             raw_events: Vec::new(),
+            own_history: true,
+            preset_cache: None,
             prev_modifiers: Modifiers::NONE,
             checks_open: true,
             intents: Vec::new(),
@@ -181,26 +188,62 @@ impl InputActionsPanel {
     /// Takes back the last step of the panel's own history.
     pub fn undo(&mut self, world: &mut World) -> bool {
         let ok = self.history.undo(world);
-        self.follow_remap();
+        let map = self.history.last_remap().clone();
+        self.follow_remap(&map);
         ok
     }
 
     /// Does the last undone step again.
     pub fn redo(&mut self, world: &mut World) -> bool {
         let ok = self.history.redo(world);
-        self.follow_remap();
+        let map = self.history.last_remap().clone();
+        self.follow_remap(&map);
         ok
     }
 
-    fn follow_remap(&mut self) {
-        let map = self.history.last_remap().clone();
-        self.baseline.remap(&map);
-        if let Some(Selection::Instance(id)) = &mut self.selection
-            && let Some(n) = map.get(id)
-        {
-            *id = *n;
+    /// Makes the panel follow instances that an undo or redo rebuilt with new ids (a deleted
+    /// action comes back as a new instance). The selection, the touch view's selected control,
+    /// the rename baseline, collapsed rows and open edits all move to the new ids.
+    ///
+    /// The panel does this itself for its own [`History`]. **A [`CommandSink`] that owns undo
+    /// must forward the map that [`EditStep::undo`](super::EditStep::undo) and
+    /// [`EditStep::redo`](super::EditStep::redo) return to this method** after every undo or
+    /// redo, or the panel keeps pointing at dead ids.
+    pub fn follow_remap(&mut self, map: &IdMap) {
+        if map.is_empty() {
+            return;
         }
-        self.touch.remap(&map);
+        let follow = |id: &mut InstanceId| {
+            if let Some(n) = map.get(id) {
+                *id = *n;
+            }
+        };
+        self.baseline.remap(map);
+        self.touch.remap(map);
+        for sel in [&mut self.selection, &mut self.focus_row] {
+            if let Some(Selection::Instance(id)) = sel {
+                follow(id);
+            }
+        }
+        self.collapsed = self
+            .collapsed
+            .iter()
+            .map(|id| map.get(id).copied().unwrap_or(*id))
+            .collect();
+        if let Some((id, ..)) = &mut self.text_edit {
+            follow(id);
+        }
+        if let Some(listen) = &mut self.listen {
+            match &mut listen.target {
+                ListenTarget::Add { action, .. } => follow(action),
+                ListenTarget::Replace {
+                    action, binding, ..
+                } => {
+                    follow(action);
+                    follow(binding);
+                }
+            }
+        }
     }
 
     /// Selects the first action called `name` (also as the selected touch control).
@@ -243,8 +286,15 @@ impl InputActionsPanel {
     }
 
     /// Device events from real gamepads (the host owns gilrs); used by Listen and the preview.
+    ///
+    /// At most [`MAX_RAW_EVENTS`] are kept; when the host feeds faster than frames are drawn,
+    /// the oldest are dropped.
     pub fn feed_raw(&mut self, events: &[RawEvent]) {
         self.raw_events.extend_from_slice(events);
+        let extra = self.raw_events.len().saturating_sub(MAX_RAW_EVENTS);
+        if extra > 0 {
+            self.raw_events.drain(..extra);
+        }
     }
 
     pub(super) fn take_raw_events(&mut self) -> Vec<RawEvent> {
@@ -291,6 +341,7 @@ impl InputActionsPanel {
         own_history: bool,
     ) {
         self.now = ui.input(|i| i.time);
+        self.own_history = own_history;
         self.refresh(world);
         let listen_inputs = if self.listen.is_some() {
             self.collect_listen_inputs(ui.ctx())
@@ -298,24 +349,27 @@ impl InputActionsPanel {
             self.prev_modifiers = ui.input(|i| i.modifiers);
             Vec::new()
         };
-        let model = self.cache.as_ref().expect("refreshed").model.clone();
-        let findings = self.cache.as_ref().expect("refreshed").findings.clone();
+        // Borrowed for the frame, not cloned: nothing in the frame reads the cache.
+        let cache = self.cache.take().expect("refreshed");
+        let (model, findings) = (&cache.model, &cache.findings);
 
         let outer = ui.available_rect_before_wrap();
         ui.scope(|ui| {
             st::scope_visuals(ui);
             ui.painter()
-                .rect_filled(outer, CornerRadius::ZERO, st::BG_BASE);
-            self.toolbar(ui, world, own_history);
+                .rect_filled(outer, CornerRadius::ZERO, st::bg_base());
+            self.toolbar(ui, world, model, own_history);
             match self.tab {
-                Tab::Bindings => self.bindings_tab(ui, world, &model, &findings),
+                Tab::Bindings => self.bindings_tab(ui, world, model, findings),
                 Tab::Preview => {
                     let mut touch = std::mem::take(&mut self.touch);
-                    touch.show(self, ui, world, &model);
+                    touch.show(self, ui, world, model);
                     self.touch = touch;
                 }
             }
         });
+
+        self.cache = Some(cache);
 
         if self.listen.is_some() {
             self.listen_popover(ui.ctx(), outer, world, listen_inputs);
@@ -507,6 +561,12 @@ impl InputActionsPanel {
                     if !report.unchanged.is_empty() {
                         text.push_str(&format!(", {} unchanged", report.unchanged.len()));
                     }
+                    if !report.conflicts.is_empty() {
+                        text.push_str(&format!(
+                            ". Duplicate controls now: {}",
+                            report.conflicts.join("; ")
+                        ));
+                    }
                     self.toast(text, self.history_is_own());
                 }
             }
@@ -562,9 +622,10 @@ impl InputActionsPanel {
         }
     }
 
+    /// True when steps go to the panel's own history (set by [`Self::show`]; false after
+    /// [`Self::show_with_sink`]). Only then can a toast offer Undo.
     fn history_is_own(&self) -> bool {
-        // Steps recorded into the panel's own history can be undone from the toast.
-        true
+        self.own_history
     }
 
     /// New instances made from the built-in context keep the built-in names as their baseline,
@@ -577,13 +638,13 @@ impl InputActionsPanel {
     // -----------------------------------------------------------------------------------------
     // Toolbar
 
-    fn toolbar(&mut self, ui: &mut Ui, world: &World, own_history: bool) {
+    fn toolbar(&mut self, ui: &mut Ui, world: &World, model: &InputModel, own_history: bool) {
         egui::Panel::top("ia-toolbar")
             .exact_size(44.0)
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(st::BG_PANEL)
+                    .fill(st::bg_panel())
                     .inner_margin(Margin::symmetric(12, 8)),
             )
             .show(ui, |ui| {
@@ -592,13 +653,13 @@ impl InputActionsPanel {
                         ui.painter(),
                         Rect::from_min_size(ui.cursor().min + vec2(0.0, 6.0), Vec2::splat(16.0)),
                         Icon::Gamepad,
-                        st::ACCENT_TEXT,
+                        st::accent_text(),
                     );
                     ui.add_space(22.0);
                     ui.label(
                         egui::RichText::new("Input actions")
                             .font(st::heading())
-                            .color(st::TEXT_1),
+                            .color(st::text_1()),
                     );
                     ui.add_space(st::S5);
                     st::segmented(
@@ -631,7 +692,7 @@ impl InputActionsPanel {
                             }
                             ui.add_space(st::S2);
                         }
-                        self.presets_menu(ui, world);
+                        self.presets_menu(ui, world, model);
                         self.add_menu(ui, world);
                     });
                 });
@@ -681,7 +742,7 @@ impl InputActionsPanel {
             ui.label(
                 egui::RichText::new(into)
                     .font(st::caption())
-                    .color(st::TEXT_3),
+                    .color(st::text_3()),
             );
             for role in ROLES {
                 let text = if role == Role::None {
@@ -710,7 +771,24 @@ impl InputActionsPanel {
         });
     }
 
-    fn presets_menu(&mut self, ui: &mut Ui, world: &World) {
+    /// Previews of every preset, worked out from the model once per scene change.
+    fn ensure_preset_reports(&mut self, world: &World, model: &InputModel) {
+        let cursor = world.change_cursor();
+        if self
+            .preset_cache
+            .as_ref()
+            .is_some_and(|(c, _)| *c == cursor)
+        {
+            return;
+        }
+        let reports = BindingPreset::ALL
+            .into_iter()
+            .map(|p| preview_preset(model, p))
+            .collect();
+        self.preset_cache = Some((cursor, reports));
+    }
+
+    fn presets_menu(&mut self, ui: &mut Ui, world: &World, model: &InputModel) {
         let resp = st::button(ui, ButtonKind::Secondary, Some(Icon::Layers), "Presets");
         egui::Popup::menu(&resp).show(|ui| {
             st::scope_visuals(ui);
@@ -718,15 +796,22 @@ impl InputActionsPanel {
             ui.label(
                 egui::RichText::new("Replace one device's bindings of every action with a role")
                     .font(st::caption())
-                    .color(st::TEXT_3),
+                    .color(st::text_3()),
             );
-            for p in BindingPreset::ALL {
-                let report = preview_preset(world, p);
+            self.ensure_preset_reports(world, model);
+            for (i, p) in BindingPreset::ALL.into_iter().enumerate() {
+                let report = &self.preset_cache.as_ref().expect("filled").1[i];
                 let enabled = !report.changed.is_empty();
                 let tip = if enabled {
                     let mut t = format!("Changes {}", report.changed.join(", "));
                     if !report.unchanged.is_empty() {
                         t.push_str(&format!("\nLeaves {}", report.unchanged.join(", ")));
+                    }
+                    if !report.conflicts.is_empty() {
+                        t.push_str(&format!(
+                            "\nWould create conflicts: {}",
+                            report.conflicts.join("; ")
+                        ));
                     }
                     t
                 } else {
@@ -763,7 +848,7 @@ impl InputActionsPanel {
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(st::BG_PANEL)
+                    .fill(st::bg_panel())
                     .inner_margin(Margin::symmetric(0, 8)),
             )
             .show(ui, |ui| self.tree(ui, world, model, findings));
@@ -773,14 +858,14 @@ impl InputActionsPanel {
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(st::BG_PANEL)
+                    .fill(st::bg_panel())
                     .inner_margin(Margin::symmetric(12, 8)),
             )
             .show(ui, |ui| self.properties(ui, world, model));
         egui::CentralPanel::default()
             .frame(
                 Frame::new()
-                    .fill(st::BG_BASE)
+                    .fill(st::bg_base())
                     .inner_margin(Margin::symmetric(12, 8)),
             )
             .show(ui, |ui| self.matrix(ui, world, model, findings));
@@ -815,9 +900,9 @@ impl InputActionsPanel {
             self.focus_row = None;
         }
         let fill = if selected {
-            st::SELECT
+            st::select()
         } else if resp.hovered() {
-            st::BG_HOVER
+            st::bg_hover()
         } else {
             Color32::TRANSPARENT
         };
@@ -827,7 +912,7 @@ impl InputActionsPanel {
             p.vline(
                 rect.left() + 1.0,
                 rect.y_range(),
-                Stroke::new(2.0, st::ACCENT),
+                Stroke::new(2.0, st::accent()),
             );
         }
         let mut x = rect.left() + 8.0 + depth as f32 * 16.0;
@@ -842,7 +927,7 @@ impl InputActionsPanel {
                 } else {
                     Icon::ChevronRight
                 },
-                st::TEXT_3,
+                st::text_3(),
             );
             if resp.clicked()
                 && resp
@@ -854,12 +939,16 @@ impl InputActionsPanel {
         }
         x += 16.0;
         let dim = enabled == Some(false);
-        let text_color = if dim { st::TEXT_OFF } else { st::TEXT_1 };
+        let text_color = if dim { st::text_off() } else { st::text_1() };
         st::paint_icon(
             p,
             Rect::from_min_size(pos2(x, rect.center().y - 7.0), Vec2::splat(14.0)),
             icon,
-            if selected { st::ACCENT_TEXT } else { st::ICON },
+            if selected {
+                st::accent_text()
+            } else {
+                st::icon()
+            },
         );
         x += 20.0;
         let name_rect = p.text(
@@ -891,13 +980,13 @@ impl InputActionsPanel {
             });
             if er.hovered() {
                 ui.painter()
-                    .rect_filled(eye, CornerRadius::same(st::R_SM), st::BG_ACTIVE);
+                    .rect_filled(eye, CornerRadius::same(st::R_SM), st::bg_active());
             }
             st::paint_icon(
                 ui.painter(),
                 eye.shrink(2.0),
                 if on { Icon::Eye } else { Icon::EyeOff },
-                if on { st::TEXT_3 } else { st::TEXT_OFF },
+                if on { st::text_3() } else { st::text_off() },
             );
             st::focus_ring(ui, &er, eye, st::R_SM);
             eye_clicked = er.clicked();
@@ -943,9 +1032,9 @@ impl InputActionsPanel {
                     };
                     let open = ctx.instance.is_none_or(|id| !self.collapsed.contains(&id));
                     let detail = if ctx.instance.is_none() {
-                        ("Built in".to_string(), st::TEXT_3)
+                        ("Built in".to_string(), st::text_3())
                     } else {
-                        (format!("P{}", ctx.priority), st::TEXT_3)
+                        (format!("P{}", ctx.priority), st::text_3())
                     };
                     let (resp, toggled, eye) = self.tree_row(
                         ui,
@@ -990,7 +1079,7 @@ impl InputActionsPanel {
                             1,
                             Icon::Action,
                             &a.name,
-                            Some((ty, st::TEXT_3)),
+                            Some((ty, st::text_3())),
                             a.instance.filter(|_| !a.bindings.is_empty()).map(|_| aopen),
                             a.instance.map(|_| a.enabled),
                             worst(a.instance),
@@ -1023,7 +1112,7 @@ impl InputActionsPanel {
                                 2,
                                 Icon::Binding,
                                 &label,
-                                Some((short_device(binding_device(b)), st::TEXT_3)),
+                                Some((short_device(binding_device(b)), st::text_3())),
                                 None,
                                 None,
                                 worst(Some(bid)),
@@ -1168,7 +1257,7 @@ impl InputActionsPanel {
             Align2::LEFT_CENTER,
             "ACTION",
             st::caption(),
-            st::TEXT_3,
+            st::text_3(),
         );
         for (i, d) in DeviceColumn::ALL.iter().enumerate() {
             let x = hdr.left() + name_w + i as f32 * col_w;
@@ -1181,17 +1270,17 @@ impl InputActionsPanel {
                 p,
                 Rect::from_min_size(pos2(x + 4.0, hdr.center().y - 7.0), Vec2::splat(14.0)),
                 icon,
-                st::TEXT_3,
+                st::text_3(),
             );
             p.text(
                 pos2(x + 24.0, hdr.center().y),
                 Align2::LEFT_CENTER,
                 d.title().to_uppercase(),
                 st::caption(),
-                st::TEXT_3,
+                st::text_3(),
             );
         }
-        p.hline(hdr.x_range(), hdr.bottom(), Stroke::new(1.0, st::LINE));
+        p.hline(hdr.x_range(), hdr.bottom(), Stroke::new(1.0, st::line()));
 
         let flagged: HashSet<InstanceId> = findings
             .iter()
@@ -1214,7 +1303,7 @@ impl InputActionsPanel {
                             Vec2::splat(14.0),
                         ),
                         Icon::Context,
-                        st::TEXT_3,
+                        st::text_3(),
                     );
                     let t = p.text(
                         pos2(r.left() + 22.0, r.center().y),
@@ -1222,9 +1311,9 @@ impl InputActionsPanel {
                         &ctx.name,
                         st::heading(),
                         if ctx.enabled {
-                            st::TEXT_1
+                            st::text_1()
                         } else {
-                            st::TEXT_OFF
+                            st::text_off()
                         },
                     );
                     let mut meta = format!("Priority {}", ctx.priority);
@@ -1242,7 +1331,7 @@ impl InputActionsPanel {
                         Align2::LEFT_CENTER,
                         meta,
                         st::caption(),
-                        st::TEXT_3,
+                        st::text_3(),
                     );
                     for a in &ctx.actions {
                         let sel = match a.instance {
@@ -1260,9 +1349,9 @@ impl InputActionsPanel {
                             row.shrink2(vec2(0.0, 2.0)),
                             CornerRadius::same(st::R_MD),
                             if selected {
-                                st::SELECT_WEAK
+                                st::select_weak()
                             } else {
-                                st::BG_PANEL
+                                st::bg_panel()
                             },
                         );
                         // Name cell.
@@ -1279,14 +1368,14 @@ impl InputActionsPanel {
                             Align2::LEFT_CENTER,
                             &a.name,
                             st::body(),
-                            if dim { st::TEXT_OFF } else { st::TEXT_1 },
+                            if dim { st::text_off() } else { st::text_1() },
                         );
                         p.text(
                             pos2(nt.right() + 6.0, row.center().y + 1.0),
                             Align2::LEFT_CENTER,
                             short_type(a.ty),
                             st::caption(),
-                            st::TEXT_3,
+                            st::text_3(),
                         );
                         if a.instance.is_some_and(|i| flagged.contains(&i)) {
                             st::paint_icon(
@@ -1296,7 +1385,7 @@ impl InputActionsPanel {
                                     Vec2::splat(14.0),
                                 ),
                                 Icon::Error,
-                                st::ERROR,
+                                st::error(),
                             );
                         }
                         st::focus_ring(ui, &nresp, name_rect.shrink(3.0), st::R_SM);
@@ -1308,7 +1397,7 @@ impl InputActionsPanel {
                             ui.painter().vline(
                                 cell.left(),
                                 cell.y_range().shrink(8.0),
-                                Stroke::new(1.0, st::LINE),
+                                Stroke::new(1.0, st::line()),
                             );
                             if *d == DeviceColumn::Touch {
                                 self.touch_cell(ui, world, cell, a, &sel);
@@ -1334,18 +1423,18 @@ impl InputActionsPanel {
 
     fn builtin_banner(&mut self, ui: &mut Ui) {
         Frame::new()
-            .fill(st::INFO_BG)
+            .fill(st::info_bg())
             .corner_radius(CornerRadius::same(st::R_MD))
             .inner_margin(Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                    st::paint_icon(ui.painter(), r, Icon::Info, st::INFO);
+                    st::paint_icon(ui.painter(), r, Icon::Info, st::info());
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.label(egui::RichText::new("This game uses the built-in CharacterControls").font(st::body()).color(st::TEXT_1));
-                        ui.label(egui::RichText::new("Move, Jump, Run, Look and Zoom with Metallic's default keys. Add them to the scene to change them.").font(st::small()).color(st::TEXT_2));
+                        ui.label(egui::RichText::new("This game uses the built-in CharacterControls").font(st::body()).color(st::text_1()));
+                        ui.label(egui::RichText::new("Move, Jump, Run, Look and Zoom with Metallic's default keys. Add them to the scene to change them.").font(st::small()).color(st::text_2()));
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if st::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add to scene").clicked() {
@@ -1393,11 +1482,11 @@ impl InputActionsPanel {
             let selected = sel.as_ref().is_some_and(|s| self.is_selected(s));
             let err = b.instance.is_some_and(|i| flagged.contains(&i));
             let fill = if selected {
-                st::SELECT
+                st::select()
             } else if resp.hovered() {
-                st::BG_HOVER
+                st::bg_hover()
             } else {
-                st::BG_RAISED
+                st::bg_raised()
             };
             ui.painter()
                 .rect_filled(chip, CornerRadius::same(st::R_SM), fill);
@@ -1405,7 +1494,7 @@ impl InputActionsPanel {
                 ui.painter().rect_stroke(
                     chip,
                     CornerRadius::same(st::R_SM),
-                    Stroke::new(1.0, st::ERROR),
+                    Stroke::new(1.0, st::error()),
                     StrokeKind::Inside,
                 );
             }
@@ -1454,7 +1543,7 @@ impl InputActionsPanel {
                 Align2::LEFT_CENTER,
                 format!("+{hidden}"),
                 st::caption(),
-                st::TEXT_3,
+                st::text_3(),
             );
         }
         if bindings.is_empty() {
@@ -1464,7 +1553,7 @@ impl InputActionsPanel {
                 Align2::LEFT_CENTER,
                 "No binding",
                 st::caption(),
-                if warn { st::WARNING } else { st::TEXT_3 },
+                if warn { st::warning() } else { st::text_3() },
             );
         }
         if let Some(action) = a.instance {
@@ -1479,9 +1568,13 @@ impl InputActionsPanel {
                 ui.painter().rect_filled(
                     add,
                     CornerRadius::same(st::R_SM),
-                    if hot { st::BG_ACTIVE } else { st::BG_RAISED },
+                    if hot {
+                        st::bg_active()
+                    } else {
+                        st::bg_raised()
+                    },
                 );
-                st::paint_icon(ui.painter(), add.shrink(5.0), Icon::Plus, st::ICON);
+                st::paint_icon(ui.painter(), add.shrink(5.0), Icon::Plus, st::icon());
             }
             st::focus_ring(ui, &resp, add, st::R_SM);
             if resp
@@ -1513,7 +1606,7 @@ impl InputActionsPanel {
                 Align2::LEFT_CENTER,
                 "Not shown on touch",
                 st::caption(),
-                st::TEXT_3,
+                st::text_3(),
             );
             return;
         }
@@ -1536,7 +1629,7 @@ impl InputActionsPanel {
         };
         let g = ui
             .painter()
-            .layout_no_wrap(text.clone(), st::caption(), st::TEXT_1);
+            .layout_no_wrap(text.clone(), st::caption(), st::text_1());
         let chip = Rect::from_min_size(
             pos2(cell.left() + 8.0, y - 12.0),
             vec2(g.size().x + 34.0, 24.0),
@@ -1550,9 +1643,9 @@ impl InputActionsPanel {
             ),
         };
         let fill = if on {
-            st::SELECT_WEAK
+            st::select_weak()
         } else if resp.hovered() {
-            st::BG_HOVER
+            st::bg_hover()
         } else {
             Color32::TRANSPARENT
         };
@@ -1561,23 +1654,23 @@ impl InputActionsPanel {
             ui.painter().rect_stroke(
                 chip,
                 CornerRadius::same(12),
-                Stroke::new(1.0, st::LINE_STRONG),
+                Stroke::new(1.0, st::line_strong()),
                 StrokeKind::Inside,
             );
         }
         let dot = pos2(chip.left() + 13.0, y);
         if on {
-            ui.painter().circle_filled(dot, 4.5, st::ACCENT);
+            ui.painter().circle_filled(dot, 4.5, st::accent());
         } else {
             ui.painter()
-                .circle_stroke(dot, 4.0, Stroke::new(1.2, st::TEXT_3));
+                .circle_stroke(dot, 4.0, Stroke::new(1.2, st::text_3()));
         }
         ui.painter().text(
             pos2(chip.left() + 24.0, y),
             Align2::LEFT_CENTER,
             text,
             st::caption(),
-            if on { st::TEXT_1 } else { st::TEXT_3 },
+            if on { st::text_1() } else { st::text_3() },
         );
         st::focus_ring(ui, &resp, chip, 12);
         if let Some(id) = a.instance
@@ -1608,7 +1701,7 @@ impl InputActionsPanel {
             ui.label(
                 egui::RichText::new("Select a context, action or binding.")
                     .font(st::small())
-                    .color(st::TEXT_3),
+                    .color(st::text_3()),
             );
             return;
         };
@@ -1618,14 +1711,14 @@ impl InputActionsPanel {
                 ui.label(
                     egui::RichText::new(&path)
                         .font(st::heading())
-                        .color(st::TEXT_1),
+                        .color(st::text_1()),
                 );
                 ui.label(
                     egui::RichText::new(
                         "Built in and read only. Add CharacterControls to the scene to edit it.",
                     )
                     .font(st::small())
-                    .color(st::TEXT_2),
+                    .color(st::text_2()),
                 );
                 ui.add_space(st::S4);
                 if st::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add to scene").clicked() {
@@ -1663,16 +1756,16 @@ impl InputActionsPanel {
                 _ => Icon::Binding,
             };
             let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-            st::paint_icon(ui.painter(), r, icon, st::ACCENT_TEXT);
+            st::paint_icon(ui.painter(), r, icon, st::accent_text());
             ui.label(
                 egui::RichText::new(prop_string(world, id, "Name"))
                     .font(st::heading())
-                    .color(st::TEXT_1),
+                    .color(st::text_1()),
             );
             ui.label(
                 egui::RichText::new(class)
                     .font(st::caption())
-                    .color(st::TEXT_3),
+                    .color(st::text_3()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if st::icon_button(ui, Icon::Trash, "Delete (Delete)", true).clicked() {
@@ -1727,7 +1820,7 @@ impl InputActionsPanel {
                 Align2::LEFT_CENTER,
                 def.name,
                 st::small(),
-                st::TEXT_2,
+                st::text_2(),
             );
             let w = ui.available_width();
             let prop = def.name.to_string();
@@ -1836,9 +1929,9 @@ impl InputActionsPanel {
                         Stroke::new(
                             1.0,
                             if r.has_focus() {
-                                st::FOCUS
+                                st::focus()
                             } else {
-                                st::LINE_CONTROL
+                                st::line_control()
                             },
                         ),
                         StrokeKind::Inside,
@@ -1901,14 +1994,14 @@ impl InputActionsPanel {
                     ui.label(
                         egui::RichText::new(text)
                             .font(st::small())
-                            .color(st::TEXT_3),
+                            .color(st::text_3()),
                     );
                 }
                 other => {
                     ui.label(
                         egui::RichText::new(format!("{:?}", other.value_type()))
                             .font(st::small())
-                            .color(st::TEXT_3),
+                            .color(st::text_3()),
                     );
                 }
             }
@@ -1930,7 +2023,7 @@ impl InputActionsPanel {
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(st::BG_PANEL)
+                    .fill(st::bg_panel())
                     .inner_margin(Margin::symmetric(12, 6)),
             );
         let panel = if self.checks_open {
@@ -1944,18 +2037,18 @@ impl InputActionsPanel {
                 if r.clicked() {
                     self.checks_open = !self.checks_open;
                 }
-                ui.label(egui::RichText::new("Checks").font(st::heading()).color(st::TEXT_1));
+                ui.label(egui::RichText::new("Checks").font(st::heading()).color(st::text_1()));
                 if findings.is_empty() {
-                    st::chip(ui, "All pass", st::SUCCESS, st::SUCCESS_BG);
+                    st::chip(ui, "All pass", st::success(), st::success_bg());
                 }
                 if errors > 0 {
-                    st::chip(ui, &plural(errors, "error"), st::ERROR, st::ERROR_BG);
+                    st::chip(ui, &plural(errors, "error"), st::error(), st::error_bg());
                 }
                 if warnings > 0 {
-                    st::chip(ui, &plural(warnings, "warning"), st::WARNING, st::WARNING_BG);
+                    st::chip(ui, &plural(warnings, "warning"), st::warning(), st::warning_bg());
                 }
                 if infos > 0 {
-                    st::chip(ui, &plural(infos, "note"), st::INFO, st::INFO_BG);
+                    st::chip(ui, &plural(infos, "note"), st::info(), st::info_bg());
                 }
             });
             if !self.checks_open {
@@ -1967,21 +2060,21 @@ impl InputActionsPanel {
                     ui.add_space(st::S3);
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                        st::paint_icon(ui.painter(), r, Icon::Check, st::SUCCESS);
-                        ui.label(egui::RichText::new("Every action has keyboard and gamepad bindings, and the touch layout fits every device.").font(st::small()).color(st::TEXT_2));
+                        st::paint_icon(ui.painter(), r, Icon::Check, st::success());
+                        ui.label(egui::RichText::new("Every action has keyboard and gamepad bindings, and the touch layout fits every device.").font(st::small()).color(st::text_2()));
                     });
                 }
                 for (i, f) in findings.iter().enumerate() {
                     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
                     let resp = ui.interact(r, Id::unique(("ia-finding", i, f.message.as_str())), Sense::click());
                     if resp.hovered() {
-                        ui.painter().rect_filled(r, CornerRadius::same(st::R_SM), st::BG_HOVER);
+                        ui.painter().rect_filled(r, CornerRadius::same(st::R_SM), st::bg_hover());
                     }
                     let (icon, color) = level_icon(f.level);
                     let p = ui.painter();
                     st::paint_icon(p, Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 7.0), Vec2::splat(14.0)), icon, color);
                     let lt = p.text(pos2(r.left() + 28.0, r.center().y), Align2::LEFT_CENTER, f.level.label(), st::caption(), color);
-                    p.text(pos2(lt.left() + 58.0, r.center().y), Align2::LEFT_CENTER, &f.message, st::small(), st::TEXT_1);
+                    p.text(pos2(lt.left() + 58.0, r.center().y), Align2::LEFT_CENTER, &f.message, st::small(), st::text_1());
                     st::focus_ring(ui, &resp, r, st::R_SM);
                     let activate = resp.clicked() || (resp.has_focus() && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)));
                     if activate && let Some(&t) = f.targets.first() {
@@ -2118,8 +2211,8 @@ impl InputActionsPanel {
             ));
         area.show(ctx, |ui| {
             Frame::new()
-                .fill(st::BG_PANEL)
-                .stroke(Stroke::new(1.0, st::LINE_STRONG))
+                .fill(st::bg_panel())
+                .stroke(Stroke::new(1.0, st::line_strong()))
                 .corner_radius(CornerRadius::same(st::R_LG))
                 .shadow(Shadow {
                     offset: [0, 8],
@@ -2140,12 +2233,12 @@ impl InputActionsPanel {
                     ui.label(
                         egui::RichText::new(format!("{}{slot}", listen.action_name))
                             .font(st::heading())
-                            .color(st::TEXT_1),
+                            .color(st::text_1()),
                     );
                     ui.label(
                         egui::RichText::new(device.title())
                             .font(st::small())
-                            .color(st::TEXT_3),
+                            .color(st::text_3()),
                     );
                     ui.add_space(st::S5);
                     if let Some((p, conflicts)) = &listen.pending {
@@ -2170,14 +2263,14 @@ impl InputActionsPanel {
                     ui.painter().circle_stroke(
                         c,
                         20.0 + pulse * 6.0,
-                        Stroke::new(1.5, st::ACCENT.gamma_multiply(0.35 + 0.4 * (1.0 - pulse))),
+                        Stroke::new(1.5, st::accent().gamma_multiply(0.35 + 0.4 * (1.0 - pulse))),
                     );
-                    ui.painter().circle_filled(c, 14.0, st::SELECT);
+                    ui.painter().circle_filled(c, 14.0, st::select());
                     st::paint_icon(
                         ui.painter(),
                         Rect::from_center_size(c, Vec2::splat(18.0)),
                         Icon::Listen,
-                        st::ACCENT_TEXT,
+                        st::accent_text(),
                     );
                     let composite = listen.action_type == ActionType::Direction2D
                         && matches!(listen.target, ListenTarget::Add { .. });
@@ -2199,7 +2292,7 @@ impl InputActionsPanel {
                         ui.label(
                             egui::RichText::new(prompt)
                                 .font(st::body())
-                                .color(st::TEXT_1),
+                                .color(st::text_1()),
                         );
                     });
                     if !listen.composite.is_empty() {
@@ -2215,7 +2308,7 @@ impl InputActionsPanel {
                                     Align2::LEFT_CENTER,
                                     ["Up", "Down", "Left", "Right"][i],
                                     st::caption(),
-                                    st::TEXT_3,
+                                    st::text_3(),
                                 );
                                 st::paint_glyph(
                                     ui.painter(),
@@ -2238,11 +2331,11 @@ impl InputActionsPanel {
                     let (bar, _) =
                         ui.allocate_exact_size(vec2(ui.available_width(), 3.0), Sense::hover());
                     ui.painter()
-                        .rect_filled(bar, CornerRadius::same(1), st::BG_DEEP);
+                        .rect_filled(bar, CornerRadius::same(1), st::bg_deep());
                     ui.painter().rect_filled(
                         Rect::from_min_size(bar.min, vec2(bar.width() * left / 8.0, 3.0)),
                         CornerRadius::same(1),
-                        st::ACCENT,
+                        st::accent(),
                     );
                     ui.add_space(st::S4);
                     ui.horizontal(|ui| {
@@ -2258,7 +2351,7 @@ impl InputActionsPanel {
                         ui.label(
                             egui::RichText::new(hint)
                                 .font(st::caption())
-                                .color(st::TEXT_3),
+                                .color(st::text_3()),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if st::button(ui, ButtonKind::Ghost, None, "Cancel").clicked() {
@@ -2375,7 +2468,7 @@ impl InputActionsPanel {
             Pending::Composite(_) => format!("Bind {} to four keys", listen.action_name),
         };
         let old = match &listen.target {
-            ListenTarget::Replace { old, .. } => *old,
+            ListenTarget::Replace { binding, prop, .. } => captured_of(world, *binding, prop),
             ListenTarget::Add { .. } => None,
         };
         let target = listen.target.clone();
@@ -2436,7 +2529,7 @@ impl InputActionsPanel {
             )
             .show(ctx, |ui| {
                 Frame::new()
-                    .fill(hex_g700())
+                    .fill(st::bg_hover())
                     .corner_radius(CornerRadius::same(st::R_MD))
                     .shadow(Shadow {
                         offset: [0, 8],
@@ -2451,7 +2544,7 @@ impl InputActionsPanel {
                             ui.label(
                                 egui::RichText::new(&text)
                                     .font(st::small())
-                                    .color(st::TEXT_1),
+                                    .color(st::text_1()),
                             );
                             if undo
                                 && st::button(ui, ButtonKind::Ghost, Some(Icon::Undo), "Undo")
@@ -2470,10 +2563,6 @@ impl InputActionsPanel {
     }
 }
 
-fn hex_g700() -> Color32 {
-    Color32::from_rgb(0x2c, 0x2a, 0x34)
-}
-
 fn plural(n: usize, word: &str) -> String {
     if n == 1 {
         format!("1 {word}")
@@ -2484,9 +2573,9 @@ fn plural(n: usize, word: &str) -> String {
 
 fn level_icon(l: Level) -> (Icon, Color32) {
     match l {
-        Level::Error => (Icon::Error, st::ERROR),
-        Level::Warning => (Icon::Warning, st::WARNING),
-        Level::Info => (Icon::Info, st::INFO),
+        Level::Error => (Icon::Error, st::error()),
+        Level::Warning => (Icon::Warning, st::warning()),
+        Level::Info => (Icon::Info, st::info()),
     }
 }
 
@@ -2610,18 +2699,18 @@ fn conflict_ui(
             .join(" "),
     };
     Frame::new()
-        .fill(st::WARNING_BG)
+        .fill(st::warning_bg())
         .corner_radius(CornerRadius::same(st::R_MD))
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                st::paint_icon(ui.painter(), r, Icon::Warning, st::WARNING);
+                st::paint_icon(ui.painter(), r, Icon::Warning, st::warning());
                 ui.label(
                     egui::RichText::new(format!("{what} is already in use"))
                         .font(st::body())
-                        .color(st::TEXT_1),
+                        .color(st::text_1()),
                 );
             });
             let mut paths: Vec<&str> = conflicts.iter().map(|c| c.path.as_str()).collect();
@@ -2629,7 +2718,7 @@ fn conflict_ui(
             ui.label(
                 egui::RichText::new(format!("Used by {}", paths.join(", ")))
                     .font(st::small())
-                    .color(st::TEXT_2),
+                    .color(st::text_2()),
             );
         });
     ui.add_space(st::S5);
@@ -2685,7 +2774,7 @@ fn mouse_pad(ui: &mut Ui, inputs: &mut Vec<CaptureInput>) {
     ui.painter().rect_filled(
         r,
         CornerRadius::same(st::R_MD),
-        if hot { st::BG_RAISED } else { st::BG_DEEP },
+        if hot { st::bg_raised() } else { st::bg_deep() },
     );
     ui.painter().rect_stroke(
         r,
@@ -2693,9 +2782,9 @@ fn mouse_pad(ui: &mut Ui, inputs: &mut Vec<CaptureInput>) {
         Stroke::new(
             1.0,
             if hot {
-                st::LINE_CONTROL
+                st::line_control()
             } else {
-                st::LINE_STRONG
+                st::line_strong()
             },
         ),
         StrokeKind::Inside,
@@ -2705,14 +2794,14 @@ fn mouse_pad(ui: &mut Ui, inputs: &mut Vec<CaptureInput>) {
         Align2::CENTER_CENTER,
         "Click here with any mouse button",
         st::small(),
-        st::TEXT_2,
+        st::text_2(),
     );
     ui.painter().text(
         r.center() + vec2(0.0, 9.0),
         Align2::CENTER_CENTER,
         "or turn the wheel",
         st::caption(),
-        st::TEXT_3,
+        st::text_3(),
     );
     if hot {
         ui.input(|i| {
@@ -2747,7 +2836,7 @@ fn pad_picker(ui: &mut Ui, glyphs: GlyphStyle, inputs: &mut Vec<CaptureInput>) {
     ui.label(
         egui::RichText::new("No pad? Pick a control:")
             .font(st::caption())
-            .color(st::TEXT_3),
+            .color(st::text_3()),
     );
     let rows: [&[Control]; 2] = [
         &[
@@ -2784,9 +2873,9 @@ fn pad_picker(ui: &mut Ui, glyphs: GlyphStyle, inputs: &mut Vec<CaptureInput>) {
                     r,
                     CornerRadius::same(st::R_SM),
                     if resp.hovered() {
-                        st::BG_HOVER
+                        st::bg_hover()
                     } else {
-                        st::BG_RAISED
+                        st::bg_raised()
                     },
                 );
                 st::paint_glyph(
@@ -2888,4 +2977,285 @@ pub(super) fn egui_key_to_control(k: Key) -> Option<Control> {
         Key::Backtick => C::Backquote,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input_actions::checks::CheckId;
+    use crate::input_actions::commands::EditStep;
+    use crate::input_actions::touch::{DevicePreset, Orientation};
+    use metallic_runtime::input::Device;
+
+    /// A host that owns undo: it keeps the steps itself.
+    #[derive(Default)]
+    struct Host {
+        steps: Vec<EditStep>,
+    }
+
+    impl CommandSink for Host {
+        fn record(&mut self, step: EditStep) {
+            self.steps.push(step);
+        }
+    }
+
+    fn scene() -> (World, InstanceId) {
+        let mut w = World::new_with_services();
+        let rs = w.root("ReplicatedStorage").unwrap();
+        let mut b = StepBuilder::new(&mut w);
+        let ctx = b
+            .create(rs, context_snapshot(&default_character_controls()))
+            .unwrap();
+        let _ = b.finish("sample");
+        (w, ctx)
+    }
+
+    fn frame(panel: &mut InputActionsPanel, world: &mut World, host: Option<&mut Host>) {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0))),
+            time: Some(1.0),
+            ..Default::default()
+        };
+        let mut host = host;
+        let mut out = ctx.run_ui(input, |ui| match host.as_deref_mut() {
+            Some(h) => panel.show_with_sink(ui, world, h),
+            None => panel.show(ui, world),
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn host_owned_undo_of_a_delete_is_followed_by_forwarding_the_map() {
+        let (mut world, ctx) = scene();
+        let jump = world.find_first_child(ctx, "Jump").unwrap();
+        let mut panel = InputActionsPanel::new(&world);
+        let mut host = Host::default();
+        frame(&mut panel, &mut world, Some(&mut host));
+        assert!(!panel.history_is_own(), "a sink owns undo");
+        frame(&mut panel, &mut world, None);
+        assert!(
+            panel.history_is_own(),
+            "the panel's own history owns it again"
+        );
+        frame(&mut panel, &mut world, Some(&mut host));
+
+        panel.select_action(&world, "Jump");
+        assert_eq!(panel.selection, Some(Selection::Instance(jump)));
+        panel.apply(&mut world, &mut host, Intent::Delete(jump));
+        assert_eq!(host.steps.len(), 1);
+        assert!(!world.is_alive(jump));
+        // The creator had the dead action selected in the tree and the touch view.
+        panel.selection = Some(Selection::Instance(jump));
+        panel.touch.select(jump);
+
+        let map = host.steps.pop().unwrap().undo(&mut world).unwrap();
+        let back = world.find_first_child(ctx, "Jump").unwrap();
+        assert_ne!(back, jump, "the instance came back with a new id");
+        assert_eq!(map.get(&jump), Some(&back));
+        panel.follow_remap(&map);
+
+        assert_eq!(panel.selection, Some(Selection::Instance(back)));
+        assert_eq!(panel.touch.selected(), Some(back));
+        assert_eq!(panel.baseline.path(back), Some("CharacterControls/Jump"));
+        assert_eq!(panel.baseline.path(jump), None);
+        // The rename baseline works for the restored action.
+        world
+            .set(back, "Name", Value::String("Leap".into()))
+            .unwrap();
+        assert!(
+            run_checks(&world, &panel.baseline)
+                .iter()
+                .any(|f| f.id == CheckId::Renamed)
+        );
+    }
+
+    #[test]
+    fn own_history_undo_still_follows_ids() {
+        let (mut world, ctx) = scene();
+        let jump = world.find_first_child(ctx, "Jump").unwrap();
+        let mut panel = InputActionsPanel::new(&world);
+        let mut history = History::new();
+        panel.apply(&mut world, &mut history, Intent::Delete(jump));
+        panel.history = history;
+        panel.selection = Some(Selection::Instance(jump));
+        assert!(panel.undo(&mut world));
+        let back = world.find_first_child(ctx, "Jump").unwrap();
+        assert_eq!(panel.selection, Some(Selection::Instance(back)));
+    }
+
+    #[test]
+    fn raw_events_are_capped_and_the_oldest_dropped() {
+        let (world, _) = scene();
+        let mut panel = InputActionsPanel::new(&world);
+        let ev = |i: usize| RawEvent::button(Device::KeyboardMouse, Control::E, 1.0, i as f64);
+        let events: Vec<RawEvent> = (0..MAX_RAW_EVENTS + 300).map(ev).collect();
+        panel.feed_raw(&events);
+        assert_eq!(panel.raw_events.len(), MAX_RAW_EVENTS);
+        assert_eq!(panel.raw_events[0].time, 300.0, "the oldest went first");
+        panel.feed_raw(&[ev(5000)]);
+        assert_eq!(panel.raw_events.len(), MAX_RAW_EVENTS);
+        assert_eq!(panel.raw_events.last().unwrap().time, 5000.0);
+        assert_eq!(panel.raw_events[0].time, 301.0);
+    }
+
+    fn touch_commit(jump: InstanceId, dx: f32, merge: bool) -> Intent {
+        let profile = DevicePreset::Phone.profile(Orientation::Landscape);
+        Intent::TouchCommit {
+            id: jump,
+            center: [300.0 + dx, 200.0],
+            size: 64.0,
+            profile,
+            merge,
+        }
+    }
+
+    #[test]
+    fn a_drag_is_one_undo_step_nudges_merge_and_seal_ends_a_merge() {
+        let (mut world, ctx) = scene();
+        let jump = world.find_first_child(ctx, "Jump").unwrap();
+        let mut panel = InputActionsPanel::new(&world);
+        let mut history = History::new();
+
+        // One drag: Seal, one commit, Seal.
+        for i in [Intent::Seal, touch_commit(jump, 40.0, false), Intent::Seal] {
+            panel.apply(&mut world, &mut history, i);
+        }
+        assert_eq!(history.undo_label(), Some("Move Jump touch control"));
+        assert!(history.undo(&mut world));
+        assert!(!history.can_undo(), "one drag is exactly one step");
+        assert_eq!(
+            world.get(jump, "TouchLayout").unwrap(),
+            Value::String("Auto".into())
+        );
+        assert!(history.redo(&mut world));
+
+        // Keyboard nudges merge into one step.
+        panel.apply(&mut world, &mut history, Intent::Seal);
+        for dx in [48.0, 56.0, 64.0] {
+            panel.apply(&mut world, &mut history, touch_commit(jump, dx, true));
+        }
+        assert!(history.undo(&mut world), "the three nudges undo together");
+        assert!(history.undo(&mut world), "the drag is the step before");
+        assert!(!history.can_undo());
+        assert!(history.redo(&mut world) && history.redo(&mut world));
+
+        // Seal ends a merge: the next nudge is its own step.
+        panel.apply(&mut world, &mut history, Intent::Seal);
+        panel.apply(&mut world, &mut history, touch_commit(jump, 100.0, true));
+        panel.apply(&mut world, &mut history, touch_commit(jump, 108.0, true));
+        panel.apply(&mut world, &mut history, Intent::Seal);
+        panel.apply(&mut world, &mut history, touch_commit(jump, 120.0, true));
+        assert!(history.undo(&mut world));
+        assert!(history.undo(&mut world));
+        assert!(
+            history.undo(&mut world),
+            "three groups: drag+nudges, two nudges, one nudge"
+        );
+        assert!(history.undo(&mut world));
+        assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn destroy_then_undo_through_the_conflict_path() {
+        // Binding Jump's Space slot to LeftShift with Replace destroys Run's LeftShift binding.
+        let (mut world, ctx) = scene();
+        let jump = world.find_first_child(ctx, "Jump").unwrap();
+        let run = world.find_first_child(ctx, "Run").unwrap();
+        let space = world.children(jump)[0];
+        let cap = Captured::plain(Control::LeftShift);
+        let conflicts = conflicts_for(&world, jump, Some(space), &cap);
+        assert_eq!(conflicts.len(), 1);
+        let shift_binding = conflicts[0].binding;
+
+        let mut panel = InputActionsPanel::new(&world);
+        panel.selection = Some(Selection::Instance(shift_binding));
+        let mut host = Host::default();
+        let listen = Listen {
+            target: ListenTarget::Replace {
+                action: jump,
+                binding: space,
+                prop: "KeyCode",
+                old: Some(Control::Space),
+            },
+            listener: Listener::new(0.0, &[]),
+            action_name: "Jump".into(),
+            action_type: ActionType::Bool,
+            composite: Vec::new(),
+            pending: None,
+            focus_first: false,
+        };
+        panel.finish_listen(
+            &mut world,
+            &listen,
+            Pending::One(cap),
+            &conflicts,
+            Resolution::Replace,
+        );
+        host.record(panel.pending_step.take().expect("one step"));
+        assert!(
+            !world.is_alive(shift_binding),
+            "the other binding was destroyed"
+        );
+        assert_eq!(prop_string(&world, space, "KeyCode"), "LeftShift");
+
+        let map = host.steps.pop().unwrap().undo(&mut world).unwrap();
+        panel.follow_remap(&map);
+        let restored = *map.get(&shift_binding).expect("rebuilt with a new id");
+        assert!(world.is_alive(restored));
+        assert_eq!(world.parent(restored), Some(run));
+        assert_eq!(prop_string(&world, restored, "KeyCode"), "LeftShift");
+        assert_eq!(prop_string(&world, space, "KeyCode"), "Space");
+        assert_eq!(panel.selection, Some(Selection::Instance(restored)));
+    }
+
+    #[test]
+    fn keyboard_preset_toast_names_the_conflicts_it_creates() {
+        // An action that already uses a key some keyboard preset hands to Jump.
+        let (mut world, ctx) = scene();
+        let key = BindingPreset::ALL
+            .into_iter()
+            .filter(|p| p.device() == DeviceColumn::KeyboardMouse)
+            .flat_map(|p| p.bindings(Role::Jump).unwrap_or_default())
+            .filter_map(|b| b.key)
+            .find(|k| *k != Control::Space)
+            .expect("a keyboard preset binds Jump to something other than Space");
+        let wave = world.create("InputAction", Some(ctx)).unwrap();
+        world
+            .set(wave, "Name", Value::String("Wave".into()))
+            .unwrap();
+        let bind = world.create("InputBinding", Some(wave)).unwrap();
+        world
+            .set(bind, "KeyCode", Value::String(key.name().into()))
+            .unwrap();
+        let model = InputModel::read(&world);
+        let keyboard: Vec<BindingPreset> = BindingPreset::ALL
+            .into_iter()
+            .filter(|p| p.device() == DeviceColumn::KeyboardMouse)
+            .collect();
+        assert!(!keyboard.is_empty());
+
+        let mut panel = InputActionsPanel::new(&world);
+        let mut history = History::new();
+        let mut saw_conflict = false;
+        for p in keyboard {
+            let preview = preview_preset(&model, p);
+            let mut copy = world.deep_clone();
+            panel.toast = None;
+            panel.apply(&mut copy, &mut history, Intent::Preset(p));
+            let toast = panel
+                .toast
+                .as_ref()
+                .map(|t| t.text.clone())
+                .unwrap_or_default();
+            if let Some(first) = preview.conflicts.first() {
+                saw_conflict = true;
+                assert!(toast.contains("Duplicate controls now"), "{toast}");
+                assert!(toast.contains(first.as_str()), "{toast}");
+            } else {
+                assert!(!toast.contains("Duplicate controls"), "{toast}");
+            }
+        }
+        assert!(saw_conflict, "Wave clashes with a preset's Jump");
+    }
 }

@@ -181,7 +181,8 @@ impl Listener {
                 CaptureInput::Wheel(n) if n != 0.0 => (Control::MouseWheel, 1.0),
                 _ => continue,
             };
-            if self.stale.contains(&c) || magnitude < PRESS_THRESHOLD {
+            // NaN fails the threshold test too: a broken stick never binds.
+            if self.stale.contains(&c) || magnitude.is_nan() || magnitude < PRESS_THRESHOLD {
                 continue;
             }
             if matches!(c, Control::MouseDelta | Control::MousePosition) {
@@ -295,19 +296,42 @@ pub fn conflicts_for(
     out
 }
 
-/// Settles conflicts inside an undo step. `old` is the control the slot had before (for Swap).
+/// What a binding's slot reads now: the control in `prop` and, for `KeyCode`, its two modifiers.
+/// Read it before overwriting the slot, to hand to [`resolve_conflicts`] as `old`.
+pub fn captured_of(world: &World, binding: InstanceId, prop: &str) -> Option<Captured> {
+    let control = Control::from_name(&prop_string(world, binding, prop))?;
+    let mut modifiers = [None; 2];
+    if prop == "KeyCode" {
+        for (slot, p) in modifiers
+            .iter_mut()
+            .zip(["PrimaryModifier", "SecondaryModifier"])
+        {
+            *slot = Control::from_name(&prop_string(world, binding, p));
+        }
+    }
+    Some(Captured { control, modifiers })
+}
+
+/// Settles conflicts inside an undo step. `old` is what the slot had before (for Swap): the other
+/// binding gets that control together with its modifiers.
 pub fn resolve_conflicts(
     b: &mut StepBuilder<'_>,
     conflicts: &[Conflict],
     resolution: Resolution,
-    old: Option<Control>,
+    old: Option<Captured>,
 ) -> Result<(), CoreError> {
     for c in conflicts {
         match resolution {
             Resolution::KeepBoth => {}
             Resolution::Swap if old.is_some() => {
-                let name = old.map_or("None", Control::name);
-                b.set(c.binding, c.prop, Value::String(name.into()))?;
+                let old = old.expect("checked");
+                b.set(c.binding, c.prop, Value::String(old.control.name().into()))?;
+                if c.prop == "KeyCode" {
+                    for (i, prop) in ["PrimaryModifier", "SecondaryModifier"].iter().enumerate() {
+                        let name = old.modifiers[i].map_or("None", Control::name);
+                        b.set(c.binding, prop, Value::String(name.into()))?;
+                    }
+                }
             }
             Resolution::Swap | Resolution::Replace => {
                 // A single-key binding goes away; a composite only loses that direction.
@@ -557,7 +581,13 @@ mod tests {
         let conflicts = conflicts_for(&w, jump, Some(space), &cap);
         assert_eq!(conflicts.len(), 1);
         let mut b = StepBuilder::new(&mut w);
-        resolve_conflicts(&mut b, &conflicts, Resolution::Swap, Some(C::Space)).unwrap();
+        resolve_conflicts(
+            &mut b,
+            &conflicts,
+            Resolution::Swap,
+            Some(Captured::plain(C::Space)),
+        )
+        .unwrap();
         write_capture(&mut b, space, &cap).unwrap();
         h.record(b.finish("Bind").unwrap());
         assert_eq!(keys_of(&w, jump), ["LeftShift", "ButtonA"]);
@@ -593,5 +623,65 @@ mod tests {
         let mut b = StepBuilder::new(&mut w);
         resolve_conflicts(&mut b, &conflicts, Resolution::KeepBoth, None).unwrap();
         assert!(b.finish("x").is_none());
+    }
+
+    #[test]
+    fn nan_stick_magnitude_never_binds() {
+        let mut l = Listener::new(0.0, &[]);
+        assert_eq!(
+            l.feed(0.1, &[Axis(C::Thumbstick1, f32::NAN)]),
+            CaptureOutcome::Listening
+        );
+        assert_eq!(
+            l.feed(0.2, &[Press(C::ButtonA, f32::NAN)]),
+            CaptureOutcome::Listening
+        );
+        assert_eq!(
+            l.feed(
+                0.3,
+                &[Axis(C::Thumbstick1, f32::NAN), Axis(C::Thumbstick2, 0.7)]
+            ),
+            CaptureOutcome::Bound(Captured::plain(C::Thumbstick2))
+        );
+    }
+
+    #[test]
+    fn swap_gives_the_other_binding_the_old_control_with_its_modifiers() {
+        let mut w = World::new_with_services();
+        let rs = w.root("ReplicatedStorage").unwrap();
+        let ctx = w.create("InputContext", Some(rs)).unwrap();
+        let bind = |w: &mut World, name: &str, key: &str, modifier: &str| {
+            let a = w.create("InputAction", Some(ctx)).unwrap();
+            w.set(a, "Name", Value::String(name.into())).unwrap();
+            let b = w.create("InputBinding", Some(a)).unwrap();
+            w.set(b, "KeyCode", Value::String(key.into())).unwrap();
+            w.set(b, "PrimaryModifier", Value::String(modifier.into()))
+                .unwrap();
+            (a, b)
+        };
+        let (a, slot) = bind(&mut w, "A", "E", "LeftAlt");
+        let (_, other) = bind(&mut w, "B", "F", "LeftControl");
+
+        let cap = Captured {
+            control: C::F,
+            modifiers: [Some(C::LeftControl), None],
+        };
+        let old = captured_of(&w, slot, "KeyCode");
+        assert_eq!(
+            old,
+            Some(Captured {
+                control: C::E,
+                modifiers: [Some(C::LeftAlt), None]
+            })
+        );
+        let conflicts = conflicts_for(&w, a, Some(slot), &cap);
+        assert_eq!(conflicts.len(), 1);
+        let mut b = StepBuilder::new(&mut w);
+        resolve_conflicts(&mut b, &conflicts, Resolution::Swap, old).unwrap();
+        write_capture(&mut b, slot, &cap).unwrap();
+        let _ = b.finish("Bind");
+        assert_eq!(prop_string(&w, other, "KeyCode"), "E");
+        assert_eq!(prop_string(&w, other, "PrimaryModifier"), "LeftAlt");
+        assert_eq!(prop_string(&w, other, "SecondaryModifier"), "None");
     }
 }

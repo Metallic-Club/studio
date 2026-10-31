@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use metallic_core::{InstanceId, World};
-use metallic_runtime::input::{ActionDef, ActionType, BindingDef, Control, Role, Trigger};
+use metallic_runtime::input::{
+    ActionDef, ActionType, BindingDef, ContextDef, Control, Role, Trigger,
+};
 
 use super::model::{
     DeviceColumn, InputModel, action_paths, binding_device, binding_label, control_label,
@@ -150,46 +152,75 @@ fn path_of(ctx: &str, action: &str) -> String {
     format!("{ctx}/{action}")
 }
 
-/// Runs every rule.
-pub fn run_checks(world: &World, baseline: &NameBaseline) -> Vec<Finding> {
-    let model = InputModel::read(world);
+/// Same control on two enabled actions of one RebindGroup (the contexts of a group share keys).
+pub(super) fn duplicate_control_findings(contexts: &[ContextDef]) -> Vec<Finding> {
     let mut out = Vec::new();
-    let target = |a: &ActionDef| a.instance.into_iter().collect::<Vec<_>>();
-
-    for ctx in &model.config.contexts {
-        if !ctx.enabled {
-            continue;
-        }
-        // Same control on two enabled actions of one context.
-        let mut users: BTreeMap<(String, String), Vec<&ActionDef>> = BTreeMap::new();
-        for a in ctx.actions.iter().filter(|a| a.enabled) {
-            for b in &a.bindings {
-                for (key, mods) in signatures(b) {
-                    let mut label: Vec<&str> = mods.iter().map(|&m| control_label(m)).collect();
-                    label.push(control_label(key));
-                    let entry = users
-                        .entry((key.name().to_string(), label.join(" + ")))
-                        .or_default();
-                    if !entry.iter().any(|x| x.name == a.name) {
-                        entry.push(a);
+    let mut groups: BTreeMap<&str, Vec<&ContextDef>> = BTreeMap::new();
+    for ctx in contexts.iter().filter(|c| c.enabled) {
+        groups.entry(&ctx.rebind_group).or_default().push(ctx);
+    }
+    for group in groups.values() {
+        let shared = group.len() > 1;
+        let mut users: BTreeMap<(String, String), Vec<(&ContextDef, &ActionDef)>> = BTreeMap::new();
+        for &ctx in group {
+            for a in ctx.actions.iter().filter(|a| a.enabled) {
+                for b in &a.bindings {
+                    for (key, mods) in signatures(b) {
+                        let mut label: Vec<&str> = mods.iter().map(|&m| control_label(m)).collect();
+                        label.push(control_label(key));
+                        let entry = users
+                            .entry((key.name().to_string(), label.join(" + ")))
+                            .or_default();
+                        if !entry
+                            .iter()
+                            .any(|(c, x)| c.name == ctx.name && x.name == a.name)
+                        {
+                            entry.push((ctx, a));
+                        }
                     }
                 }
             }
         }
         for ((_, label), actions) in users {
             if actions.len() > 1 {
-                let names: Vec<&str> = actions.iter().map(|a| a.name.as_str()).collect();
+                let names: Vec<String> = actions
+                    .iter()
+                    .map(|(c, a)| {
+                        if shared {
+                            path_of(&c.name, &a.name)
+                        } else {
+                            a.name.clone()
+                        }
+                    })
+                    .collect();
+                let place = if shared {
+                    format!("group {}", actions[0].0.rebind_group)
+                } else {
+                    actions[0].0.name.clone()
+                };
                 out.push(Finding {
                     id: CheckId::DuplicateControl,
                     level: Level::Error,
-                    message: format!(
-                        "{label} is bound to {} in {}",
-                        names.join(" and "),
-                        ctx.name
-                    ),
-                    targets: actions.iter().filter_map(|a| a.instance).collect(),
+                    message: format!("{label} is bound to {} in {place}", names.join(" and ")),
+                    targets: actions.iter().filter_map(|(_, a)| a.instance).collect(),
                 });
             }
+        }
+    }
+    out
+}
+
+/// Runs every rule.
+pub fn run_checks(world: &World, baseline: &NameBaseline) -> Vec<Finding> {
+    let model = InputModel::read(world);
+    let mut out = Vec::new();
+    let target = |a: &ActionDef| a.instance.into_iter().collect::<Vec<_>>();
+
+    out.extend(duplicate_control_findings(&model.config.contexts));
+
+    for ctx in &model.config.contexts {
+        if !ctx.enabled {
+            continue;
         }
 
         for a in ctx.actions.iter().filter(|a| a.enabled) {
@@ -439,6 +470,39 @@ mod tests {
         w.set(jump, "Enabled", Value::Bool(false)).unwrap();
         assert!(!fires(&w, &base, CheckId::DuplicateControl));
         w.destroy(b);
+    }
+
+    #[test]
+    fn duplicate_control_spans_a_rebind_group() {
+        let (mut w, ctx) = sample();
+        let rs = w.root("ReplicatedStorage").unwrap();
+        let group = w.get(ctx, "RebindGroup").unwrap();
+        let base = NameBaseline::capture(&w);
+        let other = |w: &mut World, g: Option<&Value>, name: &str| {
+            let c = w.create("InputContext", Some(rs)).unwrap();
+            w.set(c, "Name", Value::String(name.into())).unwrap();
+            if let Some(g) = g {
+                w.set(c, "RebindGroup", g.clone()).unwrap();
+            }
+            let a = w.create("InputAction", Some(c)).unwrap();
+            w.set(a, "Name", Value::String("Interact".into())).unwrap();
+            add_binding(w, a, "E");
+            (c, a)
+        };
+        // Another group never clashes.
+        let (c2, _) = other(&mut w, Some(&Value::String("Menu".into())), "MenuKeys");
+        let jump = action(&w, ctx, "Jump");
+        add_binding(&mut w, jump, "E");
+        assert!(!fires(&w, &base, CheckId::DuplicateControl));
+        // The same group does, across the two contexts.
+        w.set(c2, "RebindGroup", group).unwrap();
+        let f = run_checks(&w, &base);
+        let dup = f
+            .iter()
+            .find(|f| f.id == CheckId::DuplicateControl)
+            .expect("E is bound twice in one group");
+        assert_eq!(dup.targets.len(), 2);
+        assert!(dup.message.contains("MenuKeys/Interact"), "{}", dup.message);
     }
 
     #[test]

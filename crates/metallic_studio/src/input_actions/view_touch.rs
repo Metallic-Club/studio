@@ -62,6 +62,12 @@ impl TouchView {
         self.drag = None;
     }
 
+    /// The selected touch control.
+    #[cfg(test)]
+    pub(super) fn selected(&self) -> Option<InstanceId> {
+        self.selected
+    }
+
     /// Selects a touch control (from the Checks strip).
     pub(super) fn select(&mut self, id: InstanceId) {
         self.selected = Some(id);
@@ -99,7 +105,7 @@ impl TouchView {
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(st::BG_PANEL)
+                    .fill(st::bg_panel())
                     .inner_margin(Margin::symmetric(12, 10)),
             )
             .show(ui, |ui| self.side(panel, ui, model));
@@ -150,7 +156,7 @@ impl TouchView {
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(st::BG_PANEL)
+                    .fill(st::bg_panel())
                     .inner_margin(Margin::symmetric(12, 10)),
             )
             .show(ui, |ui| {
@@ -166,7 +172,7 @@ impl TouchView {
         egui::CentralPanel::default()
             .frame(
                 Frame::new()
-                    .fill(st::BG_BASE)
+                    .fill(st::bg_base())
                     .inner_margin(Margin::same(16)),
             )
             .show(ui, |ui| match (panel.preview.mode, profile) {
@@ -202,9 +208,9 @@ impl TouchView {
                 r,
                 CornerRadius::same(st::R_MD),
                 if on {
-                    st::SELECT
+                    st::select()
                 } else if resp.hovered() {
-                    st::BG_HOVER
+                    st::bg_hover()
                 } else {
                     Color32::TRANSPARENT
                 },
@@ -213,18 +219,18 @@ impl TouchView {
                 ui.painter(),
                 Rect::from_min_size(pos2(r.left() + 10.0, r.center().y - 8.0), Vec2::splat(16.0)),
                 icon,
-                if on { st::ACCENT_TEXT } else { st::ICON },
+                if on { st::accent_text() } else { st::icon() },
             );
             ui.painter().text(
                 pos2(r.left() + 36.0, r.center().y),
                 Align2::LEFT_CENTER,
                 mode.label(),
                 st::body(),
-                st::TEXT_1,
+                st::text_1(),
             );
             if on {
                 ui.painter()
-                    .circle_filled(pos2(r.right() - 12.0, r.center().y), 3.0, st::ACCENT);
+                    .circle_filled(pos2(r.right() - 12.0, r.center().y), 3.0, st::accent());
             }
             st::focus_ring(ui, &resp, r, st::R_MD);
             resp.widget_info(|| {
@@ -248,7 +254,7 @@ impl TouchView {
                 forced.to_lowercase()
             ))
             .font(st::caption())
-            .color(st::TEXT_3),
+            .color(st::text_3()),
         );
 
         if panel.preview.mode.is_touch() {
@@ -294,7 +300,7 @@ impl TouchView {
                         p.insets.bottom
                     ))
                     .font(st::mono())
-                    .color(st::TEXT_3),
+                    .color(st::text_3()),
                 );
             }
             switch_row(ui, "Show safe area", &mut panel.preview.show_safe_area);
@@ -308,7 +314,11 @@ impl TouchView {
                 ui.label(
                     egui::RichText::new("Edit touch layout")
                         .font(st::body())
-                        .color(if editable { st::TEXT_1 } else { st::TEXT_OFF }),
+                        .color(if editable {
+                            st::text_1()
+                        } else {
+                            st::text_off()
+                        }),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if st::toggle(ui, &mut editing, editable).changed() {
@@ -327,7 +337,7 @@ impl TouchView {
                 ui.label(
                     egui::RichText::new(help)
                         .font(st::caption())
-                        .color(st::TEXT_3),
+                        .color(st::text_3()),
                 );
                 if panel.preview.editing_layout
                     && st::button(ui, ButtonKind::Secondary, Some(Icon::Reset), "Reset layout")
@@ -340,7 +350,7 @@ impl TouchView {
                 ui.label(
                     egui::RichText::new("The built-in controls are read only.")
                         .font(st::caption())
-                        .color(st::TEXT_3),
+                        .color(st::text_3()),
                 );
                 if st::button(
                     ui,
@@ -396,18 +406,14 @@ impl TouchView {
         let painter = ui.painter().with_clip_rect(avail);
 
         // Device body and screen.
-        painter.rect_filled(frame, CornerRadius::same(28), st::G950);
+        painter.rect_filled(frame, CornerRadius::same(28), st::g950());
         painter.rect_stroke(
             frame,
             CornerRadius::same(28),
-            Stroke::new(1.0, st::LINE_STRONG),
+            Stroke::new(1.0, st::line_strong()),
             StrokeKind::Inside,
         );
-        painter.rect_filled(
-            screen,
-            CornerRadius::same(10),
-            Color32::from_rgb(0x14, 0x13, 0x19),
-        );
+        painter.rect_filled(screen, CornerRadius::same(10), st::bg_deep());
         // A quiet floor so the overlay reads against "a game".
         let horizon = screen.top() + screen.height() * 0.55;
         for i in 0..7 {
@@ -416,7 +422,7 @@ impl TouchView {
             painter.hline(
                 screen.x_range(),
                 y,
-                Stroke::new(1.0, st::LINE.gamma_multiply(0.7)),
+                Stroke::new(1.0, st::line().gamma_multiply(0.7)),
             );
         }
         for i in -6..=6 {
@@ -424,14 +430,14 @@ impl TouchView {
             let x1 = screen.center().x + i as f32 * screen.width() * 0.22;
             painter.line_segment(
                 [pos2(x0, horizon), pos2(x1, screen.bottom())],
-                Stroke::new(1.0, st::LINE.gamma_multiply(0.7)),
+                Stroke::new(1.0, st::line().gamma_multiply(0.7)),
             );
         }
 
         let safe = profile.safe_area();
         if panel.preview.show_safe_area {
             let ins = profile.insets;
-            let band = Color32::from_rgba_unmultiplied(0x0c, 0x0b, 0x0f, 190);
+            let band = st::with_alpha(st::g950(), 190);
             let bands = [
                 Rect::from_min_max(screen.min, pos2(to_px([ins.left, 0.0]).x, screen.bottom())),
                 Rect::from_min_max(
@@ -455,7 +461,7 @@ impl TouchView {
             );
             painter.add(Shape::dashed_line(
                 &rect_points(sr),
-                Stroke::new(1.0, st::INFO.gamma_multiply(0.7)),
+                Stroke::new(1.0, st::info().gamma_multiply(0.7)),
                 5.0,
                 4.0,
             ));
@@ -464,7 +470,7 @@ impl TouchView {
                 Align2::LEFT_TOP,
                 "Safe area",
                 st::caption(),
-                st::INFO,
+                st::info(),
             );
         }
         let editing = panel.preview.editing_layout && !model.uses_builtin_character_controls();
@@ -476,7 +482,7 @@ impl TouchView {
             );
             painter.add(Shape::dashed_line(
                 &rect_points(ir),
-                Stroke::new(1.0, st::LINE_CONTROL.gamma_multiply(0.6)),
+                Stroke::new(1.0, st::line_control().gamma_multiply(0.6)),
                 3.0,
                 5.0,
             ));
@@ -485,14 +491,14 @@ impl TouchView {
             painter.rect_filled(
                 zr.shrink(1.0),
                 CornerRadius::same(6),
-                st::ACCENT.gamma_multiply(0.05),
+                st::accent().gamma_multiply(0.05),
             );
             painter.text(
                 zr.left_bottom() + vec2(8.0, -6.0),
                 Align2::LEFT_BOTTOM,
                 "Stick zone",
                 st::caption(),
-                st::ACCENT_TEXT.gamma_multiply(0.7),
+                st::accent_text().gamma_multiply(0.7),
             );
         }
 
@@ -541,19 +547,14 @@ impl TouchView {
                     painter.circle_filled(
                         base,
                         r,
-                        Color32::from_rgba_unmultiplied(
-                            0x1c,
-                            0x1b,
-                            0x22,
-                            if active { 150 } else { 100 },
-                        ),
+                        st::with_alpha(st::bg_panel(), if active { 150 } else { 100 }),
                     );
                     painter.circle_stroke(
                         base,
                         r,
                         Stroke::new(
                             1.5,
-                            st::SILVER.gamma_multiply(if active { 0.8 } else { 0.45 }),
+                            st::silver().gamma_multiply(if active { 0.8 } else { 0.45 }),
                         ),
                     );
                     let kr = (p.size * 0.47).max(touch::MIN_SIZE) / 2.0 * scale;
@@ -561,31 +562,27 @@ impl TouchView {
                         knob,
                         kr,
                         if active {
-                            st::ACCENT.gamma_multiply(0.85)
+                            st::accent().gamma_multiply(0.85)
                         } else {
-                            Color32::from_rgba_unmultiplied(0x35, 0x32, 0x3e, 215)
+                            st::with_alpha(st::keycap(), 215)
                         },
                     );
                     painter.circle_stroke(
                         knob,
                         kr,
-                        Stroke::new(1.2, st::SILVER.gamma_multiply(0.8)),
+                        Stroke::new(1.2, st::silver().gamma_multiply(0.8)),
                     );
                     painter.text(
                         base + vec2(0.0, r + 10.0),
                         Align2::CENTER_CENTER,
                         &p.label,
                         st::caption(),
-                        st::TEXT_2,
+                        st::text_2(),
                     );
                 }
                 ControlRole::Menu => {
-                    painter.circle_filled(
-                        c,
-                        r,
-                        Color32::from_rgba_unmultiplied(0x1c, 0x1b, 0x22, 200),
-                    );
-                    painter.circle_stroke(c, r, Stroke::new(1.0, st::SILVER.gamma_multiply(0.5)));
+                    painter.circle_filled(c, r, st::with_alpha(st::bg_panel(), 200));
+                    painter.circle_stroke(c, r, Stroke::new(1.0, st::silver().gamma_multiply(0.5)));
                     for dx in [-3.0, 3.0] {
                         painter.rect_filled(
                             Rect::from_center_size(
@@ -593,7 +590,7 @@ impl TouchView {
                                 vec2(2.5, 10.0) * scale.max(0.6),
                             ),
                             CornerRadius::same(1),
-                            st::TEXT_2,
+                            st::text_2(),
                         );
                     }
                 }
@@ -602,10 +599,10 @@ impl TouchView {
                     let rr = if down { r * 0.94 } else { r };
                     let primary = p.role == ControlRole::Primary;
                     let fill = match (primary, down) {
-                        (true, true) => st::ACCENT_HOVER,
-                        (true, false) => Color32::from_rgba_unmultiplied(0x9d, 0x8b, 0xe0, 225),
-                        (false, true) => st::BG_ACTIVE,
-                        (false, false) => Color32::from_rgba_unmultiplied(0x24, 0x22, 0x2b, 225),
+                        (true, true) => st::accent_hover(),
+                        (true, false) => st::with_alpha(st::accent(), 225),
+                        (false, true) => st::bg_active(),
+                        (false, false) => st::with_alpha(st::bg_raised(), 225),
                     };
                     painter.circle_filled(c, rr, fill);
                     painter.circle_stroke(
@@ -614,23 +611,27 @@ impl TouchView {
                         Stroke::new(
                             1.2,
                             if primary {
-                                st::ACCENT_HOVER
+                                st::accent_hover()
                             } else {
-                                st::SILVER.gamma_multiply(0.7)
+                                st::silver().gamma_multiply(0.7)
                             },
                         ),
                     );
-                    let fg = if primary { st::ON_ACCENT } else { st::TEXT_1 };
+                    let fg = if primary {
+                        st::on_accent()
+                    } else {
+                        st::text_1()
+                    };
                     let font =
                         egui::FontId::proportional((11.0 * scale.max(0.8)).clamp(10.0, 15.0));
                     painter.text(c, Align2::CENTER_CENTER, &p.label, font, fg);
                 }
             }
             if editing && bad(i) {
-                painter.circle_stroke(c, r + 3.0, Stroke::new(1.5, st::ERROR));
+                painter.circle_stroke(c, r + 3.0, Stroke::new(1.5, st::error()));
             }
             if p.custom && editing {
-                painter.circle_filled(c + vec2(r * 0.72, -r * 0.72), 3.0, st::ACCENT_TEXT);
+                painter.circle_filled(c + vec2(r * 0.72, -r * 0.72), 3.0, st::accent_text());
             }
         }
         // Gap warnings between controls.
@@ -643,7 +644,7 @@ impl TouchView {
                     let dir = (cb - ca).normalized();
                     let ea = ca + dir * pa.radius() * scale;
                     let eb = cb - dir * pb.radius() * scale;
-                    painter.line_segment([ea, eb], Stroke::new(1.5, st::ERROR));
+                    painter.line_segment([ea, eb], Stroke::new(1.5, st::error()));
                     let text = if *gap < 0.0 {
                         "Overlap".to_string()
                     } else {
@@ -665,7 +666,7 @@ impl TouchView {
                     Stroke::new(1.0, Color32::from_white_alpha(90)),
                 );
                 if pinned {
-                    painter.circle_filled(fp, 3.0, st::ACCENT_TEXT);
+                    painter.circle_filled(fp, 3.0, st::accent_text());
                 }
             }
         }
@@ -711,7 +712,7 @@ impl TouchView {
             Align2::CENTER_CENTER,
             caption,
             st::caption(),
-            st::TEXT_3,
+            st::text_3(),
         );
     }
 
@@ -755,9 +756,9 @@ impl TouchView {
                     Stroke::new(
                         if selected { 2.0 } else { 1.0 },
                         if selected {
-                            st::ACCENT
+                            st::accent()
                         } else {
-                            st::LINE_CONTROL
+                            st::line_control()
                         },
                     ),
                 );
@@ -765,22 +766,22 @@ impl TouchView {
                     // The 8 dp spacing guide.
                     p_.add(Shape::dashed_line(
                         &circle_points(c, r + MIN_GAP * scale, 48),
-                        Stroke::new(1.0, st::ACCENT.gamma_multiply(0.45)),
+                        Stroke::new(1.0, st::accent().gamma_multiply(0.45)),
                         3.0,
                         3.0,
                     ));
-                    p_.rect_filled(handle, CornerRadius::same(2), st::ACCENT);
+                    p_.rect_filled(handle, CornerRadius::same(2), st::accent());
                     p_.rect_stroke(
                         handle,
                         CornerRadius::same(2),
-                        Stroke::new(1.0, st::ON_ACCENT),
+                        Stroke::new(1.0, st::on_accent()),
                         StrokeKind::Inside,
                     );
                 }
             }
             if resp.has_focus() {
                 ui.painter()
-                    .circle_stroke(c, r + 5.0, Stroke::new(2.0, st::FOCUS));
+                    .circle_stroke(c, r + 5.0, Stroke::new(2.0, st::focus()));
             }
             resp.widget_info(|| {
                 egui::WidgetInfo::labeled(
@@ -927,7 +928,7 @@ impl TouchView {
             ui.label(
                 egui::RichText::new("Click a control, or press Tab to reach one.")
                     .font(st::small())
-                    .color(st::TEXT_3),
+                    .color(st::text_3()),
             );
             return;
         };
@@ -936,12 +937,12 @@ impl TouchView {
             ui.label(
                 egui::RichText::new(&p.label)
                     .font(st::heading())
-                    .color(st::TEXT_1),
+                    .color(st::text_1()),
             );
             if p.custom {
-                st::chip(ui, "Custom", st::ACCENT_TEXT, st::SELECT_WEAK);
+                st::chip(ui, "Custom", st::accent_text(), st::select_weak());
             } else {
-                st::chip(ui, "Auto", st::TEXT_2, st::BG_RAISED);
+                st::chip(ui, "Auto", st::text_2(), st::bg_raised());
             }
         });
         let safe = profile.safe_area();
@@ -968,9 +969,9 @@ impl TouchView {
                     Align2::LEFT_CENTER,
                     k,
                     st::small(),
-                    st::TEXT_2,
+                    st::text_2(),
                 );
-                ui.label(egui::RichText::new(v).font(st::mono()).color(st::TEXT_1));
+                ui.label(egui::RichText::new(v).font(st::mono()).color(st::text_1()));
             });
         }
         let vs = touch::violations(profile, placed);
@@ -995,8 +996,8 @@ impl TouchView {
             if let Some(t) = text {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
-                    st::paint_icon(ui.painter(), r, Icon::Error, st::ERROR);
-                    ui.label(egui::RichText::new(t).font(st::small()).color(st::ERROR));
+                    st::paint_icon(ui.painter(), r, Icon::Error, st::error());
+                    ui.label(egui::RichText::new(t).font(st::small()).color(st::error()));
                 });
             }
         }
@@ -1025,7 +1026,7 @@ impl TouchView {
         ui.label(
             egui::RichText::new("Evaluated by the Player's input runtime.")
                 .font(st::caption())
-                .color(st::TEXT_3),
+                .color(st::text_3()),
         );
         ui.add_space(st::S2);
         let rt = self.runtime.as_ref().map(|(_, r)| r);
@@ -1040,7 +1041,7 @@ impl TouchView {
                         ui.label(
                             egui::RichText::new(&ctx.name)
                                 .font(st::caption())
-                                .color(st::TEXT_3),
+                                .color(st::text_3()),
                         );
                         last_ctx = &ctx.name;
                     }
@@ -1053,15 +1054,22 @@ impl TouchView {
                         ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
                     let active = value.is_some_and(|v| is_active(&v));
                     if active {
-                        ui.painter()
-                            .rect_filled(r, CornerRadius::same(st::R_SM), st::SELECT_WEAK);
+                        ui.painter().rect_filled(
+                            r,
+                            CornerRadius::same(st::R_SM),
+                            st::select_weak(),
+                        );
                     }
                     ui.painter().text(
                         pos2(r.left() + 6.0, r.center().y),
                         Align2::LEFT_CENTER,
                         &a.name,
                         st::body(),
-                        if a.enabled { st::TEXT_1 } else { st::TEXT_OFF },
+                        if a.enabled {
+                            st::text_1()
+                        } else {
+                            st::text_off()
+                        },
                     );
                     let vis = Rect::from_min_max(
                         pos2(r.right() - 96.0, r.top() + 4.0),
@@ -1084,17 +1092,17 @@ impl TouchView {
         );
         let p = ui.painter();
         // A generic pad: one rounded body, no product outline.
-        p.rect_filled(body, CornerRadius::same(110), st::BG_RAISED);
+        p.rect_filled(body, CornerRadius::same(110), st::bg_raised());
         p.rect_stroke(
             body,
             CornerRadius::same(110),
-            Stroke::new(1.0, st::LINE_STRONG),
+            Stroke::new(1.0, st::line_strong()),
             StrokeKind::Inside,
         );
         p.hline(
             body.x_range().shrink(110.0),
             body.top() + 0.5,
-            Stroke::new(1.0, st::HIGHLIGHT),
+            Stroke::new(1.0, st::highlight()),
         );
         let s = body.width() / 520.0;
         let at = |x: f32, y: f32| pos2(body.left() + x * s, body.top() + y * s);
@@ -1114,11 +1122,11 @@ impl TouchView {
             self.pad
                 .set_button(c, resp.is_pointer_button_down_on() || space);
             let fill = if down || space {
-                st::ACCENT
+                st::accent()
             } else if resp.hovered() {
-                st::BG_HOVER
+                st::bg_hover()
             } else {
-                st::BG_PANEL
+                st::bg_panel()
             };
             ui.painter()
                 .rect_filled(r, CornerRadius::same((size.y / 2.0) as u8), fill);
@@ -1181,16 +1189,16 @@ impl TouchView {
             }
             let v = self.pad.sticks[i];
             let painter = ui.painter();
-            painter.circle_filled(c, r, st::BG_DEEP);
-            painter.circle_stroke(c, r, Stroke::new(1.0, st::LINE_CONTROL));
+            painter.circle_filled(c, r, st::bg_deep());
+            painter.circle_stroke(c, r, Stroke::new(1.0, st::line_control()));
             let knob = c + vec2(v[0], -v[1]) * r * 0.6;
             painter.circle_filled(
                 knob,
                 r * 0.55,
                 if self.pad_drag[i] {
-                    st::ACCENT
+                    st::accent()
                 } else {
-                    st::BG_ACTIVE
+                    st::bg_active()
                 },
             );
             painter.text(
@@ -1198,7 +1206,7 @@ impl TouchView {
                 Align2::CENTER_CENTER,
                 if i == 0 { "L" } else { "R" },
                 st::caption(),
-                st::TEXT_1,
+                st::text_1(),
             );
         }
         ui.painter().text(
@@ -1206,7 +1214,7 @@ impl TouchView {
             Align2::CENTER_CENTER,
             "Virtual gamepad: click buttons, drag the sticks. A connected pad works too.",
             st::caption(),
-            st::TEXT_3,
+            st::text_3(),
         );
     }
 
@@ -1222,13 +1230,17 @@ impl TouchView {
         }
         let focused = resp.has_focus();
         ui.painter()
-            .rect_filled(card, CornerRadius::same(st::R_LG), st::BG_PANEL);
+            .rect_filled(card, CornerRadius::same(st::R_LG), st::bg_panel());
         ui.painter().rect_stroke(
             card,
             CornerRadius::same(st::R_LG),
             Stroke::new(
                 if focused { 2.0 } else { 1.0 },
-                if focused { st::FOCUS } else { st::LINE_STRONG },
+                if focused {
+                    st::focus()
+                } else {
+                    st::line_strong()
+                },
             ),
             StrokeKind::Inside,
         );
@@ -1236,7 +1248,7 @@ impl TouchView {
             ui.painter(),
             Rect::from_center_size(card.center() - vec2(0.0, 52.0), Vec2::splat(28.0)),
             Icon::Keyboard,
-            st::ACCENT_TEXT,
+            st::accent_text(),
         );
         let title = if focused {
             "Press keys to try your bindings"
@@ -1248,14 +1260,14 @@ impl TouchView {
             Align2::CENTER_CENTER,
             title,
             st::body(),
-            st::TEXT_1,
+            st::text_1(),
         );
         ui.painter().text(
             card.center() + vec2(0.0, 4.0),
             Align2::CENTER_CENTER,
             "Tab leaves. The readout on the right shows each action.",
             st::caption(),
-            st::TEXT_3,
+            st::text_3(),
         );
         if focused {
             ui.memory_mut(|m| {
@@ -1345,7 +1357,7 @@ fn switch_row(ui: &mut Ui, label: &str, on: &mut bool) {
         ui.label(
             egui::RichText::new(label)
                 .font(st::body())
-                .color(st::TEXT_1),
+                .color(st::text_1()),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             st::toggle(ui, on, true);
@@ -1368,30 +1380,30 @@ fn paint_value(p: &egui::Painter, r: Rect, ty: ActionType, v: Option<ActionValue
             let on = matches!(v, Some(ActionValue::Bool(true)));
             let c = pos2(r.right() - 8.0, r.center().y);
             if on {
-                p.circle_filled(c, 5.0, st::ACCENT);
+                p.circle_filled(c, 5.0, st::accent());
             } else {
-                p.circle_stroke(c, 4.5, Stroke::new(1.2, st::LINE_CONTROL));
+                p.circle_stroke(c, 4.5, Stroke::new(1.2, st::line_control()));
             }
             p.text(
                 c - vec2(14.0, 0.0),
                 Align2::RIGHT_CENTER,
                 if on { "Down" } else { "Up" },
                 st::caption(),
-                if on { st::ACCENT_TEXT } else { st::TEXT_3 },
+                if on { st::accent_text() } else { st::text_3() },
             );
         }
         (_, Some(ActionValue::Axis2(xy)))
         | (ActionType::Direction2D, Some(ActionValue::Axis3([xy @ .., _]))) => {
             let c = pos2(r.right() - 9.0, r.center().y);
-            p.circle_stroke(c, 8.5, Stroke::new(1.0, st::LINE_CONTROL));
+            p.circle_stroke(c, 8.5, Stroke::new(1.0, st::line_control()));
             let len = (xy[0] * xy[0] + xy[1] * xy[1]).sqrt().max(1.0);
-            p.circle_filled(c + vec2(xy[0] / len, -xy[1] / len) * 7.0, 2.5, st::ACCENT);
+            p.circle_filled(c + vec2(xy[0] / len, -xy[1] / len) * 7.0, 2.5, st::accent());
             p.text(
                 c - vec2(16.0, 0.0),
                 Align2::RIGHT_CENTER,
                 format!("{:+.2} {:+.2}", xy[0], xy[1]),
                 st::mono(),
-                st::TEXT_2,
+                st::text_2(),
             );
         }
         (_, Some(ActionValue::Axis1(x))) => {
@@ -1399,7 +1411,7 @@ fn paint_value(p: &egui::Painter, r: Rect, ty: ActionType, v: Option<ActionValue
                 pos2(r.left() + 30.0, r.center().y - 2.0),
                 pos2(r.right(), r.center().y + 2.0),
             );
-            p.rect_filled(bar, CornerRadius::same(2), st::BG_DEEP);
+            p.rect_filled(bar, CornerRadius::same(2), st::bg_deep());
             let mid = bar.center().x;
             let end = mid + x.clamp(-1.0, 1.0) * bar.width() / 2.0;
             p.rect_filled(
@@ -1408,7 +1420,7 @@ fn paint_value(p: &egui::Painter, r: Rect, ty: ActionType, v: Option<ActionValue
                     pos2(mid.max(end), bar.bottom()),
                 ),
                 CornerRadius::same(2),
-                st::ACCENT,
+                st::accent(),
             );
         }
         (_, Some(ActionValue::Axis3(v))) => {
@@ -1417,7 +1429,7 @@ fn paint_value(p: &egui::Painter, r: Rect, ty: ActionType, v: Option<ActionValue
                 Align2::RIGHT_CENTER,
                 format!("{:+.1} {:+.1} {:+.1}", v[0], v[1], v[2]),
                 st::mono(),
-                st::TEXT_2,
+                st::text_2(),
             );
         }
         (_, Some(ActionValue::Bool(b))) => {
@@ -1426,7 +1438,7 @@ fn paint_value(p: &egui::Painter, r: Rect, ty: ActionType, v: Option<ActionValue
                 Align2::RIGHT_CENTER,
                 if b { "Down" } else { "Up" },
                 st::caption(),
-                st::TEXT_2,
+                st::text_2(),
             );
         }
         (_, None) => {
@@ -1435,17 +1447,17 @@ fn paint_value(p: &egui::Painter, r: Rect, ty: ActionType, v: Option<ActionValue
                 Align2::RIGHT_CENTER,
                 "-",
                 st::caption(),
-                st::TEXT_3,
+                st::text_3(),
             );
         }
     }
 }
 
 fn warning_chip(p: &egui::Painter, at: Pos2, text: &str) {
-    let g = p.layout_no_wrap(text.to_string(), st::caption(), st::ERROR);
+    let g = p.layout_no_wrap(text.to_string(), st::caption(), st::error());
     let r = Rect::from_center_size(at, g.size() + vec2(12.0, 6.0));
-    p.rect_filled(r, CornerRadius::same(st::R_SM), st::ERROR_BG);
-    p.galley(r.min + vec2(6.0, 3.0), g, st::ERROR);
+    p.rect_filled(r, CornerRadius::same(st::R_SM), st::error_bg());
+    p.galley(r.min + vec2(6.0, 3.0), g, st::error());
 }
 
 fn rect_points(r: Rect) -> Vec<Pos2> {
