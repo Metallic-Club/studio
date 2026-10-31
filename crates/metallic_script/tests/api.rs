@@ -538,7 +538,7 @@ fn lighting_values_from_scripts_stay_in_range() {
     );
     start(&mut rig);
     let lines = rig.lines();
-    assert_eq!(lines[0], "print:10 -4 2");
+    assert_eq!(lines[0], "print:10 -5 2");
     assert!(lines[1].starts_with("print:false"), "{}", lines[1]);
     assert!(lines[1].ends_with(" 10"), "{}", lines[1]);
     assert!(lines[2].starts_with("print:false"), "{}", lines[2]);

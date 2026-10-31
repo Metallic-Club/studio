@@ -278,6 +278,13 @@ impl StudioApp {
 }
 
 impl eframe::App for StudioApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // While Play runs, Tab, Space and Enter go to the game before egui can use them.
+        if let Phase::Opened(editor) = &mut self.phase {
+            editor.raw_input_hook(raw_input);
+        }
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         if self.splash_window {
             [0.0; 4]

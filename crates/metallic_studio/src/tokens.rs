@@ -139,10 +139,10 @@ fn build(id: ThemeId) -> UiTokens {
         small_size: 11.0,
         mono_size: 12.0,
         title_size: 14.0,
-        row_height: 24.0,
+        row_height: theme::ROW_HEIGHT,
         indent: 18.0,
         label_width: 104.0,
-        icon_size: 16.0,
+        icon_size: theme::ICON_BOX,
     }
 }
 

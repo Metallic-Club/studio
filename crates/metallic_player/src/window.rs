@@ -5,6 +5,7 @@ use crate::controls_store::Controls;
 use crate::devices::{GamepadSource, key_control, mouse_control};
 use crate::menu::{ControlsHint, Menu, MenuOutcome, UiLayer};
 use crate::overlay::Overlay;
+use crate::pacing::{Pace, WindowState};
 use crate::touch_overlay::{TouchOverlay, emulation_window};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, RenderContext, RenderSettings, Renderer};
@@ -88,6 +89,9 @@ pub fn run(
         fingers: Vec::new(),
         captured: false,
         last: Instant::now(),
+        focused: true,
+        occluded: false,
+        paused: false,
         frame: 0,
         frame_times: Vec::new(),
         started: None,
@@ -147,6 +151,12 @@ struct App {
     /// The cursor is locked and mouse movement is sent as `MouseDelta`.
     captured: bool,
     last: Instant,
+    /// The window has keyboard focus.
+    focused: bool,
+    /// The window is completely hidden (where the platform reports it).
+    occluded: bool,
+    /// The last pace was [`Pace::Paused`]: the next frame starts with a fresh frame time.
+    paused: bool,
     frame: u64,
     frame_times: Vec<f64>,
     started: Option<Instant>,
@@ -349,7 +359,37 @@ impl App {
         };
     }
 
+    /// How the loop should run now (see `pacing.rs`).
+    fn pace(&self) -> Pace {
+        let Some(gfx) = self.gfx.as_ref() else {
+            return Pace::Full;
+        };
+        let state = WindowState {
+            minimised: gfx.minimised || gfx.window.is_minimized() == Some(true),
+            occluded: self.occluded,
+            focused: self.focused,
+        };
+        let automated = self.args.fps
+            || self.args.frames.is_some()
+            || !self.args.captures.is_empty()
+            || self.args.autopilot
+            || self.script.is_some();
+        Pace::for_window(state, automated)
+    }
+
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pace() == Pace::Paused {
+            // The system may still ask for a paint while minimised: the game stays paused.
+            // M2 follow-up: a networked client must not pause (the server keeps simulating and
+            // the client has to keep receiving and acknowledging); it should keep ticking
+            // without drawing instead.
+            self.paused = true;
+            return;
+        }
+        if std::mem::take(&mut self.paused) {
+            // Back from minimised: the time away is not a frame.
+            self.last = Instant::now();
+        }
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
@@ -554,7 +594,12 @@ impl ApplicationHandler for App {
             return;
         }
         match self.create_gfx(event_loop) {
-            Ok(gfx) => self.gfx = Some(gfx),
+            Ok(gfx) => {
+                if self.args.minimised {
+                    gfx.window.set_minimized(true);
+                }
+                self.gfx = Some(gfx);
+            }
             Err(e) => {
                 eprintln!("error: cannot start graphics: {e}");
                 self.failed = true;
@@ -577,7 +622,10 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::Occluded(occluded) => self.occluded = occluded,
+            WindowEvent::Focused(true) => self.focused = true,
             WindowEvent::Focused(false) => {
+                self.focused = false;
                 let now = self.input_clock();
                 self.touch.release_all(&mut self.input, now);
                 self.input.release_all(now);
@@ -656,8 +704,15 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(gfx) = self.gfx.as_ref() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let pace = self.pace();
+        if pace == Pace::Paused {
+            self.paused = true;
+        }
+        event_loop.set_control_flow(pace.control_flow(self.last));
+        if pace.wants_frame(self.last, Instant::now())
+            && let Some(gfx) = self.gfx.as_ref()
+        {
             gfx.window.request_redraw();
         }
     }

@@ -50,7 +50,12 @@ apps.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`. Anchored parts that
   are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
-  and the Humanoid rules (death, respawn, checkpoints) live here.
+  and the Humanoid rules (death, respawn, checkpoints) live here. The controller records its support contact
+  (`SupportContact`, part of `CharacterState`) in body-local coordinates and carries the capsule's bottom-sphere
+  centre through the support's next observed pose change, so riders keep their radius on tilted spinners. Idle
+  facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum
+  uses the foot contact's point velocity (cached anchored rates, Rapier world-COM velocity for dynamic bodies).
+  The capsule stays upright; the carry sweep ignores the support but other parts can shorten it.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_vfx_editor** (#41, implemented): egui widgets for `metallic_vfx`: module stack, node canvas, curve and gradient editors, timeline and a live preview. Not wired into Studio yet.
@@ -85,6 +90,16 @@ apps.
   (`LightingInputs::read`) and `evaluate`s them into the sky, the finish settings, a lighting block in the globals
   uniform (ambient, fog, shadow filter, sun / moon discs, stars) and the `bloom` post pass (`bloom.rs`).
   `set_lighting` applies inputs directly. Presets live in `metallic_core::lighting` (`docs/lighting/presets.md`).
+  Auto exposure (#151, `exposure.rs`, `shaders/exposure.wgsl`): after the scene pass, before the HDR passes, two
+  compute passes meter the HDR scene image (centre-weighted 256-bin log histogram, 30-95% band, EV100 clamp,
+  adaptation, night bias) into a GPU state buffer. The next frame copies the multiplier into the finish uniform and
+  the globals (`light_toon.y`, for toon's `unfinish`), so nothing is read back. Toon shading writes HDR alpha 0 and is
+  not metered, since its light follows the exposure. `Renderer::auto_exposure` holds the settings
+  (`Lighting.AutoExposure`, `ExposureMin`, `ExposureMax`, `ExposureCompensation` + `AutoExposureBias`,
+  `NightAdaptation`). `capture` meters the still on its own state (the live state is saved and restored), so it is
+  deterministic. Also `reset_exposure`, `set_frame_time` and `read_exposure`. Off without compute shaders (WebGL2).
+  `LookTone::for_look` maps a Look id to its curve and exposure mode (Auto, Fixed, Display); `Lighting.Look` itself
+  comes with #64.
   Skinned meshes (`skinned.rs`): `set_skinned(&[SkinnedInstance])` takes a model, its joint matrices and slot colours;
   the model is uploaded once (cached by `Arc` pointer), the joints go to a per-instance storage buffer (bind group 1),
   and `vs_skinned` (linear-blend skinning in `skin_common.wgsl`) feeds the same fragment shader and shadow passes as
@@ -114,7 +129,7 @@ apps.
   The physics wrapper retains its own synchronization/reset contract; no physics API is added by this cache.
 - **metallic_player** (Task 8): `metallic-player <project dir> [--scene F] [--headless --frames N] [--quality low|high]
   [--fps] [--autopilot] [--capture FRAME:PNG] [--input-script F] [--no-overrides] [--menu PAGE]
-  [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]`; winit window, wgpu
+  [--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]`; winit window, wgpu
   surface, egui-wgpu for the GUI pass, gilrs for gamepads, headless mode for smoke tests (no window, no GPU).
   `devices.rs` holds the winit key and mouse mapping and the gilrs `GamepadSource` (the mapping table of spec 4.2); both
   produce `RawEvent`s for the runtime. `menu/` is the Player menu (#254): Resume, Controls, Leave game. The Controls
@@ -124,7 +139,10 @@ apps.
   own data folder (`%APPDATA%\MetallicPlayer`, `METALLIC_PLAYER_DATA_DIR` overrides it).
   `touch_overlay.rs` connects the automatic touch controls to winit: real touches, device emulation (the window takes
   the device's shape, the mouse is a finger, a right click pins a second one), the 140 ms fade and `TouchImage` files;
-  it logs the overlay's draw time at the end of a windowed emulated run.
+  it logs the overlay's draw time at the end of a windowed emulated run. `pacing.rs` sets the loop's pace (#271):
+  every turn while focused (vsync paces it), 30 frames a second while unfocused, and `ControlFlow::Wait` with the
+  game paused while minimised or occluded; automated runs (`--fps`, `--frames`, `--capture`, `--autopilot`,
+  `--input-script`) always run flat out.
 - **metallic_audio** (#81): standalone, depends on no other Metallic crate. `AudioEngine` (game thread) sends
   commands to a `MixRenderer` (audio thread) that drives an `AudioBackend`: headless (deterministic offline render,
   tests, servers) or `DeviceBackend` (cpal, feature `device`). Sounds with Roblox-named properties
@@ -155,11 +173,23 @@ apps.
   one process like the Player). The session owns an `InputRuntime` and is a `play::PlayView`
   (`PlaySession::view`): the viewport draws it every frame with the game camera, avatar and ScreenGuis,
   `play::input::PlayInput` turns egui keys and mouse into `RawEvent`s, and Explorer shows its world read-only
-  (`explorer::play_tree`). Studio keys go first each frame (keymap context `Play`: Esc, plus Shift+F5 globally).
-  While playing, `EditorState::apply/record/undo/redo` refuse, editing actions and accessories are disabled,
-  Properties and the script editor are read-only, and toolbar/status bar show a "Playing" chip (theme `success`
-  tokens). Play is asked for with `UiRequest::StartPlay`, so open script tabs and gestures commit first. Stop
-  (`EditorState::stop_play`) drops the session; a start error goes to Output and Studio stays in edit mode.
+  (`explorer::PlayTree`, only visible rows drawn). Studio keys go first each frame (keymap context `Play`: Esc,
+  plus Shift+F5 globally; `Keymap::pressed_where` leaves a disabled action's key to the game, and
+  `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
+  While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
+  Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
+  Properties and the script editor are read-only, the toolbar shows a "Playing" chip (theme `success` tokens) and
+  the status bar the session's `PlayStatus`. Esc with the unsaved-changes prompt open answers the prompt. Exposure
+  adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
+  tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
+  and Studio stays in edit mode.
+  Building core (#213-#215): `preview.rs` (`PreviewOverlay`: gestures write live values through it, write-through
+  to the world so renderer and Properties need no change; commit gives one `Command::SetProperties`, cancel restores),
+  `gizmo.rs` (handles for Move/Rotate/Scale/Transform, body drags over surfaces, axis locks, R/T turns, typed values,
+  pivot drags; `GizmoDrag::finish` returns the one undo step), `snapping.rs` (`SnapSource` candidates with priority
+  and glyphs, `Surface` placement in the hit part's grid, virtual surface, soft snap), `pivot.rs` (`Pivot`, `Rigid`,
+  27 pivot snap points; pivots are core properties, `PivotOffset` and `WorldPivot`
+  plus hidden `WorldPivotSet`, written through the preview overlay as one `SetProperties`, so they are undoable and saved). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
@@ -332,7 +362,8 @@ Game::frame(&FrameInput, dt)      unchanged; MoveInput and the camera read Frame
 1. **input -> character controller**: `CharacterController::step` with the camera-relative move wish (Shift sets
    `MoveInput::run`: 1.5 x `Humanoid.WalkSpeed`, which scripts still read unchanged); death, respawn, checkpoints and
    character touches happen here. Humanoid tuning is clamped in the class registry (`metallic_core::classes`
-   `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills).
+   `MAX_*`), and the controller never writes a non-finite pose (leaving the world, `WORLD_LIMIT`, kills). A
+   character Model that a script destroyed or took out of the Workspace is replaced after `RESPAWN_DELAY` too.
 2. **physics step**: `PhysicsWorld::step(TICK)` (four 1/240 s substeps; anchored parts moved by scripts become movers).
 3. **feed events** to the script host: every `drain_touched` pair as `touched(a, b)` and `touched(b, a)`; a character
    touch as `touched(part, HumanoidRootPart)` so `hit.Parent` is the character Model; `Died` -> `humanoid_died`;
@@ -388,8 +419,8 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 - **An easing style or interpolation:** `metallic_anim/src/easing.rs` or `curve.rs`, a reference row in
   `tests/easing.rs` or `tests/curve.rs`, and its tile in `metallic_anim_editor/src/inspector.rs`.
 - **A Studio edit action:** a `Command` in `metallic_studio/src/commands.rs` applied through `History`, never by
-  mutating the world directly (a live-preview gesture writes the world while dragging and calls
-  `EditorState::record` once on release). A toolbar or menu command: register an `Action` in
+  mutating the world directly (a live-preview gesture writes through `EditorState::preview`, the
+  `PreviewOverlay`, while dragging and records its `commit` once on release). A toolbar or menu command: register an `Action` in
   `metallic_studio/src/actions.rs` and, for a default key, a row in `keymap.rs` `METALLIC_PRESET`.
 
 ## Quality bar

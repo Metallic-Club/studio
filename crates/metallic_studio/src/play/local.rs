@@ -142,7 +142,7 @@ impl PlaySession for LocalPlaySession {
 
     fn status(&self) -> PlayStatus {
         if self.is_running() {
-            PlayStatus::Running("Local Play".into())
+            PlayStatus::Running("Playing".into())
         } else {
             PlayStatus::Ended("Stopped".into())
         }

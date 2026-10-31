@@ -3,6 +3,7 @@
 //! they were.
 use eframe::egui;
 use egui_kittest::Harness;
+use egui_kittest::kittest::{By, Queryable};
 use metallic_core::{InstanceId, Value, Vec3, World};
 use metallic_runtime::TICK;
 use metallic_studio::commands::Command;
@@ -343,10 +344,21 @@ fn ten_play_stop_cycles_leak_nothing() {
 }
 
 fn harness(state: EditorState, output: OutputPanel) -> Harness<'static, EditorUi> {
+    // The panels use the theme's bundled fonts, installed on the first pass (drawn empty).
+    let mut themed = false;
     let mut h = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .build_ui_state(
-            |ui, editor: &mut EditorUi| {
+            move |ui, editor: &mut EditorUi| {
+                if !themed {
+                    metallic_studio::theme::apply(
+                        ui.ctx(),
+                        metallic_studio::theme::ThemeId::Graphite,
+                    );
+                    themed = true;
+                    ui.ctx().request_repaint();
+                    return;
+                }
                 editor.ui(ui, None);
             },
             EditorUi::new(state, output),
@@ -427,4 +439,114 @@ fn f5_plays_keys_reach_the_game_and_escape_stops() {
         position(&s.world, part),
         Value::Vector3(Vec3::new(0.0, 0.0, 0.0))
     );
+}
+
+/// Pushes a key event through the app's raw input hook, as eframe does, then runs a frame.
+fn hooked_key(h: &mut Harness<'static, EditorUi>, key: egui::Key, pressed: bool) {
+    let mut raw = h.input_mut().clone();
+    raw.events.push(egui::Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.state_mut().raw_input_hook(&mut raw);
+    *h.input_mut() = raw;
+    h.step();
+}
+
+fn root_height(w: &World) -> f64 {
+    let player = w
+        .find_first_child(w.root("Players").unwrap(), "Player1")
+        .unwrap();
+    let Value::Ref(Some(model)) = w.get(player, "Character").unwrap() else {
+        panic!("a character");
+    };
+    match position(w, w.find_first_child(model, "HumanoidRootPart").unwrap()) {
+        Value::Vector3(p) => p.y,
+        v => panic!("position {v:?}"),
+    }
+}
+
+#[test]
+fn tab_space_and_enter_go_to_the_game_not_to_a_focused_button() {
+    let output = OutputPanel::new();
+    let (world, _) = world("");
+    let mut state = EditorState::new(
+        world,
+        std::path::Path::new("."),
+        std::path::Path::new("unused.mscene"),
+        "Test",
+        output.log.sink(),
+    );
+    state.can_save = false;
+    let mut h = harness(state, output);
+    h.key_press(egui::Key::F5);
+    h.run_steps(2);
+    assert!(h.state().state.play.is_playing());
+    // Stop has keyboard focus: egui would click it on Space or Enter.
+    h.get(
+        By::new()
+            .label_contains("Stop")
+            .role(egui::accesskit::Role::Button),
+    )
+    .focus();
+    h.run_steps(90);
+    let focused = h.ctx.memory(|m| m.focused());
+    assert!(focused.is_some(), "the Stop button has focus");
+
+    hooked_key(&mut h, egui::Key::Tab, true);
+    hooked_key(&mut h, egui::Key::Tab, false);
+    assert_eq!(h.ctx.memory(|m| m.focused()), focused, "Tab moved focus");
+    hooked_key(&mut h, egui::Key::Enter, true);
+    hooked_key(&mut h, egui::Key::Enter, false);
+    assert!(h.state().state.play.is_playing(), "Enter pressed Stop");
+
+    let standing = in_play(&h.state().state, root_height);
+    hooked_key(&mut h, egui::Key::Space, true);
+    let mut top = standing;
+    for _ in 0..20 {
+        h.step();
+        top = top.max(in_play(&h.state().state, root_height));
+    }
+    hooked_key(&mut h, egui::Key::Space, false);
+    assert!(h.state().state.play.is_playing(), "Space pressed Stop");
+    assert!(top > standing + 0.2, "Space jumps: {standing} -> {top}");
+}
+
+#[test]
+fn escape_answers_the_close_prompt_and_play_goes_on() {
+    let output = OutputPanel::new();
+    let (world, part) = world("");
+    let mut state = EditorState::new(
+        world,
+        std::path::Path::new("."),
+        std::path::Path::new("unused.mscene"),
+        "Test",
+        output.log.sink(),
+    );
+    state.can_save = false;
+    state
+        .apply(Command::set(
+            part,
+            "Transparency",
+            Value::Number(0.0),
+            Value::Number(0.5),
+        ))
+        .unwrap();
+    let mut h = harness(state, output);
+    h.key_press(egui::Key::F5);
+    h.run_steps(2);
+    assert!(h.state().state.play.is_playing());
+    assert!(!h.state_mut().request_quit(), "unsaved changes ask first");
+    h.run_steps(2);
+    assert!(h.state().is_confirming());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().is_confirming(), "Esc closes the prompt");
+    assert!(h.state().state.play.is_playing(), "Esc did not stop Play");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().state.play.is_playing(), "a second Esc stops");
 }

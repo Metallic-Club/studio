@@ -8,18 +8,20 @@
 //! button is up (so WASD flies the camera while it is held).
 //!
 //! **While playing** Studio's keys are dispatched first each frame (Global and Play contexts:
-//! Esc and Shift+F5 stop), then the rest of the keyboard and the mouse over the viewport go to
-//! the game ([`PlayInput`]), then the session advances and the viewport draws it. The toolbar
-//! and status bar show a "Playing" chip, Explorer shows the play world read-only, and
-//! Properties, Insert, the script editor and every editing action are off until Stop.
-use eframe::egui::{self, RichText};
+//! Esc and Shift+F5 stop; a disabled action leaves its key alone), then the rest of the keyboard,
+//! Tab, Space and Enter included, and the mouse over the viewport go to the game
+//! ([`PlayInput`]), then the session advances and the viewport draws it. The toolbar shows a
+//! "Playing" chip and the status bar the play state, Explorer shows the play world read-only,
+//! and Properties, Insert, the script editor and every editing action are off until Stop.
+use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
 use crate::editor::{EditorState, INSERTABLE, UiRequest};
-use crate::explorer::Explorer;
+use crate::explorer::{Explorer, PlayTree};
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
+use crate::panel;
 use crate::play::input::PlayInput;
 use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
@@ -61,7 +63,8 @@ pub struct EditorUi {
     /// 3D view.
     pub viewport: Viewport,
     explorer: Explorer,
-    properties: Properties,
+    /// Properties panel.
+    pub properties: Properties,
     scripts: ScriptTabs,
     pressed: Vec<&'static str>,
     /// Open while the unsaved-changes prompt shows.
@@ -72,6 +75,8 @@ pub struct EditorUi {
     settings_requested: bool,
     /// Keyboard and mouse state of the running game's input.
     play_input: PlayInput,
+    /// Explorer's read-only tree of the play world.
+    play_tree: PlayTree,
 }
 
 impl EditorUi {
@@ -91,9 +96,34 @@ impl EditorUi {
             save_error: None,
             settings_requested: false,
             play_input: PlayInput::new(),
+            play_tree: PlayTree::new(),
         };
         ui.viewport.frame_all(&ui.state);
+        ui.sync_hold_keys();
         ui
+    }
+
+    /// Copies the held keys (V, Space) from the keymap into the viewport.
+    fn sync_hold_keys(&mut self) {
+        if let Some(c) = self.keymap.chord("hold.vertex") {
+            self.viewport.holds.vertex = c.key;
+        }
+        if let Some(c) = self.keymap.chord("hold.summon") {
+            self.viewport.holds.summon = c.key;
+        }
+    }
+
+    /// Drag-context keys (Esc, X/Y/Z, R/T, Ctrl+D) go to the drag before the viewport runs.
+    fn drag_keys(&mut self, ctx: &egui::Context) {
+        if !self.viewport.is_dragging() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let mut pressed = std::mem::take(&mut self.pressed);
+        self.keymap.pressed(ctx, &[KeyContext::Drag], &mut pressed);
+        for &id in &pressed {
+            self.viewport.drag_action(id, &mut self.state);
+        }
+        self.pressed = pressed;
     }
 
     /// Opens a game folder in a new editor.
@@ -179,27 +209,45 @@ impl EditorUi {
         let typing = if playing {
             ctx.text_edit_focused()
         } else {
-            ctx.egui_wants_keyboard_input()
+            ctx.egui_wants_keyboard_input() || self.viewport.is_editing_delta()
         };
-        let mut contexts: Vec<KeyContext> = Vec::with_capacity(2);
+        // A gesture holds values in the preview overlay: no global action runs until it ends
+        // (Esc cancels it in the viewport or in Properties).
+        let busy = !playing && (self.viewport.is_dragging() || self.properties.is_busy());
+        let mut contexts = [KeyContext::Global; 2];
+        let mut active = 0;
         if !typing {
-            contexts.push(KeyContext::Global);
+            active = 1;
             if playing {
-                contexts.push(KeyContext::Play);
-            } else if viewport_hovered && !right_down && !self.viewport.is_dragging() {
-                contexts.push(KeyContext::Viewport);
+                // With the unsaved-changes prompt open, Esc belongs to the prompt.
+                if self.confirm.is_none() {
+                    contexts[1] = KeyContext::Play;
+                    active = 2;
+                }
+            } else if viewport_hovered && !right_down && !busy {
+                contexts[1] = KeyContext::Viewport;
+                active = 2;
             }
         }
+        let contexts = &contexts[..active];
         let mut pressed = std::mem::take(&mut self.pressed);
-        if typing {
+        if busy {
+            pressed.clear();
+        } else if typing {
             // Only Save and Play keys work while a text field has focus.
             self.keymap
                 .pressed(ctx, &[KeyContext::Global], &mut pressed);
             pressed.retain(|a| a.starts_with("file.") || a.starts_with("play."));
-        } else if !self.viewport.is_dragging() {
-            self.keymap.pressed(ctx, &contexts, &mut pressed);
+        } else if playing {
+            // Studio keeps F5, Shift+F5, Esc and Ctrl+S; a disabled action leaves its key to the
+            // game.
+            let (actions, state) = (&self.actions, &self.state);
+            self.keymap
+                .pressed_where(ctx, contexts, &mut pressed, |id| {
+                    id.starts_with("play.") || actions.get(id).is_some_and(|a| a.is_enabled(state))
+                });
         } else {
-            pressed.clear();
+            self.keymap.pressed(ctx, contexts, &mut pressed);
         }
         for &id in &pressed {
             self.run_action(id);
@@ -217,6 +265,7 @@ impl EditorUi {
         if self.state.start_play(id) {
             self.scripts.show_scene();
             self.play_input = PlayInput::new();
+            self.play_tree = PlayTree::new();
             ctx.memory_mut(|m| {
                 if let Some(focused) = m.focused() {
                     m.surrender_focus(focused);
@@ -225,7 +274,16 @@ impl EditorUi {
         }
     }
 
-    /// "Esc or Shift+F5 stops", from the keymap.
+    /// Call from the app's `raw_input_hook`, before egui sees the frame's input. While the game
+    /// has the keyboard, Tab, Space and Enter are taken out here, so egui can neither move focus
+    /// to a Studio widget nor press the focused one; the game gets them through [`PlayInput`].
+    pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        if self.state.play.view().is_some() && self.confirm.is_none() {
+            self.play_input.hold_game_keys(raw);
+        }
+    }
+
+    /// "Shift+F5 or Escape", from the keymap (built only when the chip's tooltip shows).
     fn stop_keys(&self) -> String {
         let keys: Vec<String> = self
             .keymap
@@ -260,6 +318,13 @@ impl EditorUi {
     ) -> EditorExit {
         let ctx = ui.ctx().clone();
         let dt = f64::from(ctx.input(|i| i.stable_dt));
+        if self.confirm.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            // Esc answers the unsaved-changes prompt (Cancel); it never stops Play then.
+            self.confirm = None;
+            self.save_error = None;
+        }
         let played = self.state.play.is_playing();
         if played {
             // Studio keys first (Esc, Shift+F5, Ctrl+S); what is left belongs to the game.
@@ -267,242 +332,329 @@ impl EditorUi {
             self.requests(&ctx);
         }
         let (rect, hovered) = (self.viewport.rect(), self.viewport.play_hovered());
+        let prompt = self.confirm.is_some();
         if let Some(view) = self.state.play.view_mut() {
-            self.play_input.feed(&ctx, view, rect, hovered);
+            if prompt {
+                self.play_input.release(view);
+            } else {
+                self.play_input.feed(&ctx, view, rect, hovered);
+            }
         }
         self.state.play.update(dt);
         let playing = self.state.play.is_playing();
         let mut exit = EditorExit::Stay;
 
-        egui::Panel::top("menu").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new("Save").shortcut_text(self.keymap.label("file.save")),
-                        )
-                        .clicked()
-                    {
-                        self.run_action("file.save");
-                        ui.close();
-                    }
-                    self.actions
-                        .menu_items(ui, &["settings.open"], &mut self.state, &self.keymap);
-                    if ui.button("Close game").clicked() {
-                        self.scripts.flush(&mut self.state);
-                        if self.state.is_dirty() {
-                            self.confirm = Some(Leave::Close);
-                            self.save_error = None;
-                        } else {
-                            exit = EditorExit::Close;
-                        }
-                        ui.close();
-                    }
-                });
-                ui.menu_button("Edit", |ui| {
-                    let undo = self.state.history.undo_name(&self.state.world);
-                    let redo = self.state.history.redo_name(&self.state.world);
-                    let u = undo.map_or("Undo".to_string(), |n| format!("Undo {n}"));
-                    let r = redo.map_or("Redo".to_string(), |n| format!("Redo {n}"));
-                    if let Some(a) = self.actions.get("edit.undo") {
-                        let enabled = a.is_enabled(&self.state);
-                        if theme::add_enabled(
-                            ui,
-                            enabled,
-                            egui::Button::new(u).shortcut_text(self.keymap.label("edit.undo")),
-                        )
-                        .clicked()
+        egui::Panel::top("menu")
+            .frame(
+                Frame::new()
+                    .fill(theme::bg_deep())
+                    .inner_margin(Margin::symmetric(8, 2)),
+            )
+            .show(ui, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new("Save")
+                                    .shortcut_text(self.keymap.label("file.save")),
+                            )
+                            .clicked()
                         {
-                            self.run_action("edit.undo");
+                            self.run_action("file.save");
                             ui.close();
                         }
-                    }
-                    if let Some(a) = self.actions.get("edit.redo") {
-                        let enabled = a.is_enabled(&self.state);
-                        if theme::add_enabled(
+                        self.actions.menu_items(
                             ui,
-                            enabled,
-                            egui::Button::new(r).shortcut_text(self.keymap.label("edit.redo")),
-                        )
-                        .clicked()
-                        {
-                            self.run_action("edit.redo");
+                            &["settings.open"],
+                            &mut self.state,
+                            &self.keymap,
+                        );
+                        if ui.button("Close game").clicked() {
+                            self.scripts.flush(&mut self.state);
+                            if self.state.is_dirty() {
+                                self.confirm = Some(Leave::Close);
+                                self.save_error = None;
+                            } else {
+                                exit = EditorExit::Close;
+                            }
                             ui.close();
                         }
-                    }
-                    ui.separator();
-                    self.actions.menu_items(
-                        ui,
-                        &[
-                            "edit.duplicate",
-                            "edit.delete",
-                            "edit.group",
-                            "edit.rename",
-                            "edit.select_all",
-                        ],
-                        &mut self.state,
-                        &self.keymap,
-                    );
-                });
-                ui.menu_button("View", |ui| {
-                    self.actions.menu_items(
-                        ui,
-                        &["view.frame_selection", "view.frame_all"],
-                        &mut self.state,
-                        &self.keymap,
-                    );
-                });
-                ui.menu_button("Insert", |ui| {
-                    for &class in INSERTABLE {
-                        if theme::add_enabled(ui, !playing, egui::Button::new(class)).clicked() {
-                            let parent = self
-                                .state
-                                .selection
-                                .active()
-                                .filter(|&a| !self.state.world.is_a(a, "BasePart"));
-                            let at = self.state.insert_point;
-                            self.state.insert(class, parent, Some(at));
-                            ui.close();
+                    });
+                    ui.menu_button("Edit", |ui| {
+                        let undo = self.state.history.undo_name(&self.state.world);
+                        let redo = self.state.history.redo_name(&self.state.world);
+                        let u = undo.map_or("Undo".to_string(), |n| format!("Undo {n}"));
+                        let r = redo.map_or("Redo".to_string(), |n| format!("Redo {n}"));
+                        if let Some(a) = self.actions.get("edit.undo") {
+                            let enabled = a.is_enabled(&self.state);
+                            if theme::add_enabled(
+                                ui,
+                                enabled,
+                                egui::Button::new(u).shortcut_text(self.keymap.label("edit.undo")),
+                            )
+                            .clicked()
+                            {
+                                self.run_action("edit.undo");
+                                ui.close();
+                            }
                         }
-                    }
-                });
-                ui.menu_button("Test", |ui| {
-                    let ids: Vec<&'static str> = self
-                        .actions
-                        .iter()
-                        .filter(|a| a.group == ToolbarGroup::Play)
-                        .map(|a| a.id)
-                        .collect();
-                    self.actions
-                        .menu_items(ui, &ids, &mut self.state, &self.keymap);
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let dot = if self.state.is_dirty() { " •" } else { "" };
-                    ui.label(RichText::new(format!("{}{dot}", self.state.name)).strong());
+                        if let Some(a) = self.actions.get("edit.redo") {
+                            let enabled = a.is_enabled(&self.state);
+                            if theme::add_enabled(
+                                ui,
+                                enabled,
+                                egui::Button::new(r).shortcut_text(self.keymap.label("edit.redo")),
+                            )
+                            .clicked()
+                            {
+                                self.run_action("edit.redo");
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        self.actions.menu_items(
+                            ui,
+                            &[
+                                "edit.duplicate",
+                                "edit.delete",
+                                "edit.group",
+                                "edit.rename",
+                                "edit.select_all",
+                            ],
+                            &mut self.state,
+                            &self.keymap,
+                        );
+                        ui.separator();
+                        self.actions.menu_items(
+                            ui,
+                            &[
+                                "build.rotate90",
+                                "build.tilt90",
+                                "build.drop",
+                                "build.snap_to_grid",
+                                "pivot.reset",
+                            ],
+                            &mut self.state,
+                            &self.keymap,
+                        );
+                    });
+                    ui.menu_button("View", |ui| {
+                        self.actions.menu_items(
+                            ui,
+                            &["view.frame_selection", "view.frame_all", "snap.soft"],
+                            &mut self.state,
+                            &self.keymap,
+                        );
+                    });
+                    ui.menu_button("Insert", |ui| {
+                        for &class in INSERTABLE {
+                            if theme::add_enabled(ui, !playing, egui::Button::new(class)).clicked()
+                            {
+                                let parent = self
+                                    .state
+                                    .selection
+                                    .active()
+                                    .filter(|&a| !self.state.world.is_a(a, "BasePart"));
+                                let at = self.state.insert_point;
+                                self.state.insert(class, parent, Some(at));
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.menu_button("Test", |ui| {
+                        let ids: Vec<&'static str> = self
+                            .actions
+                            .iter()
+                            .filter(|a| a.group == ToolbarGroup::Play)
+                            .map(|a| a.id)
+                            .collect();
+                        self.actions
+                            .menu_items(ui, &ids, &mut self.state, &self.keymap);
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let dirty = self.state.is_dirty();
+                        ui.label(
+                            RichText::new(self.state.name.clone()).font(theme::fonts::strong()),
+                        );
+                        if dirty {
+                            ui.label(RichText::new("•").color(theme::warning()))
+                                .on_hover_text("Unsaved changes");
+                        }
+                    });
                 });
             });
-        });
 
-        egui::Panel::top("toolbar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                self.actions
-                    .toolbar(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
-                ui.label(RichText::new(self.state.tool.label()).color(ui_tokens().text_dim));
-                ui.separator();
-                self.actions
-                    .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
-                ui.separator();
-                self.actions
-                    .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
-                ui.separator();
-                self.actions
-                    .toolbar(ui, ToolbarGroup::Play, &mut self.state, &self.keymap);
-                if let Some(status) = self.state.play.status() {
-                    let text = match status {
-                        crate::play::PlayStatus::Starting => "Starting…".to_string(),
-                        crate::play::PlayStatus::Running(t) => format!("Playing · {t}"),
-                        crate::play::PlayStatus::Ended(t) => t,
-                    };
-                    playing_chip(ui, &text);
-                }
-            });
-        });
-
-        egui::Panel::bottom("status")
-            .exact_size(24.0)
+        egui::Panel::top("toolbar")
+            .exact_size(theme::CONTROL_HEIGHT_LG)
+            .frame(
+                Frame::new()
+                    .fill(theme::bg_panel())
+                    .inner_margin(Margin::symmetric(8, 4)),
+            )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().interact_size.y = 28.0;
+                    self.actions
+                        .toolbar(ui, ToolbarGroup::Tools, &mut self.state, &self.keymap);
+                    ui.separator();
+                    self.actions
+                        .toolbar(ui, ToolbarGroup::Settings, &mut self.state, &self.keymap);
+                    ui.separator();
+                    self.actions
+                        .chips(ui, ToolbarGroup::Snap, &mut self.state, &self.keymap);
+                    ui.separator();
+                    self.actions
+                        .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
+                    ui.separator();
+                    self.actions
+                        .toolbar(ui, ToolbarGroup::Play, &mut self.state, &self.keymap);
                     if playing {
-                        let text = format!("Playing: editing is off · {} stops", self.stop_keys());
-                        ui.label(RichText::new(text).small().color(theme::success()));
-                        ui.separator();
+                        playing_chip(ui, "Playing").on_hover_ui(|ui| {
+                            ui.label(format!("Editing is off. {} stops.", self.stop_keys()));
+                        });
                     }
-                    let save = if self.state.is_dirty() {
-                        "Unsaved changes"
-                    } else {
-                        "Saved"
+                });
+            });
+
+        egui::Panel::bottom("status")
+            .exact_size(theme::STATUS_HEIGHT)
+            .frame(
+                Frame::new()
+                    .fill(theme::bg_deep())
+                    .inner_margin(Margin::symmetric(12, 0)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let dim = theme::text_3();
+                    let small = |t: String| RichText::new(t).font(theme::fonts::small());
+                    ui.label(small(self.state.tool.label().to_string()).color(theme::text_2()));
+                    ui.label(small("·".into()).color(dim));
+                    let (play, colour) = match self.state.play.status() {
+                        None => ("Editing".into(), theme::text_2()),
+                        Some(crate::play::PlayStatus::Starting) => {
+                            ("Starting…".into(), theme::success())
+                        }
+                        Some(crate::play::PlayStatus::Running(t)) => (t, theme::success()),
+                        Some(crate::play::PlayStatus::Ended(t)) => (t, theme::text_2()),
                     };
-                    ui.label(RichText::new(save).small().color(ui_tokens().text_dim));
+                    ui.label(small(play.into_owned()).color(colour));
+                    // The drag readout (spec 4.5): the amount, editable for a few seconds after
+                    // release (accent), and what the drag snapped to.
+                    if let Some(st) = self.viewport.status(&self.state) {
+                        ui.label(small("·".into()).color(dim));
+                        let colour = if st.editing {
+                            theme::accent()
+                        } else {
+                            theme::text_1()
+                        };
+                        ui.label(small(st.text).monospace().color(colour));
+                        if let Some(snap) = st.snap {
+                            ui.label(small(snap).color(dim));
+                        }
+                    }
                     if let Some(note) = self.state.current_note() {
-                        ui.separator();
-                        ui.label(RichText::new(note).small());
+                        ui.label(small("·".into()).color(dim));
+                        ui.label(small(note.to_string()).color(theme::text_1()));
                         ctx.request_repaint_after(crate::editor::NOTE_TIME);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (save, colour) = if self.state.is_dirty() {
+                            ("Unsaved changes", theme::warning())
+                        } else if self.state.can_save {
+                            ("Saved", theme::text_3())
+                        } else {
+                            ("Not saved to disk", theme::text_3())
+                        };
+                        ui.label(small(save.to_string()).color(colour));
                         let n = self.state.selection.len();
-                        if n > 0 {
-                            let mut text = format!("{n} selected");
-                            if let Some(b) = self.state.selection_bounds() {
-                                let s = b.size();
-                                text.push_str(&format!(
-                                    " · {} x {} x {}",
-                                    fmt(s.x),
-                                    fmt(s.y),
-                                    fmt(s.z)
-                                ));
-                            }
-                            ui.label(RichText::new(text).small().monospace());
+                        let mut text = selection_label(&self.state);
+                        ui.label(small("·".into()).color(dim));
+                        if n > 0
+                            && let Some(b) = self.state.selection_bounds()
+                        {
+                            let s = b.size();
+                            text.push_str(&format!(
+                                " · {} x {} x {}",
+                                fmt(s.x),
+                                fmt(s.y),
+                                fmt(s.z)
+                            ));
                         }
-                        if let Some(h) = self.viewport.hovered() {
-                            ui.label(
-                                RichText::new(self.state.display_name(h))
-                                    .small()
-                                    .color(ui_tokens().text_dim),
-                            );
-                        }
+                        ui.label(small(text).monospace().color(theme::text_2()));
                     });
                 });
             });
 
         egui::Panel::left("explorer")
             .default_size(280.0)
+            .min_size(220.0)
             .resizable(true)
+            .frame(panel::frame())
             .show(ui, |ui| {
-                ui.label(RichText::new("Explorer").strong());
-                if let Some(view) = self.state.play.view() {
-                    playing_banner(ui, "Play world, read-only. Stop returns to editing.");
-                    view.inspect_world(&mut |world| {
-                        crate::explorer::play_tree(ui, world);
-                    });
-                } else if playing {
-                    playing_banner(ui, "Playing. Stop to edit.");
-                    ui.add_enabled_ui(false, |ui| self.explorer.ui(ui, &mut self.state));
-                } else {
-                    self.explorer.ui(ui, &mut self.state);
-                }
+                panel::show(
+                    ui,
+                    "Explorer",
+                    |_| {},
+                    |ui| {
+                        if let Some(view) = self.state.play.view() {
+                            playing_banner(ui, "Play world, read-only. Stop returns to editing.");
+                            let tree = &mut self.play_tree;
+                            view.inspect_world(&mut |world| tree.ui(ui, world));
+                        } else if playing {
+                            playing_banner(ui, "Playing. Stop to edit.");
+                            ui.add_enabled_ui(false, |ui| self.explorer.ui(ui, &mut self.state));
+                        } else {
+                            self.explorer.ui(ui, &mut self.state);
+                        }
+                    },
+                );
             });
         egui::Panel::right("properties")
             .default_size(304.0)
+            .min_size(260.0)
             .resizable(true)
+            .frame(panel::frame())
             .show(ui, |ui| {
-                ui.label(RichText::new("Properties").strong());
-                if playing {
-                    playing_banner(ui, "Edit values, read-only while playing.");
-                    ui.add_enabled_ui(false, |ui| self.properties.ui(ui, &mut self.state));
-                } else {
-                    self.properties.ui(ui, &mut self.state);
-                }
+                panel::show(
+                    ui,
+                    "Properties",
+                    |_| {},
+                    |ui| {
+                        if playing {
+                            playing_banner(ui, "Edit values, read-only while playing.");
+                            ui.add_enabled_ui(false, |ui| self.properties.ui(ui, &mut self.state));
+                        } else {
+                            self.properties.ui(ui, &mut self.state);
+                        }
+                    },
+                );
             });
         egui::Panel::bottom("output")
             .default_size(200.0)
+            .min_size(120.0)
             .resizable(true)
+            .frame(panel::frame())
             .show(ui, |ui| {
-                ui.label(RichText::new("Output").strong());
-                self.output.ui(ui);
+                panel::show(ui, "Output", |_| {}, |ui| self.output.ui(ui));
             });
 
+        self.drag_keys(&ctx);
         let mut viewport_hovered = false;
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.scripts.prune(&self.state);
-            let scene = self.scripts.tab_strip(ui, &mut self.state);
-            if scene {
-                let before = ui.available_rect_before_wrap();
-                self.viewport.ui(ui, &mut self.state, render_state);
-                viewport_hovered = ui.rect_contains_pointer(before);
-            } else {
-                self.scripts.editor(ui, &mut self.state);
-            }
-        });
+        egui::CentralPanel::default()
+            .frame(Frame::new().fill(theme::bg_deep()))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                self.scripts.prune(&self.state);
+                let scene = self.scripts.tab_strip(ui, &mut self.state);
+                if scene {
+                    let before = ui.available_rect_before_wrap();
+                    self.viewport.ui(ui, &mut self.state, render_state);
+                    viewport_hovered = ui.rect_contains_pointer(before);
+                } else {
+                    self.scripts.editor(ui, &mut self.state);
+                }
+            });
 
         if !played {
             let right_down = ctx.input(|i| i.pointer.secondary_down());
@@ -556,17 +708,18 @@ impl EditorUi {
 }
 
 /// The toolbar's "Playing" chip: `success` text on a `success-bg` plate.
-fn playing_chip(ui: &mut egui::Ui, text: &str) {
+fn playing_chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let galley =
         ui.painter()
             .layout_no_wrap(text.to_string(), ui_tokens().body(), theme::success());
     let pad = egui::vec2(8.0, 3.0);
-    let (rect, _) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
     Plate::raised()
         .fill(theme::success_bg())
         .paint(ui.painter(), rect);
     ui.painter()
         .galley(rect.min + pad, galley, theme::success());
+    response
 }
 
 /// A full-width note at the top of a panel while playing.
@@ -597,5 +750,51 @@ fn fmt(v: f64) -> String {
         format!("{r:.0}")
     } else {
         format!("{r}")
+    }
+}
+
+/// The status bar's selection text: the selected instance's name, "N selected" for several,
+/// "Nothing selected" for none. (It never names the part under the pointer.)
+fn selection_label(state: &EditorState) -> String {
+    match state.selection.len() {
+        0 => "Nothing selected".to_string(),
+        1 => state
+            .selection
+            .active()
+            .map_or_else(|| "1 selected".to_string(), |id| state.display_name(id)),
+        n => format!("{n} selected"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::selection_label;
+    use crate::editor::EditorState;
+    use crate::output::OutputPanel;
+    use metallic_core::World;
+
+    #[test]
+    fn status_names_the_selection_not_the_hover() {
+        let mut world = World::new_with_services();
+        let ws = world.root("Workspace").unwrap();
+        let a = world.create("Part", Some(ws)).unwrap();
+        let b = world.create("Part", Some(ws)).unwrap();
+        world
+            .set(a, "Name", metallic_core::Value::String("Jump1".to_string()))
+            .unwrap();
+        let output = OutputPanel::new();
+        let mut state = EditorState::new(
+            world,
+            std::path::Path::new("."),
+            std::path::Path::new("unused.mscene"),
+            "Test",
+            output.log.sink(),
+        );
+        assert_eq!(selection_label(&state), "Nothing selected");
+        state.selection.select_only(a);
+        assert_eq!(selection_label(&state), "Jump1");
+        state.selection.select_only(a);
+        state.selection.toggle(b);
+        assert_eq!(selection_label(&state), "2 selected");
     }
 }

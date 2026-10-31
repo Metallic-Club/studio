@@ -30,6 +30,7 @@ mod local;
 
 pub use local::{LocalPlayMode, LocalPlaySession, PLAY_TAG};
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use eframe::egui;
@@ -54,10 +55,11 @@ pub struct PlayStart<'a> {
 pub enum PlayStatus {
     /// Still starting (processes launching, world loading).
     Starting,
-    /// Running; the text is shown next to Stop ("Running", "3 players").
-    Running(String),
+    /// Running; the text is shown in the status bar ("Playing", "3 players"). Borrowed text
+    /// costs nothing to poll each frame.
+    Running(Cow<'static, str>),
     /// The session ended on its own (a crash or the game closed); the text says why.
-    Ended(String),
+    Ended(Cow<'static, str>),
 }
 
 /// One way to run the game.

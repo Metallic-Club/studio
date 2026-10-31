@@ -130,6 +130,45 @@ impl PartTransform {
         ray_box(o, d, self.size * 0.5)
     }
 
+    /// Distance along `ray` to the box surface and the outward normal (world space) of the face
+    /// hit. A ray starting inside reports distance 0 and the normal facing back along the ray.
+    pub fn ray_hit_normal(&self, ray: &Ray) -> Option<(f64, DVec3)> {
+        let inv = self.rotation.inverse();
+        let o = inv * (ray.origin - self.position);
+        let d = inv * ray.dir;
+        let h = self.size * 0.5;
+        let mut t0 = f64::NEG_INFINITY;
+        let mut t1 = f64::INFINITY;
+        let mut normal = DVec3::ZERO;
+        for i in 0..3 {
+            if d[i].abs() < 1e-12 {
+                if o[i].abs() > h[i] {
+                    return None;
+                }
+                continue;
+            }
+            let a = (-h[i] - o[i]) / d[i];
+            let b = (h[i] - o[i]) / d[i];
+            let (near, far, sign) = if a < b { (a, b, -1.0) } else { (b, a, 1.0) };
+            if near > t0 {
+                t0 = near;
+                normal = DVec3::ZERO;
+                normal[i] = sign;
+            }
+            t1 = t1.min(far);
+            if t0 > t1 {
+                return None;
+            }
+        }
+        if t1 < 0.0 {
+            return None;
+        }
+        if t0 < 0.0 {
+            return Some((0.0, -ray.dir));
+        }
+        Some((t0, (self.rotation * normal).normalize_or(DVec3::Y)))
+    }
+
     /// Distance along `ray` to the inscribed sphere (Ball parts).
     pub fn ray_hit_sphere(&self, ray: &Ray) -> Option<f64> {
         let r = self.size.min_element() * 0.5;
@@ -281,6 +320,27 @@ mod tests {
             dir: DVec3::NEG_Y,
         };
         assert!(t.ray_hit(&miss).is_none());
+    }
+
+    #[test]
+    fn face_normal_of_the_face_hit() {
+        let t = PartTransform {
+            position: DVec3::ZERO,
+            rotation: DQuat::from_rotation_x(30f64.to_radians()),
+            size: DVec3::new(10.0, 1.0, 10.0),
+        };
+        let down = Ray {
+            origin: DVec3::new(0.0, 10.0, 0.0),
+            dir: DVec3::NEG_Y,
+        };
+        let (_, n) = t.ray_hit_normal(&down).unwrap();
+        assert!((n - t.axis(1)).length() < 1e-9, "{n:?}");
+        let side = Ray {
+            origin: DVec3::new(20.0, 0.0, 0.0),
+            dir: DVec3::NEG_X,
+        };
+        let (d, n) = t.ray_hit_normal(&side).unwrap();
+        assert!((d - 15.0).abs() < 1e-9 && (n - DVec3::X).length() < 1e-9);
     }
 
     #[test]
