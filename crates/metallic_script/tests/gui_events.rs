@@ -174,3 +174,28 @@ fn zindex_behavior_is_an_enum_property() {
     );
     assert!(lines[3].starts_with("print:false"), "{lines:?}");
 }
+
+/// Connecting to `UserInputService.InputBegan`/`InputEnded` warns once per VM that only
+/// pointers are reported until #80.
+#[test]
+fn uis_input_began_warns_once_that_only_pointers_are_wired() {
+    let mut rig = Rig::new();
+    rig.local_script(
+        "Ui",
+        r#"
+        local UIS = game:GetService("UserInputService")
+        UIS.InputBegan:Connect(function() end)
+        UIS.InputBegan:Connect(function() end)
+        UIS.InputEnded:Connect(function() end)
+        "#,
+    );
+    rig.host.start().unwrap();
+    rig.run(0.0, 1);
+    let warns: Vec<String> = rig
+        .lines()
+        .into_iter()
+        .filter(|l| l.starts_with("warn:"))
+        .collect();
+    assert_eq!(warns.len(), 1, "{warns:?}");
+    assert!(warns[0].contains("#80"), "{warns:?}");
+}

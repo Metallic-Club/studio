@@ -854,7 +854,24 @@ pub fn default_value(class: &str, property: &str) -> Option<Value> {
     if property == "Name" {
         return class_def(class).map(|c| Value::String(c.name.to_string()));
     }
-    find_property(class, property).map(|d| class_default(class, d))
+    // One walk up the chain, as `find_property` (this runs on every read of an unset property):
+    // the nearest override on the way wins, else the declaring class's default.
+    let mut overridden: Option<fn() -> Value> = None;
+    let mut cur = class_def(class);
+    while let Some(c) = cur {
+        if overridden.is_none() && !c.defaults.is_empty() {
+            overridden = c
+                .defaults
+                .iter()
+                .find(|(n, _)| *n == property)
+                .map(|(_, f)| *f);
+        }
+        if let Some(d) = c.props.iter().find(|d| d.name == property) {
+            return Some(overridden.unwrap_or(d.default)());
+        }
+        cur = c.superclass.and_then(class_def);
+    }
+    None
 }
 
 /// The default of `property` in `class`: the nearest override ([`ClassDef::defaults`]) on the

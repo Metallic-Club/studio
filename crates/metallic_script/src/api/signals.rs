@@ -170,6 +170,8 @@ pub(crate) struct Pacing {
     deferred: RefCell<VecDeque<Deferred>>,
     streaks: RefCell<HashMap<u64, u32>>,
     warned_full: Cell<bool>,
+    /// The "UserInputService.InputBegan reports only pointers" warning was given (once per VM).
+    warned_uis_pointer_only: Cell<bool>,
     /// Set by `hold_step_deadline`: the next `begin_step` keeps the running deadline.
     keep_deadline: Cell<bool>,
     /// How many times a handler's arguments were built (a test hook for the dispatch cost).
@@ -374,6 +376,13 @@ impl UserData for LuaSignal {
                     lua,
                     |lua, (this, func): (UserDataRef<LuaSignal>, Function)| {
                         let owner = this.state.budget.current_owner();
+                        let pointer_only =
+                            matches!(this.key.1, EventKind::UisInputBegan | EventKind::UisInputEnded);
+                        if pointer_only && !this.state.pacing.warned_uis_pointer_only.replace(true) {
+                            this.state.sink.warn(
+                                "UserInputService.InputBegan/InputEnded report only the left                                  mouse button and touches for now; keyboard keys and other                                  buttons are not wired yet (#80)",
+                            );
+                        }
                         let (id, alive) = this.state.hub.connect(this.key, func, owner)?;
                         lua.create_userdata(LuaConnection {
                             state: this.state.clone(),
