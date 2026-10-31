@@ -111,6 +111,11 @@ apps.
   retain it so later waits remain cancellable. Native `pcall`/`xpcall` are unchanged.
 - **metallic_render** (Task 3): wgpu renderer. `Renderer::sync(&World)`, `render(target, camera, size)`; instanced shapes,
   PBR materials, cascaded shadows, sky, fog. `RenderContext` is built for a window (player) or from eframe (Studio). Headless contexts (tests, screenshots) use Vulkan, DX12 or Metal and fall back to OpenGL only without them. Every instance, adapter and device `context.rs` makes is set up under one process-wide lock: wgpu's Windows OpenGL (WGL) setup crashes the process (access violation, heap corruption) when threads do it at once (#276, upstream gfx-rs/wgpu#9760); rendering and teardown stay parallel.
+  Shadow cascade selection shares `fragment_view_depth` and `shadow_cascade` between the part and skinned
+  fragment paths. Both vertex entries pass positive clip-w through a perspective-interpolated float at location 8;
+  the fragment helper reads it without depending on backend translation of the position builtin. Rust input and
+  uniform layouts are unchanged. The numerical GPU regression invokes the production vertex entries and those same helpers,
+  with backend-specific adapter reporting; unavailable adapters are distinct from executed numeric checks.
   Frame stages (#62): shadows, then the scene into a linear `Rgba16Float` HDR target (MSAA resolves into it), then the
   post chain (`post.rs`: `PostChain` of `PostPass`es in an `Hdr` and an `Ldr` slot, run in list order; most passes
   wrap a `FullscreenPass`), with the finish pass between the slots (`tonemap.rs`: exposure, grade, `ToneCurve`,

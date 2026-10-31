@@ -2152,6 +2152,9 @@ fn make_pipelines(
 }
 
 #[cfg(test)]
+mod shadow_depth_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

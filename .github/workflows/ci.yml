@@ -41,6 +41,10 @@ jobs:
         run: python -I tools/test_cargo_lane.py
       - name: Test
         run: cargo test --workspace
+      - name: DX12 shadow cascade regression (adapter required)
+        env:
+          METALLIC_REQUIRE_SHADOW_PROBE: '1'
+        run: cargo test --locked -p metallic_render --lib renderer::shadow_depth_tests::dx12_ -j 4 -- --test-threads=1 --nocapture
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Licences
