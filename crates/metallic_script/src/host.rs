@@ -170,8 +170,9 @@ impl ScriptHost {
     }
 
     /// Advances the scripts to time `now` (seconds). In this order: starts scripts that
-    /// appeared since the last step, delivers the queued remotes and inputs, fires
-    /// `RunService.Heartbeat(dt)`, then resumes `WaitForChild` and `task.wait` threads.
+    /// appeared since the last step, delivers the queued remotes and inputs, advances the
+    /// playing tweens by `dt` (and fires their `Completed`), fires `RunService.Heartbeat(dt)`,
+    /// then resumes `WaitForChild` and `task.wait` threads.
     /// Does nothing before `start`.
     pub fn step(&mut self, now: f64, dt: f64) {
         if !self.is_running() {
@@ -195,6 +196,9 @@ impl ScriptHost {
             .try_borrow()
             .ok()
             .and_then(|w| w.root("RunService"));
+        for side in self.sides() {
+            side.state.advance_tweens(dt);
+        }
         if let Some(run_service) = run_service {
             for side in self.sides() {
                 side.state.fire((run_service, EventKind::Heartbeat), &|_| {

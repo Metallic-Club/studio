@@ -15,6 +15,7 @@ mod pivot;
 mod remote;
 mod services;
 mod signals;
+mod tween;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
@@ -78,6 +79,8 @@ pub(crate) struct ApiState {
     bind_wrapper: Function,
     /// `UserInputService` and `ContextActionService`.
     input_services: input::InputServices,
+    /// `TweenService` and the tweens of this VM.
+    pub(crate) tweens: tween::Tweens,
 }
 
 impl ApiState {
@@ -166,8 +169,10 @@ fn build(
         pending_destroy: RefCell::new(Vec::new()),
         bind_wrapper,
         input_services: input::InputServices::new(),
+        tweens: tween::Tweens::default(),
     });
     input::install_services(lua, &state)?;
+    tween::install_service(lua, &state)?;
 
     let set = |name: &str, value: mlua::Value| vm.set_global(name, value);
     let to_err = |e: ScriptError| Error::runtime(e.message);
@@ -177,6 +182,7 @@ fn build(
     )
     .map_err(to_err)?;
     set("CFrame", mlua::Value::Table(cframe::constructor(lua)?)).map_err(to_err)?;
+    set("TweenInfo", mlua::Value::Table(tween::constructor(lua)?)).map_err(to_err)?;
     for (name, table) in datatypes::constructors(lua)? {
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }

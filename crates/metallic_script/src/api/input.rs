@@ -449,6 +449,9 @@ impl Enums {
             ("ContextActionPriority", CONTEXT_ACTION_PRIORITIES.to_vec()),
             ("RotationOrder", named(&ROTATION_ORDERS)),
             ("NormalId", named(&NORMAL_IDS)),
+            ("EasingStyle", named(super::tween::EASING_STYLES)),
+            ("EasingDirection", named(super::tween::EASING_DIRECTIONS)),
+            ("PlaybackState", named(super::tween::PLAYBACK_STATES)),
         ];
         let table = lua.create_table()?;
         let mut items = HashMap::new();
@@ -588,7 +591,7 @@ impl ApiState {
         Ok(())
     }
 
-    fn enum_value(&self, enum_name: &str, name: &str) -> Value {
+    pub(crate) fn enum_value(&self, enum_name: &str, name: &str) -> Value {
         self.enums.item(enum_name, name)
     }
 
