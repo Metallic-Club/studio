@@ -6,15 +6,21 @@
 //! other repository. No `scope` is sent, because GitHub Apps ignore it.
 //!
 //! The session (access token, plus refresh token and expiry when the app has user-token expiration
-//! on) is kept as one JSON value in the Windows Credential Manager (Studio: `MetallicStudio/github`),
-//! behind the [`SecretStore`] trait so tests use memory instead. [`GithubAuth::valid_token`]
+//! on) is kept as one JSON value in the Windows Credential Manager, behind the [`SecretStore`]
+//! trait so tests use memory instead. The `keyring` crate names a Windows entry
+//! `<account>.<service>` (Studio: `github.MetallicStudio`) and stores it with
+//! `CRED_PERSIST_ENTERPRISE`, so it roams with a roaming profile. [`GithubAuth::valid_token`]
 //! refreshes an expiring access token on its own.
+//!
+//! Every network call here blocks (a sign-in polls for up to 15 minutes, a refresh retries), so
+//! a UI calls them on a worker thread; [`GithubAuth::device_sign_in_until`] can be cancelled.
 //!
 //! The app's client ID is not secret. It is committed in `config/github_app_client_id.txt` and
 //! compiled in; until the owner registers the app, the file holds a placeholder and
 //! [`embedded_client_id`] reports a clear error.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -36,6 +42,8 @@ const MIN_POLL_SECONDS: u64 = 1;
 const MAX_RETRIES: u32 = 3;
 /// An access token that expires within this many seconds is refreshed first.
 const REFRESH_MARGIN_SECONDS: u64 = 300;
+/// After a failed refresh the current token is kept only while it has at least this long left.
+const KEEP_MARGIN_SECONDS: u64 = 60;
 
 /// Why signing in or storing the token failed. No message contains a token.
 #[derive(Debug)]
@@ -143,9 +151,15 @@ impl<F: FnMut(&str, &str)> DeviceFlowUi for BrowserUi<F> {
     }
 }
 
-/// Opens a GitHub page in the default browser. Refuses any other address.
+/// True for an address on `https://github.com/`: the only pages the sign-in opens.
+pub fn is_github_page(url: &str) -> bool {
+    url.starts_with("https://github.com/")
+}
+
+/// Opens a GitHub page in the default browser. Refuses any other address. (The Launcher
+/// opens it with its own browser opener after [`is_github_page`].)
 pub fn open_in_browser(url: &str) -> std::io::Result<()> {
-    if !url.starts_with("https://github.com/") {
+    if !is_github_page(url) {
         return Err(std::io::Error::other(
             "refusing to open a non-GitHub address",
         ));
@@ -251,8 +265,12 @@ pub struct GithubAuth {
     store: Arc<dyn SecretStore>,
     sleeping: bool,
     /// Held for the whole of `valid_token`: refresh tokens rotate, so two refreshes at once
-    /// would make the second fail and wipe the session the first saved.
+    /// would make the second fail and wipe the session the first saved. A finished sign-in
+    /// checks its cancel and saves under it, and [`GithubAuth::cancel_sign_in`] and
+    /// [`GithubAuth::sign_out`] take it too, so a cancel and a save never interleave.
     refresh_lock: Mutex<()>,
+    /// Seconds since 1970 (a test can replace it).
+    clock: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 impl GithubAuth {
@@ -264,7 +282,30 @@ impl GithubAuth {
             store,
             sleeping: true,
             refresh_lock: Mutex::new(()),
+            clock: Arc::new(unix_now),
         }
+    }
+
+    /// Replaces the clock (tests): seconds since 1970.
+    #[doc(hidden)]
+    pub fn with_clock(mut self, clock: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    fn lock_session(&self) -> Result<std::sync::MutexGuard<'_, ()>, AuthError> {
+        self.refresh_lock
+            .lock()
+            .map_err(|_| AuthError::Store("session lock was poisoned".to_string()))
+    }
+
+    /// Stops a running [`device_sign_in_until`](Self::device_sign_in_until) that was given
+    /// `cancel`. Atomic with the sign-in's save: once this returns, that sign-in stores nothing
+    /// more (a sign-in that saved before stays signed in; [`sign_out`](Self::sign_out) undoes
+    /// it).
+    pub fn cancel_sign_in(&self, cancel: &AtomicBool) {
+        let _guard = self.lock_session();
+        cancel.store(true, Ordering::SeqCst);
     }
 
     /// Makes polling and retrying skip their waits (tests).
@@ -284,6 +325,7 @@ impl GithubAuth {
 
     /// Forgets the stored session.
     pub fn sign_out(&self) -> Result<(), AuthError> {
+        let _guard = self.lock_session()?;
         self.store.delete()
     }
 
@@ -295,15 +337,12 @@ impl GithubAuth {
     /// The stored access token, refreshed first when it is about to expire. `Ok(None)` means
     /// "sign in (again)": nothing is stored, or it expired and cannot be refreshed.
     pub fn valid_token(&self) -> Result<Option<Token>, AuthError> {
-        let _guard = self
-            .refresh_lock
-            .lock()
-            .map_err(|_| AuthError::Store("refresh lock was poisoned".to_string()))?;
+        let _guard = self.lock_session()?;
         // Read the store only after taking the lock: another caller may have just refreshed.
         let Some(session) = self.store.get()?.and_then(|raw| Session::parse(&raw)) else {
             return Ok(None);
         };
-        let now = unix_now();
+        let now = (self.clock)();
         if !session.needs_refresh(now) {
             return Ok(Some(Token::new(session.access_token)));
         }
@@ -312,14 +351,30 @@ impl GithubAuth {
             log::info!("stored GitHub token expired and cannot be refreshed; sign in again");
             return Ok(None);
         };
-        let body = self.post_retrying(
+        let refreshed = self.post_retrying(
             ACCESS_TOKEN_URL,
             &[
                 ("client_id", self.client_id.as_str()),
                 ("grant_type", REFRESH_GRANT),
                 ("refresh_token", refresh_token.as_str()),
             ],
-        )?;
+            None,
+        );
+        let body = match refreshed {
+            Ok(body) => body,
+            // A network blip (or a 5xx, which `post` reports as one) in the refresh window is
+            // not a reason to sign in again: the current token still works for a while (#206).
+            // The clock is read again after the retries, and the token must have a minute left.
+            Err(AuthError::Network(message))
+                if session
+                    .expires_at
+                    .is_some_and(|at| at > (self.clock)().saturating_add(KEEP_MARGIN_SECONDS)) =>
+            {
+                log::warn!("could not refresh the GitHub token ({message}); using the current one");
+                return Ok(Some(Token::new(session.access_token)));
+            }
+            Err(error) => return Err(error),
+        };
         let answer: TokenAnswer =
             serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
         if let Some(code) = answer.error.as_deref() {
@@ -332,7 +387,11 @@ impl GithubAuth {
                 "neither a token nor an error".to_string(),
             ));
         };
-        self.save(&Session::from_answer(access_token.clone(), &answer, now))?;
+        self.save(&Session::from_answer(
+            access_token.clone(),
+            &answer,
+            (self.clock)(),
+        ))?;
         log::info!("GitHub token refreshed");
         Ok(Some(Token::new(access_token)))
     }
@@ -354,16 +413,24 @@ impl GithubAuth {
     }
 
     /// Like `post`, but retries up to `MAX_RETRIES` times on network errors and HTTP 5xx,
-    /// waiting 1, 2, then 4 seconds.
-    fn post_retrying(&self, url: &str, form: &[(&str, &str)]) -> Result<String, AuthError> {
+    /// waiting 1, 2, then 4 seconds. With `cancel`, a cancel ends it with
+    /// [`AuthError::Cancelled`] before a retry and during a wait.
+    fn post_retrying(
+        &self,
+        url: &str,
+        form: &[(&str, &str)],
+        cancel: Option<&AtomicBool>,
+    ) -> Result<String, AuthError> {
+        let cancelled = || cancel.is_some_and(|c| c.load(Ordering::SeqCst));
         let mut retries = 0;
         loop {
+            if cancelled() {
+                return Err(AuthError::Cancelled);
+            }
             match self.post(url, form) {
                 Err(AuthError::Network(message)) if retries < MAX_RETRIES => {
                     log::warn!("GitHub request failed ({message}); retrying");
-                    if self.sleeping {
-                        std::thread::sleep(Duration::from_secs(1 << retries));
-                    }
+                    self.wait(Duration::from_secs(1 << retries), cancel);
                     retries += 1;
                 }
                 other => return other,
@@ -371,12 +438,41 @@ impl GithubAuth {
         }
     }
 
+    /// Waits `time` (not at all without sleeping), in short slices so a cancel is noticed.
+    fn wait(&self, time: Duration, cancel: Option<&AtomicBool>) {
+        if !self.sleeping {
+            return;
+        }
+        let until = Instant::now() + time;
+        while !cancel.is_some_and(|c| c.load(Ordering::SeqCst)) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Signs in with GitHub's device flow: asks for a code, hands it to `ui`, then polls until the
     /// user approves. Blocks the calling thread, so run it off the UI thread. On success the
     /// session is stored and the access token returned.
     pub fn device_sign_in(&self, ui: &mut dyn DeviceFlowUi) -> Result<Token, AuthError> {
-        let body =
-            self.post_retrying(DEVICE_CODE_URL, &[("client_id", self.client_id.as_str())])?;
+        self.device_sign_in_until(ui, &AtomicBool::new(false))
+    }
+
+    /// [`device_sign_in`](Self::device_sign_in) that ends with [`AuthError::Cancelled`] soon
+    /// after `cancel` is set (checked before each request, retry and poll, and while waiting).
+    /// Cancel with [`cancel_sign_in`](Self::cancel_sign_in): the cancel check and the save
+    /// share one lock, so a token that arrives after the cancel is never stored. It is dropped,
+    /// not revoked: revoking a GitHub App user token needs the app's client secret, which no
+    /// client has; the token expires on its own.
+    pub fn device_sign_in_until(
+        &self,
+        ui: &mut dyn DeviceFlowUi,
+        cancel: &AtomicBool,
+    ) -> Result<Token, AuthError> {
+        let cancelled = || cancel.load(Ordering::SeqCst);
+        let body = self.post_retrying(
+            DEVICE_CODE_URL,
+            &[("client_id", self.client_id.as_str())],
+            Some(cancel),
+        )?;
         let code: DeviceCodeAnswer =
             serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
         log::info!("GitHub device sign-in started; waiting for approval");
@@ -386,11 +482,15 @@ impl GithubAuth {
         let lifetime = Duration::from_secs(code.expires_in);
         let mut interval = code.interval.max(MIN_POLL_SECONDS);
         loop {
+            if cancelled() {
+                return Err(AuthError::Cancelled);
+            }
             if started.elapsed() >= lifetime {
                 return Err(AuthError::Expired);
             }
-            if self.sleeping {
-                std::thread::sleep(Duration::from_secs(interval));
+            self.wait(Duration::from_secs(interval), Some(cancel));
+            if cancelled() {
+                return Err(AuthError::Cancelled);
             }
             let body = self.post_retrying(
                 ACCESS_TOKEN_URL,
@@ -399,11 +499,23 @@ impl GithubAuth {
                     ("device_code", code.device_code.as_str()),
                     ("grant_type", DEVICE_GRANT),
                 ],
+                Some(cancel),
             )?;
             let answer: TokenAnswer =
                 serde_json::from_str(&body).map_err(|e| AuthError::BadResponse(e.to_string()))?;
             if let Some(value) = answer.access_token.clone() {
-                self.save(&Session::from_answer(value.clone(), &answer, unix_now()))?;
+                // One lock with `cancel_sign_in`: cancelled first and nothing is saved, or saved
+                // first and the cancel comes after a finished sign-in.
+                let _guard = self.lock_session()?;
+                if cancelled() {
+                    log::info!("a GitHub token arrived after the sign-in was cancelled; dropped");
+                    return Err(AuthError::Cancelled);
+                }
+                self.save(&Session::from_answer(
+                    value.clone(),
+                    &answer,
+                    (self.clock)(),
+                ))?;
                 log::info!("GitHub sign-in finished; session stored");
                 return Ok(Token::new(value));
             }

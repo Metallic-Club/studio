@@ -17,6 +17,12 @@
 //!   editable for [`EDIT_DELTA_TIME`] (click it or press Enter).
 //! - **Pivot edit** (P): the gizmo moves the pivot; its 27 snap points show as dots, a click
 //!   puts the pivot on one.
+//! - **Play**: while a session with a [`PlayView`](crate::play::PlayView) runs, the viewport draws
+//!   that game every frame with the game camera, character and ScreenGuis instead of the edit
+//!   world, framed by a thin `success` line. Picking, gizmos, body drags, the editable drag
+//!   readout and the fly camera are off; the editor sends keyboard and mouse to the game
+//!   ([`crate::play::input`]). Exposure adaptation restarts when Play starts and after Stop. The
+//!   edit world is then drawn again from the editor camera, which Play never moved.
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +38,7 @@ use crate::editor::{EditorState, Space, Tool, UiRequest};
 use crate::gizmo::{self, DragInput, DragModifiers, GizmoDrag, GizmoFrame, Handle, Lock};
 use crate::picking::Hit;
 use crate::snapping::{self, SnapKind};
+use crate::theme;
 use crate::tokens::ui_tokens;
 use crate::transform::{Aabb, from_d};
 
@@ -145,6 +152,23 @@ struct LastDrag {
     editing: Option<String>,
 }
 
+/// What a drag that made an undo step did, for the first-time hints (spec 14.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinishedDrag {
+    /// The axis of an axis-handle move.
+    pub axis: Option<usize>,
+    /// A body drag (not a handle).
+    pub body: bool,
+    /// Grid snapping was off.
+    pub snapping_off: bool,
+    /// The moved parts' box does not start on the move increment.
+    pub off_grid: bool,
+    /// A moved corner ended near (within 0.2 studs) but not on another part's corner.
+    pub near_corner: bool,
+    /// The one part moved, with its new height, when the drag moved a single part.
+    pub one: Option<(InstanceId, f64)>,
+}
+
 /// How long the delta of the last drag stays editable.
 pub const EDIT_DELTA_TIME: Duration = Duration::from_secs(5);
 
@@ -172,7 +196,16 @@ pub struct Viewport {
     /// Ray pick under the pointer, reused while pointer, world and camera are unchanged, so an
     /// idle pointer does not scan every part each frame.
     hover_pick: Option<(HoverKey, Option<Hit>)>,
+    /// The pointer was over the viewport in the last play frame (input goes to the game).
+    play_hovered: bool,
+    /// The last frame drew a play session (the renderer holds the play world and avatar).
+    showing_play: bool,
     delta_rect: Option<Rect>,
+    /// The camera is being flown, panned or orbited this frame.
+    navigating: bool,
+    finished: Option<FinishedDrag>,
+    /// Collisions for the current drag (built when it starts).
+    guard: Option<crate::collisions::Guard>,
 }
 
 type HoverKey = (Pos2, metallic_core::ChangeCursor, EditorCamera, Rect);
@@ -214,8 +247,27 @@ impl Viewport {
             gpu_missing_logged: false,
             last_rect: Rect::NOTHING,
             hover_pick: None,
+            play_hovered: false,
+            showing_play: false,
             delta_rect: None,
+            navigating: false,
+            finished: None,
+            guard: None,
         }
+    }
+
+    /// True when the pointer was over the viewport in the last play frame.
+    pub fn play_hovered(&self) -> bool {
+        self.showing_play && self.play_hovered
+    }
+
+    /// Cancels a gizmo or body drag in progress, putting the parts back, and closes the editable
+    /// readout of the last drag (Play starting: nothing may edit the world until Stop).
+    pub fn cancel_drag(&mut self, state: &mut EditorState) {
+        self.cancel(state);
+        self.last_drag = None;
+        self.delta_rect = None;
+        self.press = Press::None;
     }
 
     /// The part under the cursor last frame.
@@ -243,13 +295,27 @@ impl Viewport {
         self.drag.is_some()
     }
 
+    /// The last drag that made an undo step, once (for the hints).
+    pub fn take_finished(&mut self) -> Option<FinishedDrag> {
+        self.finished.take()
+    }
+
+    /// True during a drag, a box selection or camera flight: floating UI (the contextual toolbar,
+    /// hints) stays out of the way.
+    pub fn is_busy(&self) -> bool {
+        self.drag.is_some() || matches!(self.press, Press::Box { .. }) || self.navigating
+    }
+
     /// True while the last drag's delta field takes typing.
     pub fn is_editing_delta(&self) -> bool {
-        self.last_drag.as_ref().is_some_and(|l| l.editing.is_some())
+        !self.showing_play && self.last_drag.as_ref().is_some_and(|l| l.editing.is_some())
     }
 
     /// Drag value and snap target for the status line.
     pub fn status(&self, state: &EditorState) -> Option<ViewportStatus> {
+        if state.play.is_playing() {
+            return None;
+        }
         if let Some(d) = &self.drag {
             let snap = d.snap.and_then(|s| {
                 let owner = s.owner?;
@@ -401,6 +467,13 @@ impl Viewport {
         state: &mut EditorState,
         render_state: Option<&egui_wgpu::RenderState>,
     ) {
+        if state.play.view().is_some() {
+            self.play_ui(ui, state, render_state);
+            return;
+        }
+        if self.showing_play {
+            self.leave_play();
+        }
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         self.last_rect = rect;
@@ -675,7 +748,79 @@ impl Viewport {
         last.editing = Some(text);
     }
 
-    fn render(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>, px: (u32, u32)) {
+    /// Draws the running game: every frame, from the game camera, GUI on top.
+    fn play_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &EditorState,
+        render_state: Option<&egui_wgpu::RenderState>,
+    ) {
+        let rect = ui.available_rect_before_wrap();
+        let response = ui.allocate_rect(rect, Sense::click_and_drag());
+        self.last_rect = rect;
+        self.play_hovered = response.hovered() || response.dragged();
+        let first = !self.showing_play;
+        self.showing_play = true;
+        self.rendered = None;
+        self.hovered_part = None;
+        self.hovered_handle = None;
+        let ppp = ui.ctx().pixels_per_point();
+        let px = (
+            ((rect.width() * ppp).round() as u32).max(1),
+            ((rect.height() * ppp).round() as u32).max(1),
+        );
+        if self.ensure_gpu(state, render_state)
+            && let Some(gpu) = &mut self.gpu
+        {
+            gpu.ensure_target(px);
+            if first {
+                // A camera cut: meter the game's first frame afresh.
+                gpu.renderer.reset_exposure();
+            }
+            if let (Some(view), Some((_, target, _))) = (state.play.view(), &gpu.target) {
+                view.render(&mut gpu.renderer, target, px);
+            }
+        }
+        let painter = ui.painter_at(rect);
+        match self.gpu.as_ref().and_then(|g| g.texture_id) {
+            Some(id) => {
+                painter.image(
+                    id,
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => {
+                painter.rect_filled(rect, 0.0, ui_tokens().deep);
+            }
+        }
+        if let Some(view) = state.play.view() {
+            view.paint_gui(&painter);
+        }
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            0.0,
+            Stroke::new(2.0, theme::success()),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().request_repaint();
+    }
+
+    /// Back from Play: the renderer still holds the play world and the avatar.
+    fn leave_play(&mut self) {
+        if let Some(gpu) = &mut self.gpu {
+            gpu.renderer.set_skinned(&[]);
+            gpu.renderer.reset_exposure();
+        }
+        self.rendered = None;
+        self.hover_pick = None;
+        self.showing_play = false;
+        self.play_hovered = false;
+    }
+
+    /// Creates the GPU side on first use; false (logged once) without a GPU.
+    fn ensure_gpu(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>) -> bool {
         if self.gpu.is_none() {
             match rs {
                 Some(rs) => self.gpu = Some(Gpu::new(rs)),
@@ -684,9 +829,16 @@ impl Viewport {
                         state.output.studio("No GPU renderer: the 3D view is off");
                         self.gpu_missing_logged = true;
                     }
-                    return;
+                    return false;
                 }
             }
+        }
+        true
+    }
+
+    fn render(&mut self, state: &EditorState, rs: Option<&egui_wgpu::RenderState>, px: (u32, u32)) {
+        if !self.ensure_gpu(state, rs) {
+            return;
         }
         let Some(gpu) = &mut self.gpu else { return };
         let key = (state.world.change_cursor(), self.camera, px);
@@ -715,9 +867,13 @@ impl Viewport {
             )
         });
         let over = response.hovered() || response.dragged() || response.is_pointer_button_down_on();
+        self.navigating = false;
         if !over {
             return;
         }
+        self.navigating = (secondary && self.drag.is_none())
+            || middle
+            || (alt && primary && self.drag.is_none() && matches!(self.press, Press::Alt { .. }));
         let (dx, dy) = (f64::from(delta.x), f64::from(delta.y));
         if secondary && self.drag.is_none() {
             self.camera.rotate(dx, dy);
@@ -1040,6 +1196,23 @@ impl Viewport {
                 onto_surface: vertex && mods.shift,
             };
             drag.update(&input);
+            if state.snapping.collisions {
+                if self
+                    .guard
+                    .as_ref()
+                    .is_none_or(|g| g.serial() != drag.serial())
+                {
+                    self.guard = Some(crate::collisions::Guard::for_drag(&drag, &state.picks));
+                }
+                if let Some(guard) = &mut self.guard {
+                    drag.limit(|moved| guard.blocked(moved));
+                    if guard.overloaded() {
+                        state.note(
+                            "Collisions: too many parts nearby to check; the drag is held".into(),
+                        );
+                    }
+                }
+            }
             drag.apply(&mut state.world, &mut state.preview);
         }
         if released {
@@ -1050,8 +1223,11 @@ impl Viewport {
     }
 
     fn end(&mut self, drag: GizmoDrag, state: &mut EditorState) {
+        self.guard = None;
         let keep = drag.accepts_typing().then(|| drag.clone());
+        let summary = summarise(&drag, state);
         let recorded = state.finish_drag(drag);
+        self.finished = recorded.then_some(summary);
         if !recorded && let Some(sel) = self.before_duplicate.take() {
             state.selection.set(sel);
         }
@@ -1383,5 +1559,60 @@ fn box_corners(
                 painter.line_segment([sc, e], stroke);
             }
         }
+    }
+}
+
+/// The hint-relevant facts of a drag that is about to end.
+fn summarise(drag: &GizmoDrag, state: &EditorState) -> FinishedDrag {
+    let moved = drag.current();
+    let step = state.snapping.move_step.max(1e-6);
+    let mut lo = DVec3::splat(f64::INFINITY);
+    for m in moved {
+        for c in m.corners() {
+            lo = lo.min(c);
+        }
+    }
+    let mut near_corner = false;
+    let mut tested = 0usize;
+    'outer: for m in moved.iter().take(8) {
+        for (id, other, _) in state.picks.iter() {
+            if drag.moving().contains(&id) {
+                continue;
+            }
+            tested += 1;
+            if tested > 2000 {
+                break 'outer;
+            }
+            let reach = (m.size.length() + other.size.length()) * 0.5 + 0.2;
+            if m.position.distance_squared(other.position) > reach * reach {
+                continue;
+            }
+            for a in m.corners() {
+                for b in other.corners() {
+                    let d = a.distance(b);
+                    if d > 1e-3 && d <= 0.2 {
+                        near_corner = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    let off = |v: f64| (v - (v / step).round() * step).abs() > 1e-4;
+    let mut ids = drag.part_ids();
+    let one = match (ids.next(), ids.next(), moved) {
+        (Some(id), None, [t]) => Some((id, t.position.y)),
+        _ => None,
+    };
+    FinishedDrag {
+        axis: match drag.handle {
+            crate::gizmo::Handle::Axis(a) => Some(a),
+            _ => None,
+        },
+        body: drag.handle == crate::gizmo::Handle::Body,
+        snapping_off: !state.snapping.grid,
+        off_grid: lo.is_finite() && (off(lo.x) || off(lo.y) || off(lo.z)),
+        near_corner,
+        one,
     }
 }
