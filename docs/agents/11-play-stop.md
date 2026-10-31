@@ -36,12 +36,12 @@ the Output tag is now `play` (`PLAY_TAG`), and the session owns an `InputRuntime
   `raw_input_hook` and go to the game, so egui cannot move focus or press a focused button. With the unsaved-changes
   prompt open, Esc closes the prompt and game input is released.
 - Exposure adaptation resets (`Renderer::reset_exposure`) on the first play frame and after Stop.
-- No per-frame allocation in the play path: input buffers are reused, key contexts are an array, the chip text is
-  static, `PlayStatus` text is `Cow<'static, str>`.
+- No per-frame allocation in the play path: input buffers are reused, key contexts are an array, `PlayStatus` text is `Cow<'static, str>`.
 - Play is requested with `UiRequest::StartPlay(id)`: open script tabs are committed, a Properties gesture is recorded
   and a gizmo drag cancelled before the copy is taken; then the Scene tab shows and widget focus is dropped.
-- Toolbar chip "Playing" (tooltip names the stop keys), `theme::success` on a `success-bg` plate (`widgets::Plate`);
-  #367's status bar shows the session status ("Playing"). No raw colours.
+- Playing state: #367's status bar shows the session status ("Playing", `theme::success`), the viewport has a
+  `success` frame, and Explorer and Properties carry `success-bg` banners (`widgets::Plate`). No raw colours. The
+  earlier toolbar chip and status strip are gone: the toolbar has no room left after #337, and #367 covers it.
 - Failure: a `Game::start` error goes to Output ("Could not start: ...") and Studio stays in edit mode, with a status
   note. A script that errors while loading does not fail the start (engine rule: other scripts keep running); its
   error goes to Output with the `play` tag.

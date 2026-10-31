@@ -178,8 +178,8 @@ apps.
   `EditorUi::raw_input_hook` gives Tab, Space and Enter to the game before egui can move focus or press a widget).
   While playing, `EditorState::apply/record/undo/redo` refuse, every action outside `actions::PLAY_SAFE` (Play,
   Stop, Save, Settings) and its accessory is disabled, gizmos, body drags and the editable drag readout are off,
-  Properties and the script editor are read-only, the toolbar shows a "Playing" chip (theme `success` tokens) and
-  the status bar the session's `PlayStatus`. Esc with the unsaved-changes prompt open answers the prompt. Exposure
+  Properties and the script editor are read-only, the status bar shows the session's `PlayStatus` ("Playing", theme
+  `success`) and the viewport a `success` frame. Esc with the unsaved-changes prompt open answers the prompt. Exposure
   adaptation resets when Play starts and after Stop. Play is asked for with `UiRequest::StartPlay`, so open script
   tabs and gestures commit first. Stop (`EditorState::stop_play`) drops the session; a start error goes to Output
   and Studio stays in edit mode.

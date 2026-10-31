@@ -211,24 +211,7 @@ impl Explorer {
         let caret = egui::Rect::from_center_size(egui::pos2(x0 + 7.0, cy), Vec2::splat(14.0));
         if row.has_children {
             let open = self.expanded.contains(&row.id) || !self.filter.is_empty();
-            let pts = if open {
-                vec![
-                    egui::pos2(caret.left() + 3.0, cy - 2.0),
-                    egui::pos2(caret.right() - 3.0, cy - 2.0),
-                    egui::pos2(caret.center().x, cy + 3.0),
-                ]
-            } else {
-                vec![
-                    egui::pos2(caret.center().x - 2.0, caret.top() + 3.0),
-                    egui::pos2(caret.center().x + 3.0, cy),
-                    egui::pos2(caret.center().x - 2.0, caret.bottom() - 3.0),
-                ]
-            };
-            painter.add(egui::Shape::convex_polygon(
-                pts,
-                ui_tokens().text_dim,
-                Stroke::NONE,
-            ));
+            paint_caret(&painter, caret, open);
         }
         let class = state.world.class_name(row.id).unwrap_or("?");
         crate::icons::paint_class(
@@ -439,6 +422,29 @@ fn meta_text(state: &EditorState, id: InstanceId, class: &str) -> Option<String>
     }
 }
 
+/// The open / closed caret of a tree row with children.
+fn paint_caret(painter: &egui::Painter, caret: egui::Rect, open: bool) {
+    let (c, cy) = (caret.center().x, caret.center().y);
+    let pts = if open {
+        [
+            egui::pos2(caret.left() + 3.0, cy - 2.0),
+            egui::pos2(caret.right() - 3.0, cy - 2.0),
+            egui::pos2(c, cy + 3.0),
+        ]
+    } else {
+        [
+            egui::pos2(c - 2.0, caret.top() + 3.0),
+            egui::pos2(c + 3.0, cy),
+            egui::pos2(c - 2.0, caret.bottom() - 3.0),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(
+        pts.to_vec(),
+        ui_tokens().text_dim,
+        Stroke::NONE,
+    ));
+}
+
 /// The play world as a read-only tree, shown in place of the Explorer while a session runs.
 ///
 /// Rows open and close (Workspace and Players start open) but nothing can be selected, renamed,
@@ -512,29 +518,24 @@ impl PlayTree {
                         Vec2::new(ui.available_width(), t.row_height),
                         Sense::hover(),
                     );
-                    let x = rect.min.x + row.depth as f32 * t.indent;
-                    let arrow = egui::Rect::from_min_size(
-                        egui::pos2(x, rect.min.y),
-                        Vec2::splat(t.row_height),
-                    );
+                    // Same layout as the edit tree's rows.
+                    let x0 = rect.min.x + 4.0 + row.depth as f32 * t.indent;
+                    let cy = rect.center().y;
+                    let caret =
+                        egui::Rect::from_center_size(egui::pos2(x0 + 7.0, cy), Vec2::splat(14.0));
                     if row.has_children {
                         let resp = ui.interact(
-                            arrow,
-                            ui.scope_id().with(("play-arrow", row.id)),
+                            caret,
+                            ui.scope_id().with(("play-caret", row.id)),
                             Sense::click(),
                         );
-                        let open = if self.expanded.contains(&row.id) {
-                            1.0
-                        } else {
-                            0.0
-                        };
-                        egui::collapsing_header::paint_default_icon(ui, open, &resp);
+                        paint_caret(ui.painter(), caret, self.expanded.contains(&row.id));
                         if resp.clicked() {
                             toggle = Some(row.id);
                         }
                     }
-                    let icon = egui::Rect::from_min_size(
-                        egui::pos2(arrow.max.x, rect.center().y - t.icon_size / 2.0),
+                    let icon = egui::Rect::from_center_size(
+                        egui::pos2(x0 + 24.0, cy),
                         Vec2::splat(t.icon_size),
                     );
                     let class = world.class_name(row.id).unwrap_or("?");
@@ -544,7 +545,7 @@ impl PlayTree {
                         _ => class,
                     };
                     ui.painter().text(
-                        egui::pos2(icon.max.x + 6.0, rect.center().y),
+                        egui::pos2(x0 + 36.0, cy),
                         egui::Align2::LEFT_CENTER,
                         name,
                         t.body(),

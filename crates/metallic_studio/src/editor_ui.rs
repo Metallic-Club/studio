@@ -10,8 +10,8 @@
 //! **While playing** Studio's keys are dispatched first each frame (Global and Play contexts:
 //! Esc and Shift+F5 stop; a disabled action leaves its key alone), then the rest of the keyboard,
 //! Tab, Space and Enter included, and the mouse over the viewport go to the game
-//! ([`PlayInput`]), then the session advances and the viewport draws it. The toolbar shows a
-//! "Playing" chip and the status bar the play state, Explorer shows the play world read-only,
+//! ([`PlayInput`]), then the session advances and the viewport draws it. #367's status bar shows
+//! "Playing" in `success`, the viewport has a `success` frame, Explorer shows the play world read-only,
 //! and Properties, Insert, the script editor and every editing action are off until Stop.
 use eframe::egui::{self, Frame, Margin, RichText};
 use eframe::egui_wgpu;
@@ -283,18 +283,6 @@ impl EditorUi {
         }
     }
 
-    /// "Shift+F5 or Escape", from the keymap (built only when the chip's tooltip shows).
-    fn stop_keys(&self) -> String {
-        let keys: Vec<String> = self
-            .keymap
-            .bindings()
-            .iter()
-            .filter(|b| b.action == "play.stop")
-            .map(|b| b.chord.label())
-            .collect();
-        keys.join(" or ")
-    }
-
     fn requests(&mut self, ctx: &egui::Context) {
         for r in self.state.take_requests() {
             match r {
@@ -509,11 +497,6 @@ impl EditorUi {
                     ui.separator();
                     self.actions
                         .toolbar(ui, ToolbarGroup::Play, &mut self.state, &self.keymap);
-                    if playing {
-                        playing_chip(ui, "Playing").on_hover_ui(|ui| {
-                            ui.label(format!("Editing is off. {} stops.", self.stop_keys()));
-                        });
-                    }
                 });
             });
 
@@ -705,21 +688,6 @@ impl EditorUi {
         }
         exit
     }
-}
-
-/// The toolbar's "Playing" chip: `success` text on a `success-bg` plate.
-fn playing_chip(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let galley =
-        ui.painter()
-            .layout_no_wrap(text.to_string(), ui_tokens().body(), theme::success());
-    let pad = egui::vec2(8.0, 3.0);
-    let (rect, response) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
-    Plate::raised()
-        .fill(theme::success_bg())
-        .paint(ui.painter(), rect);
-    ui.painter()
-        .galley(rect.min + pad, galley, theme::success());
-    response
 }
 
 /// A full-width note at the top of a panel while playing.
