@@ -302,9 +302,11 @@ impl ApiState {
                     // The log is trimmed by its readers, so this needs hundreds of thousands of
                     // unread changes: say so instead of dropping the events silently.
                     TagChanges::Overflow => {
-                        self.tags.cursor.set(world.tag_cursor());
+                        // Continue with the oldest change the log kept: only the dropped ones
+                        // are lost.
+                        self.tags.cursor.set(world.tag_oldest_cursor());
                         self.sink
-                            .warn("tag events were lost: too many tag changes in one step");
+                            .warn("tag events were lost: too many unread tag changes");
                         return;
                     }
                     TagChanges::Changes(page) => (page, cursor, carrier),
