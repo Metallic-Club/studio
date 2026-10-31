@@ -45,6 +45,31 @@ class VpkVersionTests(unittest.TestCase):
         self.assertIsNone(release.vpk_version_from_help("Usage:\n  vpk [command]\n"))
 
 
+class StagedBinaryTests(unittest.TestCase):
+    """Staged file names must be real [[bin]] names, or the release build fails after compiling."""
+
+    @staticmethod
+    def bin_names(package):
+        import tomllib
+        text = (release.ROOT / "crates" / package / "Cargo.toml").read_text(encoding="utf-8")
+        return {b["name"] for b in tomllib.loads(text).get("bin", [])}
+
+    def test_studio_exe_is_its_bin(self):
+        self.assertIn(release.STUDIO_BUILT_EXE.removesuffix(".exe"), self.bin_names(release.CARGO_BIN))
+
+    def test_studio_ships_its_templates(self):
+        # A fresh install otherwise shows "No templates found" on the start screen.
+        self.assertIn("templates", release.STUDIO_FOLDERS)
+        self.assertTrue(any((release.ROOT / "templates").glob("*/template.toml")))
+        for folder in release.STUDIO_FOLDERS:
+            self.assertTrue((release.ROOT / folder).is_dir(), folder)
+
+    def test_launcher_files_are_bins(self):
+        bins = set().union(*(self.bin_names(p) for p in release.LAUNCHER_CARGO_PACKAGES))
+        for built, _ in release.LAUNCHER_FILES:
+            self.assertIn(built.removesuffix(".exe"), bins)
+
+
 class PackCommandTests(unittest.TestCase):
     ARGS = ("vpk", "STAGE", "ICON", "NOTES")
 
@@ -56,6 +81,13 @@ class PackCommandTests(unittest.TestCase):
             ["vpk", "pack", "--packId", "MetallicStudio", "--packVersion", "0.1.0", "--packDir", "STAGE",
              "--mainExe", "Metallic Studio.exe", "--packTitle", "Metallic Studio", "--icon", "ICON",
              "--runtime", "win-x64", "--channel", "dev", "--outputDir", out, "--releaseNotes", "NOTES"])
+
+    def test_studio_pack_title_is_never_a_bare_metallic(self):
+        # A bare "Metallic" title would overwrite another app's Metallic.lnk shortcut.
+        self.assertEqual(release.PACK_TITLE, "Metallic Studio")
+        self.assertEqual(release.PACK_ID, "MetallicStudio")
+        cmd = release.pack_command("vpk", "studio", "0.1.0", "dev", "S", "I", "N")
+        self.assertNotEqual(cmd[cmd.index("--packTitle") + 1].strip().lower(), "metallic")
 
     def test_launcher_pack_line(self):
         vpk, stage, icon, notes = self.ARGS
@@ -89,7 +121,7 @@ class PackCommandTests(unittest.TestCase):
         out = subprocess.run([sys.executable, str(Path(release.__file__)), "--channel", "dev",
                               "--version", version, "--dry-run"], capture_output=True, text=True, check=True).stdout
         self.assertIn("+ cargo build --release -p metallic_studio -j 4", out)
-        self.assertIn("+ stage metallic_studio.exe as Metallic Studio.exe in ", out)
+        self.assertIn("+ stage metallic-studio.exe as Metallic Studio.exe in ", out)
         self.assertIn(f"--tag v{version}-dev --releaseName \"Metallic Studio {version} (dev)\" --publish --token <token> --pre", out)
         self.assertNotIn("--framework", out)
         self.assertIn("--runtime win-x64", out)

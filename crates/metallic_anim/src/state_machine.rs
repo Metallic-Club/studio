@@ -14,6 +14,10 @@
 //!   the end of the next update, whichever comes first (no stale triggers hours later).
 //! - A new transition may start while a blend is running; the old blend is dropped and the
 //!   current mix fades out as one.
+//! - The outgoing mix keeps playing while it fades out (at the rate its state had when the
+//!   transition fired), so a crossfade never holds a frozen pose.
+//! - [`StateMachinePlayer::update`] and [`StateMachinePlayer::motion_samples_into`] do not
+//!   allocate once the player has run through its transitions (buffers are reused).
 
 use crate::AnimError;
 use crate::clip::Clip;
@@ -179,6 +183,8 @@ struct Fading {
     samples: Vec<MotionSample>,
     elapsed: f32,
     duration: f32,
+    /// Clip seconds per second for the outgoing samples.
+    rate: f32,
 }
 
 /// Runs a [`StateMachine`] over a fixed list of clips.
@@ -193,6 +199,8 @@ pub struct StateMachinePlayer {
     current: Active,
     fading: Option<Fading>,
     rate: f32,
+    /// Reused buffer for the next outgoing mix.
+    spare: Vec<MotionSample>,
 }
 
 impl StateMachinePlayer {
@@ -310,6 +318,7 @@ impl StateMachinePlayer {
             },
             fading: None,
             rate: 1.0,
+            spare: Vec::new(),
         })
     }
 
@@ -397,8 +406,15 @@ impl StateMachinePlayer {
         };
         if let Some(f) = &mut self.fading {
             f.elapsed += dt;
-            if f.elapsed >= f.duration {
-                self.fading = None;
+            for s in &mut f.samples {
+                if let Some(c) = self.clips.get(s.clip) {
+                    s.time = c.local_time(s.time + dt * f.rate);
+                }
+            }
+            if f.elapsed >= f.duration
+                && let Some(done) = self.fading.take()
+            {
+                self.spare = done.samples;
             }
         }
         let mut entered = None;
@@ -430,20 +446,28 @@ impl StateMachinePlayer {
                 }
             }
             // A fade still running keeps fading out inside the new one, so the pose does not pop.
-            let outgoing = if self.fading.is_some() {
-                self.motion_samples()
+            let mut outgoing = std::mem::take(&mut self.spare);
+            if self.fading.is_some() {
+                self.motion_samples_into(&mut outgoing);
             } else {
-                self.samples()
-            };
-            self.fading = if t.blend_time > 0.0 {
-                Some(Fading {
+                outgoing.clear();
+                self.samples_into(&mut outgoing);
+            }
+            let rate = speed * self.rate;
+            let old = if t.blend_time > 0.0 {
+                self.fading.replace(Fading {
                     samples: outgoing,
                     elapsed: 0.0,
                     duration: t.blend_time,
+                    rate,
                 })
             } else {
-                None
+                self.spare = outgoing;
+                self.fading.take()
             };
+            if let Some(old) = old {
+                self.spare = old.samples;
+            }
             self.current = Active {
                 state: t.to,
                 progress: 0.0,
@@ -494,8 +518,7 @@ impl StateMachinePlayer {
         }
     }
 
-    fn samples(&self) -> Vec<MotionSample> {
-        let mut out = Vec::new();
+    fn samples_into(&self, out: &mut Vec<MotionSample>) {
         let p = self.current.progress;
         let at = |clip: usize, weight: f32| {
             let c = self.clips.get(clip);
@@ -521,14 +544,22 @@ impl StateMachinePlayer {
             }
             None => {}
         }
-        out
     }
 
     /// The clips to blend for the current frame, with weights adding up to 1. During a
-    /// crossfade the outgoing mix fades out. It is frozen at the moment the transition fired, so
-    /// the fade needs no second playhead.
+    /// crossfade the outgoing mix fades out while it keeps playing.
     pub fn motion_samples(&self) -> Vec<MotionSample> {
-        let mut current = self.samples();
+        let mut out = Vec::new();
+        self.motion_samples_into(&mut out);
+        out
+    }
+
+    /// [`Self::motion_samples`] into a reused buffer (cleared first): no allocation once `out`
+    /// has grown to the largest mix (at most 2 samples per nested fade level).
+    pub fn motion_samples_into(&self, out: &mut Vec<MotionSample>) {
+        out.clear();
+        self.samples_into(out);
+        let current = out;
         if let Some(f) = &self.fading {
             let u = if f.duration > 0.0 {
                 (f.elapsed / f.duration).clamp(0.0, 1.0)
@@ -537,7 +568,7 @@ impl StateMachinePlayer {
             };
             // Smoothstep, so a fade eases in and out instead of starting and stopping at full rate.
             let w_in = u * u * (3.0 - 2.0 * u);
-            for s in &mut current {
+            for s in current.iter_mut() {
                 s.weight *= w_in;
             }
             current.extend(f.samples.iter().map(|s| MotionSample {
@@ -546,7 +577,6 @@ impl StateMachinePlayer {
             }));
         }
         current.retain(|s| s.weight > 0.0);
-        current
     }
 
     /// The clips, as given to [`StateMachinePlayer::new`].

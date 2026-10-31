@@ -4,6 +4,8 @@
 //! Layout follows Roblox: each element's `Position` and `Size` are `UDim2`s, a fraction of the
 //! parent's rectangle plus an offset in pixels (egui points). The screen is the parent of a
 //! ScreenGui's children. A disabled ScreenGui or an invisible Frame hides its whole subtree.
+//! A top inset (the Player's touch menu button, [`crate::Game::set_gui_inset`]) moves the
+//! ScreenGuis' screen down and makes it shorter by that much.
 //! `BackgroundTransparency` 1 draws no background; a TextLabel's `Text` is centred in its
 //! rectangle in `TextColor3` at `TextSize` points.
 //!
@@ -66,13 +68,19 @@ pub fn local_player_gui(world: &World) -> Option<InstanceId> {
         .find(|&c| world.is_a(c, "PlayerGui"))
 }
 
-/// Everything the local player's GUI shows on a `screen` of width x height points, back to front.
-pub fn layout(world: &World, screen: [f32; 2]) -> Vec<GuiItem> {
+/// Everything the local player's GUI shows on a `screen` of width x height points, back to front,
+/// with the top `inset` points left free.
+pub fn layout(world: &World, screen: [f32; 2], inset: f32) -> Vec<GuiItem> {
     let mut out = Vec::new();
     let Some(gui) = local_player_gui(world) else {
         return out;
     };
-    let full = [0.0, 0.0, screen[0], screen[1]];
+    let top = if inset.is_finite() {
+        inset.clamp(0.0, screen[1].max(0.0))
+    } else {
+        0.0
+    };
+    let full = [0.0, top, screen[0], screen[1] - top];
     for &sg in world.children(gui) {
         if world.is_a(sg, "ScreenGui") && flag(world, sg, "Enabled") {
             for &child in world.children(sg) {
@@ -122,10 +130,11 @@ fn add_element(world: &World, id: InstanceId, parent: [f32; 4], out: &mut Vec<Gu
     }
 }
 
-/// Draws the local player's GUI over the painter's clip rectangle (the whole 3D view).
-pub fn paint(world: &World, painter: &Painter) {
+/// Draws the local player's GUI over the painter's clip rectangle (the whole 3D view), below a
+/// top `inset` in points.
+pub fn paint(world: &World, painter: &Painter, inset: f32) {
     let area = painter.clip_rect();
-    for item in layout(world, [area.width(), area.height()]) {
+    for item in layout(world, [area.width(), area.height()], inset) {
         let rect = Rect::from_min_size(
             area.min + egui::vec2(item.rect[0], item.rect[1]),
             egui::vec2(item.rect[2], item.rect[3]),
@@ -184,7 +193,7 @@ mod tests {
     #[test]
     fn udim2_is_scale_of_parent_plus_offset() {
         let (w, _, _) = world_with_label();
-        let items = layout(&w, [1000.0, 500.0]);
+        let items = layout(&w, [1000.0, 500.0], 0.0);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].rect, [400.0, 20.0, 200.0, 50.0]);
         assert_eq!(items[1].rect, [400.0, 20.0, 200.0, 50.0]);
@@ -196,13 +205,28 @@ mod tests {
         );
     }
 
+    /// #333: with the touch menu button showing, the GUI's screen starts below it.
+    #[test]
+    fn a_top_inset_moves_the_screen_down() {
+        let (w, _, _) = world_with_label();
+        let items = layout(&w, [1000.0, 500.0], 100.0);
+        // 20 points below the 100-point inset, 10% of the 400 points left.
+        assert_eq!(items[0].rect, [400.0, 120.0, 200.0, 40.0]);
+        let none = layout(&w, [1000.0, 500.0], f32::NAN);
+        assert_eq!(
+            none[0].rect,
+            [400.0, 20.0, 200.0, 50.0],
+            "a bad inset is none"
+        );
+    }
+
     #[test]
     fn hidden_frames_and_disabled_screen_guis_draw_nothing() {
         let (mut w, sg, frame) = world_with_label();
         w.set(frame, "Visible", Value::Bool(false)).unwrap();
-        assert!(layout(&w, [800.0, 600.0]).is_empty());
+        assert!(layout(&w, [800.0, 600.0], 0.0).is_empty());
         w.set(frame, "Visible", Value::Bool(true)).unwrap();
         w.set(sg, "Enabled", Value::Bool(false)).unwrap();
-        assert!(layout(&w, [800.0, 600.0]).is_empty());
+        assert!(layout(&w, [800.0, 600.0], 0.0).is_empty());
     }
 }

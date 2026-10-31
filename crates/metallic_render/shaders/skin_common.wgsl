@@ -14,6 +14,8 @@ struct SkinIn {
     @location(2) joints: vec4<u32>,
     @location(3) weights: vec4<f32>,
     @location(4) slot: u32,
+    // Normal averaged over every vertex at this position (no hard edges), for the outline.
+    @location(5) smooth_n: vec3<f32>,
 }
 
 // Linear blend skinning: the weighted sum of the vertex's joint matrices (weights sum to 1).
