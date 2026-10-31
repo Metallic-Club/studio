@@ -48,6 +48,7 @@ pub mod icons;
 pub mod input_actions;
 pub mod keymap;
 pub mod output;
+pub mod panel;
 pub mod picking;
 pub mod play;
 pub mod png_image;

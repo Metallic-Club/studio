@@ -19,6 +19,7 @@ use eframe::egui::{
 };
 use metallic_tokens::consts as tk;
 
+use crate::icons::{self, Icon};
 use crate::theme::{self, fonts};
 use crate::widgets::{cut, plate::Plate};
 
@@ -57,6 +58,8 @@ pub struct Button<'a> {
     compact: bool,
     show_as: Option<ShowAs>,
     alt: Option<&'a str>,
+    glyph: Option<Icon>,
+    selected: bool,
 }
 
 /// Fills and ink for one button state.
@@ -83,6 +86,8 @@ impl<'a> Button<'a> {
             compact: false,
             show_as: None,
             alt: None,
+            glyph: None,
+            selected: false,
         }
     }
 
@@ -109,6 +114,18 @@ impl<'a> Button<'a> {
     /// A 16 px Phosphor icon before the text.
     pub fn icon(mut self, icon: char) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// One of the editor's drawn toolbar icons (16 px) before the text.
+    pub fn glyph(mut self, glyph: Icon) -> Self {
+        self.glyph = Some(glyph);
+        self
+    }
+
+    /// Draws a toggle that is on (a ghost button keeps `bg-active` and `text-1`).
+    pub fn selected(mut self, on: bool) -> Self {
+        self.selected = on;
         self
     }
 
@@ -251,8 +268,13 @@ impl Widget for Button<'_> {
         let gap = tk::S4;
         let pad = self.pad_x();
         let mut content = text.size().x;
-        if let Some(icon) = &icon {
-            content += icon.size().x;
+        let lead = match (&icon, self.glyph) {
+            (Some(icon), _) => Some(icon.size().x),
+            (None, Some(_)) => Some(theme::ICON_BOX),
+            _ => None,
+        };
+        if let Some(w) = lead {
+            content += w;
             if !self.text.is_empty() {
                 content += gap;
             }
@@ -284,8 +306,13 @@ impl Widget for Button<'_> {
         } else {
             rect
         };
-        let fill = colors
-            .rest
+        let on = enabled && self.selected;
+        let rest = if on && self.kind == Kind::Ghost {
+            theme::bg_active()
+        } else {
+            colors.rest
+        };
+        let fill = rest
             .lerp_to_gamma(colors.hover, hover)
             .lerp_to_gamma(colors.press, press);
         let painter = ui.painter();
@@ -301,6 +328,20 @@ impl Widget for Button<'_> {
         }
 
         let mut x = rect.left() + pad;
+        if let (None, Some(glyph)) = (&icon, self.glyph) {
+            let at = Rect::from_center_size(
+                egui::pos2(x + theme::ICON_BOX / 2.0, rect.center().y),
+                Vec2::splat(theme::ICON_BOX),
+            );
+            let base = if on { theme::text_1() } else { colors.icon };
+            let tint = if self.kind == Kind::Ghost {
+                base.lerp_to_gamma(colors.text_hover, hover)
+            } else {
+                base
+            };
+            icons::paint(painter, at, glyph, tint);
+            x += theme::ICON_BOX + if self.text.is_empty() { 0.0 } else { gap };
+        }
         if let Some(icon) = icon {
             let pos = egui::pos2(x, rect.center().y - icon.size().y / 2.0);
             let tint = if self.kind == Kind::Ghost {
@@ -311,7 +352,8 @@ impl Widget for Button<'_> {
             x += icon.size().x + gap;
             painter.galley(pos, icon, tint);
         }
-        let ink = colors.text.lerp_to_gamma(colors.text_hover, hover);
+        let base_ink = if on { theme::text_1() } else { colors.text };
+        let ink = base_ink.lerp_to_gamma(colors.text_hover, hover);
         let pos = egui::pos2(x, rect.center().y - text.size().y / 2.0);
         painter.galley_with_override_text_color(pos, text, ink);
         if let Some(k) = keycap {
