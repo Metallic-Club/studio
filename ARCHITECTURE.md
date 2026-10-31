@@ -16,7 +16,8 @@ graph LR
   audio[metallic_audio] -.-> runtime
   runtime --> player[metallic_player]
   runtime --> studio[metallic_studio]
-  anim[metallic_anim] -- presentation --> runtime
+  anim[metallic_anim] --> runtime
+  asset --> runtime
   anim --> animed[metallic_anim_editor]
   animed --> studio
   egui[egui] --> uitheme[metallic_ui_theme]
@@ -139,8 +140,9 @@ apps.
   the `InputRuntime`; `gui_input.rs` hit-tests the layout (ZIndex, DisplayOrder, ClipsDescendants, Visible, Active)
   and queues `GuiEvent`s that `ScriptHost::gui_event` fires in the client VM at the next step. A press the GUI takes
   never reaches the game's input.
-  `Simulation` owns the shared CPU kernel (World, physics, characters, server/Combined ScriptHost, membership cache
-  CPU skeletal body animation and fixed-step clock). Public constructors use server-only scripts without creating a synthetic player; Game
+  `Simulation` owns the shared CPU kernel (World, physics, characters, server/Combined ScriptHost, membership cache,
+  CPU skeletal body animation and fixed-step clock). Public constructors use server-only scripts without creating
+  a synthetic player; Game
   delegates through a private Combined constructor. Trusted `PlayerInput` keys are world-local Player InstanceIds,
   not backend/wire identities; inputs are world-space, missing samples are idle and repeated samples use the last
   value. Character references resolve each server tick so respawn keeps the same Player input key. Each Player is

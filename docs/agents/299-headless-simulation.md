@@ -287,3 +287,51 @@ across zero-tick/borrowed-world frames. Upstream restart/respawn/GUI/Parkour tes
 remain in the default suite. Graph policy currently passes: 93 normal/build
 packages, no renderer/wgpu/window/egui/gilrs dependencies. Both policy unit tests
 pass. Heavy compilation and actual Lua/GPU runs are not yet recorded for this pin.
+
+
+### a0bb1bf execution and publication evidence
+
+Final tested code and fixtures: `4541ee745fcbe209d5eff102ba26319ee957de7b`,
+main pin a0bb1bfc0e84ffd637fe8d1759f4822322601cd8. The final append updates only
+this evidence note and the ARCH dependency diagram: animation/asset are now CPU
+work, while rendering remains presentation-gated. Source review of a007366 by the
+root worker coordinator found no new integration concern. A subsequent test-only
+correction accounts for server-owned characters existing before script startup:
+both foot contact start and end are observed, unlike Combined's later connection.
+This was caught before execution, not reported as a product red.
+
+- Initial CPU all-target no-run passed in 33.59s. Initial default workspace no-run
+  passed in 3m10s and strict all-target Clippy in 34.82s.
+- The next default refresh failed before tests with disk-full `os error 112` while
+  writing runtime incremental state and Studio metadata. The raw failure was
+  retained. All managed builds stopped; the coordinator reclaimed verified native
+  Cargo caches. No engine change or timeout relaxation was made for the retry.
+- Refreshed default no-run passed in 1m39s and strict workspace all-target Clippy
+  in 25.09s. Focused library/GUI/body-touch/moving-platform/Simulation/runner checks
+  passed 194 tests, zero failures or ignores across seven result groups.
+- `cargo test --workspace --locked -j 4 -- --test-threads=1` exited zero: 1,860
+  passed, zero failed, eight upstream ignores across 141 result groups including
+  doc tests. All three full Parkour routes (keyboard, gamepad, touch) passed.
+  The eighth existing ignore is the renderer device-setup stress run; no ignore
+  was added here.
+- After a separate CPU configuration refresh (all-target no-run, 5.06s), strict
+  CPU all-target Clippy passed in 19.62s. `cargo test -p metallic_runtime
+  --no-default-features --all-targets --locked -j 4 -- --test-threads=1` passed all
+  40 applicable checks, zero failures or ignores. Presentation-only targets are
+  feature-gated; the CPU library, runner, LocalInput, Simulation and bilateral
+  limb-touch cases execute. Linux CI explicitly selects the new touch target.
+- Actual CPU normal/build graph: 93 packages and no renderer/wgpu/winit/egui/gilrs.
+  Both Python graph-policy cases, licenses, format and pinned-base whitespace pass.
+
+All Cargo builds/checks used owned guarded lane121 and four build jobs. Actual
+Lua/GPU suites ran in coordinator-assigned windows; the other managed compile
+slot could remain active, so this is functional validation, not a timing or
+capacity measurement. Main's device setup serialization is preserved verbatim;
+this task makes no new crash-cause/fix claim. It supplies no transport, admission,
+joinability or M2 acceptance; #336 remains separate and blocked as recorded.
+
+Raw logs use prefix `metallic-299-a0-` and are copied with SHA-256 metadata to
+external `integration-evidence/309-main-a0bb1bf`. The failed disk-space attempt,
+successful retry, full/focused/CPU results and source provenance remain separate.
+Earlier 5c84cf7/1,539-full/18-CPU and other historical results above are unchanged.
+After publication, inspect exact-head CI; do not merge this PR from the worker.
