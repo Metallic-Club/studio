@@ -22,7 +22,17 @@ Branch `studio/22-luau-debugger`. Two PRs: (1) VM hooks and the pause/step/inspe
 - Zero overhead: callbacks are installed only while armed; unarmed resumes use mlua's path unchanged. Unit test
   `hooks_are_installed_only_while_needed`. The instructions gate (`perf_ci`) covers only `metallic_core`, and there are
   no script benches.
-- Tests: `crates/metallic_script/tests/debugger.rs` (18), `crates/metallic_runtime/tests/debugger_pause.rs`.
+- ModuleScripts: `require` tells the debugger about each compiled module chunk (breakpoints, frame names), and
+  its `pcall` does not count as handling an error, so break-on-error stops at the module's error line.
+- A breakpoint hit during a tick stops the frame's tick loop at that tick; the frame's leftover time is dropped.
+  The avatar pose holds while paused.
+- Step Over and Out across a yield (`task.wait()`) wait for that thread and stop at its next line; other threads
+  run meanwhile. Step Into across a yield stops in whatever script code runs next.
+- Code resumed after a break (coroutines, `task.spawn` spawners) and watch expressions run as the paused frame's
+  script, so their connections and threads count against that script's quotas and stop with it.
+- Single-step mode is cleared after each debugger resume. Setting a local to a value of another type is allowed
+  (Luau is dynamic) with a warning in Output.
+- Tests: `crates/metallic_script/tests/debugger.rs` (23), `crates/metallic_runtime/tests/debugger_pause.rs` (2).
 
 ## PR 2: Studio UI
 

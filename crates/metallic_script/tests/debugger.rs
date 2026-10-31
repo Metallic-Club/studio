@@ -260,7 +260,14 @@ fn set_local_changes_value_after_resume() {
     rig.host.start().unwrap();
     rig.host.debugger().set_local(1, "y", "'seven'").unwrap();
     rig.host.debugger().resume();
-    assert_eq!(rig.lines(), ["print:f", "print:seven"]);
+    assert_eq!(
+        rig.lines(),
+        [
+            "warn:debugger: y changed type from number to string",
+            "print:f",
+            "print:seven"
+        ]
+    );
 }
 
 #[test]
@@ -406,4 +413,124 @@ fn breakpoint_set_while_running_applies_to_the_loaded_script() {
     rig.host.debugger().clear_breakpoint(id, 2);
     rig.host.debugger().resume();
     assert_eq!(rig.lines().len(), 3);
+}
+
+/// A ModuleScript `Lib` under ReplicatedStorage with `source`.
+fn module(rig: &Rig, source: &str) -> InstanceId {
+    rig.add_script("ModuleScript", "Lib", rig.root("ReplicatedStorage"), source)
+}
+
+const REQUIRE_LIB: &str =
+    "local M = require(game:GetService('ReplicatedStorage').Lib)\nM.hi()\nprint('after')\n";
+
+#[test]
+fn breakpoint_in_a_required_module() {
+    let mut rig = Rig::new();
+    let lib = module(
+        &rig,
+        "local M = {}\nfunction M.hi()\n    print('hi')\nend\nreturn M\n",
+    );
+    rig.host
+        .debugger()
+        .set_breakpoint(lib, 3, Breakpoint::Plain);
+    let main = rig.server_script("Main", REQUIRE_LIB);
+    rig.host.start().unwrap();
+    match rig.host.debugger().state() {
+        DebugState::Paused { stack, .. } => {
+            assert_eq!(stack[0].script, Some(lib));
+            assert_eq!(stack[0].line, 3);
+            assert_eq!(stack[1].script, Some(main));
+            assert_eq!(stack[1].line, 2);
+        }
+        DebugState::Running => panic!("not paused in the module"),
+    }
+    rig.host.debugger().resume();
+    assert_eq!(rig.lines(), ["print:hi", "print:after"]);
+}
+
+#[test]
+fn break_on_error_stops_inside_a_module() {
+    let mut rig = Rig::new();
+    let lib = module(&rig, "local t = nil\nreturn t.field\n");
+    rig.server_script("Main", REQUIRE_LIB);
+    rig.host.debugger().break_on_error(true);
+    rig.host.start().unwrap();
+    match rig.host.debugger().state() {
+        DebugState::Paused { reason, stack } => {
+            assert!(matches!(reason, PauseReason::Error(_)), "{reason:?}");
+            assert_eq!((stack[0].script, stack[0].line), (Some(lib), 2));
+        }
+        DebugState::Running => panic!("the module's error did not pause"),
+    }
+    rig.host.debugger().resume();
+    assert!(!rig.host.is_paused());
+    let lines = rig.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("error:") && l.contains("field")),
+        "{lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.contains("after")), "{lines:?}");
+}
+
+#[test]
+fn step_over_a_wait_stops_on_the_next_line_of_the_same_thread() {
+    let (mut rig, _) = rig_with(
+        "game:GetService('RunService').Heartbeat:Connect(function() local _ = 1 end)\nprint('a')\ntask.wait(0.05)\nprint('b')\n",
+        &[(3, Breakpoint::Plain)],
+    );
+    rig.host.start().unwrap();
+    assert_eq!(paused_at(&mut rig).map(|p| p.0), Some(3));
+    rig.host.debugger().step_over();
+    // The thread sleeps: the game runs (the handler included) without stopping in it.
+    assert!(!rig.host.is_paused());
+    let now = rig.run(0.0, 1);
+    assert!(
+        !rig.host.is_paused(),
+        "Step Over does not stop in other threads"
+    );
+    rig.run(now, 10);
+    assert_eq!(paused_at(&mut rig), Some((4, PauseReason::Step)));
+    assert_eq!(rig.lines(), ["print:a"]);
+    rig.host.debugger().resume();
+    assert_eq!(rig.lines(), ["print:a", "print:b"]);
+    rig.run(1.0, 5);
+    assert!(!rig.host.is_paused(), "the step is over");
+}
+
+#[test]
+fn code_resumed_after_a_break_keeps_its_script() {
+    let (mut rig, id) = rig_with(
+        "local co = coroutine.create(function()\n    print('co')\n    game:GetService('RunService').Heartbeat:Connect(function() print('beat') end)\nend)\ncoroutine.resume(co)\n",
+        &[(2, Breakpoint::Plain)],
+    );
+    rig.host.start().unwrap();
+    assert!(rig.host.is_paused());
+    rig.host.debugger().resume();
+    let now = rig.run(0.0, 1);
+    assert_eq!(rig.lines(), ["print:co", "print:beat"]);
+    // The connection belongs to the script: removing the script ends it.
+    rig.world.borrow_mut().destroy(id);
+    rig.run(now, 3);
+    assert_eq!(rig.lines(), ["print:co", "print:beat"]);
+}
+
+#[test]
+fn setting_a_local_to_another_type_warns() {
+    let (mut rig, _) = rig_with(
+        "local x = tonumber('1')\nprint(x)\n",
+        &[(2, Breakpoint::Plain)],
+    );
+    rig.host.start().unwrap();
+    rig.host.debugger().set_local(0, "x", "'one'").unwrap();
+    rig.host.debugger().resume();
+    let lines = rig.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("x changed type from number to string")),
+        "{lines:?}"
+    );
+    assert_eq!(lines.last().map(String::as_str), Some("print:one"));
 }

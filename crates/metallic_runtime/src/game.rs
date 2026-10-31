@@ -3,6 +3,7 @@ use crate::RuntimeError;
 use crate::avatar::{Avatar, default_model};
 use crate::body_pose::{CharacterBodies, locomotion_input};
 use crate::camera_controller::{CameraController, FOCUS_HEIGHT};
+use crate::gui_input::{GuiInput, PointerId, PointerPhase};
 use crate::input::{
     ActionEvent, ActionEventKind, ActionId, ActionValue, DeviceKind, FrameInput, InputRuntime,
 };
@@ -93,6 +94,8 @@ pub struct Game {
     input_device_changes: Option<u64>,
     /// Points at the top of the screen that ScreenGuis leave free (see [`Game::set_gui_inset`]).
     gui_inset: f32,
+    /// Hover and presses on the GUI (see [`Game::gui_pointer`]).
+    gui_input: GuiInput,
 }
 
 impl Game {
@@ -150,6 +153,7 @@ impl Game {
             character_gone: 0.0,
             input_device_changes: None,
             gui_inset: 0.0,
+            gui_input: GuiInput::new(),
         }
     }
 
@@ -228,6 +232,7 @@ impl Game {
         self.time = 0.0;
         self.accumulator = 0.0;
         self.character_gone = 0.0;
+        self.gui_input.reset();
         self.running = true;
         Ok(())
     }
@@ -254,6 +259,7 @@ impl Game {
     /// Stops the scripts. The world keeps its last state; the game can be dropped afterwards.
     pub fn stop(&mut self) {
         self.scripts.stop();
+        self.gui_input.reset();
         self.running = false;
     }
 
@@ -368,6 +374,10 @@ impl Game {
             0.0
         };
         self.camera.apply_input(input);
+        // The GUI events since the last frame, for the first tick's script step.
+        for event in self.gui_input.drain_events() {
+            self.scripts.gui_event(event);
+        }
         let mut ticks = 0;
         // Paused in the script debugger: the simulation (physics, characters, scripts) holds
         // still and no time accumulates; the camera and drawing go on.
@@ -382,11 +392,20 @@ impl Game {
                 }
                 self.accumulator -= TICK;
                 ticks += 1;
+                if self.scripts.is_paused() {
+                    // A breakpoint hit during this tick: the simulation stops right here, and
+                    // the frame's remaining time is dropped rather than run on Continue.
+                    self.accumulator = 0.0;
+                    break;
+                }
             }
         }
         self.scripts.end_frame();
         let state = self.character.and_then(|c| self.characters.state(c));
-        self.update_avatar(dt as f32);
+        if !self.scripts.is_paused() {
+            // The avatar's pose holds still while paused, like the simulation.
+            self.update_avatar(dt as f32);
+        }
         if state != Some(HumanoidState::Dead)
             && let Some(root) = self.root_position()
         {
@@ -461,10 +480,42 @@ impl Game {
         self.gui_inset
     }
 
-    /// Draws the local player's GUI with `painter` (see [`crate::gui`]).
+    /// Draws the local player's GUI with `painter` (see [`crate::gui`]), buttons shaded by
+    /// hover and press.
     pub fn paint_gui(&self, painter: &egui::Painter) {
         if let Ok(world) = self.world.try_borrow() {
-            crate::gui::paint(&world, painter, self.gui_inset);
+            let input = &self.gui_input;
+            crate::gui::paint_shaded(&world, painter, self.gui_inset, &|id| input.shade(id));
+        }
+    }
+
+    /// Gives a pointer event to the GUI before the game's input: the left mouse button and
+    /// position, or a finger, at `at` GUI points (window pixels over the scale factor) on a
+    /// `screen` of width x height points. Returns true when the GUI took it; the caller must
+    /// then not pass it (nor that press's moves and release) to the [`InputRuntime`], so a
+    /// click on a button never also drives the camera or a jump. The events reach the client
+    /// scripts in the next [`Game::frame`]'s first tick. Does nothing (false) while stopped.
+    pub fn gui_pointer(
+        &mut self,
+        pointer: PointerId,
+        phase: PointerPhase,
+        at: [f32; 2],
+        screen: [f32; 2],
+    ) -> bool {
+        if !self.running {
+            return false;
+        }
+        let Ok(world) = self.world.try_borrow() else {
+            return false;
+        };
+        self.gui_input
+            .pointer(&world, screen, self.gui_inset, pointer, phase, at)
+    }
+
+    /// The mouse left the window: the GUI elements under it get `MouseLeave`.
+    pub fn gui_mouse_left(&mut self, at: [f32; 2]) {
+        if self.running {
+            self.gui_input.mouse_left(at);
         }
     }
 

@@ -192,6 +192,7 @@ impl Scheduler {
     }
 
     pub(crate) fn cancel_thread(&self, thread: &Thread) {
+        self.debug.thread_gone(thread.to_pointer());
         if let Ok(Some(state)) = self.state(thread) {
             state.cancelled.set(true);
             state.queued.borrow_mut().take();

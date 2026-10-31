@@ -79,3 +79,38 @@ fn paused_game_does_not_advance_physics() {
     }
     assert!(height(&game) < y, "the crate falls again after Continue");
 }
+
+#[test]
+fn a_breakpoint_mid_frame_stops_the_remaining_ticks() {
+    let mut world = World::new_with_services();
+    let sss = world.root("ServerScriptService").unwrap();
+    let script = world.create("Script", Some(sss)).unwrap();
+    world
+        .set(
+            script,
+            "Source",
+            Value::String(
+                "local n = 0\ngame:GetService('RunService').Heartbeat:Connect(function()\n    n = n + 1\nend)\n"
+                    .into(),
+            ),
+        )
+        .unwrap();
+    let out = Rc::new(Captured::default());
+    let mut game = Game::from_world("Pause".into(), world, out);
+    game.start().unwrap();
+    game.frame(&FrameInput::default(), TICK);
+    game.debugger().set_breakpoint(script, 3, Breakpoint::Plain);
+    // A long frame owes several ticks; the first one hits the breakpoint and the rest wait.
+    let time = game.time();
+    let out = game.frame(&FrameInput::default(), TICK * 6.0);
+    assert!(game.is_paused());
+    assert_eq!(out.ticks, 1, "no tick runs after the one that paused");
+    assert!((game.time() - time - TICK).abs() < 1e-9);
+    game.debugger().clear_breakpoint(script, 3);
+    game.debugger().resume();
+    assert_eq!(
+        game.frame(&FrameInput::default(), TICK).ticks,
+        1,
+        "the paused frame's leftover time is not replayed as a burst"
+    );
+}

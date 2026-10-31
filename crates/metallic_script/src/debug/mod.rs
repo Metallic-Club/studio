@@ -149,6 +149,8 @@ pub(crate) struct Broken {
     pub(crate) frames: Vec<inspect::FrameSnap>,
     /// Local writes to apply in the hook that runs first on resume (top frame only).
     pub(crate) writes: Vec<(c_int, String, Value)>,
+    /// The script that owned the thread when it broke; it owns the code run on resume too.
+    pub(crate) owner: u64,
 }
 
 /// A requested step.
@@ -165,8 +167,12 @@ struct Step {
     thread: *mut ffi::lua_State,
     depth: c_int,
     line: c_int,
-    /// The stepped thread finished or yielded: stop in whatever runs next.
+    /// The stepped thread finished (or yielded during Step Into): stop in whatever runs next.
+    /// A thread that yields during Step Over or Out keeps the step, which then completes when
+    /// that thread runs again (`task.wait()` steps to the next line after the wait).
     done: bool,
+    /// The stepped thread yielded during Step Over or Out; the step waits for it.
+    waiting: bool,
 }
 
 /// The hook-skip and local writes of the thread being resumed from a hook break.
@@ -203,6 +209,8 @@ pub(crate) struct DebugCore {
     pub(crate) handles: RefCell<Vec<Value>>,
     /// `pcall` and `xpcall`, to tell handled errors from unhandled ones.
     pcalls: Cell<[usize; 2]>,
+    /// `require`'s loader function (its `pcall` does not handle module errors), 0 if none.
+    require: Cell<usize>,
 }
 
 thread_local! {
@@ -221,6 +229,19 @@ fn with_sched(l: *mut ffi::lua_State, f: impl FnOnce(&Scheduler)) {
     if let Some(s) = sched {
         f(&s);
     }
+}
+
+/// Tells the debugger a ModuleScript's chunk was compiled (`require`), so its breakpoints are
+/// set and its frames are attributed to the module (`owner` is the module's owner id).
+pub(crate) fn module_loaded(lua: &Lua, owner: u64, function: &mlua::Function, env: &mlua::Table) {
+    let mut main = std::ptr::null_mut();
+    // SAFETY: only reads the main state pointer.
+    if unsafe { lua.exec_raw::<()>((), |st| main = ffi::lua_mainthread(st)) }.is_err() {
+        return;
+    }
+    with_sched(main, |s| {
+        s.debug.breakpoints.on_load(lua, owner, function, env)
+    });
 }
 
 /// The outcome of one resume.
@@ -259,6 +280,7 @@ impl DebugCore {
             deferred: RefCell::new(VecDeque::new()),
             handles: RefCell::new(Vec::new()),
             pcalls: Cell::new([0; 2]),
+            require: Cell::new(0),
         }
     }
 
@@ -396,6 +418,7 @@ impl DebugCore {
                 how: How::Call,
                 frames: Vec::new(),
                 writes: Vec::new(),
+                owner,
             }),
         }
     }
@@ -426,6 +449,7 @@ impl DebugCore {
                 depth,
                 line,
                 done: false,
+                waiting: false,
             })
         }));
         self.rearm();
@@ -465,7 +489,7 @@ impl DebugCore {
             if let Resumer::Scheduler(thread, _) = &entry.resumer {
                 s.forget(thread);
             }
-            self.mark_step_done(entry.state);
+            self.mark_step_done(entry.state, false);
             return false;
         }
         if let How::Hook { depth, line } = entry.how {
@@ -477,6 +501,7 @@ impl DebugCore {
             });
         }
         let resumer = entry.resumer.clone();
+        let mut yielded = false;
         let broke = match &entry.resumer {
             Resumer::Scheduler(thread, owner) => {
                 if s.begin_resume(thread).is_err() {
@@ -489,6 +514,8 @@ impl DebugCore {
                 match raw {
                     Ok(Outcome::Break) => true,
                     raw => {
+                        yielded =
+                            raw.is_ok() && thread.status() == mlua::thread::ThreadStatus::Resumable;
                         if let Some(msg) = timeout {
                             s.cancel_thread(thread);
                             s.sink.error(&msg);
@@ -500,7 +527,10 @@ impl DebugCore {
                 }
             }
             Resumer::Coroutine => {
-                let (status, _) = s.budgeted(|| raw_resume_keep(&lua, self, entry.state));
+                let (status, _) = s.as_owner(entry.owner, || {
+                    s.budgeted(|| raw_resume_keep(&lua, self, entry.state))
+                });
+                yielded = status == ffi::LUA_YIELD;
                 status == ffi::LUA_BREAK
             }
         };
@@ -511,17 +541,37 @@ impl DebugCore {
                 b.resumer = resumer;
             }
         } else {
-            self.mark_step_done(entry.state);
+            self.mark_step_done(entry.state, yielded);
         }
         broke
     }
 
-    fn mark_step_done(&self, state: *mut ffi::lua_State) {
+    /// The stepped thread stopped running: it finished, or it `yielded` (then Step Over and
+    /// Out wait for it to run again).
+    fn mark_step_done(&self, state: *mut ffi::lua_State, yielded: bool) {
         if let Some(mut step) = self.step.get()
             && step.thread == state
         {
-            step.done = true;
+            if yielded && step.kind != StepKind::Into {
+                step.waiting = true;
+            } else {
+                step.done = true;
+            }
             self.step.set(Some(step));
+        }
+    }
+
+    /// A thread was cancelled or dropped: a step waiting for it ends.
+    pub(crate) fn thread_gone(&self, state: *const std::ffi::c_void) {
+        if self
+            .step
+            .get()
+            .is_some_and(|st| st.thread as *const std::ffi::c_void == state)
+        {
+            self.step.set(None);
+            if self.active.borrow().is_empty() {
+                self.rearm();
+            }
         }
     }
 
@@ -568,6 +618,7 @@ impl DebugCore {
             how,
             frames,
             writes: Vec::new(),
+            owner: s.current_owner(),
         });
         self.reason.borrow_mut().get_or_insert(reason);
         self.step.set(None);
@@ -708,6 +759,7 @@ unsafe extern "C-unwind" fn hook_interrupt(l: *mut ffi::lua_State, _ar: *mut ffi
             how: How::Call,
             frames,
             writes: Vec::new(),
+            owner: s.current_owner(),
         });
     });
 }
@@ -759,12 +811,38 @@ unsafe fn unhandled(d: &DebugCore, l: *mut ffi::lua_State) -> bool {
         }
         let f = unsafe { ffi::lua_topointer(l, -1) } as usize;
         unsafe { ffi::lua_pop(l, 1) };
-        if f == pcall || f == xpcall {
+        if (f == pcall || f == xpcall) && !unsafe { called_by(l, level + 1, d.require.get()) } {
             found += 1;
             at = level;
         }
     }
     found == 1 && at == depth - 2
+}
+
+/// True when the function at `level` is `func` (a pointer; 0 never matches). `require`'s
+/// `pcall` only carries a module's error back to the requiring script, which raises it again,
+/// so for break-on-error it does not count as handling the error.
+unsafe fn called_by(l: *mut ffi::lua_State, level: c_int, func: usize) -> bool {
+    let mut ar = unsafe { std::mem::zeroed::<ffi::lua_Debug>() };
+    if func == 0
+        || unsafe { ffi::lua_checkstack(l, 1) } == 0
+        || unsafe { ffi::lua_getinfo(l, level, c"f".as_ptr(), &mut ar) } == 0
+    {
+        return false;
+    }
+    let f = unsafe { ffi::lua_topointer(l, -1) } as usize;
+    unsafe { ffi::lua_pop(l, 1) };
+    f == func
+}
+
+/// Records `require` (the Luau loader whose `pcall` runs module chunks) for break-on-error.
+pub(crate) fn set_require(lua: &Lua, require: &mlua::Function) {
+    let mut main = std::ptr::null_mut();
+    // SAFETY: only reads the main state pointer.
+    if unsafe { lua.exec_raw::<()>((), |st| main = ffi::lua_mainthread(st)) }.is_err() {
+        return;
+    }
+    with_sched(main, |s| s.debug.require.set(require.to_pointer() as usize));
 }
 
 unsafe extern "C-unwind" fn hook_preresume(l: *mut ffi::lua_State) {
@@ -800,6 +878,7 @@ pub(crate) unsafe extern "C-unwind" fn break_spawner(l: *mut ffi::lua_State) -> 
                 how: How::Call,
                 frames,
                 writes: Vec::new(),
+                owner: s.current_owner(),
             });
             brk = true;
         }
@@ -838,6 +917,9 @@ pub(crate) fn raw_resume(
             d.rust_resume.set(true);
             result = ffi::lua_resume_(co, st, nargs);
             d.rust_resume.set(false);
+            // Single-step mode ends with the resume: a later resume (perhaps unarmed, through
+            // mlua) runs the fast interpreter path again.
+            ffi::lua_singlestep(co, 0);
             match result {
                 ffi::LUA_OK | ffi::LUA_YIELD => {
                     let n = ffi::lua_gettop(co);
@@ -850,6 +932,13 @@ pub(crate) fn raw_resume(
             }
         })?
     };
+    if result != ffi::LUA_YIELD
+        && result != ffi::LUA_BREAK
+        && d.step.get().is_some_and(|st| st.waiting && st.thread == co)
+    {
+        // The thread a step waits on finished or failed: the step ends (Continue).
+        d.thread_gone(co as *const std::ffi::c_void);
+    }
     match result {
         ffi::LUA_OK | ffi::LUA_YIELD => Ok(Outcome::Done(values)),
         ffi::LUA_BREAK => Ok(Outcome::Break),
@@ -877,6 +966,7 @@ fn raw_resume_keep(lua: &Lua, d: &DebugCore, co: *mut ffi::lua_State) -> c_int {
             d.rust_resume.set(true);
             result = ffi::lua_resume_(co, st, 0);
             d.rust_resume.set(false);
+            ffi::lua_singlestep(co, 0);
         })
     };
     if ran.is_err() {

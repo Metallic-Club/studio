@@ -43,11 +43,19 @@ impl ScriptHost {
             .find(|side| side.vm.sched().debug.is_paused())
     }
 
+    /// The script (or ModuleScript) an owner id stands for, if it is still in the world.
     fn script_of(&self, owner: u64) -> Option<InstanceId> {
-        self.running
+        if let Some(id) = self
+            .running
             .keys()
             .copied()
             .find(|&id| owner_id(id) == owner)
+        {
+            return Some(id);
+        }
+        let id = InstanceId::from_bits(owner.checked_sub(1)?);
+        let world = self.world.try_borrow().ok()?;
+        world.is_alive(id).then_some(id)
     }
 }
 

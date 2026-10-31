@@ -16,8 +16,8 @@ use metallic_core::{ChangeCursor, Changes, InstanceId, Value as CoreValue, World
 use mlua::Value;
 
 use crate::api::{
-    self, ApiState, BoundResult, EventKind, HostShared, InputActionEvent, InputDevice, InputValue,
-    RemoteTarget, TouchButtonInfo,
+    self, ApiState, BoundResult, EventKind, GuiEvent, HostShared, InputActionEvent, InputDevice,
+    InputValue, MAX_GUI_EVENTS_PER_STEP, RemoteTarget, TouchButtonInfo,
 };
 use crate::debug::{Breakpoint, Debugger};
 use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
@@ -65,7 +65,7 @@ enum HostEvent {
 
 /// Runs a world's scripts: server `Script`s and, in the default combined mode, `LocalScript`s.
 pub struct ScriptHost {
-    world: Rc<RefCell<World>>,
+    pub(crate) world: Rc<RefCell<World>>,
     pub(crate) output: Rc<dyn OutputSink>,
     shared: Rc<HostShared>,
     server: Option<Side>,
@@ -89,6 +89,8 @@ pub struct ScriptHost {
     pub(crate) manual_pause: bool,
     /// Scripts found while paused (or after a start paused): started once the game runs.
     pending_starts: Vec<(InstanceId, Context, String, String)>,
+    /// GUI events for the client scripts, delivered by the next step.
+    gui_events: Vec<GuiEvent>,
 }
 
 impl ScriptHost {
@@ -111,6 +113,7 @@ impl ScriptHost {
             break_on_error: false,
             manual_pause: false,
             pending_starts: Vec::new(),
+            gui_events: Vec::new(),
         }
     }
 
@@ -229,6 +232,22 @@ impl ScriptHost {
         if self.is_paused() {
             return;
         }
+        for side in self.sides() {
+            side.state.deliver_attribute_changes();
+            side.state.deliver_tag_changes();
+        }
+        // Every reader of the attribute log is past what it delivered: drop those entries.
+        let cursors: Vec<_> = self
+            .sides()
+            .iter()
+            .map(|s| s.state.attribute_cursor())
+            .collect();
+        let tag_cursors: Vec<_> = self.sides().iter().map(|s| s.state.tag_cursor()).collect();
+        if let Ok(mut world) = self.world.try_borrow_mut() {
+            world.trim_attribute_log(&cursors);
+            world.trim_tag_log(&tag_cursors);
+        }
+        self.deliver_gui_events();
 
         let run_service = self
             .world
@@ -273,6 +292,7 @@ impl ScriptHost {
         self.cursor = None;
         self.manual_pause = false;
         self.pending_starts.clear();
+        self.gui_events.clear();
     }
 
     /// Queues an event of an `InputAction` instance for the client scripts: the next `step`
@@ -541,6 +561,25 @@ impl ScriptHost {
                 self.output.error(&e.message);
             }
         }
+    }
+
+    /// Queues an event of a GUI element for the client scripts; the next `step` fires it, in
+    /// report order. At most [`MAX_GUI_EVENTS_PER_STEP`] wait at once (more are dropped), and
+    /// server-only hosts discard them.
+    pub fn gui_event(&mut self, event: GuiEvent) {
+        if self.run_client && self.gui_events.len() < MAX_GUI_EVENTS_PER_STEP {
+            self.gui_events.push(event);
+        }
+    }
+
+    fn deliver_gui_events(&mut self) {
+        if let Some(client) = &self.client {
+            for event in &self.gui_events {
+                client.state.deliver_gui_event(event);
+            }
+        }
+        // Keeps the capacity: no allocation per step once grown.
+        self.gui_events.clear();
     }
 
     fn deliver_inputs(&mut self) {

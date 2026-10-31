@@ -32,9 +32,12 @@ the Output tag is now `play` (`PLAY_TAG`), and the session owns an `InputRuntime
   script editor read-only; Explorer shows the play world read-only (`explorer::PlayTree`, virtualised with
   `ScrollArea::show_rows`).
 - Keys while playing: a disabled action does not consume its key (`Keymap::pressed_where`), so the game sees Ctrl+A/D/
-  S/Z/Y/G, Delete and F2; Studio keeps F5, Shift+F5, Esc and Ctrl+S. Tab, Space and Enter are taken in the app's
+  Z/Y/G, Delete and F2; Studio keeps F5, Shift+F5, Esc, Ctrl+S (Save writes the edit world) and Ctrl+W. Tab, Space and Enter are taken in the app's
   `raw_input_hook` and go to the game, so egui cannot move focus or press a focused button. With the unsaved-changes
   prompt open, Esc closes the prompt and game input is released.
+- Quit and Close game (Ctrl+W, File > Close game, which is in `PLAY_SAFE`) stop Play first, so the game never keeps
+  running behind the unsaved-changes prompt (`quitting_while_playing_stops_the_game_before_the_prompt`,
+  `ctrl_w_while_playing_stops_play_then_asks`).
 - Exposure adaptation resets (`Renderer::reset_exposure`) on the first play frame and after Stop.
 - No per-frame allocation in the play path: input buffers are reused, key contexts are an array, `PlayStatus` text is `Cow<'static, str>`.
 - Play is requested with `UiRequest::StartPlay(id)`: open script tabs are committed, a Properties gesture is recorded

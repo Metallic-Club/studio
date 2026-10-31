@@ -2,6 +2,11 @@
 //!
 //! The web view asks the `metallic-app` protocol for a file; [`serve`] answers from files compiled
 //! into the program. Only the exact bundled names exist, so a path can never reach the disk.
+//!
+//! The pages draw with the same fonts as Studio: the WOFF2 copies of
+//! `crates/metallic_ui_theme/assets/fonts` (made by `tools/gen_web_fonts.py`), with their licences.
+//! Colours come from the shared token CSS, which has one `[data-theme]` block per theme;
+//! `theme.js` picks the block before the first paint.
 
 use url::Url;
 
@@ -86,6 +91,9 @@ impl LocalResponse {
 const HTML: &str = "text/html; charset=utf-8";
 const CSS: &str = "text/css; charset=utf-8";
 const JS: &str = "text/javascript; charset=utf-8";
+const PNG: &str = "image/png";
+const WOFF2: &str = "font/woff2";
+const TEXT: &str = "text/plain; charset=utf-8";
 
 /// Every bundled file: its path, content type and bytes. Matching is exact.
 pub const BUNDLED: &[(&str, &str, &[u8])] = &[
@@ -115,6 +123,38 @@ pub const BUNDLED: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/pages/pages.css"),
     ),
     ("/pages.js", JS, include_bytes!("../assets/pages/pages.js")),
+    ("/theme.js", JS, include_bytes!("../assets/pages/theme.js")),
+    (
+        "/emblem.png",
+        PNG,
+        include_bytes!("../../../branding/placeholder-icon.png"),
+    ),
+    (
+        "/fonts/Archivo-Variable.woff2",
+        WOFF2,
+        include_bytes!("../../metallic_ui_theme/assets/fonts/Archivo-Variable.woff2"),
+    ),
+    (
+        "/fonts/JetBrainsMono-Variable.woff2",
+        WOFF2,
+        include_bytes!("../../metallic_ui_theme/assets/fonts/JetBrainsMono-Variable.woff2"),
+    ),
+    (
+        "/fonts/OFL-Archivo.txt",
+        TEXT,
+        include_bytes!("../../metallic_ui_theme/assets/fonts/OFL-Archivo.txt"),
+    ),
+    (
+        "/fonts/OFL-JetBrainsMono.txt",
+        TEXT,
+        include_bytes!("../../metallic_ui_theme/assets/fonts/OFL-JetBrainsMono.txt"),
+    ),
+    // The status icons in the pages are Phosphor's check-circle and warning-circle (fill).
+    (
+        "/fonts/LICENSE-Phosphor.txt",
+        TEXT,
+        include_bytes!("../../metallic_ui_theme/assets/fonts/LICENSE-Phosphor.txt"),
+    ),
 ];
 
 const NOT_FOUND: &[u8] = b"Not found";
