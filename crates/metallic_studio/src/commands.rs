@@ -33,18 +33,15 @@ use std::sync::Arc;
 
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
 
-use crate::pivot::{Pivot, PivotTable};
-
 /// A property name inside a command; shared, so a 500-part drag names `Position` once.
 pub type PropName = Arc<str>;
 
-/// Bookkeeping outside the world that commands change: parked instances and editor pivots.
+/// Bookkeeping outside the world that commands change: parked instances. (Pivots are core
+/// properties, `PivotOffset` and `WorldPivot`, changed by `SetProperties` like anything else.)
 #[derive(Debug, Default, Clone)]
 pub struct Book {
     /// Detached instances kept alive for undo.
     pub parked: HashSet<InstanceId>,
-    /// Pivots set in the editor (see [`crate::pivot`]).
-    pub pivots: PivotTable,
 }
 
 /// Most undo steps kept. Older steps are dropped (and their parked instances destroyed).
@@ -82,13 +79,6 @@ pub enum Command {
         name: String,
         /// The changes, applied in order and undone in reverse.
         changes: Vec<(InstanceId, PropName, Value, Value)>,
-    },
-    /// Sets editor pivots (part offsets or Model world pivots); `None` means the default.
-    SetPivots {
-        /// Undo name, e.g. "Edit pivot of Wall".
-        name: String,
-        /// (instance, old, new).
-        changes: Vec<(InstanceId, Option<Pivot>, Option<Pivot>)>,
     },
     /// Several commands as one undo step (a gizmo drag over many parts, Properties on a
     /// multi-selection). Applied in order, undone in reverse.
@@ -190,9 +180,7 @@ impl Command {
                     .unwrap_or("instance");
                 format!("Set {prop} of {what}")
             }
-            Command::Batch { name, .. }
-            | Command::SetProperties { name, .. }
-            | Command::SetPivots { name, .. } => name.clone(),
+            Command::Batch { name, .. } | Command::SetProperties { name, .. } => name.clone(),
             Command::Create { class, .. } => format!("Insert {class}"),
             Command::Delete { items } => format!("Delete {}", count(items.len(), "object")),
             Command::Reparent { from, .. } => {
@@ -218,12 +206,6 @@ impl Command {
                         }
                         return Err(e.into());
                     }
-                }
-                Ok(())
-            }
-            Command::SetPivots { changes, .. } => {
-                for (id, _, new) in changes.iter() {
-                    set_pivot(&mut book.pivots, *id, *new);
                 }
                 Ok(())
             }
@@ -380,11 +362,6 @@ impl Command {
                     let _ = world.set(*id, prop, old.clone());
                 }
             }
-            Command::SetPivots { changes, .. } => {
-                for (id, old, _) in changes.iter().rev() {
-                    set_pivot(&mut book.pivots, *id, *old);
-                }
-            }
             Command::Batch { commands, .. } => {
                 for c in commands.iter_mut().rev() {
                     c.revert(world, book);
@@ -452,17 +429,6 @@ impl Command {
             Command::Group { model: Some(m), .. } => vec![m.id],
             Command::Batch { commands, .. } => commands.iter().flat_map(Command::created).collect(),
             _ => Vec::new(),
-        }
-    }
-}
-
-fn set_pivot(table: &mut PivotTable, id: InstanceId, value: Option<Pivot>) {
-    match value {
-        Some(p) => {
-            table.insert(id, p);
-        }
-        None => {
-            table.remove(&id);
         }
     }
 }
@@ -638,11 +604,6 @@ impl History {
         e.command.revert(world, &mut self.book);
         self.revision += 1;
         Some(e.command)
-    }
-
-    /// Pivots set in the editor (see [`crate::pivot`]).
-    pub fn pivots(&self) -> &PivotTable {
-        &self.book.pivots
     }
 
     /// Pushes `cmd` as already applied (its `new` values are in the world). Used on release of a

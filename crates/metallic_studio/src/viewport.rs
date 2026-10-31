@@ -360,8 +360,7 @@ impl Viewport {
         let grab = drag.grab_now();
         let frame = drag.frame();
         let ray = drag_ray(&self.camera, self.last_rect, grab);
-        let (record, abandon) =
-            drag.finish(&state.world, &mut state.preview, state.history.pivots());
+        let (record, abandon) = drag.finish(&mut state.preview);
         if let Some(c) = abandon {
             state.history.abandon(c, &mut state.world);
         }

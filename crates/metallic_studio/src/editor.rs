@@ -32,7 +32,10 @@ use crate::commands::{Command, CommandError, History, PropName, count};
 use crate::gizmo::GizmoDrag;
 use crate::output::{Level, OutputSink, Tag};
 use crate::picking::PickCache;
-use crate::pivot::{Pivot, Rigid, world_pivot};
+use crate::pivot::{
+    Pivot, PivotWrite, Rigid, has_custom_pivot, models_with_set_pivots, pivot_writes, reset_writes,
+    to_cframe, world_pivot,
+};
 use crate::play::{PlayController, PlayStart};
 use crate::preview::PreviewOverlay;
 use crate::selection::{Selection, is_detached};
@@ -545,7 +548,7 @@ impl EditorState {
 
     /// The pivot `id` moves about (part frame times offset, Model pivot, or box centre).
     pub fn object_pivot(&self, id: InstanceId) -> Option<Pivot> {
-        world_pivot(&self.world, self.history.pivots(), id)
+        world_pivot(&self.world, id)
     }
 
     /// Where the gizmo sits: the active object's pivot (Pivot mode) or the selection's box
@@ -564,51 +567,27 @@ impl EditorState {
         })
     }
 
-    /// Selected Models with a pivot set in the editor (it moves with them).
+    /// Models in the selection (or under it) whose `WorldPivot` is set: it moves with them.
     pub fn models_with_pivots(&self) -> Vec<(InstanceId, Pivot)> {
-        self.selection
-            .ids()
-            .iter()
-            .filter(|&&id| self.world.is_a(id, "Model"))
-            .filter_map(|&id| Some((id, *self.history.pivots().get(&id)?)))
-            .collect()
+        models_with_set_pivots(&self.world, self.selection.ids())
     }
 
     /// Ends a drag: records its one step (or nothing) and drops what an unused duplicate made.
     /// True when a step was recorded.
     pub fn finish_drag(&mut self, drag: GizmoDrag) -> bool {
-        let (record, abandon) = drag.finish(&self.world, &mut self.preview, self.history.pivots());
+        let (record, abandon) = drag.finish(&mut self.preview);
         if let Some(c) = abandon {
             self.history.abandon(c, &mut self.world);
         }
         let done = match record {
             Some(c) if !self.play.is_playing() => {
-                self.record_with_pivots(c);
+                self.record(c);
                 true
             }
             _ => false,
         };
         self.after_history_change();
         done
-    }
-
-    /// Records a step whose property changes are already in the world. Pivot changes in it
-    /// (`SetPivots`, alone or in a batch) are not previewed, so they are applied here first.
-    fn record_with_pivots(&mut self, mut cmd: Command) {
-        match &mut cmd {
-            Command::SetPivots { .. } => {
-                let _ = self.history.apply_pending(&mut cmd, &mut self.world);
-            }
-            Command::Batch { commands, .. } => {
-                for c in commands.iter_mut() {
-                    if matches!(c, Command::SetPivots { .. }) {
-                        let _ = self.history.apply_pending(c, &mut self.world);
-                    }
-                }
-            }
-            _ => {}
-        }
-        self.record(cmd);
     }
 
     /// Cancels a drag (Esc): the world is as before it started.
@@ -672,28 +651,36 @@ impl EditorState {
                 Value::Vector3(from_d(t.size)),
             );
         }
-        let Some(props) = self.preview.commit(name.clone()) else {
+        if let Some(m) = motion {
+            let world_pivot: PropName = "WorldPivot".into();
+            for (id, p) in self.models_with_pivots() {
+                let value = Value::CFrame(Box::new(to_cframe(&m.frame(&p))));
+                let _ = self.preview.set(&mut self.world, id, &world_pivot, value);
+            }
+        }
+        let Some(cmd) = self.preview.commit(name) else {
             return false;
         };
-        let models = self.models_with_pivots();
-        let cmd = match motion {
-            Some(m) if !models.is_empty() => Command::Batch {
-                name: name.clone(),
-                commands: vec![
-                    props,
-                    Command::SetPivots {
-                        name,
-                        changes: models
-                            .iter()
-                            .map(|(id, p)| (*id, Some(*p), Some(m.frame(p))))
-                            .collect(),
-                    },
-                ],
-            },
-            _ => props,
-        };
-        self.record_with_pivots(cmd);
+        self.record(cmd);
         true
+    }
+
+    /// Writes pivot property changes as one step named `name`.
+    fn commit_writes(&mut self, name: String, writes: Vec<PivotWrite>) -> bool {
+        if self.play.is_playing() || writes.is_empty() {
+            return false;
+        }
+        for (id, prop, value) in writes {
+            let prop: PropName = prop.into();
+            let _ = self.preview.set(&mut self.world, id, &prop, value);
+        }
+        match self.preview.commit(name) {
+            Some(cmd) => {
+                self.record(cmd);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Moves and turns every selected part by `motion` as one step.
@@ -816,17 +803,12 @@ impl EditorState {
         self.commit_transforms(name, &changes, None)
     }
 
-    /// Sets the pivot of `id` to the world frame `pivot` (one step).
+    /// Sets the pivot of `id` to the world frame `pivot` (one step of `PivotOffset` or
+    /// `WorldPivot` writes).
     pub fn set_pivot(&mut self, id: InstanceId, pivot: Pivot) -> bool {
-        let Some(stored) = crate::pivot::stored_for(&self.world, id, &pivot) else {
-            return false;
-        };
-        let old = self.history.pivots().get(&id).copied();
-        let cmd = Command::SetPivots {
-            name: format!("Edit pivot of {}", self.display_name(id)),
-            changes: vec![(id, old, Some(stored))],
-        };
-        self.apply(cmd).is_ok()
+        let writes = pivot_writes(&self.world, id, &pivot);
+        let name = format!("Edit pivot of {}", self.display_name(id));
+        self.commit_writes(name, writes)
     }
 
     /// Restores the default pivot of the active object (Reset pivot). One step.
@@ -834,14 +816,12 @@ impl EditorState {
         let Some(id) = self.selection.active() else {
             return false;
         };
-        let Some(old) = self.history.pivots().get(&id).copied() else {
+        if !has_custom_pivot(&self.world, id) {
             return false;
-        };
-        let cmd = Command::SetPivots {
-            name: format!("Reset pivot of {}", self.display_name(id)),
-            changes: vec![(id, Some(old), None)],
-        };
-        self.apply(cmd).is_ok()
+        }
+        let writes = reset_writes(&self.world, id);
+        let name = format!("Reset pivot of {}", self.display_name(id));
+        self.commit_writes(name, writes)
     }
 
     /// Halves or doubles the move increment (`[`, `]`) through the offered steps.

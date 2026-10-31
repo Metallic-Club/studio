@@ -21,7 +21,7 @@ Stacks on #319 (`studio/10-studio-editing`). Spec: `docs/design/building-tools.m
 
 ## Deviations (in the PR)
 - Overlay is write-through instead of a render-side overlay, so the renderer is unchanged.
-- Pivots are session-only (not saved) in `History`'s `Book` until core has `PivotOffset`/`WorldPivot` (#216).
+- Pivots use core's `PivotOffset` (BasePart) and `WorldPivot` (Model, #313). A pivot edit (gizmo, pivot dots, Reset, Properties) is one `SetProperties` through the preview overlay; Properties' `WorldPivot` also sets `WorldPivotSet` like `transform::set_world_pivot`. Moving a Model with a set pivot moves `WorldPivot` in the same step. The session-only `SetPivots` store is gone.
 - No BVH: candidates come from the part list with a screen-space cull; measured inside budget (see PR).
 - No Collisions chip and no outer screen-space rotate ring yet.
 

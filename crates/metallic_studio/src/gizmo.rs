@@ -38,7 +38,7 @@ use crate::camera::ViewProjection;
 use crate::commands::{Command, PropName, count};
 use crate::editor::{Snapping, Tool};
 use crate::picking::PickCache;
-use crate::pivot::{Pivot, PivotTable, Rigid, stored_for};
+use crate::pivot::{Pivot, Rigid, pivot_writes, to_cframe};
 use crate::preview::PreviewOverlay;
 use crate::snapping::{
     self, SNAP_RADIUS_PX, SnapCandidate, SnapKind, SnapKinds, SnapQuery, SnapSource, Surface,
@@ -426,7 +426,7 @@ pub struct GizmoDrag {
     models: Vec<(InstanceId, Pivot)>,
     rotates: bool,
     resizes: bool,
-    names: [PropName; 3],
+    names: [PropName; 6],
     buf: Vec<SnapCandidate>,
 }
 
@@ -477,7 +477,14 @@ impl GizmoDrag {
             models: Vec::new(),
             rotates: false,
             resizes: false,
-            names: ["Position".into(), "Orientation".into(), "Size".into()],
+            names: [
+                "Position".into(),
+                "Orientation".into(),
+                "Size".into(),
+                "PivotOffset".into(),
+                "WorldPivot".into(),
+                "WorldPivotSet".into(),
+            ],
             buf: Vec::new(),
         }
     }
@@ -1157,6 +1164,28 @@ impl GizmoDrag {
                 );
             }
         }
+        if self.motion.is_identity() {
+            return;
+        }
+        // Pivots are core properties: a pivot edit and the WorldPivots of moved Models are
+        // written through the overlay too, so they land in the same one step.
+        if let Target::Pivot { id, start, .. } = &self.target {
+            for (target, prop, value) in pivot_writes(world, *id, &self.motion.frame(start)) {
+                let _ = overlay.set(world, target, &self.prop_name(prop), value);
+            }
+        }
+        for (id, start) in &self.models {
+            let value = Value::CFrame(Box::new(to_cframe(&self.motion.frame(start))));
+            let _ = overlay.set(world, *id, &self.prop_name("WorldPivot"), value);
+        }
+    }
+
+    fn prop_name(&self, prop: &str) -> PropName {
+        self.names
+            .iter()
+            .find(|n| &***n == prop)
+            .cloned()
+            .unwrap_or_else(|| prop.into())
     }
 
     /// Esc: restores every previewed value. Returns the pending command (Alt-drag's duplicate)
@@ -1192,57 +1221,23 @@ impl GizmoDrag {
     }
 
     /// Ends the drag. Returns (the one undo step to record, a pending command to abandon when
-    /// nothing moved). `pivots` is the current pivot table (for the old values).
-    pub fn finish(
-        self,
-        world: &World,
-        overlay: &mut PreviewOverlay,
-        pivots: &PivotTable,
-    ) -> (Option<Command>, Option<Command>) {
+    /// nothing changed). Everything the drag wrote, pivots included, is in the overlay's one
+    /// `SetProperties`; an Alt-drag's duplicate comes first in a batch.
+    pub fn finish(self, overlay: &mut PreviewOverlay) -> (Option<Command>, Option<Command>) {
         let name = self.name();
-        if let Target::Pivot { id, start, .. } = &self.target {
-            if self.motion.is_identity() {
-                return (None, None);
-            }
-            let new = self.motion.frame(start);
-            let Some(stored) = stored_for(world, *id, &new) else {
-                return (None, None);
-            };
-            let cmd = Command::SetPivots {
-                name,
-                changes: vec![(*id, pivots.get(id).copied(), Some(stored))],
-            };
-            return (Some(cmd), None);
-        }
-        let props = overlay.commit(name.clone());
-        let Some(props) = props else {
+        let Some(props) = overlay.commit(name.clone()) else {
             return (None, self.pending);
         };
-        let mut steps = Vec::with_capacity(3);
-        if let Some(p) = self.pending {
-            steps.push(p);
+        match self.pending {
+            Some(p) => (
+                Some(Command::Batch {
+                    name,
+                    commands: vec![p, props],
+                }),
+                None,
+            ),
+            None => (Some(props), None),
         }
-        steps.push(props);
-        if !self.motion.is_identity() && !self.models.is_empty() {
-            let changes = self
-                .models
-                .iter()
-                .map(|(id, start)| (*id, Some(*start), Some(self.motion.frame(start))))
-                .collect();
-            steps.push(Command::SetPivots {
-                name: name.clone(),
-                changes,
-            });
-        }
-        let cmd = if steps.len() == 1 {
-            steps.remove(0)
-        } else {
-            Command::Batch {
-                name,
-                commands: steps,
-            }
-        };
-        (Some(cmd), None)
     }
 
     /// Text next to the cursor (the typed field while typing).
@@ -1618,7 +1613,7 @@ mod tests {
         let mut d = start(&w);
         d.update(&input(ray_down(0.0, 3.0), &s, DragModifiers::default()));
         d.apply(&mut w, &mut o);
-        let (cmd, abandon) = d.finish(&w, &mut o, &PivotTable::new());
+        let (cmd, abandon) = d.finish(&mut o);
         let cmd = cmd.unwrap();
         assert!(abandon.is_none());
         assert_eq!(cmd.name(&w), "Move 1 part");
@@ -1642,9 +1637,7 @@ mod tests {
             DragModifiers::default(),
         ));
         d.apply(&mut w, &mut o);
-        let (Some(Command::SetProperties { changes, .. }), _) =
-            d.finish(&w, &mut o, &PivotTable::new())
-        else {
+        let (Some(Command::SetProperties { changes, .. }), _) = d.finish(&mut o) else {
             panic!()
         };
         assert_eq!(changes.len(), 1);
@@ -1781,8 +1774,8 @@ mod tests {
     }
 
     #[test]
-    fn pivot_drag_snaps_to_box_points_and_finishes_as_set_pivots() {
-        let (w, p) = world_with_part(Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 2.0, 2.0));
+    fn pivot_drag_snaps_to_box_points_and_finishes_as_one_property_step() {
+        let (mut w, p) = world_with_part(Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 2.0, 2.0));
         let cam = EditorCamera::default();
         let view = cam.view((800.0, 600.0));
         let f = GizmoFrame::new(DVec3::ZERO, DQuat::IDENTITY, Tool::Move, &view);
@@ -1810,12 +1803,16 @@ mod tests {
         let now = d.pivot_now().unwrap();
         assert!((now.position - corner).length() < 1e-12);
         let mut o = PreviewOverlay::new();
-        let (cmd, _) = d.finish(&w, &mut o, &PivotTable::new());
-        let Some(Command::SetPivots { changes, name }) = cmd else {
+        d.apply(&mut w, &mut o);
+        let (cmd, _) = d.finish(&mut o);
+        let Some(Command::SetProperties { changes, name }) = cmd else {
             panic!()
         };
         assert_eq!(name, "Edit pivot of Part");
-        assert_eq!(changes[0].2.unwrap().position, corner);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(&*changes[0].1, "PivotOffset");
+        let now = crate::pivot::world_pivot(&w, p).unwrap();
+        assert!((now.position - corner).length() < 1e-9);
     }
 
     #[test]

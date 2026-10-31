@@ -19,7 +19,7 @@ use crate::commands::{Command, PropName};
 use crate::editor::{EditorState, UiRequest};
 use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
-use metallic_core::transform::clamp_part_size;
+use metallic_core::transform::{clamp_part_size, orthonormal};
 
 /// Section of a property, in display order.
 fn section(prop: &str) -> usize {
@@ -85,6 +85,13 @@ impl Properties {
         if let Some(cmd) = state.preview.commit(name) {
             state.record(cmd);
         }
+    }
+
+    /// Sets `prop` to `value` on every selected instance as one step, exactly as typing the value
+    /// into the panel does (clamps and pivot rules included). For scripted checks and commands.
+    pub fn set(&mut self, state: &mut EditorState, prop: &str, value: Value) {
+        let ids = state.selection.ids().to_vec();
+        self.commit(state, &ids, Edit::Set(prop.to_string(), value), false);
     }
 
     /// Draws the panel.
@@ -173,12 +180,16 @@ impl Properties {
         p: &PropDef,
         edits: &mut Vec<Edit>,
     ) {
-        let Ok(value) = state.world.get(active, p.name) else {
+        let Some(value) = read(&state.world, active, p.name) else {
             return;
         };
-        let mixed = ids
-            .iter()
-            .any(|&id| state.world.get_ref(id, p.name).ok() != Some(&value));
+        let mixed = if p.name == "WorldPivot" {
+            ids.iter()
+                .any(|&id| read(&state.world, id, p.name).as_ref() != Some(&value))
+        } else {
+            ids.iter()
+                .any(|&id| state.world.get_ref(id, p.name).ok() != Some(&value))
+        };
         ui.horizontal(|ui| {
             let label = ui.add_sized(
                 [ui_tokens().label_width, 20.0],
@@ -357,7 +368,7 @@ impl Properties {
                 let vals = ids
                     .iter()
                     .filter_map(|&id| {
-                        let old = state.world.get(id, &prop).ok()?;
+                        let old = read(&state.world, id, &prop)?;
                         Some((id, with_component(&old, axis, x)?))
                     })
                     .collect();
@@ -371,13 +382,35 @@ impl Properties {
                 Value::Vector3(s) if prop == "Size" && state.world.is_a(id, "BasePart") => {
                     (id, Value::Vector3(clamp_part_size(s)))
                 }
+                // A Model's WorldPivot is made orthonormal like core's `set_world_pivot`.
+                Value::CFrame(cf) if prop == "WorldPivot" => match orthonormal(*cf, "WorldPivot") {
+                    Ok(cf) => (id, Value::CFrame(Box::new(cf))),
+                    Err(_) => (id, Value::CFrame(cf)),
+                },
                 v => (id, v),
             })
             .collect();
+        // Setting WorldPivot also marks it set (`WorldPivotSet`), as core's `set_world_pivot`
+        // does; without that the pivot keeps following the bounding box.
+        let marks: Vec<InstanceId> = if prop == "WorldPivot" {
+            values
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|&id| state.world.is_a(id, "Model"))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if live {
             let name: PropName = prop.as_str().into();
+            let set: PropName = "WorldPivotSet".into();
             for (id, v) in values {
                 let _ = state.preview.set(&mut state.world, id, &name, v);
+            }
+            for id in marks {
+                let _ = state
+                    .preview
+                    .set(&mut state.world, id, &set, Value::Bool(true));
             }
             self.gesture = Some(prop);
             return;
@@ -389,6 +422,13 @@ impl Properties {
                 (old != v).then(|| Command::set(id, &prop, old, v))
             })
             .collect();
+        for id in marks {
+            if let Ok(old) = state.world.get(id, "WorldPivotSet")
+                && old != Value::Bool(true)
+            {
+                commands.push(Command::set(id, "WorldPivotSet", old, Value::Bool(true)));
+            }
+        }
         match commands.len() {
             0 => {}
             1 => {
@@ -402,6 +442,16 @@ impl Properties {
             }
         }
     }
+}
+
+/// The value Properties shows and edits: a Model's `WorldPivot` is its pivot as Luau reads it
+/// (the bounding-box centre until set); everything else is the stored value.
+fn read(world: &metallic_core::World, id: InstanceId, prop: &str) -> Option<Value> {
+    if prop == "WorldPivot" && world.is_a(id, "Model") {
+        let cf = metallic_core::transform::world_pivot(world, id).ok()?;
+        return Some(Value::CFrame(Box::new(cf)));
+    }
+    world.get(id, prop).ok()
 }
 
 fn drag_speed(prop: &str) -> f64 {

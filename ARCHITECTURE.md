@@ -144,8 +144,8 @@ apps.
   `gizmo.rs` (handles for Move/Rotate/Scale/Transform, body drags over surfaces, axis locks, R/T turns, typed values,
   pivot drags; `GizmoDrag::finish` returns the one undo step), `snapping.rs` (`SnapSource` candidates with priority
   and glyphs, `Surface` placement in the hit part's grid, virtual surface, soft snap), `pivot.rs` (`Pivot`, `Rigid`,
-  27 pivot snap points; editor pivots live in `History`'s `Book` as `Command::SetPivots` until core gets
-  `PivotOffset`/`WorldPivot`, #216). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
+  27 pivot snap points; pivots are core properties, `PivotOffset` and `WorldPivot`
+  plus hidden `WorldPivotSet`, written through the preview overlay as one `SetProperties`, so they are undoable and saved). One-shot commands on `EditorState`: rotate/tilt 90, drop (End), snap to grid.
   Arrange core (#217, #218, implemented and tested, no UI yet): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional

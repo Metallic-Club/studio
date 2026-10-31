@@ -8,7 +8,7 @@ use metallic_studio::commands::Command;
 use metallic_studio::editor::{EditorState, Snapping, Tool};
 use metallic_studio::gizmo::{DragInput, DragModifiers, GizmoDrag, GizmoFrame, Handle};
 use metallic_studio::output::OutputLog;
-use metallic_studio::pivot::Pivot;
+use metallic_studio::pivot::{Pivot, Rigid};
 use metallic_studio::transform::Ray;
 
 fn state_with(parts: &[(Vec3, Vec3)]) -> (EditorState, Vec<InstanceId>, OutputLog) {
@@ -362,4 +362,124 @@ fn a_body_drag_lands_on_the_surface_under_the_cursor() {
     assert!(close(orientation(&s, moving), Vec3::new(0.0, 90.0, 0.0)));
     assert!(s.finish_drag(d));
     assert_eq!(s.history.len(), 1);
+}
+
+fn saved_state(dir: &std::path::Path) -> (EditorState, InstanceId, InstanceId, OutputLog) {
+    let log = OutputLog::new(64);
+    let mut world = World::new_with_services();
+    let ws = world.root("Workspace").unwrap();
+    let model = world.create("Model", Some(ws)).unwrap();
+    let part = world.create("Part", Some(model)).unwrap();
+    world
+        .set(part, "Size", Value::Vector3(Vec3::new(2.0, 2.0, 2.0)))
+        .unwrap();
+    let scene = dir.join("main.mscene");
+    let state = EditorState::new(world, dir, &scene, "Test", log.sink());
+    (state, model, part, log)
+}
+
+fn pivot_of(world: &World, id: InstanceId) -> DVec3 {
+    let cf = metallic_core::transform::get_pivot(world, id).unwrap();
+    DVec3::new(cf.position.x, cf.position.y, cf.position.z)
+}
+
+#[test]
+fn an_edited_part_pivot_is_one_property_step_saved_and_undone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, _model, part, _log) = saved_state(dir.path());
+    s.selection.set([part]);
+    let corner = DVec3::new(1.0, -1.0, 1.0);
+    assert!(s.set_pivot(part, Pivot::at(corner)));
+    assert_eq!(s.history.len(), 1);
+    assert!(matches!(
+        s.history.peek_undo(),
+        Some(Command::SetProperties { .. })
+    ));
+    assert!((pivot_of(&s.world, part) - corner).length() < 1e-9);
+
+    s.save().unwrap();
+    let reloaded = metallic_core::load_scene(&dir.path().join("main.mscene")).unwrap();
+    let ws = reloaded.root("Workspace").unwrap();
+    let m = reloaded.children(ws)[0];
+    let p = reloaded.children(m)[0];
+    assert!(
+        (pivot_of(&reloaded, p) - corner).length() < 1e-9,
+        "PivotOffset is saved"
+    );
+
+    s.undo();
+    assert!(
+        pivot_of(&s.world, part).length() < 1e-9,
+        "undo restores the centre"
+    );
+    s.redo();
+    assert!(s.reset_pivot());
+    assert!(pivot_of(&s.world, part).length() < 1e-9);
+}
+
+#[test]
+fn a_model_world_pivot_from_properties_is_used_saved_and_moves_with_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut s, model, part, _log) = saved_state(dir.path());
+    s.selection.set([model]);
+    let target = metallic_core::CFrame::from_position(Vec3::new(5.0, 1.0, 0.0));
+    let mut props = metallic_studio::properties::Properties::new();
+    props.set(&mut s, "WorldPivot", Value::CFrame(Box::new(target)));
+    assert_eq!(
+        s.history.len(),
+        1,
+        "WorldPivot and WorldPivotSet are one step"
+    );
+    assert!((pivot_of(&s.world, model) - DVec3::new(5.0, 1.0, 0.0)).length() < 1e-9);
+
+    s.save().unwrap();
+    let reloaded = metallic_core::load_scene(&dir.path().join("main.mscene")).unwrap();
+    let ws = reloaded.root("Workspace").unwrap();
+    let m = reloaded.children(ws)[0];
+    assert!((pivot_of(&reloaded, m) - DVec3::new(5.0, 1.0, 0.0)).length() < 1e-9);
+
+    // Moving the Model moves its set pivot in the same step (PivotTo semantics).
+    assert!(s.transform_selection(Rigid::translate(DVec3::new(0.0, 0.0, 3.0)), "Move"));
+    assert!((pivot_of(&s.world, model) - DVec3::new(5.0, 1.0, 3.0)).length() < 1e-9);
+    assert!(close(pos(&s, part), Vec3::new(0.0, 0.0, 3.0)));
+    s.undo();
+    assert!((pivot_of(&s.world, model) - DVec3::new(5.0, 1.0, 0.0)).length() < 1e-9);
+    s.undo();
+    assert!(
+        (pivot_of(&s.world, model) - DVec3::ZERO).length() < 1e-9,
+        "unset again: back to the box centre"
+    );
+}
+
+#[test]
+fn a_gizmo_pivot_drag_is_one_property_step() {
+    let (mut s, ids, _log) = state_with(&[(Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0))]);
+    let p = ids[0];
+    s.selection.set([p]);
+    let f = frame(DVec3::ZERO, Tool::Move);
+    let points = metallic_studio::pivot::candidates(&s.world, p).unwrap();
+    let mut d = GizmoDrag::begin_pivot(
+        f,
+        Handle::Axis(0),
+        &ray_down(0.0, 0.0),
+        p,
+        "Part".into(),
+        Pivot::IDENTITY,
+        points,
+    )
+    .unwrap();
+    drag_frames(&mut s, &mut d, 10, 3.0);
+    assert!(s.finish_drag(d));
+    assert_eq!(s.history.len(), 1);
+    assert_eq!(
+        s.history.undo_name(&s.world).as_deref(),
+        Some("Edit pivot of Part")
+    );
+    assert!((pivot_of(&s.world, p) - DVec3::new(3.0, 0.0, 0.0)).length() < 1e-9);
+    assert!(
+        close(pos(&s, p), Vec3::new(0.0, 0.0, 0.0)),
+        "the part stays"
+    );
+    s.undo();
+    assert!(pivot_of(&s.world, p).length() < 1e-9);
 }

@@ -1,22 +1,17 @@
 //! Pivots: the point (and axes) an object moves, rotates and scales about (spec 4.4).
 //!
-//! Roblox names: a BasePart's pivot is `PivotOffset` (relative to the part), a Model's is
-//! `WorldPivot` (world space). Defaults: the part's centre; for a Model, the centre of its parts'
-//! bounding box (it follows the parts until a pivot is set).
-//!
-//! Until `PivotOffset` / `WorldPivot` exist as properties in `metallic_core` (#216), Studio keeps
-//! pivots set in the editor in a [`PivotTable`] owned by [`crate::commands::History`], so edits
-//! are undoable like everything else. They last for the session; they are not saved in the scene
-//! file yet. When #216 lands, [`Command::SetPivots`](crate::commands::Command::SetPivots) becomes
-//! `SetProperties` on those properties and this table goes away; callers use [`world_pivot`] and
-//! do not change.
-use std::collections::HashMap;
-
-use metallic_core::{InstanceId, World};
+//! Pivots are core properties (#313, Roblox names): a BasePart's `PivotOffset` (a CFrame relative
+//! to the part) and a Model's `WorldPivot` (world space; it follows the bounding box until it is
+//! first set, and a Model with a `PrimaryPart` uses that part's pivot). Studio reads them through
+//! `metallic_core::transform::get_pivot` and changes them as ordinary property writes
+//! ([`pivot_writes`], [`reset_writes`]) through the preview overlay, so pivot edits are undoable,
+//! saved with the scene and replicated like any other property.
+use metallic_core::transform::{get_pivot, primary_part};
+use metallic_core::{CFrame, InstanceId, Value, World};
 use metallic_render::glam::{DQuat, DVec3};
 
 use crate::selection::Selection;
-use crate::transform::{Aabb, PartTransform};
+use crate::transform::{Aabb, PartTransform, from_d, to_d};
 
 /// A rigid frame: position and rotation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,9 +55,6 @@ impl Pivot {
     }
 }
 
-/// Pivots set in the editor: part offsets (relative) and Model pivots (world space).
-pub type PivotTable = HashMap<InstanceId, Pivot>;
-
 /// A part's frame as a [`Pivot`].
 pub fn part_frame(t: &PartTransform) -> Pivot {
     Pivot {
@@ -71,32 +63,113 @@ pub fn part_frame(t: &PartTransform) -> Pivot {
     }
 }
 
-/// The world-space pivot of `id`: a part's frame times its offset, a Model's stored pivot or its
-/// bounding-box centre; other containers use their bounding-box centre. `None` when `id` has no
-/// parts.
-pub fn world_pivot(world: &World, table: &PivotTable, id: InstanceId) -> Option<Pivot> {
-    if world.is_a(id, "BasePart") {
-        let t = PartTransform::read(world, id)?;
-        let offset = table.get(&id).copied().unwrap_or(Pivot::IDENTITY);
-        return Some(part_frame(&t).then(&offset));
+/// A core CFrame as a [`Pivot`].
+pub fn from_cframe(cf: &CFrame) -> Pivot {
+    let [x, y, z, w] = cf.quaternion();
+    Pivot {
+        position: to_d(cf.position),
+        rotation: DQuat::from_xyzw(x, y, z, w).normalize(),
     }
-    if let Some(p) = table.get(&id)
-        && world.is_a(id, "Model")
+}
+
+/// A [`Pivot`] as a core CFrame.
+pub fn to_cframe(p: &Pivot) -> CFrame {
+    let q = p.rotation.normalize();
+    CFrame::from_quaternion(from_d(p.position), [q.x, q.y, q.z, q.w])
+}
+
+/// The world-space pivot of `id`: core's pivot for a part or Model, the bounding-box centre for
+/// other containers. `None` when `id` has no parts.
+pub fn world_pivot(world: &World, id: InstanceId) -> Option<Pivot> {
+    if (world.is_a(id, "BasePart") || world.is_a(id, "Model"))
+        && let Ok(cf) = get_pivot(world, id)
     {
-        return Some(*p);
+        return Some(from_cframe(&cf));
     }
     let parts = Selection::parts_of(world, id);
     Aabb::of_parts(world, &parts).map(|b| Pivot::at(b.centre()))
 }
 
-/// The value to store for `id` so that its world pivot becomes `pivot`: an offset for a part, the
-/// world pivot itself for a Model. `None` for other classes (they have no pivot of their own).
-pub fn stored_for(world: &World, id: InstanceId, pivot: &Pivot) -> Option<Pivot> {
+/// One property write that a pivot change needs.
+pub type PivotWrite = (InstanceId, &'static str, Value);
+
+/// The property writes that put the pivot of `id` at the world frame `pivot`: the part's
+/// `PivotOffset`; for a Model, its `PrimaryPart`'s `PivotOffset` when it has one, else its
+/// `WorldPivot` (and the hidden `WorldPivotSet`). Empty for other classes.
+pub fn pivot_writes(world: &World, id: InstanceId, pivot: &Pivot) -> Vec<PivotWrite> {
+    let offset_of = |part: InstanceId| -> Option<PivotWrite> {
+        let t = PartTransform::read(world, part)?;
+        let local = part_frame(&t).to_local(pivot);
+        Some((
+            part,
+            "PivotOffset",
+            Value::CFrame(Box::new(to_cframe(&local))),
+        ))
+    };
     if world.is_a(id, "BasePart") {
-        let t = PartTransform::read(world, id)?;
-        return Some(part_frame(&t).to_local(pivot));
+        return offset_of(id).into_iter().collect();
     }
-    world.is_a(id, "Model").then_some(*pivot)
+    if !world.is_a(id, "Model") {
+        return Vec::new();
+    }
+    if let Some(p) = primary_part(world, id) {
+        return offset_of(p).into_iter().collect();
+    }
+    vec![
+        (id, "WorldPivot", Value::CFrame(Box::new(to_cframe(pivot)))),
+        (id, "WorldPivotSet", Value::Bool(true)),
+    ]
+}
+
+/// The writes that restore the default pivot of `id` (Reset pivot): a zero `PivotOffset`, or a
+/// Model whose pivot follows its bounding box again.
+pub fn reset_writes(world: &World, id: InstanceId) -> Vec<PivotWrite> {
+    let identity = || Value::CFrame(Box::new(CFrame::IDENTITY));
+    if world.is_a(id, "BasePart") {
+        return vec![(id, "PivotOffset", identity())];
+    }
+    if !world.is_a(id, "Model") {
+        return Vec::new();
+    }
+    match primary_part(world, id) {
+        Some(p) => vec![(p, "PivotOffset", identity())],
+        None => vec![(id, "WorldPivotSet", Value::Bool(false))],
+    }
+}
+
+/// True when `id` has a pivot that is not its default.
+pub fn has_custom_pivot(world: &World, id: InstanceId) -> bool {
+    let target = if world.is_a(id, "Model") {
+        match primary_part(world, id) {
+            Some(p) => p,
+            None => return matches!(world.get_ref(id, "WorldPivotSet"), Ok(Value::Bool(true))),
+        }
+    } else {
+        id
+    };
+    match world.get_ref(target, "PivotOffset") {
+        Ok(Value::CFrame(cf)) => **cf != CFrame::IDENTITY,
+        _ => false,
+    }
+}
+
+/// Models in or under `ids` whose `WorldPivot` is set (and no `PrimaryPart` carries it), with
+/// their pivots now: a move of their parts must move these pivots too (`PivotTo` semantics).
+pub fn models_with_set_pivots(world: &World, ids: &[InstanceId]) -> Vec<(InstanceId, Pivot)> {
+    let mut out = Vec::new();
+    let mut stack: Vec<InstanceId> = ids.to_vec();
+    while let Some(id) = stack.pop() {
+        if world.is_a(id, "Model")
+            && primary_part(world, id).is_none()
+            && matches!(world.get_ref(id, "WorldPivotSet"), Ok(Value::Bool(true)))
+            && let Ok(Value::CFrame(cf)) = world.get_ref(id, "WorldPivot")
+            && !out.iter().any(|(o, _)| *o == id)
+        {
+            out.push((id, from_cframe(cf)));
+        }
+        stack.extend_from_slice(world.children(id));
+    }
+    out
 }
 
 /// The 27 snap points of an oriented box (spec 4.4): 8 corners, 12 edge midpoints, 6 face centres
@@ -187,16 +260,51 @@ mod tests {
             .unwrap();
         w.set(p, "Orientation", Value::Vector3(Vec3::new(0.0, 90.0, 0.0)))
             .unwrap();
-        let mut table = PivotTable::new();
         // Pivot one stud along the part's local +X: with a 90 degree turn about Y that is world -Z.
         let world = Pivot::at(DVec3::new(5.0, 0.0, -1.0));
-        let offset = stored_for(&w, p, &world).unwrap();
-        table.insert(p, offset);
-        assert!((world_pivot(&w, &table, p).unwrap().position - world.position).length() < 1e-9);
+        for (id, prop, v) in pivot_writes(&w, p, &world) {
+            w.set(id, prop, v).unwrap();
+        }
+        assert!(has_custom_pivot(&w, p));
+        let now = world_pivot(&w, p).unwrap();
+        assert!((now.position - world.position).length() < 1e-9);
+        assert!(now.rotation.abs_diff_eq(DQuat::IDENTITY, 1e-9));
         w.set(p, "Position", Value::Vector3(Vec3::new(6.0, 0.0, 0.0)))
             .unwrap();
-        let moved = world_pivot(&w, &table, p).unwrap().position;
+        let moved = world_pivot(&w, p).unwrap().position;
         assert!((moved - DVec3::new(6.0, 0.0, -1.0)).length() < 1e-9);
+        for (id, prop, v) in reset_writes(&w, p) {
+            w.set(id, prop, v).unwrap();
+        }
+        assert!(!has_custom_pivot(&w, p));
+        let back = world_pivot(&w, p).unwrap();
+        assert!((back.position - DVec3::new(6.0, 0.0, 0.0)).length() < 1e-9);
+        // Default pivot axes are the part's own (core and Studio agree on the rotation).
+        let t = PartTransform::read(&w, p).unwrap();
+        assert!(
+            back.rotation.abs_diff_eq(t.rotation, 1e-9)
+                || back.rotation.abs_diff_eq(-t.rotation, 1e-9)
+        );
+    }
+
+    #[test]
+    fn a_model_pivot_is_set_then_follows_the_box_again_after_reset() {
+        let mut w = World::new_with_services();
+        let ws = w.root("Workspace").unwrap();
+        let m = w.create("Model", Some(ws)).unwrap();
+        let p = w.create("Part", Some(m)).unwrap();
+        w.set(p, "Position", Value::Vector3(Vec3::new(2.0, 0.0, 0.0)))
+            .unwrap();
+        assert!((world_pivot(&w, m).unwrap().position - DVec3::new(2.0, 0.0, 0.0)).length() < 1e-9);
+        for (id, prop, v) in pivot_writes(&w, m, &Pivot::at(DVec3::new(9.0, 1.0, 0.0))) {
+            w.set(id, prop, v).unwrap();
+        }
+        assert_eq!(models_with_set_pivots(&w, &[ws]).len(), 1);
+        assert!((world_pivot(&w, m).unwrap().position - DVec3::new(9.0, 1.0, 0.0)).length() < 1e-9);
+        for (id, prop, v) in reset_writes(&w, m) {
+            w.set(id, prop, v).unwrap();
+        }
+        assert!((world_pivot(&w, m).unwrap().position - DVec3::new(2.0, 0.0, 0.0)).length() < 1e-9);
     }
 
     #[test]
