@@ -66,7 +66,7 @@ cargo fmt --all -- --check
 ## Re-check fixes (#341)
 - gsub charges one step per match and one per 16 replacement bytes scanned (`%0` over empty matches
   too). `table.sort` wrapper: Lua comparators run directly (already interruptible); C comparators
-  are wrapped; with no comparator a table of at most 524288 numbers uses the C sort after one
+  are wrapped; with no comparator a table of at most 262144 numbers uses the C sort after one
   O(n) type scan, anything else goes through the Lua closure. C comparators are found with
   `debug.info(f, "s") == "[C]"`.
 - Sort tests compare against a plain Luau state's sort time and fail on the old code.

@@ -118,11 +118,11 @@ end
 -- comparison, so each one crosses a Lua call and the deadline check runs. Ordering and
 -- "invalid order function" are Luau's own; a type error from the default comparison loses only
 -- the closure's position prefix.
-local table, rawlen, type, pcall, error = table, rawlen, type, pcall, error
+local table, rawlen, rawget, type, pcall, error = table, rawlen, rawget, type, pcall, error
 local info = debug.info
 local sort = table.sort
 local SORT_VIA_LUA = 256
-local NUM_C_SORT = 524288
+local NUM_C_SORT = 262144
 local PREFIX = "^%[engine%]:%d+: "
 local function finish(ok, ...)
     if ok then return ... end
@@ -135,7 +135,7 @@ local function finish(ok, ...)
 end
 local function all_numbers(t, n)
     for i = 1, n do
-        if type(t[i]) ~= "number" then return false end
+        if type(rawget(t, i)) ~= "number" then return false end
     end
     return true
 end
