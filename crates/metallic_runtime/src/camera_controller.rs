@@ -74,15 +74,7 @@ impl CameraController {
 
     /// World-space walking direction for a camera-relative wish (x right, y forward). Flat (Y = 0).
     pub fn move_direction(&self, movement: [f32; 2]) -> Vec3 {
-        let (sy, cy) = self.yaw.sin_cos();
-        let forward = (f64::from(sy), f64::from(-cy));
-        let right = (f64::from(cy), f64::from(sy));
-        let (mx, my) = (f64::from(movement[0]), f64::from(movement[1]));
-        Vec3::new(
-            right.0 * mx + forward.0 * my,
-            0.0,
-            right.1 * mx + forward.1 * my,
-        )
+        crate::move_direction(movement, self.yaw)
     }
 
     /// The camera for this frame, looking at `focus` (world studs). A ray from the focus to the
@@ -136,6 +128,7 @@ mod tests {
         assert!((f.z + 1.0).abs() < 1e-9 && f.x.abs() < 1e-9);
         let r = c.move_direction([1.0, 0.0]);
         assert!((r.x - 1.0).abs() < 1e-9);
+        assert_eq!(c.move_direction([0.5, 1.0]), Vec3::new(0.5, 0.0, -1.0));
         c.yaw = std::f32::consts::FRAC_PI_2;
         let f = c.move_direction([0.0, 1.0]);
         assert!((f.x - 1.0).abs() < 1e-6, "yaw 90 deg looks along +X: {f:?}");
