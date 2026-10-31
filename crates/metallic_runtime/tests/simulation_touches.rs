@@ -113,8 +113,8 @@ fn cpu_simulation_reports_body_part_touches_on_both_sides() {
         assert!(has("pad on HumanoidRootPart"), "{lines:?}");
     }
 
-    // The script waited for the character, so the foot's handlers connected after it had landed
-    // on the pad: step off and back on so they see a fresh touch.
+    // The server-owned character exists before startup, so both sides connect before landing.
+    // Step off and back on to verify fresh touches on the limb's own signal too.
     let (off, on) = (Vec3::new(40.0, 3.0, 0.0), Vec3::new(0.0, 3.0, 0.0));
     teleport(&mut game, off);
     run(&mut game, 0.5);
@@ -140,6 +140,7 @@ fn cpu_simulation_reports_body_part_touches_on_both_sides() {
     ] {
         assert_eq!(count(off), count(on), "{on}: {lines:?}");
     }
-    // One more end than start for the foot: the first contact began before it connected.
-    assert_eq!(count("foot off Pad"), count("foot on Pad") + 1, "{lines:?}");
+    // All foot contacts began after its handlers connected and have now ended.
+    assert!(count("foot on Pad") >= 2, "{lines:?}");
+    assert_eq!(count("foot off Pad"), count("foot on Pad"), "{lines:?}");
 }
