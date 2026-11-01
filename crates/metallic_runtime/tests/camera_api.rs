@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! `workspace.CurrentCamera`, the projection methods and `Ray`, through a running `Game`.
 
 use metallic_core::World;
