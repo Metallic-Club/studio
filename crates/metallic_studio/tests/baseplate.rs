@@ -60,10 +60,10 @@ fn embedded_baseplate_is_byte_identical_to_the_repo_folder() {
 }
 
 #[test]
-fn disk_templates_list_baseplate_then_parkour() {
+fn disk_templates_list_baseplate_then_empty_and_parkour() {
     let found = list_templates(&repo_templates());
     let ids: Vec<&str> = found.iter().map(|t| t.id.as_str()).collect();
-    assert_eq!(&ids[..2], [BASEPLATE_ID, "parkour"]);
+    assert_eq!(&ids[..3], [BASEPLATE_ID, "empty", "parkour"]);
     assert!(found[0].embedded.is_none(), "the folder copy wins");
 
     let merged = with_builtin(found.clone());
