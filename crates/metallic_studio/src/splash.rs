@@ -256,7 +256,8 @@ pub fn main_window_position(splash_outer: Rect, main: Vec2) -> egui::Pos2 {
 /// monitor the splash was on).
 pub fn become_main_window(ctx: &egui::Context) {
     let outer = ctx.input(|i| i.viewport().outer_rect);
-    ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
+    // On Windows the window keeps no system frame: Studio draws its own title bar.
+    ctx.send_viewport_cmd(ViewportCommand::Decorations(!crate::title_bar::CUSTOM));
     ctx.send_viewport_cmd(ViewportCommand::Resizable(true));
     ctx.send_viewport_cmd(ViewportCommand::InnerSize(MAIN_SIZE));
     ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(MAIN_MIN_SIZE));

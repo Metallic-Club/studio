@@ -198,6 +198,19 @@ fn zone_around_resting_part() -> (World, PhysicsWorld, InstanceId) {
     (world, phys, zone)
 }
 
+/// Changing `prop` rebuilds the collider of the unanchored part resting on the baseplate; it
+/// keeps touching the baseplate, so neither a second `Touched` nor a `TouchEnded` fires (and
+/// Rapier's islands stay consistent, #423).
+fn rebuild_resting_part(prop: &str, value: Value) {
+    let (mut world, mut phys, _, p) = resting();
+    world.set(p, prop, value).unwrap();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 0.5);
+    assert!(phys.drain_touched().is_empty(), "{prop}: a second Touched");
+    assert!(phys.drain_touch_ended().is_empty(), "{prop}: a TouchEnded");
+    assert!(pos(&world, p).y > 2.0, "{prop}: fell into the baseplate");
+}
+
 /// Changing `prop` rebuilds the zone's collider; it keeps touching the part, so neither a
 /// second `Touched` nor a `TouchEnded` fires.
 fn rebuild_while_touching(prop: &str, value: Value) {
@@ -211,14 +224,21 @@ fn rebuild_while_touching(prop: &str, value: Value) {
 
 #[test]
 fn resizing_a_touching_part_fires_no_second_touched() {
-    rebuild_while_touching("Size", Value::Vector3(Vec3::new(7.0, 3.0, 7.0)));
+    rebuild_resting_part("Size", Value::Vector3(Vec3::new(4.0, 1.2, 2.0)));
 }
 
 #[test]
 fn reshaping_a_touching_part_fires_no_second_touched() {
-    rebuild_while_touching("Shape", Value::String("Ball".into()));
+    rebuild_resting_part("Shape", Value::String("Ball".into()));
 }
 
+#[test]
+fn changing_the_material_of_a_touching_part_fires_no_second_touched() {
+    rebuild_resting_part("Material", Value::String("Ice".into()));
+}
+
+/// An unanchored part with `CanCollide` off falls through the floor, so this one rebuilds an
+/// anchored zone instead.
 #[test]
 fn turning_on_can_collide_on_a_touching_part_fires_no_second_touched() {
     rebuild_while_touching("CanCollide", Value::Bool(true));
@@ -648,6 +668,147 @@ fn rotating_anchored_platform_carries_rider() {
     let p = pos(&world, rider);
     let turned = (-p.z).atan2(p.x).to_degrees();
     assert!(turned > 45.0, "rider turned {turned} deg, at {p:?}");
+}
+
+/// Rider resting on an anchored platform at the origin, settled for 1 s.
+fn platform_with_rider(world: &mut World, phys: &mut PhysicsWorld) -> (InstanceId, InstanceId) {
+    let plat = part(
+        world,
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(20.0, 2.0, 20.0),
+        true,
+    );
+    let rider = part(
+        world,
+        Vec3::new(0.0, 1.6, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    phys.sync_from(world);
+    run(phys, world, 1.0);
+    (plat, rider)
+}
+
+#[test]
+fn teleported_anchored_part_has_zero_velocity() {
+    let mut world = World::new_with_services();
+    let mut phys = PhysicsWorld::new();
+    let (plat, _) = platform_with_rider(&mut world, &mut phys);
+    // a script resets the platform 50 studs in one frame (3000 studs/s if swept)
+    world
+        .set(plat, "Position", Value::Vector3(Vec3::new(50.0, 0.0, 0.0)))
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    let v = phys.velocity(plat).unwrap();
+    assert!(v.magnitude() < 1e-6, "v = {v:?}");
+    assert_eq!(pos(&world, plat), Vec3::new(50.0, 0.0, 0.0));
+}
+
+#[test]
+fn teleporting_anchored_platform_does_not_launch_rider() {
+    let mut world = World::new_with_services();
+    let mut phys = PhysicsWorld::new();
+    let (plat, rider) = platform_with_rider(&mut world, &mut phys);
+    let start = pos(&world, rider);
+    // reset the platform 50 studs up in one frame: swept, it would hit the rider from below
+    world
+        .set(plat, "Position", Value::Vector3(Vec3::new(0.0, 50.0, 0.0)))
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    let v = phys.velocity(rider).unwrap();
+    assert!(v.magnitude() < 20.0, "rider launched: v = {v:?}");
+    run(&mut phys, &mut world, 0.25);
+    let p = pos(&world, rider);
+    assert!(p.y < start.y, "rider rose to y = {}", p.y);
+    assert!(
+        (p.x - start.x).abs() < 1.0 && (p.z - start.z).abs() < 1.0,
+        "p = {p:?}"
+    );
+}
+
+fn assert_unit_normal(n: Vec3) {
+    assert!(
+        n.x.is_finite() && n.y.is_finite() && n.z.is_finite(),
+        "normal not finite: {n:?}"
+    );
+    assert!((n.magnitude() - 1.0).abs() < 1e-6, "normal not unit: {n:?}");
+}
+
+#[test]
+fn raycast_normal_is_unit_even_from_inside_a_part() {
+    let mut world = World::new_with_services();
+    let floor = baseplate(&mut world);
+    let ball = part(
+        &mut world,
+        Vec3::new(0.0, 20.0, 0.0),
+        Vec3::new(4.0, 4.0, 4.0),
+        true,
+    );
+    world
+        .set(ball, "Shape", Value::String("Ball".into()))
+        .unwrap();
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    // from outside: the normal is the face normal
+    let hit = phys
+        .raycast(Vec3::new(0.0, 10.0, 0.0), Vec3::new(0.0, -20.0, 0.0), &[])
+        .unwrap();
+    assert_eq!(hit.instance, floor);
+    assert_unit_normal(hit.normal);
+    assert!((hit.normal.y - 1.0).abs() < 1e-3, "{:?}", hit.normal);
+    // edge case from #34: a ground check that starts inside geometry hits at distance 0
+    for (origin, inside) in [
+        (Vec3::new(0.0, 1.0, 0.0), floor),
+        (Vec3::new(0.0, 20.0, 0.0), ball),
+    ] {
+        let dir = Vec3::new(0.0, -10.0, 0.0);
+        let hit = phys.raycast(origin, dir, &[]).unwrap();
+        assert_eq!(hit.instance, inside);
+        assert!(hit.distance.abs() < 1e-6, "distance = {}", hit.distance);
+        assert_unit_normal(hit.normal);
+        // with no surface to measure, the normal opposes the ray
+        assert!((hit.normal.y - 1.0).abs() < 1e-6, "{:?}", hit.normal);
+    }
+}
+
+#[test]
+fn rotation_only_snap_is_a_teleport() {
+    let mut world = World::new_with_services();
+    let plat = part(
+        &mut world,
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(20.0, 2.0, 20.0),
+        true,
+    );
+    let rider = part(
+        &mut world,
+        Vec3::new(6.0, 1.6, 0.0),
+        Vec3::new(2.0, 2.0, 2.0),
+        false,
+    );
+    let mut phys = PhysicsWorld::new();
+    phys.sync_from(&world);
+    run(&mut phys, &mut world, 1.0);
+    let start = pos(&world, rider);
+    // a script flips the platform 170 degrees about +Y in one frame (~178 rad/s if swept)
+    world
+        .set(
+            plat,
+            "Orientation",
+            Value::Vector3(Vec3::new(0.0, 170.0, 0.0)),
+        )
+        .unwrap();
+    phys.step(&mut world, 1.0 / 60.0);
+    let w = phys.angular_velocity(plat).unwrap();
+    assert!(w.magnitude() < 1e-6, "w = {w:?}");
+    let v = phys.velocity(rider).unwrap();
+    assert!(v.magnitude() < 20.0, "rider flung: v = {v:?}");
+    run(&mut phys, &mut world, 0.25);
+    let p = pos(&world, rider);
+    assert!(
+        (p.x - start.x).abs() < 1.0 && (p.z - start.z).abs() < 1.0,
+        "rider moved from {start:?} to {p:?}"
+    );
 }
 
 #[test]

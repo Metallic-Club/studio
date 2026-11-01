@@ -62,6 +62,7 @@ fn event_kind(class: &str, name: &str) -> Option<EventKind> {
         "Died" if class == "Humanoid" => Some(EventKind::Died),
         "CharacterAdded" if class == "Player" => Some(EventKind::CharacterAdded),
         "PlayerAdded" if class == "Players" => Some(EventKind::PlayerAdded),
+        "PlayerRemoving" if class == "Players" => Some(EventKind::PlayerRemoving),
         "Heartbeat" if class == "RunService" => Some(EventKind::Heartbeat),
         "OnServerEvent" if class == "RemoteEvent" => Some(EventKind::OnServerEvent),
         "OnClientEvent" if class == "RemoteEvent" => Some(EventKind::OnClientEvent),

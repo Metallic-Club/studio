@@ -55,6 +55,9 @@ pub(crate) struct HostShared {
     pub(crate) viewport: Cell<[f64; 2]>,
     /// The GUI inset in pixels, for the `Screen` camera methods.
     pub(crate) gui_inset: Cell<f64>,
+    /// A test and throttling hook: after this many handler calls in a step, the step counts as
+    /// out of time (see `ScriptHost::set_step_handler_limit`).
+    pub(crate) step_handler_limit: Cell<Option<usize>>,
 }
 
 impl HostShared {

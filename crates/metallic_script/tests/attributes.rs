@@ -383,6 +383,7 @@ fn the_host_trims_the_log_it_has_delivered() {
 #[test]
 fn a_burst_of_changes_is_delivered_in_order_over_several_steps() {
     let mut rig = Rig::new();
+    rig.host.set_step_handler_limit(Some(500));
     part(&rig, "P");
     rig.server_script(
         "Main",
@@ -408,4 +409,49 @@ fn a_burst_of_changes_is_delivered_in_order_over_several_steps() {
             .any(|l| l.contains("lost") || l.contains("dropped")),
         "{lines:?}"
     );
+}
+
+#[test]
+fn a_backlog_beyond_the_log_loses_only_the_dropped_events_and_says_so() {
+    let mut rig = Rig::new();
+    part(&rig, "P");
+    rig.server_script(
+        "Main",
+        "local p = workspace.P
+         local seen = 0
+         p:GetAttributeChangedSignal('Late'):Connect(function() seen += 1 end)
+         p.AttributeChanged:Connect(function(name) if name == 'Early' then seen += 1000 end end)
+         task.wait(1)
+         print('seen', seen)",
+    );
+    rig.host.start().unwrap();
+    let t = rig.run(0.0, 2);
+    let p = rig
+        .world
+        .borrow()
+        .find_first_child(rig.root("Workspace"), "P")
+        .unwrap();
+    {
+        // More unread changes than the log keeps, between two steps: the oldest are dropped,
+        // the newest (the 'Late' one) survives.
+        let mut w = rig.world.borrow_mut();
+        w.set_attribute(p, "Early", metallic_core::Value::Number(1.0))
+            .unwrap();
+        for i in 0..300_000 {
+            w.set_attribute(p, "N", metallic_core::Value::Number(f64::from(i)))
+                .unwrap();
+        }
+        w.set_attribute(p, "Late", metallic_core::Value::Number(1.0))
+            .unwrap();
+    }
+    rig.run(t, 90);
+    let lines = rig.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("warn:") && l.contains("were lost")),
+        "{lines:?}"
+    );
+    // The surviving newest change was delivered (1), the dropped oldest one (1000) was not.
+    assert!(lines.contains(&"print:seen 1".to_string()), "{lines:?}");
 }

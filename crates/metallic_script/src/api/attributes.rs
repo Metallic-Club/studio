@@ -187,9 +187,11 @@ impl ApiState {
                     // The log is trimmed by its readers, so this needs hundreds of thousands of
                     // unread changes: say so instead of dropping the events silently.
                     AttributeChanges::Overflow => {
-                        self.attributes.cursor.set(world.attribute_cursor());
+                        // Continue with the oldest change the log kept: only the dropped ones
+                        // are lost.
+                        self.attributes.cursor.set(world.attribute_oldest_cursor());
                         self.sink.warn(
-                            "attribute change events were lost: too many attribute changes in one step",
+                            "attribute change events were lost: too many unread attribute changes",
                         );
                         return;
                     }

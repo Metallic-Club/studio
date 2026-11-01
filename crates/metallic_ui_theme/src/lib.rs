@@ -104,6 +104,8 @@ const DANGER: Color32 = rgba(tk::DANGER);
 const DANGER_HOVER: Color32 = rgba(tk::DANGER_HOVER);
 /// Text on the destructive fill.
 const ON_DANGER: Color32 = rgba(tk::ON_DANGER);
+/// The hovered close button of the title bar (the Windows system red, every theme).
+const CAPTION_CLOSE: Color32 = rgba(tk::CAPTION_CLOSE);
 /// Text on [`ART_SCRIM`] (the same in every theme).
 pub const ART_TEXT: Color32 = rgba(tk::G_100);
 /// Icons on [`ART_SCRIM`].
@@ -233,6 +235,7 @@ palette! {
     DANGER, danger, "danger";
     DANGER_HOVER, danger_hover, "danger-hover";
     ON_DANGER, on_danger, "on-danger";
+    CAPTION_CLOSE, caption_close, "caption-close";
     ART_SCRIM, art_scrim, "art-scrim";
     EDGE_LOW, edge_low, "edge-low";
     KEYCAP_ON_ACCENT, keycap_on_accent, "keycap-on-accent";

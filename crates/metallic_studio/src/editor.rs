@@ -207,6 +207,10 @@ pub enum UiRequest {
     OpenSettings,
     /// Close the game, asking first when it has unsaved changes (Ctrl+W, like File > Close game).
     CloseGame,
+    /// Open the command palette with this text typed ("" for Ctrl+K, ">" for Ctrl+Shift+P).
+    OpenPalette(&'static str),
+    /// Open the Insert palette at the cursor (Shift+A over the viewport).
+    InsertAtCursor,
 }
 
 /// Everything about one open game except the UI.

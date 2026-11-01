@@ -34,9 +34,12 @@ jobs:
           rustup toolchain install
           rustup component add clippy rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves: PR caches would evict main's from the 10 GB repo cache and leave cold builds.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny,cargo-nextest
       - name: Format
         run: cargo fmt --check
       - uses: actions/setup-python@v5
@@ -44,8 +47,11 @@ jobs:
           python-version: '3.12'
       - name: Build lane guard tests
         run: python -I tools/test_cargo_lane.py
+      # nextest runs the ~140 test binaries in parallel; cargo test ran them one after another (~6 min).
       - name: Test
-        run: cargo test --workspace
+        run: cargo nextest run --workspace --profile ci
+      - name: Doc tests
+        run: cargo test --workspace --doc
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Licences
@@ -61,6 +67,9 @@ jobs:
           rustup toolchain install
           rustup component add clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves: PR caches would evict main's from the 10 GB repo cache and leave cold builds.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -84,6 +93,9 @@ jobs:
         shell: bash
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves: PR caches would evict main's from the 10 GB repo cache and leave cold builds.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install system libraries
         run: |
           sudo apt-get update
