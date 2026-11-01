@@ -605,6 +605,41 @@ the golden hash on purpose (`cargo run -p metallic_core --example registry_hash`
 generated module tree, so run `rustfmt --edition 2024` on the new file; CI checks the folder. Design:
 `docs/design/class-system.md`.
 
+## How to write a method
+Methods are written once, in the class file, with no knowledge of any scripting language (`classes/call.rs`; design section
+5). **Nothing routes a script call here until #462, and existing methods move with #465-#467: a method declared today is not
+visible to Luau yet.**
+
+```rust
+fn set_lit(call: &mut MethodCall) -> Result<CallOutcome, ApiError> {
+    let lit = call.opt_bool(0)?.unwrap_or(true); // already checked against the signature
+    call.world.set(call.this, "Lit", Value::Bool(lit))?;
+    Ok(lit.into())
+}
+// In the class file's `.methods(&[...])`:
+MethodDesc::native("SetLit", set_lit)
+    .params(&[Param::new("lit", Ty::Bool).optional()])
+    .returns(Ty::Bool)
+    .describe("Lights or darkens the beacon; lights it when left out.")
+```
+
+- **Arguments** are checked from the signature before the body runs: the count, then each type, left to right. A nil is
+  "left out" for an `.optional()` parameter. An `Int` is accepted as a `Number`; a `Number` as an `Int` only when whole and in
+  range. `.manual()` skips the check for that parameter, and the method reads it with `call.arg(i)` and keeps its own text:
+  migration only, for a text a test asserts.
+- **Yielding** is a return value: declare `.yields()` and return `CallOutcome::Wait(WaitRequest::...)`. The host parks the
+  thread and resumes it with a value, or nil on timeout.
+- **Errors** are `ApiError`. `?` works on a `CoreError`; `ApiError::message("text")` prints the text as given. One formatter
+  gives `Part:Resize: argument #1 expected Enum.NormalId, got string`, naming the instance's class, not the declaring one.
+- **Needs the script host** (fires a remote, calls script code, reads host state): declare `MethodDesc::host("Name")` and add
+  `methods.implement("Class", "Name", body)?` to `metallic_script/src/api/host_methods.rs`, where `body` takes a `HostCall`.
+  `tests/host_methods.rs` fails on a `Host` method with no body and on a body that names no `Host` method.
+  `NOT_MIGRATED_HOST_METHODS` lists the ones the old tables still dispatch; it can only shrink.
+- **Every language** goes through `HostApi` (`classes/host_api.rs`), addressed by ids: the handle's liveness and class, the
+  member in the instance's own table (so `hide` and overrides apply), the context (#468), the arguments, then the body.
+  `MethodDispatch` holds that order once. `metallic_core` depends on no scripting language; `tests/call_convention.rs` walks
+  `Cargo.lock` to hold that.
+
 ## Where to add things
 - **A new Instance class or property:** one class file (see "How to add a class"), a test in `tests/tree.rs`; the Luau API
   picks up registry properties by name; Studio's Properties panel too. Add to Insert menu if creators should create it.
@@ -657,8 +692,8 @@ inherited member keeps its `MemberId` and `PropertyIndex` in every subclass. `cl
 `GuiBase2d`, `GuiObject`, `LuaSourceContainer`, `BaseScript`, `BaseRemoteEvent`, `ServiceProvider`, `DataModel`) are
 refused by `World::create`, so also by scene load; `Instance.new` also refuses `SERVICE` classes and anything else
 without `CREATABLE`. `World::create` still accepts services for engine code and hand-built worlds. Method and signal lists
-exist in the descriptors but stay signature-only (`PVInstance.GetPivot`, `PivotTo`) until #461-#465 route calls through
-them; the Luau binding still dispatches its own tables. Inserted abstract classes change no existing `IsA` answer: a test
+exist in the descriptors, but no script call goes through them until #462-#465 (`PVInstance.GetPivot`, `PivotTo` are
+signatures only); the Luau binding still dispatches its own tables. Inserted abstract classes change no existing `IsA` answer: a test
 holds the table recorded from the old `classes.rs`.
 
 `replication::{instance_visible, property_visible, property_value}` implement the play-client filter. They hide

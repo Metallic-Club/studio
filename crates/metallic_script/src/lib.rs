@@ -16,6 +16,9 @@
 //! setup or client-script execution. This scripting role adds no network or server process.
 //! [`ScriptHost::with_role`] selects explicit [`ScriptRole`]s, including a Client VM with
 //! deferred local-player binding. Player registration/removal uses trusted World-local IDs.
+//!
+//! [`host_methods`] is the table of methods core declares `Host` and this crate implements. The
+//! Luau binding does not dispatch through it until #462.
 
 #![warn(missing_docs)]
 
@@ -26,6 +29,9 @@ mod pattern;
 mod task_lib;
 mod vm;
 
+pub use api::host_methods::{
+    HostCall, HostMethodFn, HostState, NOT_MIGRATED_HOST_METHODS, host_methods,
+};
 pub use api::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,

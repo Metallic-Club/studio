@@ -7,6 +7,10 @@
 //! superclass chain. The functions below ([`class_def`], [`find_property`], [`is_subclass`],
 //! [`all_properties`], ...) are thin wrappers over it, kept so callers can migrate later.
 //!
+//! Methods use a language-neutral calling convention ([`MethodCall`], [`ScriptValue`],
+//! [`CallOutcome`], [`ApiError`]; `call.rs` has "How to write a method"), and every language binding
+//! goes through one interface ([`HostApi`]). This crate knows no scripting language.
+//!
 //! # Adding a class
 //!
 //! Create `src/classes/<group>/<class>.rs` with a `pub static CLASS: ClassDesc` and nothing else
@@ -17,14 +21,25 @@
 use crate::value::Value;
 use std::sync::LazyLock;
 
+mod call;
 mod desc;
+mod host_api;
 mod lists;
 pub(crate) mod prelude;
 mod resolve;
 
+pub use call::{
+    ApiError, ApiErrorKind, CallContext, CallOutcome, EnumItemRef, FunctionRef, MemberCategory,
+    MethodCall, MethodFn, ScriptValue, Side, SignalKey, TypeName, UNNAMED_INSTANCE, WaitRequest,
+    check_arguments, conforms,
+};
 pub use desc::{
     ArgCheck, CallbackDesc, ClassDesc, ClassFlags, DefaultOverride, FunctionSig, MemberContext,
     MethodDesc, MethodImpl, NumRange, Param, PropAccess, PropDesc, Repl, SignalDesc, Ty,
+};
+pub use host_api::{
+    Handle, HostApi, HostCall, HostMethodError, HostMethodFn, HostMethods, MethodDispatch,
+    member_of,
 };
 pub use lists::{
     CAMERA_TYPES, INPUT_ACTION_TYPES, INPUT_ROLES, INPUT_TRIGGERS, LIGHTING_STYLES, MATERIALS,
