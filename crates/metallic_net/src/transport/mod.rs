@@ -10,6 +10,7 @@ mod conditioner;
 pub mod limits;
 mod memory;
 mod quic;
+mod receive;
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -17,6 +18,7 @@ use std::time::Duration;
 pub use conditioner::LinkConditioner;
 pub use memory::MemoryNet;
 pub use quic::{QuicClient, QuicServer};
+pub use receive::{PollBudget, PollReport, PollStop};
 
 use crate::NetError;
 use limits::{MAX_CLIENT_FRAME, MAX_SERVER_FRAME};
@@ -123,8 +125,15 @@ pub trait Connection: Send {
     fn send_reliable(&mut self, channel: Channel, frame: Vec<u8>) -> Result<(), NetError>;
     /// Sends an unreliable datagram of at most [`MAX_DATAGRAM`](limits::MAX_DATAGRAM) bytes.
     fn send_datagram(&mut self, bytes: Vec<u8>) -> Result<(), NetError>;
-    /// Appends everything that arrived since the last poll to `out`.
+    /// Appends everything available to `out`, without a per-call delivery bound.
+    /// Drivers needing finite tick work must use [`Self::poll_bounded`] instead.
     fn poll(&mut self, out: &mut Vec<Incoming>);
+    /// Appends at most the budget's events and payload bytes, preserving pending FIFO order.
+    /// Existing entries in `out` do not count. An indivisible event that does not fit stays
+    /// pending; [`PollStop::ByteLimit`] reports its required payload budget without dropping it.
+    /// See [`PollBudget`] for accounting and limits. There is no unrestricted default fallback:
+    /// implementations must supply this operation explicitly.
+    fn poll_bounded(&mut self, out: &mut Vec<Incoming>, budget: PollBudget) -> PollReport;
     /// Current round-trip time estimate.
     fn rtt(&self) -> Duration;
     /// Traffic counters.

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
 use metallic_core::classes::{PropDef, all_properties, find_property};
+use metallic_core::look_override;
 use metallic_core::{CFrame, InstanceId, UDim2, Value, Vec3};
 
 use crate::commands::{Command, PropName};
@@ -68,7 +69,8 @@ fn section(prop: &str) -> usize {
         | "TextColor3"
         | "TextSize"
         | "Text"
-        | "Visible" => 1,
+        | "Visible"
+        | "LookOverride" => 1,
         "Position" | "Orientation" | "Size" => 2,
         "Anchored" | "CanCollide" => 3,
         "Enabled" => 4,
@@ -557,8 +559,14 @@ impl Properties {
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_min_size(egui::vec2(label_w, crate::theme::ROW_HEIGHT));
+                    // LookOverride shows as "Style" (building-tools spec 12.5).
+                    let shown = if p.name == look_override::PROPERTY {
+                        "Style"
+                    } else {
+                        p.name
+                    };
                     let label = ui.add(
-                        egui::Label::new(RichText::new(p.name).color(crate::theme::text_2()))
+                        egui::Label::new(RichText::new(shown).color(crate::theme::text_2()))
                             .truncate(),
                     );
                     label.on_hover_text(format!(
@@ -598,6 +606,17 @@ impl Properties {
                         );
                         if r.changed() {
                             edits.push(Edit::Set(name, Value::Number(v)));
+                        }
+                    }
+                    (Value::String(s), _) if p.name == look_override::PROPERTY => {
+                        // "Inherit · Realistic" or the style; a click opens the style picker.
+                        let text = style_row_text(state, active, s);
+                        if ui
+                            .add(egui::Button::new(text).min_size(egui::vec2(160.0, 0.0)))
+                            .on_hover_text("Open the style picker (L)")
+                            .clicked()
+                        {
+                            state.request(UiRequest::RunAction(crate::style_picker::OPEN_ID));
                         }
                     }
                     (Value::String(s), Some(allowed)) => {
@@ -903,6 +922,21 @@ fn with_component(value: &Value, i: usize, x: f64) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// The Style row's text: the stored style, or "Inherit · <what it resolves to>".
+fn style_row_text(state: &EditorState, id: InstanceId, stored: &str) -> String {
+    if stored != look_override::INHERIT {
+        return look_override::display_name(stored)
+            .unwrap_or(stored)
+            .to_string();
+    }
+    let resolved = look_override::resolve(&state.world, id)
+        .unwrap_or_else(|| crate::style_picker::place_look(&state.world));
+    format!(
+        "Inherit · {}",
+        look_override::display_name(resolved).unwrap_or(resolved)
+    )
 }
 
 #[cfg(test)]

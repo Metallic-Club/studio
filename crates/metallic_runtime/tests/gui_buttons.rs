@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! Clickable GUI end to end (#79): pointer events through `Game::gui_pointer` reach LocalScript
 //! handlers of TextButton and ImageButton events, overlapping buttons resolve by ZIndex, and a
 //! press the GUI takes is reported so the caller keeps it from the game's input.
@@ -343,4 +344,41 @@ fn a_click_on_a_button_does_not_reach_game_input() {
     let elsewhere = click(&mut r, [700.0, 500.0]);
     let fire: Vec<&String> = elsewhere.iter().filter(|l| l.starts_with("Fire")).collect();
     assert_eq!(fire, ["Fire Begin", "Fire End"]);
+}
+
+/// The persistent Combined host must retain GUI events across zero-tick or borrowed frames.
+#[test]
+fn button_events_wait_for_a_successful_simulation_tick() {
+    let mut r = Rig::new();
+    let at = [220.0, 120.0];
+    assert!(r.pointer(PointerId::Mouse, PointerPhase::Down, at));
+    assert!(r.pointer(PointerId::Mouse, PointerPhase::Up, at));
+    let idle = metallic_runtime::FrameInput::default();
+    assert_eq!(r.game.frame(&idle, 0.0).ticks, 0);
+    assert!(r.lines().is_empty());
+    let world = r.game.world();
+    let held = world.borrow_mut();
+    assert_eq!(r.game.frame(&idle, TICK).ticks, 0);
+    assert!(r.lines().is_empty());
+    drop(held);
+    assert_eq!(r.game.frame(&idle, 0.0).ticks, 1);
+    let lines = r.lines();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("Play Activated "))
+            .count(),
+        1,
+        "{lines:?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.as_str() == "Play MouseButton1Click")
+            .count(),
+        1,
+        "{lines:?}"
+    );
+    r.frame();
+    assert!(r.lines().is_empty(), "GUI events must not replay");
 }

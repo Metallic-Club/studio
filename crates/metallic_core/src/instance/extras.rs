@@ -21,9 +21,14 @@ pub const MAX_ATTRIBUTE_NAME: usize = 100;
 pub const MAX_ATTRIBUTE_STRING: usize = 65_536;
 /// Most attributes one instance can hold.
 pub const MAX_ATTRIBUTES: usize = 1024;
-/// Most attribute and tag changes a log keeps before the oldest half is dropped. Readers that
-/// follow the log trim it ([`World::trim_attribute_log`]), so this only matters when changes
-/// pile up unread (hundreds of thousands in one step).
+/// Most attribute and tag changes a log keeps; one more drops the oldest half (about 131,000
+/// changes) and the readers behind it get `Overflow` and a warning, so they lose exactly those.
+/// Readers that follow the log trim it ([`World::trim_attribute_log`]), so this only matters
+/// when changes pile up unread (hundreds of thousands).
+///
+/// The unread backlog is not charged to [`MAX_EXTRAS_BYTES`]: it is bounded by this limit (a
+/// few tens of MiB at most, and only while nobody reads), and charging it would make
+/// `SetAttribute` fail because of events not yet delivered rather than because of the data held.
 const LOG_LIMIT: usize = 262_144;
 /// A log with room for more entries than this is shrunk once it is mostly empty again.
 const SHRINK_ABOVE: usize = 4096;
@@ -309,7 +314,9 @@ impl World {
             extras.attributes.insert(name.to_string(), value);
         }
         self.extras_bytes = self.extras_bytes - old_cost + new_cost;
-        self.record(id);
+        // Attributes and tags are coarse-only in the journal for now: `changes_since` reports
+        // the id, `changes_since_detailed` reports nothing (use the attribute and tag logs).
+        self.record(id, None);
         self.attribute_log.push(AttributeChange {
             id,
             name: name.to_string(),
@@ -390,6 +397,15 @@ impl World {
     /// Entries of room the attribute and tag logs hold, for diagnostics and tests.
     pub fn change_log_capacity(&self) -> usize {
         self.attribute_log.capacity() + self.tag_log.capacity()
+    }
+
+    /// The cursor at the oldest change the attribute log still holds: where a reader that
+    /// got [`AttributeChanges::Overflow`] can continue (it lost only what the log dropped).
+    pub fn attribute_oldest_cursor(&self) -> AttributeCursor {
+        AttributeCursor {
+            world: self.uid,
+            seq: self.attribute_log.floor,
+        }
     }
 
     /// The current end of the attribute log.
@@ -528,7 +544,7 @@ impl World {
             .entry(tag.to_string())
             .or_default()
             .insert(id);
-        self.record(id);
+        self.record(id, None); // coarse-only, like attributes
         if self.is_in_tree(id) {
             self.tag_log.push(TagChange {
                 id,
@@ -560,7 +576,7 @@ impl World {
                 self.tag_index.remove(tag);
             }
         }
-        self.record(id);
+        self.record(id, None); // coarse-only, like attributes
         if self.is_in_tree(id) {
             self.tag_log.push(TagChange {
                 id,
@@ -636,6 +652,15 @@ impl World {
             .min();
         if let Some(seq) = oldest {
             self.tag_log.trim_to(seq);
+        }
+    }
+
+    /// The cursor at the oldest change the tag log still holds; see
+    /// [`World::attribute_oldest_cursor`].
+    pub fn tag_oldest_cursor(&self) -> TagCursor {
+        TagCursor {
+            world: self.uid,
+            seq: self.tag_log.floor,
         }
     }
 

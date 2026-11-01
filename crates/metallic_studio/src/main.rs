@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 use metallic_studio::app::{Options, StudioApp, WINDOW_TITLE, icon_image};
-use metallic_studio::splash;
+use metallic_studio::{splash, title_bar};
 
 fn main() -> eframe::Result {
     // Must run first: when the installer or an update starts Studio with a hook argument,
@@ -15,7 +15,7 @@ fn main() -> eframe::Result {
         Ok(o) => o,
         Err(message) => {
             eprintln!(
-                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|firstrun|error|editor|playing|colour|components|settings --theme graphite|titanium|light --location <dir> --size <w>x<h>]"
+                "{message}\nusage: metallic-studio [--screenshot <png> --scene splash|start|firstrun|error|editor|playing|palette|colour|components|settings --theme graphite|titanium|light --location <dir> --size <w>x<h>]"
             );
             std::process::exit(2);
         }
@@ -29,6 +29,8 @@ fn main() -> eframe::Result {
         viewport
             .with_inner_size(options.size.unwrap_or(splash::MAIN_SIZE.into()))
             .with_min_inner_size(splash::MAIN_MIN_SIZE)
+            // Windows: Studio draws its own title bar (title_bar.rs).
+            .with_decorations(!title_bar::CUSTOM)
     };
     match icon_image() {
         Ok(img) => {
