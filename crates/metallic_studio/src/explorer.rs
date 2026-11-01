@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use eframe::egui::{self, Sense, Stroke, Vec2};
 use metallic_core::{InstanceId, Value};
 
-use crate::editor::{EditorState, INSERTABLE, UiRequest};
+use crate::editor::{EditorState, UiRequest, insertable, with_class_tooltip};
 use crate::tokens::ui_tokens;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -321,8 +321,8 @@ impl Explorer {
                 actions.push(Action::Click(id, egui::Modifiers::NONE));
             }
             ui.menu_button("Insert", |ui| {
-                for &class in INSERTABLE {
-                    if ui.button(class).clicked() {
+                for &class in insertable() {
+                    if with_class_tooltip(ui.button(class), class).clicked() {
                         actions.push(Action::Insert(class, id));
                         ui.close();
                     }

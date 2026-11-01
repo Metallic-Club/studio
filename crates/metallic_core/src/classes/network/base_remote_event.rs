@@ -4,4 +4,5 @@ use crate::classes::prelude::*;
 pub static CLASS: ClassDesc = ClassDesc::new("BaseRemoteEvent", Some("Instance"))
     .flags(ClassFlags::ABSTRACT)
     .category("Network")
+    .icon_like("RemoteEvent")
     .describe("A one-way message channel between the server and clients.");

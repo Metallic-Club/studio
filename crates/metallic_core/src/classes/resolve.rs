@@ -6,7 +6,7 @@
 //! `overrides()`; `defaults` and `hide` change an inherited member without redeclaring it.
 //! A malformed set of classes gives a typed [`SchemaError`], never a panic.
 use super::desc::{CallbackDesc, SignalDesc};
-use super::desc::{ClassDesc, ClassFlags, MemberContext, MethodDesc, PropDesc};
+use super::desc::{ClassDesc, ClassFlags, InsertEntry, MemberContext, MethodDesc, PropDesc};
 use crate::value::Value;
 use std::collections::HashSet;
 
@@ -246,6 +246,37 @@ impl Registry {
     pub(crate) fn resolved(&self, id: ClassId) -> &ResolvedClass {
         &self.classes[usize::from(id.0)]
     }
+
+    /// What the Studio Insert lists offer: `CREATABLE` classes not marked
+    /// [`InsertEntry::Hidden`], with each category's classes together. A category sits where its
+    /// lowest [`InsertEntry::Listed`] number puts it; ties go by name.
+    pub fn insertable(&self) -> Vec<&'static ClassDesc> {
+        let listed: Vec<(u16, &'static ClassDesc)> = self
+            .descs
+            .iter()
+            .filter(|class| class.is_creatable())
+            .filter_map(|&class| match class.insert {
+                InsertEntry::Listed(order) => Some((order, class)),
+                InsertEntry::Hidden => None,
+            })
+            .collect();
+        let first_of = |category: &str| {
+            listed
+                .iter()
+                .filter(|(_, class)| class.category == category)
+                .map(|(order, _)| *order)
+                .min()
+        };
+        let mut sorted: Vec<_> = listed
+            .iter()
+            .map(|&(order, class)| {
+                let key = (first_of(class.category), class.category, order, class.name);
+                (key, class)
+            })
+            .collect();
+        sorted.sort_by_key(|&(key, _)| key);
+        sorted.into_iter().map(|(_, class)| class).collect()
+    }
 }
 
 /// Why a set of classes does not resolve. Each variant names the class (and member) at fault.
@@ -332,6 +363,16 @@ pub enum SchemaError {
         class: &'static str,
         /// The name in `hide`.
         member: &'static str,
+    },
+    /// A property's `visible_when` reads a name that is not a property of the class.
+    #[error("property {class}.{property} is visible when {reads}, which is not a property")]
+    VisibleWhenWithoutProperty {
+        /// The class.
+        class: &'static str,
+        /// The property with the condition.
+        property: &'static str,
+        /// The name the condition reads.
+        reads: &'static str,
     },
     /// A property has a normalizer without a contract id, or a contract id without a normalizer.
     #[error("property {class}.{property} must declare normalize and normalize_schema_id together")]
@@ -700,6 +741,17 @@ fn resolve_class(
         .map(|ancestor| sorted[usize::from(ancestor.0)].name)
         .collect();
     let by_name = name_table(class.name, &table.members)?;
+    for prop in &table.props {
+        if let Some(reads) = prop.editor.visible_when.map(|when| when.property())
+            && !table.props.iter().any(|other| other.name == reads)
+        {
+            return Err(SchemaError::VisibleWhenWithoutProperty {
+                class: class.name,
+                property: prop.name,
+                reads,
+            });
+        }
+    }
     let name_is_custom = chain
         .iter()
         .any(|ancestor| has_name_default(sorted[usize::from(ancestor.0)]));

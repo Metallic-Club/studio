@@ -18,6 +18,10 @@
 //! `cargo test -p metallic_core`: the resolution checks run, and `registry_hash_is_pinned` tells
 //! you to update the golden hash on purpose. `cargo fmt` does not follow discovered modules, so
 //! format new files with `rustfmt --edition 2024 --check <file>` (CI checks the folder).
+//!
+//! Studio reads this registry too: [`Registry::insertable`] is its Insert lists and
+//! [`PropDesc::editor`] says how the Properties panel shows a property. Neither is in
+//! `registry_hash`.
 use crate::value::Value;
 use std::sync::LazyLock;
 
@@ -34,8 +38,9 @@ pub use call::{
     check_arguments, conforms,
 };
 pub use desc::{
-    ArgCheck, CallbackDesc, ClassDesc, ClassFlags, DefaultOverride, FunctionSig, MemberContext,
-    MethodDesc, MethodImpl, NumRange, Param, PropAccess, PropDesc, Repl, SignalDesc, Ty,
+    ArgCheck, CallbackDesc, ClassDesc, ClassFlags, DefaultOverride, Editor, FunctionSig,
+    InsertEntry, MemberContext, MethodDesc, MethodImpl, NumRange, NumberUnit, Param, PropAccess,
+    PropDesc, Repl, Section, SignalDesc, Ty, VisibleWhen, Widget,
 };
 pub use host_api::{
     Handle, HostApi, HostCall, HostMethodError, HostMethodFn, HostMethods, MethodDispatch,

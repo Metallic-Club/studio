@@ -59,22 +59,26 @@ use crate::transform::{
 /// How long an undo or save note stays in the status bar.
 pub const NOTE_TIME: Duration = Duration::from_secs(2);
 
-/// Classes offered by Insert (Explorer right-click and the Insert menu).
-pub const INSERTABLE: &[&str] = &[
-    "Part",
-    "SpawnLocation",
-    "Checkpoint",
-    "Script",
-    "LocalScript",
-    "ModuleScript",
-    "Folder",
-    "Model",
-    "RemoteEvent",
-    "ScreenGui",
-    "TextLabel",
-    "TextButton",
-    "ImageButton",
-];
+/// Classes offered by Insert (Explorer right-click, the Insert menu and the palettes), from the
+/// registry: see [`metallic_core::classes::Registry::insertable`].
+pub fn insertable() -> &'static [&'static str] {
+    static NAMES: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+        metallic_core::classes::registry()
+            .insertable()
+            .iter()
+            .map(|class| class.name)
+            .collect()
+    });
+    &NAMES
+}
+
+/// `response` with the description of `class` as its tooltip, when it has one.
+pub fn with_class_tooltip(response: eframe::egui::Response, class: &str) -> eframe::egui::Response {
+    match metallic_core::classes::class_def(class) {
+        Some(def) if !def.description.is_empty() => response.on_hover_text(def.description),
+        _ => response,
+    }
+}
 
 /// The active viewport tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

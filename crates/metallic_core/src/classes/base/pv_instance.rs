@@ -4,6 +4,7 @@ use crate::classes::prelude::*;
 pub static CLASS: ClassDesc = ClassDesc::new("PVInstance", Some("Instance"))
     .flags(ClassFlags::ABSTRACT)
     .category("Base")
+    .icon_like("Model")
     .describe("Anything with a pivot in the world: parts and models.")
     // Signatures only. `metallic_script/src/api/pivot.rs` still implements them (#465).
     .methods(&[

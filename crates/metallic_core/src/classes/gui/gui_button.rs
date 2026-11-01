@@ -5,7 +5,9 @@ use crate::classes::prelude::*;
 pub static CLASS: ClassDesc = ClassDesc::new("GuiButton", Some("Frame"))
     .flags(ClassFlags::CREATABLE)
     .category("GUI")
+    .no_insert()
     .describe("A rectangle that takes clicks.")
-    .props(&[PropDesc::new("AutoButtonColor", ValueType::Bool, || {
-        Value::Bool(true)
-    })]);
+    .props(&[
+        PropDesc::new("AutoButtonColor", ValueType::Bool, || Value::Bool(true))
+            .describe("Changes the button's background while it is pointed at or pressed."),
+    ]);

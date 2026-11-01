@@ -42,4 +42,10 @@ pub const fn look_override() -> PropDesc {
         look::LOOK_OVERRIDES,
     )
     .normalized(look::look_override_id, look::NORMALIZATION_SCHEMA_ID)
+    .editor(
+        Editor::section(Section::APPEARANCE)
+            .label("Style")
+            .style_picker(),
+    )
+    .describe("The look of this object. Inherit takes it from its parent or the place.")
 }

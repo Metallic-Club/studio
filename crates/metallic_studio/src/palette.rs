@@ -30,7 +30,7 @@ use eframe::egui::{self, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2};
 use metallic_core::{InstanceId, Value, Vec3};
 
 use crate::actions::ActionRegistry;
-use crate::editor::{EditorState, INSERTABLE};
+use crate::editor::{EditorState, insertable, with_class_tooltip};
 use crate::keymap::Keymap;
 use crate::theme::{self, fonts};
 use crate::widgets;
@@ -496,7 +496,7 @@ impl CommandPalette {
         }
         let playing = state.play.is_playing();
         if !playing {
-            for (k, &class) in INSERTABLE.iter().enumerate() {
+            for (k, &class) in insertable().iter().enumerate() {
                 self.text.clear();
                 self.text.push_str("Insert ");
                 self.text.push_str(class);
@@ -520,7 +520,7 @@ impl CommandPalette {
                     choice: Choice::Run(a.id),
                 },
                 None => {
-                    let class = INSERTABLE[i - list.len()];
+                    let class = insertable()[i - list.len()];
                     Row {
                         group: Group::Commands,
                         title: format!("Insert {class}"),
@@ -546,14 +546,14 @@ impl CommandPalette {
         };
         let m = Matcher::new(self.query.trim());
         self.scored.clear();
-        for (i, c) in INSERTABLE.iter().enumerate() {
+        for (i, c) in insertable().iter().enumerate() {
             if let Some(s) = m.score(c) {
                 self.scored.push((s, i as u32));
             }
         }
-        top(&mut self.scored, INSERTABLE.len());
+        top(&mut self.scored, insertable().len());
         self.rows.extend(self.scored.iter().map(|&(_, i)| {
-            let class = INSERTABLE[i as usize];
+            let class = insertable()[i as usize];
             Row {
                 group: Group::Insert,
                 title: class.to_string(),
@@ -775,6 +775,10 @@ impl CommandPalette {
                     }
                     let selected = i == self.selected;
                     let resp = paint_row(ui, row, selected);
+                    let resp = match row.choice {
+                        Choice::Insert { class, .. } => with_class_tooltip(resp, class),
+                        _ => resp,
+                    };
                     if selected && std::mem::take(&mut self.scroll_to_selected) {
                         resp.scroll_to_me(None);
                     }
@@ -1160,6 +1164,42 @@ mod tests {
     use crate::actions::default_actions;
     use crate::output::OutputLog;
     use metallic_core::World;
+
+    /// The list from before it came from the registry (#473), in its order. A new class may join
+    /// it anywhere; these keep their order.
+    #[test]
+    fn the_insert_list_keeps_its_classes_in_order() {
+        let before = [
+            "Part",
+            "SpawnLocation",
+            "Checkpoint",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Folder",
+            "Model",
+            "RemoteEvent",
+            "ScreenGui",
+            "TextLabel",
+            "TextButton",
+            "ImageButton",
+        ];
+        let kept: Vec<&str> = insertable()
+            .iter()
+            .copied()
+            .filter(|class| before.contains(class))
+            .collect();
+        assert_eq!(kept, before);
+    }
+
+    #[test]
+    fn the_insert_palette_lists_the_registry_classes() {
+        let mut palette = CommandPalette::new();
+        palette.open_insert(Pos2::ZERO, Vec3::new(0.0, 0.0, 0.0), None);
+        palette.search_insert();
+        let titles: Vec<&str> = palette.rows().iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, insertable());
+    }
 
     fn state() -> EditorState {
         let mut world = World::new_with_services();
