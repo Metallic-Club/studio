@@ -757,6 +757,13 @@ pub fn class_icon(class: &str, shape: Option<&str>) -> ClassIcon {
         "InputContext" => Some(C::InputContext),
         "InputAction" => Some(C::InputAction),
         "InputBinding" => Some(C::InputBinding),
+        // Abstract classes have no instances to show; these keep every class drawable.
+        "PVInstance" => Some(C::Model),
+        "GuiBase2d" => Some(C::Gui),
+        "GuiObject" => Some(C::Frame),
+        "LuaSourceContainer" | "BaseScript" => Some(C::Script),
+        "BaseRemoteEvent" => Some(C::RemoteEvent),
+        "ServiceProvider" | "DataModel" => Some(C::Workspace),
         _ => None,
     };
     let icon = by_name.unwrap_or_else(|| {

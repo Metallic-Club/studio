@@ -42,6 +42,10 @@ jobs:
           tool: cargo-deny,cargo-nextest
       - name: Format
         run: cargo fmt --check
+      # `cargo fmt` follows `mod` declarations, not the module tree build.rs generates.
+      - name: Format discovered class files
+        shell: bash
+        run: find crates/metallic_core/src/classes -mindepth 2 -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
