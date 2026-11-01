@@ -70,7 +70,6 @@ const LAVA: Color3 = rgb(196.0, 80.0, 30.0);
 const FINISH: Color3 = rgb(236.0, 234.0, 240.0);
 const HUD_BACK: Color3 = rgb(28.0, 25.0, 34.0);
 const HUD_TEXT: Color3 = rgb(231.0, 229.0, 236.0);
-const HUD_DIM: Color3 = rgb(190.0, 187.0, 198.0);
 
 /// Top of the ground far below the course.
 const GROUND_TOP: f64 = -60.0;
@@ -803,27 +802,8 @@ impl Builder {
         w.set(message, "BackgroundTransparency", Value::Number(1.0))?;
         w.set(message, "TextColor3", Value::Color3(HUD_TEXT))?;
         w.set(message, "TextSize", Value::Number(28.0))?;
-        let help = w.create("TextLabel", Some(hud))?;
-        w.set(help, "Name", Value::String("Controls".into()))?;
-        w.set(
-            help,
-            "Position",
-            Value::UDim2(UDim2::new(0.0, 16.0, 1.0, -48.0)),
-        )?;
-        w.set(
-            help,
-            "Size",
-            Value::UDim2(UDim2::new(0.0, 560.0, 0.0, 32.0)),
-        )?;
-        w.set(help, "BackgroundColor3", Value::Color3(HUD_BACK))?;
-        w.set(help, "BackgroundTransparency", Value::Number(0.15))?;
-        w.set(help, "TextColor3", Value::Color3(HUD_DIM))?;
-        w.set(help, "TextSize", Value::Number(18.0))?;
-        w.set(
-            help,
-            "Text",
-            Value::String("WASD move   Space jump   Shift run   Right-drag camera".into()),
-        )?;
+        // No controls text here: the player's own controls plate shows the keys in the player's
+        // bindings, bottom left (#480).
         self.script("LocalScript", hud, "ShowStatus", scripts::HUD)
     }
 }

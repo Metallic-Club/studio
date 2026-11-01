@@ -3241,19 +3241,6 @@
                             ],
                         ),
                         (
-                            class: "TextLabel",
-                            props: [
-                                ("Name", String("Controls")),
-                                ("Position", UDim2((x_scale:0.0,x_offset:16.0,y_scale:1.0,y_offset:-48.0))),
-                                ("Size", UDim2((x_scale:0.0,x_offset:560.0,y_scale:0.0,y_offset:32.0))),
-                                ("BackgroundColor3", Color3((r:28.0,g:25.0,b:34.0))),
-                                ("BackgroundTransparency", Number(0.15)),
-                                ("Text", String("WASD move   Space jump   Shift run   Right-drag camera")),
-                                ("TextColor3", Color3((r:190.0,g:187.0,b:198.0))),
-                                ("TextSize", Number(18.0)),
-                            ],
-                        ),
-                        (
                             class: "LocalScript",
                             props: [
                                 ("Name", String("ShowStatus")),
