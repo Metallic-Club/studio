@@ -1,4 +1,5 @@
 //! The in-game GUI pass: egui paints the game's PlayerGui over the 3D view.
+use crate::touch_overlay::TouchOverlay;
 use egui::{Id, LayerId, Order, ViewportInfo};
 use metallic_runtime::Game;
 
@@ -17,8 +18,9 @@ impl Overlay {
         Overlay { ctx, renderer }
     }
 
-    /// Paints the game's GUI into `target` (already holding the 3D frame) of `size` pixels at
-    /// `scale` pixels per point.
+    /// Paints the game's GUI, then the touch overlay, into `target` (already holding the 3D
+    /// frame) of `size` pixels at `scale` pixels per point.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -27,6 +29,7 @@ impl Overlay {
         size: (u32, u32),
         scale: f32,
         game: &Game,
+        touch: Option<&mut TouchOverlay>,
     ) {
         let scale = if scale.is_finite() && scale > 0.0 {
             scale
@@ -52,8 +55,13 @@ impl Overlay {
             .ctx
             .layer_painter(LayerId::new(Order::Foreground, Id::unique("metallic_gui")));
         game.paint_gui(&painter);
-        let full = self.ctx.end_pass();
-        let primitives = self.ctx.tessellate(full.shapes, full.pixels_per_point);
+        if let Some(touch) = touch {
+            touch.paint(&self.ctx, scale);
+        }
+        let mut full = self.ctx.end_pass();
+        let primitives = self
+            .ctx
+            .tessellate(std::mem::take(&mut full.shapes), full.pixels_per_point);
         for (id, deltas) in &full.textures_delta.set {
             for delta in deltas {
                 self.renderer.update_texture(device, queue, *id, delta);
@@ -94,5 +102,7 @@ impl Overlay {
         for id in &full.textures_delta.free {
             self.renderer.free_texture(id);
         }
+        // Applied above; debug builds of egui panic when a delta is dropped unhandled.
+        full.textures_delta.clear();
     }
 }

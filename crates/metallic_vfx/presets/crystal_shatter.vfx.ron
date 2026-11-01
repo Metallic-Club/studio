@@ -1,0 +1,138 @@
+(
+  format: 1,
+  name: "Crystal shatter",
+  description: "Low-poly ice crystal shards bursting and bouncing.",
+  tags: [
+    "low-poly",
+    "impact",
+    "ice",
+  ],
+  style: LowPoly,
+  duration: 1.9,
+  emitters: [
+    (
+      name: "Shards",
+      capacity: 64,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 30,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Sphere(
+            radius: 0.4,
+          ),
+          offset: (0.0, 1.4, 0.0),
+        ),
+        Lifetime(
+          seconds: (1.2, 1.8),
+        ),
+        Velocity(
+          speed: (4.0, 8.0),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.25, 0.5),
+        ),
+        Color(
+          choices: [
+            "#8FD3FF",
+            "#5BA8E6",
+            "#C6ECFF",
+          ],
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (-360.0, 360.0),
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.0, -14.0, 0.0),
+        ),
+        CollisionPlane(
+          point: (0.0, 0.0, 0.0),
+          normal: (0.0, 1.0, 0.0),
+          bounce: 0.35,
+          friction: 0.4,
+          on_hit: Bounce,
+        ),
+        ErosionOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (0.7, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Shard,
+        alpha_steps: 1,
+      ),
+    ),
+    (
+      name: "Puff",
+      capacity: 16,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 8,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Sphere(
+            radius: 0.5,
+          ),
+          offset: (0.0, 1.4, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.5, 0.8),
+        ),
+        Velocity(
+          speed: (1.0, 2.0),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.6, 0.9),
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (-60.0, 60.0),
+        ),
+        Color(
+          choices: [
+            "#E4F6FF",
+          ],
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 2.0,
+        ),
+        ErosionOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Hexagon,
+        alpha_steps: 1,
+      ),
+    ),
+  ],
+)

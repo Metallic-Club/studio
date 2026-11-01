@@ -1,0 +1,8 @@
+id = "empty"
+name = "Empty"
+description = "Nothing but a spawn point and default lighting. No floor: place every part yourself."
+preview = "preview.png"
+order = 1
+kind = "empty"
+facts = "3D, just a spawn"
+inside = "a spawn point and default lighting."

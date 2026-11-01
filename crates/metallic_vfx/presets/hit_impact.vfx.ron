@@ -1,0 +1,218 @@
+(
+  format: 1,
+  name: "Hit impact",
+  description: "A punchy melee hit: flash, star, sparks and a ring.",
+  tags: [
+    "impact",
+    "combat",
+    "one-shot",
+  ],
+  style: Realistic,
+  duration: 0.7,
+  emitters: [
+    (
+      name: "Flash",
+      capacity: 2,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 1,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 1.5, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.12, 0.12),
+        ),
+        Size(
+          size: (3.0, 3.0),
+        ),
+        Color(
+          choices: [
+            "#FFF4D6",
+          ],
+        ),
+      ],
+      update: [
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: SoftDot,
+        light_emission: 1.0,
+        brightness: 1.5,
+      ),
+    ),
+    (
+      name: "Star",
+      capacity: 2,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 1,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 1.5, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.2, 0.2),
+        ),
+        Size(
+          size: (2.6, 2.6),
+        ),
+        Rotation(
+          angle: (0.0, 90.0),
+          spin: (0.0, 0.0),
+        ),
+        Color(
+          choices: [
+            "#FFFFFF",
+          ],
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (1.0, 0.2),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Twinkle,
+        light_emission: 1.0,
+        brightness: 1.8,
+      ),
+    ),
+    (
+      name: "Ring",
+      capacity: 2,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 1,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 1.5, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.24, 0.24),
+        ),
+        Size(
+          size: (3.0, 3.0),
+        ),
+        Color(
+          choices: [
+            "#FFD58A",
+          ],
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.15),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Ring,
+        light_emission: 1.0,
+        brightness: 1.4,
+      ),
+    ),
+    (
+      name: "Sparks",
+      capacity: 32,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 16,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+          offset: (0.0, 1.5, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.2, 0.35),
+        ),
+        Velocity(
+          speed: (9.0, 15.0),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.12, 0.16),
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 6.0,
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#FFF3C4"),
+              (1.0, "#FF8A2B"),
+            ],
+            space: Oklab,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (0.6, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Stretched(
+          speed_scale: 0.05,
+        ),
+        texture: Spark,
+        light_emission: 1.0,
+        brightness: 2.0,
+      ),
+    ),
+  ],
+)

@@ -1,0 +1,133 @@
+(
+  format: 1,
+  name: "Footstep",
+  description: "Small dust and pebbles for each step; also spawns by distance while walking.",
+  tags: [
+    "dust",
+    "movement",
+    "footstep",
+  ],
+  style: Realistic,
+  duration: 0.9,
+  emitters: [
+    (
+      name: "Dust",
+      capacity: 32,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 7,
+        ),
+        Distance(
+          per_stud: 0.6,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Cone(
+            radius: 0.15,
+            angle: 82.0,
+          ),
+        ),
+        Lifetime(
+          seconds: (0.5, 0.8),
+        ),
+        Velocity(
+          speed: (1.2, 2.4),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (0.28, 0.45),
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (-40.0, 40.0),
+        ),
+        Color(
+          choices: [
+            "#D2C3A6",
+            "#BFAE8E",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 3.0,
+        ),
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.6),
+              (1.0, 1.9),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.1, 0.35),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Smoke,
+      ),
+    ),
+    (
+      name: "Pebbles",
+      capacity: 16,
+      spawn: [
+        Burst(
+          time: 0.0,
+          count: 5,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Point,
+        ),
+        Lifetime(
+          seconds: (0.5, 0.7),
+        ),
+        Velocity(
+          speed: (2.0, 3.2),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (70.0, 70.0),
+        ),
+        Size(
+          size: (0.06, 0.1),
+        ),
+        Color(
+          choices: [
+            "#8C7B62",
+            "#6E604B",
+          ],
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.0, -18.0, 0.0),
+        ),
+        CollisionPlane(
+          point: (0.0, 0.0, 0.0),
+          normal: (0.0, 1.0, 0.0),
+          bounce: 0.3,
+          friction: 0.5,
+          on_hit: Bounce,
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Dot,
+      ),
+    ),
+  ],
+)

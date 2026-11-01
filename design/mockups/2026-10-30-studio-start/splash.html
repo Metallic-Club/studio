@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metallic Studio splash</title>
+<!-- Splash window: 720 x 420, borderless, centred, shown until the start screen is ready (target under 2 s).
+     The page background stands in for the desktop so the window's shape and shadow show. Emblem: branding/placeholder-icon.png
+     at 160 px on a titanium plate (its 256 px source covers 160 % scale), never redrawn or recoloured. ?step=1..4 shows each loading step. -->
+<script>{const t=new URLSearchParams(location.search).get("theme"); if(t) document.documentElement.dataset.theme=t;}</script>
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: #3a3d44; display: grid; place-items: center; font: 400 13px/18px var(--font); color: var(--text-1); }
+  body.bare { background: transparent; }
+  .splash { width: 720px; height: 420px; display: grid; grid-template-columns: 272px 1fr; position: relative;
+    border-radius: var(--r-lg); overflow: hidden; background: var(--bg-base);
+    clip-path: polygon(0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg), 100% 100%, 0 100%);
+    box-shadow: inset 0 1px 0 var(--highlight);
+    animation: arrive var(--t-splash) var(--ease-out); }
+  .shadow { filter: drop-shadow(0 16px 24px rgba(0,0,0,0.5)); }
+  @keyframes arrive { from { opacity: 0; transform: scale(0.98); } }
+  /* Titanium plate: the brand's silver as one flat field, so the dark emblem reads; no gradient, no glow. */
+  .plate { background: var(--g-200); display: grid; place-items: center; box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), inset -1px 0 0 rgba(0,0,0,0.25); }
+  .plate img { width: 160px; height: 160px; display: block; }
+  .body { padding: 44px 40px 36px; display: flex; flex-direction: column; }
+  .word { font: 700 44px/46px var(--font); font-stretch: 125%; letter-spacing: -0.02em; margin: 0; }
+  .word span { display: block; color: var(--text-2); font-weight: 520; }
+  .ver { margin-top: 16px; color: var(--text-3); }
+  .status { margin-top: auto; }
+  .status .line { display: flex; justify-content: space-between; align-items: baseline; color: var(--text-2); }
+  .status .line .count { color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .track { margin-top: 10px; height: 2px; background: var(--bg-active); border-radius: 1px; overflow: hidden; }
+  .fill { height: 100%; width: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0.5);
+    transition: transform var(--t-panel) var(--ease-out); }
+  </style>
+</head>
+<body>
+<div class="shadow">
+  <div class="splash" role="dialog" aria-label="Metallic Studio is starting" aria-busy="true">
+    <div class="plate"><img src="../../../branding/placeholder-icon.png" alt="Metallic emblem"></div>
+    <div class="body">
+      <h1 class="word">Metallic<span>Studio</span></h1>
+      <div class="ver t-small">Version 0.1.0, dev channel</div>
+      <div class="status" aria-live="polite">
+        <div class="line"><span class="t-body" id="msg">Starting the renderer</span><span class="t-small count" id="cnt">2 of 4</span></div>
+        <div class="track" role="progressbar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="2" id="bar"><div class="fill" id="fill"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  const steps = ['Loading fonts and settings', 'Starting the renderer', 'Reading templates', 'Opening the start screen'];
+  const P = new URLSearchParams(location.search);
+  const n = Math.min(4, Math.max(1, +(P.get('step') || 2)));
+  document.getElementById('msg').textContent = steps[n - 1];
+  document.getElementById('cnt').textContent = `${n} of 4`;
+  document.getElementById('bar').setAttribute('aria-valuenow', n);
+  document.getElementById('fill').style.transform = `scaleX(${n / 4})`;
+  if (P.get('theme')) document.documentElement.dataset.theme = P.get('theme');
+  if (P.has('bare')) document.body.classList.add('bare');
+</script>
+</body>
+</html>

@@ -35,7 +35,7 @@ camera and GUI; `metallic_player` is the window/headless app; `templates/parkour
 ## Commands
 ```
 export PATH="$HOME/.cargo/bin:$PATH"
-export CARGO_TARGET_DIR=C:/Users/alexi/Documents/metallic-studio-worktrees/_target-8-runtime-parkour
+export CARGO_TARGET_DIR=<home>/Documents/metallic-studio-worktrees/_target-8-runtime-parkour
 cargo test -j 2 -p metallic_player -p metallic_runtime
 cargo run -j 2 -p metallic_player -- templates/parkour --scene tests/smoke.mscene --headless --frames 1200
 cargo run -j 2 --release -p metallic_player -- templates/parkour --fps

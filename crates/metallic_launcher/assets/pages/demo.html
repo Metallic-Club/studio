@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metallic Play developer demo</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/pages.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<main class="card wide">
+  <header class="brand"><img src="/emblem.png" alt="" width="20" height="20"><span>Metallic Play developer mode</span></header>
+  <h1>Developer demo page</h1>
+  <p>No site address is set, so this page stands in for the Metallic site. Start Metallic Play with a development address to load your own site instead.</p>
+
+  <h2>This Launcher</h2>
+  <dl class="facts">
+    <dt>Launcher bridge</dt><dd id="bridge-state">Checking...</dd>
+    <dt>Browser string</dt><dd id="ua"><code></code></dd>
+  </dl>
+
+  <h2>Bridge commands</h2>
+  <p>This page is bundled with the Launcher, so it may use only the commands bundled pages are allowed. Pages of the site may use more.</p>
+  <ul class="checks">
+    <li><button type="button" class="btn btn-secondary" data-cmd="getInfo">Get info</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="installStatus">Install status</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="getSettings">Get settings</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="githubSignIn">GitHub sign-in</button></li>
+    <li><button type="button" class="btn btn-secondary" data-cmd="signIn">Site sign-in (refused here)</button></li>
+  </ul>
+  <pre class="out" id="bridge-out" role="status" aria-live="polite"></pre>
+
+  <h2>Sample Play link</h2>
+  <p>This link uses a made-up ticket, so the Launcher will not find a place to join.</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="metallic://play?place=1&amp;ticket=demo-ticket-0000">Play</a>
+  </div>
+
+  <h2>Navigation checks</h2>
+  <p>Each one should be refused or sent to your normal browser. Nothing should open inside this window.</p>
+  <ul class="checks">
+    <li><a class="btn btn-secondary" href="file:///">Local file</a></li>
+    <li><a class="btn btn-secondary" href="javascript:void(0)">Script link</a></li>
+    <li><a class="btn btn-secondary" href="/offline.html" download="offline.html">Download</a></li>
+    <li><button type="button" class="btn btn-secondary" data-check="popup">New window</button></li>
+    <li><button type="button" class="btn btn-secondary" data-check="geolocation">Location</button></li>
+  </ul>
+  <p class="result" id="result" role="status" aria-live="polite"></p>
+</main>
+<script src="/pages.js"></script>
+</body>
+</html>
