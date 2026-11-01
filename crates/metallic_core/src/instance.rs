@@ -246,7 +246,7 @@ impl World {
             id,
             kind,
         });
-        }
+    }
 
     fn record_subtree(&mut self, id: InstanceId) {
         let mut stack = vec![id];
