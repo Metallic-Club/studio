@@ -137,11 +137,7 @@ fn fixture(body: &str) -> Result<Fixture, Box<dyn Error>> {
         )?;
         world.set(id, "Anchored", Value::Bool(true))?;
         // Quarters add up exactly, so the reads checksum needs no tolerance.
-        world.set(
-            id,
-            "Transparency",
-            Value::Number((index % 4) as f64 * 0.25),
-        )?;
+        world.set(id, "Transparency", Value::Number((index % 4) as f64 * 0.25))?;
         parts.push(id);
     }
     let services = world
