@@ -231,7 +231,7 @@ impl EditorTools {
             (
                 "tool.transform",
                 "Transform",
-                Icon::Text("T"),
+                Icon::Transform,
                 Tool::Transform,
             ),
         ] {
@@ -247,8 +247,8 @@ impl EditorTools {
             );
         }
         for (id, label, icon, modal) in [
-            ("tool.brush", "Brush", Icon::Text("B"), Modal::Brush),
-            ("tool.measure", "Measure", Icon::Text("M"), Modal::Measure),
+            ("tool.brush", "Brush", Icon::Brush, Modal::Brush),
+            ("tool.measure", "Measure", Icon::Measure, Modal::Measure),
         ] {
             let (a, b) = (sh.clone(), sh.clone());
             r.register(
@@ -269,14 +269,29 @@ impl EditorTools {
                 .checked(move |_| b.borrow().modal == Some(modal)),
             );
         }
-        for (mode, id, label) in [
-            (SelectMode::Box, "select.mode_box", "Box select"),
-            (SelectMode::Lasso, "select.mode_lasso", "Lasso select"),
-            (SelectMode::Paint, "select.mode_paint", "Paint select"),
+        for (mode, id, label, icon) in [
+            (
+                SelectMode::Box,
+                "select.mode_box",
+                "Box select",
+                Icon::SelectBox,
+            ),
+            (
+                SelectMode::Lasso,
+                "select.mode_lasso",
+                "Lasso select",
+                Icon::SelectLasso,
+            ),
+            (
+                SelectMode::Paint,
+                "select.mode_paint",
+                "Paint select",
+                Icon::SelectPaint,
+            ),
         ] {
             let (a, b) = (sh.clone(), sh.clone());
             r.register(
-                Action::new(id, label, Icon::Text("S"), ToolbarGroup::Hidden, move |s| {
+                Action::new(id, label, icon, ToolbarGroup::Hidden, move |s| {
                     let mut t = a.borrow_mut();
                     t.leave_modal();
                     t.select.cancel();
@@ -301,7 +316,7 @@ impl EditorTools {
         r.register(popover(
             "build.align",
             "Align",
-            Icon::Text("Al"),
+            Icon::Align,
             ToolbarGroup::Build,
             Popover::Align,
             2,
@@ -309,14 +324,14 @@ impl EditorTools {
         r.register(popover(
             "build.distribute",
             "Distribute",
-            Icon::Text("Di"),
+            Icon::Distribute,
             ToolbarGroup::Hidden,
             Popover::Align,
             3,
         ));
         for (id, label, icon, copy) in [
-            ("build.mirror", "Mirror", Icon::Text("Mi"), false),
-            ("build.mirror_copy", "Mirror copy", Icon::Text("M+"), true),
+            ("build.mirror", "Mirror", Icon::Mirror, false),
+            ("build.mirror_copy", "Mirror copy", Icon::MirrorCopy, true),
         ] {
             let a = sh.clone();
             let group = if copy {
@@ -335,7 +350,7 @@ impl EditorTools {
         r.register(popover(
             "build.array",
             "Array",
-            Icon::Text("Ar"),
+            Icon::Array,
             ToolbarGroup::Build,
             Popover::Array,
             1,
@@ -343,7 +358,7 @@ impl EditorTools {
         r.register(popover(
             "select.similar",
             "Select similar",
-            Icon::Text("Si"),
+            Icon::SelectSimilar,
             ToolbarGroup::Build,
             Popover::Similar,
             1,
@@ -356,7 +371,7 @@ impl EditorTools {
         let sh = &self.shared;
         let hidden = |id, label, f: Box<dyn FnMut(&mut EditorState)>| {
             let mut f = f;
-            Action::new(id, label, Icon::Text("K"), ToolbarGroup::Hidden, move |s| {
+            Action::new(id, label, Icon::Keyboard, ToolbarGroup::Hidden, move |s| {
                 f(s)
             })
         };

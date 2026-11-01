@@ -163,7 +163,7 @@ impl Toolbar {
                 ui.separator();
                 let button = Button::ghost("")
                     .compact()
-                    .glyph(Icon::Text("»"))
+                    .glyph(Icon::More)
                     .alt(MORE_LABEL);
                 ui.add(button)
             });

@@ -68,7 +68,7 @@ impl InputActionsDock {
             Action::new(
                 TOGGLE_ID,
                 "Input actions",
-                Icon::Text("IA"),
+                Icon::Gamepad,
                 ToolbarGroup::View,
                 move |_| toggle.set(!toggle.get()),
             )
