@@ -207,7 +207,11 @@ apps.
   the reserved -128 axis. `to_move_input` defensively produces finite, unit-bounded horizontal wishes while
   retaining analog magnitude below full tilt. The shared `move_direction` preserves CameraController's existing
   transform. This changes no Game input wiring and supplies no packet encoding, admission or prediction.
-  The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
+  The pure type/helper need only core and physics. The input presentation module supplies
+  `LocalInput::from_frame(&FrameInput, camera_yaw)`, delegating to `from_components` after action evaluation;
+  digital composites and analog deadzones are not processed twice, and orbit/zoom do not enter command data.
+  The adapter is opt-in and inherits the input module's presentation boundary. Game/Simulation/NetDriver wiring
+  remains a separate integration; the current Combined Game path is unchanged.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
   avatar is animated by a `BodyAnimator` (`body_pose.rs`), which needs only `metallic_asset` and `metallic_anim` (no
