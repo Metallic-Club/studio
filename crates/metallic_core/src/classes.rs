@@ -7,7 +7,8 @@ use crate::value::{Color3, UDim2, Value, ValueType, Vec3};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-/// Materials a part may use.
+/// Materials a part may use (`Enum.Material` in Luau, Roblox names). The order is the
+/// renderer's material table order: append new materials at the end.
 pub const MATERIALS: &[&str] = &[
     "Plastic",
     "SmoothPlastic",
@@ -19,6 +20,18 @@ pub const MATERIALS: &[&str] = &[
     "Brick",
     "Ice",
     "Sand",
+    "WoodPlanks",
+    "Slate",
+    "Cobblestone",
+    "Marble",
+    "Granite",
+    "Pebble",
+    "Fabric",
+    "DiamondPlate",
+    "CorrodedMetal",
+    "Snow",
+    "Rock",
+    "Asphalt",
 ];
 
 /// Shapes a part may have.
