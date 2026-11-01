@@ -338,6 +338,11 @@ impl Budget {
         self.sched.owner_of(thread)
     }
 
+    /// True while the debugger has this VM paused (handlers then wait).
+    pub(crate) fn paused(&self) -> bool {
+        self.sched.debug.is_paused()
+    }
+
     /// The owner id of the script whose code is running now (0 outside any script).
     pub(crate) fn current_owner(&self) -> u64 {
         self.sched.current_owner()
@@ -406,6 +411,8 @@ impl ScriptVm {
     fn setup(lua: &Lua, sched: &Rc<Scheduler>) -> mlua::Result<Table> {
         let globals = lua.globals();
         let tostring: Function = globals.get("tostring")?;
+        // Full debug info (local and upvalue names) for the debugger; no runtime cost.
+        lua.set_compiler(mlua::chunk::Compiler::new().set_debug_level(2));
 
         // Needs `debug`, `xpcall`, `coroutine`: must run before they are removed.
         task_lib::install(lua, sched)?;
@@ -594,9 +601,13 @@ impl ScriptVm {
             .lua
             .load(source)
             .set_name(format!("={chunk_name}"))
-            .set_environment(env)
+            .set_environment(env.clone())
             .into_function()
             .map_err(to_err)?;
+        self.sched
+            .debug
+            .breakpoints
+            .on_load(&self.lua, owner, &function, &env);
         let (thread, args) = self
             .sched
             .as_owner(owner, || {
@@ -616,6 +627,11 @@ impl ScriptVm {
     /// the output sink.
     pub fn step(&mut self, now: f64) {
         self.sched.step(now);
+    }
+
+    /// The scheduler, for the debugger.
+    pub(crate) fn sched(&self) -> &Scheduler {
+        &self.sched
     }
 
     /// Drops the VM together with every pending `task.wait`/`task.delay`.

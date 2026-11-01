@@ -214,10 +214,17 @@ pub(crate) fn install(
             match lua
                 .load(source.as_str())
                 .set_name(format!("={name}"))
-                .set_environment(env)
+                .set_environment(env.clone())
                 .into_function()
             {
                 Ok(function) => {
+                    // Breakpoints and frame names of the module (the debugger, #22).
+                    crate::debug::module_loaded(
+                        lua,
+                        crate::host::owner_id(module.id),
+                        &function,
+                        &env,
+                    );
                     let owner = st.budget.current_owner();
                     st.require.loading.borrow_mut().insert(
                         key,

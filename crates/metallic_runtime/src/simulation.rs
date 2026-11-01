@@ -264,6 +264,8 @@ impl Simulation {
     /// Negative/non-finite elapsed time is zero. Returns the number of completed ticks.
     /// A borrowed World retains pending time for retry and causes no partial tick.
     /// Server mode steps each valid Player's current Character once, defaulting to idle.
+    /// No ticks run while the script debugger has the game paused, and a tick that hits a
+    /// breakpoint ends the frame.
     pub fn advance(&mut self, dt: f64, inputs: &[PlayerInput]) -> u32 {
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_FRAME_DT)
@@ -271,7 +273,9 @@ impl Simulation {
             0.0
         };
         let mut ticks = 0;
-        if self.running {
+        // Paused in the script debugger: physics, characters and scripts hold still and no time
+        // accumulates. A host without a debugger answers with one load (`ScriptHost::is_paused`).
+        if self.running && !self.scripts.is_paused() {
             self.accumulator = (self.accumulator + dt).min(MAX_FRAME_DT + TICK);
             while self.accumulator + 1e-9 >= TICK {
                 if !self.tick(inputs) {
@@ -279,6 +283,12 @@ impl Simulation {
                 }
                 self.accumulator -= TICK;
                 ticks += 1;
+                if self.scripts.is_paused() {
+                    // A breakpoint hit during this tick: the simulation stops right here, and
+                    // the frame's remaining time is dropped rather than run on Continue.
+                    self.accumulator = 0.0;
+                    break;
+                }
             }
         }
         self.scripts.end_frame();
@@ -286,10 +296,11 @@ impl Simulation {
     }
 
     /// Executes exactly one fixed tick, without consuming buffered fractional frame time.
-    /// Returns false while stopped or while the World is borrowed. This is useful for a
-    /// deterministic trusted local runner; it is not a real-time capacity guarantee.
+    /// Returns false while stopped, paused in the debugger or while the World is borrowed. This
+    /// is useful for a deterministic trusted local runner; it is not a real-time capacity
+    /// guarantee.
     pub fn tick_once(&mut self, inputs: &[PlayerInput]) -> bool {
-        let completed = self.running && self.tick(inputs);
+        let completed = self.running && !self.scripts.is_paused() && self.tick(inputs);
         self.scripts.end_frame();
         completed
     }

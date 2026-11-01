@@ -20,6 +20,7 @@
 #![warn(missing_docs)]
 
 mod api;
+mod debug;
 mod host;
 mod pattern;
 mod task_lib;
@@ -30,6 +31,7 @@ pub use api::{
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
 };
 pub use api::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
+pub use debug::{Breakpoint, DebugState, Debugger, Frame, PauseReason, Scope, VarHandle, VarNode};
 pub use host::{LOCAL_PLAYER_NAME, ScriptHost, ScriptRole};
 pub use vm::{
     Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,

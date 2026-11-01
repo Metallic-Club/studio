@@ -248,11 +248,14 @@ impl ApiState {
         self.pacing.args_built.get()
     }
 
+    /// Out of step time, or paused in the debugger: handlers wait for a later step.
     fn over_budget(&self) -> bool {
-        self.pacing
-            .deadline
-            .get()
-            .is_some_and(|d| Instant::now() >= d)
+        self.budget.paused()
+            || self
+                .pacing
+                .deadline
+                .get()
+                .is_some_and(|d| Instant::now() >= d)
             || self
                 .shared
                 .step_handler_limit

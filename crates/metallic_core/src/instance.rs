@@ -128,6 +128,15 @@ impl InstanceId {
     pub fn to_bits(self) -> u64 {
         (u64::from(self.generation) << 32) | u64::from(self.index)
     }
+
+    /// The id [`InstanceId::to_bits`] packed. Bits that never came from `to_bits` give an id that
+    /// does not resolve (or, like any id, one of another world).
+    pub fn from_bits(bits: u64) -> InstanceId {
+        InstanceId {
+            index: bits as u32,
+            generation: (bits >> 32) as u32,
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -34,6 +34,7 @@ pub use input::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
 };
+pub(crate) use instance::LuaInstance;
 pub(crate) use remote::{QueuedRemote, RemoteTarget};
 pub(crate) use signals::{EventKind, Hub, Pacing};
 
@@ -207,6 +208,7 @@ fn build(
     set("Enum", mlua::Value::Table(state.enums.table.clone())).map_err(to_err)?;
     let (lib, shared_g) = vm.env_parts();
     let require = require::install(lua, &state, lib, shared_g)?;
+    crate::debug::set_require(lua, &require);
     set("require", mlua::Value::Function(require)).map_err(to_err)?;
     set("game", mlua::Value::UserData(services::game(lua, &state)?)).map_err(to_err)?;
     let workspace = state.world()?.root("Workspace");

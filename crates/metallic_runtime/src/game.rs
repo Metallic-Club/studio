@@ -126,6 +126,17 @@ impl Game {
         self.simulation.running
     }
 
+    /// The script debugger (breakpoints, pause, step, inspection). While it has the game
+    /// paused, [`Game::frame`] runs no ticks.
+    pub fn debugger(&mut self) -> metallic_script::Debugger<'_> {
+        self.simulation.scripts.debugger()
+    }
+
+    /// True while the script debugger has the game paused.
+    pub fn is_paused(&self) -> bool {
+        self.simulation.scripts.is_paused()
+    }
+
     /// Starts the game: runs the scripts (which creates the local player `Player1`), copies the
     /// contents of `StarterGui` into the player's `PlayerGui` (once per start; a restart replaces
     /// the previous copies, while retaining runtime-created GUI),
@@ -252,6 +263,8 @@ impl Game {
     /// 4. script step (inputs, `RunService.Heartbeat`, resumed waits);
     /// 5. physics re-sync when scripts created, destroyed or reshaped parts (change journal).
     ///
+    /// No ticks run while the script debugger has the game paused ([`Game::is_paused`]).
+    ///
     /// Then the skinned avatar follows the character (pose, smoothed facing, animation over `dt`)
     /// and the camera follows too. (The touch volumes follow the tick-rate body animation of
     /// step 1, which the avatar's animation matches.) Draw with [`Game::render`] and [`crate::gui::paint`].
@@ -278,7 +291,10 @@ impl Game {
             .simulation
             .character
             .and_then(|c| self.simulation.characters.state(c));
-        self.update_avatar(dt as f32);
+        if !self.simulation.scripts.is_paused() {
+            // The avatar's pose holds still while paused, like the simulation.
+            self.update_avatar(dt as f32);
+        }
         if state != Some(HumanoidState::Dead)
             && let Some(root) = self.root_position()
         {
