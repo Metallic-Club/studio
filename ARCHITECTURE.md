@@ -77,8 +77,12 @@ apps.
   Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
   (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Anchored parts that
-  are moved or rotated become kinematic movers (linear + angular velocity). `CharacterController`, `spawn_character`
+  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Before the
+  first step `sync_from` runs Rapier's collision pipeline (raycasts and touches work at once; the first step builds the
+  islands); after it, only the query tree (`BroadPhaseBvh::set_aabb`), since that pipeline leaves bodies inserted after a
+  step out of the islands in Rapier 0.36.1 (#423); their contacts start in the next step. Anchored parts that
+  are moved or rotated become kinematic movers (linear + angular velocity); moves faster than `TELEPORT_SPEED` or turns
+  faster than `TELEPORT_ANGULAR_SPEED` are plain teleports. `CharacterController`, `spawn_character`
   and the Humanoid rules (death, respawn, checkpoints) live here. A character is a solid `HumanoidRootPart` plus the 15
   R15 body parts (`BodyPart`: `Head`, `UpperTorso`, ..., `RightFoot`), which have CanCollide off and so are sensors
   that never push. Each body part holds a bone-attached touch capsule, placed by a `BodyPose` the runtime sets every
@@ -86,7 +90,10 @@ apps.
   broad-phase lookup per step, at most `MAX_TOUCH_CANDIDATES` parts (existing contacts first, then the nearest; the rest
   are counted in `TouchQueryCost`), nothing allocated once warm. They report `CharacterEvent::Touched`/`TouchEnded
   { part, hit }` per body part, including when a character is destroyed or replaced; the movement capsule reports as
-  the root. Nothing is matched by name, so NPC Models keep their own physics. The controller records its support contact
+  the root. Nothing is matched by name, so NPC Models keep their own physics. Characters the controller steps leave
+  each other out of their scene queries and meet in `limbs.rs`: capsule against capsule (16 volumes each), each contact
+  stored once per pair of characters and reported once, at most `MAX_CHARACTER_PAIRS` overlapping characters per step
+  (touching ones first), counted in `TouchQueryCost`; characters it does not step stay ordinary scene parts. The controller records its support contact
   (`SupportContact`, part of `CharacterState`) in body-local coordinates and carries the capsule's bottom-sphere
   centre through the support's next observed pose change, so riders keep their radius on tilted spinners. Idle
   facing turns by the same pose change's world-up twist; explicit movement keeps world-space facing. Jump momentum
@@ -95,6 +102,8 @@ apps.
   `PhysicsWorld::scripted_pose` is the pose the next step gives a part; the controller adds the step from an
   anchored support's body pose to it as a final lead, so riders trail a Heartbeat-moved platform by one tick, not
   two (#374). `relative_velocity` is measured against the support's motion at the bottom-sphere centre.
+  `CharacterController::restore_state` ignores destroyed targets before modifying its caches; live restores retain
+  movement sanitization, pose placement and existing touch history.
 - **metallic_meshgen** (#35, implemented): CPU mesh generation for every Part shape (glam only, no GPU). `generate(&MeshDesc)` turns shape, size in studs, bevel, LOD and shading into an indexed `MeshData` (positions, normals, tangents, two UV sets, optional baked AO) plus a `ColliderHint`; `MeshDesc::key()` is a stable cache key. Meshes are built at real size, so the instance transform carries no scale.
 - **metallic_vfx** (#41, implemented): particle effects, trails and beams. Niagara-style module stack data model, a beginner `roblox::ParticleEmitter` front end, a deterministic seeded CPU simulator, a renderer-neutral depth-sorted quad draw list and RON effect files with presets. No GPU, no World knowledge.
 - **metallic_ui_theme** (S8): the render-free egui theme shared by Studio, `metallic_anim_editor` and `metallic_vfx_editor`:
@@ -109,10 +118,11 @@ apps.
   convex polygons, edge chains and merged tilemaps; one-way platforms, sensors, collision groups, revolute/prismatic/
   distance/weld joints. Platformer characters (`add_character`, `CharacterConfig`: coyote time, jump buffer, variable
   jump, wall slide/jump, drop-through, platform carry) run inside the fixed tick. Backend choice and the proposed 2D
-  Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
+  Structural sync refreshes queries/contacts through a zero-time Rapier physics step, linking persistent islands
+  before later real ticks without advancing simulation time. Instance classes: `docs/agents/126-physics2d.md`. Debug view: `--example physics2d_demo`.
 - **metallic_script** (Tasks 6-7): `ScriptVm` is a sandboxed Luau VM (mlua; time budget, memory cap, forbidden globals,
   `task` library). `ScriptHost::new` runs server and client scripts over a shared `World`; additive `new_server`
-  starts only the server VM and server-eligible Scripts, without creating a local Player/PlayerGui or PlayerAdded.
+  starts only the server VM and server-eligible Scripts, without creating a local Player/PlayerGui or synthetic PlayerAdded.
   The role is fixed at construction, preserves pre-existing world state and filters client script candidates before
   running-script bookkeeping. This adds no transport, player admission, server executable or M2 acceptance.
   Script debugger (Task 15, `src/debug/`, `ScriptHost::debugger`): breakpoints (plain, condition, logpoint) are
@@ -121,6 +131,13 @@ apps.
   chain innermost first with fresh budgets. Luau's debug callbacks are installed only while armed (breakpoints, break on
   error, a pending step or pause), so a game without breakpoints runs unhooked. While paused the host runs no script
   code and `Game::frame` runs no ticks.
+  `with_role` also selects Client-only execution with deferred trusted local-Player binding. Client eligibility
+  follows its own PlayerGui/current Character plus the existing starter-script path; rebinding cancels old owned
+  work and clears pending action/GUI input from the previous binding; a same-binding no-op retains valid input.
+  Local removal or binding invalidation also clears queued GUI events. Explicit `add_player`/`remove_player`
+  manage the host roster and Added/Removing events with normal budgets.
+  World-local handles are validated; the caller owns Player/Character destruction after Removing and before the
+  next step. Stop/restart recreates VM/session work and validates retained registrations/binding without name-based revival.
   The host exposes the Roblox-named API
   (documented in `docs/luau-api.md`) and RemoteEvent delivery. Instance member lookup retains mlua's owning string guard
   for valid UTF-8 keys; invalid UTF-8 keeps an owned lossy fallback. Output goes through `OutputSink`.
@@ -196,7 +213,11 @@ apps.
   the reserved -128 axis. `to_move_input` defensively produces finite, unit-bounded horizontal wishes while
   retaining analog magnitude below full tilt. The shared `move_direction` preserves CameraController's existing
   transform. This changes no Game input wiring and supplies no packet encoding, admission or prediction.
-  The pure type/helper need only core and physics; later network-role integration supplies FrameInput adapters.
+  The pure type/helper need only core and physics. The input presentation module supplies
+  `LocalInput::from_frame(&FrameInput, camera_yaw)`, delegating to `from_components` after action evaluation;
+  digital composites and analog deadzones are not processed twice, and orbit/zoom do not enter command data.
+  The adapter is opt-in and inherits the input module's presentation boundary. Game/Simulation/NetDriver wiring
+  remains a separate integration; the current Combined Game path is unchanged.
   The local character is drawn as the skinned default avatar (`avatar.rs`, `art/avatar/out/default_avatar.glb` built
   into the binary): feet `ROOT_HEIGHT` below the `HumanoidRootPart`, facing smoothed toward `Orientation.Y`. The
   avatar is animated by a `BodyAnimator` (`body_pose.rs`), which needs only `metallic_asset` and `metallic_anim` (no
@@ -246,6 +267,19 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  Initial Explorer reparent capture suppresses selected descendants before excluding roots already under the
+  destination. All-no-op drops use the existing Nothing path before history acceptance, preserving undo/redo,
+  parked ids and saved cleanliness; mixed drops record only genuine moves.
+  Command palette (#128): `palette.rs` (`CommandPalette`) searches objects (one row per name and class, Enter
+  selects all), game-folder files, every registered action with its keymap shortcut plus "Insert <class>", guides
+  given with `set_guides`, and an always-last "Ask Litha" row. It returns a `palette::Choice` that `EditorUi`
+  carries out through actions and `EditorState::insert`, so undo is unchanged. Actions `palette.open` (Ctrl+K),
+  `palette.commands` (Ctrl+Shift+P, opens with `>`) and `insert.at_cursor` (Shift+A over the viewport, an Insert
+  list at the cursor that places at `EditorState::insert_point`). Entry points for the title bar and Litha:
+  `EditorUi::open_command_palette`, `open_command_palette_with`, `take_litha_question`. Grid snap moved from Ctrl+K
+  to G (viewport). Objects parked for undo are skipped. `palette::Matcher` scores many texts in one pass each with
+  no allocation (`fuzzy_score` is the one-off form); the file index is built on a background thread and reused
+  for `ASSET_INDEX_AGE` (`is_indexing`, `poll_index`).
   `play::LocalPlaySession` (#356) owns a fresh real Game over `World::deep_clone`, accepts evaluated FrameInput,
   and lends the play world read-only through an inspection closure. Explicit Stop and the private Game guard's
   Drop shut down VMs and release the play world, including fallible-start cleanup. All script output uses one
@@ -281,6 +315,12 @@ apps.
   docked, never over the selection or gizmo; it shows building actions only when they are registered, by id), and
   `hints.rs` (eight first-time hints fed by `HintEvent`s from `EditorUi`, at most one per 3 minutes, never during a
   drag, Play or camera flight; shown ids in `hints.ron` in the config folder; Settings "Show tips"/"Reset tips").
+  Style picker (#224): `style_picker.rs` (`StylePicker`, action `style.open`, L): a 4 x 2 radio group of tiles that
+  writes `LookOverride` (#222) to the selection's Models or each part; hover 150 ms or Space previews through the
+  preview overlay, a click or Enter is one undo step, Esc cancels. Thumbnails come from a `ThumbnailSource`
+  (`GpuThumbnails`: its own `Renderer` on Studio's device rendering an isolated copy of the selection with `capture`),
+  one per frame into a per-opening cache. Properties shows `LookOverride` as a Style row that opens the picker;
+  Explorer draws a style glyph on rows with their own override.
   Arrange core (#217, #218): `tools::arrange` plans `align`, `distribute`, `mirror`,
   `linear`, `radial`, `grid` and `along_path` arrays from `Object`s that `read_objects(&World, ids)` builds from shared
   `tools::geom::PartSnapshot`s, and returns a `Plan` (property changes with old and new values, planned copies, optional
@@ -405,6 +445,10 @@ apps.
   `QuicServer`/`QuicClient` (quinn on a background tokio thread, TLS 1.3 with a pinned self-signed certificate, ALPN
   `metallic/1`), `MemoryNet` (manual clock, deterministic) and `LinkConditioner` (latency, jitter, loss; on QUIC it
   wraps the server's UDP socket). The server side enforces spec 7.3's transport limits (`transport::limits`).
+  `Connection::poll_bounded` limits events and payload bytes appended in one call; it retains an atomic event
+  that does not fit and reports its byte requirement. Memory uses a FIFO deque; QUIC holds at most one deferred
+  event outside its channel. The existing unrestricted `poll` remains available. These are delivery/dequeue
+  bounds, not a wall-clock, background-network or shared-clock maintenance bound; see [transport polling](docs/transport-polling.md).
   `wire` is the byte format on top: `ClientMsg`/`ServerMsg` in reliable frames (`[kind][source][varint len][postcard
   body]`, `encode_*`/`decode_*`, unknown kinds decode as `Decoded::UnknownKind`), `NetId` (services 1-10, dynamic from
   64), `NetValue` (every `Value` type plus `Vector2` and tables, `from_value`/`to_value`), the join snapshot body
@@ -591,3 +635,5 @@ Current-main GUI classes retain indices 34..36; the five replication classes app
 indices are usable only after an equal fingerprint is negotiated.
 Lighting properties and class ordering from main are retained; replication-only classes append after those classes.
 Numeric normalization belongs to World::set; outgoing replication observes that authoritative normalized value.
+
+Server Simulation startup retains preexisting-character history before eager script execution, so startup character removal still enters the respawn timer (#429).

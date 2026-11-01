@@ -14,6 +14,8 @@
 //! signals, `RemoteEvent`; see `docs/luau-api.md`).
 //! [`ScriptHost::new_server`] selects only the server VM, without synthetic local-player
 //! setup or client-script execution. This scripting role adds no network or server process.
+//! [`ScriptHost::with_role`] selects explicit [`ScriptRole`]s, including a Client VM with
+//! deferred local-player binding. Player registration/removal uses trusted World-local IDs.
 
 #![warn(missing_docs)]
 
@@ -30,7 +32,7 @@ pub use api::{
 };
 pub use api::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
 pub use debug::{Breakpoint, DebugState, Debugger, Frame, PauseReason, Scope, VarHandle, VarNode};
-pub use host::{LOCAL_PLAYER_NAME, ScriptHost};
+pub use host::{LOCAL_PLAYER_NAME, ScriptHost, ScriptRole};
 pub use vm::{
     Budget, Context, MEMORY_LIMIT_BYTES, OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, ScriptError,
     ScriptVm,

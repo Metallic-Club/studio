@@ -1,6 +1,7 @@
 //! [`ScriptHost`]: runs the game's scripts and feeds events (Touched, deaths, new characters,
 //! remotes) to them. The default host has server/client VMs over one shared `World`;
 //! [`ScriptHost::new_server`] starts only the server side without a synthetic local player.
+//! [`ScriptHost::with_role`] also selects a Client VM that waits for explicit local binding.
 //!
 //! The runtime (task 8) owns the host and calls [`ScriptHost::step`] every frame. Inputs
 //! that come from other systems (physics, character controller) are queued with
@@ -8,7 +9,7 @@
 //! [`ScriptHost::character_added`] and reach the scripts on the next `step`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -24,6 +25,17 @@ use crate::vm::{Context, OutputSink, RESUME_BUDGET, ScriptError, ScriptVm};
 
 /// Name of the one local player created by the default combined [`ScriptHost::start`].
 pub const LOCAL_PLAYER_NAME: &str = "Player1";
+
+/// Which script VMs a host creates. This is a local execution policy, not authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptRole {
+    /// Legacy shared-world server/client execution with a synthetic local player.
+    Combined,
+    /// Server scripts only, with players supplied by the caller.
+    Server,
+    /// Client scripts only, waiting for an explicitly bound local player.
+    Client,
+}
 
 /// One VM together with the API state that drives it.
 pub(crate) struct Side {
@@ -63,15 +75,18 @@ enum HostEvent {
     },
 }
 
-/// Runs a world's scripts: server `Script`s and, in the default combined mode, `LocalScript`s.
+/// Runs a world's scripts in the fixed [`ScriptRole`] selected at construction.
 pub struct ScriptHost {
     pub(crate) world: Rc<RefCell<World>>,
     pub(crate) output: Rc<dyn OutputSink>,
     shared: Rc<HostShared>,
     server: Option<Side>,
     client: Option<Side>,
-    /// Fixed by construction: combined hosts also create the client VM and local player.
-    run_client: bool,
+    role: ScriptRole,
+    /// Explicitly registered players, plus the Combined host's synthetic local player.
+    players: HashSet<InstanceId>,
+    /// Last client eligibility scope; Character changes need more than script journal IDs.
+    client_scope: Option<(InstanceId, Option<InstanceId>)>,
     inputs: Vec<HostEvent>,
     /// Scripts that were started and not stopped since (each runs once per `start`).
     pub(crate) running: HashMap<InstanceId, RunningScript>,
@@ -100,13 +115,26 @@ impl ScriptHost {
     /// Creates a combined server/client host that is not running yet.
     /// Output of all scripts goes to `output`; [`Self::start`] creates the local player.
     pub fn new(world: Rc<RefCell<World>>, output: Rc<dyn OutputSink>) -> ScriptHost {
+        Self::with_role(world, output, ScriptRole::Combined)
+    }
+
+    /// Creates a stopped host with a fixed execution role.
+    /// Client hosts create no instances and wait for [`Self::set_local_player`] before
+    /// running LocalScripts. Player registration is separate from local binding.
+    pub fn with_role(
+        world: Rc<RefCell<World>>,
+        output: Rc<dyn OutputSink>,
+        role: ScriptRole,
+    ) -> ScriptHost {
         ScriptHost {
             world,
             output,
             shared: Rc::new(HostShared::default()),
             server: None,
             client: None,
-            run_client: true,
+            role,
+            players: HashSet::new(),
+            client_scope: None,
             inputs: Vec::new(),
             running: HashMap::new(),
             cursor: None,
@@ -131,9 +159,128 @@ impl ScriptHost {
     /// This constructor adds no networking, player admission or dedicated-server process.
     /// Client-targeted remotes have no receiver and are discarded on the next delivery step.
     pub fn new_server(world: Rc<RefCell<World>>, output: Rc<dyn OutputSink>) -> ScriptHost {
-        let mut host = Self::new(world, output);
-        host.run_client = false;
-        host
+        Self::with_role(world, output, ScriptRole::Server)
+    }
+
+    /// The fixed execution role selected at construction.
+    pub fn role(&self) -> ScriptRole {
+        self.role
+    }
+
+    /// Registers an existing, live Player directly under the trusted Players service.
+    /// Returns false for an already registered player. PlayerAdded is delivered on the
+    /// next step (or after the next start); GetPlayers includes it when that event fires.
+    /// No Player, GUI or Character is created, and no backend identity is interpreted.
+    ///
+    /// # Errors
+    /// Returns an error for a busy World, stale/non-Player handle or invalid parent.
+    pub fn add_player(&mut self, player: InstanceId) -> Result<bool, ScriptError> {
+        self.validate_player(player)?;
+        if !self.players.insert(player) {
+            return Ok(false);
+        }
+        if self.is_running() {
+            self.inputs.push(HostEvent::PlayerAdded { player });
+        }
+        Ok(true)
+    }
+
+    /// Removes a registered player from this host without destroying World instances.
+    /// Returns false for an unknown/already removed handle. A pending PlayerAdded is
+    /// delivered before PlayerRemoving in an active session; the player remains in
+    /// GetPlayers during immediate Removing dispatch. Deferred handlers observe later roster
+    /// state. A stale registered handle is forgotten without callbacks.
+    ///
+    /// The caller destroys the Player/Character after this call and before the next step.
+    /// Signal callbacks use the existing budgets; yielded/deferred handlers are not promised
+    /// to finish before destruction. Local client-owned work stops when its binding leaves.
+    ///
+    /// # Errors
+    /// A busy World returns an error without changing registration or pending events.
+    pub fn remove_player(&mut self, player: InstanceId) -> Result<bool, ScriptError> {
+        if !self.players.contains(&player) {
+            return Ok(false);
+        }
+        let players = {
+            let world = self
+                .world
+                .try_borrow()
+                .map_err(|_| host_error("the world is busy"))?;
+            valid_player(&world, player)
+                .then(|| world.root("Players"))
+                .flatten()
+        };
+        self.prune_client_scripts()?;
+        self.inputs.retain(|event| {
+            !matches!(event,
+            HostEvent::PlayerAdded { player: p } | HostEvent::CharacterAdded { player: p, .. }
+                if *p == player)
+        });
+        if self.is_running()
+            && let Some(players) = players
+        {
+            let _dispatch_budgets: Vec<_> = self
+                .sides()
+                .into_iter()
+                .map(|side| side.state.dispatch_budget())
+                .collect();
+            self.deliver_player_added(player);
+            self.fire_instance_event(players, EventKind::PlayerRemoving, Some(player));
+        }
+        self.players.remove(&player);
+        self.shared.joined.borrow_mut().remove(&player);
+        if self.shared.local_player.get() == Some(player) {
+            self.shared.local_player.set(None);
+            self.stop_client_scripts();
+            self.client_scope = None;
+            self.cursor = None;
+            self.shared.input.clear();
+            self.gui_events.clear();
+            self.shared.remotes.borrow_mut().clear();
+            self.shared.queued.set([(0, 0); 2]);
+            self.input_dispatched = false;
+        }
+        Ok(true)
+    }
+
+    /// Binds a Client host to an existing live Player; returns false for the same binding.
+    /// Eligible LocalScripts start on the next step, or during start when bound beforehand.
+    /// Rebinding cancels the old client scripts, tasks, connections and queued remotes, action input and GUI events.
+    /// It does not register a PlayerAdded event; use [`Self::add_player`] for roster changes.
+    ///
+    /// # Errors
+    /// Rejects non-Client roles, busy Worlds and stale/non-Player/improperly parented handles.
+    pub fn set_local_player(&mut self, player: InstanceId) -> Result<bool, ScriptError> {
+        if self.role != ScriptRole::Client {
+            return Err(host_error(
+                "only a Client host accepts a local-player binding",
+            ));
+        }
+        self.validate_player(player)?;
+        if self.shared.local_player.get() == Some(player) {
+            return Ok(false);
+        }
+        self.stop_client_scripts();
+        self.shared.local_player.set(Some(player));
+        self.client_scope = None;
+        self.cursor = None;
+        self.shared.remotes.borrow_mut().clear();
+        self.shared.queued.set([(0, 0); 2]);
+        self.shared.input.clear();
+        self.gui_events.clear();
+        self.input_dispatched = false;
+        Ok(true)
+    }
+
+    fn validate_player(&self, player: InstanceId) -> Result<(), ScriptError> {
+        let world = self
+            .world
+            .try_borrow()
+            .map_err(|_| host_error("the world is busy"))?;
+        if !valid_player(&world, player) {
+            return Err(host_error("expected a live Player directly under Players"));
+        }
+        Ok(())
     }
 
     /// Sets the resume budget of active VMs, now and after the next `start`
@@ -145,9 +292,18 @@ impl ScriptHost {
         }
     }
 
+    /// Makes a step count as out of time after `limit` handler calls (`None`: only the clock
+    /// decides, the default). A throttle for hosts that want to spread a burst of events, and
+    /// the hook the tests use to make a step run out of time on any machine: handlers past the
+    /// limit are deferred, and lifecycle events (tag and attribute signals) wait in the log for
+    /// the next step.
+    pub fn set_step_handler_limit(&mut self, limit: Option<usize>) {
+        self.shared.step_handler_limit.set(limit);
+    }
+
     /// True between `start` and `stop`.
     pub fn is_running(&self) -> bool {
-        self.server.is_some()
+        self.server.is_some() || self.client.is_some()
     }
 
     /// The script debugger: breakpoints, pause and step, and the paused frames.
@@ -177,7 +333,9 @@ impl ScriptHost {
     /// a `PlayerGui` in the client VM. A script that errors is reported to the output sink
     /// and the others still run. `PlayerAdded` fires for `Player1` on the first `step`.
     /// A [`Self::new_server`] host starts only the server side, without a synthetic player or
-    /// PlayerAdded, and excludes client scripts before recording them as running.
+    /// synthetic PlayerAdded, and excludes client scripts before recording them as running.
+    /// Client hosts start only the client VM; LocalScripts wait for an explicit valid binding.
+    /// Registered live players receive one queued PlayerAdded in World child order per session.
     ///
     /// Scripts cloned into those places later (for example StarterGui contents copied
     /// into the `PlayerGui` when the character spawns) start on the next `step`.
@@ -189,27 +347,62 @@ impl ScriptHost {
         if self.is_running() {
             return Ok(());
         }
-        let player = self
-            .run_client
-            .then(|| self.ensure_local_player())
-            .transpose()?;
+        let player = match self.role {
+            ScriptRole::Combined => Some(self.ensure_local_player()?),
+            ScriptRole::Server => None,
+            ScriptRole::Client => {
+                let world = self
+                    .world
+                    .try_borrow()
+                    .map_err(|_| host_error("the world is busy"))?;
+                self.shared
+                    .local_player
+                    .get()
+                    .filter(|&p| valid_player(&world, p))
+            }
+        };
+        if self.role == ScriptRole::Combined
+            && let Some(player) = player
+        {
+            self.players.insert(player);
+        }
+        let joined = {
+            let world = self
+                .world
+                .try_borrow()
+                .map_err(|_| host_error("the world is busy"))?;
+            self.players.retain(|&p| valid_player(&world, p));
+            world.root("Players").map_or_else(Vec::new, |root| {
+                world
+                    .children(root)
+                    .iter()
+                    .copied()
+                    .filter(|p| self.players.contains(p))
+                    .collect()
+            })
+        };
         self.shared.local_player.set(player);
         self.shared.joined.borrow_mut().clear();
         self.shared.remotes.borrow_mut().clear();
         self.shared.queued.set([(0, 0); 2]);
         self.shared.input.clear();
-        self.inputs = player
-            .map(|player| HostEvent::PlayerAdded { player })
+        self.input_dispatched = false;
+        self.inputs = joined
             .into_iter()
+            .map(|player| HostEvent::PlayerAdded { player })
             .collect();
         self.running.clear();
         self.cursor = None;
+        self.client_scope = None;
 
-        self.server = Some(self.make_side(Context::Server)?);
-        self.client = self
-            .run_client
+        let server = (self.role != ScriptRole::Client)
+            .then(|| self.make_side(Context::Server))
+            .transpose()?;
+        let client = (self.role != ScriptRole::Server)
             .then(|| self.make_side(Context::Client))
             .transpose()?;
+        self.server = server;
+        self.client = client;
         self.sync_scripts();
         Ok(())
     }
@@ -218,8 +411,13 @@ impl ScriptHost {
     /// appeared since the last step, delivers the queued remotes and inputs, fires
     /// `RunService.Heartbeat(dt)`, then resumes `WaitForChild` and `task.wait` threads.
     /// Does nothing before `start`.
+    /// Client hosts postpone the whole step if the World cannot be read for ownership
+    /// validation, preserving queued work and any held frame deadline for a later retry.
     pub fn step(&mut self, now: f64, dt: f64) {
         if !self.is_running() || self.is_paused() {
+            return;
+        }
+        if self.role == ScriptRole::Client && self.world.try_borrow().is_err() {
             return;
         }
         for side in self.sides() {
@@ -284,6 +482,8 @@ impl ScriptHost {
 
     /// Shuts active VMs down, dropping every connection and sleeping thread. `start` may be
     /// called again afterwards; scripts then run again from the beginning.
+    /// Retains registered players and Client binding, validating them against the World on
+    /// restart. It never destroys Player/Character instances or binds replacements by name.
     pub fn stop(&mut self) {
         for side in [self.server.take(), self.client.take()]
             .into_iter()
@@ -296,10 +496,12 @@ impl ScriptHost {
         self.shared.queued.set([(0, 0); 2]);
         self.shared.joined.borrow_mut().clear();
         self.shared.input.clear();
+        self.input_dispatched = false;
         self.running.clear();
         self.cursor = None;
         self.manual_pause = false;
         self.pending_starts.clear();
+        self.client_scope = None;
         self.gui_events.clear();
     }
 
@@ -436,7 +638,108 @@ impl ScriptHost {
     }
 
     fn runnable_context(&self, world: &World, id: InstanceId) -> Option<Context> {
-        script_context(world, id).filter(|context| self.run_client || *context == Context::Server)
+        match self.role {
+            ScriptRole::Client => client_script_context(world, id, self.shared.local_player.get()?),
+            ScriptRole::Server => script_context(world, id).filter(|c| *c == Context::Server),
+            ScriptRole::Combined => script_context(world, id).filter(|context| {
+                *context == Context::Server || self.shared.local_player.get().is_some()
+            }),
+        }
+    }
+
+    fn stop_client_scripts(&mut self) {
+        let ids: Vec<_> = self
+            .running
+            .iter()
+            .filter_map(|(&id, running)| (running.context == Context::Client).then_some(id))
+            .collect();
+        for id in ids {
+            self.running.remove(&id);
+            if let Some(client) = &self.client {
+                client.state.stop_owner(owner_id(id));
+            }
+        }
+    }
+
+    /// Stops invalid Client owners before public immediate dispatch paths. It neither
+    /// starts scripts nor advances the journal cursor: the next normal step must still
+    /// observe every new script/change. Owner cancellation does not call Lua handlers.
+    fn prune_client_scripts(&mut self) -> Result<(), ScriptError> {
+        if self.role != ScriptRole::Client || self.client.is_none() {
+            return Ok(());
+        }
+        self.refresh_client_scope();
+        let stops: Vec<_> = {
+            let world = self
+                .world
+                .try_borrow()
+                .map_err(|_| host_error("the world is busy"))?;
+            let changed = self
+                .cursor
+                .and_then(|cursor| match world.changes_since(cursor).0 {
+                    Changes::Ids(ids) => Some(ids),
+                    Changes::Overflow => None,
+                });
+            let candidates = changed.unwrap_or_else(|| self.running.keys().copied().collect());
+            candidates
+                .into_iter()
+                .filter(|id| {
+                    self.running
+                        .get(id)
+                        .is_some_and(|script| script.context == Context::Client)
+                        && self.runnable_context(&world, *id) != Some(Context::Client)
+                })
+                .collect()
+        };
+        for id in stops {
+            self.running.remove(&id);
+            if let Some(client) = &self.client {
+                client.state.stop_owner(owner_id(id));
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh_client_scope(&mut self) {
+        if self.role != ScriptRole::Client {
+            return;
+        }
+        let scope = {
+            let Ok(world) = self.world.try_borrow() else {
+                return;
+            };
+            self.shared
+                .local_player
+                .get()
+                .filter(|&p| valid_player(&world, p))
+                .map(|p| {
+                    let character = match world.get_ref(p, "Character") {
+                        Ok(CoreValue::Ref(Some(c))) if world.is_a(*c, "Model") => Some(*c),
+                        _ => None,
+                    };
+                    (p, character)
+                })
+        };
+        let invalid_binding = scope.is_none() && self.shared.local_player.get().is_some();
+        if scope != self.client_scope || invalid_binding {
+            if scope.is_none() {
+                if let Some(player) = self.shared.local_player.get() {
+                    self.players.remove(&player);
+                    self.shared.joined.borrow_mut().remove(&player);
+                    self.inputs.retain(|event| !matches!(event,
+                        HostEvent::PlayerAdded { player: p } | HostEvent::CharacterAdded { player: p, .. }
+                            if *p == player));
+                    self.shared.remotes.borrow_mut().clear();
+                    self.shared.queued.set([(0, 0); 2]);
+                    self.shared.input.clear();
+                    self.gui_events.clear();
+                    self.input_dispatched = false;
+                }
+                self.shared.local_player.set(None);
+            }
+            self.client_scope = scope;
+            self.cursor = None;
+        }
     }
 
     /// Finds or creates `Players.Player1` and its `PlayerGui`.
@@ -480,6 +783,7 @@ impl ScriptHost {
     /// were destroyed, disabled or moved out of a place where scripts run. Looks at the whole
     /// tree the first time and only at changed instances afterwards (the world's journal).
     fn sync_scripts(&mut self) {
+        self.refresh_client_scope();
         let (starts, stops) = {
             let Ok(world) = self.world.try_borrow() else {
                 return;
@@ -573,9 +877,10 @@ impl ScriptHost {
 
     /// Queues an event of a GUI element for the client scripts; the next `step` fires it, in
     /// report order. At most [`MAX_GUI_EVENTS_PER_STEP`] wait at once (more are dropped), and
-    /// server-only hosts discard them.
+    /// server-only hosts discard them. Client binding changes discard pending GUI events;
+    /// a no-op binding retains valid queued input.
     pub fn gui_event(&mut self, event: GuiEvent) {
-        if self.run_client && self.gui_events.len() < MAX_GUI_EVENTS_PER_STEP {
+        if self.role != ScriptRole::Server && self.gui_events.len() < MAX_GUI_EVENTS_PER_STEP {
             self.gui_events.push(event);
         }
     }
@@ -609,16 +914,22 @@ impl ScriptHost {
                     self.fire_instance_event(player, EventKind::CharacterAdded, Some(model));
                 }
                 HostEvent::PlayerAdded { player } => {
-                    let players = self
-                        .world
-                        .try_borrow()
-                        .ok()
-                        .and_then(|w| w.is_alive(player).then(|| w.root("Players")).flatten());
-                    if let Some(players) = players {
-                        self.shared.joined.borrow_mut().insert(player);
-                        self.fire_instance_event(players, EventKind::PlayerAdded, Some(player));
-                    }
+                    self.deliver_player_added(player);
                 }
+            }
+        }
+    }
+
+    fn deliver_player_added(&self, player: InstanceId) {
+        let players = self.world.try_borrow().ok().and_then(|world| {
+            (self.players.contains(&player) && valid_player(&world, player))
+                .then(|| world.root("Players"))
+                .flatten()
+        });
+        if let Some(players) = players {
+            let first = self.shared.joined.borrow_mut().insert(player);
+            if first {
+                self.fire_instance_event(players, EventKind::PlayerAdded, Some(player));
             }
         }
     }
@@ -658,7 +969,7 @@ impl ScriptHost {
     }
 
     fn deliver_input_actions(&mut self) {
-        if !self.run_client {
+        if self.role == ScriptRole::Server {
             self.shared.input.events.borrow_mut().clear();
         }
         let changes = std::mem::take(&mut *self.shared.input.type_changes.borrow_mut());
@@ -679,8 +990,16 @@ impl ScriptHost {
     /// `ContextActionService` handlers are known before the character reads its input. The
     /// `step` of the same frame then delivers no more action events and continues the time
     /// budget started here; call [`ScriptHost::end_frame`] when the frame is done.
+    /// Client hosts first prune owners that lost eligibility, without starting new scripts
+    /// or consuming journal changes. A borrowed World postpones Client execution until its
+    /// scope can be validated; existing queued work is retained.
     pub fn dispatch_input_now(&mut self, now: f64) {
         if self.is_paused() {
+            return;
+        }
+        if self.prune_client_scripts().is_err() {
+            // Without a readable World the Client scope cannot be validated. Leave
+            // queued work for a later dispatch/step instead of running stale owners.
             return;
         }
         let Some(client) = &self.client else { return };
@@ -716,6 +1035,70 @@ impl ScriptHost {
             }
         }
     }
+}
+
+fn host_error(message: &str) -> ScriptError {
+    ScriptError {
+        message: format!("script host: {message}"),
+    }
+}
+
+fn valid_player(world: &World, player: InstanceId) -> bool {
+    world.is_a(player, "Player")
+        && world.root("Players").is_some_and(|players| {
+            world.is_builtin(players) && world.parent(player) == Some(players)
+        })
+}
+
+/// A Client's script must be in its own GUI/scripts/Character, or the existing starter
+/// template path. Inspect every ancestor so an outer private boundary cannot be bypassed.
+fn client_script_context(world: &World, id: InstanceId, player: InstanceId) -> Option<Context> {
+    if !valid_player(world, player)
+        || world.class_name(id) != Some("LocalScript")
+        || !matches!(world.get_ref(id, "Enabled"), Ok(CoreValue::Bool(true)))
+    {
+        return None;
+    }
+    let character = match world.get_ref(player, "Character") {
+        Ok(CoreValue::Ref(Some(c))) if world.is_a(*c, "Model") => Some(*c),
+        _ => None,
+    };
+    let mut owned = false;
+    let mut starter = false;
+    let mut current = world.parent(id);
+    while let Some(node) = current {
+        let class = world.class_name(node)?;
+        if matches!(class, "ServerStorage" | "ServerScriptService")
+            || (class == "Player" && node != player)
+        {
+            return None;
+        }
+        if matches!(class, "PlayerGui" | "PlayerScripts") {
+            let mut ancestor = world.parent(node);
+            let mut owner = None;
+            while let Some(parent) = ancestor {
+                if world.is_a(parent, "Player") {
+                    owner = Some(parent);
+                    break;
+                }
+                ancestor = world.parent(parent);
+            }
+            if owner != Some(player) {
+                return None;
+            }
+            owned = true;
+        }
+        owned |= character == Some(node);
+        starter |= class == "StarterPlayerScripts";
+        current = world.parent(node);
+        if current.is_none() {
+            return (world.is_builtin(node)
+                && ((owned && matches!(class, "Workspace" | "Players"))
+                    || (starter && class == "StarterPlayer")))
+                .then_some(Context::Client);
+        }
+    }
+    None
 }
 
 /// All instances below `id` (and `id`), parents first, in tree order.

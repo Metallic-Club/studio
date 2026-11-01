@@ -27,6 +27,6 @@ fixes below. Item 2 (limb against limb) is `studio/371-limb-touches`.
 ## Known limits
 - Two anchored parts that do not move never pair in Rapier (no fixed-fixed contacts), so they fire neither event.
   The tests move an anchored part in, or use an unanchored one.
-- Rebuilding a resting unanchored part's collider (a `Size` or `Shape` change) can trip a debug-only Rapier island
-  assertion ("touching pair not linked in the persistent islands"). It predates this change; the rebuild tests use an
-  anchored zone. Tracked as a separate follow-up.
+- Rebuilding a resting unanchored part's collider used to trip a debug-only Rapier island assertion; fixed in #423,
+  whose rebuild tests use the resting part again (the `CanCollide` one keeps the zone: an unanchored part with
+  `CanCollide` off falls through the floor).
