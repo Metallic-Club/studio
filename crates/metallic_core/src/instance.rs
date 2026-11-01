@@ -1,4 +1,6 @@
 //! The instance tree: [`World`] and [`InstanceId`].
+pub mod edit;
+
 use crate::CoreError;
 use crate::classes::{self, class_def, default_value, default_value_ref, find_property};
 use crate::signal::Signal;

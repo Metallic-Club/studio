@@ -29,6 +29,7 @@ pub mod transform;
 mod value;
 
 pub use cframe::{CFrame, RotationOrder};
+pub use instance::edit;
 pub use instance::{
     AttributeChange, AttributeChanges, AttributeCursor, Change, ChangeCursor, ChangeKind, Changes,
     DetailedChanges, InstanceId, MAX_ATTRIBUTE_NAME, MAX_ATTRIBUTE_STRING, MAX_ATTRIBUTES,
