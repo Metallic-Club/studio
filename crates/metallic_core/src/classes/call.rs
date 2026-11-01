@@ -849,7 +849,8 @@ impl ApiError {
                 format!("{class}:{member}: argument #{index} expected {expected}, got nothing")
             }
             ApiErrorKind::TooManyArguments { max, got } => {
-                format!("{class}:{member}: expected at most {max} arguments, got {got}")
+                let plural = if *max == 1 { "" } else { "s" };
+                format!("{class}:{member}: expected at most {max} argument{plural}, got {got}")
             }
             ApiErrorKind::NotAMember => format!("{member} is not a valid member of {class}"),
             ApiErrorKind::ReadOnly => format!("{member} is read-only"),

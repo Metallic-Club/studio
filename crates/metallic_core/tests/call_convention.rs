@@ -485,6 +485,10 @@ fn missing_and_wrong_arguments_give_the_design_text() {
         "Folder:Required: expected at most 3 arguments, got 4"
     );
     assert_eq!(
+        host.text(this, "Whole", &[ScriptValue::Int(1), ScriptValue::Int(2)]),
+        "Folder:Whole: expected at most 1 argument, got 2"
+    );
+    assert_eq!(
         host.err(this, "Required", &[]).kind,
         ApiErrorKind::MissingArgument {
             index: 1,
@@ -1153,8 +1157,8 @@ fn a_method_reads_the_context_it_was_called_with() {
     assert_eq!(host.ret(this, "Side", &[]), true.into());
 }
 
-/// The crates `metallic_core` reaches in `Cargo.lock`, itself and dev-dependencies included.
-fn reachable_from_core(lock: &str) -> HashSet<&str> {
+/// The crates `root` reaches in `Cargo.lock`, itself and dev-dependencies included.
+fn reachable<'a>(lock: &'a str, root: &'a str) -> HashSet<&'a str> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for package in lock.split("[[package]]").skip(1) {
         let mut lines = package.lines();
@@ -1173,7 +1177,7 @@ fn reachable_from_core(lock: &str) -> HashSet<&str> {
         dependencies.entry(name).or_default().extend(listed);
     }
     let mut seen = HashSet::new();
-    let mut queue = vec!["metallic_core"];
+    let mut queue = vec![root];
     while let Some(name) = queue.pop() {
         if seen.insert(name) {
             queue.extend(dependencies.get(name).into_iter().flatten().copied());
@@ -1197,12 +1201,10 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 fn core_stays_free_of_any_scripting_language() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let lock = std::fs::read_to_string(manifest.join("../../Cargo.lock")).unwrap();
-    let reached = reachable_from_core(&lock);
-    assert!(
-        reached.contains("sha2"),
-        "the lockfile parser found nothing"
-    );
-    assert!(reached.len() > 5, "the lockfile parser found too little");
+    let reached = reachable(&lock, "metallic_core");
+    assert!(reached.contains("sha2"), "the walk found nothing");
+    // The same walk does see it where it belongs.
+    assert!(reachable(&lock, "metallic_script").contains("mlua"));
     assert!(!reached.contains("metallic_script"));
     for forbidden in ["mlua", "mlua-sys", "wasmtime"] {
         assert!(

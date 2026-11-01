@@ -16,6 +16,8 @@
 //! retain no historic values and do not replace a durable editing operation log.
 //! Attribute and tag changes are coarse-only for now: `changes_since` reports the id, the detailed
 //! reader has no entry for them (read the attribute and tag logs instead).
+//! Class methods use a language-neutral calling convention and one host interface, in [`classes`]:
+//! this crate depends on no scripting language.
 #![warn(missing_docs)]
 
 mod cframe;
