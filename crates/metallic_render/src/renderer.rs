@@ -74,7 +74,8 @@ const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub enum Quality {
     /// One 1024 px shadow cascade, no multisampling.
     Low,
-    /// Three 2048 px shadow cascades and 4x MSAA.
+    /// Three 2048 px shadow cascades and 4x MSAA (lowered to the highest count the scene
+    /// target and depth formats support; see [`Renderer::msaa_samples`]).
     #[default]
     High,
 }
@@ -99,6 +100,8 @@ impl RenderSettings {
             Quality::High => 2048,
         }
     }
+    /// The sample count the preset asks for; [`supported_samples`] lowers it to what the
+    /// formats support.
     fn samples(self) -> u32 {
         match self.quality {
             Quality::Low => 1,
@@ -111,6 +114,67 @@ impl RenderSettings {
 const GLOBALS_AUTO_OFFSET: u64 = (std::mem::offset_of!(Globals, lighting)
     + std::mem::offset_of!(LightingUniform, toon)
     + 4) as u64;
+
+/// The highest sample count up to `requested` that a colour target with `color` flags can
+/// render and resolve and a depth target with `depth` flags can render; 1 always works.
+fn supported_samples(
+    requested: u32,
+    color: wgpu::TextureFormatFeatureFlags,
+    depth: wgpu::TextureFormatFeatureFlags,
+) -> u32 {
+    [16, 8, 4, 2]
+        .into_iter()
+        .filter(|&n| n <= requested)
+        .find(|&n| {
+            color.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE)
+                && color.sample_count_supported(n)
+                && depth.sample_count_supported(n)
+        })
+        .unwrap_or(1)
+}
+
+/// What the device accepts for `format`, the way wgpu validates it: the adapter's own
+/// features when the device has `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` or is a downlevel
+/// device, the WebGPU guarantees otherwise (and when no adapter is known).
+fn device_format_features(
+    device: &wgpu::Device,
+    adapter: Option<&wgpu::Adapter>,
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureFormatFeatures {
+    let features = device.features();
+    if let Some(a) = adapter {
+        let adapter_specific =
+            features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        let downlevel = !a
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::WEBGPU_TEXTURE_FORMAT_SUPPORT);
+        if adapter_specific || downlevel {
+            return a.get_texture_format_features(format);
+        }
+    }
+    format.guaranteed_format_features(features)
+}
+
+/// The scene target format ([`hdr_format_for`]) and the MSAA sample count to use with it.
+fn scene_targets(
+    device: &wgpu::Device,
+    adapter: Option<&wgpu::Adapter>,
+    hdr_features: Option<wgpu::TextureFormatFeatures>,
+    settings: RenderSettings,
+) -> (wgpu::TextureFormat, u32) {
+    let requested = settings.samples();
+    let format = hdr_format_for(hdr_features, requested);
+    let samples = supported_samples(
+        requested,
+        device_format_features(device, adapter, format).flags,
+        device_format_features(device, adapter, DEPTH_FORMAT).flags,
+    );
+    if samples != requested {
+        log::warn!("{requested}x MSAA is not supported for {format:?}; using {samples}x");
+    }
+    (format, samples)
+}
 
 /// Uniform block shared by all shaders; mirrors `Globals` in `common.wgsl`.
 #[repr(C)]
@@ -172,11 +236,38 @@ struct GpuTimer {
     recorded: bool,
 }
 
-/// A growable GPU buffer of instances.
+/// Changed instances closer together than this are written in one `write_buffer` call (the
+/// unchanged ones between them are rewritten, which is cheaper than another call).
+const MERGE_GAP: usize = 4;
+
+/// The index ranges of `new` that differ byte for byte from `old` (or lie past its end), with
+/// runs less than [`MERGE_GAP`] apart merged. Uploading these ranges of `new` over a buffer that
+/// holds `old` leaves it holding `new`.
+fn changed_ranges(old: &[InstanceRaw], new: &[InstanceRaw]) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    for (i, n) in new.iter().enumerate() {
+        let same = old
+            .get(i)
+            .is_some_and(|o| bytemuck::bytes_of(o) == bytemuck::bytes_of(n));
+        if same {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if i - last.end < MERGE_GAP => last.end = i + 1,
+            _ => out.push(i..i + 1),
+        }
+    }
+    out
+}
+
+/// A growable GPU buffer of instances with a CPU copy of its contents, so an upload writes only
+/// the instances that changed.
 struct InstanceBuffer {
     buffer: wgpu::Buffer,
     capacity: usize,
     count: usize,
+    /// What the buffer holds (its first `count` instances).
+    mirror: Vec<InstanceRaw>,
 }
 
 impl InstanceBuffer {
@@ -191,18 +282,40 @@ impl InstanceBuffer {
             }),
             capacity,
             count: 0,
+            mirror: Vec::new(),
         }
     }
 
-    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[InstanceRaw]) {
+    /// Makes the buffer hold `data`, writing only the ranges that differ from what it holds
+    /// (everything after it grew). Returns the bytes written.
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[InstanceRaw]) -> u64 {
         if data.len() > self.capacity {
             *self = InstanceBuffer::new(device, data.len().next_power_of_two());
         }
-        if !data.is_empty() {
-            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(data));
+        let stride = std::mem::size_of::<InstanceRaw>();
+        let mut written = 0;
+        for range in changed_ranges(&self.mirror, data) {
+            let bytes: &[u8] = bytemuck::cast_slice(&data[range.clone()]);
+            queue.write_buffer(&self.buffer, (range.start * stride) as u64, bytes);
+            written += bytes.len() as u64;
         }
+        self.mirror.clear();
+        self.mirror.extend_from_slice(data);
         self.count = data.len();
+        written
     }
+}
+
+/// Consecutive runs of the same mesh in `kinds`, as instance ranges for one draw each.
+fn kind_runs(kinds: &[MeshKind]) -> impl Iterator<Item = (MeshKind, std::ops::Range<u32>)> + '_ {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let kind = *kinds.get(start)?;
+        let len = kinds[start..].iter().take_while(|k| **k == kind).count();
+        let run = (kind, start as u32..(start + len) as u32);
+        start += len;
+        Some(run)
+    })
 }
 
 struct Pipelines {
@@ -452,7 +565,9 @@ struct CascadeSlot {
 }
 
 /// Draws the Parts of a world. Create with [`Renderer::new`], call [`Renderer::sync`] when the
-/// world changed and [`Renderer::render`] once per frame.
+/// world changed and [`Renderer::render`] once per frame. `render` draws with
+/// [`Camera::sanitized`], so a non-finite camera position or field of view falls back to a
+/// finite one.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -485,10 +600,16 @@ pub struct Renderer {
     hdr_features: Option<wgpu::TextureFormatFeatures>,
     /// The HDR target format in use (see [`hdr_format_for`]).
     hdr_format: wgpu::TextureFormat,
+    /// The context's adapter, to check MSAA support when the settings change.
+    adapter: Option<wgpu::Adapter>,
+    /// MSAA sample count of the scene pass (see [`Renderer::msaa_samples`]).
+    samples: u32,
     /// Bumped whenever the attachments are rebuilt ([`PostContext::targets`]).
     targets: u64,
     scene: Scene,
     uploaded_version: Option<u64>,
+    /// Instance bytes written to the GPU so far ([`Renderer::uploaded_instance_bytes`]).
+    uploaded_instance_bytes: u64,
     meshes: Vec<GpuMesh>,
     opaque: Vec<InstanceBuffer>,
     blended: InstanceBuffer,
@@ -648,13 +769,15 @@ impl Renderer {
             .adapter
             .as_ref()
             .map(|a| a.get_texture_format_features(HDR_FORMAT));
-        let hdr_format = hdr_format_for(hdr_features, settings.samples());
+        let adapter = ctx.adapter.clone();
+        let (hdr_format, samples) =
+            scene_targets(&device, adapter.as_ref(), hdr_features, settings);
         if hdr_format != HDR_FORMAT {
             log::warn!("{HDR_FORMAT:?} is not renderable here; HDR falls back to {hdr_format:?}");
         }
         let pipelines = make_pipelines(
             &device,
-            settings.samples(),
+            samples,
             hdr_format,
             &global_layout,
             &shadow_layout,
@@ -685,9 +808,12 @@ impl Renderer {
             finish_gpu,
             hdr_features,
             hdr_format,
+            adapter,
+            samples,
             targets: 0,
             scene: Scene::new(),
             uploaded_version: None,
+            uploaded_instance_bytes: 0,
             meshes,
             opaque,
             blended,
@@ -752,10 +878,10 @@ impl Renderer {
         );
         self.cascade_slots =
             make_cascade_slots(&self.device, &self.shadow_layout, settings.cascades());
-        self.hdr_format = hdr_format_for(self.hdr_features, settings.samples());
+        self.pick_scene_targets();
         self.pipelines = make_pipelines(
             &self.device,
-            settings.samples(),
+            self.samples,
             self.hdr_format,
             &self.global_layout,
             &self.shadow_layout,
@@ -839,16 +965,32 @@ impl Renderer {
             allowed_usages: wgpu::TextureUsages::empty(),
             flags: wgpu::TextureFormatFeatureFlags::empty(),
         });
-        self.hdr_format = hdr_format_for(self.hdr_features, self.settings.samples());
+        self.pick_scene_targets();
         self.pipelines = make_pipelines(
             &self.device,
-            self.settings.samples(),
+            self.samples,
             self.hdr_format,
             &self.global_layout,
             &self.shadow_layout,
             &self.skin_layout,
         );
         self.attachments = None;
+    }
+
+    /// Sets [`Renderer::hdr_format`] and [`Renderer::msaa_samples`] for the current settings.
+    fn pick_scene_targets(&mut self) {
+        (self.hdr_format, self.samples) = scene_targets(
+            &self.device,
+            self.adapter.as_ref(),
+            self.hdr_features,
+            self.settings,
+        );
+    }
+
+    /// The MSAA sample count in use: the quality preset's count (4 for [`Quality::High`]),
+    /// lowered to the highest count the scene target format and the depth format support.
+    pub fn msaa_samples(&self) -> u32 {
+        self.samples
     }
 
     /// Number of parts currently known to the renderer (drawn or not).
@@ -860,11 +1002,27 @@ impl Renderer {
     /// and its lighting (the `Lighting` service and its effect children, see
     /// [`Renderer::set_lighting`]).
     ///
-    /// Only parts whose data changed are re-uploaded; an unchanged world costs one read per
-    /// property and no GPU work.
+    /// The first call reads every part. Later calls re-read only the instances named by the
+    /// world's change journal (all parts again after the journal overflowed or for another
+    /// world), so an unchanged world costs a journal check, a read of the lighting and no GPU
+    /// work.
+    ///
+    /// The upload happens in the next [`Renderer::render`]: each per-shape instance buffer is
+    /// compared with what the GPU holds and only the changed instance ranges are written, so a
+    /// few changed parts cost a few instances of upload. Adding or removing parts, or moving one
+    /// between the opaque and the blended list (Transparency crossing 0), shifts the later
+    /// entries and uploads most of that buffer again. The blended list is re-sorted every frame
+    /// and uploaded the same way, so a moving camera rewrites the entries whose order changed.
     pub fn sync(&mut self, world: &World) {
         self.scene.sync(world);
         self.set_lighting(&LightingInputs::read(world));
+    }
+
+    /// Instance bytes written to the GPU since the renderer was made (opaque and blended), for
+    /// tests of the partial upload.
+    #[doc(hidden)]
+    pub fn uploaded_instance_bytes(&self) -> u64 {
+        self.uploaded_instance_bytes
     }
 
     /// Applies lighting properties: sets [`Renderer::sky`], [`Renderer::finish`], the bloom
@@ -976,14 +1134,15 @@ impl Renderer {
                     .filter(|p| !p.is_invisible())
                     .map(|p| p.instance),
             );
-            self.opaque[kind.index()].upload(&self.device, &self.queue, &data);
+            self.uploaded_instance_bytes +=
+                self.opaque[kind.index()].upload(&self.device, &self.queue, &data);
         }
         self.scratch_instances = data;
         self.uploaded_version = Some(self.scene.version());
     }
 
     fn ensure_attachments(&mut self, size: (u32, u32)) {
-        let samples = self.settings.samples();
+        let samples = self.samples;
         let sampleable = self.post.reads_depth();
         if let Some(att) = self.attachments.as_mut()
             && att.size == size
@@ -1127,6 +1286,8 @@ impl Renderer {
                 bytemuck::cast_slice(self.material_table.rows().as_slice()),
             );
         }
+        // A NaN eye or field of view would reach the uniform block, the sort and the cascades.
+        let camera = &camera.sanitized();
         self.select_skinned_lods(camera, size.1);
 
         // Blended parts are re-sorted every frame because the order depends on the camera.
@@ -1145,7 +1306,7 @@ impl Renderer {
         instances.extend(sorted.iter().map(|s| s.2));
         self.blended_kinds.clear();
         self.blended_kinds.extend(sorted.iter().map(|s| s.1));
-        self.blended.upload(&self.device, &self.queue, &instances);
+        self.uploaded_instance_bytes += self.blended.upload(&self.device, &self.queue, &instances);
         self.scratch_instances = instances;
         self.scratch_blended = sorted;
 
@@ -1212,6 +1373,9 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.shadow);
             pass.set_bind_group(0, &slot.bind_group, &[]);
             self.draw_opaque(&mut pass);
+            // Like Roblox, partly transparent parts cast a full shadow; invisible ones
+            // (Transparency 1) are not in the blended list and cast none.
+            self.draw_blended_instances(&mut pass);
             pass.set_pipeline(&self.pipelines.skinned_shadow);
             self.draw_skinned(&mut pass, None);
         }
@@ -1419,7 +1583,7 @@ impl Renderer {
             return;
         };
         let size = att.size;
-        let samples = self.settings.samples();
+        let samples = self.samples;
         let mut chain = std::mem::take(&mut self.post);
 
         // HDR passes ping-pong between hdr[0] and hdr[1].
@@ -1611,18 +1775,24 @@ impl Renderer {
             return;
         }
         pass.set_pipeline(&self.pipelines.blended);
-        let stride = std::mem::size_of::<InstanceRaw>() as u64;
-        let mut bound: Option<MeshKind> = None;
-        for (i, kind) in self.blended_kinds.iter().enumerate() {
+        self.draw_blended_instances(pass);
+    }
+
+    /// Draws the blended instances far to near with the pipeline already set (the blended
+    /// pipeline, or the shadow pipeline for their shadows): one instanced draw per run of
+    /// same-shape neighbours in the sorted list, its `first_instance` range indexing the one
+    /// bound instance buffer. Within a draw, instances are rasterised in order, so blending
+    /// stays far to near.
+    fn draw_blended_instances(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if self.blended.count == 0 {
+            return;
+        }
+        pass.set_vertex_buffer(1, self.blended.buffer.slice(..));
+        for (kind, instances) in kind_runs(&self.blended_kinds) {
             let mesh = &self.meshes[kind.index()];
-            if bound != Some(*kind) {
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
-                bound = Some(*kind);
-            }
-            let offset = i as u64 * stride;
-            pass.set_vertex_buffer(1, self.blended.buffer.slice(offset..offset + stride));
-            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..mesh.index_count, 0, instances);
         }
     }
 
@@ -2180,5 +2350,80 @@ mod tests {
         validate_wgsl("shadow", SHADOW_PARTS);
         validate_wgsl("finish", FINISH_PARTS);
         validate_wgsl("prepass", PREPASS_PARTS);
+    }
+
+    fn inst(x: f32) -> InstanceRaw {
+        InstanceRaw {
+            model: [[x; 4]; 4],
+            color: [1.0; 4],
+            material: [0; 4],
+        }
+    }
+
+    #[test]
+    fn changed_ranges_cover_exactly_what_differs() {
+        let old: Vec<InstanceRaw> = (0..20).map(|i| inst(i as f32)).collect();
+        assert!(changed_ranges(&old, &old).is_empty());
+        // Everything is new against an empty buffer.
+        assert_eq!(changed_ranges(&[], &old), vec![0..20]);
+        let mut new = old.clone();
+        new[5] = inst(-1.0);
+        assert_eq!(changed_ranges(&old, &new), vec![5..6]);
+        // Close changes merge (gap below MERGE_GAP); far ones stay apart.
+        new[7] = inst(-1.0);
+        new[15] = inst(-1.0);
+        assert_eq!(changed_ranges(&old, &new), vec![5..8, 15..16]);
+        // Growth uploads the new tail; shrinking needs no write for the dropped entries.
+        let mut grown = old.clone();
+        grown.push(inst(99.0));
+        assert_eq!(changed_ranges(&old, &grown), vec![20..21]);
+        assert!(changed_ranges(&old, &old[..10]).is_empty());
+        // Compared as bytes: NaN equals itself, 0.0 and -0.0 differ.
+        let nan = vec![inst(f32::NAN)];
+        assert!(changed_ranges(&nan, &nan).is_empty());
+        assert_eq!(changed_ranges(&[inst(0.0)], &[inst(-0.0)]), vec![0..1]);
+    }
+
+    #[test]
+    fn blended_runs_group_same_shape_neighbours_in_order() {
+        use MeshKind::{Box, Sphere};
+        let runs: Vec<_> = kind_runs(&[Box, Box, Sphere, Box, Box, Box]).collect();
+        assert_eq!(runs, vec![(Box, 0..2), (Sphere, 2..3), (Box, 3..6)]);
+        assert_eq!(kind_runs(&[]).count(), 0);
+        let runs: Vec<_> = kind_runs(&[Sphere]).collect();
+        assert_eq!(runs, vec![(Sphere, 0..1)]);
+    }
+
+    #[test]
+    fn msaa_falls_back_to_the_highest_supported_count() {
+        use wgpu::TextureFormatFeatureFlags as F;
+        let resolve = F::MULTISAMPLE_RESOLVE;
+        let all = F::MULTISAMPLE_X2 | F::MULTISAMPLE_X4 | F::MULTISAMPLE_X8 | resolve;
+        assert_eq!(supported_samples(4, all, all), 4);
+        assert_eq!(supported_samples(1, all, all), 1);
+        // Never above the request, even when more is supported.
+        assert_eq!(supported_samples(2, all, all), 2);
+        // Colour without 4x: the next lower count both support.
+        assert_eq!(supported_samples(4, F::MULTISAMPLE_X2 | resolve, all), 2);
+        // Depth without 4x limits it too.
+        assert_eq!(supported_samples(4, all, F::MULTISAMPLE_X2), 2);
+        // No resolve support, or no multisampling at all: single sample.
+        assert_eq!(supported_samples(4, F::MULTISAMPLE_X4, all), 1);
+        assert_eq!(supported_samples(4, F::empty(), F::empty()), 1);
+    }
+
+    /// The WebGPU guarantees (used when the device has no adapter-specific format features)
+    /// include 4x for the HDR, LDR and depth formats, so the High preset keeps 4x there.
+    #[test]
+    fn guaranteed_formats_keep_4x() {
+        let g =
+            |f: wgpu::TextureFormat| f.guaranteed_format_features(wgpu::Features::empty()).flags;
+        for format in [HDR_FORMAT, LDR_FORMAT] {
+            assert_eq!(
+                supported_samples(4, g(format), g(DEPTH_FORMAT)),
+                4,
+                "{format:?}"
+            );
+        }
     }
 }

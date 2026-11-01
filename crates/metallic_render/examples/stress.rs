@@ -10,6 +10,7 @@
 use metallic_core::{Color3, InstanceId, Value, Vec3 as V3, World};
 use metallic_render::glam::Vec3;
 use metallic_render::{Camera, Quality, RenderContext, RenderSettings, Renderer};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
@@ -157,6 +158,60 @@ fn orbit_camera(t: f32) -> Camera {
     }
 }
 
+/// Frame times kept for the percentiles (about a minute at 160 fps), so a long run uses
+/// bounded memory.
+const RECENT_FRAMES: usize = 10_000;
+/// How many of the slowest frames the summary names.
+const WORST_FRAMES: usize = 5;
+
+/// Running frame-time statistics: totals over the whole run plus a bounded ring of recent
+/// frame times for the percentiles.
+struct FrameTimes {
+    /// The last `RECENT_FRAMES` frame times in milliseconds, oldest first.
+    recent: VecDeque<f32>,
+    count: u64,
+    over_33ms: u64,
+    /// The slowest frames of the run as (frame index, ms), slowest first.
+    worst: Vec<(u64, f32)>,
+}
+
+impl FrameTimes {
+    fn new() -> FrameTimes {
+        FrameTimes {
+            recent: VecDeque::with_capacity(RECENT_FRAMES),
+            count: 0,
+            over_33ms: 0,
+            worst: Vec::with_capacity(WORST_FRAMES + 1),
+        }
+    }
+
+    fn push(&mut self, ms: f32) {
+        if self.recent.len() == RECENT_FRAMES {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(ms);
+        if ms > 33.0 {
+            self.over_33ms += 1;
+        }
+        let at = self.worst.partition_point(|&(_, w)| w >= ms);
+        if at < WORST_FRAMES {
+            self.worst.insert(at, (self.count, ms));
+            self.worst.truncate(WORST_FRAMES);
+        }
+        self.count += 1;
+    }
+
+    /// The `q` quantile (0..=1) of the recent frame times.
+    fn recent_quantile(&self, q: f32) -> f32 {
+        let mut sorted: Vec<f32> = self.recent.iter().copied().collect();
+        sorted.sort_by(f32::total_cmp);
+        sorted
+            .get(((sorted.len() as f32 - 1.0) * q) as usize)
+            .copied()
+            .unwrap_or(0.0)
+    }
+}
+
 struct Stats {
     window_start: Instant,
     frames: u32,
@@ -166,8 +221,7 @@ struct Stats {
     total_frames: u64,
     sync_total: Duration,
     sync_window: Duration,
-    /// Every frame time in milliseconds, for the summary.
-    all: Vec<f32>,
+    times: FrameTimes,
 }
 
 impl Stats {
@@ -182,7 +236,7 @@ impl Stats {
             total_frames: 0,
             sync_total: Duration::ZERO,
             sync_window: Duration::ZERO,
-            all: Vec::new(),
+            times: FrameTimes::new(),
         }
     }
 
@@ -195,7 +249,7 @@ impl Stats {
         let now = Instant::now();
         let dt = now - self.last_frame;
         self.worst = self.worst.max(dt);
-        self.all.push(dt.as_secs_f32() * 1000.0);
+        self.times.push(dt.as_secs_f32() * 1000.0);
         self.last_frame = now;
         self.frames += 1;
         self.total_frames += 1;
@@ -221,33 +275,24 @@ impl Stats {
     }
 
     fn summary(&self) {
-        let mut sorted = self.all.clone();
-        sorted.sort_by(f32::total_cmp);
-        let at = |q: f32| {
-            sorted
-                .get(((sorted.len() as f32 - 1.0) * q) as usize)
-                .copied()
-                .unwrap_or(0.0)
-        };
-        let slow: Vec<String> = {
-            let mut idx: Vec<usize> = (0..self.all.len()).collect();
-            idx.sort_by(|&a, &b| self.all[b].total_cmp(&self.all[a]));
-            idx.iter()
-                .take(5)
-                .map(|&i| format!("#{i}={:.1}ms", self.all[i]))
-                .collect()
-        };
+        let t = &self.times;
+        let slow: Vec<String> = t
+            .worst
+            .iter()
+            .map(|(i, ms)| format!("#{i}={ms:.1}ms"))
+            .collect();
         println!(
-            "overall fps avg {:.1} over {} frames; frame ms p50 {:.2} p99 {:.2} p99.9 {:.2} max {:.2}; >33 ms: {} frames; worst: {}; sync avg {:.3} ms/frame",
+            "overall fps avg {:.1} over {} frames; frame ms (last {}) p50 {:.2} p99 {:.2} p99.9 {:.2}; max {:.2}; >33 ms: {} frames; worst: {}; sync avg {:.3} ms/frame",
             self.overall(),
-            self.all.len(),
-            at(0.5),
-            at(0.99),
-            at(0.999),
-            at(1.0),
-            self.all.iter().filter(|&&m| m > 33.0).count(),
+            t.count,
+            t.recent.len(),
+            t.recent_quantile(0.5),
+            t.recent_quantile(0.99),
+            t.recent_quantile(0.999),
+            t.worst.first().map_or(0.0, |w| w.1),
+            t.over_33ms,
             slow.join(" "),
-            self.sync_total.as_secs_f64() * 1000.0 / self.all.len().max(1) as f64,
+            self.sync_total.as_secs_f64() * 1000.0 / t.count.max(1) as f64,
         );
     }
 }
@@ -401,10 +446,35 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(gfx) = self.gfx.as_ref() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(gfx) = self.gfx.as_ref() else {
+            return;
+        };
+        let drawable = !gfx.minimised && gfx.config.width > 0 && gfx.config.height > 0;
+        let deadline = self
+            .seconds
+            .and_then(|s| Duration::try_from_secs_f32(s).ok())
+            .map(|d| self.start + d);
+        if !drawable && deadline.is_some_and(|d| Instant::now() >= d) {
+            self.stats.summary();
+            event_loop.exit();
+            return;
+        }
+        event_loop.set_control_flow(control_flow(drawable, deadline));
+        if drawable {
             gfx.window.request_redraw();
         }
+    }
+}
+
+/// How the event loop runs: flat out while there is something to draw; asleep until the next
+/// event (a restore sends `Resized`) or the `--seconds` deadline while minimised, instead of
+/// spinning at 100% CPU.
+fn control_flow(drawable: bool, deadline: Option<Instant>) -> ControlFlow {
+    match (drawable, deadline) {
+        (true, _) => ControlFlow::Poll,
+        (false, Some(d)) => ControlFlow::WaitUntil(d),
+        (false, None) => ControlFlow::Wait,
     }
 }
 
@@ -469,4 +539,36 @@ fn main() {
         start: Instant::now(),
     };
     event_loop.run_app(&mut app).expect("run");
+}
+
+// Run with `cargo test -p metallic_render --example stress`.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_times_stay_bounded_and_keep_the_worst() {
+        let mut t = FrameTimes::new();
+        for i in 0..(RECENT_FRAMES as u64 * 3) {
+            t.push(if i == 7 { 120.0 } else { (i % 10) as f32 });
+        }
+        assert_eq!(t.count, RECENT_FRAMES as u64 * 3);
+        assert_eq!(t.recent.len(), RECENT_FRAMES);
+        assert!(t.recent.capacity() < RECENT_FRAMES * 2);
+        assert_eq!(t.worst.len(), WORST_FRAMES);
+        assert_eq!(t.worst[0], (7, 120.0));
+        assert!(t.worst.windows(2).all(|w| w[0].1 >= w[1].1));
+        assert_eq!(t.over_33ms, 1);
+        assert_eq!(t.recent_quantile(0.0), 0.0);
+        assert_eq!(t.recent_quantile(1.0), 9.0);
+    }
+
+    #[test]
+    fn minimised_waits_instead_of_polling() {
+        let d = Instant::now() + Duration::from_secs(3);
+        assert_eq!(control_flow(true, None), ControlFlow::Poll);
+        assert_eq!(control_flow(true, Some(d)), ControlFlow::Poll);
+        assert_eq!(control_flow(false, None), ControlFlow::Wait);
+        assert_eq!(control_flow(false, Some(d)), ControlFlow::WaitUntil(d));
+    }
 }

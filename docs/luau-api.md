@@ -174,7 +174,10 @@ Tags are text labels on instances (Roblox's `CollectionService`). `game:GetServi
     `new(x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22)`, `CFrame.identity`, `lookAt(at, target, up?)`,
     `Angles(rx, ry, rz)` = `fromEulerAnglesXYZ` (Rx * Ry * Rz: Z is applied first), `fromEulerAnglesYXZ` =
     `fromOrientation` (Ry * Rx * Rz), `fromEulerAngles(rx, ry, rz, order?)` with `Enum.RotationOrder` (default XYZ),
-    `fromAxisAngle(axis, angle)`, `fromMatrix(pos, vX, vY, vZ?)`.
+    `fromAxisAngle(axis, angle)`, `fromMatrix(pos, vX, vY, vZ?)`. The 12-number `new` re-orthonormalises its matrix
+    the way a property stores it (an orthonormal matrix is kept as given, a scaled or skewed one keeps its look
+    vector); a finite matrix that cannot be fixed (zero or parallel columns) gets the identity rotation. `fromMatrix`
+    keeps its axes as given.
   - Fields: `Position`, `X Y Z`, `Rotation`, `LookVector`, `RightVector`, `UpVector`, `XVector`, `YVector`, `ZVector`.
   - Methods: `Inverse`, `Lerp(goal, alpha)` (position linear, rotation along the shortest arc), `ToWorldSpace`,
     `ToObjectSpace`, `PointToWorldSpace`, `PointToObjectSpace`, `VectorToWorldSpace`, `VectorToObjectSpace` (each takes
@@ -222,8 +225,9 @@ Code: `metallic_core::transform`, shared with Studio's building tools. Spec: `do
   so does `Resize`. `ScaleTo` and `PivotTo` compute and check every new value first. If a part would leave the size
   limits, or a position would overflow, they error and change nothing (`GetScale` included).
 - **CFrame properties.** `PivotOffset`, `WorldPivot`, `BasePart.CFrame` and `PivotTo`'s target are made orthonormal on
-  write. A scaled or skewed matrix keeps its right axis and corrects the others (`CFrame:Orthonormalize`), so
-  `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate rotation (for example all zeros) errors.
+  write (every CFrame property is, in `World::set`). A scaled or skewed matrix keeps its right axis and corrects up
+  and right (`CFrame:Orthonormalize`), so `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate
+  rotation (for example all zeros from `fromMatrix`) errors.
 - `Model:GetBoundingBox()` returns `(CFrame, Vector3)`: the box around every BasePart descendant, oriented like the
   PrimaryPart (or the pivot when there is none). An empty model returns its pivot and size 0.
   `Model:GetExtentsSize()` returns that size.

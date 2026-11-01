@@ -9,9 +9,11 @@ Metallic Launcher (`Metallic.exe`) and the Player (`metallic-player.exe`, staged
 them as MetallicLauncher on the Velopack channel `launcher-<channel>` with the WebView2 framework
 check, and uploads to the same repository as a release tagged `launcher-v<version>-<channel>`.
 
-Steps: cargo build --release, stage the files with the main exe renamed to "Metallic Studio.exe",
+Steps: cargo build --locked --profile dist (root Cargo.toml: thin LTO, one codegen unit, unwinding
+panics, line tables in a separate .pdb), stage the files with the main exe renamed to "Metallic Studio.exe",
 `vpk pack` (installer "MetallicStudio-<channel>-Setup.exe" plus full and delta packages), then
-`vpk upload github` to Metallic-Club/studio as a release tagged v<version>-<channel>.
+`vpk upload github` to Metallic-Club/studio as a release tagged v<version>-<channel>. The .pdb files
+are copied to target/release-symbols/<tag>/ (not packed, not uploaded) for symbolising crash reports.
 
 The same script runs by hand and in .github/workflows/release.yml. The GitHub token is read from
 the environment variable GITHUB_TOKEN (the workflow's own token, or `gh auth token` by hand); it
@@ -45,6 +47,10 @@ ROOT = Path(__file__).resolve().parent.parent
 ICON_PNG = ROOT / "branding" / "placeholder-icon.png"
 ICON_ICO = ROOT / "branding" / "icon.ico"
 OUT_DIR = ROOT / "target" / "release-out"
+# The Cargo profile for shipped builds ([profile.dist] in the root Cargo.toml) and where it puts them.
+CARGO_PROFILE = "dist"
+BUILD_DIR = ROOT / "target" / CARGO_PROFILE
+SYMBOLS_DIR = ROOT / "target" / "release-symbols"
 VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", re.ASCII)
 CARGO_TOML = ROOT / "Cargo.toml"
 
@@ -54,7 +60,7 @@ LAUNCHER_PACK_ID = "MetallicLauncher"
 LAUNCHER_PACK_TITLE = "Metallic Play"
 LAUNCHER_MAIN_EXE = "Metallic.exe"
 LAUNCHER_CARGO_PACKAGES = ["metallic_launcher", "metallic_player"]
-# (file in target/release, name in the package)
+# (file in target/dist, name in the package)
 LAUNCHER_FILES = [("Metallic.exe", "Metallic.exe"), ("metallic-player.exe", "metallic-player.exe")]
 LAUNCHER_CHANNEL_PREFIX = "launcher-"
 LAUNCHER_TAG_PREFIX = "launcher-v"
@@ -137,6 +143,20 @@ def make_icon(dry_run):
     return target
 
 
+def build_command(app, jobs):
+    """The cargo build command line: the dist profile, Cargo.lock as committed."""
+    packages = LAUNCHER_CARGO_PACKAGES if app == "launcher" else [CARGO_BIN]
+    command = ["cargo", "build", "--locked", "--profile", CARGO_PROFILE]
+    for package in packages:
+        command += ["-p", package]
+    return command + ["-j", str(jobs)]
+
+
+def symbol_file(built):
+    """The .pdb rustc writes next to a Windows exe: the bin name with '-' turned into '_'."""
+    return Path(built).stem.replace("-", "_") + ".pdb"
+
+
 def pack_command(vpk, app, version, channel, stage, icon, notes):
     """The `vpk pack` command line. Both name runtime win-x64 (vpk otherwise assumes x86); the
     Launcher's adds the WebView2 framework check and uses the Velopack channel `launcher-<channel>`."""
@@ -193,13 +213,7 @@ def main():
 
     check_vpk_version(args.vpk, args.dry_run)
 
-    if launcher:
-        cargo = ["cargo", "build", "--release"]
-        for package in LAUNCHER_CARGO_PACKAGES:
-            cargo += ["-p", package]
-        run(cargo + ["-j", str(args.jobs)], args.dry_run)
-    else:
-        run(["cargo", "build", "--release", "-p", CARGO_BIN, "-j", str(args.jobs)], args.dry_run)
+    run(build_command(args.app, args.jobs), args.dry_run)
 
     stage = OUT_DIR / "stage"
     notes = OUT_DIR / "release-notes.md"
@@ -209,14 +223,27 @@ def main():
         print(f"+ stage {built} as {name} in {stage.relative_to(ROOT)}")
     for folder in folders:
         print(f"+ stage folder {folder}/ in {stage.relative_to(ROOT)}")
+    symbols = SYMBOLS_DIR / tag
+    for built, _ in staged:
+        print(f"+ keep {symbol_file(built)} in {symbols.relative_to(ROOT)}")
     if not args.dry_run:
         shutil.rmtree(OUT_DIR / "stage", ignore_errors=True)
         stage.mkdir(parents=True)
         for built, name in staged:
-            exe = ROOT / "target" / "release" / built
+            exe = BUILD_DIR / built
             if not exe.exists():
                 sys.exit(f"{exe} not found; did the build use another target dir (CARGO_TARGET_DIR)?")
             shutil.copy2(exe, stage / name)
+        # Debug info for crash reports stays out of the package; keep it per release tag.
+        shutil.rmtree(symbols, ignore_errors=True)
+        symbols.mkdir(parents=True)
+        for built, _ in staged:
+            pdb = BUILD_DIR / symbol_file(built)
+            if pdb.exists():
+                shutil.copy2(pdb, symbols / pdb.name)
+            else:
+                print(f"WARNING: {pdb} not found; crash reports for this release cannot be symbolised.",
+                      file=sys.stderr)
         for folder in folders:
             shutil.copytree(ROOT / folder, stage / folder)
         title = LAUNCHER_PACK_TITLE if launcher else PACK_TITLE

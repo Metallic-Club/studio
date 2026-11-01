@@ -239,10 +239,27 @@ fn collect_parts(world: &World, looks: &LookOverrides) -> Vec<PartDraw> {
     out
 }
 
+/// A Vector3 property, or `default` when it is missing or not finite (in f32) on any axis.
+///
+/// Non-finite values are replaced so a part always compares equal to its last read: a NaN never
+/// does, and would make [`Scene::sync`] report a change (and re-upload) on every sync.
 fn vec3_prop(world: &World, id: InstanceId, name: &str, default: Vec3) -> Vec3 {
     match world.get(id, name) {
-        Ok(Value::Vector3(v)) => Vec3::new(v.x as f32, v.y as f32, v.z as f32),
+        Ok(Value::Vector3(v)) => finite_or(Vec3::new(v.x as f32, v.y as f32, v.z as f32), default),
         _ => default,
+    }
+}
+
+fn finite_or(v: Vec3, default: Vec3) -> Vec3 {
+    if v.is_finite() { v } else { default }
+}
+
+/// `Transparency` as drawn: clamped to 0..=1, opaque (0) when NaN.
+fn transparency_of(t: f64) -> f32 {
+    if t.is_nan() {
+        0.0
+    } else {
+        (t as f32).clamp(0.0, 1.0)
     }
 }
 
@@ -250,12 +267,13 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
     let position = vec3_prop(world, id, "Position", Vec3::ZERO);
     let rot = vec3_prop(world, id, "Orientation", Vec3::ZERO);
     let size = vec3_prop(world, id, "Size", Vec3::ONE).max(Vec3::splat(0.001));
+    let grey = Vec3::new(163.0, 162.0, 165.0);
     let color = match world.get(id, "Color") {
-        Ok(Value::Color3(c)) => [c.r as f32, c.g as f32, c.b as f32],
-        _ => [163.0, 162.0, 165.0],
+        Ok(Value::Color3(c)) => finite_or(Vec3::new(c.r as f32, c.g as f32, c.b as f32), grey),
+        _ => grey,
     };
     let transparency = match world.get(id, "Transparency") {
-        Ok(Value::Number(t)) => (t as f32).clamp(0.0, 1.0),
+        Ok(Value::Number(t)) => transparency_of(t),
         _ => 0.0,
     };
     let material = match world.get(id, "Material") {
@@ -565,5 +583,34 @@ mod tests {
     fn srgb_conversion_hits_the_ends() {
         assert_eq!(srgb_to_linear(0.0), 0.0);
         assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    /// `World::set` rejects non-finite values since #98; the renderer still sanitises what it
+    /// reads so a NaN that gets in another way cannot make every sync report a change.
+    #[test]
+    fn non_finite_reads_fall_back_to_finite_defaults() {
+        assert_eq!(transparency_of(f64::NAN), 0.0);
+        assert_eq!(transparency_of(f64::INFINITY), 1.0);
+        assert_eq!(transparency_of(-3.0), 0.0);
+        assert_eq!(transparency_of(0.25), 0.25);
+        let d = Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(finite_or(Vec3::new(f32::NAN, 0.0, 0.0), d), d);
+        assert_eq!(finite_or(Vec3::new(0.0, f32::INFINITY, 0.0), d), d);
+        // A finite f64 too large for f32 becomes infinite after the cast and also falls back.
+        assert_eq!(finite_or(Vec3::new(1e39_f64 as f32, 0.0, 0.0), d), d);
+        assert_eq!(finite_or(Vec3::ONE, d), Vec3::ONE);
+    }
+
+    /// A part read twice compares equal, so an unchanged part never counts as a change.
+    #[test]
+    fn rereading_an_unchanged_part_is_not_a_change() {
+        let (mut w, ids) = world_with_parts();
+        w.set(ids[0], "Transparency", Value::Number(0.4)).unwrap();
+        let a = read_part(&w, ids[0], None);
+        assert!(a.is_some());
+        assert_eq!(a, read_part(&w, ids[0], None));
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        assert!(!scene.update(&w, ids[0]));
     }
 }

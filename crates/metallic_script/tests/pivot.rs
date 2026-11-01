@@ -455,12 +455,13 @@ fn pivot_offset_is_made_orthonormal() {
         local target = CFrame.new(5, 6, 7) * CFrame.Angles(0.3, 0.6, 0.9)
         p:PivotTo(target)
         same(p:GetPivot(), target, "round trip")
-        -- A skewed target lands as its orthonormal version.
-        local skewed = CFrame.new(1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1)
+        -- A skewed target (fromMatrix keeps its axes as given) lands as its orthonormal version.
+        local skewed = CFrame.fromMatrix(V(1, 1, 1), V(1, 0, 0), V(1, 1, 0), V(0, 0, 1))
         p:PivotTo(skewed)
         same(p:GetPivot(), skewed:Orthonormalize(), "skewed target")
-        print(pcall(function() p.PivotOffset = CFrame.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) end))
-        print(pcall(function() p:PivotTo(CFrame.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) end))
+        local zero = CFrame.fromMatrix(V(0, 0, 0), V(0, 0, 0), V(0, 0, 0), V(0, 0, 0))
+        print(pcall(function() p.PivotOffset = zero end))
+        print(pcall(function() p:PivotTo(zero) end))
     "#);
     assert_eq!(lines.len(), 3, "{lines:?}");
     for line in &lines[..2] {
