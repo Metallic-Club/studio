@@ -84,7 +84,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Jump3")),
-                                ("Position", Vector3((x:-2.0,y:1.0,z:-46.0))),
+                                ("Position", Vector3((x:-2.0,y:1.5,z:-46.0))),
                                 ("Size", Vector3((x:8.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -95,7 +95,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Jump3Rim")),
-                                ("Position", Vector3((x:-2.0,y:0.6,z:-46.0))),
+                                ("Position", Vector3((x:-2.0,y:1.1,z:-46.0))),
                                 ("Size", Vector3((x:8.6,y:1.4,z:8.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -128,7 +128,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Jump5")),
-                                ("Position", Vector3((x:0.0,y:4.0,z:-70.0))),
+                                ("Position", Vector3((x:0.0,y:4.5,z:-70.0))),
                                 ("Size", Vector3((x:8.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -139,7 +139,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Jump5Rim")),
-                                ("Position", Vector3((x:0.0,y:3.6,z:-70.0))),
+                                ("Position", Vector3((x:0.0,y:4.1,z:-70.0))),
                                 ("Size", Vector3((x:8.6,y:1.4,z:8.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -172,7 +172,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Step2")),
-                                ("Position", Vector3((x:0.0,y:7.0,z:-89.0))),
+                                ("Position", Vector3((x:0.0,y:7.5,z:-89.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -183,7 +183,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Step2Rim")),
-                                ("Position", Vector3((x:0.0,y:6.6,z:-89.0))),
+                                ("Position", Vector3((x:0.0,y:7.1,z:-89.0))),
                                 ("Size", Vector3((x:6.6,y:1.4,z:6.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -216,7 +216,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Step4")),
-                                ("Position", Vector3((x:0.0,y:10.0,z:-107.0))),
+                                ("Position", Vector3((x:0.0,y:10.5,z:-107.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -227,7 +227,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Step4Rim")),
-                                ("Position", Vector3((x:0.0,y:9.6,z:-107.0))),
+                                ("Position", Vector3((x:0.0,y:10.1,z:-107.0))),
                                 ("Size", Vector3((x:6.6,y:1.4,z:6.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -238,7 +238,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Zigzag1")),
-                                ("Position", Vector3((x:-5.0,y:10.0,z:-118.0))),
+                                ("Position", Vector3((x:-5.0,y:10.5,z:-118.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -249,7 +249,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Zigzag1Rim")),
-                                ("Position", Vector3((x:-5.0,y:9.6,z:-118.0))),
+                                ("Position", Vector3((x:-5.0,y:10.1,z:-118.0))),
                                 ("Size", Vector3((x:6.6,y:1.4,z:6.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -304,7 +304,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Zigzag4")),
-                                ("Position", Vector3((x:2.0,y:13.0,z:-152.0))),
+                                ("Position", Vector3((x:2.0,y:13.5,z:-152.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -315,7 +315,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Zigzag4Rim")),
-                                ("Position", Vector3((x:2.0,y:12.6,z:-152.0))),
+                                ("Position", Vector3((x:2.0,y:13.1,z:-152.0))),
                                 ("Size", Vector3((x:6.6,y:1.4,z:6.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -326,7 +326,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("PlankBridge")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-170.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-170.0))),
                                 ("Size", Vector3((x:4.0,y:1.0,z:26.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -337,7 +337,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("PlankBridgeRim")),
-                                ("Position", Vector3((x:0.0,y:12.6,z:-170.0))),
+                                ("Position", Vector3((x:0.0,y:13.1,z:-170.0))),
                                 ("Size", Vector3((x:4.6,y:1.4,z:26.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -392,7 +392,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Hop3")),
-                                ("Position", Vector3((x:-2.0,y:13.0,z:-212.0))),
+                                ("Position", Vector3((x:-2.0,y:13.5,z:-212.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -403,7 +403,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Hop3Rim")),
-                                ("Position", Vector3((x:-2.0,y:12.6,z:-212.0))),
+                                ("Position", Vector3((x:-2.0,y:13.1,z:-212.0))),
                                 ("Size", Vector3((x:6.6,y:1.4,z:6.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -414,7 +414,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Checkpoint1Island")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-228.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-228.0))),
                                 ("Size", Vector3((x:16.0,y:1.0,z:16.0))),
                                 ("Color", Color3((r:214.0,g:178.0,b:126.0))),
                                 ("Material", String("Sand")),
@@ -425,7 +425,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Checkpoint1IslandRim")),
-                                ("Position", Vector3((x:0.0,y:12.6,z:-228.0))),
+                                ("Position", Vector3((x:0.0,y:13.1,z:-228.0))),
                                 ("Size", Vector3((x:16.6,y:1.4,z:16.6))),
                                 ("Color", Color3((r:150.0,g:104.0,b:70.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -436,7 +436,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkRim")),
-                                ("Position", Vector3((x:0.0,y:12.6,z:-263.0))),
+                                ("Position", Vector3((x:0.0,y:13.1,z:-263.0))),
                                 ("Size", Vector3((x:14.6,y:1.4,z:54.6))),
                                 ("Color", Color3((r:58.0,g:72.0,b:108.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -447,7 +447,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor1")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-240.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-240.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -458,7 +458,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:5.0,y:13.0,z:-246.0))),
+                                ("Position", Vector3((x:5.0,y:13.5,z:-246.0))),
                                 ("Size", Vector3((x:4.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -469,7 +469,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor2")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-252.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-252.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -480,7 +480,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:-5.0,y:13.0,z:-258.0))),
+                                ("Position", Vector3((x:-5.0,y:13.5,z:-258.0))),
                                 ("Size", Vector3((x:4.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -491,7 +491,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor3")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-264.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-264.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -502,7 +502,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-270.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-270.0))),
                                 ("Size", Vector3((x:4.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -513,7 +513,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor4")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-276.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-276.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -524,7 +524,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:-5.25,y:13.0,z:-282.5))),
+                                ("Position", Vector3((x:-5.25,y:13.5,z:-282.5))),
                                 ("Size", Vector3((x:3.5,y:1.0,z:5.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -535,7 +535,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:5.25,y:13.0,z:-282.5))),
+                                ("Position", Vector3((x:5.25,y:13.5,z:-282.5))),
                                 ("Size", Vector3((x:3.5,y:1.0,z:5.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -546,7 +546,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor5")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-287.5))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-287.5))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -557,7 +557,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Dock")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-319.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-319.0))),
                                 ("Size", Vector3((x:12.0,y:1.0,z:12.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -568,7 +568,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("DockRim")),
-                                ("Position", Vector3((x:0.0,y:12.6,z:-319.0))),
+                                ("Position", Vector3((x:0.0,y:13.1,z:-319.0))),
                                 ("Size", Vector3((x:12.6,y:1.4,z:12.6))),
                                 ("Color", Color3((r:58.0,g:72.0,b:108.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -579,7 +579,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaRiverRim")),
-                                ("Position", Vector3((x:0.0,y:10.6,z:-343.0))),
+                                ("Position", Vector3((x:0.0,y:11.1,z:-343.0))),
                                 ("Size", Vector3((x:16.6,y:1.4,z:36.6))),
                                 ("Color", Color3((r:58.0,g:72.0,b:108.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -590,7 +590,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("RiverBeam1")),
-                                ("Position", Vector3((x:-2.0,y:13.0,z:-332.0))),
+                                ("Position", Vector3((x:-2.0,y:13.5,z:-332.0))),
                                 ("Size", Vector3((x:3.0,y:1.0,z:14.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -601,7 +601,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("RiverRest")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-342.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-342.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -612,7 +612,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("RiverBeam2")),
-                                ("Position", Vector3((x:2.0,y:13.0,z:-353.0))),
+                                ("Position", Vector3((x:2.0,y:13.5,z:-353.0))),
                                 ("Size", Vector3((x:3.0,y:1.0,z:16.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -623,7 +623,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkRim")),
-                                ("Position", Vector3((x:0.0,y:12.6,z:-388.0))),
+                                ("Position", Vector3((x:0.0,y:13.1,z:-388.0))),
                                 ("Size", Vector3((x:14.6,y:1.4,z:54.6))),
                                 ("Color", Color3((r:58.0,g:72.0,b:108.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -634,7 +634,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor1")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-365.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-365.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -645,7 +645,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:-5.0,y:13.0,z:-371.0))),
+                                ("Position", Vector3((x:-5.0,y:13.5,z:-371.0))),
                                 ("Size", Vector3((x:4.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -656,7 +656,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor2")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-377.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-377.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -667,7 +667,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:5.0,y:13.0,z:-383.0))),
+                                ("Position", Vector3((x:5.0,y:13.5,z:-383.0))),
                                 ("Size", Vector3((x:4.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -678,7 +678,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor3")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-389.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-389.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -689,7 +689,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-395.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-395.0))),
                                 ("Size", Vector3((x:4.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -700,7 +700,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor4")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-401.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-401.0))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:8.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -711,7 +711,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:-5.25,y:13.0,z:-407.5))),
+                                ("Position", Vector3((x:-5.25,y:13.5,z:-407.5))),
                                 ("Size", Vector3((x:3.5,y:1.0,z:5.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -722,7 +722,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("SafeLane")),
-                                ("Position", Vector3((x:5.25,y:13.0,z:-407.5))),
+                                ("Position", Vector3((x:5.25,y:13.5,z:-407.5))),
                                 ("Size", Vector3((x:3.5,y:1.0,z:5.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -733,7 +733,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaWalkFloor5")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-412.5))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-412.5))),
                                 ("Size", Vector3((x:14.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -744,7 +744,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Checkpoint2Island")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-423.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-423.0))),
                                 ("Size", Vector3((x:16.0,y:1.0,z:16.0))),
                                 ("Color", Color3((r:118.0,g:142.0,b:184.0))),
                                 ("Material", String("Concrete")),
@@ -755,7 +755,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Checkpoint2IslandRim")),
-                                ("Position", Vector3((x:0.0,y:12.6,z:-423.0))),
+                                ("Position", Vector3((x:0.0,y:13.1,z:-423.0))),
                                 ("Size", Vector3((x:16.6,y:1.4,z:16.6))),
                                 ("Color", Color3((r:58.0,g:72.0,b:108.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -766,7 +766,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Arena")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-449.0))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-449.0))),
                                 ("Size", Vector3((x:30.0,y:1.0,z:30.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -777,7 +777,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("ArenaRim")),
-                                ("Position", Vector3((x:0.0,y:12.6,z:-449.0))),
+                                ("Position", Vector3((x:0.0,y:13.1,z:-449.0))),
                                 ("Size", Vector3((x:30.6,y:1.4,z:30.6))),
                                 ("Color", Color3((r:70.0,g:96.0,b:56.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -810,7 +810,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Ledge2")),
-                                ("Position", Vector3((x:-3.0,y:16.0,z:-482.0))),
+                                ("Position", Vector3((x:-3.0,y:16.5,z:-482.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -821,7 +821,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Ledge2Rim")),
-                                ("Position", Vector3((x:-3.0,y:15.6,z:-482.0))),
+                                ("Position", Vector3((x:-3.0,y:16.1,z:-482.0))),
                                 ("Size", Vector3((x:6.6,y:1.4,z:6.6))),
                                 ("Color", Color3((r:70.0,g:96.0,b:56.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -876,7 +876,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaPoolRim")),
-                                ("Position", Vector3((x:0.0,y:17.6,z:-537.0))),
+                                ("Position", Vector3((x:0.0,y:18.1,z:-537.0))),
                                 ("Size", Vector3((x:16.6,y:1.4,z:24.6))),
                                 ("Color", Color3((r:70.0,g:96.0,b:56.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -953,8 +953,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerColumn")),
-                                ("Position", Vector3((x:0.0,y:-2.25,z:-565.0))),
-                                ("Size", Vector3((x:6.0,y:117.5,z:6.0))),
+                                ("Position", Vector3((x:0.0,y:-2.0,z:-565.0))),
+                                ("Size", Vector3((x:6.0,y:118.0,z:6.0))),
                                 ("Color", Color3((r:60.0,g:82.0,b:50.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -975,7 +975,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerPad2")),
-                                ("Position", Vector3((x:-6.928203230275509,y:24.0,z:-561.0))),
+                                ("Position", Vector3((x:-6.928203230275509,y:24.5,z:-561.0))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -997,7 +997,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerPad4")),
-                                ("Position", Vector3((x:5.142300877492314,y:29.0,z:-558.8716444550482))),
+                                ("Position", Vector3((x:5.142300877492314,y:29.5,z:-558.8716444550482))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -1019,7 +1019,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerPad6")),
-                                ("Position", Vector3((x:5.142300877492312,y:34.0,z:-571.1283555449518))),
+                                ("Position", Vector3((x:5.142300877492312,y:34.5,z:-571.1283555449518))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -1041,7 +1041,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerPad8")),
-                                ("Position", Vector3((x:-6.92820323027551,y:39.0,z:-569.0))),
+                                ("Position", Vector3((x:-6.92820323027551,y:39.5,z:-569.0))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -1063,7 +1063,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerPad10")),
-                                ("Position", Vector3((x:-2.7361611466053506,y:44.0,z:-557.4824590337128))),
+                                ("Position", Vector3((x:-2.7361611466053506,y:44.5,z:-557.4824590337128))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -1085,7 +1085,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerPad12")),
-                                ("Position", Vector3((x:7.878462024097664,y:49.0,z:-563.6108145786645))),
+                                ("Position", Vector3((x:7.878462024097664,y:49.5,z:-563.6108145786645))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -1107,7 +1107,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("TowerPad14")),
-                                ("Position", Vector3((x:4.898587196589413e-15,y:54.0,z:-573.0))),
+                                ("Position", Vector3((x:4.898587196589413e-15,y:54.5,z:-573.0))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -1118,7 +1118,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Checkpoint3Island")),
-                                ("Position", Vector3((x:0.0,y:54.0,z:-589.0))),
+                                ("Position", Vector3((x:0.0,y:54.5,z:-589.0))),
                                 ("Size", Vector3((x:16.0,y:1.0,z:16.0))),
                                 ("Color", Color3((r:120.0,g:160.0,b:92.0))),
                                 ("Material", String("Grass")),
@@ -1129,7 +1129,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Checkpoint3IslandRim")),
-                                ("Position", Vector3((x:0.0,y:53.6,z:-589.0))),
+                                ("Position", Vector3((x:0.0,y:54.1,z:-589.0))),
                                 ("Size", Vector3((x:16.6,y:1.4,z:16.6))),
                                 ("Color", Color3((r:70.0,g:96.0,b:56.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1162,7 +1162,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LongJump2")),
-                                ("Position", Vector3((x:-2.0,y:57.0,z:-617.0))),
+                                ("Position", Vector3((x:-2.0,y:57.5,z:-617.0))),
                                 ("Size", Vector3((x:6.0,y:1.0,z:6.0))),
                                 ("Color", Color3((r:176.0,g:214.0,b:224.0))),
                                 ("Material", String("Ice")),
@@ -1173,7 +1173,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LongJump2Rim")),
-                                ("Position", Vector3((x:-2.0,y:56.6,z:-617.0))),
+                                ("Position", Vector3((x:-2.0,y:57.1,z:-617.0))),
                                 ("Size", Vector3((x:6.6,y:1.4,z:6.6))),
                                 ("Color", Color3((r:70.0,g:108.0,b:128.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1411,17 +1411,6 @@
                         (
                             class: "Part",
                             props: [
-                                ("Name", String("Ground")),
-                                ("Position", Vector3((x:0.0,y:-62.0,z:-300.0))),
-                                ("Size", Vector3((x:1600.0,y:4.0,z:1600.0))),
-                                ("Color", Color3((r:40.0,g:38.0,b:46.0))),
-                                ("Material", String("Concrete")),
-                                ("Anchored", Bool(true)),
-                            ],
-                        ),
-                        (
-                            class: "Part",
-                            props: [
                                 ("Name", String("Support")),
                                 ("Position", Vector3((x:0.0,y:-31.2,z:0.0))),
                                 ("Size", Vector3((x:4.0,y:59.6,z:4.0))),
@@ -1511,8 +1500,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:-2.0,y:-30.45,z:-46.0))),
-                                ("Size", Vector3((x:2.4,y:61.1,z:2.4))),
+                                ("Position", Vector3((x:-2.0,y:-30.2,z:-46.0))),
+                                ("Size", Vector3((x:2.4,y:61.6,z:2.4))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1533,8 +1522,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-28.95,z:-70.0))),
-                                ("Size", Vector3((x:2.4,y:64.1,z:2.4))),
+                                ("Position", Vector3((x:0.0,y:-28.7,z:-70.0))),
+                                ("Size", Vector3((x:2.4,y:64.6,z:2.4))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1555,8 +1544,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-27.45,z:-89.0))),
-                                ("Size", Vector3((x:1.7999999999999998,y:67.1,z:1.7999999999999998))),
+                                ("Position", Vector3((x:0.0,y:-27.2,z:-89.0))),
+                                ("Size", Vector3((x:1.7999999999999998,y:67.6,z:1.7999999999999998))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1577,8 +1566,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-25.95,z:-107.0))),
-                                ("Size", Vector3((x:1.7999999999999998,y:70.1,z:1.7999999999999998))),
+                                ("Position", Vector3((x:0.0,y:-25.7,z:-107.0))),
+                                ("Size", Vector3((x:1.7999999999999998,y:70.6,z:1.7999999999999998))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1588,8 +1577,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:-5.0,y:-25.95,z:-118.0))),
-                                ("Size", Vector3((x:1.7999999999999998,y:70.1,z:1.7999999999999998))),
+                                ("Position", Vector3((x:-5.0,y:-25.7,z:-118.0))),
+                                ("Size", Vector3((x:1.7999999999999998,y:70.6,z:1.7999999999999998))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1621,8 +1610,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:2.0,y:-24.45,z:-152.0))),
-                                ("Size", Vector3((x:1.7999999999999998,y:73.1,z:1.7999999999999998))),
+                                ("Position", Vector3((x:2.0,y:-24.2,z:-152.0))),
+                                ("Size", Vector3((x:1.7999999999999998,y:73.6,z:1.7999999999999998))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1632,8 +1621,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-24.45,z:-170.0))),
-                                ("Size", Vector3((x:1.6,y:73.1,z:1.6))),
+                                ("Position", Vector3((x:0.0,y:-24.2,z:-170.0))),
+                                ("Size", Vector3((x:1.6,y:73.6,z:1.6))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1665,8 +1654,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:-2.0,y:-24.45,z:-212.0))),
-                                ("Size", Vector3((x:1.7999999999999998,y:73.1,z:1.7999999999999998))),
+                                ("Position", Vector3((x:-2.0,y:-24.2,z:-212.0))),
+                                ("Size", Vector3((x:1.7999999999999998,y:73.6,z:1.7999999999999998))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1676,8 +1665,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-24.45,z:-228.0))),
-                                ("Size", Vector3((x:4.0,y:73.1,z:4.0))),
+                                ("Position", Vector3((x:0.0,y:-24.2,z:-228.0))),
+                                ("Size", Vector3((x:4.0,y:73.6,z:4.0))),
                                 ("Color", Color3((r:122.0,g:88.0,b:62.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1687,7 +1676,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("FlagPole")),
-                                ("Position", Vector3((x:-6.0,y:18.0,z:-233.0))),
+                                ("Position", Vector3((x:-6.0,y:18.5,z:-233.0))),
                                 ("Size", Vector3((x:0.4,y:9.0,z:0.4))),
                                 ("Color", Color3((r:201.0,g:204.0,b:210.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1698,7 +1687,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Flag")),
-                                ("Position", Vector3((x:-6.0,y:21.5,z:-231.5))),
+                                ("Position", Vector3((x:-6.0,y:22.0,z:-231.5))),
                                 ("Size", Vector3((x:0.2,y:1.6,z:2.6))),
                                 ("Color", Color3((r:155.0,g:130.0,b:212.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1709,8 +1698,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:-4.0,y:-24.45,z:-247.0))),
-                                ("Size", Vector3((x:3.0,y:73.1,z:3.0))),
+                                ("Position", Vector3((x:-4.0,y:-24.2,z:-247.0))),
+                                ("Size", Vector3((x:3.0,y:73.6,z:3.0))),
                                 ("Color", Color3((r:52.0,g:64.0,b:94.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1720,8 +1709,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:4.0,y:-24.45,z:-279.0))),
-                                ("Size", Vector3((x:3.0,y:73.1,z:3.0))),
+                                ("Position", Vector3((x:4.0,y:-24.2,z:-279.0))),
+                                ("Size", Vector3((x:3.0,y:73.6,z:3.0))),
                                 ("Color", Color3((r:52.0,g:64.0,b:94.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1731,8 +1720,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-24.45,z:-319.0))),
-                                ("Size", Vector3((x:3.5999999999999996,y:73.1,z:3.5999999999999996))),
+                                ("Position", Vector3((x:0.0,y:-24.2,z:-319.0))),
+                                ("Size", Vector3((x:3.5999999999999996,y:73.6,z:3.5999999999999996))),
                                 ("Color", Color3((r:52.0,g:64.0,b:94.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1742,8 +1731,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-25.45,z:-343.0))),
-                                ("Size", Vector3((x:4.0,y:71.1,z:4.0))),
+                                ("Position", Vector3((x:0.0,y:-25.2,z:-343.0))),
+                                ("Size", Vector3((x:4.0,y:71.6,z:4.0))),
                                 ("Color", Color3((r:52.0,g:64.0,b:94.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1753,8 +1742,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:-4.0,y:-24.45,z:-372.0))),
-                                ("Size", Vector3((x:3.0,y:73.1,z:3.0))),
+                                ("Position", Vector3((x:-4.0,y:-24.2,z:-372.0))),
+                                ("Size", Vector3((x:3.0,y:73.6,z:3.0))),
                                 ("Color", Color3((r:52.0,g:64.0,b:94.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1764,8 +1753,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:4.0,y:-24.45,z:-404.0))),
-                                ("Size", Vector3((x:3.0,y:73.1,z:3.0))),
+                                ("Position", Vector3((x:4.0,y:-24.2,z:-404.0))),
+                                ("Size", Vector3((x:3.0,y:73.6,z:3.0))),
                                 ("Color", Color3((r:52.0,g:64.0,b:94.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1775,8 +1764,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-24.45,z:-423.0))),
-                                ("Size", Vector3((x:4.0,y:73.1,z:4.0))),
+                                ("Position", Vector3((x:0.0,y:-24.2,z:-423.0))),
+                                ("Size", Vector3((x:4.0,y:73.6,z:4.0))),
                                 ("Color", Color3((r:52.0,g:64.0,b:94.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1786,7 +1775,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("FlagPole")),
-                                ("Position", Vector3((x:-6.0,y:18.0,z:-428.0))),
+                                ("Position", Vector3((x:-6.0,y:18.5,z:-428.0))),
                                 ("Size", Vector3((x:0.4,y:9.0,z:0.4))),
                                 ("Color", Color3((r:201.0,g:204.0,b:210.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1797,7 +1786,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Flag")),
-                                ("Position", Vector3((x:-6.0,y:21.5,z:-426.5))),
+                                ("Position", Vector3((x:-6.0,y:22.0,z:-426.5))),
                                 ("Size", Vector3((x:0.2,y:1.6,z:2.6))),
                                 ("Color", Color3((r:155.0,g:130.0,b:212.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1808,8 +1797,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-24.45,z:-449.0))),
-                                ("Size", Vector3((x:4.0,y:73.1,z:4.0))),
+                                ("Position", Vector3((x:0.0,y:-24.2,z:-449.0))),
+                                ("Size", Vector3((x:4.0,y:73.6,z:4.0))),
                                 ("Color", Color3((r:60.0,g:82.0,b:50.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1819,7 +1808,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("BarHub")),
-                                ("Position", Vector3((x:0.0,y:16.0,z:-449.0))),
+                                ("Position", Vector3((x:0.0,y:16.5,z:-449.0))),
                                 ("Size", Vector3((x:3.0,y:5.0,z:3.0))),
                                 ("Color", Color3((r:70.0,g:96.0,b:56.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1841,8 +1830,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:-3.0,y:-22.95,z:-482.0))),
-                                ("Size", Vector3((x:1.7999999999999998,y:76.1,z:1.7999999999999998))),
+                                ("Position", Vector3((x:-3.0,y:-22.7,z:-482.0))),
+                                ("Size", Vector3((x:1.7999999999999998,y:76.6,z:1.7999999999999998))),
                                 ("Color", Color3((r:60.0,g:82.0,b:50.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1874,8 +1863,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-21.950000000000003,z:-537.0))),
-                                ("Size", Vector3((x:4.0,y:78.1,z:4.0))),
+                                ("Position", Vector3((x:0.0,y:-21.700000000000003,z:-537.0))),
+                                ("Size", Vector3((x:4.0,y:78.6,z:4.0))),
                                 ("Color", Color3((r:60.0,g:82.0,b:50.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1885,8 +1874,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:0.0,y:-3.9499999999999993,z:-589.0))),
-                                ("Size", Vector3((x:4.0,y:114.1,z:4.0))),
+                                ("Position", Vector3((x:0.0,y:-3.6999999999999993,z:-589.0))),
+                                ("Size", Vector3((x:4.0,y:114.6,z:4.0))),
                                 ("Color", Color3((r:60.0,g:82.0,b:50.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -1896,7 +1885,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("FlagPole")),
-                                ("Position", Vector3((x:-6.0,y:59.0,z:-594.0))),
+                                ("Position", Vector3((x:-6.0,y:59.5,z:-594.0))),
                                 ("Size", Vector3((x:0.4,y:9.0,z:0.4))),
                                 ("Color", Color3((r:201.0,g:204.0,b:210.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1907,7 +1896,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Flag")),
-                                ("Position", Vector3((x:-6.0,y:62.5,z:-592.5))),
+                                ("Position", Vector3((x:-6.0,y:63.0,z:-592.5))),
                                 ("Size", Vector3((x:0.2,y:1.6,z:2.6))),
                                 ("Color", Color3((r:155.0,g:130.0,b:212.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -1929,8 +1918,8 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Support")),
-                                ("Position", Vector3((x:-2.0,y:-2.4499999999999993,z:-617.0))),
-                                ("Size", Vector3((x:1.7999999999999998,y:117.1,z:1.7999999999999998))),
+                                ("Position", Vector3((x:-2.0,y:-2.1999999999999993,z:-617.0))),
+                                ("Size", Vector3((x:1.7999999999999998,y:117.6,z:1.7999999999999998))),
                                 ("Color", Color3((r:58.0,g:90.0,b:108.0))),
                                 ("Material", String("Concrete")),
                                 ("Anchored", Bool(true)),
@@ -2890,7 +2879,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:-2.0,y:13.0,z:-246.0))),
+                                ("Position", Vector3((x:-2.0,y:13.5,z:-246.0))),
                                 ("Size", Vector3((x:10.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2901,7 +2890,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:2.0,y:13.0,z:-258.0))),
+                                ("Position", Vector3((x:2.0,y:13.5,z:-258.0))),
                                 ("Size", Vector3((x:10.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2912,7 +2901,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:-4.5,y:13.0,z:-270.0))),
+                                ("Position", Vector3((x:-4.5,y:13.5,z:-270.0))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2923,7 +2912,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:4.5,y:13.0,z:-270.0))),
+                                ("Position", Vector3((x:4.5,y:13.5,z:-270.0))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2934,7 +2923,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-282.5))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-282.5))),
                                 ("Size", Vector3((x:7.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2945,7 +2934,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaRiver")),
-                                ("Position", Vector3((x:0.0,y:11.0,z:-343.0))),
+                                ("Position", Vector3((x:0.0,y:11.5,z:-343.0))),
                                 ("Size", Vector3((x:16.0,y:1.0,z:36.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2956,7 +2945,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:2.0,y:13.0,z:-371.0))),
+                                ("Position", Vector3((x:2.0,y:13.5,z:-371.0))),
                                 ("Size", Vector3((x:10.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2967,7 +2956,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:-2.0,y:13.0,z:-383.0))),
+                                ("Position", Vector3((x:-2.0,y:13.5,z:-383.0))),
                                 ("Size", Vector3((x:10.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2978,7 +2967,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:-4.5,y:13.0,z:-395.0))),
+                                ("Position", Vector3((x:-4.5,y:13.5,z:-395.0))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -2989,7 +2978,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:4.5,y:13.0,z:-395.0))),
+                                ("Position", Vector3((x:4.5,y:13.5,z:-395.0))),
                                 ("Size", Vector3((x:5.0,y:1.0,z:4.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -3000,7 +2989,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("Lava")),
-                                ("Position", Vector3((x:0.0,y:13.0,z:-407.5))),
+                                ("Position", Vector3((x:0.0,y:13.5,z:-407.5))),
                                 ("Size", Vector3((x:7.0,y:1.0,z:5.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -3011,7 +3000,7 @@
                             class: "Part",
                             props: [
                                 ("Name", String("LavaPool")),
-                                ("Position", Vector3((x:0.0,y:18.0,z:-537.0))),
+                                ("Position", Vector3((x:0.0,y:18.5,z:-537.0))),
                                 ("Size", Vector3((x:16.0,y:1.0,z:24.0))),
                                 ("Color", Color3((r:196.0,g:80.0,b:30.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -3037,7 +3026,7 @@
                             class: "Checkpoint",
                             props: [
                                 ("Name", String("Checkpoint1")),
-                                ("Position", Vector3((x:0.0,y:13.7,z:-228.0))),
+                                ("Position", Vector3((x:0.0,y:14.2,z:-228.0))),
                                 ("Size", Vector3((x:8.0,y:0.4,z:8.0))),
                                 ("Color", Color3((r:201.0,g:204.0,b:210.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -3049,7 +3038,7 @@
                             class: "Checkpoint",
                             props: [
                                 ("Name", String("Checkpoint2")),
-                                ("Position", Vector3((x:0.0,y:13.7,z:-423.0))),
+                                ("Position", Vector3((x:0.0,y:14.2,z:-423.0))),
                                 ("Size", Vector3((x:8.0,y:0.4,z:8.0))),
                                 ("Color", Color3((r:201.0,g:204.0,b:210.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -3061,7 +3050,7 @@
                             class: "Checkpoint",
                             props: [
                                 ("Name", String("Checkpoint3")),
-                                ("Position", Vector3((x:0.0,y:54.7,z:-589.0))),
+                                ("Position", Vector3((x:0.0,y:55.2,z:-589.0))),
                                 ("Size", Vector3((x:8.0,y:0.4,z:8.0))),
                                 ("Color", Color3((r:201.0,g:204.0,b:210.0))),
                                 ("Material", String("SmoothPlastic")),
@@ -3085,7 +3074,7 @@
                     class: "Part",
                     props: [
                         ("Name", String("MovingPlatform")),
-                        ("Position", Vector3((x:0.0,y:13.0,z:-301.5))),
+                        ("Position", Vector3((x:0.0,y:13.5,z:-301.5))),
                         ("Size", Vector3((x:8.0,y:1.0,z:8.0))),
                         ("Color", Color3((r:180.0,g:184.0,b:191.0))),
                         ("Material", String("Metal")),
@@ -3105,7 +3094,7 @@
                     class: "Part",
                     props: [
                         ("Name", String("SpinningBar")),
-                        ("Position", Vector3((x:0.0,y:14.9,z:-449.0))),
+                        ("Position", Vector3((x:0.0,y:15.4,z:-449.0))),
                         ("Size", Vector3((x:28.0,y:1.2,z:1.2))),
                         ("Color", Color3((r:180.0,g:184.0,b:191.0))),
                         ("Material", String("Metal")),
@@ -3238,19 +3227,6 @@
                                         ("TextSize", Number(28.0)),
                                     ],
                                 ),
-                            ],
-                        ),
-                        (
-                            class: "TextLabel",
-                            props: [
-                                ("Name", String("Controls")),
-                                ("Position", UDim2((x_scale:0.0,x_offset:16.0,y_scale:1.0,y_offset:-48.0))),
-                                ("Size", UDim2((x_scale:0.0,x_offset:560.0,y_scale:0.0,y_offset:32.0))),
-                                ("BackgroundColor3", Color3((r:28.0,g:25.0,b:34.0))),
-                                ("BackgroundTransparency", Number(0.15)),
-                                ("Text", String("WASD move   Space jump   Shift run   Right-drag camera")),
-                                ("TextColor3", Color3((r:190.0,g:187.0,b:198.0))),
-                                ("TextSize", Number(18.0)),
                             ],
                         ),
                         (

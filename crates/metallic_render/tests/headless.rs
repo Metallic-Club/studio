@@ -120,3 +120,163 @@ fn low_quality_renders_and_resizing_is_safe() {
     let px = r.capture(&camera(), SIZE).expect("capture");
     assert!(distinct_colours(&px) > 200);
 }
+
+/// The default avatar drawn skinned in its rest pose: it covers the middle of the frame, the
+/// close view uses LOD0 and a far view LOD2; clearing the instances removes it again.
+#[test]
+fn skinned_avatar_draws_and_picks_its_level_of_detail() {
+    use metallic_render::glam::Mat4;
+    use metallic_render::metallic_asset::{Pose, SkinnedModel};
+    use metallic_render::{SkinStyle, SkinnedInstance};
+    use std::sync::Arc;
+
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let glb = include_bytes!("../../../art/avatar/out/default_avatar.glb");
+    let model = Arc::new(SkinnedModel::from_glb(glb).expect("avatar"));
+    // Metres to studs; the avatar stands at the origin facing the camera (+Z).
+    let scale = 1.0 / 0.28;
+    let mut joints = Vec::new();
+    Pose::rest(&model.skeleton).skin_matrices(
+        &model.skeleton,
+        Mat4::from_scale(Vec3::splat(scale)),
+        &mut joints,
+    );
+    let mut r = Renderer::with_settings(
+        &ctx,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        RenderSettings {
+            quality: Quality::Low,
+        },
+    );
+    let empty = World::new_with_services();
+    r.sync(&empty);
+    // Coverage is counted as changed pixels: keep the exposure fixed so the background does
+    // not change with the metered brightness.
+    r.auto_exposure.enabled = false;
+    let close = Camera {
+        position: Vec3::new(0.0, 2.75, 4.0),
+        look_at: Vec3::new(0.0, 2.75, 0.0),
+        fov_deg: 60.0,
+    };
+    let before = r.capture(&close, SIZE).expect("capture");
+    let instance = SkinnedInstance {
+        model: &model,
+        joints: &joints,
+        slot_colors: &[],
+        center: Vec3::new(0.0, 2.75, 0.0),
+        height: 5.5,
+        detail_scale: scale,
+        style: SkinStyle::Standard,
+    };
+    r.set_skinned(&[instance]);
+    let with = r.capture(&close, SIZE).expect("capture");
+    assert_eq!(r.skinned_lods(), [0]);
+    let centre = |px: &[u8]| {
+        let i = ((SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    assert_ne!(centre(&before), centre(&with), "nothing drawn at the torso");
+    let changed = before
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(with.as_chunks::<4>().0)
+        .filter(|(a, b)| a != b)
+        .count();
+    let share = changed as f32 / (SIZE.0 * SIZE.1) as f32;
+    assert!(
+        (0.05..0.6).contains(&share),
+        "avatar covers {share} of the frame"
+    );
+
+    let far = Camera {
+        position: Vec3::new(0.0, 2.75, 200.0),
+        ..close
+    };
+    r.capture(&far, SIZE).expect("capture");
+    assert_eq!(r.skinned_lods(), [2]);
+
+    r.set_skinned(&[]);
+    let cleared = r.capture(&close, SIZE).expect("capture");
+    assert_eq!(centre(&before), centre(&cleared));
+}
+
+/// The toon style draws a dark warm-brown ink outline around the avatar and shades it in warm
+/// tones; the standard style draws neither.
+#[test]
+fn toon_avatar_has_ink_outline_and_warm_shading() {
+    use metallic_render::glam::Mat4;
+    use metallic_render::metallic_asset::{Pose, SkinnedModel};
+    use metallic_render::{SkinStyle, SkinnedInstance};
+    use std::sync::Arc;
+
+    let Ok(ctx) = RenderContext::new_headless() else {
+        eprintln!("no graphics adapter, skipping");
+        return;
+    };
+    let glb = include_bytes!("../../../art/avatar/out/default_avatar.glb");
+    let model = Arc::new(SkinnedModel::from_glb(glb).expect("avatar"));
+    let scale = 1.0 / 0.28;
+    let mut joints = Vec::new();
+    Pose::rest(&model.skeleton).skin_matrices(
+        &model.skeleton,
+        Mat4::from_scale(Vec3::splat(scale)),
+        &mut joints,
+    );
+    let mut r = Renderer::with_settings(
+        &ctx,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        RenderSettings {
+            quality: Quality::Low,
+        },
+    );
+    r.sync(&World::new_with_services());
+    // The default lighting's bloom lifts a 2 px dark line by about 15/255; this test checks the
+    // ink colour itself.
+    r.post_mut().remove("bloom");
+    // Anti-aliasing (on at Low, where MSAA is off) blends the line's stair steps into the
+    // background, as it should; this test checks the ink colour itself.
+    r.post_mut().remove(metallic_render::MLAA_PASS);
+    let cam = Camera {
+        position: Vec3::new(0.0, 2.75, 9.0),
+        look_at: Vec3::new(0.0, 2.75, 0.0),
+        fov_deg: 50.0,
+    };
+    // Ink #5b3b33 within a small tolerance (dither and band edges).
+    let is_ink = |p: &[u8; 4]| {
+        (p[0] as i32 - 0x5b).abs() <= 12
+            && (p[1] as i32 - 0x3b).abs() <= 12
+            && (p[2] as i32 - 0x33).abs() <= 12
+    };
+    let mut shot = |style| {
+        r.set_skinned(&[SkinnedInstance {
+            model: &model,
+            joints: &joints,
+            slot_colors: &[],
+            center: Vec3::new(0.0, 2.75, 0.0),
+            height: 5.5,
+            detail_scale: scale,
+            style,
+        }]);
+        r.capture(&cam, SIZE).expect("capture")
+    };
+    let toon = shot(SkinStyle::Toon);
+    let standard = shot(SkinStyle::Standard);
+    let ink = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| is_ink(p)).count();
+    let (toon_ink, standard_ink) = (ink(&toon), ink(&standard));
+    assert!(toon_ink > 400, "toon outline pixels: {toon_ink}");
+    assert!(
+        standard_ink < toon_ink / 10,
+        "standard has ink: {standard_ink}"
+    );
+    // The torso centre is warm: red above blue by a clear margin.
+    let i = ((SIZE.1 / 2 * SIZE.0 + SIZE.0 / 2) * 4) as usize;
+    let c = &toon[i..i + 3];
+    assert!(
+        c[0] as i32 - c[2] as i32 > 25,
+        "torso colour {c:?} is not warm"
+    );
+}

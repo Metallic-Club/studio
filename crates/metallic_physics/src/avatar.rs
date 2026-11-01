@@ -1,130 +1,111 @@
-//! The Metallic avatar: an R6-style block figure built from Parts and posed around its root.
+//! The character's parts: the `HumanoidRootPart` and the 15 R15 body parts. All are invisible:
+//! they give scripts the familiar part names (`hit.Parent`, `Head`, `LeftHand`), while the runtime
+//! draws the skinned default avatar in their place.
 //!
-//! Layout relative to the `HumanoidRootPart` centre (which sits [`crate::ROOT_HEIGHT`] = 3 studs
-//! above the feet), before the character's yaw is applied:
+//! - `HumanoidRootPart`: 2 x 2 x 1 at the root, CanCollide. It is the character part loose parts
+//!   bump into.
+//! - The body parts ([`BodyPart`]): CanCollide off, so the physics keeps them as sensors that
+//!   never push or block. They are the boxes around the bone-attached touch volumes (see
+//!   [`crate::body`]), moved every step to the pose the touches were found with.
 //!
-//! | Part             | Size      | Offset         | Visible | CanCollide |
-//! |------------------|-----------|----------------|---------|------------|
-//! | HumanoidRootPart | 2 x 2 x 1 | (0, 0, 0)      | no      | yes        |
-//! | Torso            | 2 x 2 x 1 | (0, 0, 0)      | yes     | yes        |
-//! | Head             | 2 x 1 x 1 | (0, 1.5, 0)    | yes     | yes        |
-//! | Left Arm         | 1 x 2 x 1 | (-1.5, 0, 0)   | yes     | no         |
-//! | Right Arm        | 1 x 2 x 1 | (1.5, 0, 0)    | yes     | no         |
-//! | Left Leg         | 1 x 2 x 1 | (-0.5, -2, 0)  | yes     | no         |
-//! | Right Leg        | 1 x 2 x 1 | (0.5, -2, 0)   | yes     | no         |
-//!
-//! Default colours follow the classic Roblox look: [`SKIN`] head and arms, a [`SHIRT`] torso and
-//! [`PANTS`] legs; the Torso carries a thin violet `Stripe` part as its child.
-//! All parts are Anchored: the [`crate::CharacterController`] moves them.
+//! All parts are Anchored (the [`crate::CharacterController`] moves them) with Transparency 1.
+use crate::body::{BodyPart, BodyPose};
 use metallic_core::{Color3, CoreError, InstanceId, Value, Vec3, World};
 
-/// Head and arm colour, a warm skin tone `#eab892`.
-pub const SKIN: Color3 = Color3::new(234.0, 184.0, 146.0);
-/// Torso colour, slate blue `#4a68aa`.
-pub const SHIRT: Color3 = Color3::new(74.0, 104.0, 170.0);
-/// Leg colour, dark graphite `#2e3240`.
-pub const PANTS: Color3 = Color3::new(46.0, 50.0, 64.0);
-/// Accent colour, violet `#9b82d4`: the torso stripe and reached checkpoints.
+/// Accent colour, violet `#9b82d4`: reached checkpoints.
 pub const VIOLET: Color3 = Color3::new(155.0, 130.0, 212.0);
 
 /// Name of the invisible root part the controller moves.
 pub(crate) const ROOT_PART: &str = "HumanoidRootPart";
+/// Size of the root part.
+const ROOT_SIZE: Vec3 = Vec3::new(2.0, 2.0, 1.0);
 
-/// One body part: name, size, offset from the root, visible, CanCollide.
-struct Limb {
-    name: &'static str,
-    size: Vec3,
-    offset: Vec3,
-    visible: bool,
-    can_collide: bool,
-}
-
-const fn limb(
-    name: &'static str,
-    size: (f64, f64, f64),
-    offset: (f64, f64, f64),
-    visible: bool,
-    can_collide: bool,
-) -> Limb {
-    Limb {
-        name,
-        size: Vec3::new(size.0, size.1, size.2),
-        offset: Vec3::new(offset.0, offset.1, offset.2),
-        visible,
-        can_collide,
-    }
-}
-
-const LIMBS: [Limb; 7] = [
-    limb(ROOT_PART, (2.0, 2.0, 1.0), (0.0, 0.0, 0.0), false, true),
-    limb("Head", (2.0, 1.0, 1.0), (0.0, 1.5, 0.0), true, true),
-    limb("Torso", (2.0, 2.0, 1.0), (0.0, 0.0, 0.0), true, true),
-    limb("Left Arm", (1.0, 2.0, 1.0), (-1.5, 0.0, 0.0), true, false),
-    limb("Right Arm", (1.0, 2.0, 1.0), (1.5, 0.0, 0.0), true, false),
-    limb("Left Leg", (1.0, 2.0, 1.0), (-0.5, -2.0, 0.0), true, false),
-    limb("Right Leg", (1.0, 2.0, 1.0), (0.5, -2.0, 0.0), true, false),
-];
-
-/// The violet band around the chest, a child of the Torso.
-const STRIPE: Limb = limb("Stripe", (2.04, 0.4, 1.04), (0.0, 0.3, 0.0), true, false);
-
-/// Creates the root, the six body parts and the stripe under `model`, posed at `root` facing -Z.
+/// Creates the root and the 15 body parts under `model`, posed at `root` facing -Z.
 pub(crate) fn build(world: &mut World, model: InstanceId, root: Vec3) -> Result<(), CoreError> {
-    for l in &LIMBS {
-        let id = make_part(world, model, l)?;
-        if l.name == "Torso" {
-            make_part(world, id, &STRIPE)?;
-        }
+    make_part(world, model, ROOT_PART, ROOT_SIZE, true)?;
+    for p in BodyPart::ALL {
+        make_part(world, model, p.name(), p.size(), false)?;
     }
     place(world, model, root, 0.0);
     Ok(())
 }
 
-fn make_part(world: &mut World, parent: InstanceId, l: &Limb) -> Result<InstanceId, CoreError> {
+fn make_part(
+    world: &mut World,
+    parent: InstanceId,
+    name: &str,
+    size: Vec3,
+    can_collide: bool,
+) -> Result<InstanceId, CoreError> {
     let id = world.create("Part", Some(parent))?;
-    world.set(id, "Name", Value::String(l.name.into()))?;
-    world.set(id, "Size", Value::Vector3(l.size))?;
+    world.set(id, "Name", Value::String(name.into()))?;
+    world.set(id, "Size", Value::Vector3(size))?;
     world.set(id, "Anchored", Value::Bool(true))?;
-    world.set(id, "CanCollide", Value::Bool(l.can_collide))?;
+    world.set(id, "CanCollide", Value::Bool(can_collide))?;
     world.set(id, "Material", Value::String("SmoothPlastic".into()))?;
-    let (color, transparency) = match (l.visible, l.name) {
-        (false, _) => (SHIRT, 1.0),
-        (true, "Stripe") => (VIOLET, 0.0),
-        (true, "Head" | "Left Arm" | "Right Arm") => (SKIN, 0.0),
-        (true, "Left Leg" | "Right Leg") => (PANTS, 0.0),
-        (true, _) => (SHIRT, 0.0),
-    };
-    world.set(id, "Color", Value::Color3(color))?;
-    world.set(id, "Transparency", Value::Number(transparency))?;
+    world.set(id, "Transparency", Value::Number(1.0))?;
     Ok(id)
 }
 
-/// Rotates `v` by `yaw` degrees around +Y (Roblox orientation convention).
-fn rotate_y(v: Vec3, yaw: f64) -> Vec3 {
-    let (s, c) = yaw.to_radians().sin_cos();
-    Vec3::new(v.x * c + v.z * s, v.y, -v.x * s + v.z * c)
+/// The instances of a character's parts, looked up once and checked before each use.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct PartIds {
+    root: Option<InstanceId>,
+    body: [Option<InstanceId>; crate::body::BODY_PART_COUNT],
 }
 
-/// Writes Position and Orientation of every avatar part found in `model` so the root is at
-/// `root` and the figure faces yaw `yaw` (degrees; 0 looks along -Z). Missing parts are skipped.
-pub(crate) fn place(world: &mut World, model: InstanceId, root: Vec3, yaw: f64) {
-    let orientation = Value::Vector3(Vec3::new(0.0, yaw, 0.0));
-    for l in &LIMBS {
-        let Some(id) = world.find_first_child(model, l.name) else {
-            continue;
+impl PartIds {
+    /// Finds the parts of `model` again where a cached id is missing or no longer alive.
+    pub(crate) fn refresh(&mut self, world: &World, model: InstanceId) {
+        let fresh = |id: Option<InstanceId>, name: &str| match id {
+            Some(id) if world.is_alive(id) && world.parent(id) == Some(model) => Some(id),
+            _ => world.find_first_child(model, name),
         };
-        let pos = root + rotate_y(l.offset, yaw);
-        // The properties exist on every Part, so these writes cannot fail.
-        let _ = world.set(id, "Position", Value::Vector3(pos));
-        let _ = world.set(id, "Orientation", orientation.clone());
-        if l.name == "Torso"
-            && let Some(stripe) = world.find_first_child(id, STRIPE.name)
-        {
-            let pos = root + rotate_y(STRIPE.offset, yaw);
-            let _ = world.set(stripe, "Position", Value::Vector3(pos));
-            let _ = world.set(stripe, "Orientation", orientation.clone());
+        self.root = fresh(self.root, ROOT_PART);
+        for p in BodyPart::ALL {
+            self.body[p.index()] = fresh(self.body[p.index()], p.name());
         }
     }
+
+    /// The instance of a body part.
+    pub(crate) fn body(&self, part: BodyPart) -> Option<InstanceId> {
+        self.body[part.index()]
+    }
+
+    /// The `HumanoidRootPart`.
+    pub(crate) fn root(&self) -> Option<InstanceId> {
+        self.root
+    }
+}
+
+/// Writes Position and Orientation of the root part (at `root`, facing `yaw` degrees; 0 looks
+/// along -Z) and of every body part (from `pose`). Missing parts are skipped.
+pub(crate) fn place_pose(world: &mut World, ids: &PartIds, root: Vec3, yaw: f64, pose: &BodyPose) {
+    // The properties exist on every Part, so these writes cannot fail.
+    if let Some(id) = ids.root {
+        let _ = world.set(id, "Position", Value::Vector3(root));
+        let _ = world.set(id, "Orientation", Value::Vector3(Vec3::new(0.0, yaw, 0.0)));
+    }
+    for p in BodyPart::ALL {
+        let Some(id) = ids.body(p) else {
+            continue;
+        };
+        let frame = pose.parts[p.index()];
+        let _ = world.set(id, "Position", Value::Vector3(root + frame.position));
+        let _ = world.set(
+            id,
+            "Orientation",
+            Value::Vector3(frame.orientation_degrees()),
+        );
+    }
+}
+
+/// Poses every part of `model` in the rest pose so the root is at `root` and the figure faces
+/// `yaw` degrees.
+pub(crate) fn place(world: &mut World, model: InstanceId, root: Vec3, yaw: f64) {
+    let mut ids = PartIds::default();
+    ids.refresh(world, model);
+    place_pose(world, &ids, root, yaw, &BodyPose::rest(yaw));
 }
 
 #[cfg(test)]
@@ -132,9 +113,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rotate_y_matches_roblox_convention() {
-        // yaw 90 turns the look vector -Z into -X
-        let v = rotate_y(Vec3::new(0.0, 0.0, -1.0), 90.0);
-        assert!((v - Vec3::new(-1.0, 0.0, 0.0)).magnitude() < 1e-12);
+    fn build_names_and_sizes_every_part() {
+        let mut world = World::new_with_services();
+        let ws = world.root("Workspace").unwrap();
+        let model = world.create("Model", Some(ws)).unwrap();
+        build(&mut world, model, Vec3::new(0.0, 3.0, 0.0)).unwrap();
+        assert_eq!(world.children(model).len(), 16);
+        let hand = world.find_first_child(model, "LeftHand").unwrap();
+        assert_eq!(
+            world.get(hand, "Size").unwrap(),
+            Value::Vector3(BodyPart::LeftHand.size())
+        );
+        assert_eq!(world.get(hand, "CanCollide").unwrap(), Value::Bool(false));
+        let root = world.find_first_child(model, ROOT_PART).unwrap();
+        assert_eq!(world.get(root, "CanCollide").unwrap(), Value::Bool(true));
     }
 }

@@ -1,0 +1,42 @@
+Fonts bundled with Metallic Studio
+==================================
+
+Studio draws all of its text and icons with the fonts in this folder (src/theme/fonts.rs).
+Each file keeps its licence text next to it. The three text fonts were subset with fontTools
+(hinting removed, all OpenType features and the variation axes kept) to:
+Latin and Latin Extended (U+0000-024F, U+0259, U+02B0-036F, U+1E00-1EFF, U+2C60-2C7F,
+U+A720-A7FF), general punctuation, currency and letterlike symbols (U+2000-206F, U+20A0-20CF,
+U+2100-214F), arrows U+2190-2199, U+2212, U+2215, U+FEFF, U+FFFD. Extra ranges are listed per font.
+
+Archivo-Variable.ttf
+  Archivo, Version 2.001, variable (wght 100-900, wdth 62-125).
+  Copyright 2020 The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo).
+  SIL Open Font License 1.1, see OFL-Archivo.txt.
+  Source: https://github.com/google/fonts/tree/main/ofl/archivo, file Archivo[wdth,wght].ttf.
+
+JetBrainsMono-Variable.ttf
+  JetBrains Mono, Version 2.304, variable (wght 100-800).
+  Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono).
+  SIL Open Font License 1.1, see OFL-JetBrainsMono.txt.
+  Source: https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304,
+  file fonts/variable/JetBrainsMono[wght].ttf. Extra ranges: mathematical operators
+  U+2200-22FF, box drawing, block elements and geometric shapes U+2500-25FF.
+
+NotoSans-Variable.ttf
+  Noto Sans, Version 2.015, variable (wght 100-900; the wdth axis pinned at 100).
+  Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic).
+  SIL Open Font License 1.1, see OFL-NotoSans.txt.
+  Source: https://github.com/google/fonts/tree/main/ofl/notosans, file NotoSans[wdth,wght].ttf.
+  Used only as the fallback for Greek and Cyrillic, which Archivo does not cover. Extra ranges:
+  Greek U+0370-03FF, U+1F00-1FFF; Cyrillic U+0400-052F, U+1C80-1C8F, U+2DE0-2DFF, U+A640-A69F.
+
+Archivo-Variable.woff2, JetBrainsMono-Variable.woff2
+  The two .ttf files above as WOFF2 (lossless Brotli compression, same glyphs and axes), for the
+  Metallic Play (Launcher) pages, which serve them from the program itself. Made by
+  tools/gen_web_fonts.py; `python tools/gen_web_fonts.py --check` fails if they are out of date.
+
+Phosphor.ttf, Phosphor-Fill.ttf
+  Phosphor Icons, Version 2.1 (package @phosphor-icons/web v2.1.2), regular and fill weights,
+  unmodified. Copyright (c) 2020-2021 Phosphor Icons. MIT License, see LICENSE-Phosphor.txt.
+  Source: https://github.com/phosphor-icons/web/tree/v2.1.2/src (regular/Phosphor.ttf,
+  fill/Phosphor-Fill.ttf). The icon code points are in that folder's selection.json.

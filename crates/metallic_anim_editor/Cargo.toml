@@ -1,0 +1,17 @@
+[package]
+name = "metallic_anim_editor"
+description = "egui animation editor widgets for Metallic Studio: dope sheet, curve editor, transport, rig preview."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+metallic_ui_theme.workspace = true
+egui = "0.37.0"
+metallic_anim = { path = "../metallic_anim" }
+
+[dev-dependencies]
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "links", "wayland", "wgpu", "x11"] }
+egui_kittest = { version = "0.37.0", features = ["wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

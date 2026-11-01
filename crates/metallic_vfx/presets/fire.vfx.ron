@@ -1,0 +1,237 @@
+(
+  format: 1,
+  name: "Fire",
+  description: "Campfire flames with embers and a smoke column.",
+  tags: [
+    "fire",
+    "loop",
+    "environment",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Smoke",
+      capacity: 128,
+      spawn: [
+        Rate(
+          per_second: 5.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Sphere(
+            radius: 0.4,
+          ),
+          offset: (0.0, 1.8, 0.0),
+        ),
+        Lifetime(
+          seconds: (2.2, 3.2),
+        ),
+        Velocity(
+          speed: (1.0, 1.6),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (20.0, 20.0),
+        ),
+        Size(
+          size: (1.0, 1.5),
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (-25.0, 25.0),
+        ),
+      ],
+      update: [
+        CurlNoise(
+          strength: 1.5,
+          scale: 3.0,
+          scroll: (0.0, 0.6, 0.0),
+          octaves: 2,
+        ),
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.6),
+              (1.0, 2.4),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#3A3330"),
+              (1.0, "#5E5853"),
+            ],
+            space: Oklab,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.2, 0.72),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Smoke,
+      ),
+    ),
+    (
+      name: "Flames",
+      capacity: 128,
+      spawn: [
+        Rate(
+          per_second: 42.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Cone(
+            radius: 0.55,
+            angle: 12.0,
+          ),
+        ),
+        Lifetime(
+          seconds: (0.55, 0.95),
+        ),
+        Velocity(
+          speed: (1.8, 3.2),
+          direction: FromShape(Outward),
+          spread: (0.0, 0.0),
+        ),
+        Size(
+          size: (1.3, 1.9),
+        ),
+        Rotation(
+          angle: (-12.0, 12.0),
+          spin: (-20.0, 20.0),
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.0, 1.6, 0.0),
+        ),
+        CurlNoise(
+          strength: 3.0,
+          scale: 2.0,
+          scroll: (0.0, 1.5, 0.0),
+          octaves: 2,
+        ),
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.55),
+              (0.25, 1.0),
+              (1.0, 0.25),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#FFF3C4"),
+              (0.2, "#FFB238"),
+              (0.55, "#F25C19"),
+              (1.0, "#7A1E0C"),
+            ],
+            space: Oklab,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.12, 0.05),
+              (0.65, 0.3),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: FlameSheet,
+        flipbook: Some((
+          columns: 4,
+          rows: 4,
+          mode: Loop,
+          fps: (14.0, 20.0),
+          start_random: true,
+        )),
+        light_emission: 0.85,
+        brightness: 1.6,
+      ),
+    ),
+    (
+      name: "Embers",
+      capacity: 64,
+      spawn: [
+        Rate(
+          per_second: 9.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Sphere(
+            radius: 0.45,
+          ),
+          offset: (0.0, 0.3, 0.0),
+        ),
+        Lifetime(
+          seconds: (1.0, 2.0),
+        ),
+        Velocity(
+          speed: (2.0, 4.0),
+          direction: Axis((0.0, 1.0, 0.0)),
+          spread: (40.0, 40.0),
+        ),
+        Size(
+          size: (0.08, 0.15),
+        ),
+      ],
+      update: [
+        Drag(
+          drag: 0.5,
+        ),
+        CurlNoise(
+          strength: 6.0,
+          scale: 1.5,
+          scroll: (0.0, 1.0, 0.0),
+          octaves: 2,
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#FFD27A"),
+              (1.0, "#FF5A1F"),
+            ],
+            space: Oklab,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (0.7, 0.2),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: SoftDot,
+        light_emission: 1.0,
+        brightness: 2.2,
+      ),
+    ),
+  ],
+)

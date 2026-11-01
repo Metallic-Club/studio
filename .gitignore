@@ -1,3 +1,6 @@
 /target
 /dist
 __pycache__/
+
+# Python virtual environments (tools/lighting/requirements.txt)
+.venv/
