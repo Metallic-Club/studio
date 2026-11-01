@@ -92,7 +92,7 @@ impl ColourDock {
             Action::new(
                 OPEN_ID,
                 "Colour",
-                Icon::Text("C"),
+                Icon::Colour,
                 ToolbarGroup::Hidden,
                 move |_| flag.set(true),
             )

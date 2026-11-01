@@ -214,13 +214,13 @@ impl Explorer {
             paint_caret(&painter, caret, open);
         }
         let class = state.world.class_name(row.id).unwrap_or("?");
-        crate::icons::paint_class(
+        crate::icons::paint_class_icon(
             &painter,
             egui::Rect::from_center_size(
                 egui::pos2(x0 + 24.0, cy),
                 Vec2::splat(ui_tokens().icon_size),
             ),
-            class,
+            row_icon(&state.world, row.id, class),
             ui_tokens().icon,
         );
         let name_pos = egui::pos2(x0 + 36.0, cy);
@@ -432,6 +432,18 @@ impl Explorer {
     }
 }
 
+/// The row icon of `id`: by class, and for parts by their Shape.
+fn row_icon(world: &metallic_core::World, id: InstanceId, class: &str) -> crate::icons::ClassIcon {
+    let icon = crate::icons::class_icon(class, None);
+    if icon != crate::icons::ClassIcon::Block {
+        return icon;
+    }
+    match world.get_ref(id, "Shape") {
+        Ok(Value::String(shape)) => crate::icons::class_icon(class, Some(shape)),
+        _ => icon,
+    }
+}
+
 fn meta_text(state: &EditorState, id: InstanceId, class: &str) -> Option<String> {
     match class {
         "Folder" | "Model" => Some(state.world.children(id).len().to_string()),
@@ -574,7 +586,12 @@ impl PlayTree {
                         Vec2::splat(t.icon_size),
                     );
                     let class = world.class_name(row.id).unwrap_or("?");
-                    crate::icons::paint_class(ui.painter(), icon, class, t.icon);
+                    crate::icons::paint_class_icon(
+                        ui.painter(),
+                        icon,
+                        row_icon(world, row.id, class),
+                        t.icon,
+                    );
                     let name = match world.get_ref(row.id, "Name") {
                         Ok(Value::String(s)) if !s.is_empty() => s.as_str(),
                         _ => class,
@@ -591,5 +608,29 @@ impl PlayTree {
         if let Some(id) = toggle {
             self.toggle(id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::icons::ClassIcon;
+
+    #[test]
+    fn row_icons_follow_part_shape() {
+        let mut world = metallic_core::World::new_empty();
+        let part = world.create("Part", None).unwrap();
+        assert_eq!(row_icon(&world, part, "Part"), ClassIcon::Block);
+        world
+            .set(part, "Shape", Value::String("Cylinder".into()))
+            .unwrap();
+        assert_eq!(row_icon(&world, part, "Part"), ClassIcon::Cylinder);
+        let spawn = world.create("SpawnLocation", None).unwrap();
+        world
+            .set(spawn, "Shape", Value::String("Ball".into()))
+            .unwrap();
+        assert_eq!(row_icon(&world, spawn, "SpawnLocation"), ClassIcon::Spawn);
+        let folder = world.create("Folder", None).unwrap();
+        assert_eq!(row_icon(&world, folder, "Folder"), ClassIcon::Folder);
     }
 }
