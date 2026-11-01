@@ -50,6 +50,9 @@ pub(crate) struct HostShared {
     pub(crate) local_player: Cell<Option<InstanceId>>,
     /// Input events, action states and device flags pushed by the host.
     pub(crate) input: input::InputShared,
+    /// A test and throttling hook: after this many handler calls in a step, the step counts as
+    /// out of time (see `ScriptHost::set_step_handler_limit`).
+    pub(crate) step_handler_limit: Cell<Option<usize>>,
 }
 
 /// Everything the API functions of one VM need.

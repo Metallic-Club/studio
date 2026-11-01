@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! Character-membership transitions through the public runtime frame/touch path.
 
 use metallic_core::{InstanceId, Value, Vec3, World};

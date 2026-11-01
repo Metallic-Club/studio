@@ -9,6 +9,8 @@ const YAW_STEPS: f32 = 65_536.0;
 /// This is command data, not a serialized packet or an authenticated player identity.
 /// Its Rust memory layout is not a wire format. Protocol decoders must reject
 /// noncanonical axes with [`Self::is_canonical`] before admitting a command.
+/// Presentation callers can use the input module's `LocalInput::from_frame` adapter;
+/// CPU callers construct commands with [`Self::from_components`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalInput {
     /// Rightward movement, -127 through 127; -128 is noncanonical.
