@@ -589,7 +589,7 @@ impl EditorUi {
         let playing = self.state.play.is_playing();
         let mut exit = early.unwrap_or(EditorExit::Stay);
 
-        egui::Panel::top("menu")
+        let menu = egui::Panel::top("menu")
             .frame(
                 Frame::new()
                     .fill(theme::bg_deep())
@@ -768,6 +768,8 @@ impl EditorUi {
                     });
                 });
             });
+        // The command palette hangs from the menu bar, over the whole toolbar.
+        self.palette.hang_from(menu.response.rect.bottom());
 
         egui::Panel::top("toolbar")
             .exact_size(theme::CONTROL_HEIGHT_LG)
@@ -892,7 +894,7 @@ impl EditorUi {
                     |_| {},
                     |ui| {
                         if playing {
-                            playing_banner(ui, "Edit values, read-only while playing.");
+                            playing_banner(ui, "Read-only while playing. Stop to edit.");
                             ui.add_enabled_ui(false, |ui| self.properties.ui(ui, &mut self.state));
                         } else {
                             // The owner may edit during its own gesture; the flag is its state

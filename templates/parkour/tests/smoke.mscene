@@ -1411,17 +1411,6 @@
                         (
                             class: "Part",
                             props: [
-                                ("Name", String("Ground")),
-                                ("Position", Vector3((x:0.0,y:-62.0,z:-300.0))),
-                                ("Size", Vector3((x:1600.0,y:4.0,z:1600.0))),
-                                ("Color", Color3((r:40.0,g:38.0,b:46.0))),
-                                ("Material", String("Concrete")),
-                                ("Anchored", Bool(true)),
-                            ],
-                        ),
-                        (
-                            class: "Part",
-                            props: [
                                 ("Name", String("Support")),
                                 ("Position", Vector3((x:0.0,y:-31.2,z:0.0))),
                                 ("Size", Vector3((x:4.0,y:59.6,z:4.0))),
