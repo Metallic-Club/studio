@@ -59,7 +59,8 @@ use touched::{EventCollector, TouchTracker};
 
 /// Gravity in studs per second squared (downward).
 pub const GRAVITY: f64 = 196.2;
-/// Longest `dt` one [`PhysicsWorld::step`] call simulates, in seconds; larger values are clamped.
+/// Longest finite `dt` a [`PhysicsWorld::step`] or [`CharacterController::step`] call simulates,
+/// in seconds; larger values are clamped.
 pub const MAX_STEP: f64 = 0.25;
 /// Length of one fixed simulation substep in seconds.
 pub const SUBSTEP: f64 = 1.0 / 240.0;
