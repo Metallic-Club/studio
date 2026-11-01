@@ -660,6 +660,8 @@ impl World {
     /// skewed one re-orthonormalised keeping its right axis. Rejected writes change
     /// neither properties, the change journal, nor signals. Properties with a registry range
     /// ([`crate::classes::NumRange`]) are clamped (or wrapped) into it. Fires `property_changed` when an accepted value changes.
+    /// Updating an existing non-default property reuses its stored key. Owned value clones and
+    /// signal lookup may still allocate; first insertion also allocates property storage.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
         let class = self.node(id).ok_or(CoreError::InvalidInstance)?.class;
         let def = find_property(class, prop).ok_or_else(|| CoreError::UnknownProperty {
@@ -722,6 +724,8 @@ impl World {
         if let Some(n) = self.node_mut(id) {
             if is_default {
                 n.props.remove(prop);
+            } else if let Some(stored) = n.props.get_mut(prop) {
+                *stored = value.clone();
             } else {
                 n.props.insert(prop.to_string(), value.clone());
             }

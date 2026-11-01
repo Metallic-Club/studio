@@ -47,6 +47,8 @@ apps.
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through
   either world getter. Name lookup and dotted paths use borrowed reads. Also `deep_clone()` used by Play.
+  Existing non-default property writes reuse the BTreeMap key; first insertion,
+  owned value clones/defaults and temporary signal-lookup keys may still allocate.
   Change journal (#59): each mutation (`create`, `destroy`, `set_parent` to a new parent, a `set_parent_at` reorder,
   `set` with a new value, `clone_subtree`) appends the instance id to a per-world journal, bounded at 16,384 entries
   (`JOURNAL_LIMIT`; the oldest half is dropped when it is full). `World::change_cursor()` marks a position, and
