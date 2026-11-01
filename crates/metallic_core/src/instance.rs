@@ -4,6 +4,7 @@ use crate::classes::{self, class_def, default_value, default_value_ref, find_pro
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -167,7 +168,7 @@ pub struct World {
     roots: Vec<InstanceId>,
     /// Fires `(parent, child)` whenever an instance gets a parent (create or reparent).
     pub child_added: Signal<(InstanceId, InstanceId)>,
-    prop_signals: HashMap<(InstanceId, String), Signal<Value>>,
+    prop_signals: HashMap<(InstanceId, Cow<'static, str>), Signal<Value>>,
     uid: u64,
     revision: u64,
     journal: Vec<JournalEntry>,
@@ -718,9 +719,10 @@ impl World {
         }
         if old != value {
             self.record(id, Some(JournalKind::Property(def)));
-            // The is_empty check skips allocating the lookup key when nothing listens at all.
+            // Avoid hashing when no property signal has been registered. The validated registry
+            // name is static, so even an unrelated signal needs no temporary owned lookup name.
             if !self.prop_signals.is_empty()
-                && let Some(sig) = self.prop_signals.get_mut(&(id, prop.to_string()))
+                && let Some(sig) = self.prop_signals.get_mut(&(id, Cow::Borrowed(def.name)))
             {
                 sig.fire(&value);
             }
@@ -730,12 +732,20 @@ impl World {
 
     /// The signal fired with the new value when `prop` of `id` changes (created on first use).
     ///
-    /// `id` and `prop` are not validated. If `id` does not resolve in this world (never allocated
-    /// here, destroyed or stale), the signal never fires and is discarded by the next
-    /// [`World::destroy`]. Ids are world-local ([`InstanceId`]), so an id taken from another world
+    /// `id` and `prop` are not validated. While `id` does not resolve in this world (never allocated
+    /// here, destroyed or stale), the signal cannot fire; unresolved registrations are discarded by
+    /// the next successful [`World::destroy`]. An id that becomes live before cleanup addresses that
+    /// instance normally. Ids are world-local ([`InstanceId`]), so an id taken from another world
     /// that equals a live id here connects to this world's instance, and the signal fires for it.
     pub fn property_changed(&mut self, id: InstanceId, prop: &str) -> &mut Signal<Value> {
-        self.prop_signals.entry((id, prop.to_string())).or_default()
+        let name = match self
+            .node(id)
+            .and_then(|node| find_property(node.class, prop))
+        {
+            Some(def) => Cow::Borrowed(def.name),
+            None => Cow::Owned(prop.to_string()),
+        };
+        self.prop_signals.entry((id, name)).or_default()
     }
 
     /// True when the instance's class is `class` or inherits from it.

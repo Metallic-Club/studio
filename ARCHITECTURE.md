@@ -34,6 +34,9 @@ apps.
   `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
+  property-signal keys borrow known static registry names and own unknown/unresolved registration names,
+  preserving exact text equality and the existing unvalidated-registration/cleanup behavior. This avoids
+  temporary known-name lookup allocations; owned Value/default clones and stored property keys are separate.
   attributes (`instance/extras.rs`: a boxed side record per node, so instances without any pay one pointer and the
   property paths never look at them; changes go to the change journal and to a bounded attribute log read with
   `attribute_changes_since`) and tags (same record, plus a tag-to-instances index so `tagged` never scans the tree, and a
