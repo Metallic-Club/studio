@@ -163,7 +163,7 @@ impl StylePicker {
             Action::new(
                 OPEN_ID,
                 "Style",
-                Icon::Text("St"),
+                Icon::Style,
                 ToolbarGroup::Hidden,
                 move |_| r.set(true),
             )
@@ -464,7 +464,7 @@ impl StylePicker {
                     .add(
                         Button::ghost("")
                             .compact()
-                            .glyph(Icon::Text("×"))
+                            .glyph(Icon::Close)
                             .alt("Close"),
                     )
                     .clicked()

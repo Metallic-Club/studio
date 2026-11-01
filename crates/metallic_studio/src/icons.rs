@@ -100,13 +100,15 @@ pub enum Icon {
     ContextBar,
     /// A key (key bindings).
     Keyboard,
+    /// A half-filled circle (the look of a part: the style picker).
+    Style,
     /// A double chevron (more toolbar groups). Keep it last: [`Icon::ALL`] ends with it.
     More,
 }
 
 impl Icon {
     /// Every icon, in declaration order (tests paint each one and check the order).
-    pub const ALL: [Icon; 45] = [
+    pub const ALL: [Icon; 46] = [
         Icon::Select,
         Icon::Move,
         Icon::Rotate,
@@ -151,6 +153,7 @@ impl Icon {
         Icon::Colour,
         Icon::ContextBar,
         Icon::Keyboard,
+        Icon::Style,
         Icon::More,
     ];
 }
@@ -573,6 +576,7 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, c: Color32) {
             painter.circle_filled(o + vec2(4.0, 0.0), 0.9, c);
         }
         Icon::Keyboard => paint_class_icon(painter, rect, ClassIcon::InputBinding, c),
+        Icon::Style => paint_class_icon(painter, rect, ClassIcon::ColorCorrection, c),
         Icon::More => {
             poly(
                 painter,
