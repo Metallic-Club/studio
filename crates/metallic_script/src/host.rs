@@ -275,6 +275,15 @@ impl ScriptHost {
         }
     }
 
+    /// Makes a step count as out of time after `limit` handler calls (`None`: only the clock
+    /// decides, the default). A throttle for hosts that want to spread a burst of events, and
+    /// the hook the tests use to make a step run out of time on any machine: handlers past the
+    /// limit are deferred, and lifecycle events (tag and attribute signals) wait in the log for
+    /// the next step.
+    pub fn set_step_handler_limit(&mut self, limit: Option<usize>) {
+        self.shared.step_handler_limit.set(limit);
+    }
+
     /// True between `start` and `stop`.
     pub fn is_running(&self) -> bool {
         self.server.is_some() || self.client.is_some()

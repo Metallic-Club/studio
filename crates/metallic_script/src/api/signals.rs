@@ -185,6 +185,8 @@ pub(crate) struct Pacing {
     keep_deadline: Cell<bool>,
     /// How many times a handler's arguments were built (a test hook for the dispatch cost).
     args_built: Cell<u64>,
+    /// Handler calls made in the current step, for `HostShared::step_handler_limit`.
+    handlers_this_step: Cell<usize>,
 }
 
 /// Ends only a dispatch budget established by its own external lifecycle call.
@@ -221,6 +223,7 @@ impl ApiState {
             Instant::now() + Duration::from_secs_f64(STEP_BUDGET_SEC),
         ));
         self.pacing.warned_full.set(false);
+        self.pacing.handlers_this_step.set(0);
     }
 
     /// Starts a time budget at once, dropping any held one (see `hold_step_deadline`).
@@ -250,10 +253,15 @@ impl ApiState {
             .deadline
             .get()
             .is_some_and(|d| Instant::now() >= d)
+            || self
+                .shared
+                .step_handler_limit
+                .get()
+                .is_some_and(|n| self.pacing.handlers_this_step.get() >= n)
     }
 
     /// Whether the lifecycle events (tag added or removed, attribute changed) of a log can be
-    /// handed to `handlers` handlers now. They are never dropped: when this step is out of time
+    /// handed to `handlers` handlers now. They are not dropped by the handler queue: when this step is out of time
     /// or the deferred queue has no room for that many calls, the reader stays at the event and
     /// takes it up again in the next step, in order. The events wait in the world's log (which
     /// holds hundreds of thousands) instead of in the handler queue.
@@ -349,6 +357,9 @@ impl ApiState {
 
     /// Runs one handler in its own thread; tracks consecutive timeouts of its script.
     fn run_handler(&self, func: Function, owner: u64, values: Vec<Value>) {
+        self.pacing
+            .handlers_this_step
+            .set(self.pacing.handlers_this_step.get() + 1);
         let name = func.info().short_src.unwrap_or_default();
         let mut all = Vec::with_capacity(values.len() + 1);
         all.push(Value::Function(func));
