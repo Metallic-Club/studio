@@ -85,4 +85,10 @@ cargo test -p metallic_script -j 4 --test host_methods
 None blocking.
 
 ## Last check results
-See the PR body once checks have run on the final head.
+`cargo test --workspace -j 4 --no-fail-fast`: 2328 passed, 5 failed, 9 ignored. Four pass when rerun alone (load, #497):
+`metallic_runtime --test sim_runner argument_load_and_script_failures_return_nonzero`, `metallic_studio --test local_play
+combined_output_preserves_server_client_and_error_text_without_false_attribution`, `metallic_studio --test play
+play_does_not_change_edit_world` and `script_errors_go_to_output_with_the_play_tag`. The fifth fails alone too: the known #436
+(`metallic_render --test shading gpu_timing_measures_a_frame_where_supported`). `cargo clippy --workspace --all-targets -j 4 --
+-D warnings`: clean. `cargo deny check licenses`: licenses ok. `cargo fmt --all -- --check` and the class-file rustfmt step: clean.
+No existing test was edited; the golden `registry_hash` is unchanged.
