@@ -123,7 +123,7 @@ impl Game {
 
     /// The scripts' VM memory, waiting threads and running scripts (developer overlay, #14).
     pub fn script_stats(&self) -> metallic_script::ScriptStats {
-        self.scripts.stats()
+        self.simulation.scripts.stats()
     }
 
     /// True between [`Game::start`] and [`Game::stop`].
