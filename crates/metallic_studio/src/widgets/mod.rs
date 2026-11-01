@@ -1,11 +1,13 @@
 //! Studio's own widgets on top of egui: the cut, plates, buttons and keycaps (research doc
-//! sections 3.3, 3.4 and 3.7), and the start screen's cards, segmented filter and toasts.
+//! sections 3.3, 3.4 and 3.7), the start screen's cards, segmented filter and toasts, and the
+//! number fields of Properties ([`number`]).
 //! [`components`] draws the basic ones in every state for design review (`--scene components`).
 
 pub mod button;
 pub mod card;
 pub mod components;
 pub mod cut;
+pub mod number;
 pub mod plate;
 pub mod segmented;
 pub mod toast;

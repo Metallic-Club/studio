@@ -39,7 +39,8 @@ use crate::widgets;
 pub const PALETTE_WIDTH: f32 = 640.0;
 /// Insert palette width.
 pub const INSERT_WIDTH: f32 = 260.0;
-/// Distance from the top of the window (under the title bar).
+/// Distance from the top of the window (under the title bar) when the editor has not said where
+/// its menu bar ends ([`CommandPalette::hang_from`]).
 pub const PALETTE_TOP: f32 = 44.0;
 /// Most recently run commands remembered.
 pub const RECENT_COMMANDS: usize = 8;
@@ -240,6 +241,8 @@ pub struct CommandPalette {
     focus: bool,
     rect: Option<Rect>,
     scroll_to_selected: bool,
+    /// Window y the search palette hangs from (see [`CommandPalette::hang_from`]).
+    top: Option<f32>,
 }
 
 impl CommandPalette {
@@ -334,6 +337,13 @@ impl CommandPalette {
         self.selected = 0;
         self.focus = true;
         self.rect = None;
+    }
+
+    /// Hangs the search palette from window y `top`, the bottom of the menu bar. It then covers
+    /// the toolbar under it whole: hung lower, from [`PALETTE_TOP`], its top edge cut through the
+    /// toolbar's labels and their upper halves showed above it.
+    pub fn hang_from(&mut self, top: f32) {
+        self.top = Some(top);
     }
 
     /// Closes the palette.
@@ -675,10 +685,8 @@ impl CommandPalette {
             }
             _ => {
                 let w = PALETTE_WIDTH.min(screen.width() - 32.0);
-                (
-                    Pos2::new(screen.center().x - w / 2.0, screen.top() + PALETTE_TOP),
-                    w,
-                )
+                let top = self.top.unwrap_or(screen.top() + PALETTE_TOP);
+                (Pos2::new(screen.center().x - w / 2.0, top), w)
             }
         };
         let mut picked = None;
