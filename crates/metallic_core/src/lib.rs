@@ -9,22 +9,35 @@
 //! ([`save_scene`], [`load_scene`]).
 //! [`World::set`] rejects non-finite numeric components before changing state, recording a
 //! journal entry, or dispatching a property-change signal.
+//! [`World::changes_since`] reports deduplicated instance invalidations;
+//! [`World::changes_since_detailed`] shares its cursor/history and reports ordered [`ChangeKind`]
+//! notices with static property tokens. Neither reader consumes the journal. Detailed notices
+//! retain no historic values and do not replace a durable editing operation log.
+//! Attribute and tag changes are coarse-only for now: `changes_since` reports the id, the detailed
+//! reader has no entry for them (read the attribute and tag logs instead).
 #![warn(missing_docs)]
 
 mod cframe;
 pub mod classes;
 mod instance;
 pub mod lighting;
+pub mod look_override;
+pub mod replication;
 mod scene_file;
 mod signal;
 pub mod transform;
 mod value;
 
 pub use cframe::{CFrame, RotationOrder};
-pub use instance::{ChangeCursor, Changes, InstanceId, World};
+pub use instance::{
+    AttributeChange, AttributeChanges, AttributeCursor, Change, ChangeCursor, ChangeKind, Changes,
+    DetailedChanges, InstanceId, MAX_ATTRIBUTE_NAME, MAX_ATTRIBUTE_STRING, MAX_ATTRIBUTES,
+    MAX_EXTRAS_BYTES, MAX_TAG, MAX_TAGS, TagChange, TagChanges, TagCursor, World,
+    check_attribute_name, check_attribute_value, check_tag,
+};
 pub use scene_file::{load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
-pub use value::{Color3, UDim2, Value, ValueType, Vec3};
+pub use value::{Color3, UDim2, Value, ValueType, Vec3, orientation_to_quat, quat_to_orientation};
 
 /// Errors returned by the core crate.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

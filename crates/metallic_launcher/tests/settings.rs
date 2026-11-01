@@ -1,6 +1,8 @@
 //! Tests for the settings file and the start-up arguments.
 
-use metallic_launcher::{DeepLink, LauncherConfig, LauncherSettings, SettingsPatch, SettingsStore};
+use metallic_launcher::{
+    DeepLink, LauncherConfig, LauncherSettings, SettingsPatch, SettingsStore, Theme,
+};
 
 #[test]
 fn missing_file_gives_defaults() {
@@ -29,6 +31,59 @@ fn old_files_without_new_fields_still_load() {
 }
 
 #[test]
+fn theme_defaults_to_graphite_and_an_unknown_word_keeps_the_other_settings() {
+    assert_eq!(LauncherSettings::default().theme, Theme::Graphite);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("settings.toml");
+    std::fs::write(
+        &path,
+        "close_to_tray = false
+theme = \"chrome\"
+",
+    )
+    .unwrap();
+    let settings = SettingsStore::at(path.clone()).load();
+    assert!(!settings.close_to_tray);
+    assert_eq!(settings.theme, Theme::Graphite);
+    std::fs::write(
+        &path,
+        "theme = \"system\"
+",
+    )
+    .unwrap();
+    assert_eq!(SettingsStore::at(path).load().theme, Theme::System);
+}
+
+#[test]
+fn a_theme_that_is_not_a_word_resets_only_the_theme() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("settings.toml");
+    for bad in ["3", "true", "[\"light\"]", "{ name = \"light\" }"] {
+        std::fs::write(
+            &path,
+            format!("close_to_tray = false\ndeveloper_mode = true\ntheme = {bad}\n"),
+        )
+        .unwrap();
+        let settings = SettingsStore::at(path.clone()).load();
+        assert!(!settings.close_to_tray, "{bad}");
+        assert!(settings.developer_mode, "{bad}");
+        assert_eq!(settings.theme, Theme::Graphite, "{bad}");
+    }
+}
+
+#[test]
+fn every_named_theme_is_a_shared_token_theme() {
+    // The pages set `data-theme` to this word; the token CSS must have a block for it.
+    let set = metallic_tokens::parse(metallic_tokens::TOKENS_JSON).unwrap();
+    for theme in Theme::ALL {
+        if theme != Theme::System {
+            assert!(set.theme_ids().contains(&theme.as_str()), "{theme:?}");
+        }
+    }
+    assert_eq!(set.theme_ids().len(), Theme::ALL.len() - 1);
+}
+
+#[test]
 fn save_then_load_round_trips() {
     let tmp = tempfile::tempdir().unwrap();
     let store = SettingsStore::at(tmp.path().join("deep").join("settings.toml"));
@@ -37,6 +92,7 @@ fn save_then_load_round_trips() {
         developer_mode: true,
         dev_url: Some("http://localhost:3000".to_string()),
         channel: metallic_update::Channel::Stable,
+        theme: Theme::Titanium,
     };
     store.save(&settings).unwrap();
     assert_eq!(store.load(), settings);

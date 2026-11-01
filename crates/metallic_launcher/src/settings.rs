@@ -37,6 +37,67 @@ pub struct LauncherSettings {
     /// own settings page may change it, and it applies after a restart.
     #[serde(default)]
     pub channel: Channel,
+    /// The colour theme of the Launcher's own pages. Default Graphite. An unknown word in the
+    /// file reads as the default, so a newer file never resets the other settings.
+    #[serde(default, deserialize_with = "theme_or_default")]
+    pub theme: Theme,
+}
+
+/// The colour theme of the Launcher's bundled pages: one of the shared design-token themes, or
+/// `System`, which follows the Windows light/dark setting (light: Light, dark: Graphite).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    /// Follow the system's light or dark setting.
+    System,
+    /// The default dark theme.
+    #[default]
+    Graphite,
+    /// A lighter dark theme.
+    Titanium,
+    /// The light ("Aluminium") theme.
+    Light,
+}
+
+impl Theme {
+    /// Every theme, in the order the settings page lists them.
+    pub const ALL: [Theme; 4] = [
+        Theme::System,
+        Theme::Graphite,
+        Theme::Titanium,
+        Theme::Light,
+    ];
+
+    /// The word used in the settings file, the bridge and the pages' `data-theme` attribute.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Theme::System => "system",
+            Theme::Graphite => "graphite",
+            Theme::Titanium => "titanium",
+            Theme::Light => "light",
+        }
+    }
+}
+
+/// Reads a theme word, giving the default for a word this build does not know or a value that is
+/// not a word at all (`theme = 3`), so a bad theme never costs the other settings.
+fn theme_or_default<'de, D>(deserializer: D) -> Result<Theme, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Word(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Word(word) => Theme::ALL
+            .into_iter()
+            .find(|theme| theme.as_str() == word)
+            .unwrap_or_default(),
+        Value::Other(_) => Theme::default(),
+    })
 }
 
 impl Default for LauncherSettings {
@@ -46,6 +107,7 @@ impl Default for LauncherSettings {
             developer_mode: false,
             dev_url: None,
             channel: Channel::default(),
+            theme: Theme::default(),
         }
     }
 }
@@ -60,7 +122,8 @@ where
 }
 
 /// A change to apply to the settings; `None` leaves a field alone. Read from the bridge as
-/// camelCase JSON (`closeToTray`, `developerMode`, `devUrl`, `channel`); unknown fields are refused.
+/// camelCase JSON (`closeToTray`, `developerMode`, `devUrl`, `channel`, `theme`); unknown fields
+/// are refused.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
@@ -76,6 +139,9 @@ pub struct SettingsPatch {
     /// New value for `channel` (`"dev"` or `"stable"`).
     #[serde(default)]
     pub channel: Option<Channel>,
+    /// New value for `theme` (`"system"`, `"graphite"`, `"titanium"` or `"light"`).
+    #[serde(default)]
+    pub theme: Option<Theme>,
 }
 
 impl LauncherSettings {
@@ -96,6 +162,9 @@ impl LauncherSettings {
         }
         if let Some(value) = patch.channel {
             self.channel = value;
+        }
+        if let Some(value) = patch.theme {
+            self.theme = value;
         }
         Ok(())
     }
