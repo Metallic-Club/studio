@@ -1,0 +1,638 @@
+//! Platform motion is sampled with the runtime's controller-then-physics ordering.
+
+use metallic_core::{InstanceId, Value, Vec3, World};
+use metallic_physics::{
+    CharacterController, HumanoidState, MoveInput, PhysicsWorld, ROOT_HEIGHT, spawn_character,
+};
+
+const DT: f64 = 1.0 / 60.0;
+
+struct Sim {
+    world: World,
+    physics: PhysicsWorld,
+    controller: CharacterController,
+    player: InstanceId,
+    platform: InstanceId,
+}
+
+impl Sim {
+    fn new() -> Self {
+        let mut world = World::new_with_services();
+        let platform = world.create("Part", world.root("Workspace")).unwrap();
+        for (name, value) in [
+            ("Anchored", Value::Bool(true)),
+            ("Position", Value::Vector3(Vec3::new(0.0, -1.0, 0.0))),
+            ("Size", Value::Vector3(Vec3::new(40.0, 2.0, 40.0))),
+        ] {
+            world.set(platform, name, value).unwrap();
+        }
+        let player = world.create("Player", world.root("Players")).unwrap();
+        let character = spawn_character(&mut world, player).unwrap();
+        let root = world
+            .find_first_child(character, "HumanoidRootPart")
+            .unwrap();
+        world
+            .set(
+                root,
+                "Position",
+                Value::Vector3(Vec3::new(8.0, ROOT_HEIGHT, 0.0)),
+            )
+            .unwrap();
+        let mut physics = PhysicsWorld::new();
+        physics.sync_from(&world);
+        let mut sim = Self {
+            world,
+            physics,
+            controller: CharacterController::new(),
+            player,
+            platform,
+        };
+        for _ in 0..30 {
+            sim.frame(MoveInput::default());
+        }
+        sim.assert_standing();
+        sim
+    }
+
+    fn character(&self) -> InstanceId {
+        let Value::Ref(Some(character)) = self.world.get(self.player, "Character").unwrap() else {
+            panic!("missing character");
+        };
+        character
+    }
+
+    fn root(&self) -> InstanceId {
+        self.world
+            .find_first_child(self.character(), "HumanoidRootPart")
+            .unwrap()
+    }
+
+    fn vector(&self, property: &str) -> Vec3 {
+        let Value::Vector3(value) = self.world.get(self.root(), property).unwrap() else {
+            panic!("missing root vector");
+        };
+        value
+    }
+
+    fn position(&self) -> Vec3 {
+        self.vector("Position")
+    }
+
+    fn velocity(&self) -> Vec3 {
+        self.controller.velocity(self.character()).unwrap()
+    }
+
+    fn rotate(&mut self, orientation: Vec3, input: MoveInput) {
+        self.world
+            .set(self.platform, "Orientation", Value::Vector3(orientation))
+            .unwrap();
+        self.frame(input);
+    }
+
+    fn frame(&mut self, input: MoveInput) {
+        self.frame_dt(input, DT);
+    }
+
+    fn frame_dt(&mut self, input: MoveInput, dt: f64) {
+        let character = self.character();
+        self.controller
+            .step(&mut self.world, &self.physics, character, input, dt);
+        self.controller.drain_events();
+        self.physics.step(&mut self.world, dt);
+    }
+
+    fn stop(&mut self) {
+        // Rates come from the last completed physics step; allow that sample to clear.
+        self.frame(MoveInput::default());
+        self.frame(MoveInput::default());
+    }
+
+    fn assert_standing(&self) {
+        assert_eq!(
+            self.controller.state(self.character()),
+            Some(HumanoidState::Running),
+            "at {:?}",
+            self.position()
+        );
+    }
+}
+
+fn rotate_y(point: Vec3, degrees: f64) -> Vec3 {
+    let (sine, cosine) = degrees.to_radians().sin_cos();
+    Vec3::new(
+        point.x * cosine + point.z * sine,
+        point.y,
+        -point.x * sine + point.z * cosine,
+    )
+}
+
+fn yaw_error(actual: f64, expected: f64) -> f64 {
+    ((actual - expected + 180.0).rem_euclid(360.0) - 180.0).abs()
+}
+
+#[test]
+fn off_center_rider_follows_positive_and_negative_quarter_turns() {
+    for sign in [1.0, -1.0] {
+        let mut sim = Sim::new();
+        let initial = sim.position();
+        for frame in 1..=60 {
+            sim.rotate(
+                Vec3::new(0.0, sign * 90.0 * frame as f64 / 60.0, 0.0),
+                MoveInput::default(),
+            );
+            sim.assert_standing();
+        }
+        sim.stop();
+        let expected = rotate_y(initial, sign * 90.0);
+        assert!(
+            (sim.position() - expected).magnitude() < 1.0,
+            "rider {:?}, expected {expected:?}",
+            sim.position()
+        );
+    }
+}
+
+#[test]
+fn standing_facing_tracks_platform_yaw_in_both_directions() {
+    for sign in [1.0, -1.0] {
+        let mut sim = Sim::new();
+        for frame in 1..=60 {
+            sim.rotate(
+                Vec3::new(0.0, sign * 90.0 * frame as f64 / 60.0, 0.0),
+                MoveInput::default(),
+            );
+        }
+        sim.stop();
+        let orientation = sim.vector("Orientation");
+        assert!(
+            yaw_error(orientation.y, sign * 90.0) < 0.1,
+            "{orientation:?}"
+        );
+        assert_eq!(orientation.x, 0.0);
+        assert_eq!(orientation.z, 0.0);
+    }
+}
+
+#[test]
+fn repeated_rotations_do_not_accumulate_radial_drift() {
+    let mut sim = Sim::new();
+    let initial = sim.position();
+    for frame in 1..=480 {
+        let angle = frame as f64 * 1.5;
+        sim.rotate(Vec3::new(0.0, angle, 0.0), MoveInput::default());
+        let expected = rotate_y(initial, angle);
+        assert!(
+            (sim.position() - expected).magnitude() < 1.0,
+            "frame {frame}: rider {:?}, expected {expected:?}",
+            sim.position()
+        );
+        sim.assert_standing();
+    }
+    sim.stop();
+    let position = sim.position();
+    for _ in 0..30 {
+        sim.frame(MoveInput::default());
+    }
+    assert!((sim.position() - position).magnitude() < 1e-4);
+}
+
+#[test]
+fn stationary_and_translating_support_do_not_gain_rotation_or_duplicate_translation() {
+    let mut sim = Sim::new();
+    let initial = sim.position();
+    for _ in 0..30 {
+        sim.frame(MoveInput::default());
+    }
+    assert!((sim.position() - initial).magnitude() < 1e-4);
+    for frame in 1..=60 {
+        sim.world
+            .set(
+                sim.platform,
+                "Position",
+                Value::Vector3(Vec3::new(frame as f64 * 8.0 / 60.0, -1.0, 0.0)),
+            )
+            .unwrap();
+        sim.frame(MoveInput::default());
+    }
+    sim.stop();
+    assert!((sim.position().x - initial.x - 8.0).abs() < 0.05);
+    assert!(yaw_error(sim.vector("Orientation").y, 0.0) < 0.1);
+    sim.assert_standing();
+    let stopped = sim.position();
+    for _ in 0..30 {
+        sim.frame(MoveInput::default());
+    }
+    assert!((sim.position() - stopped).magnitude() < 1e-4);
+}
+
+#[test]
+fn jump_keeps_tangential_momentum_without_airborne_platform_steering() {
+    let mut sim = Sim::new();
+    for frame in 1..=30 {
+        sim.rotate(
+            Vec3::new(0.0, frame as f64 * 1.5, 0.0),
+            MoveInput::default(),
+        );
+    }
+    let before = sim.position();
+    sim.rotate(
+        Vec3::new(0.0, 46.5, 0.0),
+        MoveInput {
+            jump: true,
+            ..MoveInput::default()
+        },
+    );
+    let inherited = sim.velocity();
+    let omega = std::f64::consts::FRAC_PI_2;
+    assert!((inherited.x - omega * before.z).abs() < 0.5);
+    assert!((inherited.z + omega * before.x).abs() < 0.5);
+    assert_eq!(
+        sim.controller.state(sim.character()),
+        Some(HumanoidState::Jumping)
+    );
+    let yaw = sim.vector("Orientation").y;
+    for frame in 32..=37 {
+        sim.rotate(
+            Vec3::new(0.0, frame as f64 * 1.5, 0.0),
+            MoveInput::default(),
+        );
+        assert!((sim.velocity().x - inherited.x).abs() < 1e-3);
+        assert!((sim.velocity().z - inherited.z).abs() < 1e-3);
+        assert!(yaw_error(sim.vector("Orientation").y, yaw) < 0.1);
+    }
+    for _ in 0..60 {
+        sim.frame(MoveInput::default());
+    }
+    sim.assert_standing();
+    assert!(sim.velocity().x.abs() < 1e-3 && sim.velocity().z.abs() < 1e-3);
+}
+
+#[test]
+fn explicit_movement_keeps_world_direction_and_facing() {
+    let mut sim = Sim::new();
+    for frame in 1..=30 {
+        sim.rotate(
+            Vec3::new(0.0, frame as f64 * 1.5, 0.0),
+            MoveInput::default(),
+        );
+    }
+    let omega = std::f64::consts::FRAC_PI_2;
+    for frame in 31..=40 {
+        let before = sim.position();
+        sim.rotate(
+            Vec3::new(0.0, frame as f64 * 1.5, 0.0),
+            MoveInput {
+                dir: Vec3::new(1.0, 0.0, 0.0),
+                ..MoveInput::default()
+            },
+        );
+        assert!(yaw_error(sim.vector("Orientation").y, -90.0) < 1e-5);
+        assert!((sim.velocity().x - (16.0 + omega * before.z)).abs() < 0.75);
+        assert!((sim.velocity().z + omega * before.x).abs() < 0.75);
+    }
+}
+
+#[test]
+fn small_tilts_carry_the_bottom_sphere_and_keep_the_capsule_upright() {
+    // Root 3 studs above the surface; the bottom-sphere centre is 1.02 above it and the foot
+    // contact on it. The pivot (part origin) is 1 stud below the surface.
+    let anchor_lever = 2.02;
+    for sign in [1.0, -1.0] {
+        let mut sim = Sim::new();
+        let initial = sim.position();
+        let rate = sign * 10.0;
+        for frame in 1..=60 {
+            sim.rotate(
+                Vec3::new(0.0, 0.0, rate * frame as f64 / 60.0),
+                MoveInput::default(),
+            );
+            sim.assert_standing();
+            if frame == 2 {
+                let w = rate.to_radians();
+                // The root moves with the bottom-sphere centre...
+                assert!(
+                    (sim.velocity().x + w * anchor_lever).abs() < 0.15,
+                    "root velocity {:?}",
+                    sim.velocity()
+                );
+                // ...and a still rider reads as still relative to it (#374).
+                let character = sim.character();
+                let relative = sim.controller.relative_velocity(character).unwrap();
+                assert!(relative.magnitude() < 1e-6, "relative {relative:?}");
+            }
+        }
+        // The velocity a jump keeps uses the foot contact lever arm (1 stud above the pivot).
+        let mut jumper = Sim::new();
+        jumper.rotate(Vec3::new(0.0, 0.0, rate / 60.0), MoveInput::default());
+        jumper.rotate(
+            Vec3::new(0.0, 0.0, rate * 2.0 / 60.0),
+            MoveInput {
+                jump: true,
+                ..MoveInput::default()
+            },
+        );
+        assert!(
+            (jumper.velocity().x + rate.to_radians()).abs() < 0.15,
+            "jump velocity {:?}",
+            jumper.velocity()
+        );
+        sim.stop();
+        let (sine, cosine) = rate.to_radians().sin_cos();
+        let up = ROOT_HEIGHT - (anchor_lever - 1.0);
+        let expected = Vec3::new(
+            initial.x * cosine - anchor_lever * sine,
+            -1.0 + initial.x * sine + anchor_lever * cosine + up,
+            initial.z,
+        );
+        assert!(
+            (sim.position() - expected).magnitude() < 0.05,
+            "rider {:?}, expected {expected:?}",
+            sim.position()
+        );
+        let orientation = sim.vector("Orientation");
+        assert_eq!(orientation.x, 0.0);
+        assert_eq!(orientation.z, 0.0);
+    }
+}
+
+#[test]
+fn replacing_the_support_body_discards_its_old_contact() {
+    let mut sim = Sim::new();
+    for frame in 1..=30 {
+        sim.rotate(
+            Vec3::new(0.0, frame as f64 * 1.5, 0.0),
+            MoveInput::default(),
+        );
+    }
+    sim.stop();
+    let before = sim.position();
+    sim.world
+        .set(
+            sim.platform,
+            "Size",
+            Value::Vector3(Vec3::new(44.0, 2.0, 44.0)),
+        )
+        .unwrap();
+    sim.physics.sync_from(&sim.world);
+    sim.frame(MoveInput::default());
+    assert!((sim.position() - before).magnitude() < 0.05);
+    for frame in 1..=30 {
+        sim.rotate(
+            Vec3::new(0.0, 45.0 + frame as f64 * 1.5, 0.0),
+            MoveInput::default(),
+        );
+    }
+    sim.stop();
+    assert!((sim.position() - rotate_y(before, 45.0)).magnitude() < 0.1);
+    sim.assert_standing();
+}
+
+#[test]
+fn script_repositioning_does_not_reuse_the_old_off_center_jump_contact() {
+    let mut sim = Sim::new();
+    for frame in 1..=30 {
+        sim.rotate(
+            Vec3::new(0.0, frame as f64 * 1.5, 0.0),
+            MoveInput::default(),
+        );
+    }
+    sim.world
+        .set(
+            sim.root(),
+            "Position",
+            Value::Vector3(Vec3::new(0.0, ROOT_HEIGHT, 0.0)),
+        )
+        .unwrap();
+    sim.frame(MoveInput {
+        jump: true,
+        ..MoveInput::default()
+    });
+    assert_eq!(
+        sim.controller.state(sim.character()),
+        Some(HumanoidState::Jumping)
+    );
+    assert!(sim.velocity().x.abs() < 0.05 && sim.velocity().z.abs() < 0.05);
+}
+
+#[test]
+fn falling_dynamic_support_keeps_its_rider_when_stopped_by_a_floor() {
+    let mut sim = Sim::new();
+    let floor = sim
+        .world
+        .create("Part", sim.world.root("Workspace"))
+        .unwrap();
+    for (name, value) in [
+        ("Anchored", Value::Bool(true)),
+        ("Position", Value::Vector3(Vec3::new(0.0, -9.0, 0.0))),
+        ("Size", Value::Vector3(Vec3::new(100.0, 2.0, 100.0))),
+    ] {
+        sim.world.set(floor, name, value).unwrap();
+    }
+    sim.world
+        .set(sim.platform, "Anchored", Value::Bool(false))
+        .unwrap();
+    sim.physics.sync_from(&sim.world);
+    // Establish the replacement body's contact before it begins falling.
+    let character = sim.character();
+    sim.controller.step(
+        &mut sim.world,
+        &sim.physics,
+        character,
+        MoveInput::default(),
+        DT,
+    );
+    for frame in 1..=90 {
+        // The controller consumes the *previous* completed physics step.
+        let Value::Vector3(position) = sim.world.get(sim.platform, "Position").unwrap() else {
+            panic!("platform position");
+        };
+        sim.frame(MoveInput::default());
+        assert!(
+            (sim.position().y - position.y - 1.0 - ROOT_HEIGHT).abs() < 0.1,
+            "frame {frame}: rider {:?}, platform {position:?}",
+            sim.position()
+        );
+        sim.assert_standing();
+    }
+}
+
+fn radius(point: Vec3) -> f64 {
+    point.x.hypot(point.z)
+}
+
+/// Review finding 1 on #256: a tilted support spinning around world up must not let the rider
+/// drift in or out. The foot contact sits beside the root on a tilt, so carrying the contact
+/// moved the root by the wrong amount every frame (radius 6.19 after 10 s at 20 degrees).
+#[test]
+fn tilted_spinning_support_keeps_rider_radius() {
+    for tilt in [8.0, 20.0] {
+        let mut sim = Sim::new();
+        // Tilt over half a second around the X axis; the rider stands on the hinge line.
+        for frame in 1..=30 {
+            sim.rotate(
+                Vec3::new(tilt * frame as f64 / 30.0, 0.0, 0.0),
+                MoveInput::default(),
+            );
+        }
+        sim.stop();
+        sim.assert_standing();
+        let start = sim.position();
+        let start_radius = radius(start);
+        let mut worst: f64 = 0.0;
+        for frame in 1..=600 {
+            let t = frame as f64 * DT;
+            sim.rotate(Vec3::new(tilt, 30.0 * t, 0.0), MoveInput::default());
+            sim.assert_standing();
+            worst = worst.max((radius(sim.position()) - start_radius).abs());
+            assert!(
+                (sim.position().y - start.y).abs() < 0.02,
+                "tilt {tilt}, frame {frame}: height {}",
+                sim.position().y
+            );
+        }
+        sim.stop();
+        worst = worst.max((radius(sim.position()) - start_radius).abs());
+        assert!(
+            worst < 0.02,
+            "tilt {tilt}: radius error {worst} (start {start_radius})"
+        );
+        // 10 s at 30 deg/s is 300 degrees around the axis.
+        let expected = rotate_y(start, 300.0);
+        assert!(
+            (sim.position() - expected).magnitude() < 0.05,
+            "tilt {tilt}: rider {:?}, expected {expected:?}",
+            sim.position()
+        );
+        assert!(yaw_error(sim.vector("Orientation").y, 300.0) < 0.05);
+    }
+}
+
+/// Review finding 2 on #256: facing comes from the same support pose change as position, so the
+/// two agree even when frame lengths vary (facing used to add `w.y * this frame's dt` while
+/// position followed the previous physics step).
+#[test]
+fn facing_and_position_agree_under_variable_dt() {
+    let mut sim = Sim::new();
+    let start = sim.position();
+    let rate = 60.0;
+    let steps = [1.0 / 30.0, 1.0 / 90.0, 1.0 / 60.0, 1.0 / 45.0, 1.0 / 120.0];
+    let polar = |p: Vec3| (-p.z).atan2(p.x).to_degrees();
+    let mut time = 0.0;
+    for frame in 0..300 {
+        let dt = steps[frame % steps.len()];
+        time += dt;
+        sim.world
+            .set(
+                sim.platform,
+                "Orientation",
+                Value::Vector3(Vec3::new(0.0, rate * time, 0.0)),
+            )
+            .unwrap();
+        sim.frame_dt(MoveInput::default(), dt);
+        sim.assert_standing();
+        let position = sim.position();
+        let facing = sim.vector("Orientation").y;
+        assert!(
+            yaw_error(facing, polar(position)) < 0.01,
+            "frame {frame}: facing {facing}, around the axis {}",
+            polar(position)
+        );
+        assert!((radius(position) - radius(start)).abs() < 0.01);
+    }
+    sim.stop();
+    let expected = rotate_y(start, rate * time);
+    assert!(
+        (sim.position() - expected).magnitude() < 0.05,
+        "rider {:?}, expected {expected:?}",
+        sim.position()
+    );
+    assert!(yaw_error(sim.vector("Orientation").y, rate * time) < 0.01);
+}
+
+/// #374: a rider standing still on a tilted spinner must read as still (the animation's idle
+/// threshold is 0.05 stud/s). Measuring against the foot contact's velocity gave 0.18 stud/s at
+/// 20 degrees, because the contact sits beside the carried bottom-sphere centre on a tilt.
+#[test]
+fn still_rider_on_tilted_spinner_has_no_relative_speed() {
+    for tilt in [8.0, 20.0] {
+        let mut sim = Sim::new();
+        for frame in 1..=30 {
+            sim.rotate(
+                Vec3::new(tilt * frame as f64 / 30.0, 0.0, 0.0),
+                MoveInput::default(),
+            );
+        }
+        sim.stop();
+        let mut worst: f64 = 0.0;
+        for frame in 1..=300 {
+            let t = frame as f64 * DT;
+            sim.rotate(Vec3::new(tilt, 30.0 * t, 0.0), MoveInput::default());
+            sim.assert_standing();
+            let relative = sim.controller.relative_velocity(sim.character()).unwrap();
+            worst = worst.max(relative.x.hypot(relative.z));
+        }
+        assert!(worst < 0.01, "tilt {tilt}: relative speed {worst} stud/s");
+    }
+}
+
+/// A frame in the runtime's order: characters, physics, then scripts (`Heartbeat`), which
+/// move the support for the next tick.
+fn scripted_frame(sim: &mut Sim, position: Vec3, orientation: Vec3) {
+    sim.frame(MoveInput::default());
+    for (name, value) in [("Position", position), ("Orientation", orientation)] {
+        sim.world
+            .set(sim.platform, name, Value::Vector3(value))
+            .unwrap();
+    }
+}
+
+/// #374 / #273: a support a script moves every tick after physics used to carry its rider two
+/// ticks behind the pose the script set. Carrying from the scripted pose keeps it within one.
+#[test]
+fn script_moved_support_keeps_rider_within_one_tick() {
+    let base = Vec3::new(0.0, -1.0, 0.0);
+    // (name, platform pose at time t, speed of the rider's point in studs per second)
+    type Path = fn(f64) -> (Vec3, Vec3);
+    let cases: [(&str, Path, f64); 4] = [
+        (
+            "slide",
+            |t| (Vec3::new(4.0 * t, -1.0, 0.0), Vec3::default()),
+            4.0,
+        ),
+        (
+            "lift",
+            |t| (Vec3::new(0.0, -1.0 + 6.0 * t, 0.0), Vec3::default()),
+            6.0,
+        ),
+        (
+            "drop",
+            |t| (Vec3::new(0.0, -1.0 - 6.0 * t, 0.0), Vec3::default()),
+            6.0,
+        ),
+        (
+            "spin",
+            |t| (Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 90.0 * t, 0.0)),
+            8.0 * std::f64::consts::FRAC_PI_2,
+        ),
+    ];
+    for (name, path, speed) in cases {
+        let mut sim = Sim::new();
+        let start = sim.position();
+        let mut worst: f64 = 0.0;
+        for tick in 1..=120 {
+            let (position, orientation) = path(tick as f64 * DT);
+            scripted_frame(&mut sim, position, orientation);
+            sim.assert_standing();
+            // Where the rider belongs on the support as the script has now placed it.
+            let expected = rotate_y(start - base, orientation.y) + position;
+            if tick > 3 {
+                worst = worst.max((sim.position() - expected).magnitude());
+            }
+        }
+        let one_tick = speed * DT;
+        assert!(
+            worst <= one_tick + 0.01,
+            "{name}: rider {worst:.4} stud behind, one tick is {one_tick:.4}"
+        );
+    }
+}

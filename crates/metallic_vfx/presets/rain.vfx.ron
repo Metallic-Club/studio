@@ -1,0 +1,123 @@
+(
+  format: 1,
+  name: "Rain",
+  description: "Steady rain with splashes on the ground.",
+  tags: [
+    "weather",
+    "rain",
+    "loop",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Drops",
+      capacity: 1024,
+      spawn: [
+        Rate(
+          per_second: 320.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Box(
+            size: (14.0, 0.1, 8.0),
+          ),
+          offset: (0.0, 9.0, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.7, 0.7),
+        ),
+        Velocity(
+          speed: (17.0, 21.0),
+          direction: Axis((0.12, -1.0, 0.0)),
+          spread: (2.0, 2.0),
+        ),
+        Size(
+          size: (0.05, 0.07),
+        ),
+        Color(
+          choices: [
+            "#B7CDE0",
+          ],
+        ),
+      ],
+      update: [
+        CollisionPlane(
+          point: (0.0, 0.0, 0.0),
+          normal: (0.0, 1.0, 0.0),
+          bounce: 0.0,
+          friction: 0.0,
+          on_hit: Kill,
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.45),
+              (1.0, 0.45),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Stretched(
+          speed_scale: 0.045,
+        ),
+        texture: Streak,
+      ),
+    ),
+    (
+      name: "Splashes",
+      capacity: 256,
+      spawn: [
+        Rate(
+          per_second: 70.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Box(
+            size: (14.0, 0.0, 8.0),
+          ),
+          offset: (0.0, 0.03, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.28, 0.28),
+        ),
+        Size(
+          size: (0.55, 0.55),
+        ),
+        Color(
+          choices: [
+            "#C6D9EA",
+          ],
+        ),
+      ],
+      update: [
+        SizeOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.15),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.3),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        facing: Ground,
+        texture: Ring,
+      ),
+    ),
+  ],
+)

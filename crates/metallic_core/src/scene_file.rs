@@ -17,6 +17,7 @@
 //! ```
 //! Instances are written in tree order. Built-in service instances are marked `builtin: true`
 //! and are matched with the ones `World::new_with_services` already made when loading.
+use crate::cframe::CFrame;
 use crate::classes::{all_properties, default_value};
 use crate::value::{Color3, UDim2, Value, Vec3};
 use crate::{CoreError, InstanceId, World};
@@ -47,6 +48,7 @@ enum SceneValue {
     Color3(#[serde(with = "SceneColor3")] Color3),
     UDim2(#[serde(with = "SceneUDim2")] UDim2),
     Ref(Option<usize>),
+    CFrame(CFrame),
 }
 
 // Scene-specific strict representations keep the public value types' Serde
@@ -91,6 +93,12 @@ struct SceneNode {
     builtin: bool,
     #[serde(default)]
     props: Vec<(String, SceneValue)>,
+    /// Attributes, sorted by name. Absent in files written before attributes existed.
+    #[serde(default)]
+    attributes: Vec<(String, SceneValue)>,
+    /// Tags, sorted. Absent in files written before tags existed.
+    #[serde(default)]
+    tags: Vec<String>,
     #[serde(default)]
     children: Vec<SceneNode>,
 }
@@ -105,6 +113,7 @@ fn to_scene(v: Value, index_of: &dyn Fn(InstanceId) -> Option<usize>) -> SceneVa
         Value::Color3(x) => SceneValue::Color3(x),
         Value::UDim2(x) => SceneValue::UDim2(x),
         Value::Ref(r) => SceneValue::Ref(r.and_then(index_of)),
+        Value::CFrame(cf) => SceneValue::CFrame(*cf),
     }
 }
 
@@ -199,6 +208,29 @@ fn write_node(
         }
         let _ = writeln!(out, "{pad}    ],");
     }
+    let tags: Vec<String> = world.tags(id).map(str::to_string).collect();
+    if !tags.is_empty() {
+        let list: Vec<String> = tags
+            .iter()
+            .map(|t| ron::to_string(t).map_err(err))
+            .collect::<Result<_, _>>()?;
+        let _ = writeln!(out, "{pad}    tags: [{}],", list.join(", "));
+    }
+    let attributes: Vec<String> = world
+        .attributes(id)
+        .map(|(name, v)| {
+            let name = ron::to_string(name).map_err(err)?;
+            let val = ron::to_string(&to_scene(v.clone(), index_of)).map_err(err)?;
+            Ok(format!("{pad}        ({name}, {val}),"))
+        })
+        .collect::<Result<_, CoreError>>()?;
+    if !attributes.is_empty() {
+        let _ = writeln!(out, "{pad}    attributes: [");
+        for l in attributes {
+            let _ = writeln!(out, "{l}");
+        }
+        let _ = writeln!(out, "{pad}    ],");
+    }
     let kids = world.children(id);
     if !kids.is_empty() {
         let _ = writeln!(out, "{pad}    children: [");
@@ -214,7 +246,8 @@ fn write_node(
 /// Writes the world to `path` in tree order, non-default properties only.
 ///
 /// The complete scene is encoded before a sibling temporary file is written and synced, then
-/// renamed over the destination. Failure before replacement leaves an existing scene untouched.
+/// renamed over the destination. Failure before replacement leaves an existing scene untouched
+/// and the temporary file is removed.
 /// The tree must be no deeper than [`MAX_SCENE_DEPTH`] and must contain every canonical built-in
 /// exactly once at its standard location, including `StarterPlayerScripts`. A builtinless
 /// [`World::new_empty`] is an in-memory utility world and cannot be saved as a v1 game scene:
@@ -260,6 +293,9 @@ impl Drop for PendingScene {
     }
 }
 
+/// Writes `path` through a temporary file in the same folder: `write` writes the contents, then
+/// the file is flushed, synced and renamed over `path`. On any error the temporary file is
+/// removed and `path` is left as it was.
 fn write_atomic(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
     let filename = path.file_name().ok_or_else(|| {
         io::Error::new(
@@ -305,6 +341,7 @@ fn write_atomic(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) ->
     };
     let written = (|| {
         write(&mut file)?;
+        file.flush()?;
         #[cfg(unix)]
         if let Ok(metadata) = std::fs::metadata(path) {
             file.set_permissions(metadata.permissions())?;
@@ -313,7 +350,13 @@ fn write_atomic(path: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) ->
     })();
     drop(file);
     written?;
-    replace_scene(&pending.0, path)
+    replace_scene(&pending.0, path)?;
+    // Make the rename itself durable where the platform allows syncing a folder.
+    #[cfg(unix)]
+    if let Ok(d) = File::open(parent) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 fn replace_scene(from: &Path, to: &Path) -> io::Result<()> {
@@ -406,12 +449,34 @@ impl Loader {
                 SceneValue::Vector3(x) => Value::Vector3(x),
                 SceneValue::Color3(x) => Value::Color3(x),
                 SceneValue::UDim2(x) => Value::UDim2(x),
+                SceneValue::CFrame(x) => Value::CFrame(Box::new(x)),
                 SceneValue::Ref(r) => {
                     self.pending.push((id, name, r));
                     continue;
                 }
             };
             self.world.set(id, &name, value)?;
+        }
+        for (name, v) in node.attributes {
+            let value = match v {
+                SceneValue::Nil => Value::Nil,
+                SceneValue::Bool(b) => Value::Bool(b),
+                SceneValue::Number(n) => Value::Number(n),
+                SceneValue::String(s) => Value::String(s),
+                SceneValue::Vector3(x) => Value::Vector3(x),
+                SceneValue::Color3(x) => Value::Color3(x),
+                SceneValue::UDim2(x) => Value::UDim2(x),
+                SceneValue::CFrame(x) => Value::CFrame(Box::new(x)),
+                SceneValue::Ref(_) => {
+                    return Err(CoreError::Scene(format!(
+                        "attribute `{name}` cannot hold an instance reference"
+                    )));
+                }
+            };
+            self.world.set_attribute(id, &name, value)?;
+        }
+        for tag in node.tags {
+            self.world.add_tag(id, &tag)?;
         }
         for c in node.children {
             self.add(c, Some(id), depth + 1)?;
@@ -425,6 +490,8 @@ impl Loader {
 /// Errors: [`CoreError::Io`] if unreadable, [`CoreError::Scene`] if it does not parse, has an
 /// unsupported version, unknown field (including typed value members), duplicate property, unmatched built-in marker, excessive
 /// depth or a dangling reference; class/property errors from [`World::create`] and [`World::set`].
+/// Every property goes through [`World::set`], so a CFrame with a scaled or skewed rotation is
+/// re-orthonormalised (keeping its right axis) and a degenerate one fails the load.
 /// Legacy v1 input may omit standard services; they are supplied by the fresh world. The saver
 /// requires the complete canonical service set so it cannot silently save a world that changes on load.
 pub fn load_scene(path: &Path) -> Result<World, CoreError> {
@@ -476,6 +543,51 @@ mod tests {
         ));
         std::fs::create_dir_all(&directory).unwrap();
         directory
+    }
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir()
+            .join("metallic_core_atomic")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn failed_write_keeps_the_original_file() {
+        let d = dir("fail");
+        let path = d.join("main.mscene");
+        std::fs::write(&path, "original").unwrap();
+        let err = write_atomic(&path, |f| {
+            f.write_all(b"half a sce")?;
+            Err(std::io::Error::other("disk full"))
+        });
+        assert!(err.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        // No temporary file is left behind.
+        let left: Vec<_> = std::fs::read_dir(&d).unwrap().collect();
+        assert_eq!(left.len(), 1);
+    }
+
+    #[test]
+    fn save_replaces_the_file_and_leaves_no_temp() {
+        let d = dir("ok");
+        let path = d.join("main.mscene");
+        std::fs::write(&path, "old").unwrap();
+        save_scene(&World::new_with_services(), &path).unwrap();
+        assert!(load_scene(&path).is_ok());
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn save_into_a_missing_folder_fails_cleanly() {
+        let d = dir("missing");
+        let path = d.join("nope").join("main.mscene");
+        assert!(matches!(
+            save_scene(&World::new_with_services(), &path),
+            Err(CoreError::Io(_))
+        ));
     }
 
     #[test]
@@ -546,6 +658,8 @@ mod tests {
             class: "Folder".into(),
             builtin: false,
             props: vec![],
+            attributes: Default::default(),
+            tags: Default::default(),
             children: vec![],
         };
         for _ in 1..=MAX_SCENE_DEPTH {
@@ -553,6 +667,8 @@ mod tests {
                 class: "Folder".into(),
                 builtin: false,
                 props: vec![],
+                attributes: Default::default(),
+                tags: Default::default(),
                 children: vec![node],
             };
         }

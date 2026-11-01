@@ -1,0 +1,101 @@
+(
+  format: 1,
+  name: "Falling leaves",
+  description: "Autumn leaves tumbling in the wind.",
+  tags: [
+    "nature",
+    "leaves",
+    "loop",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Leaves",
+      capacity: 128,
+      spawn: [
+        Rate(
+          per_second: 6.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Box(
+            size: (10.0, 0.1, 6.0),
+          ),
+          offset: (-1.5, 7.0, 0.0),
+        ),
+        Lifetime(
+          seconds: (7.0, 9.0),
+        ),
+        Velocity(
+          speed: (0.4, 0.8),
+          direction: Axis((-0.0, -1.0, -0.0)),
+          spread: (30.0, 30.0),
+        ),
+        Size(
+          size: (0.35, 0.5),
+        ),
+        Color(
+          choices: [
+            "#D9822B",
+            "#C0562A",
+            "#E8B04A",
+            "#9C6B2E",
+          ],
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (-200.0, 200.0),
+        ),
+      ],
+      update: [
+        Acceleration(
+          accel: (0.7, -0.7, 0.0),
+        ),
+        Drag(
+          drag: 0.6,
+        ),
+        CurlNoise(
+          strength: 2.5,
+          scale: 2.5,
+          scroll: (0.4, 0.0, 0.0),
+          octaves: 2,
+        ),
+        CollisionPlane(
+          point: (0.0, 0.0, 0.0),
+          normal: (0.0, 1.0, 0.0),
+          bounce: 0.0,
+          friction: 1.0,
+          on_hit: Stick,
+        ),
+        SquashOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.0),
+              (0.25, 0.9),
+              (0.5, 0.0),
+              (0.75, -0.9),
+              (1.0, 0.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.05, 0.0),
+              (0.92, 0.0),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Leaf,
+      ),
+    ),
+  ],
+)

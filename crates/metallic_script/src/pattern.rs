@@ -4,7 +4,8 @@
 //! Luau's own implementations run uninterruptibly in C, so a pattern such as `.-b` on a
 //! large string could hang the host. These versions follow the same semantics (they are a
 //! port of the reference matcher) but count steps and give up with `pattern too complex`
-//! after [`MAX_STEPS`] steps or once the script's time budget is gone.
+//! after [`MAX_STEPS`] steps in one match attempt, or once the script's time budget is gone.
+//! Deadline polling continues across attempts, including scans with many short failures.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -14,14 +15,22 @@ use mlua::{Error, Function, Lua, LuaString, MultiValue, Result, Table, Value};
 use crate::task_lib::{Scheduler, TIMEOUT_MSG};
 use crate::vm::script_location;
 
-/// Hard cap on matcher steps per call to a pattern function.
+/// Hard cap on matcher steps per starting-position attempt.
 pub(crate) const MAX_STEPS: u64 = 10_000_000;
+/// Charged-work interval for deadline checks, independent of attempt boundaries.
+const DEADLINE_POLL_STEPS: u64 = 4096;
 /// Cap on the nesting depth of the matcher (as in the reference implementation).
 const MAX_DEPTH: u32 = 200;
 /// Cap on captures per pattern.
 const MAX_CAPTURES: usize = 32;
 /// Cap on the size of a `gsub` result.
 const MAX_RESULT: usize = 64 * 1024 * 1024;
+/// Pattern bytes of a `[...]` class read per extra matcher step (#166). Shorter reads cost
+/// nothing extra, so ordinary patterns count exactly as before; a long class is charged in
+/// proportion to its length, so the step cap and the deadline check bound it.
+const CLASS_BYTES_PER_STEP: u64 = 16;
+/// Class bytes read between two charges while scanning a class.
+const CLASS_READ_CHUNK: usize = 4096;
 
 const CAP_UNFINISHED: isize = -1;
 const CAP_POSITION: isize = -2;
@@ -54,7 +63,12 @@ struct State<'a> {
     pat: &'a [u8],
     level: usize,
     caps: [(usize, isize); MAX_CAPTURES],
+    /// Complexity charged to the current starting-position attempt.
     steps: u64,
+    /// Charged work since the last deadline poll, retained across attempts.
+    poll_steps: u64,
+    /// Bytes charged but not yet worth a step (see `charge_bytes`).
+    byte_acc: u64,
     deadline: Option<Instant>,
     depth: u32,
 }
@@ -87,27 +101,59 @@ impl<'a> State<'a> {
             level: 0,
             caps: [(0, 0); MAX_CAPTURES],
             steps: 0,
+            poll_steps: 0,
+            byte_acc: 0,
             deadline,
             depth: 0,
         }
     }
 
+    /// Starts an independent attempt without resetting aggregate deadline polling.
+    fn begin_attempt(&mut self) {
+        self.level = 0;
+        self.steps = 0;
+    }
+
     fn tick(&mut self, n: u64) -> R<()> {
-        let before = self.steps;
-        self.steps += n;
+        self.steps = self.steps.saturating_add(n);
         if self.steps > MAX_STEPS {
             return Err(Stop::TooComplex);
         }
-        if (before >> 12) != (self.steps >> 12)
-            && let Some(d) = self.deadline
-            && Instant::now() >= d
-        {
-            return Err(Stop::Timeout);
+        self.poll_steps = self.poll_steps.saturating_add(n);
+        if self.poll_steps >= DEADLINE_POLL_STEPS {
+            self.poll_steps %= DEADLINE_POLL_STEPS;
+            if let Some(d) = self.deadline
+                && Instant::now() >= d
+            {
+                return Err(Stop::Timeout);
+            }
         }
         Ok(())
     }
 
-    fn class_end(&self, mut p: usize) -> R<usize> {
+    fn charge_steps(&mut self, n: u64) -> R<()> {
+        self.tick(n)
+    }
+
+    /// Charges one step per 16 bytes copied or compared outside the matching loop (replacement
+    /// text, back-references), so such loops are bounded by the step cap and the deadline.
+    fn charge_bytes(&mut self, bytes: usize) -> R<()> {
+        self.byte_acc += bytes as u64;
+        let steps = self.byte_acc / CLASS_BYTES_PER_STEP;
+        self.byte_acc %= CLASS_BYTES_PER_STEP;
+        if steps == 0 { Ok(()) } else { self.tick(steps) }
+    }
+
+    /// Charges for reading `bytes` bytes of a `[...]` class.
+    fn charge_class(&mut self, bytes: usize) -> R<()> {
+        match bytes as u64 / CLASS_BYTES_PER_STEP {
+            0 => Ok(()),
+            extra => self.tick(extra),
+        }
+    }
+
+    fn class_end(&mut self, mut p: usize) -> R<usize> {
+        let start = p;
         let pat = self.pat;
         let c = pat[p];
         p += 1;
@@ -121,6 +167,8 @@ impl<'a> State<'a> {
             if pat.get(p) == Some(&b'^') {
                 p += 1;
             }
+            // Charged while reading, so a huge class is stopped part way, not after the scan.
+            let mut charged = 0;
             loop {
                 if p >= pat.len() {
                     return Err(Stop::Msg("malformed pattern (missing ']')"));
@@ -130,52 +178,34 @@ impl<'a> State<'a> {
                 if cc == b'%' && p < pat.len() {
                     p += 1;
                 }
+                if p - start - charged >= CLASS_READ_CHUNK {
+                    self.charge_class(p - start - charged)?;
+                    charged = p - start;
+                }
                 if pat.get(p) == Some(&b']') {
                     break;
                 }
             }
+            self.charge_class(p - start - charged)?;
             return Ok(p + 1);
         }
         Ok(p)
     }
 
-    /// `p` points at `[`, `ec` at the closing `]`.
-    fn match_bracket_class(&self, c: u8, mut p: usize, ec: usize) -> bool {
-        let pat = self.pat;
-        let mut sig = true;
-        if pat.get(p + 1) == Some(&b'^') {
-            sig = false;
-            p += 1;
-        }
-        loop {
-            p += 1;
-            if p >= ec {
-                break;
-            }
-            if pat[p] == b'%' {
-                p += 1;
-                if match_class(c, pat[p]) {
-                    return sig;
-                }
-            } else if pat.get(p + 1) == Some(&b'-') && p + 2 < ec {
-                p += 2;
-                if pat[p - 2] <= c && c <= pat[p] {
-                    return sig;
-                }
-            } else if pat[p] == c {
-                return sig;
-            }
-        }
-        !sig
+    /// `p` points at `[`, `ec` at the closing `]`. Charges for the class bytes read.
+    fn match_bracket_class(&mut self, c: u8, p: usize, ec: usize) -> R<bool> {
+        // Charged first, for the whole class: the read below is bounded by its length.
+        self.charge_class(ec - p)?;
+        Ok(bracket_class(self.pat, c, p, ec).0)
     }
 
-    fn single_match(&self, c: u8, p: usize, ep: usize) -> bool {
-        match self.pat[p] {
+    fn single_match(&mut self, c: u8, p: usize, ep: usize) -> R<bool> {
+        Ok(match self.pat[p] {
             b'.' => true,
             b'%' => match_class(c, self.pat[p + 1]),
-            b'[' => self.match_bracket_class(c, p, ep - 1),
+            b'[' => return self.match_bracket_class(c, p, ep - 1),
             pc => pc == c,
-        }
+        })
     }
 
     fn match_balance(&mut self, s: usize, p: usize) -> R<Option<usize>> {
@@ -206,10 +236,10 @@ impl<'a> State<'a> {
 
     fn max_expand(&mut self, s: usize, p: usize, ep: usize) -> R<Option<usize>> {
         let mut i = 0;
-        while s + i < self.src.len() && self.single_match(self.src[s + i], p, ep) {
+        while s + i < self.src.len() && self.single_match(self.src[s + i], p, ep)? {
+            self.tick(1)?;
             i += 1;
         }
-        self.tick(i as u64)?;
         loop {
             if let Some(r) = self.do_match(s + i, ep + 1)? {
                 return Ok(Some(r));
@@ -226,7 +256,7 @@ impl<'a> State<'a> {
             if let Some(r) = self.do_match(s, ep + 1)? {
                 return Ok(Some(r));
             }
-            if s < self.src.len() && self.single_match(self.src[s], p, ep) {
+            if s < self.src.len() && self.single_match(self.src[s], p, ep)? {
                 s += 1;
             } else {
                 return Ok(None);
@@ -260,7 +290,7 @@ impl<'a> State<'a> {
         Ok(res)
     }
 
-    fn match_capture(&self, s: usize, digit: u8) -> R<Option<usize>> {
+    fn match_capture(&mut self, s: usize, digit: u8) -> R<Option<usize>> {
         let l = (digit as usize).wrapping_sub(b'1' as usize);
         if l >= self.level || self.caps[l].1 == CAP_UNFINISHED {
             return Err(Stop::Msg("invalid capture index"));
@@ -270,6 +300,7 @@ impl<'a> State<'a> {
             return Ok(None);
         }
         let len = len as usize;
+        self.charge_bytes(len)?;
         if self.src.len() - s >= len && self.src[init..init + len] == self.src[s..s + len] {
             Ok(Some(s + len))
         } else {
@@ -321,8 +352,8 @@ impl<'a> State<'a> {
                     let ep = self.class_end(p)?;
                     let prev = if s == 0 { 0 } else { self.src[s - 1] };
                     let cur = self.src.get(s).copied().unwrap_or(0);
-                    if !self.match_bracket_class(prev, p, ep - 1)
-                        && self.match_bracket_class(cur, p, ep - 1)
+                    if !self.match_bracket_class(prev, p, ep - 1)?
+                        && self.match_bracket_class(cur, p, ep - 1)?
                     {
                         p = ep;
                         continue;
@@ -342,7 +373,7 @@ impl<'a> State<'a> {
                 _ => {}
             }
             let ep = self.class_end(p)?;
-            let m = s < self.src.len() && self.single_match(self.src[s], p, ep);
+            let m = s < self.src.len() && self.single_match(self.src[s], p, ep)?;
             match self.pat.get(ep) {
                 Some(b'?') => {
                     if m && let Some(r) = self.do_match(s + 1, ep + 1)? {
@@ -398,6 +429,36 @@ impl<'a> State<'a> {
     }
 }
 
+/// Tests `c` against the `[...]` class at `p` (closing `]` at `ec`). Returns the result and
+/// where reading stopped, so the caller can charge for the bytes read.
+fn bracket_class(pat: &[u8], c: u8, mut p: usize, ec: usize) -> (bool, usize) {
+    let mut sig = true;
+    if pat.get(p + 1) == Some(&b'^') {
+        sig = false;
+        p += 1;
+    }
+    loop {
+        p += 1;
+        if p >= ec {
+            break;
+        }
+        if pat[p] == b'%' {
+            p += 1;
+            if match_class(c, pat[p]) {
+                return (sig, p);
+            }
+        } else if pat.get(p + 1) == Some(&b'-') && p + 2 < ec {
+            p += 2;
+            if pat[p - 2] <= c && c <= pat[p] {
+                return (sig, p);
+            }
+        } else if pat[p] == c {
+            return (sig, p);
+        }
+    }
+    (!sig, p)
+}
+
 /// Lua-style relative start position (as in Luau): 1-based, negative counts from the end.
 fn pos_relat(pos: f64, len: usize) -> usize {
     let pos = pos.trunc();
@@ -412,6 +473,84 @@ fn pos_relat(pos: f64, len: usize) -> usize {
 
 fn has_specials(pat: &[u8]) -> bool {
     pat.iter().any(|c| b"^$*+?.([%-".contains(c))
+}
+
+/// Recognizes one literal byte conservatively; malformed magic stays on the matcher.
+fn literal_byte(pat: &[u8]) -> Option<u8> {
+    match pat {
+        [byte] if !b"^$*+?.()[]%-".contains(byte) => Some(*byte),
+        _ => None,
+    }
+}
+
+/// Uses the same sticky timeout reporting as the general matcher.
+fn check_deadline(lua: &Lua, sched: &Scheduler) -> Result<()> {
+    if let Some(deadline) = sched.deadline.get()
+        && Instant::now() >= deadline
+    {
+        return Err(stop_error(lua, sched, Stop::Timeout));
+    }
+    Ok(())
+}
+
+fn match_literal(
+    lua: &Lua,
+    sched: &Scheduler,
+    src: &[u8],
+    byte: u8,
+    init: usize,
+) -> Result<MultiValue> {
+    for chunk in src[init..].chunks(DEADLINE_POLL_STEPS as usize) {
+        check_deadline(lua, sched)?;
+        if chunk.contains(&byte) {
+            let result = lua.create_string([byte])?;
+            check_deadline(lua, sched)?;
+            return Ok(MultiValue::from_vec(vec![Value::String(result)]));
+        }
+    }
+    check_deadline(lua, sched)?;
+    Ok(MultiValue::from_vec(vec![Value::Nil]))
+}
+
+fn gsub_literal(
+    lua: &Lua,
+    sched: &Scheduler,
+    src: &[u8],
+    byte: u8,
+    replacement: u8,
+    max_s: usize,
+) -> Result<MultiValue> {
+    check_deadline(lua, sched)?;
+    if src.len() > MAX_RESULT {
+        return Err(Error::runtime(
+            "string.gsub: result too large (limit 64 MB)",
+        ));
+    }
+    let mut out = Vec::with_capacity(src.len());
+    let mut count = 0;
+    for chunk in src.chunks(DEADLINE_POLL_STEPS as usize) {
+        check_deadline(lua, sched)?;
+        let start = out.len();
+        out.extend_from_slice(chunk);
+        if count >= max_s {
+            continue;
+        }
+        for current in &mut out[start..] {
+            if *current == byte {
+                *current = replacement;
+                count += 1;
+                if count >= max_s {
+                    break;
+                }
+            }
+        }
+    }
+    let result = lua.create_string(&out)?;
+    check_deadline(lua, sched)?;
+    Ok(MultiValue::from_vec(vec![
+        Value::String(result),
+        num(count),
+    ]))
 }
 
 fn find_plain(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
@@ -446,12 +585,15 @@ fn find_aux(
             None => vec![Value::Nil],
         }));
     }
+    if !find && let Some(byte) = literal_byte(&pat) {
+        return match_literal(lua, sched, &src, byte, init);
+    }
     let anchor = pat.first() == Some(&b'^');
     let pstart = usize::from(anchor);
     let mut st = State::new(&src, &pat, sched.deadline.get());
     let mut s1 = init;
     loop {
-        st.level = 0;
+        st.begin_attempt();
         if let Some(e) = st
             .do_match(s1, pstart)
             .map_err(|e| stop_error(lua, sched, e))?
@@ -479,7 +621,7 @@ fn gmatch(sched: &Rc<Scheduler>, lua: &Lua, (s, pat): (LuaString, LuaString)) ->
         let mut st = State::new(&src, &pat, sched.deadline.get());
         let mut s1 = pos.get();
         while s1 <= src.len() {
-            st.level = 0;
+            st.begin_attempt();
             if let Some(e) = st.do_match(s1, 0).map_err(|e| stop_error(lua, &sched, e))? {
                 pos.set(if e == s1 { e + 1 } else { e });
                 return Ok(MultiValue::from_vec(st.captures(lua, s1, e, true)?));
@@ -499,6 +641,20 @@ fn add_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
     }
     out.extend_from_slice(bytes);
     Ok(())
+}
+
+/// `add_bytes`, charging the appended bytes to the matcher's step budget so a long replacement
+/// loop is bounded by the step cap and the deadline.
+fn append(
+    st: &mut State<'_>,
+    lua: &Lua,
+    sched: &Scheduler,
+    out: &mut Vec<u8>,
+    bytes: &[u8],
+) -> Result<()> {
+    st.charge_bytes(bytes.len())
+        .map_err(|er| stop_error(lua, sched, er))?;
+    add_bytes(out, bytes)
 }
 
 fn value_bytes(lua: &Lua, v: &Value) -> Result<Vec<u8>> {
@@ -538,13 +694,20 @@ fn gsub(
         v => Some(value_bytes(lua, v)?),
     };
     let max_s = max_n.map_or(src.len() + 1, |n| if n < 0.0 { 0 } else { n as usize });
+    if let Some(byte) = literal_byte(&pat)
+        && let Some(replacement) = &repl_str
+        && let [replacement] = replacement.as_slice()
+        && *replacement != b'%'
+    {
+        return gsub_literal(lua, sched, &src, byte, *replacement, max_s);
+    }
     let anchor = pat.first() == Some(&b'^');
     let pstart = usize::from(anchor);
     let mut st = State::new(&src, &pat, sched.deadline.get());
     let mut out: Vec<u8> = Vec::new();
     let (mut pos, mut n) = (0usize, 0usize);
     while n < max_s {
-        st.level = 0;
+        st.begin_attempt();
         let e = st
             .do_match(pos, pstart)
             .map_err(|er| stop_error(lua, sched, er))?;
@@ -553,9 +716,16 @@ fn gsub(
             match &repl_str {
                 Some(r) => {
                     let mut i = 0;
+                    // One step per match, even an empty one that appends nothing.
+                    st.charge_steps(1)
+                        .map_err(|er| stop_error(lua, sched, er))?;
                     while i < r.len() {
+                        // And per replacement byte scanned: `%0` over empty matches appends
+                        // nothing, but a huge replacement is still walked for every match.
+                        st.charge_bytes(1)
+                            .map_err(|er| stop_error(lua, sched, er))?;
                         if r[i] != b'%' {
-                            add_bytes(&mut out, &r[i..=i])?;
+                            append(&mut st, lua, sched, &mut out, &r[i..=i])?;
                         } else {
                             i += 1;
                             match r.get(i) {
@@ -564,12 +734,12 @@ fn gsub(
                                         "invalid use of '%' in replacement string",
                                     ));
                                 }
-                                Some(b'0') => add_bytes(&mut out, &src[pos..e])?,
+                                Some(b'0') => append(&mut st, lua, sched, &mut out, &src[pos..e])?,
                                 Some(d) if d.is_ascii_digit() => {
                                     let v = st.one_capture(lua, usize::from(*d - b'1'), pos, e)?;
-                                    add_bytes(&mut out, &value_bytes(lua, &v)?)?;
+                                    append(&mut st, lua, sched, &mut out, &value_bytes(lua, &v)?)?;
                                 }
-                                Some(c) => add_bytes(&mut out, &[*c])?,
+                                Some(c) => append(&mut st, lua, sched, &mut out, &[*c])?,
                             }
                         }
                         i += 1;
@@ -590,8 +760,10 @@ fn gsub(
                         _ => Value::Nil,
                     };
                     match result {
-                        Value::Nil | Value::Boolean(false) => add_bytes(&mut out, &src[pos..e])?,
-                        v => add_bytes(&mut out, &value_bytes(lua, &v)?)?,
+                        Value::Nil | Value::Boolean(false) => {
+                            append(&mut st, lua, sched, &mut out, &src[pos..e])?
+                        }
+                        v => append(&mut st, lua, sched, &mut out, &value_bytes(lua, &v)?)?,
                     }
                 }
             }
@@ -599,7 +771,7 @@ fn gsub(
         match e {
             Some(e) if e > pos => pos = e,
             _ if pos < src.len() => {
-                add_bytes(&mut out, &src[pos..=pos])?;
+                append(&mut st, lua, sched, &mut out, &src[pos..=pos])?;
                 pos += 1;
             }
             _ => break,
@@ -609,7 +781,7 @@ fn gsub(
         }
     }
     if pos < src.len() {
-        add_bytes(&mut out, &src[pos..])?;
+        append(&mut st, lua, sched, &mut out, &src[pos..])?;
     }
     Ok(MultiValue::from_vec(vec![
         Value::String(lua.create_string(&out)?),
@@ -648,4 +820,68 @@ fn stop_error(lua: &Lua, sched: &Scheduler, stop: Stop) -> Error {
         *sched.timeout_loc.borrow_mut() = Some(script_location(lua, 1));
     }
     stop.into()
+}
+
+#[cfg(test)]
+mod attempt_budget_tests {
+    use super::*;
+    use std::time::Duration;
+
+    struct Quiet;
+    impl crate::vm::OutputSink for Quiet {
+        fn print(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    #[test]
+    fn expired_literal_paths_report_timeout_and_mark_it_sticky() {
+        let lua = Lua::new();
+        let sched = Scheduler::new(Rc::new(Quiet));
+        sched.deadline.set(Some(Instant::now()));
+        for result in [
+            match_literal(&lua, &sched, b"", b'a', 0),
+            match_literal(&lua, &sched, b"a", b'a', 0),
+            gsub_literal(&lua, &sched, b"", b'a', b'b', 1),
+            gsub_literal(&lua, &sched, b"a", b'a', b'b', 0),
+            gsub_literal(&lua, &sched, b"a", b'a', b'b', 1),
+        ] {
+            let error = result.unwrap_err();
+            assert!(crate::vm::format_error(&error).contains(TIMEOUT_MSG));
+        }
+        assert!(sched.timeout_loc.borrow().is_some());
+    }
+
+    #[test]
+    fn independent_attempts_receive_their_own_complexity_allowance() {
+        let mut state = State::new(b"", b"", None);
+        assert!(state.tick(MAX_STEPS).is_ok());
+        assert!(matches!(state.tick(1), Err(Stop::TooComplex)));
+        state.begin_attempt();
+        assert!(state.tick(MAX_STEPS).is_ok());
+        assert!(matches!(state.tick(1), Err(Stop::TooComplex)));
+    }
+
+    #[test]
+    fn many_short_failed_attempts_still_reach_the_deadline_poll() {
+        let expired = Instant::now() - Duration::from_secs(1);
+        let mut state = State::new(b"a", b"x", Some(expired));
+        for attempt in 1..=DEADLINE_POLL_STEPS {
+            state.begin_attempt();
+            match state.do_match(0, 0) {
+                Ok(None) => assert!(attempt < DEADLINE_POLL_STEPS),
+                Err(Stop::Timeout) => assert_eq!(attempt, DEADLINE_POLL_STEPS),
+                _ => panic!("unexpected result for a one-step failed attempt"),
+            }
+        }
+    }
+
+    #[test]
+    fn attempt_reset_preserves_partial_poll_work() {
+        let expired = Instant::now() - Duration::from_secs(1);
+        let mut state = State::new(b"", b"", Some(expired));
+        assert!(state.tick(DEADLINE_POLL_STEPS - 1).is_ok());
+        state.begin_attempt();
+        assert!(matches!(state.tick(1), Err(Stop::Timeout)));
+    }
 }

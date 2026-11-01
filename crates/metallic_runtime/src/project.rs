@@ -4,6 +4,8 @@
 //! name = "Parkour"
 //! main_scene = "main.mscene"
 //! ```
+//! Studio also preserves project metadata such as `[[setting]]` labels/ranges/help in this
+//! file. The runtime reads the fields below and leaves that additional metadata on disk.
 use crate::RuntimeError;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -11,7 +13,7 @@ use std::path::{Path, PathBuf};
 /// File name of the project file inside a project folder.
 pub const PROJECT_FILE: &str = "metallic.toml";
 
-/// The contents of `metallic.toml`.
+/// Runtime fields read from `metallic.toml`; additional project metadata is tolerated.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ProjectConfig {
     /// The game's display name.

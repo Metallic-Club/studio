@@ -15,6 +15,18 @@ pub struct RgbaImage {
     pub rgba: Vec<u8>,
 }
 
+/// The size of a PNG from its header, without decoding any pixels.
+pub fn png_dimensions(bytes: &[u8], label: &str) -> Result<(u32, u32), StudioError> {
+    let reader = png::Decoder::new(Cursor::new(bytes))
+        .read_info()
+        .map_err(|e| StudioError::Image {
+            path: label.to_owned(),
+            message: e.to_string(),
+        })?;
+    let info = reader.info();
+    Ok((info.width, info.height))
+}
+
 /// Decodes PNG `bytes`. `label` names the source in error messages.
 pub fn decode_png(bytes: &[u8], label: &str) -> Result<RgbaImage, StudioError> {
     let fail = |message: String| StudioError::Image {
@@ -68,6 +80,13 @@ mod tests {
         let img = decode_png(bytes, "icon").expect("decode");
         assert_eq!((img.width, img.height), (256, 256));
         assert_eq!(img.rgba.len(), 256 * 256 * 4);
+    }
+
+    #[test]
+    fn dimensions_come_from_the_header() {
+        let bytes = include_bytes!("../../../branding/placeholder-icon.png");
+        assert_eq!(png_dimensions(bytes, "icon").expect("header"), (256, 256));
+        assert!(png_dimensions(b"nope", "bad").is_err());
     }
 
     #[test]

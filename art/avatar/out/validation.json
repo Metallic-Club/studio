@@ -1,0 +1,133 @@
+{
+ "armatures": 1,
+ "bones": 53,
+ "meshes": {
+  "DefaultAvatar_LOD0": {
+   "triangles": 4392,
+   "vertices": 4601,
+   "max_influences": 3,
+   "unweighted": 0,
+   "materials": [
+    "M_Head",
+    "M_Torso",
+    "M_Arms",
+    "M_Legs",
+    "M_Hands",
+    "M_Feet"
+   ]
+  },
+  "DefaultAvatar_LOD1": {
+   "triangles": 2780,
+   "vertices": 3158,
+   "max_influences": 3,
+   "unweighted": 0,
+   "materials": [
+    "M_Head",
+    "M_Torso",
+    "M_Arms",
+    "M_Legs",
+    "M_Hands",
+    "M_Feet"
+   ]
+  },
+  "DefaultAvatar_LOD2": {
+   "triangles": 896,
+   "vertices": 1218,
+   "max_influences": 3,
+   "unweighted": 0,
+   "materials": [
+    "M_Head",
+    "M_Torso",
+    "M_Arms",
+    "M_Legs",
+    "M_Hands",
+    "M_Feet"
+   ]
+  }
+ },
+ "clips": {
+  "cheer": [
+   0,
+   48
+  ],
+  "climb": [
+   0,
+   24
+  ],
+  "dance": [
+   0,
+   30
+  ],
+  "fall": [
+   0,
+   75
+  ],
+  "idle": [
+   0,
+   90
+  ],
+  "idle_b": [
+   0,
+   90
+  ],
+  "jump": [
+   0,
+   16
+  ],
+  "land": [
+   0,
+   16
+  ],
+  "land_hard": [
+   0,
+   28
+  ],
+  "point": [
+   0,
+   45
+  ],
+  "pose_hand_on_hip": [
+   0,
+   1
+  ],
+  "pose_run": [
+   0,
+   1
+  ],
+  "pose_sit_back": [
+   0,
+   1
+  ],
+  "run": [
+   0,
+   16
+  ],
+  "sit": [
+   0,
+   60
+  ],
+  "swim": [
+   0,
+   40
+  ],
+  "swim_idle": [
+   0,
+   100
+  ],
+  "walk": [
+   0,
+   16
+  ],
+  "walk_slow": [
+   0,
+   20
+  ],
+  "wave": [
+   0,
+   60
+  ]
+ },
+ "missing": [],
+ "wrong_length": [],
+ "bytes": 1596644
+}

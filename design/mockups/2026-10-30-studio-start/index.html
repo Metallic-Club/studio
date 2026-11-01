@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metallic Studio start</title>
+<!-- Mockup for docs/research/2026-10-30-ui-overhaul.md. Tokens: assets/tokens.css. Fonts: Archivo + JetBrains Mono (SIL OFL 1.1),
+     icons: Phosphor 2.1 (MIT). Emblem: branding/placeholder-icon.png, referenced, not copied. Parkour art: real engine renders.
+     Only the Parkour template exists today; Obby, FPS arena, Racing, Platformer and Empty 3D world are proposed names.
+     States: ?theme=light | ?theme=titanium, ?state=firstrun -->
+<script>{const t=new URLSearchParams(location.search).get("theme"); if(t) document.documentElement.dataset.theme=t;}</script>
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/tokens.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg-base); color: var(--text-1); font: 400 13px/18px var(--font); overflow: hidden;
+    display: grid; grid-template-rows: 40px 1fr; grid-template-columns: 288px 1fr; min-width: 1024px; }
+  button { font: inherit; color: inherit; }
+
+  /* Title bar: the window's own chrome, drawn by Studio (eframe decorations off) */
+  .titlebar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding-left: 14px; background: var(--bg-deep);
+    border-bottom: 1px solid var(--line); user-select: none; }
+  .titlebar .brand { display: flex; align-items: center; gap: 10px; width: 262px; }
+  .titlebar .brand img { width: 20px; height: 20px; display: block; }
+  .search { flex: 0 1 420px; margin: 0 auto; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px;
+    border-radius: var(--r-sm); background: var(--bg-panel); color: var(--text-3); box-shadow: inset 0 0 0 1px var(--line); }
+  .search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text-1); font: 400 13px/18px var(--font); }
+  .search input::placeholder { color: var(--text-3); }
+  .search:focus-within { box-shadow: inset 0 0 0 1px var(--focus); }
+  .titlebar .tools { display: flex; align-items: center; gap: 2px; }
+  .titlebar .tools .btn { height: 28px; padding: 0 8px; }
+  .winctl { display: flex; margin-left: 8px; height: 40px; }
+  .winctl button { width: 46px; height: 40px; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; color: var(--text-2); }
+  .winctl button:hover { background: var(--bg-hover); color: var(--text-1); }
+  .winctl button.close:hover { background: #c42b1c; color: #fff; }
+  .winctl .ic { width: 14px; height: 14px; color: currentColor; }
+
+  /* Rail */
+  .rail { background: var(--bg-panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .rail .top { padding: 16px 16px 8px; }
+  .rail .open { width: 100%; justify-content: flex-start; }
+  .rail .open .key { margin-left: auto; }
+  .rail h2 { margin: 24px 4px 8px; display: flex; align-items: baseline; gap: 8px; }
+  .rail h2 .count { color: var(--text-3); }
+  .recents { list-style: none; margin: 0; padding: 0 8px; overflow: auto; flex: 1; }
+  .recent { display: flex; gap: 12px; align-items: center; padding: 8px; border-radius: var(--r-md); cursor: pointer;
+    transition: background-color var(--t-fast) var(--ease-out); }
+  .recent:hover { background: var(--bg-hover); }
+  .recent:focus-visible { outline-offset: -2px; }
+  .thumb { width: 80px; height: 45px; border-radius: var(--r-xs); flex: none; overflow: hidden; position: relative; background: var(--bg-raised); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb.missing { display: grid; place-items: center; box-shadow: inset 0 0 0 1px var(--line-strong); background: transparent; }
+  .recent .name { font: 580 13px/18px var(--font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent .meta { font: 400 12px/16px var(--font); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent .meta.warn { color: var(--warning); display: flex; gap: 4px; align-items: center; }
+  .recent .meta.warn .ic { width: 14px; height: 14px; color: var(--warning); }
+  .recent > div { min-width: 0; }
+  .empty-recents { margin: 0 12px; padding: 16px; border-radius: var(--r-md); background: var(--bg-raised); box-shadow: inset 0 1px 0 var(--highlight); display: none; }
+  .empty-recents p { margin: 4px 0 0; color: var(--text-2); }
+  .rail .foot { padding: 12px 16px 14px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+  .rail .foot .ver { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+  .rail .foot .ver .ic { width: 14px; height: 14px; color: var(--success); }
+  .rail .foot .links { display: flex; gap: 14px; }
+  .link { background: none; border: 0; padding: 0; cursor: pointer; color: var(--text-3); font: 400 12px/16px var(--font); text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; transition: color var(--t-fast) var(--ease-out); }
+  .link:hover { color: var(--text-1); text-decoration-color: currentColor; }
+
+  /* Main */
+  main { overflow: auto; padding: 36px 48px 28px; min-width: 0; }
+  .head p { margin: 8px 0 0; color: var(--text-2); }
+  .head .key { margin: 0 2px; }
+
+  .stage { margin-top: 24px; display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: clamp(380px, calc(100vh - 400px), 456px); background: var(--bg-panel);
+    border-radius: var(--r-lg); position: relative;
+    clip-path: polygon(0 0, calc(100% - var(--cut-lg)) 0, 100% var(--cut-lg), 100% 100%, 0 100%);
+    box-shadow: inset 0 1px 0 var(--highlight); }
+  .art { position: relative; overflow: hidden; border-radius: var(--r-lg) 0 0 var(--r-lg); background: var(--bg-raised); }
+  .art img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity var(--t-panel) var(--ease-out); }
+  .art .chips { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: var(--r-sm);
+    background: var(--art-scrim); color: #e6e4ea; font: 580 12px/16px var(--font); }
+  .chip .ic { width: 14px; height: 14px; color: #c3c0ca; }
+  .form { padding: 26px 28px 24px; display: flex; flex-direction: column; min-width: 0; }
+  .form .facts { color: var(--text-3); margin-top: 2px; }
+  .form .desc { margin: 14px 0 0; color: var(--text-1); }
+  .form .inside { margin: 10px 0 0; color: var(--text-2); }
+  .form .inside b { color: var(--text-1); font-weight: 580; }
+  .form .fields { margin-top: auto; display: grid; gap: 14px; }
+  .row { display: flex; gap: 8px; }
+  .actions { margin-top: 18px; display: flex; align-items: center; gap: 12px; }
+
+  @media (max-height: 860px) { .form .inside { display: none; } }
+  .sp-head { margin-top: 32px; display: flex; align-items: center; justify-content: space-between; }
+  .seg { display: inline-flex; padding: 2px; border-radius: var(--r-sm); background: var(--bg-deep); box-shadow: inset 0 0 0 1px var(--line); }
+  .seg button { height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2);
+    font: 540 12px/16px var(--font); cursor: pointer; transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out); }
+  .seg button:hover { color: var(--text-1); }
+  .seg button[aria-pressed="true"] { background: var(--bg-active); color: var(--text-1); box-shadow: inset 0 1px 0 var(--highlight); }
+  .seg button:focus-visible { outline-offset: 0; }
+
+  .grid { margin-top: 12px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+  /* A card is a 2 px frame (transparent, accent when selected) around a plate; both share the chamfer when selected. */
+  .card { position: relative; text-align: left; border: 0; padding: 2px; margin: -2px; cursor: pointer; background: transparent; border-radius: 8px; }
+  .card .in { display: block; background: var(--bg-panel); border-radius: var(--r-md); box-shadow: inset 0 1px 0 var(--highlight);
+    transition: background-color var(--t-fast) var(--ease-out); }
+  .card:hover .in { background: var(--bg-raised); }
+  .card .cart { aspect-ratio: 16 / 9; border-radius: var(--r-md) var(--r-md) 0 0; overflow: hidden; position: relative; display: grid; place-items: center; }
+  .card .cart img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .card .cart .ic { width: 38px; height: 38px; position: relative; }
+  .card .lbl { padding: 9px 12px 11px; }
+  .card .lbl .n { font: 580 13px/18px var(--font); display: flex; align-items: center; gap: 6px; }
+  .card .lbl .n .ic { width: 14px; height: 14px; color: var(--accent); display: none; }
+  .card .lbl .m { font: 400 12px/16px var(--font); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card[aria-selected="true"] { background: var(--accent); clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%); }
+  .card[aria-selected="true"] .in { background: var(--bg-raised); clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 11px, 100% 100%, 0 100%); }
+  .card[aria-selected="true"] .lbl .n .ic { display: inline-flex; }
+  .card:focus-visible { outline-offset: 2px; }
+  .card[hidden] { display: none; }
+  .nores { display: none; margin-top: 12px; padding: 20px; border-radius: var(--r-md); background: var(--bg-panel); color: var(--text-2); }
+
+  /* Theme art: sky, horizon and ground in a template's lighting colours (art, not chrome) */
+  .sky-obby { background: linear-gradient(#8fc0ea 0 58%, #cfe3f1 58% 62%, #5aa35d 62%); }
+  .sky-obby .ic { color: #1f3f7a; }
+  .sky-fps { background: linear-gradient(#59534b 0 58%, #8a7f70 58% 62%, #3b3732 62%); }
+  .sky-fps .ic { color: #e9dfcf; }
+  .sky-race { background: linear-gradient(#3c3048 0%, #c97a5a 52%, #e7a874 60%, #2b2630 60%); }
+  .sky-race .ic { color: #f6e6d6; }
+  .sky-plat { background: linear-gradient(#f2ead8 0 58%, #e6d8b8 58% 62%, #cdb88d 62%); }
+  .sky-plat .ic { color: #5a4a2e; }
+  .sky-empty { background: linear-gradient(#b9bcc6 0 58%, #d6d8de 58% 62%, #8d909b 62%); }
+  .sky-empty .ic { color: #2c2a34; }
+
+  /* Toasts */
+  .toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 10; }
+  .toast { display: flex; align-items: center; gap: 10px; min-width: 300px; max-width: 420px; padding: 12px 14px; border-radius: var(--r-md);
+    background: var(--bg-hover); color: var(--text-1); box-shadow: var(--shadow-pop), inset 0 1px 0 var(--highlight);
+    animation: tin var(--t-slow) var(--ease-out); }
+  .toast .ic { color: var(--success); }
+  .toast.out { animation: tout var(--t-base) var(--ease-in) forwards; }
+  @keyframes tin { from { opacity: 0; transform: translateY(8px); } }
+  @keyframes tout { to { opacity: 0; transform: translateY(4px); } }
+
+  /* First run */
+  body.firstrun .recents { display: none; }
+  body.firstrun .empty-recents { display: block; }
+  body.firstrun .rail h2 .count { display: none; }
+  .spacer-firstrun { display: none; }
+  body.firstrun .spacer-firstrun { display: block; }
+</style>
+</head>
+<body>
+<header class="titlebar">
+  <div class="brand"><img src="../../../branding/placeholder-icon.png" alt=""><span class="t-strong">Metallic Studio</span></div>
+  <label class="search" title="Search templates and recent games">
+    <i class="ic" data-icon="magnifying-glass"></i>
+    <input id="q" type="search" placeholder="Search templates and recent games" aria-label="Search templates and recent games">
+    <span class="key">Ctrl K</span>
+  </label>
+  <div class="tools">
+    <button class="btn btn-ghost" data-toast="Settings opens: theme, interface size, folders, updates."><i class="ic" data-icon="gear-six"></i>Settings</button>
+    <button class="btn btn-ghost" data-toast="Help opens the Studio guide and keyboard shortcuts."><i class="ic" data-icon="question"></i>Help</button>
+  </div>
+  <div class="winctl">
+    <button aria-label="Minimise" data-toast="Minimises the window."><i class="ic" data-icon="minus"></i></button>
+    <button aria-label="Maximise" data-toast="Maximises the window."><i class="ic" data-icon="square"></i></button>
+    <button class="close" aria-label="Close" data-toast="Closes Studio."><i class="ic" data-icon="x"></i></button>
+  </div>
+</header>
+
+<aside class="rail">
+  <div class="top">
+    <button class="btn btn-secondary open" id="openFolder"><i class="ic" data-icon="folder-open"></i>Open a game folder<span class="key">Ctrl O</span></button>
+    <h2 class="t-heading">Recent games <span class="count t-caption">5</span></h2>
+  </div>
+  <ul class="recents" id="recents">
+    <li class="recent" tabindex="0" data-name="Lava Run"><span class="thumb"><img src="assets/parkour-finish-clean.jpg" alt=""></span>
+      <div><div class="name">Lava Run</div><div class="meta">Parkour, 12 minutes ago</div></div></li>
+    <li class="recent" tabindex="0" data-name="Sky Tower"><span class="thumb sky-obby" style="display:grid;place-items:center"><i class="ic" data-icon="ladder"></i></span>
+      <div><div class="name">Sky Tower</div><div class="meta">Obby, yesterday</div></div></li>
+    <li class="recent" tabindex="0" data-name="Rooftop Run"><span class="thumb"><img src="assets/parkour-start-1280.jpg" alt=""></span>
+      <div><div class="name">Rooftop Run</div><div class="meta">Parkour, Monday</div></div></li>
+    <li class="recent" tabindex="0" data-name="Arena Prototype"><span class="thumb missing"><i class="ic" data-icon="folder-open"></i></span>
+      <div><div class="name">Arena Prototype</div><div class="meta warn"><i class="ic" data-icon="warning"></i>Folder moved or deleted</div></div></li>
+    <li class="recent" tabindex="0" data-name="Kart Test 2"><span class="thumb sky-race" style="display:grid;place-items:center"><i class="ic" data-icon="flag-checkered"></i></span>
+      <div><div class="name">Kart Test 2</div><div class="meta">Racing, 24 October</div></div></li>
+  </ul>
+  <div class="empty-recents">
+    <div class="t-strong">No games yet</div>
+    <p>Games you create or open show up here, newest first. Pick a starting point to make your first one.</p>
+  </div>
+  <div style="flex:1" class="spacer-firstrun"></div>
+  <div class="foot">
+    <div class="t-small" style="color:var(--text-2)">Metallic Studio 0.1.0, dev channel</div>
+    <div class="ver t-small"><i class="ic" data-icon="check-circle-fill"></i>Up to date</div>
+    <div class="links">
+      <button class="link" data-toast="Release notes for 0.1.0 open in your browser.">Release notes</button>
+      <button class="link" data-toast="Third-party licences: Archivo, JetBrains Mono (OFL 1.1), Phosphor (MIT) and the Rust crates.">Third-party licences</button>
+    </div>
+  </div>
+</aside>
+
+<main>
+  <section class="head">
+    <h1 class="t-display" style="margin:0">What do you want to make?</h1>
+    <p class="t-body-lg">Every template opens ready to play. Press <span class="key">F5</span> to try it, then change anything you like.</p>
+  </section>
+
+  <section class="stage" aria-label="Selected starting point">
+    <div class="art" id="art"><img id="artImg" src="assets/parkour-checkpoint-clean.jpg" alt="Parkour template: a platform course with a checkpoint flag">
+      <div class="chips" id="chips"><span class="chip"><i class="ic" data-icon="cube"></i>3D</span><span class="chip"><i class="ic" data-icon="sun"></i>Titanium look</span></div>
+    </div>
+    <form class="form" id="form" novalidate>
+      <h2 class="t-title" id="tName" style="margin:0">Parkour</h2>
+      <div class="facts t-small" id="tFacts">3D, third-person</div>
+      <p class="desc t-body-lg" id="tDesc">Run, jump and reach the finish. Checkpoints save your progress.</p>
+      <p class="inside t-small" id="tInside"><b>Inside:</b> spawn, three checkpoints, a moving platform, lava, a spinning bar and a finish timer.</p>
+      <div class="fields">
+        <div>
+          <label class="field-label" for="gname">Game name</label>
+          <input class="field" id="gname" value="My Parkour" autocomplete="off" aria-describedby="help">
+        </div>
+        <div>
+          <label class="field-label" for="gfolder">Folder</label>
+          <div class="row"><input class="field" id="gfolder" value="C:\Games" autocomplete="off" aria-describedby="help">
+            <button type="button" class="btn btn-secondary" data-toast="Choose a folder: the system folder picker opens.">Browse</button></div>
+          <div class="field-help" id="help">Studio creates C:\Games\My Parkour. It must be new or empty.</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Create game <span class="key">Enter</span></button>
+      </div>
+    </form>
+  </section>
+
+  <section>
+    <div class="sp-head">
+      <h2 class="t-heading" style="margin:0">Starting points</h2>
+      <div class="seg" role="group" aria-label="Filter starting points" id="seg">
+        <button aria-pressed="true" data-f="all">All</button><button aria-pressed="false" data-f="3d">3D</button><button aria-pressed="false" data-f="2d">2D</button><button aria-pressed="false" data-f="empty">Empty</button>
+      </div>
+    </div>
+    <div class="grid" role="listbox" aria-label="Starting points" id="grid"></div>
+    <div class="nores" id="nores">No starting point matches. Clear the search to see all six.</div>
+  </section>
+</main>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="assets/icons.js"></script>
+<script>
+const T = [
+  { id:'parkour', name:'Parkour', facts:'3D, third-person', f:'3d', img:'assets/parkour-preview.png', stage:'assets/parkour-checkpoint-clean.jpg',
+    desc:'Run, jump and reach the finish. Checkpoints save your progress.',
+    inside:'spawn, three checkpoints, a moving platform, lava, a spinning bar and a finish timer.', look:'Titanium look' },
+  { id:'obby', name:'Obby', facts:'3D, third-person', f:'3d', sky:'sky-obby', icon:'ladder',
+    desc:'Climb a tower of obstacles, one stage at a time.', inside:'ten stages, a stage counter and a respawn pad.', look:'Bright look' },
+  { id:'fps', name:'FPS arena', facts:'3D, first-person', f:'3d', sky:'sky-fps', icon:'crosshair',
+    desc:'A small arena for quick rounds with a first-person camera.', inside:'two spawns, cover, a round timer and a score board.', look:'Warm look' },
+  { id:'race', name:'Racing', facts:'3D, chase camera', f:'3d', sky:'sky-race', icon:'flag-checkered',
+    desc:'Drive laps around a short track against the clock.', inside:'a kart, a looped track, lap counter and best time.', look:'Sunset look' },
+  { id:'plat', name:'Platformer', facts:'2D, side view', f:'2d', sky:'sky-plat', icon:'flag',
+    desc:'Jump across a side-scrolling level to the flag.', inside:'a player, moving platforms, coins and a goal flag.', look:'Paper look' },
+  { id:'empty', name:'Empty 3D world', facts:'Baseplate and a spawn', f:'empty', sky:'sky-empty', icon:'cube',
+    desc:'A flat baseplate, a spawn point and default lighting.', inside:'nothing else. Build from scratch.', look:'Titanium look' },
+];
+const grid = document.getElementById('grid');
+let sel = 'parkour';
+function ico(n){ return `<i class="ic" data-icon="${n}"><svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">${PH[n]}</svg></i>`; }
+grid.innerHTML = T.map(t => `
+  <button class="card" role="option" data-id="${t.id}" data-f="${t.f}" aria-selected="${t.id===sel}" tabindex="${t.id===sel?0:-1}">
+    <span class="in"><span class="cart ${t.sky||''}">${t.img?`<img src="${t.img}" alt="">`:ico(t.icon)}</span>
+    <span class="lbl" style="display:block"><span class="n">${ico('check-circle-fill')}${t.name}</span><span class="m" style="display:block">${t.facts}</span></span></span>
+  </button>`).join('');
+
+function select(id, focus){
+  sel = id; const t = T.find(x => x.id === id);
+  grid.querySelectorAll('.card').forEach(c => { const on = c.dataset.id === id; c.setAttribute('aria-selected', on); c.tabIndex = on ? 0 : -1; if (on && focus) c.focus(); });
+  document.getElementById('tName').textContent = t.name;
+  document.getElementById('tFacts').textContent = t.facts;
+  document.getElementById('tDesc').textContent = t.desc;
+  document.getElementById('tInside').innerHTML = '<b>Inside:</b> ' + t.inside;
+  const art = document.getElementById('art'), img = document.getElementById('artImg');
+  art.className = 'art ' + (t.sky || '');
+  if (t.stage) { img.style.display = ''; img.src = t.stage; img.alt = t.name + ' template'; art.style.placeItems = ''; art.querySelector('.big')?.remove(); }
+  else { img.style.display = 'none'; art.style.display = 'grid'; art.style.placeItems = 'center';
+    art.querySelector('.big')?.remove(); const b = document.createElement('span'); b.className = 'big'; b.innerHTML = ico(t.icon);
+    b.querySelector('.ic').style.cssText = 'width:96px;height:96px'; art.prepend(b); }
+  document.getElementById('chips').innerHTML = `<span class="chip">${ico(t.f==='2d'?'squares-four':'cube')}${t.f==='2d'?'2D':'3D'}</span><span class="chip">${ico('sun')}${t.look}</span>`;
+  const n = document.getElementById('gname'); n.value = 'My ' + t.name.replace(/^Empty 3D world$/, 'Game'); upd();
+}
+grid.addEventListener('click', e => { const c = e.target.closest('.card'); if (c) select(c.dataset.id, true); });
+grid.addEventListener('keydown', e => {
+  const vis = [...grid.querySelectorAll('.card:not([hidden])')]; const i = vis.findIndex(c => c.dataset.id === sel);
+  if (e.key === 'ArrowRight' && i < vis.length - 1) { select(vis[i+1].dataset.id, true); e.preventDefault(); }
+  if (e.key === 'ArrowLeft' && i > 0) { select(vis[i-1].dataset.id, true); e.preventDefault(); }
+});
+
+let filt = 'all';
+function applyFilter(){
+  const q = document.getElementById('q').value.trim().toLowerCase(); let n = 0;
+  grid.querySelectorAll('.card').forEach(c => { const t = T.find(x => x.id === c.dataset.id);
+    const ok = (filt === 'all' || t.f === filt) && (!q || (t.name + ' ' + t.facts).toLowerCase().includes(q)); c.hidden = !ok; if (ok) n++; });
+  document.querySelectorAll('.recent').forEach(r => { r.hidden = q && !r.textContent.toLowerCase().includes(q); });
+  document.getElementById('nores').style.display = n ? 'none' : 'block';
+}
+document.getElementById('seg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return;
+  filt = b.dataset.f; document.querySelectorAll('#seg button').forEach(x => x.setAttribute('aria-pressed', x === b)); applyFilter(); });
+document.getElementById('q').addEventListener('input', applyFilter);
+
+const bad = /[<>:"/\\|?*]/;
+function upd(){
+  const n = document.getElementById('gname'), f = document.getElementById('gfolder'), h = document.getElementById('help');
+  n.removeAttribute('aria-invalid'); h.className = 'field-help';
+  h.textContent = `Studio creates ${f.value.replace(/\\$/, '')}\\${n.value || '...'}. It must be new or empty.`;
+}
+document.getElementById('gname').addEventListener('input', upd);
+document.getElementById('gfolder').addEventListener('input', upd);
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault();
+  const n = document.getElementById('gname'), h = document.getElementById('help'); const v = n.value.trim();
+  const err = !v ? 'Give your game a name.' : bad.test(v) ? 'Names cannot contain < > : " / \\ | ? or *.' : '';
+  if (err) { n.setAttribute('aria-invalid', 'true'); h.className = 'field-error'; h.innerHTML = ico('warning-circle-fill').replace('class="ic"', 'class="ic" style="color:var(--error);width:14px;height:14px;margin-top:1px"') + err; n.focus(); return; }
+  toast(`Created ${v}. Opening it in Build.`);
+});
+
+const toasts = document.getElementById('toasts');
+function toast(msg){ const t = document.createElement('div'); t.className = 'toast t-body'; t.innerHTML = ico('check-circle-fill') + '<span>' + msg + '</span>';
+  toasts.append(t); setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 200); }, 4000); }
+document.querySelectorAll('[data-toast]').forEach(b => b.addEventListener('click', () => toast(b.dataset.toast)));
+document.getElementById('openFolder').addEventListener('click', () => toast('Choose a game folder: the system folder picker opens.'));
+document.querySelectorAll('.recent').forEach(r => { const go = () => r.querySelector('.warn') ? toast('Arena Prototype: the folder is gone. Locate it or remove it from the list.') : toast(`Opening ${r.dataset.name}.`);
+  r.addEventListener('click', go); r.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); });
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key.toLowerCase() === 'k') { e.preventDefault(); document.getElementById('q').focus(); }
+  if (e.ctrlKey && e.key.toLowerCase() === 'o') { e.preventDefault(); toast('Choose a game folder: the system folder picker opens.'); }
+  if (e.key === 'F5') { e.preventDefault(); toast(`Playing the ${T.find(x => x.id === sel).name} template. Press Esc to stop.`); }
+});
+
+const P = new URLSearchParams(location.search);
+if (P.get('state') === 'firstrun') document.body.classList.add('firstrun');
+if (P.get('pick')) select(P.get('pick'));
+if (P.get('toast')) toast(P.get('toast'));
+</script>
+</body>
+</html>

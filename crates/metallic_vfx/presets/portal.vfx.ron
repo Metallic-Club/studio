@@ -1,0 +1,135 @@
+(
+  format: 1,
+  name: "Portal",
+  description: "A swirling violet portal standing upright.",
+  tags: [
+    "magic",
+    "portal",
+    "loop",
+  ],
+  style: Realistic,
+  emitters: [
+    (
+      name: "Inner swirl",
+      capacity: 128,
+      spawn: [
+        Rate(
+          per_second: 36.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 1.6,
+          ),
+          rotation: (90.0, 0.0, 0.0),
+          offset: (0.0, 2.2, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.9, 1.3),
+        ),
+        Size(
+          size: (0.9, 1.5),
+        ),
+        Rotation(
+          angle: (0.0, 360.0),
+          spin: (60.0, 140.0),
+        ),
+      ],
+      update: [
+        Vortex(
+          axis: (0.0, 0.0, 1.0),
+          center: (0.0, 0.0, 0.0),
+          swirl: 4.0,
+          pull: 1.0,
+        ),
+        ColorOverLife(
+          gradient: (
+            keys: [
+              (0.0, "#2B1B55"),
+              (1.0, "#6B4FD8"),
+            ],
+            space: Oklab,
+          ),
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 1.0),
+              (0.3, 0.45),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: Smoke,
+        light_emission: 0.3,
+      ),
+    ),
+    (
+      name: "Rim",
+      capacity: 512,
+      spawn: [
+        Rate(
+          per_second: 140.0,
+        ),
+      ],
+      init: [
+        Shape(
+          shape: Disc(
+            radius: 2.0,
+            inner: 0.9,
+          ),
+          rotation: (90.0, 0.0, 0.0),
+          offset: (0.0, 2.2, 0.0),
+        ),
+        Lifetime(
+          seconds: (0.8, 1.3),
+        ),
+        Size(
+          size: (0.1, 0.24),
+        ),
+        Color(
+          choices: [
+            "#7C5CFF",
+            "#B497FF",
+            "#5C3FD1",
+            "#E3D8FF",
+          ],
+          mix: true,
+        ),
+      ],
+      update: [
+        Attractor(
+          position: (0.0, 2.2, 0.0),
+          strength: 6.0,
+          radius: 2.0,
+          kill_radius: 0.25,
+        ),
+        Vortex(
+          axis: (0.0, 0.0, 1.0),
+          center: (0.0, 0.0, 0.0),
+          swirl: 12.0,
+        ),
+        TransparencyOverLife(
+          curve: (
+            keys: [
+              (0.0, 0.2),
+              (1.0, 1.0),
+            ],
+            interp: Smooth,
+          ),
+        ),
+      ],
+      render: (
+        kind: Billboard,
+        texture: SoftDot,
+        light_emission: 1.0,
+        brightness: 1.8,
+      ),
+    ),
+  ],
+)

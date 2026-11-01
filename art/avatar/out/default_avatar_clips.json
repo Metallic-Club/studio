@@ -1,0 +1,367 @@
+{
+ "file": "default_avatar.glb",
+ "fps": 30,
+ "stud_m": 0.28,
+ "meshes": {
+  "DefaultAvatar_LOD0": 4392,
+  "DefaultAvatar_LOD1": 2780,
+  "DefaultAvatar_LOD2": 896
+ },
+ "clips": {
+  "idle": {
+   "frames": 91,
+   "first": 0,
+   "last": 90,
+   "seconds": 3.0,
+   "loop": true,
+   "export": true,
+   "priority": 1,
+   "source": "Quaternius UAL 1 Idle_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "walk_slow": {
+   "frames": 21,
+   "first": 0,
+   "last": 20,
+   "seconds": 0.6667,
+   "loop": true,
+   "export": true,
+   "priority": 1,
+   "speed_studs_s": 6.0,
+   "speed_m_s": 1.68,
+   "cycle_frames": 20,
+   "cycle_s": 0.6667,
+   "stride_m": 1.12,
+   "stride_studs": 4.0,
+   "step_m": 0.56,
+   "cadence_steps_min": 180.0,
+   "stance_frames": 10.71,
+   "flight_frames_per_step": 0.0,
+   "double_support_frames_per_step": 0.71,
+   "ground_per_stance_m": 0.6,
+   "left_contact_frame": 0,
+   "right_contact_frame": 10,
+   "source": "Quaternius UAL 1 Walk_Loop (trunk, arms, head); legs procedural",
+   "source_contacts": [
+    0.0,
+    20.0,
+    40
+   ],
+   "roll_in_cycle": 0.07,
+   "max_leg_reach": 0.9796,
+   "max_planted_foot_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "walk": {
+   "frames": 17,
+   "first": 0,
+   "last": 16,
+   "seconds": 0.5333,
+   "loop": true,
+   "export": true,
+   "priority": 1,
+   "speed_studs_s": 16.0,
+   "speed_m_s": 4.48,
+   "cycle_frames": 16,
+   "cycle_s": 0.5333,
+   "stride_m": 2.3893,
+   "stride_studs": 8.533,
+   "step_m": 1.1947,
+   "cadence_steps_min": 225.0,
+   "stance_frames": 4.42,
+   "flight_frames_per_step": 3.58,
+   "double_support_frames_per_step": 0.0,
+   "ground_per_stance_m": 0.66,
+   "left_contact_frame": 0,
+   "right_contact_frame": 8,
+   "source": "Quaternius UAL 1 Jog_Fwd_Loop (trunk, arms, head); legs procedural",
+   "source_contacts": [
+    1.0,
+    15.0,
+    28
+   ],
+   "roll_in_cycle": 0.07,
+   "max_leg_reach": 0.98,
+   "max_planted_foot_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "run": {
+   "frames": 17,
+   "first": 0,
+   "last": 16,
+   "seconds": 0.5333,
+   "loop": true,
+   "export": true,
+   "priority": 1,
+   "speed_studs_s": 24.0,
+   "speed_m_s": 6.72,
+   "cycle_frames": 16,
+   "cycle_s": 0.5333,
+   "stride_m": 3.584,
+   "stride_studs": 12.8,
+   "step_m": 1.792,
+   "cadence_steps_min": 225.0,
+   "stance_frames": 3.04,
+   "flight_frames_per_step": 4.96,
+   "double_support_frames_per_step": 0.0,
+   "ground_per_stance_m": 0.68,
+   "left_contact_frame": 0,
+   "right_contact_frame": 8,
+   "source": "Quaternius UAL 1 Sprint_Loop (trunk, arms, head); legs procedural",
+   "source_contacts": [
+    0.0,
+    10.0,
+    20
+   ],
+   "roll_in_cycle": 0.07,
+   "max_leg_reach": 0.98,
+   "max_planted_foot_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "jump": {
+   "frames": 17,
+   "first": 0,
+   "last": 16,
+   "seconds": 0.5333,
+   "loop": false,
+   "export": true,
+   "priority": 1,
+   "launch_frame": 6,
+   "source": "Quaternius UAL 1 Jump_Start (+ code anticipation 0-4)",
+   "note": "frames 0-5 are the anticipation; apply the jump impulse on frame 6",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "fall": {
+   "frames": 76,
+   "first": 0,
+   "last": 75,
+   "seconds": 2.5,
+   "loop": true,
+   "export": true,
+   "priority": 1,
+   "source": "Quaternius UAL 1 Jump_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    17.22
+   ],
+   "min_sole_z_mm": -58.1
+  },
+  "land": {
+   "frames": 17,
+   "first": 0,
+   "last": 16,
+   "seconds": 0.5333,
+   "loop": false,
+   "export": true,
+   "priority": 1,
+   "source": "Quaternius UAL 1 Jump_Land",
+   "max_ground_slip_mm_per_frame": [
+    0.35,
+    0.09
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "land_hard": {
+   "frames": 29,
+   "first": 0,
+   "last": 28,
+   "seconds": 0.9333,
+   "loop": false,
+   "export": true,
+   "priority": 1,
+   "source": "Quaternius UAL 1 Jump_Land",
+   "max_ground_slip_mm_per_frame": [
+    0.21,
+    0.02
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "swim": {
+   "frames": 41,
+   "first": 0,
+   "last": 40,
+   "seconds": 1.3333,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 1 Swim_Fwd_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": 669.7
+  },
+  "swim_idle": {
+   "frames": 101,
+   "first": 0,
+   "last": 100,
+   "seconds": 3.3333,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 1 Swim_Idle_Loop",
+   "max_ground_slip_mm_per_frame": [
+    17.57,
+    14.8
+   ],
+   "min_sole_z_mm": -71.6
+  },
+  "sit": {
+   "frames": 61,
+   "first": 0,
+   "last": 60,
+   "seconds": 2.0,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 1 Sitting_Idle_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "dance": {
+   "frames": 31,
+   "first": 0,
+   "last": 30,
+   "seconds": 1.0,
+   "loop": true,
+   "export": true,
+   "priority": 3,
+   "bpm": 120,
+   "frames_per_beat": 15,
+   "source": "Quaternius UAL 1 Dance_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.08
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "idle_b": {
+   "frames": 91,
+   "first": 0,
+   "last": 90,
+   "seconds": 3.0,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "source": "Quaternius UAL 2 Idle_FoldArms_Loop",
+   "max_ground_slip_mm_per_frame": [
+    0.82,
+    0.01
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "wave": {
+   "frames": 61,
+   "first": 0,
+   "last": 60,
+   "seconds": 2.0,
+   "loop": false,
+   "export": true,
+   "priority": 3,
+   "source": "Quaternius UAL 1 Idle_Loop + keyed wave arm",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "cheer": {
+   "frames": 49,
+   "first": 0,
+   "last": 48,
+   "seconds": 1.6,
+   "loop": false,
+   "export": true,
+   "priority": 3,
+   "source": "Quaternius UAL 1 Idle_Loop + keyed cheer",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.01
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "climb": {
+   "frames": 25,
+   "first": 0,
+   "last": 24,
+   "seconds": 0.8,
+   "loop": true,
+   "export": true,
+   "priority": 2,
+   "climb_speed_m_s": 0.7,
+   "climb_speed_studs_s": 2.5,
+   "rung_spacing_m": 0.28,
+   "wall_offset_m": 0.17,
+   "max_ground_slip_mm_per_frame": [
+    5.98,
+    0.0
+   ],
+   "min_sole_z_mm": -25.2
+  },
+  "point": {
+   "frames": 46,
+   "first": 0,
+   "last": 45,
+   "seconds": 1.5,
+   "loop": false,
+   "export": true,
+   "priority": 3,
+   "source": "procedural upper body over Quaternius UAL 1 Idle_Loop legs",
+   "max_ground_slip_mm_per_frame": [
+    0.0,
+    0.0
+   ],
+   "min_sole_z_mm": -0.0
+  },
+  "pose_hand_on_hip": {
+   "frames": 1,
+   "first": 0,
+   "last": 0,
+   "seconds": 0.0,
+   "loop": false,
+   "export": true,
+   "priority": 0,
+   "min_sole_z_mm": -0.0
+  },
+  "pose_run": {
+   "frames": 1,
+   "first": 0,
+   "last": 0,
+   "seconds": 0.0,
+   "loop": false,
+   "export": true,
+   "priority": 0,
+   "min_sole_z_mm": -1.2
+  },
+  "pose_sit_back": {
+   "frames": 1,
+   "first": 0,
+   "last": 0,
+   "seconds": 0.0,
+   "loop": false,
+   "export": true,
+   "priority": 0,
+   "min_sole_z_mm": -30.6
+  }
+ }
+}
