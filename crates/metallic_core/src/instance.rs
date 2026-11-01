@@ -109,6 +109,7 @@ struct JournalEntry {
 }
 
 /// Stable handle to an instance. Generational: a destroyed instance's id never becomes valid again.
+/// A slot is permanently retired after its last representable generation is destroyed.
 ///
 /// An id is local to the [`World`] that made it: an index and a generation, with no record of
 /// which world it came from. Two independent worlds hand out the same ids in the same order, so an
@@ -436,6 +437,7 @@ impl World {
     }
 
     /// Destroys an instance and all its descendants; their ids become invalid. Unknown ids are ignored.
+    /// Slots at generation `u32::MAX` are retired rather than reused with a wrapped generation.
     pub fn destroy(&mut self, id: InstanceId) {
         if !self.is_alive(id) {
             return;
@@ -459,8 +461,10 @@ impl World {
                     self.extras_bytes -= extras::extras_cost(extras);
                 }
                 stack.extend(node.children);
-                slot.generation += 1;
-                self.free.push(cur.index);
+                if let Some(next_generation) = slot.generation.checked_add(1) {
+                    slot.generation = next_generation;
+                    self.free.push(cur.index);
+                }
             }
         }
         // Keep only signals of live instances. Ids that never belonged to this world (out of range,
@@ -851,6 +855,95 @@ impl World {
             tag_log: TagLog::default(),
             extras_bytes: self.extras_bytes,
         }
+    }
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+
+    // Boundary coverage without billions of allocations; fixtures are still unreferenced roots.
+    fn root_at_generation(world: &mut World, id: InstanceId, generation: u32) -> InstanceId {
+        assert!(world.is_alive(id));
+        assert_eq!(world.parent(id), None);
+        let root = world.roots.iter_mut().find(|root| **root == id).unwrap();
+        let replacement = InstanceId {
+            index: id.index,
+            generation,
+        };
+        *root = replacement;
+        world.slots[id.index as usize].generation = generation;
+        replacement
+    }
+
+    #[test]
+    fn destroying_last_generation_retires_slot_and_keeps_old_ids_dead() {
+        let mut world = World::new_empty();
+        let original = world.create("Part", None).unwrap();
+        let last = root_at_generation(&mut world, original, u32::MAX);
+        world.destroy(last);
+        assert!(!world.is_alive(original));
+        assert!(!world.is_alive(last));
+        assert_eq!(world.class_name(last), None);
+        assert!(world.roots().is_empty());
+        assert!(!world.free.contains(&last.index));
+        assert_eq!(world.slots[last.index as usize].generation, u32::MAX);
+
+        for _ in 0..4 {
+            let replacement = world.create("Part", None).unwrap();
+            assert_ne!(replacement.index, last.index);
+            assert!(!world.is_alive(original));
+            assert!(!world.is_alive(last));
+            world.destroy(last);
+            assert!(world.is_alive(replacement));
+            world.destroy(replacement);
+        }
+        let mut snapshot = world.deep_clone();
+        let replacement = snapshot.create("Part", None).unwrap();
+        assert_ne!(replacement.index, last.index);
+        assert!(!snapshot.is_alive(original));
+        assert!(!snapshot.is_alive(last));
+    }
+
+    #[test]
+    fn penultimate_generation_reuses_slot_for_one_last_live_id() {
+        let mut world = World::new_empty();
+        let original = world.create("Part", None).unwrap();
+        let before_last = root_at_generation(&mut world, original, u32::MAX - 1);
+        world.destroy(before_last);
+        let last = world.create("Folder", None).unwrap();
+        assert_eq!(last.index, original.index);
+        assert_eq!(last.generation, u32::MAX);
+        assert_eq!(world.class_name(last), Some("Folder"));
+        assert!(!world.is_alive(original));
+        assert!(!world.is_alive(before_last));
+        world.destroy(last);
+        assert_ne!(world.create("Part", None).unwrap().index, original.index);
+    }
+
+    #[test]
+    fn subtree_retirement_preserves_normal_reuse_signals_and_change_history() {
+        let mut world = World::new_empty();
+        let parent = world.create("Folder", None).unwrap();
+        let original_child = world.create("Part", None).unwrap();
+        let child = root_at_generation(&mut world, original_child, u32::MAX);
+        world.set_parent(child, Some(parent)).unwrap();
+        world.property_changed(child, "Name").connect(|_| {});
+        let cursor = world.change_cursor();
+        world.destroy(parent);
+        assert!(!world.is_alive(parent));
+        assert!(!world.is_alive(child));
+        assert!(world.prop_signals.is_empty());
+        assert_eq!(
+            world.changes_since(cursor).0,
+            Changes::Ids(vec![parent, child])
+        );
+        let replacement = world.create("Folder", None).unwrap();
+        assert_eq!(replacement.index, parent.index);
+        assert_eq!(replacement.generation, parent.generation + 1);
+        assert!(!world.is_alive(original_child));
+        assert!(!world.free.contains(&child.index));
+        assert!(world.children(replacement).is_empty());
     }
 }
 

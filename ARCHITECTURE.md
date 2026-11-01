@@ -39,8 +39,8 @@ apps.
   temporary known-name lookup allocations; owned Value/default clones and stored property keys are separate.
   attributes (`instance/extras.rs`: a boxed side record per node, so instances without any pay one pointer and the
   property paths never look at them; changes go to the change journal and to a bounded attribute log read with
-  `attribute_changes_since`) and tags (same record, plus a tag-to-instances index so `tagged` never scans the tree, and a
-  tag log for the instance-added/removed signals; reparent and destroy only walk a subtree while some tag exists);
+  `attribute_changes_since`) and tags (same record, plus a tag-to-instances index so `tagged` never scans the tree,
+  and a tag log for the instance-added/removed signals; reparent and destroy only walk a subtree while some tag exists);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
   only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
@@ -59,8 +59,8 @@ apps.
   reparent operations, explicit same-parent/root reorders and properties. `Reordered` identifies the moved sibling;
   its parent receives only a coarse invalidation, and unchanged descendants receive none. A cross-parent
   `set_parent_at` emits one `Reparented` notice; readers observe its final position. Same-parent `set_parent`
-  and unchanged `set_parent_at` calls leave both cursors unchanged. Property tokens are canonical static registry names, with no journal-owned
-  strings or values. Private property metadata keeps a thin static `PropDef` pointer and forms the public name
+  and unchanged `set_parent_at` calls leave both cursors unchanged. Property tokens are canonical static registry names,
+  with no journal-owned strings or values. Private property metadata keeps a thin static `PropDef` pointer and forms the public name
   token on read. Both readers share the same bounded retention/overflow boundary, including coarse-only
   descendant invalidations after reparent. Clones record creations in deterministic parent-before-child order.
   The detailed feed retains current-state invalidations, not historic values or a durable editing operation log.
@@ -70,7 +70,8 @@ apps.
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `World::set` (so also the scene loader) stores every CFrame through `CFrame::try_orthonormalize`:
   an orthonormal rotation is kept bit for bit, a scaled or skewed one is re-orthonormalised keeping its right axis, and
-  a degenerate one (zero or parallel columns) is refused like a NaN. `BasePart.CFrame` in Luau maps onto Position/Orientation. `transform` holds the pivot rules
+  a degenerate one (zero or parallel columns) is refused like a NaN. `BasePart.CFrame` in Luau maps onto Position/Orientation.
+  `transform` holds the pivot rules
   (`get_pivot`, `pivot_to`), `resize`, `scale_to` and `bounding_box`, shared by Luau and the building tools.
   `PropDef::hidden` marks engine bookkeeping (`Model.WorldPivotSet`, `Model.ScaleFactor`) that Luau does not show.
   `PropDef::normalize` converts a String write outside `allowed` to its stored form (a display name to an id).
@@ -80,14 +81,8 @@ apps.
   non-`inherit` value, else `None` (the place Look). `LookOverrides` caches it per part and is kept current with
   `apply(world, &changes)` from the change journal, returning the parts whose style changed (including parts below a
   Model whose own value changed). The renderer's `Scene` holds one; `PartDraw::style` carries the resolved id.
-- **metallic_asset** (#76): file formats, with no GPU or world dependency. `SkinnedModel::from_glb(&[u8])` imports a
-  skinned glTF 2.0 binary (`.glb`): one skeleton (joints sorted parents-first, inverse binds, rest pose), skinned meshes
-  per level of detail (`<name>_LOD<n>`; positions, normals, UVs, up to 4 renormalised joint weights, material slot),
-  material slots and animation clips (`Clip`, `Track`: translation/rotation/scale with STEP, LINEAR and CUBICSPLINE).
-  Hostile files return `AssetError`, never panic: every accessor is bounds-checked, counts are capped (`MAX_JOINTS`,
-  `MAX_VERTICES`, `MAX_KEYFRAMES`, ...), and the gltf crate's own validation runs only after our reference checks.
-  Also `Pose` (local transforms, `blend`, `skin_matrices`). A separate crate because render (meshes) and runtime
-  (skeleton, clips) both need it, and later player avatars and the animation system (#40) will too.
+  Destroying a slot at its final
+  `u32` generation retires it permanently, preserving stale-handle rejection without changing the   64-bit ID layout.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
   `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Before the
   first step `sync_from` runs Rapier's collision pipeline (raycasts and touches work at once; the first step builds the
