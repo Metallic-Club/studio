@@ -204,8 +204,9 @@ fn hash_member(hash: &mut Sha256, member: &Member, owner: &str, defaults: &[Valu
             }
             hash_ty(hash, &desc.returns);
             hash.update([u8::from(desc.yields)]);
-            // 0 is reserved for `Native`, which arrives with #461.
+            // Where the body lives, never which function: an address differs per build.
             hash.update([match desc.implementation {
+                MethodImpl::Native(_) => 0,
                 MethodImpl::Host => 1,
                 MethodImpl::Luau => 2,
             }]);
@@ -463,6 +464,23 @@ mod tests {
                 .describe("Text.")
                 .category("Text")])
         );
+    }
+
+    #[test]
+    fn fingerprint_covers_where_a_method_lives_but_not_which_function() {
+        use crate::classes::{ApiError, CallOutcome, MethodCall, MethodDesc, ScriptValue};
+        fn one(_: &mut MethodCall<'_>) -> Result<CallOutcome, ApiError> {
+            Ok(ScriptValue::Nil.into())
+        }
+        fn other(_: &mut MethodCall<'_>) -> Result<CallOutcome, ApiError> {
+            Ok(true.into())
+        }
+        static NATIVE: [MethodDesc; 1] = [MethodDesc::native("Do", one)];
+        static OTHER_BODY: [MethodDesc; 1] = [MethodDesc::native("Do", other)];
+        static HOST: [MethodDesc; 1] = [MethodDesc::host("Do")];
+        let hash = |methods| ok_hash(&[ClassDef::new("Fixture", None).methods(methods)]);
+        assert_ne!(hash(&NATIVE), hash(&HOST));
+        assert_eq!(hash(&NATIVE), hash(&OTHER_BODY));
     }
 
     #[test]

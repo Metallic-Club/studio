@@ -1,4 +1,7 @@
 //! What a class file imports.
+// No class file has a Native method until #465.
+#[allow(unused_imports)]
+pub use super::call::*;
 pub use super::desc::*;
 pub use super::lists::*;
 pub use crate::cframe::CFrame;

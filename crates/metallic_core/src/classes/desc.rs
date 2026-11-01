@@ -2,6 +2,7 @@
 //!
 //! Everything here is plain `const` data with nothing specific to one scripting language.
 //! [`resolve`](super::resolve()) turns these into flat per-class tables.
+use super::call::MethodFn;
 use crate::value::{Color3, Value, ValueType};
 
 /// What a class is allowed to be. See `docs/design/class-system.md` section 3.1.
@@ -308,6 +309,12 @@ pub struct FunctionSig {
     pub returns: &'static Ty,
 }
 
+/// What an accessor names as its expected function type when no parameter declares one.
+pub(super) static ANY_FUNCTION: FunctionSig = FunctionSig {
+    params: &[],
+    returns: &Ty::Any,
+};
+
 /// How a parameter's type is checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgCheck {
@@ -354,17 +361,31 @@ impl Param {
     }
 }
 
-/// Where a method's body lives. `Native(MethodFn)` arrives with #461 (fingerprint byte 0).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where a method's body lives.
+#[derive(Debug, Clone, Copy)]
 pub enum MethodImpl {
+    /// In the class file; needs only the world.
+    Native(MethodFn),
     /// In `metallic_script`, because it needs the script host.
     Host,
     /// In a Luau snippet next to the class file (#470).
     Luau,
 }
 
-/// One method a class declares. Signature only until #461-#465 route calls through it: the Luau
-/// binding still dispatches its own table, so declaring a method here changes no script.
+impl PartialEq for MethodImpl {
+    fn eq(&self, other: &MethodImpl) -> bool {
+        match (self, other) {
+            (MethodImpl::Native(a), MethodImpl::Native(b)) => std::ptr::fn_addr_eq(*a, *b),
+            (MethodImpl::Host, MethodImpl::Host) | (MethodImpl::Luau, MethodImpl::Luau) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MethodImpl {}
+
+/// One method a class declares. No script call goes through this until #462-#465: the Luau binding
+/// still dispatches its own table, so declaring a method here changes no script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MethodDesc {
     /// Method name.
@@ -406,6 +427,13 @@ impl MethodDesc {
         }
     }
 
+    /// A method implemented in the class file, returning nothing and taking no arguments.
+    pub const fn native(name: &'static str, body: MethodFn) -> MethodDesc {
+        let mut method = MethodDesc::host(name);
+        method.implementation = MethodImpl::Native(body);
+        method
+    }
+
     /// Declares the parameters.
     pub const fn params(mut self, params: &'static [Param]) -> MethodDesc {
         self.params = params;
@@ -415,6 +443,18 @@ impl MethodDesc {
     /// Declares the result type.
     pub const fn returns(mut self, returns: Ty) -> MethodDesc {
         self.returns = returns;
+        self
+    }
+
+    /// Takes any number of trailing arguments of this type.
+    pub const fn variadic(mut self, ty: Ty) -> MethodDesc {
+        self.variadic = Some(ty);
+        self
+    }
+
+    /// May park the calling thread by returning `CallOutcome::Wait`.
+    pub const fn yields(mut self) -> MethodDesc {
+        self.yields = true;
         self
     }
 

@@ -12,6 +12,7 @@ mod cframe;
 mod datatypes;
 mod errors;
 mod gui;
+pub(crate) mod host_methods;
 mod input;
 mod instance;
 mod pivot;

@@ -26,6 +26,9 @@ mod pattern;
 mod task_lib;
 mod vm;
 
+pub use api::host_methods::{
+    HostCall, HostMethodFn, HostState, NOT_MIGRATED_HOST_METHODS, host_methods,
+};
 pub use api::{
     BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
     MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
