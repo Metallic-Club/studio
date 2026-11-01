@@ -42,35 +42,55 @@ jobs:
         run: python3 -m unittest discover -s head/tools/perf -p 'test_*.py' -v
       - name: Use identical workload source and compiler for both revisions
         run: |
-          mkdir -p base/crates/metallic_core/examples
+          mkdir -p base/crates/metallic_core/examples base/crates/metallic_script/examples
+          # Checked before the copy: only a base without this source can mark the Luau suite new.
+          if [ ! -f base/crates/metallic_script/examples/perf_ci_lua.rs ]; then
+            echo 'LUA_GATE_ARGS=--new' >> "$GITHUB_ENV"
+          fi
           cp head/crates/metallic_core/examples/perf_ci.rs base/crates/metallic_core/examples/perf_ci.rs
+          cp head/crates/metallic_script/examples/perf_ci_lua.rs base/crates/metallic_script/examples/perf_ci_lua.rs
           cp head/rust-toolchain.toml base/rust-toolchain.toml
       - name: Build base
         working-directory: base
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/base
-        run: cargo build --locked --release -p metallic_core --example perf_ci
+        run: |
+          cargo build --locked --release -p metallic_core --example perf_ci
+          cargo build --locked --release -p metallic_script --example perf_ci_lua
       - name: Build head
         working-directory: head
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/head
-        run: cargo build --locked --release -p metallic_core --example perf_ci
+        run: |
+          cargo build --locked --release -p metallic_core --example perf_ci
+          cargo build --locked --release -p metallic_script --example perf_ci_lua
       - name: Measure base and head
+        id: measure
         working-directory: head
         run: |
           python3 tools/perf/measure.py collect --binary ../target/base/release/examples/perf_ci --source crates/metallic_core/examples/perf_ci.rs --output ../results/base/report.json --revision '${{ github.event.pull_request.base.sha }}'
           python3 tools/perf/measure.py collect --binary ../target/head/release/examples/perf_ci --source crates/metallic_core/examples/perf_ci.rs --output ../results/head/report.json --revision '${{ github.event.pull_request.head.sha }}'
+          python3 tools/perf/measure.py collect --suite lua --binary ../target/base/release/examples/perf_ci_lua --source crates/metallic_script/examples/perf_ci_lua.rs --output ../results/base/lua-report.json --revision '${{ github.event.pull_request.base.sha }}'
+          python3 tools/perf/measure.py collect --suite lua --binary ../target/head/release/examples/perf_ci_lua --source crates/metallic_script/examples/perf_ci_lua.rs --output ../results/head/lua-report.json --revision '${{ github.event.pull_request.head.sha }}'
       - name: Gate at five percent instruction growth
         working-directory: head
         run: python3 tools/perf/measure.py compare --base ../results/base/report.json --head ../results/head/report.json --threshold 5 --summary ../results/comparison.md
+      # Runs even when the core gate failed, so a PR sees both results at once.
+      - name: Gate Luau workloads at five percent instruction growth
+        if: ${{ !cancelled() && steps.measure.outcome == 'success' }}
+        working-directory: head
+        run: python3 tools/perf/measure.py compare --suite lua --base ../results/base/lua-report.json --head ../results/head/lua-report.json --threshold 5 --summary ../results/lua-comparison.md $LUA_GATE_ARGS
       - name: Publish comparison
         if: always()
         run: |
-          if [ -f results/comparison.md ]; then
-            cat results/comparison.md >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'Instruction comparison unavailable; inspect the failed collection/build step.' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for summary in results/comparison.md results/lua-comparison.md; do
+            if [ -f "$summary" ]; then
+              cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+              echo >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Instruction comparison unavailable ($summary); inspect the failed collection/build step." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

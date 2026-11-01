@@ -1,11 +1,12 @@
 name: Release
-# Runs only when a tag like v0.1.1-dev or v0.2.0-stable is pushed, and only for commits that are
-# already on main. Builds the installer and publishes it as a GitHub Release with the workflow's
-# own GITHUB_TOKEN (no other secrets). Actions are pinned to full commit SHAs.
+# Runs only when a tag like v0.1.1-dev or v0.2.0-stable (Studio) or launcher-v0.1.1-dev (Launcher)
+# is pushed, and only for commits that are already on main. Builds the installer and publishes it
+# as a GitHub Release with the workflow's own GITHUB_TOKEN (no other secrets). Actions are pinned to full commit SHAs.
 on:
   push:
     tags:
       - "v*"
+      - "launcher-v*"
 
 permissions:
   contents: write
@@ -21,6 +22,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      # Catches mistakes only, not a lock: a tag runs the release.yml of the tagged commit, which
+      # could drop this step. The tag ruleset is the real control (docs/releasing.md).
       - name: Refuse tags that are not on main
         shell: bash
         run: |
@@ -33,10 +36,16 @@ jobs:
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
+          app=studio
+          if [[ "$tag" == launcher-v* ]]; then
+            app=launcher
+            tag="${tag#launcher-}"
+          fi
           if [[ ! "$tag" =~ ^v(([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*))-(dev|stable)$ ]]; then
-            echo "Tag '$tag' must look like v0.1.1-dev or v0.2.0-stable" >&2
+            echo "Tag '$GITHUB_REF_NAME' must look like v0.1.1-dev, v0.2.0-stable or launcher-v0.1.1-dev" >&2
             exit 1
           fi
+          echo "RELEASE_APP=$app" >> "$GITHUB_ENV"
           echo "RELEASE_VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
           echo "RELEASE_CHANNEL=${BASH_REMATCH[5]}" >> "$GITHUB_ENV"
       - name: Check the tag matches the workspace version
@@ -53,8 +62,10 @@ jobs:
           dotnet tool install --global vpk --version "$pinned"
       - name: Install Pillow (icon conversion)
         run: python -m pip install Pillow==11.3.0
-      - name: Build, pack and publish
+      # release.py builds with `cargo build --locked --profile dist` ([profile.dist] in the root Cargo.toml)
+      # and stages the exes from target/dist/.
+      - name: Build (dist profile), pack and publish
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python tools/release.py --channel "$RELEASE_CHANNEL" --version "$RELEASE_VERSION"
+        run: python tools/release.py --app "$RELEASE_APP" --channel "$RELEASE_CHANNEL" --version "$RELEASE_VERSION"

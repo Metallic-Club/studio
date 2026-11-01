@@ -1,4 +1,4 @@
-//! The Roblox-named Luau API: `game`, `workspace`, `Instance`, the datatypes, services,
+//! The Roblox-named Luau API: `game`, `workspace`, `Instance`, the datatypes (with `CFrame`), services,
 //! signals and `RemoteEvent`.
 //!
 //! Every VM gets one [`ApiState`] that the userdata and functions of this module share. It
@@ -6,12 +6,21 @@
 //! keeps a `World` borrow while Lua code runs: handlers may change the world, so the host
 //! collects what to call, releases the borrow and only then calls into Lua.
 
+mod attributes;
+mod camera;
+mod cframe;
 mod datatypes;
 mod errors;
+mod gui;
+pub(crate) mod host_methods;
+mod input;
 mod instance;
+mod pivot;
 mod remote;
+mod require;
 mod services;
 mod signals;
+mod tags;
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
@@ -22,6 +31,12 @@ use mlua::{Error, Function, Table, WeakLua};
 
 use crate::vm::{Budget, Context, OutputSink, ScriptError, ScriptVm, format_error};
 
+pub use gui::{GuiEvent, GuiEventKind, GuiPointer, MAX_GUI_EVENTS_PER_STEP};
+pub use input::{
+    BoundResult, InputActionEvent, InputDevice, InputEventKind, InputValue, KEY_CODES,
+    MAX_ACTION_EVENTS_PER_STEP, TouchButtonInfo, USER_INPUT_TYPES,
+};
+pub(crate) use instance::LuaInstance;
 pub(crate) use remote::{QueuedRemote, RemoteTarget};
 pub(crate) use signals::{EventKind, Hub, Pacing};
 
@@ -36,6 +51,27 @@ pub(crate) struct HostShared {
     pub(crate) joined: RefCell<HashSet<InstanceId>>,
     /// The player of the client VM (`Players.LocalPlayer`).
     pub(crate) local_player: Cell<Option<InstanceId>>,
+    /// Input events, action states and device flags pushed by the host.
+    pub(crate) input: input::InputShared,
+    /// The viewport the camera maths use, in pixels (zero until the host reports it).
+    pub(crate) viewport: Cell<[f64; 2]>,
+    /// The GUI inset in pixels, for the `Screen` camera methods.
+    pub(crate) gui_inset: Cell<f64>,
+    /// A test and throttling hook: after this many handler calls in a step, the step counts as
+    /// out of time (see `ScriptHost::set_step_handler_limit`).
+    pub(crate) step_handler_limit: Cell<Option<usize>>,
+}
+
+impl HostShared {
+    /// The viewport size, [`camera::DEFAULT_VIEWPORT`] until the host reports one.
+    pub(crate) fn viewport_size(&self) -> [f64; 2] {
+        let v = self.viewport.get();
+        if v[0] > 0.0 && v[1] > 0.0 {
+            v
+        } else {
+            camera::DEFAULT_VIEWPORT
+        }
+    }
 }
 
 /// Everything the API functions of one VM need.
@@ -57,6 +93,24 @@ pub(crate) struct ApiState {
     pub(crate) waiters: Rc<RefCell<Vec<instance::Waiter>>>,
     /// Instance methods by name (`FindFirstChild`, `GetPlayers`, ...).
     methods: HashMap<&'static str, Function>,
+    /// `Enum` and its items.
+    enums: input::Enums,
+    /// Actions bound with `ContextActionService:BindAction`, by name.
+    bound: RefCell<HashMap<String, input::Bound>>,
+    /// `Cancel` calls for actions unbound while pressed.
+    cancels: RefCell<Vec<input::PendingCancel>>,
+    /// Hidden actions to destroy once the world is free: `(action, context)`.
+    pending_destroy: RefCell<Vec<(InstanceId, InstanceId)>>,
+    /// Wraps a bound handler so its `Sink`/`Pass` result reaches the host.
+    bind_wrapper: Function,
+    /// `UserInputService` and `ContextActionService`.
+    input_services: input::InputServices,
+    /// Attribute signal names and this VM's read position in the world's attribute log.
+    attributes: attributes::AttributeState,
+    /// Tag signal names, this VM's read position in the world's tag log and `CollectionService`.
+    tags: tags::TagState,
+    /// Which thread is loading which ModuleScript, and who waits for it.
+    pub(crate) require: require::RequireState,
 }
 
 impl ApiState {
@@ -111,6 +165,11 @@ fn build(
     let mut raw = instance::methods(lua, &waiters, &now)?;
     raw.extend(services::methods(lua)?);
     raw.extend(remote::methods(lua)?);
+    raw.extend(pivot::methods(lua)?);
+    raw.extend(input::action_methods(lua)?);
+    raw.extend(attributes::methods(lua)?);
+    raw.extend(tags::methods(lua)?);
+    raw.extend(camera::methods(lua)?);
     for (name, function) in raw {
         // `WaitForChild` is Luau code that calls guarded functions itself.
         let function = if name == "WaitForChild" {
@@ -121,6 +180,12 @@ fn build(
         methods.insert(name, function);
     }
 
+    let enums = input::Enums::install(lua)?;
+    let bind_wrapper = input::bind_wrapper(lua, &enums)?;
+    let (world_cursor, tag_cursor) = {
+        let w = world.borrow();
+        (w.attribute_cursor(), w.tag_cursor())
+    };
     let state = Rc::new(ApiState {
         world,
         context: vm.context(),
@@ -135,7 +200,18 @@ fn build(
         now,
         waiters,
         methods,
+        enums,
+        bound: RefCell::new(HashMap::new()),
+        cancels: RefCell::new(Vec::new()),
+        pending_destroy: RefCell::new(Vec::new()),
+        bind_wrapper,
+        input_services: input::InputServices::new(),
+        attributes: attributes::AttributeState::new(world_cursor),
+        tags: tags::TagState::new(tag_cursor),
+        require: require::RequireState::default(),
     });
+    tags::install_service(lua, &state)?;
+    input::install_services(lua, &state)?;
 
     let set = |name: &str, value: mlua::Value| vm.set_global(name, value);
     let to_err = |e: ScriptError| Error::runtime(e.message);
@@ -144,9 +220,16 @@ fn build(
         mlua::Value::Table(instance::constructor(lua, &state)?),
     )
     .map_err(to_err)?;
+    set("CFrame", mlua::Value::Table(cframe::constructor(lua)?)).map_err(to_err)?;
+    set("Ray", mlua::Value::Table(camera::ray_constructor(lua)?)).map_err(to_err)?;
     for (name, table) in datatypes::constructors(lua)? {
         set(name, mlua::Value::Table(table)).map_err(to_err)?;
     }
+    set("Enum", mlua::Value::Table(state.enums.table.clone())).map_err(to_err)?;
+    let (lib, shared_g) = vm.env_parts();
+    let require = require::install(lua, &state, lib, shared_g)?;
+    crate::debug::set_require(lua, &require);
+    set("require", mlua::Value::Function(require)).map_err(to_err)?;
     set("game", mlua::Value::UserData(services::game(lua, &state)?)).map_err(to_err)?;
     let workspace = state.world()?.root("Workspace");
     let workspace = match workspace {

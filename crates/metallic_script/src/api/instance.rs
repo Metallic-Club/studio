@@ -4,13 +4,15 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use metallic_core::classes::{find_property, is_subclass};
+use metallic_core::classes::{class_def, find_property, is_subclass};
+use metallic_core::transform;
 use metallic_core::{CoreError, InstanceId, Value as CoreValue};
 use mlua::{
     AnyUserData, Function, Lua, MetaMethod, Table, Thread, UserData, UserDataFields,
     UserDataMethods, UserDataRef, Value,
 };
 
+use super::cframe::{LuaCFrame, cframe};
 use super::datatypes::lua_to_value;
 use super::errors;
 use super::signals::{EventKind, LuaSignal};
@@ -20,8 +22,9 @@ use crate::vm::format_error;
 /// How long `WaitForChild` without a timeout waits before it warns (like Roblox).
 const INFINITE_YIELD_WARN_SEC: f64 = 5.0;
 
-/// Methods that exist only on some classes: `(method, class)`. Everything else in the
-/// method table is available on every instance.
+/// Methods that exist only on some classes: `(method, class)`; a method listed more than once
+/// exists on each of those classes. Everything else in the method table is available on every
+/// instance.
 const CLASS_METHODS: &[(&str, &str)] = &[
     ("GetService", "DataModel"),
     ("GetPlayers", "Players"),
@@ -32,19 +35,42 @@ const CLASS_METHODS: &[(&str, &str)] = &[
     ("FireServer", "RemoteEvent"),
     ("FireClient", "RemoteEvent"),
     ("FireAllClients", "RemoteEvent"),
+    ("ViewportPointToRay", "Camera"),
+    ("ScreenPointToRay", "Camera"),
+    ("WorldToViewportPoint", "Camera"),
+    ("WorldToScreenPoint", "Camera"),
+    ("GetState", "InputAction"),
+    ("GetHoldProgress", "InputAction"),
+    // PVInstance methods: BasePart and Model (PVInstance itself is not a registry class).
+    ("GetPivot", "BasePart"),
+    ("GetPivot", "Model"),
+    ("PivotTo", "BasePart"),
+    ("PivotTo", "Model"),
+    ("Resize", "BasePart"),
+    ("ScaleTo", "Model"),
+    ("GetScale", "Model"),
+    ("GetBoundingBox", "Model"),
+    ("GetExtentsSize", "Model"),
 ];
 
 /// The event named `name` on an instance of `class`, if there is one.
 fn event_kind(class: &str, name: &str) -> Option<EventKind> {
     match name {
+        "AttributeChanged" => Some(EventKind::AttributeChanged(0)),
         "Touched" if is_subclass(class, "BasePart") => Some(EventKind::Touched),
+        "TouchEnded" if is_subclass(class, "BasePart") => Some(EventKind::TouchEnded),
         "Died" if class == "Humanoid" => Some(EventKind::Died),
         "CharacterAdded" if class == "Player" => Some(EventKind::CharacterAdded),
         "PlayerAdded" if class == "Players" => Some(EventKind::PlayerAdded),
+        "PlayerRemoving" if class == "Players" => Some(EventKind::PlayerRemoving),
         "Heartbeat" if class == "RunService" => Some(EventKind::Heartbeat),
         "OnServerEvent" if class == "RemoteEvent" => Some(EventKind::OnServerEvent),
         "OnClientEvent" if class == "RemoteEvent" => Some(EventKind::OnClientEvent),
-        _ => None,
+        "Pressed" if class == "InputAction" => Some(EventKind::Pressed),
+        "Released" if class == "InputAction" => Some(EventKind::Released),
+        "Triggered" if class == "InputAction" => Some(EventKind::Triggered),
+        "StateChanged" if class == "InputAction" => Some(EventKind::StateChanged),
+        _ => super::gui::GuiEventKind::of(class, name).map(EventKind::Gui),
     }
 }
 
@@ -71,6 +97,11 @@ fn core_error(e: CoreError) -> mlua::Error {
 }
 
 impl LuaInstance {
+    /// Errors when the instance has been destroyed.
+    pub(crate) fn ensure_alive(&self) -> mlua::Result<()> {
+        self.live()
+    }
+
     fn live(&self) -> mlua::Result<()> {
         if self.state.world()?.is_alive(self.id) {
             Ok(())
@@ -290,6 +321,33 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             let parent = state.world()?.parent(this.id);
             return state.wrap_opt(lua, parent);
         }
+        "CFrame" if is_subclass(class, "BasePart") => {
+            let cf = super::cframe::part_cframe(&*state.world()?, this.id).map_err(core_error)?;
+            return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
+        }
+        "WorldPivot" if is_subclass(class, "Model") => {
+            let cf = transform::world_pivot(&*state.world()?, this.id).map_err(core_error)?;
+            return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
+        }
+        "CurrentCamera" if class == "Workspace" => {
+            let camera = super::camera::current_camera(&*state.world()?);
+            return state.wrap_opt(lua, camera);
+        }
+        "ViewportSize" if class == "Camera" => {
+            let [w, h] = state.shared.viewport_size();
+            return Ok(Value::UserData(
+                lua.create_userdata(super::datatypes::LuaVector2([w, h]))?,
+            ));
+        }
+        // An enum in scripts (`camera.CameraType == Enum.CameraType.Scriptable`); the property
+        // itself is stored as its name.
+        "CameraType" if class == "Camera" => {
+            let name = match state.world()?.get_ref(this.id, "CameraType") {
+                Ok(CoreValue::String(s)) => s.clone(),
+                _ => "Custom".to_string(),
+            };
+            return Ok(state.enum_value("CameraType", &name));
+        }
         "LocalPlayer" if class == "Players" => {
             let player = match state.context {
                 crate::vm::Context::Client => state.shared.local_player.get(),
@@ -299,11 +357,13 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
         }
         _ => {}
     }
+    state.check_input_member(class, key)?;
     if let Some(method) = state.methods.get(key) {
-        let allowed = CLASS_METHODS
+        let mut owners = CLASS_METHODS
             .iter()
-            .find(|(name, _)| *name == key)
-            .is_none_or(|(_, owner)| is_subclass(class, owner));
+            .filter(|(name, _)| *name == key)
+            .peekable();
+        let allowed = owners.peek().is_none() || owners.any(|(_, owner)| is_subclass(class, owner));
         if allowed {
             return Ok(Value::Function(method.clone()));
         }
@@ -324,7 +384,7 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             key: (this.id, kind),
         })?));
     }
-    if find_property(class, key).is_some() {
+    if find_property(class, key).is_some_and(|d| !d.hidden) {
         return state.get_property(lua, this.id, key);
     }
     let child = state.world()?.find_first_child(this.id, key);
@@ -341,16 +401,45 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
     let class = this.class()?;
     match key {
         "ClassName" => Err(lua_error("ClassName is read-only")),
+        "CurrentCamera" if class == "Workspace" => Err(lua_error("CurrentCamera is read-only")),
+        "ViewportSize" if class == "Camera" => Err(lua_error("ViewportSize is read-only")),
         "Parent" => set_parent(this, value),
+        "CFrame" if is_subclass(class, "BasePart") => {
+            let cf = cframe(value).ok_or_else(|| {
+                lua_error(format!(
+                    "invalid value for property CFrame: expected CFrame, got {}",
+                    value.type_name()
+                ))
+            })?;
+            super::cframe::set_part_cframe(&mut *this.state.world_mut()?, this.id, cf)
+                .map_err(core_error)
+        }
+        "WorldPivot" if is_subclass(class, "Model") => {
+            let cf = cframe(value).ok_or_else(|| {
+                lua_error(format!(
+                    "invalid value for property WorldPivot: expected CFrame, got {}",
+                    value.type_name()
+                ))
+            })?;
+            transform::set_world_pivot(&mut *this.state.world_mut()?, this.id, cf)
+                .map_err(core_error)
+        }
         _ => {
-            let Some(def) = find_property(class, key) else {
+            let Some(def) = find_property(class, key).filter(|d| !d.hidden) else {
                 return if this.state.methods.contains_key(key) || event_kind(class, key).is_some() {
                     Err(lua_error(format!("{key} is read-only")))
                 } else {
                     Err(not_a_member(key, class))
                 };
             };
-            let converted = lua_to_value(value, def.ty, key)?;
+            let mut converted = lua_to_value(value, def.ty, key)?;
+            // Like Roblox, a part's Size is clamped to 0.001..=2048 studs per axis.
+            if key == "Size"
+                && let CoreValue::Vector3(size) = converted
+                && is_subclass(class, "BasePart")
+            {
+                converted = CoreValue::Vector3(transform::clamp_part_size(size));
+            }
             this.state
                 .world_mut()?
                 .set(this.id, key, converted)
@@ -430,7 +519,12 @@ pub(crate) fn methods(
     })?;
     let is_a = lua.create_function(|_, (this, class): (UserDataRef<LuaInstance>, String)| {
         this.live()?;
-        Ok(this.state.world()?.is_a(this.id, &class))
+        let world = this.state.world()?;
+        Ok(if class == "PVInstance" {
+            world.is_a(this.id, "BasePart") || world.is_a(this.id, "Model")
+        } else {
+            world.is_a(this.id, &class)
+        })
     })?;
     let destroy = lua.create_function(|_, this: UserDataRef<LuaInstance>| {
         let mut world = this.state.world_mut()?;
@@ -538,7 +632,9 @@ pub(crate) fn constructor(lua: &Lua, state: &Rc<ApiState>) -> mlua::Result<Table
     table.set(
         "new",
         errors::guarded_fn(lua, move |lua, (class, parent): (String, Option<Value>)| {
-            if super::services::is_service(&class) {
+            // Unknown classes fall through to `create`, after the parent check, as before.
+            let refused = class_def(&class).is_some_and(|def| !def.is_creatable());
+            if refused || super::services::is_service(&class) {
                 return Err(lua_error(format!(
                     "Unable to create an Instance of type \"{class}\""
                 )));

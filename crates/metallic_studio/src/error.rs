@@ -35,9 +35,20 @@ pub enum StudioError {
         /// What is wrong with it.
         message: String,
     },
+    /// A scene or project file could not be read or written.
+    #[error("Could not open or save {path}: {message}")]
+    Scene {
+        /// The file or folder involved.
+        path: PathBuf,
+        /// What went wrong.
+        message: String,
+    },
     /// The chosen folder is not a Metallic game.
     #[error("This folder isn't a Metallic game (it has no metallic.toml).")]
     NotAGame(PathBuf),
+    /// A saved colour palette could not be created or changed.
+    #[error("{0}")]
+    Palette(String),
 }
 
 impl StudioError {

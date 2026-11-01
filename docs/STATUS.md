@@ -13,6 +13,9 @@ Milestone 1 is still in progress. Tasks #1 through #9 are closed, and their impl
 Tasks #10 through #14 remain open. Issue labels on closed tasks can lag their actual state; filter for open issues.
 This snapshot does not declare the complete editor, installer round trip or milestone acceptance finished.
 
+- #197 Launcher L1 Task 9 (packaging, release process, Linux compile check, acceptance; product name Metallic Play, owner choice 2026-10-30): implemented and tested in code on branch
+  `studio/launcher-l1-20261030`; the install round trip is pending (lead/owner), see `docs/agents/197-launcher-release.md`.
+
 | Area on main | Implemented evidence | Remaining work |
 | --- | --- | --- |
 | Engine foundations, Tasks #1-#7 | Seven-crate workspace; typed Instance world and scene format; renderer; Rapier physics and characters; sandboxed Luau, scheduler and Instance/RemoteEvent API | Tracked correctness/performance fixes remain on the issue board; open PRs are not merged implementations |

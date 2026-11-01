@@ -1,0 +1,129 @@
+/* Metallic tokens for the 2026-10-30 Studio start and splash mockups.
+   Base: design/tokens/metallic.tokens.json on main (PR #199 values, unchanged).
+   Additions proposed in docs/research/2026-10-30-ui-overhaul.md are marked "new".
+   Light ("Aluminium") and Titanium values are the website's (plateform web-ui globals.css), proposed for the shared JSON. */
+:root {
+  color-scheme: dark;
+  /* Graphite ramp (slight violet cast) */
+  --g-950: #0c0b0f; --g-900: #111015; --g-850: #16151b; --g-800: #1c1b22; --g-750: #24222b;
+  --g-700: #2c2a34; --g-650: #35323e; --g-600: #43404d; --g-500: #5f5b6b; --g-400: #817d8c;
+  --g-300: #a3a0ad; --g-200: #c3c0ca; --g-100: #e6e4ea; --g-50: #f4f3f7;
+  /* Violet ramp (the one accent) */
+  --v-50: #f3f0fc; --v-100: #e4def8; --v-200: #cdc2f2; --v-300: #b4a6ec; --v-400: #9d8be0;
+  --v-500: #8673cf; --v-600: #6f5cb6; --v-700: #584993; --v-800: #3a3354; --v-900: #2a2638; --v-950: #1f1c29;
+
+  /* Roles: Graphite (default dark) */
+  --bg-deep: var(--g-900); --bg-base: var(--g-850); --bg-panel: var(--g-800);
+  --bg-raised: var(--g-750); --bg-hover: var(--g-700); --bg-active: var(--g-650);
+  --select: var(--v-800); --select-weak: var(--v-900);
+  --line: #2b2933; --line-strong: var(--g-600); --line-control: #6f6b7a;
+  --text-1: #e6e4ea; --text-2: #aeaab6; --text-3: #8e8a97; --text-off: var(--g-500);
+  --icon: #bdbac4; --accent: var(--v-400); --accent-hover: var(--v-300); --accent-press: var(--v-500);
+  --accent-text: var(--v-300); --on-accent: var(--g-900); --focus: var(--v-300);
+  --highlight: rgba(255,255,255,0.06);      /* 1 px top edge: light catching a machined edge */
+  --edge-low: rgba(0,0,0,0.30);             /* new: 1 px bottom edge on raised plates */
+  --error: #ec7a72; --error-bg: #3a2226; --warning: #e0ad55; --warning-bg: #352c1d;
+  --success: #62bf91; --success-bg: #1d3329; --info: #7fb0e6; --info-bg: #1c2a3a;
+  --danger: #8f3a35; --danger-hover: #a3443e;
+  --art-scrim: rgb(18 17 22 / 0.78);        /* plate behind text on game art */
+  --backdrop: rgb(12 11 15 / 0.60);         /* new for Studio: modal scrim */
+
+  /* Type */
+  --font: 'Archivo', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* Space (4 px grid) */
+  --s1: 2px; --s2: 4px; --s3: 6px; --s4: 8px; --s5: 12px; --s6: 16px; --s7: 20px; --s8: 24px;
+  --s9: 32px; --s10: 40px; --s11: 48px; --s12: 64px; --s13: 96px; /* s12, s13 new (web sections) */
+  /* Radii and the cut */
+  --r-xs: 3px; --r-sm: 4px; --r-md: 6px; --r-lg: 10px;
+  --cut-sm: 6px; --cut-md: 10px; --cut-lg: 14px;
+  /* Elevation: only floating things cast a shadow */
+  --shadow-pop: 0 8px 24px rgba(0,0,0,0.45);     /* menus, popovers, toasts */
+  --shadow-modal: 0 16px 48px rgba(0,0,0,0.55);  /* new: dialogs, the splash window */
+  /* Motion */
+  --t-fast: 90ms; --t-base: 140ms; --t-slow: 200ms;
+  --t-panel: 240ms; --t-splash: 320ms;           /* new */
+  --ease-out: cubic-bezier(0.215, 0.61, 0.355, 1);
+  --ease-in-out: cubic-bezier(0.645, 0.045, 0.355, 1);
+  --ease-in: cubic-bezier(0.55, 0.055, 0.675, 0.19); /* new: exits */
+}
+
+:root[data-theme="titanium"] {
+  --bg-deep: #1c1b22; --bg-base: #24222b; --bg-panel: #2c2a34; --bg-raised: #35323e;
+  --bg-hover: #3c3946; --bg-active: #43404d; --select: #3a3354; --select-weak: #2f2b3b;
+  --line: #3a3744; --line-strong: #5f5b6b; --line-control: #8a8695;
+  --text-1: #f4f3f7; --text-2: #c3c0ca; --text-3: #b3afbd; --text-off: #6c6878;
+  --icon: #cfccd6; --accent-text: #c2b6f0; --highlight: rgba(255,255,255,0.07);
+  --error: #f2948c; --warning: #e8bb6a; --success: #74cc9f; --info: #95bfee;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-deep: #ffffff; --bg-base: #eceaf0; --bg-panel: #f4f3f7; --bg-raised: #ffffff;
+  --bg-hover: #e3e1e8; --bg-active: #d8d5de; --select: #e4def8; --select-weak: #f3f0fc;
+  --line: #d8d5de; --line-strong: #c3c0ca; --line-control: #7a7685;
+  --text-1: #16151b; --text-2: #43404d; --text-3: #57535f; --text-off: #a3a0ad;
+  --icon: #43404d; --accent: #6f5cb6; --accent-hover: #584993; --accent-press: #4d4082;
+  --accent-text: #584993; --on-accent: #ffffff; --focus: #584993;
+  --highlight: rgba(255,255,255,0.7); --edge-low: rgba(22,21,27,0.08);
+  --error: #b3261e; --error-bg: #fbe9e7; --warning: #7a5200; --warning-bg: #fbf0d9;
+  --success: #1d7048; --success-bg: #e2f2e9; --info: #1f5c9e; --info-bg: #e3edf8;
+  --danger: #b3261e; --danger-hover: #96201a;
+  --shadow-pop: 0 8px 24px rgba(22,21,27,0.16); --shadow-modal: 0 16px 48px rgba(22,21,27,0.22);
+  --art-scrim: rgb(12 11 15 / 0.74); --backdrop: rgb(22 21 27 / 0.40);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-fast: 0ms; --t-base: 0ms; --t-slow: 80ms; --t-panel: 80ms; --t-splash: 80ms; }
+}
+
+/* Type roles. Archivo width axis: 100 = interface voice, 125 = display voice. */
+.t-display { font: 700 32px/38px var(--font); font-stretch: 125%; letter-spacing: -0.012em; }
+.t-title   { font: 680 22px/28px var(--font); font-stretch: 125%; letter-spacing: -0.006em; }
+.t-heading { font: 620 15px/20px var(--font); font-stretch: 112.5%; }
+.t-body-lg { font: 400 14px/20px var(--font); }
+.t-body    { font: 400 13px/18px var(--font); }
+.t-strong  { font: 580 13px/18px var(--font); }
+.t-small   { font: 400 12px/16px var(--font); }
+.t-caption { font: 540 11px/14px var(--font); }
+.t-num     { font: 400 12px/16px var(--mono); font-variant-numeric: tabular-nums; }
+
+.ic { display: inline-flex; width: 16px; height: 16px; flex: none; color: var(--icon); }
+.ic svg { width: 100%; height: 100%; display: block; }
+.ic-20 { width: 20px; height: 20px; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.key { font: 560 11px/16px var(--font); padding: 0 5px; min-width: 18px; text-align: center; border-radius: var(--r-xs);
+  background: var(--bg-active); color: var(--text-2); display: inline-block; }
+
+/* Buttons */
+.btn { font: 580 13px/18px var(--font); height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-sm);
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-1); white-space: nowrap;
+  transition: background-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out); }
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--accent); color: var(--on-accent); height: 36px; padding: 0 16px;
+  clip-path: polygon(0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm), 100% 100%, 0 100%); }
+.btn-primary .key { background: rgb(17 16 21 / 0.16); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:active { background: var(--accent-press); }
+.btn-primary:focus-visible { outline: 2px solid var(--on-accent); outline-offset: -5px; }
+.btn-secondary { background: var(--bg-raised); box-shadow: inset 0 1px 0 var(--highlight), inset 0 -1px 0 var(--edge-low); }
+.btn-secondary:hover { background: var(--bg-hover); }
+.btn-secondary:active { background: var(--bg-active); }
+.btn-ghost { background: transparent; color: var(--text-2); }
+.btn-ghost .ic { color: var(--text-2); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text-1); }
+.btn-ghost:hover .ic { color: var(--text-1); }
+
+/* Inputs */
+.field-label { font: 540 12px/16px var(--font); color: var(--text-2); display: block; margin-bottom: 6px; }
+.field { height: 32px; width: 100%; box-sizing: border-box; padding: 0 10px; border-radius: var(--r-sm);
+  background: var(--bg-deep); border: 1px solid var(--line-control); color: var(--text-1); font: 400 13px/18px var(--font);
+  transition: border-color var(--t-fast) var(--ease-out); }
+.field:hover { border-color: var(--text-3); }
+.field:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--focus); }
+.field[aria-invalid="true"] { border-color: var(--error); }
+.field-help { font: 400 12px/16px var(--font); color: var(--text-3); margin-top: 6px; }
+.field-error { font: 400 12px/16px var(--font); color: var(--error); margin-top: 6px; display: flex; gap: 6px; }

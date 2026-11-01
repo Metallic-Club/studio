@@ -156,69 +156,11 @@ pub(crate) fn matrix_from_orientation(o: Vec3) -> [[f64; 3]; 3] {
     ]
 }
 
-/// Quaternion `[x, y, z, w]` for Roblox Euler angles in degrees.
-pub(crate) fn quat_from_orientation(o: Vec3) -> [f64; 4] {
-    let m = matrix_from_orientation(o);
-    let tr = m[0][0] + m[1][1] + m[2][2];
-    let (x, y, z, w);
-    if tr > 0.0 {
-        let s = (tr + 1.0).sqrt() * 2.0;
-        w = 0.25 * s;
-        x = (m[2][1] - m[1][2]) / s;
-        y = (m[0][2] - m[2][0]) / s;
-        z = (m[1][0] - m[0][1]) / s;
-    } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
-        let s = (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0;
-        w = (m[2][1] - m[1][2]) / s;
-        x = 0.25 * s;
-        y = (m[0][1] + m[1][0]) / s;
-        z = (m[0][2] + m[2][0]) / s;
-    } else if m[1][1] > m[2][2] {
-        let s = (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt() * 2.0;
-        w = (m[0][2] - m[2][0]) / s;
-        x = (m[0][1] + m[1][0]) / s;
-        y = 0.25 * s;
-        z = (m[1][2] + m[2][1]) / s;
-    } else {
-        let s = (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt() * 2.0;
-        w = (m[1][0] - m[0][1]) / s;
-        x = (m[0][2] + m[2][0]) / s;
-        y = (m[1][2] + m[2][1]) / s;
-        z = 0.25 * s;
-    }
-    [x, y, z, w]
-}
-
-/// Roblox Euler angles in degrees for a quaternion `[x, y, z, w]`.
-pub(crate) fn orientation_from_quat(q: [f64; 4]) -> Vec3 {
-    let [x, y, z, w] = q;
-    let n = (x * x + y * y + z * z + w * w).sqrt();
-    let (x, y, z, w) = (x / n, y / n, z / n, w / n);
-    let m = [
-        [
-            1.0 - 2.0 * (y * y + z * z),
-            2.0 * (x * y - z * w),
-            2.0 * (x * z + y * w),
-        ],
-        [
-            2.0 * (x * y + z * w),
-            1.0 - 2.0 * (x * x + z * z),
-            2.0 * (y * z - x * w),
-        ],
-        [
-            2.0 * (x * z - y * w),
-            2.0 * (y * z + x * w),
-            1.0 - 2.0 * (x * x + y * y),
-        ],
-    ];
-    let rx = (-m[1][2]).clamp(-1.0, 1.0).asin();
-    let (ry, rz) = if m[1][2].abs() < 0.999_999 {
-        (m[0][2].atan2(m[2][2]), m[1][0].atan2(m[1][1]))
-    } else {
-        ((-m[2][0]).atan2(m[0][0]), 0.0)
-    };
-    Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees())
-}
+/// Quaternion `[x, y, z, w]` for Roblox Euler angles in degrees, and back; both live in core
+/// so the wire encoding shares them.
+pub(crate) use metallic_core::{
+    orientation_to_quat as quat_from_orientation, quat_to_orientation as orientation_from_quat,
+};
 
 /// Builds the collider for a shape name and part size (studs).
 ///

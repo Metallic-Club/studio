@@ -1,4 +1,4 @@
-"""Collect bounded core measurements or fail closed on an instruction regression.
+"""Collect bounded core and Luau measurements or fail closed on an instruction regression.
 
 Uses only Python's standard library. Wall-time reports are trend artifacts, never PR gates.
 """
@@ -14,7 +14,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-WORKLOADS = {"reads": "metallic_perf_reads", "writes": "metallic_perf_writes", "clone": "metallic_perf_clone"}
+WORKLOADS = {
+    "reads": "metallic_perf_reads", "writes": "metallic_perf_writes", "clone": "metallic_perf_clone",
+    "create": "metallic_perf_create", "destroy": "metallic_perf_destroy",
+}
+LUA_WORKLOADS = {
+    "lua_reads": "metallic_perf_lua_reads", "lua_writes": "metallic_perf_lua_writes",
+    "lua_method_calls": "metallic_perf_lua_method_calls",
+}
+SUITES = {"core": WORKLOADS, "lua": LUA_WORKLOADS}
 
 
 def command(args: list[str]) -> str:
@@ -38,13 +46,13 @@ def instructions(text: str) -> int:
     return count
 
 
-def read_report(path: Path) -> dict:
+def read_report(path: Path, workloads: dict = WORKLOADS) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or type(data.get("schema")) is not int or data.get("schema") != 1 or data.get("metric") != "instructions":
         raise ValueError("comparison requires schema 1 instruction reports")
     if not isinstance(data.get("metadata"), dict) or not isinstance(data.get("workloads"), dict):
         raise ValueError("invalid report shape")
-    if set(data["workloads"]) != set(WORKLOADS):
+    if set(data["workloads"]) != set(workloads):
         raise ValueError("reports must contain every fixed workload")
     for record in data["workloads"].values():
         samples = record.get("samples") if isinstance(record, dict) else None
@@ -55,7 +63,8 @@ def read_report(path: Path) -> dict:
     return data
 
 
-def compare(base: dict, head: dict, threshold: float) -> tuple[bool, str]:
+def compare(base: dict, head: dict, threshold: float, workloads: dict = WORKLOADS, new: bool = False) -> tuple[bool, str]:
+    """Compare median Ir. With new, the base revision lacks the workload source: rows show their numbers but cannot fail."""
     if not math.isfinite(threshold) or threshold < 0 or threshold > 100:
         raise ValueError("threshold must be finite and between 0 and 100 percent")
     for key in ["rustc", "platform", "machine", "valgrind", "workload_sha256", "profile"]:
@@ -64,17 +73,18 @@ def compare(base: dict, head: dict, threshold: float) -> tuple[bool, str]:
             raise ValueError(f"incompatible or missing measurement metadata: {key}")
     rows = ["| Workload | Base Ir | Head Ir | Change | Result |", "|---|---:|---:|---:|---|"]
     passed = True
-    for name in WORKLOADS:
+    for name in workloads:
         before = statistics.median(base["workloads"][name]["samples"])
         after = statistics.median(head["workloads"][name]["samples"])
         change = (after - before) * 100 / before
-        allowed = change <= threshold
+        allowed = new or change <= threshold
         passed = passed and allowed
-        rows.append(f"| {name} | {before} | {after} | {change:+.2f}% | {'PASS' if allowed else 'FAIL'} |")
+        result = "NEW (not gated)" if new else "PASS" if allowed else "FAIL"
+        rows.append(f"| {name} | {before} | {after} | {change:+.2f}% | {result} |")
     return passed, "\n".join(rows) + "\n"
 
 
-def collect(args: argparse.Namespace) -> None:
+def collect(args: argparse.Namespace, workloads: dict = WORKLOADS) -> None:
     if args.repeats < 3 or args.repeats > 9 or args.repeats % 2 != 1:
         raise ValueError("repeats must be an odd integer from 3 to 9")
     if args.output.exists():
@@ -95,7 +105,7 @@ def collect(args: argparse.Namespace) -> None:
         },
         "workloads": {},
     }
-    for name, symbol in WORKLOADS.items():
+    for name, symbol in workloads.items():
         samples = []
         for repeat in range(args.repeats):
             invocation = [str(binary), name]
@@ -127,17 +137,21 @@ def main() -> int:
     measure.add_argument("--revision", required=True)
     measure.add_argument("--metric", choices=["instructions", "walltime"], default="instructions")
     measure.add_argument("--repeats", type=int, default=3)
+    measure.add_argument("--suite", choices=sorted(SUITES), default="core")
     gate = sub.add_parser("compare")
     gate.add_argument("--base", type=Path, required=True)
     gate.add_argument("--head", type=Path, required=True)
     gate.add_argument("--threshold", type=float, default=5)
     gate.add_argument("--summary", type=Path, required=True)
+    gate.add_argument("--suite", choices=sorted(SUITES), default="core")
+    gate.add_argument("--new", action="store_true", help="the base revision lacks this suite's source: report without gating")
     args = parser.parse_args()
     try:
+        workloads = SUITES[args.suite]
         if args.action == "collect":
-            collect(args)
+            collect(args, workloads)
             return 0
-        passed, summary = compare(read_report(args.base), read_report(args.head), args.threshold)
+        passed, summary = compare(read_report(args.base, workloads), read_report(args.head, workloads), args.threshold, workloads, args.new)
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         args.summary.write_text(summary, encoding="utf-8")
         print(summary)

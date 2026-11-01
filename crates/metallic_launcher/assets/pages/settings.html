@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metallic Play settings</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/pages.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<main class="card wide">
+  <header class="brand"><img src="/emblem.png" alt="" width="20" height="20"><span>Metallic Play</span></header>
+  <h1>Settings</h1>
+
+  <section class="section" aria-labelledby="theme-heading">
+    <h2 id="theme-heading">Theme</h2>
+    <p class="hint">System follows the Windows light or dark setting. The theme is saved as you choose it.</p>
+    <div class="segmented" role="radiogroup" aria-labelledby="theme-heading">
+      <label><input type="radio" name="theme" value="graphite"><span>Graphite</span></label>
+      <label><input type="radio" name="theme" value="titanium"><span>Titanium</span></label>
+      <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+      <label><input type="radio" name="theme" value="system"><span>System</span></label>
+    </div>
+    <p class="status" id="theme-status" role="status" aria-live="polite" hidden><svg class="icon icon-ok" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 96Q426 96 350 129Q274 161 217.5 217.5Q161 274 129 350Q96 426 96 512Q96 598 129 674Q161 750 217.5 806.5Q274 863 350 895Q426 928 512 928Q598 928 674 895Q750 863 806.5 806.5Q863 750 895 674Q928 598 928 512Q928 426 895 350Q862 274 806 218Q750 162 674 129Q598 96 512 96ZM695 439 471 663Q466 667 460.5 669.5Q455 672 448 672Q441 672 435.5 669.5Q430 667 425 663L329 567Q325 562 322.5 556.5Q320 551 320 544Q320 531 329.5 521.5Q339 512 352 512Q359 512 364.5 514.5Q370 517 375 521L448 595L649 393Q654 389 659.5 386.5Q665 384 672 384Q685 384 694.5 393.5Q704 403 704 416Q704 423 701.5 428.5Q699 434 695 439Z"/></svg><svg class="icon icon-error" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 96Q426 96 350 129Q274 161 217.5 217.5Q161 274 129 350Q96 426 96 512Q96 598 129 674Q161 750 217.5 806.5Q274 863 350 895Q426 928 512 928Q598 928 674 895Q750 863 806.5 806.5Q863 750 895 674Q928 598 928 512Q928 426 895 350Q862 274 806 218Q750 162 674 129Q598 96 512 96ZM480 320Q480 307 489.5 297.5Q499 288 512 288Q525 288 534.5 297.5Q544 307 544 320V544Q544 557 534.5 566.5Q525 576 512 576Q499 576 489.5 566.5Q480 557 480 544ZM512 736Q492 736 478 722Q464 708 464 688Q464 668 478 654Q492 640 512 640Q532 640 546 654Q560 668 560 688Q560 708 546 722Q532 736 512 736Z"/></svg><span></span></p>
+  </section>
+
+  <form id="settings-form" novalidate>
+    <section class="section" aria-labelledby="window-heading">
+      <h2 id="window-heading">Window</h2>
+      <p class="hint">What closing the Metallic Play window does.</p>
+      <label class="check">
+        <input type="checkbox" id="close-to-tray">
+        <span>Keep Metallic Play running in the tray when I close the window</span>
+      </label>
+    </section>
+
+    <section class="section" aria-labelledby="updates-heading">
+      <h2 id="updates-heading">Updates</h2>
+      <p class="hint">Which releases Metallic Play and Metallic Studio follow.</p>
+      <label class="field" for="channel">Update channel</label>
+      <select class="text" id="channel" aria-describedby="channel-help">
+        <option value="dev">Team builds (dev)</option>
+        <option value="stable">Stable</option>
+      </select>
+      <p class="hint" id="channel-help">The update channel applies after you restart Metallic Play.</p>
+      <div class="actions">
+        <button type="button" id="github-sign-in" class="btn btn-secondary">Sign in to GitHub for team builds</button>
+      </div>
+      <p class="status" id="github-status" role="status" aria-live="polite" hidden><svg class="icon icon-ok" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 96Q426 96 350 129Q274 161 217.5 217.5Q161 274 129 350Q96 426 96 512Q96 598 129 674Q161 750 217.5 806.5Q274 863 350 895Q426 928 512 928Q598 928 674 895Q750 863 806.5 806.5Q863 750 895 674Q928 598 928 512Q928 426 895 350Q862 274 806 218Q750 162 674 129Q598 96 512 96ZM695 439 471 663Q466 667 460.5 669.5Q455 672 448 672Q441 672 435.5 669.5Q430 667 425 663L329 567Q325 562 322.5 556.5Q320 551 320 544Q320 531 329.5 521.5Q339 512 352 512Q359 512 364.5 514.5Q370 517 375 521L448 595L649 393Q654 389 659.5 386.5Q665 384 672 384Q685 384 694.5 393.5Q704 403 704 416Q704 423 701.5 428.5Q699 434 695 439Z"/></svg><svg class="icon icon-error" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 96Q426 96 350 129Q274 161 217.5 217.5Q161 274 129 350Q96 426 96 512Q96 598 129 674Q161 750 217.5 806.5Q274 863 350 895Q426 928 512 928Q598 928 674 895Q750 863 806.5 806.5Q863 750 895 674Q928 598 928 512Q928 426 895 350Q862 274 806 218Q750 162 674 129Q598 96 512 96ZM480 320Q480 307 489.5 297.5Q499 288 512 288Q525 288 534.5 297.5Q544 307 544 320V544Q544 557 534.5 566.5Q525 576 512 576Q499 576 489.5 566.5Q480 557 480 544ZM512 736Q492 736 478 722Q464 708 464 688Q464 668 478 654Q492 640 512 640Q532 640 546 654Q560 668 560 688Q560 708 546 722Q532 736 512 736Z"/></svg><span></span></p>
+    </section>
+
+    <section class="section" aria-labelledby="developer-heading">
+      <h2 id="developer-heading">Developer</h2>
+      <p class="hint">For people building the Metallic site.</p>
+      <label class="check">
+        <input type="checkbox" id="developer-mode">
+        <span>Developer mode</span>
+      </label>
+      <label class="field" for="dev-url">Development address</label>
+      <input class="text" type="text" id="dev-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Address of your development server" aria-describedby="dev-url-error dev-url-help">
+      <p class="field-error" id="dev-url-error" hidden><svg class="icon icon-error" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 96Q426 96 350 129Q274 161 217.5 217.5Q161 274 129 350Q96 426 96 512Q96 598 129 674Q161 750 217.5 806.5Q274 863 350 895Q426 928 512 928Q598 928 674 895Q750 863 806.5 806.5Q863 750 895 674Q928 598 928 512Q928 426 895 350Q862 274 806 218Q750 162 674 129Q598 96 512 96ZM480 320Q480 307 489.5 297.5Q499 288 512 288Q525 288 534.5 297.5Q544 307 544 320V544Q544 557 534.5 566.5Q525 576 512 576Q499 576 489.5 566.5Q480 557 480 544ZM512 736Q492 736 478 722Q464 708 464 688Q464 668 478 654Q492 640 512 640Q532 640 546 654Q560 668 560 688Q560 708 546 722Q532 736 512 736Z"/></svg><span>Use an https address, or http on localhost.</span></p>
+      <p class="hint" id="dev-url-help">Developer mode and the development address apply after you restart Metallic Play.</p>
+    </section>
+
+    <div class="actions">
+      <button type="submit" id="save" class="btn btn-primary" disabled>Save</button>
+      <a class="btn btn-ghost" href="/offline.html" data-back>Back</a>
+    </div>
+    <p class="status" id="settings-status" role="status" aria-live="polite" hidden><svg class="icon icon-ok" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 96Q426 96 350 129Q274 161 217.5 217.5Q161 274 129 350Q96 426 96 512Q96 598 129 674Q161 750 217.5 806.5Q274 863 350 895Q426 928 512 928Q598 928 674 895Q750 863 806.5 806.5Q863 750 895 674Q928 598 928 512Q928 426 895 350Q862 274 806 218Q750 162 674 129Q598 96 512 96ZM695 439 471 663Q466 667 460.5 669.5Q455 672 448 672Q441 672 435.5 669.5Q430 667 425 663L329 567Q325 562 322.5 556.5Q320 551 320 544Q320 531 329.5 521.5Q339 512 352 512Q359 512 364.5 514.5Q370 517 375 521L448 595L649 393Q654 389 659.5 386.5Q665 384 672 384Q685 384 694.5 393.5Q704 403 704 416Q704 423 701.5 428.5Q699 434 695 439Z"/></svg><svg class="icon icon-error" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 96Q426 96 350 129Q274 161 217.5 217.5Q161 274 129 350Q96 426 96 512Q96 598 129 674Q161 750 217.5 806.5Q274 863 350 895Q426 928 512 928Q598 928 674 895Q750 863 806.5 806.5Q863 750 895 674Q928 598 928 512Q928 426 895 350Q862 274 806 218Q750 162 674 129Q598 96 512 96ZM480 320Q480 307 489.5 297.5Q499 288 512 288Q525 288 534.5 297.5Q544 307 544 320V544Q544 557 534.5 566.5Q525 576 512 576Q499 576 489.5 566.5Q480 557 480 544ZM512 736Q492 736 478 722Q464 708 464 688Q464 668 478 654Q492 640 512 640Q532 640 546 654Q560 668 560 688Q560 708 546 722Q532 736 512 736Z"/></svg><span></span></p>
+  </form>
+
+  <p class="legal">Text is set in Archivo and JetBrains Mono, under the SIL Open Font License 1.1 (<a href="/fonts/OFL-Archivo.txt">Archivo licence</a>, <a href="/fonts/OFL-JetBrainsMono.txt">JetBrains Mono licence</a>). Status icons are from Phosphor Icons, under the <a href="/fonts/LICENSE-Phosphor.txt">MIT licence</a>.</p>
+</main>
+<script src="/pages.js"></script>
+</body>
+</html>

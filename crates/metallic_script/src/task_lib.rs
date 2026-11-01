@@ -2,13 +2,16 @@
 //! script threads, and the execution budget.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mlua::{Error, Function, IntoLuaMulti, LightUserData, Lua, MultiValue, Result, Thread, Value};
+use mlua::{
+    AnyUserData, Error, Function, IntoLuaMulti, LightUserData, Lua, MultiValue, Result, Table,
+    Thread, UserData, Value, WeakLua,
+};
 
+use crate::debug::{self, DebugCore, Outcome};
 use crate::vm::{OutputSink, RESUME_BUDGET, STEP_BUDGET_SEC, format_error, lossy};
 
 /// Text of the error raised when a thread runs out of budget.
@@ -33,6 +36,19 @@ const OK: usize = 1;
 /// First result of a guarded thread body that raised an error (second result: message).
 const ERR: usize = 2;
 
+/// A fresh allocation identifies one queue admission without a wrapping counter.
+struct QueueLease;
+
+/// This state never references its thread or Lua; the weak-key registry owns its handle.
+struct ThreadState {
+    owner: u64,
+    cancelled: Cell<bool>,
+    queued: RefCell<Option<Rc<QueueLease>>>,
+}
+
+struct ThreadStateHandle(Rc<ThreadState>);
+impl UserData for ThreadStateHandle {}
+
 /// A suspended coroutine waiting for its wake-up time.
 struct Pending {
     wake: f64,
@@ -43,6 +59,8 @@ struct Pending {
     is_wait: bool,
     thread: Thread,
     args: Vec<Value>,
+    state: Rc<ThreadState>,
+    lease: Rc<QueueLease>,
 }
 
 /// State shared between the VM, the `task` functions and the interrupt hook.
@@ -55,15 +73,19 @@ pub(crate) struct Scheduler {
     /// running code (possibly empty).
     pub(crate) timeout_loc: RefCell<Option<String>>,
     pending: RefCell<Vec<Pending>>,
-    /// Thread (by address) -> the owner id of the script it belongs to. Removed when the
-    /// thread finishes. Owner 0 means "no script".
-    owners: RefCell<HashMap<usize, u64>>,
+    /// Weak thread keys avoid pointer-reuse aliases and keep cancelled live threads blocked.
+    threads: RefCell<Option<Table>>,
+    lua: RefCell<Option<WeakLua>>,
     /// The owner of the code that is running now; new threads and connections inherit it.
     current: Cell<u64>,
     seq: Cell<u64>,
     pub(crate) sink: Rc<dyn OutputSink>,
     /// Lua function `guard(f, ...)`: runs `f` under `xpcall` with the error normaliser.
     guard: RefCell<Option<Function>>,
+    /// Creates an equivalent guard with its function and complete argument tuple bound.
+    bind_guard: RefCell<Option<Function>>,
+    /// The debugger of this VM (inert until breakpoints or a pause are set).
+    pub(crate) debug: DebugCore,
 }
 
 impl Scheduler {
@@ -74,19 +96,25 @@ impl Scheduler {
             resume_budget: Cell::new(RESUME_BUDGET),
             timeout_loc: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
-            owners: RefCell::new(HashMap::new()),
+            threads: RefCell::new(None),
+            lua: RefCell::new(None),
             current: Cell::new(0),
             seq: Cell::new(0),
             sink,
             guard: RefCell::new(None),
+            bind_guard: RefCell::new(None),
+            debug: DebugCore::new(),
         }
     }
 
     /// Forgets every sleeping thread.
     pub(crate) fn clear(&self) {
+        self.debug.clear();
         self.pending.borrow_mut().clear();
-        self.owners.borrow_mut().clear();
+        *self.threads.borrow_mut() = None;
         *self.guard.borrow_mut() = None;
+        *self.bind_guard.borrow_mut() = None;
+        *self.lua.borrow_mut() = None;
     }
 
     pub(crate) fn guard(&self) -> Result<Function> {
@@ -96,32 +124,111 @@ impl Scheduler {
             .ok_or_else(|| Error::runtime("script VM is shut down"))
     }
 
-    /// Creates a guarded thread that will run `f`; the first resume must pass `f` first.
+    pub(crate) fn lua(&self) -> Result<Lua> {
+        self.lua
+            .borrow()
+            .as_ref()
+            .and_then(WeakLua::try_upgrade)
+            .ok_or_else(|| Error::runtime("script VM is shut down"))
+    }
+
+    fn registry(&self) -> Result<Table> {
+        let _lua = self.lua()?;
+        self.threads
+            .borrow()
+            .clone()
+            .ok_or_else(|| Error::runtime("script VM is shut down"))
+    }
+
+    fn state(&self, thread: &Thread) -> Result<Option<Rc<ThreadState>>> {
+        let value: Option<AnyUserData> = self.registry()?.raw_get(thread.clone())?;
+        value
+            .map(|value| {
+                value
+                    .borrow::<ThreadStateHandle>()
+                    .map(|state| state.0.clone())
+            })
+            .transpose()
+    }
+
+    fn register(&self, lua: &Lua, thread: &Thread) -> Result<Rc<ThreadState>> {
+        if let Some(state) = self.state(thread)? {
+            return Ok(state);
+        }
+        let state = Rc::new(ThreadState {
+            owner: self.current.get(),
+            cancelled: Cell::new(false),
+            queued: RefCell::new(None),
+        });
+        let handle = lua.create_userdata(ThreadStateHandle(state.clone()))?;
+        self.registry()?.raw_set(thread.clone(), handle)?;
+        Ok(state)
+    }
+
+    fn can_resume(&self, thread: &Thread) -> Result<bool> {
+        Ok(self
+            .state(thread)?
+            .is_none_or(|state| !state.cancelled.get() && state.queued.borrow().is_none()))
+    }
+
+    pub(crate) fn begin_resume(&self, thread: &Thread) -> Result<()> {
+        if let Some(state) = self.state(thread)? {
+            if state.cancelled.get() {
+                return Err(Error::runtime("cannot resume a cancelled task thread"));
+            }
+            state.queued.borrow_mut().take();
+        }
+        Ok(())
+    }
+
+    fn finish_resume(&self, thread: &Thread) -> Result<()> {
+        if matches!(
+            thread.status(),
+            mlua::thread::ThreadStatus::Finished | mlua::thread::ThreadStatus::Error
+        ) {
+            self.registry()?.raw_remove(thread.clone())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn cancel_thread(&self, thread: &Thread) {
+        self.debug.thread_gone(thread.to_pointer());
+        if let Ok(Some(state)) = self.state(thread) {
+            state.cancelled.set(true);
+            state.queued.borrow_mut().take();
+            self.pending
+                .borrow_mut()
+                .retain(|pending| !Rc::ptr_eq(&pending.state, &state));
+        }
+    }
+
+    /// Creates a guarded thread with its original function and arguments already bound.
     pub(crate) fn new_thread(
         &self,
         lua: &Lua,
         f: Function,
         args: Vec<Value>,
     ) -> Result<(Thread, Vec<Value>)> {
-        let thread = lua.create_thread(self.guard()?)?;
-        let owner = self.current.get();
-        if owner != 0 {
-            self.owners
-                .borrow_mut()
-                .insert(thread.to_pointer() as usize, owner);
-        }
+        let bind = self
+            .bind_guard
+            .borrow()
+            .clone()
+            .ok_or_else(|| Error::runtime("script VM is shut down"))?;
         let mut all = Vec::with_capacity(args.len() + 1);
         all.push(Value::Function(f));
         all.extend(args);
-        Ok((thread, all))
+        let body: Function = bind.call(MultiValue::from_vec(all))?;
+        let thread = lua.create_thread(body)?;
+        self.register(lua, &thread)?;
+        Ok((thread, Vec::new()))
     }
 
     /// The owner id of the script a thread belongs to.
     pub(crate) fn owner_of(&self, thread: &Thread) -> Option<u64> {
-        self.owners
-            .borrow()
-            .get(&(thread.to_pointer() as usize))
-            .copied()
+        self.state(thread)
+            .ok()
+            .flatten()
+            .and_then(|state| (state.owner != 0 && !state.cancelled.get()).then_some(state.owner))
     }
 
     /// The owner of the code that is running now (0 outside any script).
@@ -139,17 +246,38 @@ impl Scheduler {
 
     /// Forgets the sleeping threads of `owner`; they are never resumed again.
     pub(crate) fn cancel_owner(&self, owner: u64) {
-        let owners = self.owners.borrow();
-        self.pending.borrow_mut().retain(|p| {
-            owners
-                .get(&(p.thread.to_pointer() as usize))
-                .is_none_or(|o| *o != owner)
-        });
-        drop(owners);
-        self.owners.borrow_mut().retain(|_, o| *o != owner);
+        if owner == 0 {
+            return;
+        }
+        if let Ok(registry) = self.registry() {
+            for (_, value) in registry.pairs::<Thread, AnyUserData>().flatten() {
+                if let Ok(state) = value.borrow::<ThreadStateHandle>()
+                    && state.0.owner == owner
+                {
+                    state.0.cancelled.set(true);
+                    state.0.queued.borrow_mut().take();
+                }
+            }
+        }
+        self.pending.borrow_mut().retain(|p| p.state.owner != owner);
     }
 
-    fn push(&self, wake: f64, is_wait: bool, thread: Thread, args: Vec<Value>) {
+    fn push(
+        &self,
+        lua: &Lua,
+        wake: f64,
+        is_wait: bool,
+        thread: Thread,
+        args: Vec<Value>,
+    ) -> Result<()> {
+        let state = self.register(lua, &thread)?;
+        if state.cancelled.get() || state.queued.borrow().is_some() {
+            return Err(Error::runtime(
+                "cannot schedule an already owned task thread",
+            ));
+        }
+        let lease = Rc::new(QueueLease);
+        *state.queued.borrow_mut() = Some(lease.clone());
         let seq = self.seq.get();
         self.seq.set(seq + 1);
         let started = self.now.get();
@@ -160,20 +288,19 @@ impl Scheduler {
             is_wait,
             thread,
             args,
+            state,
+            lease,
         });
+        Ok(())
     }
 
     /// Interprets the outcome of one resume: queue sleepers, report guarded errors.
-    fn after_resume(
+    pub(crate) fn after_resume(
         &self,
         thread: &Thread,
         raw: Result<MultiValue>,
     ) -> std::result::Result<(), String> {
-        if thread.status() != mlua::thread::ThreadStatus::Resumable {
-            self.owners
-                .borrow_mut()
-                .remove(&(thread.to_pointer() as usize));
-        }
+        self.finish_resume(thread).map_err(|e| format_error(&e))?;
         let values = raw.map_err(|e| format_error(&e))?;
         if thread.status() == mlua::thread::ThreadStatus::Resumable {
             if is_tag(values.front(), SLEEP) {
@@ -182,12 +309,15 @@ impl Scheduler {
                     Some(Value::Integer(n)) => *n as f64,
                     _ => 0.0,
                 };
+                let lua = self.lua().map_err(|e| format_error(&e))?;
                 self.push(
+                    &lua,
                     self.now.get() + secs.max(0.0),
                     true,
                     thread.clone(),
                     Vec::new(),
-                );
+                )
+                .map_err(|e| format_error(&e))?;
             }
             // Any other yield parks the thread; its owner resumes it later.
             return Ok(());
@@ -220,32 +350,72 @@ impl Scheduler {
         (out, loc.map(|l| format!("{l}{TIMEOUT_MSG}")))
     }
 
-    /// Resumes `thread` under a fresh (or the enclosing, if earlier) budget.
+    /// Resumes `thread` once: through the debugger while it is armed (a break is then an
+    /// outcome, not an error), else through mlua.
+    fn run_thread(&self, thread: &Thread, args: Vec<Value>) -> Result<Outcome> {
+        if self.debug.armed() {
+            let lua = self.lua()?;
+            return debug::raw_resume(&lua, &self.debug, thread, args);
+        }
+        thread
+            .resume::<MultiValue>(MultiValue::from_vec(args))
+            .map(Outcome::Done)
+    }
+
+    /// Resumes `thread` under a fresh (or the enclosing, if earlier) budget. While the
+    /// game is paused the resume waits until it continues.
     pub(crate) fn resume_with_budget(
         &self,
         thread: &Thread,
         args: Vec<Value>,
     ) -> std::result::Result<(), String> {
+        if self.debug.is_paused() {
+            self.debug.defer(thread.clone(), args);
+            return Ok(());
+        }
         let owner = self.owner_of(thread).unwrap_or(0);
-        let (raw, timeout) = self.as_owner(owner, || {
-            self.budgeted(|| thread.resume::<MultiValue>(MultiValue::from_vec(args)))
-        });
+        self.begin_resume(thread).map_err(|e| format_error(&e))?;
+        let (raw, timeout) =
+            self.as_owner(owner, || self.budgeted(|| self.run_thread(thread, args)));
+        if let Ok(Outcome::Break) = raw {
+            self.debug.scheduler_break(thread, owner);
+            return Ok(());
+        }
         if let Some(msg) = timeout {
-            self.owners
-                .borrow_mut()
-                .remove(&(thread.to_pointer() as usize));
+            self.cancel_thread(thread);
             return Err(msg);
         }
-        self.after_resume(thread, raw)
+        self.after_resume(thread, raw.map(Outcome::values))
     }
 
-    /// Resumes `thread` inside the caller's budget (used by `task.spawn`).
-    fn resume_inline(&self, thread: &Thread, args: Vec<Value>) -> std::result::Result<(), String> {
+    /// Resumes `thread` inside the caller's budget (used by `task.spawn`). True when it
+    /// paused (the spawner then pauses too).
+    fn resume_inline(
+        &self,
+        thread: &Thread,
+        args: Vec<Value>,
+    ) -> std::result::Result<bool, String> {
+        if self.debug.is_paused() {
+            self.debug.defer(thread.clone(), args);
+            return Ok(false);
+        }
         let owner = self.owner_of(thread).unwrap_or(self.current.get());
-        let raw = self.as_owner(owner, || {
-            thread.resume::<MultiValue>(MultiValue::from_vec(args))
-        });
-        self.after_resume(thread, raw)
+        self.begin_resume(thread).map_err(|e| format_error(&e))?;
+        let raw = self.as_owner(owner, || self.run_thread(thread, args));
+        if let Ok(Outcome::Break) = raw {
+            self.debug.scheduler_break(thread, owner);
+            return Ok(true);
+        }
+        self.after_resume(thread, raw.map(Outcome::values))
+            .map(|()| false)
+    }
+
+    /// Drops a paused thread that will not run again (it stopped at an error).
+    pub(crate) fn forget(&self, thread: &Thread) {
+        self.cancel_thread(thread);
+        if let Ok(registry) = self.registry() {
+            let _ = registry.raw_remove(thread.clone());
+        }
     }
 
     /// Calls `f(args)` under the budget, through the error normaliser.
@@ -279,6 +449,9 @@ impl Scheduler {
     /// Resumes due threads, stopping early once [`STEP_BUDGET_SEC`] is used up; the rest
     /// stay due and run on the next step. Errors go to the sink.
     pub(crate) fn step(&self, now: f64) {
+        if self.debug.is_paused() {
+            return;
+        }
         self.now.set(now);
         let mut due = {
             let mut pending = self.pending.borrow_mut();
@@ -290,11 +463,27 @@ impl Scheduler {
         let started = Instant::now();
         let mut due = due.into_iter();
         while let Some(p) = due.next() {
-            if started.elapsed().as_secs_f64() > STEP_BUDGET_SEC {
+            if started.elapsed().as_secs_f64() > STEP_BUDGET_SEC || self.debug.is_paused() {
                 let mut pending = self.pending.borrow_mut();
                 pending.push(p);
                 pending.extend(due);
                 break;
+            }
+            let current = !p.state.cancelled.get()
+                && p.state
+                    .queued
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|lease| Rc::ptr_eq(lease, &p.lease));
+            if !current {
+                continue;
+            }
+            if p.thread.status() != mlua::thread::ThreadStatus::Resumable {
+                p.state.queued.borrow_mut().take();
+                if let Err(error) = self.finish_resume(&p.thread) {
+                    self.sink.error(&format_error(&error));
+                }
+                continue;
             }
             let args = if p.is_wait {
                 vec![Value::Number(now - p.started)]
@@ -310,6 +499,13 @@ impl Scheduler {
 
 /// Registers the global `task` table and the thread guard.
 pub(crate) fn install(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
+    *sched.lua.borrow_mut() = Some(lua.weak());
+    DebugCore::install(sched, lua)?;
+    let threads = lua.create_table()?;
+    let weak = lua.create_table()?;
+    weak.set("__mode", "k")?;
+    threads.set_metatable(Some(weak))?;
+    *sched.threads.borrow_mut() = Some(threads);
     let globals = lua.globals();
     let xpcall: Value = globals.get("xpcall")?;
     let type_fn: Value = globals.get("type")?;
@@ -318,14 +514,17 @@ pub(crate) fn install(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
     let find: Value = globals.get::<mlua::Table>("string")?.get("find")?;
     let info: Value = globals.get::<mlua::Table>("debug")?.get("info")?;
     let yield_fn: Value = globals.get::<mlua::Table>("coroutine")?.get("yield")?;
+    let tables: Table = globals.get("table")?;
+    let pack: Function = tables.get("pack")?;
+    let unpack: Function = tables.get("unpack")?;
 
     // The guard runs every script thread. Its handler turns any error value into a
     // string without running script code (no `__tostring` of script tables) and adds the
     // `<chunk>:<line>:` of the nearest Lua frame when the message has none.
-    let guard: Function = lua
+    let (guard, bind_guard): (Function, Function) = lua
         .load(
             r#"
-local xpcall, type, tostring, sub, info, okTag, errTag, find = ...
+local xpcall, type, tostring, sub, info, okTag, errTag, find, pack, unpack = ...
 local function describe(e)
     local t = type(e)
     if t == "string" then return e end
@@ -356,7 +555,12 @@ local function finish(ok, ...)
     if ok then return okTag, ... end
     return errTag, ...
 end
-return function(f, ...) return finish(xpcall(f, handler, ...)) end
+local function guard(f, ...) return finish(xpcall(f, handler, ...)) end
+local function bind(f, ...)
+    local args = pack(...)
+    return function() return finish(xpcall(f, handler, unpack(args, 1, args.n))) end
+end
+return guard, bind
 "#,
         )
         .set_name("=[engine]")
@@ -369,53 +573,184 @@ return function(f, ...) return finish(xpcall(f, handler, ...)) end
             tag(OK),
             tag(ERR),
             find,
+            pack,
+            unpack,
         ))?;
     *sched.guard.borrow_mut() = Some(guard);
+    *sched.bind_guard.borrow_mut() = Some(bind_guard);
+
+    install_coroutines(lua, sched)?;
 
     let task = lua.create_table()?;
 
     // `task.wait` yields `(SLEEP, seconds)` to the scheduler.
     let wait: Function = lua
-        .load("local yield, sleep = ... return function(n) return yield(sleep, n or 0) end")
-        .call((yield_fn, tag(SLEEP)))?;
+        .load(r#"
+local yield, sleep, tonumber, type, error = ...
+return function(n)
+    if n == nil then n = 0 else
+        local value = tonumber(n)
+        if value == nil then error("bad argument #1 to 'wait' (number expected, got "..type(n)..")", 2) end
+        n = value
+    end
+    return yield(sleep, n)
+end
+"#)
+        .set_name("=[engine]")
+        .call((yield_fn, tag(SLEEP), globals.get::<Function>("tonumber")?, globals.get::<Function>("type")?, globals.get::<Function>("error")?))?;
     task.set("wait", wait)?;
 
+    // `task.spawn` is a Luau wrapper so that, when the spawned thread pauses in the
+    // debugger, the spawner can pause right after the call (a Rust function cannot break).
     let s = sched.clone();
-    task.set(
-        "spawn",
-        lua.create_function(move |lua, (f, args): (Value, MultiValue)| {
-            let args: Vec<Value> = args.into_iter().collect();
-            let (thread, first) = match f {
-                Value::Function(f) => s.new_thread(lua, f, args)?,
-                Value::Thread(t) => (t, args),
-                other => return Err(bad_target(&other)),
-            };
-            if let Err(e) = s.resume_inline(&thread, first) {
+    let spawn_raw = lua.create_function(move |lua, (f, args): (Value, MultiValue)| {
+        let args: Vec<Value> = args.into_iter().collect();
+        let (thread, first) = match f {
+            Value::Function(f) => s.new_thread(lua, f, args)?,
+            Value::Thread(t) => {
+                if !s.can_resume(&t)? {
+                    return Err(Error::runtime(
+                        "cannot schedule an already owned task thread",
+                    ));
+                }
+                s.register(lua, &t)?;
+                (t, args)
+            }
+            other => return Err(bad_target(&other)),
+        };
+        let broke = match s.resume_inline(&thread, first) {
+            Ok(broke) => broke,
+            Err(e) => {
                 // A timeout is reported once, by the resume that owns the budget.
                 if s.timeout_loc.borrow().is_none() {
                     s.sink.error(&e);
                 }
+                false
             }
-            Ok(thread)
-        })?,
-    )?;
+        };
+        Ok((thread, broke))
+    })?;
+    // SAFETY: `break_spawner` follows the Lua C function protocol.
+    let break_spawner = unsafe { lua.create_c_function(debug::break_spawner)? };
+    let spawn: Function = lua
+        .load(
+            r#"
+local raw, pause = ...
+return function(...)
+    local thread, broke = raw(...)
+    if broke then pause() end
+    return thread
+end
+"#,
+        )
+        .set_name("=[engine]")
+        .call((spawn_raw, break_spawner))?;
+    task.set("spawn", spawn)?;
 
     let s = sched.clone();
     task.set(
         "delay",
-        lua.create_function(move |lua, (secs, f, args): (f64, Value, MultiValue)| {
-            let args: Vec<Value> = args.into_iter().collect();
-            let (thread, first) = match f {
-                Value::Function(f) => s.new_thread(lua, f, args)?,
-                Value::Thread(t) => (t, args),
-                other => return Err(bad_target(&other)),
-            };
-            s.push(s.now.get() + secs.max(0.0), false, thread.clone(), first);
-            Ok(thread)
-        })?,
+        lua.create_function(
+            move |lua, (secs, f, args): (Option<f64>, Value, MultiValue)| {
+                let args: Vec<Value> = args.into_iter().collect();
+                let (thread, first) = match f {
+                    Value::Function(f) => s.new_thread(lua, f, args)?,
+                    Value::Thread(t) => {
+                        if !s.can_resume(&t)? {
+                            return Err(Error::runtime(
+                                "cannot schedule an already owned task thread",
+                            ));
+                        }
+                        s.register(lua, &t)?;
+                        (t, args)
+                    }
+                    other => return Err(bad_target(&other)),
+                };
+                s.push(
+                    lua,
+                    s.now.get() + secs.unwrap_or(0.0).max(0.0),
+                    false,
+                    thread.clone(),
+                    first,
+                )?;
+                Ok(thread)
+            },
+        )?,
     )?;
 
     globals.set("task", task)
+}
+
+/// Keep ordinary coroutine values in Lua, including opaque error userdata identities.
+fn install_coroutines(lua: &Lua, sched: &Rc<Scheduler>) -> Result<()> {
+    let globals = lua.globals();
+    let coroutines: Table = globals.get("coroutine")?;
+    let native_resume: Function = coroutines.get("resume")?;
+    let native_create: Function = coroutines.get("create")?;
+    let s = sched.clone();
+    let admitted = lua.create_function(move |_, thread: Thread| s.can_resume(&thread))?;
+    let s = sched.clone();
+    let finish = lua.create_function(move |_, thread: Thread| s.finish_resume(&thread))?;
+    let s = sched.clone();
+    let sleep = lua.create_function(move |lua, (thread, seconds): (Thread, f64)| {
+        s.push(
+            lua,
+            s.now.get() + seconds.max(0.0),
+            true,
+            thread,
+            Vec::new(),
+        )
+    })?;
+    let tables: Table = globals.get("table")?;
+    let (resume, wrap): (Function, Function) = lua.load(r#"
+local native_resume, create, admitted, finish, sleep, sleepTag, okTag, errTag,
+    type, typename, tostring, error, select, pack, unpack = ...
+local function bad_argument(name, expected, count, value)
+    if count == 0 then
+        error("missing argument #1 to '"..name.."' ("..expected.." expected)", 3)
+    end
+    error("invalid argument #1 to '"..name.."' ("..expected.." expected, got "..typename(value)..")", 3)
+end
+local function outcome(thread, ok, ...)
+    if not ok then finish(thread) return false, ... end
+    local first = ...
+    if first == sleepTag then
+        sleep(thread, select(2, ...))
+        return true
+    end
+    finish(thread)
+    if first == okTag then return true, select(2, ...) end
+    if first == errTag then return false, select(2, ...) end
+    return true, ...
+end
+local function resume(...)
+    local thread = ...
+    if type(thread) ~= 'thread' then bad_argument('resume', 'thread', select('#', ...), thread) end
+    if not admitted(thread) then return false, 'cannot resume a task-owned coroutine' end
+    return outcome(thread, native_resume(...))
+end
+local function wrap(...)
+    local f = ...
+    if type(f) ~= 'function' then bad_argument('wrap', 'function', select('#', ...), f) end
+    local thread = create(f)
+    return function(...)
+        local values = pack(resume(thread, ...))
+        if not values[1] then
+            local value = values[2]
+            if type(value) == 'number' then value = tostring(value) end
+            error(value, 2)
+        end
+        return unpack(values, 2, values.n)
+    end
+end
+return resume, wrap
+"#).set_name("=[engine]").call((native_resume, native_create, admitted, finish, sleep,
+        tag(SLEEP), tag(OK), tag(ERR), globals.get::<Function>("type")?, globals.get::<Function>("typeof")?,
+        globals.get::<Function>("tostring")?, globals.get::<Function>("error")?, globals.get::<Function>("select")?,
+        tables.get::<Function>("pack")?, tables.get::<Function>("unpack")?))?;
+    coroutines.set("resume", resume)?;
+    coroutines.set("wrap", wrap)?;
+    Ok(())
 }
 
 fn bad_target(v: &Value) -> Error {
@@ -423,4 +758,105 @@ fn bad_target(v: &Value) -> Error {
         "invalid argument (function or thread expected, got {})",
         v.type_name()
     ))
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    struct Quiet;
+    impl OutputSink for Quiet {
+        fn print(&self, _: &str) {}
+        fn warn(&self, _: &str) {}
+        fn error(&self, _: &str) {}
+    }
+
+    #[derive(Default)]
+    struct Trace(RefCell<Vec<String>>);
+    impl OutputSink for Trace {
+        fn print(&self, line: &str) {
+            self.0.borrow_mut().push(line.into());
+        }
+        fn warn(&self, line: &str) {
+            self.0.borrow_mut().push(format!("warn:{line}"));
+        }
+        fn error(&self, line: &str) {
+            self.0.borrow_mut().push(format!("error:{line}"));
+        }
+    }
+
+    fn assert_cancellation_survives_failed_resume(source: &str) {
+        let trace = Rc::new(Trace::default());
+        let mut vm =
+            crate::vm::ScriptVm::with_output(crate::vm::Context::Server, trace.clone()).unwrap();
+        let owner = u64::MAX - 17;
+        vm.run_script_owned("RetainOwner", source, Vec::new(), owner)
+            .unwrap();
+        assert_eq!(*trace.0.borrow(), ["armed"]);
+        vm.run_script_owned(
+            "Control",
+            "task.delay(1,function() print('control') end)",
+            Vec::new(),
+            owner + 1,
+        )
+        .unwrap();
+        vm.budget().cancel_owner(owner);
+        vm.step(1.0);
+        assert_eq!(*trace.0.borrow(), ["armed", "control"]);
+    }
+
+    #[test]
+    fn failed_resume_of_running_task_retains_ownership_until_cancellation() {
+        assert_cancellation_survives_failed_resume(
+            r#"
+local ok=coroutine.resume(coroutine.running())
+assert(not ok)
+print('armed')
+task.wait(1)
+print('escaped')
+"#,
+        );
+    }
+
+    #[test]
+    fn failed_resume_of_normal_parent_retains_ownership_until_cancellation() {
+        assert_cancellation_survives_failed_resume(
+            r#"
+local parent=coroutine.running()
+local nested=coroutine.create(function() assert(not coroutine.resume(parent)) end)
+assert(coroutine.resume(nested))
+print('armed')
+task.wait(1)
+print('escaped')
+"#,
+        );
+    }
+
+    #[test]
+    fn cancelled_live_thread_is_blocked_without_retaining_dead_weak_keys() {
+        let lua = Lua::new();
+        let scheduler = Rc::new(Scheduler::new(Rc::new(Quiet)));
+        install(&lua, &scheduler).unwrap();
+        let function = lua.create_function(|_, ()| Ok(())).unwrap();
+        let owner = u64::MAX - 7;
+        let (thread, args) = scheduler
+            .as_owner(owner, || scheduler.new_thread(&lua, function, Vec::new()))
+            .unwrap();
+        assert_eq!(scheduler.owner_of(&thread), Some(owner));
+        scheduler
+            .push(&lua, 10.0, false, thread.clone(), args)
+            .unwrap();
+        scheduler.cancel_owner(owner - 1);
+        assert_eq!(scheduler.pending.borrow().len(), 1);
+        scheduler.cancel_owner(owner);
+        assert!(scheduler.pending.borrow().is_empty());
+        assert!(!scheduler.can_resume(&thread).unwrap());
+        assert_eq!(scheduler.owner_of(&thread), None);
+        let registry = scheduler.registry().unwrap();
+        assert_eq!(registry.clone().pairs::<Value, Value>().count(), 1);
+        drop(thread);
+        lua.gc_collect().unwrap();
+        lua.gc_collect().unwrap();
+        assert_eq!(registry.pairs::<Value, Value>().count(), 0);
+    }
 }
