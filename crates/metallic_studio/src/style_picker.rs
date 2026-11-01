@@ -461,12 +461,7 @@ impl StylePicker {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add(
-                        Button::ghost("")
-                            .compact()
-                            .glyph(Icon::Close)
-                            .alt("Close"),
-                    )
+                    .add(Button::ghost("").compact().glyph(Icon::Close).alt("Close"))
                     .clicked()
                 {
                     close = true;

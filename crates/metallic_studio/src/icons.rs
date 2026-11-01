@@ -643,6 +643,8 @@ pub enum ClassIcon {
     Lighting,
     /// Sky: the sun on the horizon.
     Sky,
+    /// Camera: a body with a lens at the front.
+    Camera,
     /// Atmosphere: haze lines.
     Atmosphere,
     /// Clouds: a cloud.
@@ -673,7 +675,7 @@ pub enum ClassIcon {
 
 impl ClassIcon {
     /// Every class icon, in declaration order (tests paint each one and check the order).
-    pub const ALL: [ClassIcon; 38] = [
+    pub const ALL: [ClassIcon; 39] = [
         ClassIcon::Workspace,
         ClassIcon::Folder,
         ClassIcon::Model,
@@ -699,6 +701,7 @@ impl ClassIcon {
         ClassIcon::ImageButton,
         ClassIcon::Lighting,
         ClassIcon::Sky,
+        ClassIcon::Camera,
         ClassIcon::Atmosphere,
         ClassIcon::Clouds,
         ClassIcon::Bloom,
@@ -741,6 +744,7 @@ pub fn class_icon(class: &str, shape: Option<&str>) -> ClassIcon {
         "ImageButton" => Some(C::ImageButton),
         "Lighting" => Some(C::Lighting),
         "Sky" => Some(C::Sky),
+        "Camera" => Some(C::Camera),
         "Atmosphere" => Some(C::Atmosphere),
         "Clouds" => Some(C::Clouds),
         "BloomEffect" => Some(C::Bloom),
@@ -996,6 +1000,21 @@ pub fn paint_class_icon(painter: &egui::Painter, rect: Rect, icon: ClassIcon, c:
                 painter.line_segment([base + d * 5.6, base + d * 7.4], fine);
             }
             line(painter, o, (-5.0, 6.8), (5.0, 6.8), fine);
+        }
+        ClassIcon::Camera => {
+            outline(
+                painter,
+                Rect::from_center_size(o + vec2(-1.5, 0.0), vec2(10.0, 8.0)),
+                1.5,
+                s,
+            );
+            poly(
+                painter,
+                o,
+                &[(3.5, -1.5), (7.0, -3.5), (7.0, 3.5), (3.5, 1.5)],
+                true,
+                s,
+            );
         }
         ClassIcon::Atmosphere => {
             for base in [-4.5f32, 0.0, 4.5] {
