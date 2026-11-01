@@ -99,6 +99,19 @@ fn parkour_template_has_the_required_content() {
         assert!(w.is_a(r, "RemoteEvent"));
     }
 
+    // The player's controls plate is the only controls row: the HUD's one text is the banner
+    // (#480: a text row of the template's own sat under the plate).
+    let gui = w.root("StarterGui").unwrap();
+    let mut gui_ids = Vec::new();
+    descendants(&w, gui, &mut gui_ids);
+    let texts: Vec<String> = gui_ids
+        .iter()
+        .filter(|&&i| w.is_a(i, "TextLabel"))
+        .map(|&i| w.full_name(i))
+        .collect();
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(texts[0].ends_with("Banner.Message"), "{texts:?}");
+
     let lava = w.find_first_child(ws, "Lava").expect("Lava folder");
     let lava_parts: Vec<InstanceId> = w
         .children(lava)

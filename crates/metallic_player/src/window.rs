@@ -166,7 +166,7 @@ struct App {
     quit: bool,
     /// The Player menu (Menu action: Esc or Start by default).
     menu: Menu,
-    /// The Jump / Run / Menu hint at the start and after a glyph change.
+    /// The Move / Jump / Run / Camera / Menu hint at the start and after a glyph change.
     hint: ControlsHint,
     /// Where the player's input overrides are stored.
     controls: Controls,

@@ -2,7 +2,9 @@
 //!
 //! Sections come in a fixed order: the class's own (Data), Appearance, Transform, Physics,
 //! Behaviour. Values that differ across a multi-selection show "Mixed". Number fields scrub on
-//! drag and accept expressions (`3*4`, `+2` adds to the current value, see [`crate::expr`]).
+//! drag and accept expressions (`3*4`, `+2` adds to the current value, see [`crate::expr`]). Each
+//! shows by its kind (studs, degrees, 0-1 fraction, integer), right-aligned in the interface font
+//! ([`crate::widgets::number`]).
 //!
 //! **One gesture, one undo step:** while the pointer is held (scrubbing a number) changes go
 //! through the editor's [`crate::preview::PreviewOverlay`], which writes them as a live preview
@@ -21,18 +23,53 @@ use crate::commands::{Command, PropName};
 use crate::editor::{EditorState, UiRequest};
 use crate::expr::eval_relative;
 use crate::tokens::ui_tokens;
+use crate::widgets::number::{self, NumberKind};
 use metallic_core::transform::{clamp_part_size, orthonormal};
 
-/// Formats a number field like egui does, but never as "-0" (a negative zero or a tiny negative
-/// value that rounds to zero shows as "0").
-fn fmt_drag(n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
-    let text = egui::emath::format_with_decimals_in_range(n, decimals.clone());
-    match text.strip_prefix('-') {
-        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => {
-            egui::emath::format_with_decimals_in_range(0.0, decimals)
+/// Width of an axis letter's cell (X, Y, Z) before a number field.
+const AXIS_WIDTH: f32 = 10.0;
+/// Width of the "Position" / "Rotation" cell of a CFrame row, so both rows' fields line up.
+const PART_LABEL_WIDTH: f32 = 56.0;
+/// The narrowest a number field gets in a narrow panel.
+const MIN_FIELD_WIDTH: f32 = 36.0;
+
+/// How a Number property is shown (see [`crate::widgets::number`]).
+fn number_kind(p: &PropDef) -> NumberKind {
+    match p.name {
+        "ZIndex" | "DisplayOrder" | "Priority" | "UserId" | "PointerIndex" | "TouchOrder"
+        | "Order" | "TextSize" | "StarCount" => NumberKind::Integer,
+        "Orientation" | "GeographicLatitude" | "SunAngularSize" | "MoonAngularSize" => {
+            NumberKind::Degrees
         }
-        _ => text,
+        name if name.ends_with("Transparency") => NumberKind::Fraction,
+        _ => match p.range {
+            Some(r) if r.min == 0.0 && r.max == 1.0 => NumberKind::Fraction,
+            _ => NumberKind::Studs,
+        },
     }
+}
+
+/// Width of each of `n` number fields sharing what is left of the row, each after an axis letter
+/// when `letters` is set.
+fn field_width(ui: &egui::Ui, n: usize, letters: bool) -> f32 {
+    let gap = ui.spacing().item_spacing.x;
+    let letter = if letters { AXIS_WIDTH + gap } else { 0.0 };
+    let n = n as f32;
+    ((ui.available_width() - n * (letter + gap) + gap) / n)
+        .floor()
+        .max(MIN_FIELD_WIDTH)
+}
+
+/// The axis letter before a vector component's field, in the axis colour.
+fn axis_letter(ui: &mut egui::Ui, axis: usize) {
+    ui.add_sized(
+        [AXIS_WIDTH, number::height(ui)],
+        egui::Label::new(
+            RichText::new(["X", "Y", "Z"][axis])
+                .color(ui_tokens().axis[axis])
+                .strong(),
+        ),
+    );
 }
 
 /// What a number attribute's drag asked for this frame.
@@ -440,7 +477,11 @@ impl Properties {
                         }
                         Value::Number(n) => {
                             let mut now = *n;
-                            let response = ui.add(egui::DragValue::new(&mut now).speed(0.1));
+                            let cur = *n;
+                            let response =
+                                number::field(ui, &mut now, NumberKind::Studs, 80.0, move |s| {
+                                    eval_relative(s, cur)
+                                });
                             if response.changed() {
                                 if response.dragged() {
                                     // Every frame of a drag: live, one undo step at the end.
@@ -546,10 +587,6 @@ impl Properties {
         };
         let playing = state.play.is_playing();
         let hover_bg = ui.painter().add(egui::Shape::Noop);
-        let numeric = matches!(
-            value,
-            Value::Number(_) | Value::Vector3(_) | Value::CFrame(_) | Value::UDim2(_)
-        );
         let row = ui.horizontal(|ui| {
             ui.set_min_height(crate::theme::ROW_HEIGHT);
             // Names sit left aligned in a fixed column (about 40 % of the default panel).
@@ -582,11 +619,6 @@ impl Properties {
             let name = p.name.to_string();
             // While playing, values are read-only and drawn disabled.
             ui.add_enabled_ui(!playing, |ui| {
-                if numeric {
-                    ui.style_mut()
-                        .text_styles
-                        .insert(egui::TextStyle::Button, ui_tokens().mono());
-                }
                 match (&value, p.allowed) {
                     (Value::Bool(b), _) => {
                         let mut v = *b;
@@ -597,13 +629,10 @@ impl Properties {
                     (Value::Number(n), _) => {
                         let mut v = *n;
                         let cur = *n;
-                        let r = ui.add(
-                            egui::DragValue::new(&mut v)
-                                .speed(drag_speed(p.name))
-                                .max_decimals(3)
-                                .custom_formatter(fmt_drag)
-                                .custom_parser(move |s| eval_relative(s, cur)),
-                        );
+                        let w = field_width(ui, 1, false);
+                        let r = number::field(ui, &mut v, number_kind(p), w, move |s| {
+                            eval_relative(s, cur)
+                        });
                         if r.changed() {
                             edits.push(Edit::Set(name, Value::Number(v)));
                         }
@@ -653,20 +682,17 @@ impl Properties {
                     }
                     (Value::Vector3(v), _) => {
                         let comps = [v.x, v.y, v.z];
+                        let kind = if p.name == "Orientation" {
+                            NumberKind::Degrees
+                        } else {
+                            NumberKind::Studs
+                        };
+                        let w = field_width(ui, 3, true);
                         for (axis, &c) in comps.iter().enumerate() {
-                            ui.label(
-                                RichText::new(["X", "Y", "Z"][axis])
-                                    .color(ui_tokens().axis[axis])
-                                    .strong(),
-                            );
+                            axis_letter(ui, axis);
                             let mut x = c;
-                            let r = ui.add(
-                                egui::DragValue::new(&mut x)
-                                    .speed(drag_speed(p.name))
-                                    .max_decimals(3)
-                                    .custom_formatter(fmt_drag)
-                                    .custom_parser(move |s| eval_relative(s, c)),
-                            );
+                            let r =
+                                number::field(ui, &mut x, kind, w, move |s| eval_relative(s, c));
                             if r.changed() {
                                 edits.push(Edit::Component(name.clone(), axis, x));
                             }
@@ -676,27 +702,34 @@ impl Properties {
                         // Shown and edited as position plus orientation (degrees, Y then X then Z).
                         let o = cf.orientation_degrees();
                         let rows = [
-                            ("Position", [cf.position.x, cf.position.y, cf.position.z], 0),
-                            ("Rotation", [o.x, o.y, o.z], 3),
+                            (
+                                "Position",
+                                [cf.position.x, cf.position.y, cf.position.z],
+                                0,
+                                NumberKind::Studs,
+                            ),
+                            ("Rotation", [o.x, o.y, o.z], 3, NumberKind::Degrees),
                         ];
                         ui.vertical(|ui| {
-                            for (label, comps, base) in rows {
+                            for (label, comps, base, kind) in rows {
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(label).color(ui_tokens().text_dim));
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(PART_LABEL_WIDTH, number::height(ui)),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.set_min_width(PART_LABEL_WIDTH);
+                                            ui.label(
+                                                RichText::new(label).color(ui_tokens().text_dim),
+                                            );
+                                        },
+                                    );
+                                    let w = field_width(ui, 3, true);
                                     for (axis, &c) in comps.iter().enumerate() {
-                                        ui.label(
-                                            RichText::new(["X", "Y", "Z"][axis])
-                                                .color(ui_tokens().axis[axis])
-                                                .strong(),
-                                        );
+                                        axis_letter(ui, axis);
                                         let mut x = c;
-                                        let r = ui.add(
-                                            egui::DragValue::new(&mut x)
-                                                .speed(if base == 0 { 0.1 } else { 1.0 })
-                                                .max_decimals(3)
-                                                .custom_formatter(fmt_drag)
-                                                .custom_parser(move |s| eval_relative(s, c)),
-                                        );
+                                        let r = number::field(ui, &mut x, kind, w, move |s| {
+                                            eval_relative(s, c)
+                                        });
                                         if r.changed() {
                                             edits.push(Edit::Component(
                                                 name.clone(),
@@ -727,22 +760,22 @@ impl Properties {
                         }
                         ui.label(
                             RichText::new(format!("{}, {}, {}", rgb[0], rgb[1], rgb[2]))
-                                .monospace()
                                 .color(ui_tokens().text_dim),
                         );
                     }
                     (Value::UDim2(u), _) => {
                         let comps = [u.x_scale, u.x_offset, u.y_scale, u.y_offset];
+                        let w = field_width(ui, 4, false);
                         for (i, &c) in comps.iter().enumerate() {
                             let mut x = c;
-                            let speed = if i % 2 == 0 { 0.01 } else { 1.0 };
-                            let r = ui.add(
-                                egui::DragValue::new(&mut x)
-                                    .speed(speed)
-                                    .max_decimals(3)
-                                    .custom_formatter(fmt_drag)
-                                    .custom_parser(move |s| eval_relative(s, c)),
-                            );
+                            // Scales are fractions of the parent, offsets whole pixels.
+                            let kind = if i % 2 == 0 {
+                                NumberKind::Fraction
+                            } else {
+                                NumberKind::Integer
+                            };
+                            let r =
+                                number::field(ui, &mut x, kind, w, move |s| eval_relative(s, c));
                             if r.changed() {
                                 edits.push(Edit::Component(name.clone(), i, x));
                             }
@@ -884,14 +917,6 @@ fn read(world: &metallic_core::World, id: InstanceId, prop: &str) -> Option<Valu
     world.get(id, prop).ok()
 }
 
-fn drag_speed(prop: &str) -> f64 {
-    match prop {
-        "Orientation" => 1.0,
-        "Transparency" | "BackgroundTransparency" => 0.01,
-        _ => 0.1,
-    }
-}
-
 fn to_u8(c: f64) -> u8 {
     c.round().clamp(0.0, 255.0) as u8
 }
@@ -978,11 +1003,18 @@ mod tests {
     }
 
     #[test]
-    fn negative_zero_shows_as_zero() {
-        assert_eq!(fmt_drag(-0.0, 0..=3), "0");
-        assert_eq!(fmt_drag(-0.0001, 0..=3), "0");
-        assert_eq!(fmt_drag(-0.5, 0..=3), "-0.5");
-        assert_eq!(fmt_drag(8.0, 1..=3), "8.0");
-        assert_eq!(fmt_drag(-22.0, 1..=3), "-22.0");
+    fn number_properties_get_their_kind() {
+        let kind = |class: &str, prop: &str| number_kind(find_property(class, prop).unwrap());
+        assert_eq!(kind("Part", "Transparency"), NumberKind::Fraction);
+        assert_eq!(
+            kind("Frame", "BackgroundTransparency"),
+            NumberKind::Fraction
+        );
+        assert_eq!(kind("Frame", "ZIndex"), NumberKind::Integer);
+        assert_eq!(kind("TextLabel", "TextSize"), NumberKind::Integer);
+        assert_eq!(kind("Lighting", "GeographicLatitude"), NumberKind::Degrees);
+        // A 0-1 range in the registry makes a fraction; other ranges keep the plain rule.
+        assert_eq!(kind("Lighting", "ShadowSoftness"), NumberKind::Fraction);
+        assert_eq!(kind("Lighting", "Brightness"), NumberKind::Studs);
     }
 }

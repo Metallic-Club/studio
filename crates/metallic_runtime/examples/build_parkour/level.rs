@@ -60,7 +60,6 @@ const ICE: Palette = Palette {
     support: rgb(58.0, 90.0, 108.0),
 };
 
-const GROUND: Color3 = rgb(40.0, 38.0, 46.0);
 const TOWER: Color3 = rgb(50.0, 54.0, 70.0);
 const TOWER_CAP: Color3 = rgb(70.0, 76.0, 96.0);
 const VIOLET: Color3 = rgb(155.0, 130.0, 212.0);
@@ -70,9 +69,9 @@ const LAVA: Color3 = rgb(196.0, 80.0, 30.0);
 const FINISH: Color3 = rgb(236.0, 234.0, 240.0);
 const HUD_BACK: Color3 = rgb(28.0, 25.0, 34.0);
 const HUD_TEXT: Color3 = rgb(231.0, 229.0, 236.0);
-const HUD_DIM: Color3 = rgb(190.0, 187.0, 198.0);
 
-/// Top of the ground far below the course.
+/// Where the columns and towers end, far below the course in the fog. There is no ground plane:
+/// its far edge showed as a hard line across the sky.
 const GROUND_TOP: f64 = -60.0;
 /// Characters below this height die (Workspace.FallenPartsDestroyHeight).
 const FALL_HEIGHT: f64 = -30.0;
@@ -211,7 +210,7 @@ impl Builder {
         Ok(())
     }
 
-    /// A platform: slab, rim and a support column down to the ground. Returns the slab.
+    /// A platform: slab, rim and a support column down into the fog. Returns the slab.
     #[allow(clippy::too_many_arguments)]
     fn platform(
         &mut self,
@@ -229,7 +228,7 @@ impl Builder {
         Ok(slab)
     }
 
-    /// A square support column from `from_y` (section coordinates) down into the ground.
+    /// A square support column from `from_y` (section coordinates) down into the fog.
     fn support(
         &mut self,
         pal: Palette,
@@ -243,7 +242,7 @@ impl Builder {
         Ok(())
     }
 
-    /// A square concrete column from `top` (section coordinates) down into the ground.
+    /// A square concrete column from `top` (section coordinates) down into the fog.
     #[allow(clippy::too_many_arguments)]
     fn column(
         &mut self,
@@ -255,7 +254,7 @@ impl Builder {
         z: f64,
         width: f64,
     ) -> Result<InstanceId, CoreError> {
-        // The ground does not move with the section, so work out the height in world Y.
+        // The column bottoms do not move with the section, so work out the height in world Y.
         let bottom = GROUND_TOP - 1.0 - self.at.0;
         self.part(
             "Part",
@@ -361,16 +360,6 @@ impl Builder {
 
     fn level(&mut self) -> Result<(), CoreError> {
         let ws = self.ws;
-        let scenery = self.scenery;
-        self.part(
-            "Part",
-            scenery,
-            "Ground",
-            [1600.0, 4.0, 1600.0],
-            [0.0, GROUND_TOP - 2.0, -300.0],
-            GROUND,
-            "Concrete",
-        )?;
         let lava = self.lava;
         self.script("Script", lava, "KnockOutOnTouch", scripts::LAVA)?;
         let checkpoints = folder(&mut self.w, ws, "Checkpoints")?;
@@ -803,27 +792,8 @@ impl Builder {
         w.set(message, "BackgroundTransparency", Value::Number(1.0))?;
         w.set(message, "TextColor3", Value::Color3(HUD_TEXT))?;
         w.set(message, "TextSize", Value::Number(28.0))?;
-        let help = w.create("TextLabel", Some(hud))?;
-        w.set(help, "Name", Value::String("Controls".into()))?;
-        w.set(
-            help,
-            "Position",
-            Value::UDim2(UDim2::new(0.0, 16.0, 1.0, -48.0)),
-        )?;
-        w.set(
-            help,
-            "Size",
-            Value::UDim2(UDim2::new(0.0, 560.0, 0.0, 32.0)),
-        )?;
-        w.set(help, "BackgroundColor3", Value::Color3(HUD_BACK))?;
-        w.set(help, "BackgroundTransparency", Value::Number(0.15))?;
-        w.set(help, "TextColor3", Value::Color3(HUD_DIM))?;
-        w.set(help, "TextSize", Value::Number(18.0))?;
-        w.set(
-            help,
-            "Text",
-            Value::String("WASD move   Space jump   Shift run   Right-drag camera".into()),
-        )?;
+        // No controls text here: the player's own controls plate shows the keys in the player's
+        // bindings, bottom left (#480).
         self.script("LocalScript", hud, "ShowStatus", scripts::HUD)
     }
 }

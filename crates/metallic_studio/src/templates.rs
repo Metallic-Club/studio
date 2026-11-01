@@ -6,6 +6,12 @@
 //! and survives creation/renaming. Catalog metadata, previews and root test fixtures stay in
 //! the template. Legacy settings in `template.toml` are migrated into the project file.
 //!
+//! Studio reads the folder from [`templates_dir`]: `METALLIC_TEMPLATES_DIR`, then the installed
+//! `templates/` next to the exe, then (debug builds only) the repo's `templates/`.
+//! A `preview.png` is a frame of the template playing (`metallic-player templates/<id> --capture
+//! 150:<png> --frames 160`, 1920 x 1080) scaled down to 640 x 360. Regenerate them all when the
+//! character or the lighting changes.
+//!
 //! The Baseplate template is also compiled into Studio ([`builtin_baseplate`]), so a game can be
 //! created even when the templates folder is missing.
 
@@ -143,15 +149,61 @@ impl TemplateFile {
     }
 }
 
-/// The folder templates are read from: env `METALLIC_TEMPLATES_DIR`, else `<exe dir>/templates`.
+/// Environment variable that points Studio at a templates folder (wins over everything else).
+pub const TEMPLATES_DIR_ENV: &str = "METALLIC_TEMPLATES_DIR";
+
+/// The folder templates are read from, first match wins:
+///
+/// 1. env `METALLIC_TEMPLATES_DIR` when it is set and not empty (used as given, even if missing);
+/// 2. the installed location `<exe dir>/templates` when that folder exists (the installer and
+///    `tools/release.py` put it there);
+/// 3. debug builds only: the repo's own `templates/`, found from `CARGO_MANIFEST_DIR` at compile
+///    time, so `cargo run` and `target/debug/metallic-studio` show every template without setting
+///    the variable. It is a compile-time path rather than a walk up from the exe because several
+///    worktrees may share one `CARGO_TARGET_DIR`, where the exe sits far from the sources. Release
+///    builds leave it out so a shipped binary never carries a build-machine path;
+/// 4. otherwise `<exe dir>/templates` anyway, so the "cannot be read" warning names the install
+///    path (the start screen then offers the compiled-in Baseplate only).
 pub fn templates_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("METALLIC_TEMPLATES_DIR") {
-        return PathBuf::from(dir);
-    }
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    exe_dir.unwrap_or_default().join("templates")
+    resolve_templates_dir(
+        std::env::var_os(TEMPLATES_DIR_ENV),
+        exe_dir.as_deref(),
+        dev_templates_dir().as_deref(),
+    )
+}
+
+/// The repo's `templates/` in a debug build (see [`templates_dir`]).
+#[cfg(debug_assertions)]
+pub fn dev_templates_dir() -> Option<PathBuf> {
+    Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates"))
+}
+
+/// Release builds have no dev fallback (see [`templates_dir`]).
+#[cfg(not(debug_assertions))]
+pub fn dev_templates_dir() -> Option<PathBuf> {
+    None
+}
+
+/// [`templates_dir`] with its inputs given: the env value, the exe's folder and the dev fallback.
+pub fn resolve_templates_dir(
+    env: Option<std::ffi::OsString>,
+    exe_dir: Option<&Path>,
+    dev_dir: Option<&Path>,
+) -> PathBuf {
+    if let Some(dir) = env.filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let installed = exe_dir.unwrap_or(Path::new("")).join("templates");
+    if installed.is_dir() {
+        return installed;
+    }
+    match dev_dir {
+        Some(dev) if dev.is_dir() => dev.to_path_buf(),
+        _ => installed,
+    }
 }
 
 /// Reads one template folder; `Err` carries a short reason for the log.
@@ -565,6 +617,53 @@ mod tests {
             ("2D, side view", "Paper look")
         );
         assert!(parse_template_file(&format!("{base}kind = \"4d\"\n")).is_err());
+    }
+
+    #[test]
+    fn templates_dir_prefers_env_then_installed_then_dev() {
+        let root = tempfile::tempdir().expect("tmp");
+        let exe_dir = root.path().join("bin");
+        let installed = exe_dir.join("templates");
+        let dev = root.path().join("repo").join("templates");
+        fs::create_dir_all(&dev).expect("dev dir");
+        let env = Some(std::ffi::OsString::from("C:/custom/templates"));
+
+        // The env var wins, even over folders that exist.
+        fs::create_dir_all(&installed).expect("installed dir");
+        assert_eq!(
+            resolve_templates_dir(env.clone(), Some(&exe_dir), Some(&dev)),
+            PathBuf::from("C:/custom/templates")
+        );
+        // An empty env var counts as unset.
+        assert_eq!(
+            resolve_templates_dir(Some("".into()), Some(&exe_dir), Some(&dev)),
+            installed
+        );
+        // The installed folder wins over the dev fallback.
+        assert_eq!(
+            resolve_templates_dir(None, Some(&exe_dir), Some(&dev)),
+            installed
+        );
+        // No installed folder: the dev fallback.
+        fs::remove_dir(&installed).expect("remove installed");
+        assert_eq!(resolve_templates_dir(None, Some(&exe_dir), Some(&dev)), dev);
+        // Neither (or a release build without a dev path): the install path, for the warning.
+        assert_eq!(
+            resolve_templates_dir(None, Some(&exe_dir), Some(&root.path().join("gone"))),
+            installed
+        );
+        assert_eq!(resolve_templates_dir(None, Some(&exe_dir), None), installed);
+    }
+
+    #[test]
+    fn debug_builds_fall_back_to_the_repo_templates() {
+        let dev = dev_templates_dir();
+        if cfg!(debug_assertions) {
+            let dev = dev.expect("debug builds have a dev fallback");
+            assert!(dev.join("baseplate").join(TEMPLATE_FILE).is_file());
+        } else {
+            assert!(dev.is_none(), "release builds carry no build path");
+        }
     }
 
     #[test]

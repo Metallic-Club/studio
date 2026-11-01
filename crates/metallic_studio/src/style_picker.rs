@@ -163,7 +163,7 @@ impl StylePicker {
             Action::new(
                 OPEN_ID,
                 "Style",
-                Icon::Text("St"),
+                Icon::Style,
                 ToolbarGroup::Hidden,
                 move |_| r.set(true),
             )
@@ -461,12 +461,7 @@ impl StylePicker {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add(
-                        Button::ghost("")
-                            .compact()
-                            .glyph(Icon::Text("×"))
-                            .alt("Close"),
-                    )
+                    .add(Button::ghost("").compact().glyph(Icon::Close).alt("Close"))
                     .clicked()
                 {
                     close = true;

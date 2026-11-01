@@ -8,7 +8,8 @@
 //! - **Stage**: one plate with the cut: the template's art (with chips) and the form: title,
 //!   facts, description, "Inside", Game name, Folder + Browse, a help line that turns into
 //!   inline validation, and the one violet action "Create game".
-//! - **Starting points**: the template cards with a segmented filter (All, 3D, 2D, Empty).
+//! - **Starting points**: the template cards with a segmented filter (All, 3D, 2D, Empty; 2D only
+//!   once a 2D template exists).
 //!
 //! Keyboard: Tab walks the rail, the form (name, folder, Browse, Create), the filter and the
 //! cards in that order; Enter in a field or on Create creates the game; arrows move between
@@ -93,6 +94,21 @@ impl Filter {
             Self::Empty => "No empty worlds yet. Try All.",
         }
     }
+}
+
+/// The filter's segments for `templates`: All, 3D, 2D and Empty, except that 2D stays hidden until
+/// a 2D template exists (2D is milestone M3), so it never opens on an empty list.
+fn filter_options(templates: &[TemplateInfo]) -> Vec<(Filter, &'static str)> {
+    let has_2d = templates.iter().any(|t| t.kind == TemplateKind::TwoD);
+    [
+        (Filter::All, "All"),
+        (Filter::ThreeD, "3D"),
+        (Filter::TwoD, "2D"),
+        (Filter::Empty, "Empty"),
+    ]
+    .into_iter()
+    .filter(|&(filter, _)| filter != Filter::TwoD || has_2d)
+    .collect()
 }
 
 /// Which form field an error belongs to (it gets the red border).
@@ -889,6 +905,10 @@ impl StartScreen {
 
     fn starting_points(&mut self, ui: &mut Ui) {
         let width = ui.available_width();
+        let filters = filter_options(&self.templates);
+        if !filters.iter().any(|(f, _)| *f == self.filter) {
+            self.filter = Filter::All;
+        }
         ui.allocate_ui_with_layout(
             vec2(width, 30.0),
             Layout::left_to_right(Align::Center),
@@ -896,16 +916,7 @@ impl StartScreen {
                 ui.set_width(width);
                 ui.label(RichText::new("Starting points").font(fonts::heading()));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    segmented(
-                        ui,
-                        &mut self.filter,
-                        &[
-                            (Filter::All, "All"),
-                            (Filter::ThreeD, "3D"),
-                            (Filter::TwoD, "2D"),
-                            (Filter::Empty, "Empty"),
-                        ],
-                    );
+                    segmented(ui, &mut self.filter, &filters);
                 });
             },
         );
@@ -1262,14 +1273,14 @@ mod tests {
     }
 
     #[test]
-    fn with_the_disk_templates_baseplate_comes_before_parkour() {
+    fn with_the_disk_templates_baseplate_comes_first_then_empty_and_parkour() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates");
         let screen = StartScreen::new(
             crate::templates::list_templates(&dir),
             RecentProjects::load(None),
         );
         let ids: Vec<&str> = screen.templates.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(&ids[..2], ["baseplate", "parkour"]);
+        assert_eq!(&ids[..3], ["baseplate", "empty", "parkour"]);
         assert_eq!(screen.name, "My Baseplate");
     }
 
@@ -1352,6 +1363,32 @@ mod tests {
         assert!(!Filter::ThreeD.admits(TemplateKind::Empty));
         assert!(Filter::Empty.admits(TemplateKind::Empty));
         assert!(!Filter::TwoD.admits(TemplateKind::ThreeD));
+    }
+
+    #[test]
+    fn the_2d_filter_hides_until_a_2d_template_exists() {
+        let tpl = tempfile::tempdir().expect("tmp");
+        let labels = |templates: &[TemplateInfo]| -> Vec<&'static str> {
+            filter_options(templates)
+                .into_iter()
+                .map(|(_, l)| l)
+                .collect()
+        };
+        let mut templates = vec![template(tpl.path())];
+        assert_eq!(labels(&templates), ["All", "3D", "Empty"]);
+        let mut screen = StartScreen::new(templates.clone(), RecentProjects::load(None));
+        screen.filter = Filter::TwoD;
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, theme::ThemeId::Graphite);
+        frame(&ctx, &mut screen, Vec::new());
+        assert_eq!(
+            screen.filter,
+            Filter::All,
+            "a hidden filter falls back to All"
+        );
+
+        templates[0].kind = TemplateKind::TwoD;
+        assert_eq!(labels(&templates), ["All", "3D", "2D", "Empty"]);
     }
 
     #[test]

@@ -189,7 +189,12 @@ impl ViewportHeader {
         );
         right.spacing_mut().item_spacing.x = 4.0;
         if !self.overflow.is_empty() {
-            let more = right.add(Button::ghost("»").compact().alt("More header options"));
+            let more = right.add(
+                Button::ghost("")
+                    .compact()
+                    .glyph(crate::icons::Icon::More)
+                    .alt("More header options"),
+            );
             egui::Popup::menu(&more).show(|ui| {
                 actions.check_items(ui, &self.overflow, state, keymap);
             });

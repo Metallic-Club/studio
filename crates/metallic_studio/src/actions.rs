@@ -414,11 +414,7 @@ fn toolbar_button(
     } else {
         Button::ghost(if labelled { name } else { "" })
     };
-    button = button.compact().selected(checked);
-    // A text placeholder icon says nothing the accessory label does not (Pivot/Centre).
-    if a.accessory.is_none() || !matches!(a.icon, Icon::Text(_)) {
-        button = button.glyph(a.icon);
-    }
+    button = button.compact().selected(checked).glyph(a.icon);
     if !labelled {
         button = button.alt(&tip);
     }
@@ -489,7 +485,7 @@ pub fn default_actions() -> ActionRegistry {
         (
             "tool.transform",
             "Transform",
-            Icon::Text("T"),
+            Icon::Transform,
             Tool::Transform,
         ),
     ] {
@@ -572,7 +568,7 @@ pub fn default_actions() -> ActionRegistry {
     r.register(Action::new(
         "view.focus_context_bar",
         "Focus the contextual toolbar",
-        Icon::Text("."),
+        Icon::ContextBar,
         ToolbarGroup::Hidden,
         // The editor window moves the focus (it owns the bar); see `EditorUi::run_action`.
         |_| {},
@@ -630,7 +626,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "pivot.mode",
             "Pivot or selection centre",
-            Icon::Text("Pv"),
+            Icon::PivotMode,
             ToolbarGroup::Settings,
             |s| {
                 s.pivot_mode = match s.pivot_mode {
@@ -654,7 +650,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "pivot.edit",
             "Edit pivot",
-            Icon::Text("P"),
+            Icon::Pivot,
             ToolbarGroup::Settings,
             |s| s.pivot_edit = !s.pivot_edit,
         )
@@ -665,7 +661,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "pivot.reset",
             "Reset pivot",
-            Icon::Text("P"),
+            Icon::Pivot,
             ToolbarGroup::Hidden,
             |s| {
                 s.reset_pivot();
@@ -702,7 +698,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "build.drop",
             "Drop onto surface below",
-            Icon::Text("v"),
+            Icon::Drop,
             ToolbarGroup::Hidden,
             |s| {
                 s.drop_selection();
@@ -771,7 +767,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "edit.duplicate",
             "Duplicate",
-            Icon::Text("D"),
+            Icon::Duplicate,
             ToolbarGroup::Hidden,
             EditorState::duplicate_selection,
         )
@@ -781,7 +777,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "edit.delete",
             "Delete",
-            Icon::Text("X"),
+            Icon::Delete,
             ToolbarGroup::Hidden,
             EditorState::delete_selection,
         )
@@ -791,7 +787,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "edit.group",
             "Group",
-            Icon::Text("G"),
+            Icon::Group,
             ToolbarGroup::Hidden,
             EditorState::group_selection,
         )
@@ -801,7 +797,7 @@ pub fn default_actions() -> ActionRegistry {
         Action::new(
             "edit.rename",
             "Rename",
-            Icon::Text("R"),
+            Icon::Rename,
             ToolbarGroup::Hidden,
             |s| {
                 if let Some(id) = s.selection.active() {
@@ -814,7 +810,7 @@ pub fn default_actions() -> ActionRegistry {
     r.register(Action::new(
         "edit.select_all",
         "Select all in Workspace",
-        Icon::Text("A"),
+        Icon::SelectAll,
         ToolbarGroup::Hidden,
         |s| {
             if let Some(ws) = s.world.root("Workspace") {
@@ -826,7 +822,7 @@ pub fn default_actions() -> ActionRegistry {
     r.register(Action::new(
         "file.save",
         "Save",
-        Icon::Text("S"),
+        Icon::Save,
         ToolbarGroup::Hidden,
         |s| {
             if let Err(e) = s.save() {
@@ -841,56 +837,56 @@ pub fn default_actions() -> ActionRegistry {
     r.register(Action::new(
         "file.close",
         "Close game",
-        Icon::Text("W"),
+        Icon::Close,
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::CloseGame),
     ));
     r.register(Action::new(
         "edit.deselect",
         "Clear selection",
-        Icon::Text("Esc"),
+        Icon::Deselect,
         ToolbarGroup::Hidden,
         |s| s.selection.clear(),
     ));
     r.register(Action::new(
         "settings.open",
         "Settings",
-        Icon::Text(","),
+        Icon::Settings,
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::OpenSettings),
     ));
     r.register(Action::new(
         "view.frame_selection",
         "Frame selection",
-        Icon::Text("F"),
+        Icon::FrameSelection,
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::FrameSelection),
     ));
     r.register(Action::new(
         "view.frame_all",
         "Frame all",
-        Icon::Text("H"),
+        Icon::FrameAll,
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::FrameAll),
     ));
     r.register(Action::new(
         "palette.open",
         "Search or run a command",
-        Icon::Text("K"),
+        Icon::Search,
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::OpenPalette("")),
     ));
     r.register(Action::new(
         "palette.commands",
         "Run a command",
-        Icon::Text(">"),
+        Icon::Commands,
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::OpenPalette(">")),
     ));
     r.register(Action::new(
         "insert.at_cursor",
         "Insert at cursor",
-        Icon::Text("A"),
+        Icon::Insert,
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::InsertAtCursor),
     ));
