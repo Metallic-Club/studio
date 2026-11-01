@@ -21,18 +21,22 @@ below are its output and can serve as Studio picker thumbnails (#83).
 
 | Preset | Luma mean | p1 | p99 | Chroma |
 |---|---|---|---|---|
-| clear-day | 0.555 | 0.181 | 0.694 | 0.111 |
-| golden-hour | 0.531 | 0.169 | 0.674 | 0.187 |
-| overcast | 0.545 | 0.167 | 0.806 | 0.034 |
+| clear-day | 0.555 | 0.179 | 0.694 | 0.111 |
+| golden-hour | 0.528 | 0.167 | 0.670 | 0.187 |
+| overcast | 0.542 | 0.165 | 0.802 | 0.034 |
 | night-city | 0.188 | 0.043 | 0.322 | 0.099 |
-| moonlit | 0.288 | 0.057 | 0.466 | 0.081 |
-| horror-fog | 0.366 | 0.233 | 0.444 | 0.074 |
-| sci-fi-interior | 0.484 | 0.120 | 0.654 | 0.191 |
-| cartoon-bright | 0.514 | 0.169 | 0.754 | 0.182 |
-| pixel-dusk | 0.464 | 0.087 | 0.683 | 0.243 |
-| underwater | 0.487 | 0.316 | 0.643 | 0.247 |
+| moonlit | 0.286 | 0.055 | 0.465 | 0.081 |
+| horror-fog | 0.363 | 0.230 | 0.441 | 0.074 |
+| sci-fi-interior | 0.482 | 0.120 | 0.650 | 0.191 |
+| cartoon-bright | 0.515 | 0.170 | 0.754 | 0.182 |
+| pixel-dusk | 0.467 | 0.090 | 0.687 | 0.244 |
+| underwater | 0.486 | 0.314 | 0.643 | 0.247 |
 | desert-noon | 0.580 | 0.235 | 0.756 | 0.108 |
-| alien-dusk | 0.526 | 0.171 | 0.679 | 0.303 |
+| alien-dusk | 0.523 | 0.168 | 0.678 | 0.303 |
+
+The previews are metered by auto exposure (#151). `ExposureCompensation` is set for the fixed exposure, and each
+preset's `AutoExposureBias` makes the metered image match it on the reference scene, so the preset looks the same with
+`AutoExposure` on or off (`tests/exposure.rs` checks both against the #149 means).
 
 `tests/lighting_presets.rs` checks these bounds on every preset: mean luma 0.3 to 0.7 (0.1 to 0.45 for the two night
 presets), p99 under 0.95, p99 - p1 over 0.15, p1 under 0.35, mean chroma 0.01 to 0.45, and every pair of presets
@@ -47,7 +51,12 @@ clamped, and `ClockTime` wraps around 24.
 - `ClockTime`, `GeographicLatitude`: sun position (equinox; +X east, +Z south). The sky, sun colour, sun strength
   and metered exposure come from the per-elevation table in `docs/agents/37-lighting/m1_sky_table.md`. Below -1
   degrees the moon lights the scene (`MoonBrightness`), with stars (`Sky.StarCount`).
-- `Brightness` scales the sun; `ExposureCompensation` is in stops. `NightAdaptation` keeps night darker and bluer.
+- `Brightness` scales the sun; `ExposureCompensation` is in stops, added after metering. `NightAdaptation` keeps
+  night darker and bluer.
+- `AutoExposure` (default on) meters every frame with a 256-bin luminance histogram on the GPU and adapts (faster
+  toward light than dark); off keeps the fixed exposure from the sun elevation. `ExposureMin` / `ExposureMax`
+  (EV100, default -4 / 16) limit the meter. `AutoExposureBias` (EV) is added only while metering, so a place can look
+  the same with metering on and off. Fixed and 2D Looks never meter. Toon-shaded pixels are not metered.
 - `Ambient` (flat, everywhere) and `OutdoorAmbient` (from the sky) add fill light relative to exposure: 255 adds
   half of a metered mid-tone, so the same value reads the same by day and by night. `ColorShift_Top` adds to the
   sun's colour, `ColorShift_Bottom` to the light bounced up from the ground. `EnvironmentDiffuseScale` and
@@ -62,8 +71,8 @@ clamped, and `ClockTime` wraps around 24.
 - `Clouds.Cover` dims the sun, turns the sky an even grey of `Clouds.Color` and softens shadows.
 - `BloomEffect` drives the bloom post pass (absent: 0.04 / 24 / 0; disabled: off).
 - `ColorCorrectionEffect`: brightness, contrast, saturation, tint in the finish pass.
-- `ColorGradingEffect.TonemapperPreset`: `Default` (AgX Punchy; Neutral when `LightingStyle` is Soft), `AgX`,
-  `Neutral`, `ACES`, `Filmic`, `Retro` (clamp).
+- `ColorGradingEffect.TonemapperPreset`: `Default` (the Look's curve: AgX Punchy under Realistic, Neutral when
+  `LightingStyle` is Soft), `AgXPunchy`, `AgX`, `Neutral`, `ACES`, `Filmic`, `Retro` (clamp).
 
 ## The presets
 
@@ -84,6 +93,7 @@ Low warm sun an hour before sunset, long soft shadows with a violet fill.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 17.25 |
+| Lighting | AutoExposureBias | -0.35 |
 | Lighting | Brightness | 1.15 |
 | Lighting | ExposureCompensation | 0.2 |
 | Lighting | OutdoorAmbient | (18, 14, 34) |
@@ -105,6 +115,7 @@ Even grey daylight under full cloud: no hard shadows, quiet colour.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 13 |
+| Lighting | AutoExposureBias | -0.4 |
 | Lighting | ExposureCompensation | 0.2 |
 | Lighting | ShadowSoftness | 1 |
 | Atmosphere | Density | 0.32 |
@@ -128,6 +139,7 @@ Late evening under a violet city glow; fog lit from below, few stars.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 22.5 |
+| Lighting | AutoExposureBias | -0.7 |
 | Lighting | Ambient | (62, 52, 82) |
 | Lighting | OutdoorAmbient | (12, 12, 22) |
 | Lighting | NightAdaptation | 0.5 |
@@ -151,6 +163,7 @@ Full moon on a clear night: cool silver light, crisp shadows, many stars.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 1 |
+| Lighting | AutoExposureBias | -0.3 |
 | Lighting | ExposureCompensation | 0.6 |
 | Lighting | ShadowSoftness | 0.15 |
 | Lighting | MoonBrightness | 1.5 |
@@ -169,6 +182,7 @@ Dusk swallowed by thick green-grey fog; drained colour, nothing far is safe.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 18.15 |
+| Lighting | AutoExposureBias | -0.75 |
 | Lighting | Brightness | 0.4 |
 | Lighting | ExposureCompensation | -0.3 |
 | Lighting | ShadowSoftness | 0.8 |
@@ -194,6 +208,7 @@ Clean, cool halls: soft overhead light, steel-blue fill, no haze.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 12 |
+| Lighting | AutoExposureBias | -0.4 |
 | Lighting | Brightness | 0.55 |
 | Lighting | ExposureCompensation | 0.2 |
 | Lighting | Ambient | (64, 78, 104) |
@@ -214,6 +229,7 @@ Toy-box noon: saturated colour, soft wrap light, lifted shadows, no grime.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 13 |
+| Lighting | AutoExposureBias | 0.1 |
 | Lighting | Brightness | 1.2 |
 | Lighting | ExposureCompensation | -0.3 |
 | Lighting | OutdoorAmbient | (40, 44, 64) |
@@ -239,6 +255,7 @@ Peach light, violet shadows, hard edges and a big sun, for pixel styles.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 17.55 |
+| Lighting | AutoExposureBias | -0.45 |
 | Lighting | OutdoorAmbient | (40, 22, 72) |
 | Lighting | ShadowSoftness | 0 |
 | Atmosphere | Color | (255, 176, 130) |
@@ -259,6 +276,7 @@ Teal water that eats red light and swallows distance; soft sun from above.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 13 |
+| Lighting | AutoExposureBias | -0.85 |
 | Lighting | Brightness | 0.6 |
 | Lighting | ExposureCompensation | 0.3 |
 | Lighting | ShadowSoftness | 0.6 |
@@ -284,6 +302,7 @@ Hard high sun at low latitude: short black shadows, bleached warm haze.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 12.3 |
+| Lighting | AutoExposureBias | 0.65 |
 | Lighting | GeographicLatitude | 25 |
 | Lighting | Brightness | 1.5 |
 | Lighting | ExposureCompensation | -0.4 |
@@ -304,6 +323,7 @@ Sunset on another world: amber sky, teal shade, a cold blue glow toward the sun.
 | Object | Property | Value |
 |---|---|---|
 | Lighting | ClockTime | 17 |
+| Lighting | AutoExposureBias | -0.1 |
 | Lighting | OutdoorAmbient | (40, 120, 130) |
 | Lighting | EnvironmentDiffuseScale | 0.35 |
 | Lighting | ColorShift_Top | (0, 120, 255) |
@@ -314,4 +334,3 @@ Sunset on another world: amber sky, teal shade, a cold blue glow toward the sun.
 | Atmosphere | Haze | 3 |
 | Atmosphere | AirColor | (255, 170, 110) |
 | BloomEffect | Intensity | 0.06 |
-

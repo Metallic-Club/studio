@@ -42,9 +42,9 @@ macro_rules! palette {
 
         /// Every role with its token name and whether the host theme overrides it.
         #[cfg(test)]
-        const ROLES: &[(&str, fn() -> Color32, bool)] = &[
-            $(($token, $name, $host.is_some()),)*
-        ];
+        fn roles() -> Vec<(&'static str, fn() -> Color32, bool)> {
+            vec![$(($token, $name as fn() -> Color32, $host.is_some()),)*]
+        }
     };
 }
 
@@ -71,12 +71,12 @@ palette! {
     text_3 => "text-3", None::<Color32>,
     text_off => "text-off", None::<Color32>,
     icon => "icon", None::<Color32>,
-    accent => "accent", Some(theme::ACCENT),
-    accent_hover => "accent-hover", Some(theme::FOCUS),
-    accent_text => "accent-text", Some(theme::FOCUS),
+    accent => "accent", Some(theme::accent()),
+    accent_hover => "accent-hover", Some(theme::focus()),
+    accent_text => "accent-text", Some(theme::focus()),
     on_accent => "on-accent", None::<Color32>,
-    focus => "focus", Some(theme::FOCUS),
-    error => "error", Some(theme::ERROR),
+    focus => "focus", Some(theme::focus()),
+    error => "error", Some(theme::error()),
     error_bg => "error-bg", None::<Color32>,
     warning => "warning", None::<Color32>,
     warning_bg => "warning-bg", None::<Color32>,
@@ -425,6 +425,8 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool) -> Respons
     let color = if enabled { self::icon() } else { text_off() };
     paint_icon(ui.painter(), rect.shrink(4.0), icon, color);
     focus_ring(ui, &resp, rect, R_SM);
+    // The tooltip doubles as the accessible name (screen readers and UI tests find it).
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tip));
     let resp = resp.on_hover_text(tip);
     if enabled {
         resp
@@ -453,6 +455,7 @@ pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, text: &str) -> 
     let icon_w = if icon.is_some() { 16.0 + S3 } else { 0.0 };
     let size = vec2(galley.size().x + icon_w + 2.0 * S5, 28.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
     let down = resp.is_pointer_button_down_on();
     let hot = resp.hovered() || resp.has_focus();
     let (fill, fg) = match kind {
@@ -551,7 +554,9 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, enabled: bool) -> Response {
         *on = !*on;
         resp.mark_changed();
     }
-    let t = ui.ctx().animate_bool_with_time(resp.id, *on, 0.09);
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(resp.id, *on, crate::theme::motion(0.09));
     let track = if !enabled {
         bg_raised()
     } else if *on {
@@ -1015,8 +1020,8 @@ mod tests {
     #[test]
     fn colours_come_from_the_token_file_or_the_host_theme() {
         let set = metallic_tokens::parse(metallic_tokens::TOKENS_JSON).unwrap();
-        assert!(!ROLES.is_empty());
-        for (name, get, from_host) in ROLES {
+        assert!(!roles().is_empty());
+        for (name, get, from_host) in roles() {
             let [r, g, b, _] =
                 metallic_tokens::color(&set, name).unwrap_or_else(|| panic!("no token {name}"));
             let c = get();
@@ -1026,10 +1031,10 @@ mod tests {
             }
         }
         // The roles the host theme names are the host's colours.
-        assert_eq!(accent(), theme::ACCENT);
-        assert_eq!(focus(), theme::FOCUS);
-        assert_eq!(accent_text(), theme::FOCUS);
-        assert_eq!(error(), theme::ERROR);
+        assert_eq!(accent(), theme::accent());
+        assert_eq!(focus(), theme::focus());
+        assert_eq!(accent_text(), theme::focus());
+        assert_eq!(error(), theme::error());
     }
 
     #[test]

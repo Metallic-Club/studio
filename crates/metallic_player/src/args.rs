@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub const USAGE: &str = "usage: metallic-player <project dir> [--scene <file relative to project>] \
 [--headless --frames N] [--quality low|high] [--fps] [--autopilot] [--frames N] \
 [--capture FRAME:PNG]... [--capture-view X,Y,Z,LX,LY,LZ] [--input-script <file>] [--no-overrides] [--menu main|keyboard|gamepad|assist|touch] \
-[--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion]";
+[--emulate phone|tablet|small-phone[-portrait]] [--reduce-motion] [--minimised]";
 
 /// Parsed arguments.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +46,8 @@ pub struct Args {
     pub emulate: Option<DeviceProfile>,
     /// `--reduce-motion`: the touch overlay appears and disappears without a fade.
     pub reduce_motion: bool,
+    /// `--minimised`: the window starts minimised (for checking CPU use while minimised).
+    pub minimised: bool,
 }
 
 impl Args {
@@ -67,6 +69,7 @@ impl Args {
             menu: None,
             emulate: None,
             reduce_motion: false,
+            minimised: false,
         };
         while let Some(a) = it.next() {
             let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
@@ -83,6 +86,7 @@ impl Args {
                     )?);
                 }
                 "--reduce-motion" => args.reduce_motion = true,
+                "--minimised" => args.minimised = true,
                 "--fps" => args.fps = true,
                 "--no-overrides" => args.no_overrides = true,
                 "--menu" => {
@@ -185,6 +189,8 @@ mod tests {
     fn parses_the_emulate_option() {
         let a = parse("p --emulate phone --capture 60:shot.png").unwrap();
         assert_eq!(a.emulate, Some(DeviceProfile::phone()));
+        assert!(parse("p --minimised").unwrap().minimised);
+        assert!(!parse("p").unwrap().minimised);
         let a = parse("p --emulate tablet-portrait --reduce-motion").unwrap();
         assert_eq!(a.emulate.map(|p| p.size), Some([820.0, 1180.0]));
         assert!(a.reduce_motion);

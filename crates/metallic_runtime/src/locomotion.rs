@@ -34,15 +34,15 @@
 //! delayed, which is not an animation matter.
 //!
 //! The state machine only picks clips, times and weights. The clips themselves stay the asset's
-//! own ([`metallic_render::metallic_asset`]); the machine is built over name-and-length stand-ins
+//! own ([`metallic_asset`]); the machine is built over name-and-length stand-ins
 //! for them and its [`MotionSample`]s are sampled from the asset clips and blended here.
 //! [`Locomotion::update`] does not allocate.
+use glam::Quat;
 use metallic_anim::{
     Clip, Condition, LoopMode, Motion, MotionSample, Parameter, ParameterValue, State,
     StateMachine, StateMachinePlayer, Transition,
 };
-use metallic_render::glam::Quat;
-use metallic_render::metallic_asset::{Pose, SkinnedModel};
+use metallic_asset::{Pose, SkinnedModel};
 use std::sync::Arc;
 
 /// Gait clips and the speed (studs/s) each is authored for, slowest first. Idle sits at 0.
@@ -676,8 +676,8 @@ impl Locomotion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::avatar::{STUD_METRES, default_model};
-    use metallic_render::glam::{Mat4, Vec3};
+    use crate::body_pose::{STUD_METRES, default_model};
+    use glam::{Mat4, Vec3};
 
     const DT: f32 = 1.0 / 60.0;
 

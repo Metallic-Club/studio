@@ -7,11 +7,24 @@ end to end (the owner round trip is pending, see the last section).
 - `tools/release.py` builds `metallic_studio`, packs it with Velopack (`vpk pack`) and uploads it with
   `vpk upload github` to the private repo `Metallic-Club/studio` as a release tagged `vX.Y.Z-<channel>`.
 - `.github/workflows/release.yml` runs the same script when a tag `v*` is pushed. It uses the workflow's own
-  `GITHUB_TOKEN`; there are no other secrets. It refuses tags whose commit is not on `main`, and every action in it is
+  `GITHUB_TOKEN`; there are no other secrets. It refuses tags whose commit is not on `main` (a check against mistakes, not a lock: see
+  "Protect the release tags"), and every action in it is
   pinned to a full commit SHA (update the SHA and the version comment together).
 - Studio (`crates/metallic_studio/src/updater.rs`) lists the releases of its channel, offers a newer one, downloads it
   and restarts. Because the repo is private, each person signs in once with GitHub's device sign-in
-  (`github_auth.rs`); the session lives in Windows Credential Manager under `MetallicStudio/github`.
+  (`github_auth.rs`); the session lives in Windows Credential Manager. The `keyring` crate names the entry
+  `<account>.<service>`, so it shows as `github.MetallicStudio` (the Launcher's: `github.MetallicLauncher` and
+  `platform.MetallicLauncher`), and stores it with `CRED_PERSIST_ENTERPRISE`, so the refresh token roams with a roaming
+  profile. That is acceptable: it is the same user's session.
+- Shipped builds use the `dist` Cargo profile (`[profile.dist]` in the root `Cargo.toml`): `release` plus thin LTO,
+  one codegen unit, `panic = "unwind"` and line-table debug info in a separate file. The script runs
+  `cargo build --locked --profile dist -p <package> -j 4` and stages the exes from `target/dist/`, not
+  `target/release/`. Panics must keep unwinding: asset import catches glTF parser panics, mlua turns a panic in a Rust
+  callback into a Lua error, and the update download worker reports a panicked thread as an error. Measurements and
+  reasons: `docs/agents/123-dist-profile.md`.
+- Each release's `.pdb` files (debug info with file:line tables, not shipped in the package) are copied to
+  `target/release-symbols/<tag>/`. Keep them for a release built by hand; they are what turns a crash address into a
+  source line. The workflow does not keep them yet (its runner is thrown away), see the progress note.
 - The Velopack CLI is pinned to `1.3.39-g8d2844f` in `tools/release.py` (`VPK_VERSION`). It is the same version as the
   `velopack` crate in `crates/metallic_studio/Cargo.toml`. Change both together.
 
@@ -43,22 +56,27 @@ runs). Prefer the workflow.
   one exact tag cannot establish the complete delta chain from an arbitrary installed version. Velopack verifies the
   downloaded full package's checksum. Delta optimization needs a separate complete-chain design and regression tests.
   Metadata uses the updater's bounded HTTP client; each package transfer has a ten-minute overall timeout. This is
-  synchronous worker logic; UI cancellation/threading is tracked separately in #206. Installed-copy restart and real
+  synchronous worker logic: a UI runs the check, the download and the sign-in on a worker thread (the Launcher does;
+  Studio has no UI for them yet). `GithubAuth::device_sign_in_until` takes a cancel flag. Installed-copy restart and real
   release round-trip acceptance remain pending below.
 - Only the owner decides when a stable release is cut. Dev builds come first; stable is a dev build that was tested.
 - A release can be marked required (Studio then insists on restarting): add `--required` to the script, or put the line
   `required: true` in the release notes. Use it only for breaking changes (file format, protocol).
 - The check accumulates skipped releases through a published same-channel version at/below the installed version
-  or the end of the list. A required flag on an older skipped page still applies to the newest offer. The existing
-  maximum of five pages of 50 remains; a scan truncated before that boundary reports an error rather than an
-  incomplete optional offer. This relies on the release process above publishing increasing versions, not on GitHub
+  or the end of the list. A required flag on an older skipped page still applies to the newest offer. It reads at
+  most 20 pages of 50 (the list holds both apps and both channels). A client more than 250 releases of its own app and
+  channel behind fails closed: the newest version is offered as required, so it updates instead of showing an update
+  error forever. Other apps' and channels' releases never count toward the 250. When the 20 pages run out first, it
+  is an error. This relies on the release process above publishing increasing versions, not on GitHub
   sorting arbitrary version strings. Later-page failures also produce no partial offer.
 
 ## Protect the release tags (owner, one time)
 Anyone who can push a tag `v*` can start a release. Add a tag ruleset: repo `Metallic-Club/studio`, Settings, Rules,
 Rulesets, New ruleset, New tag ruleset. Target tags matching `v*`; enable Restrict creations, Restrict updates and
-Restrict deletions, and put only the owner (and the lead account) on the bypass list. The workflow's `main` check is a
-second lock, not a replacement.
+Restrict deletions, and put only the owner (and the lead account) on the bypass list. **The ruleset is required: it is the only real control.**
+The workflow's "tag must be on `main`" step is not a second lock. A tag push runs the `release.yml` of the tagged commit,
+so whoever can push a tag can tag a commit whose `release.yml` drops the check. The step only catches honest mistakes
+(tagging a branch commit by accident).
 
 ## Register the GitHub App (owner, one time)
 Studio uses a GitHub App, not an OAuth App: an OAuth App with the `repo` scope would give each user's token read and

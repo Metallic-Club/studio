@@ -122,16 +122,12 @@ fn preorder(world: &World, root: InstanceId) -> Vec<InstanceId> {
     out
 }
 
-/// Moves the last child of `parent` to `index` by re-appending the siblings after it.
+/// Moves the last child of `parent` to `index`.
 fn move_last_to(world: &mut World, parent: InstanceId, index: usize) -> Result<(), CoreError> {
-    let children = world.children(parent).to_vec();
-    if children.len() <= 1 || index + 1 >= children.len() {
+    let Some(&last) = world.children(parent).last() else {
         return Ok(());
-    }
-    for &sibling in &children[index..children.len() - 1] {
-        world.set_parent(sibling, Some(parent))?;
-    }
-    Ok(())
+    };
+    world.set_parent_at(last, Some(parent), index)
 }
 
 /// One change of the tree.
@@ -287,7 +283,9 @@ impl EditStep {
         Ok(map)
     }
 
-    fn remap(&mut self, map: &IdMap) {
+    /// Rewrites the ids of every edit with `map` (old id to new id), after another step rebuilt
+    /// instances this step refers to.
+    pub fn remap(&mut self, map: &IdMap) {
         remap_all(&mut self.edits, map);
     }
 }

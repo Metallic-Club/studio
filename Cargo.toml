@@ -22,6 +22,9 @@ metallic_script = { path = "crates/metallic_script" }
 metallic_runtime = { path = "crates/metallic_runtime" }
 metallic_update = { path = "crates/metallic_update" }
 metallic_tokens = { path = "crates/metallic_tokens" }
+toml = "1.1.8"
+log = "0.4"
+metallic_ui_theme = { path = "crates/metallic_ui_theme" }
 metallic_audio = { path = "crates/metallic_audio" }
 metallic_net = { path = "crates/metallic_net" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
@@ -51,3 +54,20 @@ debug = false
 opt-level = 2
 [profile.dev.package.mlua-sys]
 opt-level = 2
+
+# Shipped builds (tools/release.py and the Release workflow build with `--profile dist`).
+# Measurements and reasons: docs/agents/123-dist-profile.md.
+# - lto = "thin" and one codegen unit: 4-7 % smaller exes, about the same build time as release.
+#   Fat LTO was still linking after 26 minutes at -j 4, so it was not adopted.
+# - panic stays "unwind": asset import catches parser panics (metallic_asset), mlua turns panics in
+#   Rust callbacks into Lua errors, and the update download worker reports a panicked thread as an error.
+# - line tables go to a separate debug file (the .pdb beside the exe on Windows), so crash addresses
+#   resolve to file:line while the shipped exe stays small. Keep the .pdb of every release.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+debug = "line-tables-only"
+split-debuginfo = "packed"
+strip = "none"

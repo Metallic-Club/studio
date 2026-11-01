@@ -67,6 +67,8 @@ fn real_pairs() -> Vec<Pair> {
     for bg in ["danger", "danger-hover"] {
         out.push(pair("on-danger", bg, TEXT));
     }
+    // The close glyph of Studio's title bar is an icon, not text: 3:1.
+    out.push(pair("on-danger", "caption-close", CONTROL));
     for fg in ["text-1", "text-2"] {
         out.push(pair(fg, "select", TEXT));
     }
@@ -162,4 +164,78 @@ fn every_theme_meets_contrast() {
         all.extend(failures(&set, theme, &pairs));
     }
     assert!(all.is_empty(), "contrast failures:\n{}", all.join("\n"));
+}
+
+/// Colour roles with no contrast pair, each with the reason none applies.
+const DECORATIVE: [(&str, &str); 8] = [
+    (
+        "line",
+        "hairline between surfaces; decoration, not a control border (line-control is checked)",
+    ),
+    (
+        "line-strong",
+        "heavier separator and dialog outline; decoration",
+    ),
+    ("text-off", "disabled text, exempt from WCAG 1.4.3"),
+    ("highlight", "1 px top sheen on plates; decoration"),
+    ("edge-low", "dark lower edge of plates; decoration"),
+    (
+        "art-scrim",
+        "dims game art behind text; the art behind it is not known",
+    ),
+    ("backdrop", "scrim behind dialogs; nothing is drawn on it"),
+    (
+        "keycap-on-accent",
+        "keycap fill on an accent button; its text is on-accent, which is checked",
+    ),
+];
+
+/// True for the raw colour ramps (`g-500`, `v-300`): primitives that the roles point at.
+fn is_ramp_step(name: &str) -> bool {
+    let mut parts = name.splitn(2, '-');
+    matches!(
+        (parts.next(), parts.next()),
+        (Some("g" | "v"), Some(n)) if n.parse::<u16>().is_ok()
+    )
+}
+
+/// Every colour role in every theme must be in a checked pair, or be listed above with a reason.
+/// The raw ramps are primitives, not roles, and are covered through the roles that use them.
+#[test]
+fn every_colour_role_is_checked_or_explained() {
+    let set = parse(TOKENS_JSON).unwrap();
+    let mut seen: Vec<&str> = Vec::new();
+    for p in real_pairs() {
+        seen.push(p.fg);
+        seen.push(p.bg);
+    }
+    let mut missing = Vec::new();
+    for token in set.tokens().iter().filter(|t| t.kind() == "color") {
+        let name = token.name();
+        let allowed = DECORATIVE.iter().any(|(n, _)| *n == name);
+        if !seen.contains(&name) && !allowed && !is_ramp_step(name) {
+            missing.push(name.to_owned());
+        }
+    }
+    for (name, reason) in DECORATIVE {
+        assert!(!reason.is_empty(), "{name} needs a reason");
+        assert!(
+            !seen.contains(&name),
+            "{name} is checked, remove it from DECORATIVE"
+        );
+    }
+    // Every theme must resolve every role to a plain colour, or the pairs above prove nothing.
+    for theme in set.theme_ids() {
+        for token in set.tokens().iter().filter(|t| t.kind() == "color") {
+            assert!(
+                themed_color(&set, theme, token.name()).is_some(),
+                "{theme}: {} is not a plain colour",
+                token.name()
+            );
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "colour roles in no contrast pair: {missing:?}"
+    );
 }

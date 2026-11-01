@@ -28,7 +28,7 @@ struct Frame {
 
 struct Look {
     flipbook: vec2<f32>,    // columns, rows (1, 1 = single image)
-    fps: f32,               // 0 = frame follows normalised age instead of time
+    fps: f32,               // 0 = play once over the particle's life (age), > 0 = loop at this rate
     soft_distance: f32,     // fade distance in world units, 0 disables soft particles
     additive: f32,          // 0 = alpha blend, 1 = additive
     _pad0: f32,
@@ -38,7 +38,7 @@ struct Look {
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> particles: array<Particle>;
-@group(0) @binding(2) var<storage, read> alive: array<u32>;
+@group(0) @binding(2) var<storage, read> alive: array<u32>; // the live half of particles_sim's `lists`
 @group(0) @binding(3) var scene_depth: texture_depth_2d;
 @group(1) @binding(0) var<uniform> look: Look;
 @group(1) @binding(1) var atlas: texture_2d<f32>;
@@ -78,14 +78,18 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 
     let t = p.age / max(p.lifetime, 1e-4);
     let total = max(look.flipbook.x * look.flipbook.y, 1.0);
-    let f = select(t * total, p.age * look.fps, look.fps > 0.0);
+    // With fps 0 the flipbook plays once over the particle's life: frame 0 at birth, the last frame at
+    // death, never blending back into frame 0. With fps > 0 it loops, so the wrap is intended.
+    let by_age = look.fps <= 0.0;
+    let f = select(p.age * look.fps, clamp(t, 0.0, 1.0) * (total - 1.0), by_age);
+    let next = select(floor(f) + 1.0, min(floor(f) + 1.0, total - 1.0), by_age);
     let local = vec2<f32>(c.x + 0.5, 0.5 - c.y);
 
     var out: VOut;
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
     out.uv_a = frame_uv(local, floor(f));
-    out.uv_b = frame_uv(local, floor(f) + 1.0);
-    out.blend = fract(f);
+    out.uv_b = frame_uv(local, next);
+    out.blend = f - floor(f);
     out.color = p.color;
     out.view_depth = out.clip.w;
     return out;

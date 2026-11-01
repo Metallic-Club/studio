@@ -18,9 +18,44 @@
 //!
 //! Commands keep property names as strings and values as [`Value`]s, so any property of any class
 //! is undoable without extra code. Undo names follow "Verb object (count)".
+//!
+//! # Gestures (#213)
+//!
+//! A building tool never pushes one step per frame. During a gesture it writes through the
+//! [`PreviewOverlay`](crate::preview::PreviewOverlay); on release the overlay becomes one
+//! [`Command::SetProperties`] (old and new value per change), so moving 500 parts is one entry.
+//! Gestures that also create instances (Alt-drag duplicates first) run the creating command with
+//! [`History::apply_pending`] and record `Batch[create, SetProperties]` on release, or
+//! [`History::abandon`] it on Esc. [`History::take_last`] reverts the newest step and hands it
+//! back, so the editable delta after a drag (spec 4.5) can change it without adding a step.
+//!
+//! # Steps from panels that build their own edits
+//!
+//! [`Command::Step`] holds an [`EditStep`] (the Input Actions panel's undo unit). A step destroys
+//! instances for real and rebuilds them with new ids on undo, so its undo and redo return an
+//! [`IdMap`]. History then rewrites the ids in every command it keeps and queues the map;
+//! [`History::take_remaps`] hands the maps to whoever holds ids (the Input Actions panel's
+//! `follow_remap`).
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
+
+use crate::input_actions::EditStep;
+use crate::input_actions::commands::IdMap;
+
+/// A property name inside a command; shared, so a 500-part drag names `Position` once.
+pub type PropName = Arc<str>;
+
+/// Bookkeeping outside the world that commands change: parked instances. (Pivots are core
+/// properties, `PivotOffset` and `WorldPivot`, changed by `SetProperties` like anything else.)
+#[derive(Debug, Default, Clone)]
+pub struct Book {
+    /// Detached instances kept alive for undo.
+    pub parked: HashSet<InstanceId>,
+    /// Ids rebuilt by [`Command::Step`]s during the current apply or revert (`old -> new`).
+    pub remap: IdMap,
+}
 
 /// Most undo steps kept. Older steps are dropped (and their parked instances destroyed).
 pub const HISTORY_LIMIT: usize = 200;
@@ -50,6 +85,38 @@ pub enum Command {
         /// Value after.
         new: Value,
     },
+    /// Sets, changes or removes one attribute. `Nil` stands for "no attribute" in `old` (the
+    /// attribute is added) and in `new` (it is removed).
+    SetAttribute {
+        /// Instance changed.
+        id: InstanceId,
+        /// Attribute name.
+        name: String,
+        /// Value before (`Nil`: there was none).
+        old: Value,
+        /// Value after (`Nil`: remove it).
+        new: Value,
+    },
+    /// Adds (`on`) or removes one tag.
+    SetTag {
+        /// Instance changed.
+        id: InstanceId,
+        /// The tag.
+        tag: String,
+        /// True to add it, false to remove it.
+        on: bool,
+        /// Filled by apply: whether the world changed. Undo does nothing when it did not (adding
+        /// a tag the instance already had must not remove it on undo).
+        changed: bool,
+    },
+    /// Many property changes as one undo step: (instance, property, old value, new value). A
+    /// gesture's preview overlay turns into this on release.
+    SetProperties {
+        /// Undo name, e.g. "Move 12 parts".
+        name: String,
+        /// The changes, applied in order and undone in reverse.
+        changes: Vec<(InstanceId, PropName, Value, Value)>,
+    },
     /// Several commands as one undo step (a gizmo drag over many parts, Properties on a
     /// multi-selection). Applied in order, undone in reverse.
     Batch {
@@ -74,7 +141,9 @@ pub enum Command {
         /// Where each removed root was; filled by apply.
         items: Vec<Placement>,
     },
-    /// Moves instances under a new parent (as last children).
+    /// Moves instances under a new parent (as last children). Initial placement capture
+    /// suppresses selected descendants before excluding built-ins and same-parent roots.
+    /// An all-no-op request returns [`CommandError::Nothing`] without a history entry.
     Reparent {
         /// Where each moved instance was before; filled by apply when empty.
         from: Vec<Placement>,
@@ -98,6 +167,9 @@ pub enum Command {
         /// The Model; created by the first apply.
         model: Option<Placement>,
     },
+    /// A tree edit built by a panel (Input Actions), already applied when recorded. Undo and
+    /// redo may rebuild instances with new ids (see the module docs).
+    Step(EditStep),
 }
 
 /// Why a command could not run. The world is left as it was before the command.
@@ -150,7 +222,37 @@ impl Command {
                     .unwrap_or("instance");
                 format!("Set {prop} of {what}")
             }
-            Command::Batch { name, .. } => name.clone(),
+            Command::SetAttribute { id, name, new, .. } => {
+                let what = world
+                    .get_ref(*id, "Name")
+                    .ok()
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("instance");
+                if matches!(new, Value::Nil) {
+                    format!("Remove attribute {name} of {what}")
+                } else {
+                    format!("Set attribute {name} of {what}")
+                }
+            }
+            Command::SetTag { id, tag, on, .. } => {
+                let what = world
+                    .get_ref(*id, "Name")
+                    .ok()
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("instance");
+                if *on {
+                    format!("Add tag {tag} to {what}")
+                } else {
+                    format!("Remove tag {tag} from {what}")
+                }
+            }
+            Command::Batch { name, .. } | Command::SetProperties { name, .. } => name.clone(),
             Command::Create { class, .. } => format!("Insert {class}"),
             Command::Delete { items } => format!("Delete {}", count(items.len(), "object")),
             Command::Reparent { from, .. } => {
@@ -160,26 +262,125 @@ impl Command {
                 format!("Duplicate {}", count(sources.len(), "object"))
             }
             Command::Group { items, .. } => format!("Group {}", count(items.len(), "object")),
+            Command::Step(step) => step.label.clone(),
         }
     }
 
-    /// Runs the command. On error the world is unchanged.
-    fn apply(
-        &mut self,
-        world: &mut World,
-        parked: &mut HashSet<InstanceId>,
-    ) -> Result<(), CommandError> {
+    /// Rewrites instance ids after an undo or redo rebuilt instances (`old -> new`).
+    pub fn remap(&mut self, map: &IdMap) {
+        if map.is_empty() {
+            return;
+        }
+        let fix = |id: &mut InstanceId| {
+            if let Some(&n) = map.get(id) {
+                *id = n;
+            }
+        };
+        let fix_opt = |id: &mut Option<InstanceId>| {
+            if let Some(i) = id {
+                fix(i);
+            }
+        };
+        let fix_place = |p: &mut Placement| {
+            fix(&mut p.id);
+            fix_opt(&mut p.parent);
+        };
+        match self {
+            Command::SetProperty { id, old, new, .. } => {
+                fix(id);
+                for v in [old, new] {
+                    if let Value::Ref(r) = v {
+                        fix_opt(r);
+                    }
+                }
+            }
+            Command::SetAttribute { id, .. } | Command::SetTag { id, .. } => fix(id),
+            Command::SetProperties { changes, .. } => {
+                for (id, _, old, new) in changes.iter_mut() {
+                    fix(id);
+                    for v in [old, new] {
+                        if let Value::Ref(r) = v {
+                            fix_opt(r);
+                        }
+                    }
+                }
+            }
+            Command::Batch { commands, .. } => commands.iter_mut().for_each(|c| c.remap(map)),
+            Command::Create { parent, id, .. } => {
+                fix(parent);
+                fix_opt(id);
+            }
+            Command::Delete { items } => items.iter_mut().for_each(fix_place),
+            Command::Reparent { from, to } => {
+                from.iter_mut().for_each(fix_place);
+                fix(to);
+            }
+            Command::Duplicate {
+                sources, copies, ..
+            } => {
+                sources.iter_mut().for_each(fix);
+                copies.iter_mut().for_each(fix_place);
+            }
+            Command::Group { items, model } => {
+                items.iter_mut().for_each(fix_place);
+                if let Some(m) = model {
+                    fix_place(m);
+                }
+            }
+            Command::Step(step) => step.remap(map),
+        }
+    }
+
+    /// Runs the command. On error the world is unchanged. Ids rebuilt by a [`Command::Step`] go
+    /// into `book.remap`; later commands of a batch are rewritten with it.
+    fn apply(&mut self, world: &mut World, book: &mut Book) -> Result<(), CommandError> {
         match self {
             Command::SetProperty { id, prop, new, .. } => Ok(world.set(*id, prop, new.clone())?),
+            Command::SetAttribute { id, name, new, .. } => {
+                Ok(world.set_attribute(*id, name, new.clone())?)
+            }
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                *changed = world.has_tag(*id, tag) != *on;
+                if *on {
+                    world.add_tag(*id, tag)?;
+                } else {
+                    world.remove_tag(*id, tag)?;
+                }
+                Ok(())
+            }
+            Command::SetProperties { changes, .. } => {
+                for i in 0..changes.len() {
+                    let (id, prop, _, new) = &changes[i];
+                    if let Err(e) = world.set(*id, prop, new.clone()) {
+                        for (id, prop, old, _) in changes[..i].iter().rev() {
+                            let _ = world.set(*id, prop, old.clone());
+                        }
+                        return Err(e.into());
+                    }
+                }
+                Ok(())
+            }
             Command::Batch { commands, .. } => {
                 for i in 0..commands.len() {
-                    if let Err(e) = commands[i].apply(world, parked) {
+                    commands[i].remap(&book.remap);
+                    if let Err(e) = commands[i].apply(world, book) {
                         for done in commands[..i].iter_mut().rev() {
-                            done.revert(world, parked);
+                            done.remap(&book.remap);
+                            done.revert(world, book);
                         }
                         return Err(e);
                     }
                 }
+                Ok(())
+            }
+            Command::Step(step) => {
+                let fresh = step.redo(world)?;
+                book.remap.extend(fresh);
                 Ok(())
             }
             Command::Create {
@@ -189,7 +390,7 @@ impl Command {
                 id,
             } => {
                 if let Some(existing) = *id {
-                    unpark(world, parked, existing, Some(*parent), usize::MAX)?;
+                    unpark(world, &mut book.parked, existing, Some(*parent), usize::MAX)?;
                     return Ok(());
                 }
                 let new_id = world.create(class, Some(*parent))?;
@@ -218,7 +419,7 @@ impl Command {
                     return Err(CommandError::Nothing("delete"));
                 }
                 for p in items.iter() {
-                    park(world, parked, p.id)?;
+                    park(world, &mut book.parked, p.id)?;
                 }
                 Ok(())
             }
@@ -227,7 +428,7 @@ impl Command {
                     let ids: Vec<InstanceId> = from.iter().map(|p| p.id).collect();
                     *from = top_level(world, &ids)
                         .into_iter()
-                        .filter(|&id| !world.is_builtin(id))
+                        .filter(|&id| !world.is_builtin(id) && world.parent(id) != Some(*to))
                         .filter_map(|id| placement(world, id))
                         .collect();
                     from.sort_by_key(|p| p.index);
@@ -252,7 +453,7 @@ impl Command {
             } => {
                 if !copies.is_empty() {
                     for c in copies.iter() {
-                        unpark(world, parked, c.id, c.parent, usize::MAX)?;
+                        unpark(world, &mut book.parked, c.id, c.parent, usize::MAX)?;
                     }
                     return Ok(());
                 }
@@ -276,7 +477,7 @@ impl Command {
             }
             Command::Group { items, model } => {
                 if let Some(m) = *model {
-                    unpark(world, parked, m.id, m.parent, m.index)?;
+                    unpark(world, &mut book.parked, m.id, m.parent, m.index)?;
                     for p in items.iter() {
                         world.set_parent(p.id, Some(m.id))?;
                     }
@@ -312,17 +513,46 @@ impl Command {
         }
     }
 
-    /// Undoes the command. Best effort: a failure on one item does not stop the others.
-    fn revert(&mut self, world: &mut World, parked: &mut HashSet<InstanceId>) {
+    /// Undoes the command. Best effort: a failure on one item does not stop the others. Ids
+    /// rebuilt by a [`Command::Step`] go into `book.remap`.
+    fn revert(&mut self, world: &mut World, book: &mut Book) {
+        let parked = &mut book.parked;
         match self {
             Command::SetProperty { id, prop, old, .. } => {
                 let _ = world.set(*id, prop, old.clone());
             }
-            Command::Batch { commands, .. } => {
-                for c in commands.iter_mut().rev() {
-                    c.revert(world, parked);
+            Command::SetAttribute { id, name, old, .. } => {
+                let _ = world.set_attribute(*id, name, old.clone());
+            }
+            Command::SetTag {
+                id,
+                tag,
+                on,
+                changed,
+            } => {
+                if *changed {
+                    let _ = if *on {
+                        world.remove_tag(*id, tag)
+                    } else {
+                        world.add_tag(*id, tag)
+                    };
                 }
             }
+            Command::SetProperties { changes, .. } => {
+                for (id, prop, old, _) in changes.iter().rev() {
+                    let _ = world.set(*id, prop, old.clone());
+                }
+            }
+            Command::Batch { commands, .. } => {
+                for c in commands.iter_mut().rev() {
+                    c.remap(&book.remap);
+                    c.revert(world, book);
+                }
+            }
+            Command::Step(step) => match step.undo(world) {
+                Ok(fresh) => book.remap.extend(fresh),
+                Err(e) => log::warn!("undo of `{}` failed: {e}", step.label),
+            },
             Command::Create { id, .. } => {
                 if let Some(id) = *id {
                     let _ = park(world, parked, id);
@@ -356,7 +586,8 @@ impl Command {
 
     /// Destroys the instances this command keeps parked, when it leaves the history.
     /// `applied` says whether the command is currently in effect.
-    fn discard(&self, world: &mut World, parked: &mut HashSet<InstanceId>, applied: bool) {
+    fn discard(&self, world: &mut World, book: &mut Book, applied: bool) {
+        let parked = &mut book.parked;
         let mut drop = |id: InstanceId| {
             if parked.remove(&id) {
                 world.destroy(id);
@@ -365,7 +596,7 @@ impl Command {
         match self {
             Command::Batch { commands, .. } => {
                 for c in commands {
-                    c.discard(world, parked, applied);
+                    c.discard(world, book, applied);
                 }
             }
             Command::Delete { items } if applied => items.iter().for_each(|p| drop(p.id)),
@@ -388,7 +619,8 @@ impl Command {
     }
 }
 
-fn count(n: usize, noun: &str) -> String {
+/// "1 part", "12 parts".
+pub fn count(n: usize, noun: &str) -> String {
     if n == 1 {
         format!("1 {noun}")
     } else {
@@ -432,7 +664,8 @@ pub fn placement(world: &World, id: InstanceId) -> Option<Placement> {
 
 /// Moves `id` under `parent` at `index` (clamped to the end).
 ///
-/// `World::set_parent` appends; the siblings that belong after `index` are re-appended in order.
+/// Uses `World::set_parent_at` (`set_parent` alone appends, and moving to the same parent is
+/// a no-op there).
 pub fn place(
     world: &mut World,
     id: InstanceId,
@@ -442,18 +675,7 @@ pub fn place(
     if placement(world, id).is_some_and(|p| p.parent == parent && p.index == index) {
         return Ok(());
     }
-    world.set_parent(id, parent)?;
-    let siblings: Vec<InstanceId> = match parent {
-        Some(p) => world.children(p).to_vec(),
-        None => world.roots().to_vec(),
-    };
-    let last = siblings.len().saturating_sub(1);
-    if index < last {
-        for &s in &siblings[index..last] {
-            world.set_parent(s, parent)?;
-        }
-    }
-    Ok(())
+    world.set_parent_at(id, parent, index)
 }
 
 fn park(
@@ -505,7 +727,7 @@ struct Entry {
 pub struct History {
     undo: Vec<Entry>,
     redo: Vec<Entry>,
-    parked: HashSet<InstanceId>,
+    book: Book,
     next_serial: u64,
     /// Serial of the newest applied step when the scene was last saved (0: nothing applied).
     saved: u64,
@@ -514,6 +736,8 @@ pub struct History {
     floor: u64,
     /// Bumps on every apply, record, undo and redo.
     revision: u64,
+    /// Id maps from undo and redo of [`Command::Step`]s, oldest first, not yet taken.
+    remaps: Vec<IdMap>,
 }
 
 impl History {
@@ -528,8 +752,42 @@ impl History {
     /// Runs `cmd` on `world` and pushes it as one undo step. Clears the redo list.
     /// On error nothing is pushed and the world is unchanged.
     pub fn apply(&mut self, mut cmd: Command, world: &mut World) -> Result<&Command, CommandError> {
-        cmd.apply(world, &mut self.parked)?;
+        let result = cmd.apply(world, &mut self.book);
+        self.after_rebuild();
+        result?;
         Ok(self.push(cmd, world))
+    }
+
+    /// Runs `cmd` without pushing it: the first part of a gesture that is recorded later (an
+    /// Alt-drag duplicates, then moves). Finish with [`History::record`] of a step that contains
+    /// `cmd`, or [`History::abandon`]. On error the world is unchanged.
+    pub fn apply_pending(
+        &mut self,
+        cmd: &mut Command,
+        world: &mut World,
+    ) -> Result<(), CommandError> {
+        let result = cmd.apply(world, &mut self.book);
+        self.after_rebuild();
+        result
+    }
+
+    /// Undoes a pending command (see [`History::apply_pending`]) and destroys what it created.
+    pub fn abandon(&mut self, mut cmd: Command, world: &mut World) {
+        cmd.revert(world, &mut self.book);
+        self.after_rebuild();
+        cmd.discard(world, &mut self.book, false);
+        self.revision += 1;
+    }
+
+    /// Reverts the newest undo step and hands it back without keeping it, so a tool can change
+    /// it and push the changed version (the editable delta after a drag). Re-apply or record the
+    /// changed step, or pass it to [`History::abandon`].
+    pub fn take_last(&mut self, world: &mut World) -> Option<Command> {
+        let mut e = self.undo.pop()?;
+        e.command.revert(world, &mut self.book);
+        self.after_rebuild();
+        self.revision += 1;
+        Some(e.command)
     }
 
     /// Pushes `cmd` as already applied (its `new` values are in the world). Used on release of a
@@ -540,7 +798,7 @@ impl History {
 
     fn push(&mut self, cmd: Command, world: &mut World) -> &Command {
         for e in self.redo.drain(..) {
-            e.command.discard(world, &mut self.parked, false);
+            e.command.discard(world, &mut self.book, false);
         }
         let serial = self.next_serial.max(1);
         self.next_serial = serial + 1;
@@ -551,7 +809,7 @@ impl History {
         if self.undo.len() > HISTORY_LIMIT {
             let old = self.undo.remove(0);
             self.floor = old.serial;
-            old.command.discard(world, &mut self.parked, true);
+            old.command.discard(world, &mut self.book, true);
         }
         self.revision += 1;
         &self.undo[self.undo.len() - 1].command
@@ -561,8 +819,9 @@ impl History {
     pub fn undo(&mut self, world: &mut World) -> Option<String> {
         let mut e = self.undo.pop()?;
         let name = e.command.name(world);
-        e.command.revert(world, &mut self.parked);
+        e.command.revert(world, &mut self.book);
         self.redo.push(e);
+        self.after_rebuild();
         self.revision += 1;
         Some(name)
     }
@@ -570,10 +829,12 @@ impl History {
     /// Redoes the newest undone step; returns its name.
     pub fn redo(&mut self, world: &mut World) -> Option<String> {
         let mut e = self.redo.pop()?;
-        if e.command.apply(world, &mut self.parked).is_err() {
+        let result = e.command.apply(world, &mut self.book);
+        self.after_rebuild();
+        if result.is_err() {
             // The world changed under the step (should not happen while every edit goes
             // through History); drop it rather than leave a half-applied step.
-            e.command.discard(world, &mut self.parked, false);
+            e.command.discard(world, &mut self.book, false);
             self.revision += 1;
             return None;
         }
@@ -581,6 +842,34 @@ impl History {
         self.undo.push(e);
         self.revision += 1;
         Some(name)
+    }
+
+    /// Rewrites every kept command with the ids the last apply or revert rebuilt, and queues
+    /// the map for [`History::take_remaps`].
+    fn after_rebuild(&mut self) {
+        let map = std::mem::take(&mut self.book.remap);
+        if map.is_empty() {
+            return;
+        }
+        for e in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            e.command.remap(&map);
+        }
+        self.remaps.push(map);
+    }
+
+    /// Id maps (old id to new id) from undo and redo steps that rebuilt instances, oldest first.
+    /// Whoever holds instance ids outside the history (a panel's selection) applies them.
+    pub fn take_remaps(&mut self) -> Vec<IdMap> {
+        std::mem::take(&mut self.remaps)
+    }
+
+    /// The newest undo step while nothing is undone, for folding a continuing gesture into it
+    /// (a value dragged over many frames). The command stays applied, as with [`History::record`].
+    pub fn last_mut(&mut self) -> Option<&mut Command> {
+        if !self.redo.is_empty() {
+            return None;
+        }
+        self.undo.last_mut().map(|e| &mut e.command)
     }
 
     /// The step Undo would revert.
@@ -610,12 +899,12 @@ impl History {
 
     /// True when `id` is detached by a delete or an undone creation (see the module docs).
     pub fn is_parked(&self, id: InstanceId) -> bool {
-        self.parked.contains(&id)
+        self.book.parked.contains(&id)
     }
 
     /// Every parked instance.
     pub fn parked(&self) -> impl Iterator<Item = InstanceId> + '_ {
-        self.parked.iter().copied()
+        self.book.parked.iter().copied()
     }
 
     /// Changes on every apply, record, undo and redo (for caches and repaint).

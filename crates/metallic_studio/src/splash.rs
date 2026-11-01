@@ -108,7 +108,7 @@ impl Splash {
         let since = *self.since.get_or_insert_with(Instant::now);
         if !self.hold {
             // Arrive: fade in over `t-splash`, easing out.
-            let t = (since.elapsed().as_secs_f32() / theme::T_SPLASH).min(1.0);
+            let t = (since.elapsed().as_secs_f32() / theme::t_splash()).min(1.0);
             if t < 1.0 {
                 ui.multiply_opacity(egui::emath::easing::cubic_out(t));
                 ui.ctx().request_repaint();
@@ -117,7 +117,7 @@ impl Splash {
         let rect = Rect::from_center_size(ui.max_rect().center(), SIZE);
         let painter = ui.painter();
         let radius = CornerRadius::same(theme::R_LG);
-        cut::fill(painter, rect, radius, theme::CUT_LG, theme::BG_BASE);
+        cut::fill(painter, rect, radius, theme::CUT_LG, theme::bg_base());
 
         // The titanium plate: one flat field of light metal, so the dark emblem reads.
         let plate = Rect::from_min_size(rect.min, vec2(PLATE_WIDTH, rect.height()));
@@ -141,7 +141,7 @@ impl Splash {
         painter.hline(
             plate.right()..=rect.right() - theme::CUT_LG,
             rect.top() + 0.5,
-            Stroke::new(1.0, theme::HIGHLIGHT),
+            Stroke::new(1.0, theme::highlight()),
         );
         if let Some(emblem) = emblem {
             let at = Rect::from_center_size(plate.center(), Vec2::splat(EMBLEM));
@@ -155,8 +155,8 @@ impl Splash {
         let painter = ui.painter();
         let mut y = body.top();
         for (text, light, color) in [
-            ("Metallic", false, theme::TEXT_1),
-            ("Studio", true, theme::TEXT_2),
+            ("Metallic", false, theme::text_1()),
+            ("Studio", true, theme::text_2()),
         ] {
             let galley = painter.layout_job(wordmark_line(text, light, color));
             painter.galley(egui::pos2(body.left(), y), galley, color);
@@ -167,7 +167,7 @@ impl Splash {
             Align2::LEFT_TOP,
             version_line(),
             fonts::small(),
-            theme::TEXT_3,
+            theme::text_3(),
         );
 
         // Status: step name and count above a 2 px track; the fill eases to the done share.
@@ -183,27 +183,27 @@ impl Splash {
             Align2::LEFT_CENTER,
             label,
             fonts::body(),
-            theme::TEXT_2,
+            theme::text_2(),
         );
         painter.text(
             egui::pos2(body.right(), line),
             Align2::RIGHT_CENTER,
             count,
             fonts::small(),
-            theme::TEXT_3,
+            theme::text_3(),
         );
-        painter.rect_filled(track, 1.0, theme::BG_ACTIVE);
+        painter.rect_filled(track, 1.0, theme::bg_active());
         let shown = ui.ctx().animate_value_with_time(
             egui::Id::unique("splash-progress"),
             self.progress(),
-            theme::T_PANEL,
+            theme::t_panel(),
         );
         if shown > 0.0 {
             let fill = Rect::from_min_size(
                 track.min,
                 vec2(track.width() * shown.clamp(0.0, 1.0), track.height()),
             );
-            painter.rect_filled(fill, 1.0, theme::ACCENT);
+            painter.rect_filled(fill, 1.0, theme::accent());
         }
     }
 }
@@ -244,18 +244,26 @@ pub fn viewport(builder: ViewportBuilder) -> ViewportBuilder {
         .with_resizable(false)
 }
 
-/// Turns the splash window into the normal Studio window, centred where the splash was.
+/// Where the main window's outer top-left goes so it is centred on the splash, in the same screen
+/// coordinates as the splash's outer rect. These can be negative: a monitor left of or above the
+/// primary one has negative coordinates, and clamping to zero would throw the window onto the
+/// primary monitor.
+pub fn main_window_position(splash_outer: Rect, main: Vec2) -> egui::Pos2 {
+    splash_outer.center() - main / 2.0
+}
+
+/// Turns the splash window into the normal Studio window, centred where the splash was (on the
+/// monitor the splash was on).
 pub fn become_main_window(ctx: &egui::Context) {
-    let centre = ctx.input(|i| i.viewport().outer_rect.map(|r| r.center()));
-    ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
+    let outer = ctx.input(|i| i.viewport().outer_rect);
+    // On Windows the window keeps no system frame: Studio draws its own title bar.
+    ctx.send_viewport_cmd(ViewportCommand::Decorations(!crate::title_bar::CUSTOM));
     ctx.send_viewport_cmd(ViewportCommand::Resizable(true));
     ctx.send_viewport_cmd(ViewportCommand::InnerSize(MAIN_SIZE));
     ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(MAIN_MIN_SIZE));
-    if let Some(centre) = centre {
-        let top_left = centre - MAIN_SIZE / 2.0;
-        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(
-            top_left.x.max(0.0),
-            top_left.y.max(0.0),
+    if let Some(outer) = outer {
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(main_window_position(
+            outer, MAIN_SIZE,
         )));
     }
 }
@@ -263,6 +271,24 @@ pub fn become_main_window(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_main_window_centres_on_the_splash_on_any_monitor() {
+        let splash = |x: f32, y: f32| Rect::from_min_size(egui::pos2(x, y), SIZE);
+        // Primary monitor: splash centred on a 1920x1080 screen.
+        let p = main_window_position(splash(600.0, 330.0), MAIN_SIZE);
+        assert_eq!(p, egui::pos2(320.0, 140.0));
+        // A monitor left of the primary has negative x: the window must stay there.
+        let p = main_window_position(splash(-1560.0, 330.0), MAIN_SIZE);
+        assert_eq!(p, egui::pos2(-1840.0, 140.0));
+        // A monitor above the primary has negative y.
+        let p = main_window_position(splash(600.0, -750.0), MAIN_SIZE);
+        assert_eq!(p, egui::pos2(320.0, -940.0));
+        // Same centre before and after.
+        let r = splash(-300.0, -200.0);
+        let p = main_window_position(r, MAIN_SIZE);
+        assert_eq!(p + MAIN_SIZE / 2.0, r.center());
+    }
 
     #[test]
     fn steps_advance_one_at_a_time_and_report_their_count() {
