@@ -1,6 +1,7 @@
 //! CPU side of the renderer: turns the parts of a [`World`] into draw lists.
-use crate::materials::{material_index, material_params};
+use crate::materials::material_index;
 use crate::meshes::MeshKind;
+use crate::shading::MaterialTable;
 use bytemuck::{Pod, Zeroable};
 use glam::{EulerRot, Mat4, Vec3};
 use metallic_core::look_override::LookOverrides;
@@ -15,8 +16,10 @@ pub struct InstanceRaw {
     pub model: [[f32; 4]; 4],
     /// Linear RGB colour and alpha (`1 - Transparency`).
     pub color: [f32; 4],
-    /// Roughness, metalness, material id, unused.
-    pub material: [f32; 4],
+    /// [0] material table row ([`MaterialTable::row`]), [1] flags (bit 0 hull, 1 vertex snap,
+    /// 2 affine, 3 nearest, bits 4-7 style slot; none used yet), [2] material id for the
+    /// procedural detail, [3] reserved.
+    pub material: [u32; 4],
 }
 
 /// One part ready to draw.
@@ -236,10 +239,27 @@ fn collect_parts(world: &World, looks: &LookOverrides) -> Vec<PartDraw> {
     out
 }
 
+/// A Vector3 property, or `default` when it is missing or not finite (in f32) on any axis.
+///
+/// Non-finite values are replaced so a part always compares equal to its last read: a NaN never
+/// does, and would make [`Scene::sync`] report a change (and re-upload) on every sync.
 fn vec3_prop(world: &World, id: InstanceId, name: &str, default: Vec3) -> Vec3 {
     match world.get(id, name) {
-        Ok(Value::Vector3(v)) => Vec3::new(v.x as f32, v.y as f32, v.z as f32),
+        Ok(Value::Vector3(v)) => finite_or(Vec3::new(v.x as f32, v.y as f32, v.z as f32), default),
         _ => default,
+    }
+}
+
+fn finite_or(v: Vec3, default: Vec3) -> Vec3 {
+    if v.is_finite() { v } else { default }
+}
+
+/// `Transparency` as drawn: clamped to 0..=1, opaque (0) when NaN.
+fn transparency_of(t: f64) -> f32 {
+    if t.is_nan() {
+        0.0
+    } else {
+        (t as f32).clamp(0.0, 1.0)
     }
 }
 
@@ -247,12 +267,13 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
     let position = vec3_prop(world, id, "Position", Vec3::ZERO);
     let rot = vec3_prop(world, id, "Orientation", Vec3::ZERO);
     let size = vec3_prop(world, id, "Size", Vec3::ONE).max(Vec3::splat(0.001));
+    let grey = Vec3::new(163.0, 162.0, 165.0);
     let color = match world.get(id, "Color") {
-        Ok(Value::Color3(c)) => [c.r as f32, c.g as f32, c.b as f32],
-        _ => [163.0, 162.0, 165.0],
+        Ok(Value::Color3(c)) => finite_or(Vec3::new(c.r as f32, c.g as f32, c.b as f32), grey),
+        _ => grey,
     };
     let transparency = match world.get(id, "Transparency") {
-        Ok(Value::Number(t)) => (t as f32).clamp(0.0, 1.0),
+        Ok(Value::Number(t)) => transparency_of(t),
         _ => 0.0,
     };
     let material = match world.get(id, "Material") {
@@ -270,11 +291,13 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
         rot.x.to_radians(),
         rot.z.to_radians(),
     );
-    let model = Mat4::from_translation(position) * rotation * Mat4::from_scale(size);
-    let params = material_params(&material);
+    let kind = MeshKind::from_shape(&shape);
+    let model =
+        Mat4::from_translation(position) * rotation * Mat4::from_scale(mesh_scale(kind, size));
+    let index = material_index(&material);
     Some(PartDraw {
         id,
-        kind: MeshKind::from_shape(&shape),
+        kind,
         instance: InstanceRaw {
             model: model.to_cols_array_2d(),
             color: [
@@ -283,15 +306,26 @@ fn read_part(world: &World, id: InstanceId, style: Option<&'static str>) -> Opti
                 srgb_to_linear(color[2] / 255.0),
                 1.0 - transparency,
             ],
-            material: [
-                params.roughness,
-                params.metalness,
-                material_index(&material) as f32,
-                0.0,
-            ],
+            // Style slot 0 (the place Look) until #223 maps resolved styles to slots.
+            material: [MaterialTable::row(0, index), 0, index as u32, 0],
         },
         style,
     })
+}
+
+/// Scale applied to the unit mesh so the drawn shape matches the physics collider
+/// (`build_collider` in `metallic_physics/src/sync.rs`) and Roblox: a Ball is a sphere whose
+/// diameter is the smallest axis; a Cylinder runs along local X with length `Size.X` and diameter
+/// `min(Size.Y, Size.Z)`. Box and Wedge fill the whole `Size`.
+fn mesh_scale(kind: MeshKind, size: Vec3) -> Vec3 {
+    match kind {
+        MeshKind::Sphere => Vec3::splat(size.min_element()),
+        MeshKind::Cylinder => {
+            let d = size.y.min(size.z);
+            Vec3::new(size.x, d, d)
+        }
+        _ => size,
+    }
 }
 
 /// Converts one sRGB encoded channel (0..=1) to linear light.
@@ -403,6 +437,49 @@ mod tests {
         assert_eq!(ball.instance.model[0][0], 2.0);
     }
 
+    /// Syncs one part with `shape` and `size` (no rotation) and returns its mesh kind and the
+    /// scale on its model matrix diagonal.
+    fn render_scale(shape: &str, size: CoreVec3) -> (MeshKind, Vec3) {
+        let (mut w, ids) = world_with_parts();
+        w.set(ids[0], "Shape", Value::String(shape.into())).unwrap();
+        w.set(ids[0], "Size", Value::Vector3(size)).unwrap();
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        let part = scene.parts().find(|p| p.id == ids[0]).unwrap();
+        let m = part.instance.model;
+        (part.kind, Vec3::new(m[0][0], m[1][1], m[2][2]))
+    }
+
+    // Expected values mirror `build_collider` in crates/metallic_physics/src/sync.rs:
+    // Ball = sphere of radius min(half extents); Cylinder = half height hx along X, radius
+    // min(hy, hz). metallic_render does not depend on metallic_physics, so they are written out.
+    #[test]
+    fn ball_render_scale_matches_physics() {
+        let (kind, scale) = render_scale("Ball", CoreVec3::new(8.0, 2.0, 2.0));
+        assert_eq!(kind, MeshKind::Sphere);
+        // Physics: radius min(4, 1, 1) = 1, so diameter 2 on every axis.
+        assert_eq!(scale, Vec3::splat(2.0));
+        let (_, scale) = render_scale("Ball", CoreVec3::new(3.0, 5.0, 4.0));
+        assert_eq!(scale, Vec3::splat(3.0));
+    }
+
+    #[test]
+    fn cylinder_render_scale_matches_physics() {
+        let (kind, scale) = render_scale("Cylinder", CoreVec3::new(4.0, 6.0, 2.0));
+        assert_eq!(kind, MeshKind::Cylinder);
+        // Physics: half height 2 along X (length 4), radius min(3, 1) = 1 (diameter 2). The unit
+        // cylinder mesh already runs along local X (meshes.rs), so X is the length axis.
+        assert_eq!(scale, Vec3::new(4.0, 2.0, 2.0));
+    }
+
+    #[test]
+    fn block_and_wedge_keep_full_size() {
+        for shape in ["Block", "Wedge"] {
+            let (_, scale) = render_scale(shape, CoreVec3::new(4.0, 6.0, 2.0));
+            assert_eq!(scale, Vec3::new(4.0, 6.0, 2.0), "{shape}");
+        }
+    }
+
     #[test]
     fn later_syncs_are_incremental() {
         let (mut w, ids) = world_with_parts();
@@ -506,5 +583,34 @@ mod tests {
     fn srgb_conversion_hits_the_ends() {
         assert_eq!(srgb_to_linear(0.0), 0.0);
         assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    /// `World::set` rejects non-finite values since #98; the renderer still sanitises what it
+    /// reads so a NaN that gets in another way cannot make every sync report a change.
+    #[test]
+    fn non_finite_reads_fall_back_to_finite_defaults() {
+        assert_eq!(transparency_of(f64::NAN), 0.0);
+        assert_eq!(transparency_of(f64::INFINITY), 1.0);
+        assert_eq!(transparency_of(-3.0), 0.0);
+        assert_eq!(transparency_of(0.25), 0.25);
+        let d = Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(finite_or(Vec3::new(f32::NAN, 0.0, 0.0), d), d);
+        assert_eq!(finite_or(Vec3::new(0.0, f32::INFINITY, 0.0), d), d);
+        // A finite f64 too large for f32 becomes infinite after the cast and also falls back.
+        assert_eq!(finite_or(Vec3::new(1e39_f64 as f32, 0.0, 0.0), d), d);
+        assert_eq!(finite_or(Vec3::ONE, d), Vec3::ONE);
+    }
+
+    /// A part read twice compares equal, so an unchanged part never counts as a change.
+    #[test]
+    fn rereading_an_unchanged_part_is_not_a_change() {
+        let (mut w, ids) = world_with_parts();
+        w.set(ids[0], "Transparency", Value::Number(0.4)).unwrap();
+        let a = read_part(&w, ids[0], None);
+        assert!(a.is_some());
+        assert_eq!(a, read_part(&w, ids[0], None));
+        let mut scene = Scene::new();
+        scene.sync(&w);
+        assert!(!scene.update(&w, ids[0]));
     }
 }

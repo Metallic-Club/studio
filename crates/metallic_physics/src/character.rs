@@ -56,6 +56,10 @@
 //! [`PhysicsWorld::drain_touched`] never reports character parts. The runtime turns these events
 //! into `BasePart.Touched` and `BasePart.TouchEnded` on the touched part, with the character
 //! part as `hit`. When a character dies its contacts end and it reports no new touches.
+//! Characters this controller steps touch each other volume against volume, each contact
+//! reported once with the other character's part as `part` (see [`crate::limbs`]); characters
+//! it does not step are ordinary scene parts. A character first stepped this tick is still a
+//! scene part to the others for that one step.
 //!
 //! Rules: `Health <= 0` (or not a number), the root below `Workspace.FallenPartsDestroyHeight`,
 //! or the root leaving the world (a non-finite coordinate or one beyond [`WORLD_LIMIT`]) makes the
@@ -73,6 +77,7 @@ use crate::avatar::{self, PartIds, ROOT_PART, VIOLET};
 use crate::body::{
     BodyPart, BodyPose, Contact, ROOT_HIT, TOUCH_MARGIN, TouchQueryCost, TouchVolumes,
 };
+use crate::limbs::CharacterPairs;
 use crate::{GRAVITY, PhysicsWorld, from_vector, to_vector};
 use metallic_core::classes::{MAX_JUMP_POWER, MAX_SLOPE_ANGLE, MAX_WALK_SPEED};
 use metallic_core::{CoreError, InstanceId, Value, Vec3, World};
@@ -597,6 +602,8 @@ pub struct CharacterController {
     own: Vec<ColliderHandle>,
     /// Scratch stack for walking the character Model (reused).
     walk: Vec<InstanceId>,
+    /// Contacts between the stepped characters' volumes (see [`crate::limbs`]).
+    pairs: CharacterPairs,
 }
 
 impl CharacterController {
@@ -682,7 +689,14 @@ impl CharacterController {
                 tests: b.volumes.tests,
                 dropped: b.volumes.dropped,
                 capped_queries: b.volumes.capped_queries,
+                ..TouchQueryCost::default()
             })
+            .with_characters(self.pairs.cost.get(&character).copied().unwrap_or_default())
+    }
+
+    /// The parts of other characters touching `character`'s parts, as `(mine, theirs)`.
+    pub fn touching_characters(&self, character: InstanceId) -> Vec<(InstanceId, InstanceId)> {
+        self.pairs.touching(character)
     }
 
     /// The character's movement state and root position, to rewind to later. A character that
@@ -709,12 +723,16 @@ impl CharacterController {
     /// Sets the character's movement state and places the whole character at `state.position`
     /// and `state.yaw` (body parts in the current [`CharacterController::body_pose`]). The set of
     /// parts it touches is left alone, so no touch is reported twice.
+    /// A destroyed or invalid target is ignored without creating cached state.
     pub fn restore_state(
         &mut self,
         world: &mut World,
         character: InstanceId,
         state: &CharacterState,
     ) {
+        if !world.is_alive(character) {
+            return;
+        }
         self.motions.insert(
             character,
             Motion {
@@ -760,10 +778,12 @@ impl CharacterController {
         self.motions.retain(|&id, _| world.is_alive(id));
         // A character destroyed or replaced without dying still ends its contacts.
         let events = &mut self.events;
+        let pairs = &mut self.pairs;
         self.bodies.retain(|&id, body| {
             let alive = world.is_alive(id);
             if !alive {
                 end_all(events, world, id, body);
+                pairs.end(id, events);
             }
             alive
         });
@@ -798,6 +818,7 @@ impl CharacterController {
                 if let Some(body) = self.bodies.remove(&character) {
                     end_all(&mut self.events, world, character, &body);
                 }
+                self.pairs.end(character, &mut self.events);
                 self.events.push(CharacterEvent::Respawned {
                     player,
                     old: character,
@@ -876,8 +897,19 @@ impl CharacterController {
         if alive {
             let probe = Capsule::new_y(HALF_SEGMENT as f32, (RADIUS + TOUCH_MARGIN) as f32);
             let probe_pose = capsule_pose(new_root);
+            // Other stepped characters meet this one volume against volume (see
+            // `crate::limbs`), not as scene parts.
+            let motions = &self.motions;
+            let world_ref: &World = world;
+            let skip = |h: ColliderHandle| {
+                own.contains(&h)
+                    || physics
+                        .owner_of(h)
+                        .and_then(|p| world_ref.parent(p))
+                        .is_some_and(|m| m != character && motions.contains_key(&m))
+            };
             body.volumes
-                .query(physics, &own, &probe, &probe_pose, &pose, new_root);
+                .query(physics, &skip, &probe, &probe_pose, &pose, new_root);
             body.volumes.commit(on_start, on_end);
         } else {
             body.volumes.clear(on_end);
@@ -900,6 +932,26 @@ impl CharacterController {
                 });
             }
         }
+        if alive
+            && let Some(me) = self.bodies.get(&character)
+            && let Some(mine) = me.volumes.world.as_ref()
+        {
+            let motions = &self.motions;
+            let world_ref: &World = world;
+            let others = self
+                .bodies
+                .iter()
+                .filter(move |&(&id, _)| {
+                    id != character
+                        && world_ref.is_alive(id)
+                        && motions
+                            .get(&id)
+                            .is_some_and(|m| m.state != HumanoidState::Dead)
+                })
+                .filter_map(|(&id, b)| b.volumes.world.as_ref().map(|w| (id, w, &b.ids)));
+            self.pairs
+                .update(character, (mine, &me.ids), others, &mut self.events);
+        }
         started.sort_unstable();
         started.dedup();
         self.reach_checkpoints(world, character, &started);
@@ -911,6 +963,7 @@ impl CharacterController {
 
     /// Makes the character Dead and reports [`CharacterEvent::Died`] (once per life).
     fn die(&mut self, m: &mut Motion, character: InstanceId, humanoid: InstanceId) {
+        self.pairs.end(character, &mut self.events);
         *m = Motion {
             state: HumanoidState::Dead,
             vertical: m.vertical.min(0.0),

@@ -3449,6 +3449,7 @@ dependencies = [
  "criterion",
  "ron",
  "serde",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -3629,6 +3630,7 @@ dependencies = [
  "toml 1.1.8+spec-1.1.0",
  "velopack",
  "wgpu",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

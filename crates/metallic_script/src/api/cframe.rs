@@ -55,6 +55,24 @@ fn euler_args(args: &[Option<f64>]) -> (f64, f64, f64) {
     (at(0), at(1), at(2))
 }
 
+/// `CFrame.new(x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22)`, re-orthonormalised like a
+/// stored CFrame ([`CFrame::try_orthonormalize`]: an orthonormal matrix is kept bit for bit, a
+/// scaled or skewed one keeps its right axis), so a script reads back what a property stores.
+/// A finite matrix that cannot be orthonormalised (a zero column, parallel columns) gets the
+/// identity rotation at the given position: Roblox does not document that case. A non-finite
+/// matrix is kept as given, so assigning it to a property still errors.
+fn twelve_numbers(n: &[f64]) -> CFrame {
+    let cf = CFrame::from_parts(
+        Vec3::new(n[0], n[1], n[2]),
+        [[n[3], n[4], n[5]], [n[6], n[7], n[8]], [n[9], n[10], n[11]]],
+    );
+    match cf.try_orthonormalize() {
+        Some(fixed) => fixed,
+        None if cf.is_finite() => CFrame::from_position(cf.position),
+        None => cf,
+    }
+}
+
 /// `CFrame.new(...)` with each Roblox overload.
 fn new(args: &[Value]) -> mlua::Result<CFrame> {
     let numbers: Option<Vec<f64>> = args.iter().map(number).collect();
@@ -65,10 +83,7 @@ fn new(args: &[Value]) -> mlua::Result<CFrame> {
             Vec3::new(n[0], n[1], n[2]),
             [n[3], n[4], n[5], n[6]],
         )),
-        (12, Some(n)) => Ok(CFrame::from_parts(
-            Vec3::new(n[0], n[1], n[2]),
-            [[n[3], n[4], n[5]], [n[6], n[7], n[8]], [n[9], n[10], n[11]]],
-        )),
+        (12, Some(n)) => Ok(twelve_numbers(&n)),
         (1, _) => vector(&args[0])
             .map(CFrame::from_position)
             .ok_or_else(|| lua_error("CFrame.new: expected a Vector3")),

@@ -17,6 +17,14 @@ pub enum KeyContext {
     /// While a gizmo or body drag is held: Esc cancels, X/Y/Z lock axes, R/T turn, Ctrl+D
     /// stamps. These keys mean nothing else during a drag.
     Drag,
+    /// While a building-tool popover (Align, Array, Select similar) is open, wherever the
+    /// pointer is: Esc closes it, Enter makes the array, letters pick a Select similar key.
+    /// Checked before every other context.
+    Popover,
+    /// While the brush or Measure is on and the pointer is over the viewport (or a tool gesture
+    /// is held): Esc cancels the stroke or clears, `[` / `]` change the brush radius. Checked
+    /// before Global and Viewport.
+    Tool,
     /// While a play session runs: Studio keys that win over the game (Esc stops). Viewport
     /// keys are off then; the game gets them.
     Play,
@@ -115,7 +123,10 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("space.toggle", "X", KeyContext::Viewport),
     ("pivot.mode", "Z", KeyContext::Viewport),
     ("pivot.edit", "P", KeyContext::Viewport),
-    ("snap.grid", "Ctrl+K", KeyContext::Global),
+    ("snap.grid", "G", KeyContext::Viewport),
+    ("palette.open", "Ctrl+K", KeyContext::Global),
+    ("palette.commands", "Ctrl+Shift+P", KeyContext::Global),
+    ("insert.at_cursor", "Shift+A", KeyContext::Viewport),
     ("increment.move_down", "[", KeyContext::Viewport),
     ("increment.move_up", "]", KeyContext::Viewport),
     ("increment.rotate_down", "Shift+[", KeyContext::Viewport),
@@ -136,11 +147,35 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("view.frame_selection", "F", KeyContext::Viewport),
     ("view.frame_all", "Home", KeyContext::Viewport),
     ("view.focus_context_bar", "Ctrl+.", KeyContext::Global),
+    // Building tools (building-tools spec, shortcut table) and the colour popover.
+    ("tool.brush", "B", KeyContext::Viewport),
+    ("tool.measure", "Shift+M", KeyContext::Viewport),
+    ("build.align", "A", KeyContext::Viewport),
+    ("build.mirror", "Ctrl+M", KeyContext::Global),
+    ("build.mirror_copy", "Ctrl+Shift+M", KeyContext::Global),
+    ("build.array", "Ctrl+Shift+D", KeyContext::Global),
+    ("select.similar", "Shift+G", KeyContext::Viewport),
+    ("colour.open", "C", KeyContext::Viewport),
+    // Open building-tool popovers and the brush/measure tool (checked first, see KeyContext).
+    ("popover.close", "Escape", KeyContext::Popover),
+    ("array.make", "Enter", KeyContext::Popover),
+    ("similar.color", "C", KeyContext::Popover),
+    ("similar.material", "M", KeyContext::Popover),
+    ("similar.style", "L", KeyContext::Popover),
+    ("similar.size", "S", KeyContext::Popover),
+    ("similar.class", "K", KeyContext::Popover),
+    ("similar.name", "N", KeyContext::Popover),
+    ("similar.tags", "T", KeyContext::Popover),
+    ("similar.parent", "P", KeyContext::Popover),
+    ("tool.cancel", "Escape", KeyContext::Tool),
+    ("brush.radius_down", "[", KeyContext::Tool),
+    ("brush.radius_up", "]", KeyContext::Tool),
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
     ("play.stop", "Escape", KeyContext::Play),
     ("output.clear", "Ctrl+L", KeyContext::Global),
-    // Esc never closes anything: it clears the selection, or cancels a gizmo drag.
+    // Esc never closes the game: it closes a building popover or cancels a tool (above), clears
+    // the selection, or cancels a gizmo drag.
     ("edit.deselect", "Escape", KeyContext::Viewport),
     ("drag.cancel", "Escape", KeyContext::Drag),
     ("drag.lock_x", "X", KeyContext::Drag),
@@ -226,8 +261,9 @@ impl Keymap {
     }
 
     /// Actions whose chord was pressed this frame in one of `active` contexts. Modifiers must
-    /// match exactly (Ctrl+Shift+Z is not Ctrl+Z). Matching key presses are consumed so egui
-    /// widgets do not also react. `out` is cleared first.
+    /// match exactly (Ctrl+Shift+Z is not Ctrl+Z). When a chord is bound in several active
+    /// contexts, the context listed first in `active` wins. Matching key presses are consumed so
+    /// egui widgets do not also react. `out` is cleared first.
     pub fn pressed(&self, ctx: &egui::Context, active: &[KeyContext], out: &mut Vec<&'static str>) {
         self.pressed_where(ctx, active, out, |_| true);
     }
@@ -254,11 +290,13 @@ impl Keymap {
                 else {
                     return true;
                 };
-                let Some(b) = self.bindings.iter().find(|b| {
-                    active.contains(&b.context)
-                        && b.chord.key == *key
-                        && b.chord.matches_modifiers(*modifiers)
-                        && owns(b.action)
+                let Some(b) = active.iter().find_map(|c| {
+                    self.bindings.iter().find(|b| {
+                        b.context == *c
+                            && b.chord.key == *key
+                            && b.chord.matches_modifiers(*modifiers)
+                            && owns(b.action)
+                    })
                 }) else {
                     return true;
                 };

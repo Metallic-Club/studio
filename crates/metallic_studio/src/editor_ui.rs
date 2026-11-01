@@ -7,6 +7,10 @@
 //! and Play keys work), viewport keys only while the pointer is over the 3D view and the right
 //! button is up (so WASD flies the camera while it is held).
 //!
+//! The building tools ([`EditorTools`]), the Input Actions dock ([`InputActionsDock`]) and the
+//! colour popover ([`ColourDock`]) live in their own modules; this file only registers them,
+//! gives them their place in the layout and calls them once per frame.
+//!
 //! **While playing** Studio's keys are dispatched first each frame (Global and Play contexts:
 //! Esc and Shift+F5 stop; a disabled action leaves its key alone), then the rest of the keyboard,
 //! Tab, Space and Enter included, and the mouse over the viewport go to the game
@@ -18,17 +22,23 @@ use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
 use crate::context_bar::ContextBar;
-use crate::editor::{EditorState, INSERTABLE, UiRequest};
+use crate::editor::{EditorState, Gesture, INSERTABLE, UiRequest};
+use crate::editor_colour::ColourDock;
+use crate::editor_input_actions::InputActionsDock;
+use crate::editor_tools::{EditorTools, ViewContext};
 use crate::explorer::{Explorer, PlayTree};
 use crate::hints::{HintEvent, Hints};
 use crate::keymap::{KeyContext, Keymap};
 use crate::output::OutputPanel;
+use crate::palette::{Choice, CommandPalette};
 use crate::panel;
 use crate::play::input::PlayInput;
 use crate::properties::Properties;
 use crate::script_editor::ScriptTabs;
+use crate::style_picker::StylePicker;
 use crate::theme;
 use crate::tokens::ui_tokens;
+use crate::toolbar::{Toolbar, ToolbarLayout};
 use crate::viewport::Viewport;
 use crate::viewport_header::ViewportHeader;
 use crate::widgets::Plate;
@@ -79,11 +89,20 @@ pub struct EditorUi {
     pub output: OutputPanel,
     /// 3D view.
     pub viewport: Viewport,
+    /// Building tools (align, mirror, array, brush, selection modes, measure).
+    pub tools: EditorTools,
+    /// The Input Actions panel, docked on the right when open.
+    pub input_actions: InputActionsDock,
+    /// The colour popover for Color3 properties.
+    pub colour: ColourDock,
+    toolbar: Toolbar,
     explorer: Explorer,
     /// The strip over the viewport (spec 3.1).
     pub header: ViewportHeader,
     /// The floating toolbar over the selection (spec 3.2).
     pub context_bar: ContextBar,
+    /// The building style picker (L, Properties > Style).
+    pub style_picker: StylePicker,
     /// First-time hints (spec 14.1); in memory until the app loads the saved ones.
     pub hints: Hints,
     /// Selection and history revisions the hints last looked at.
@@ -102,17 +121,31 @@ pub struct EditorUi {
     play_input: PlayInput,
     /// Explorer's read-only tree of the play world.
     play_tree: PlayTree,
+    /// Ctrl+K command palette and Shift+A Insert palette.
+    pub palette: CommandPalette,
+    /// The last question asked of Litha from the palette, for the Litha panel to take.
+    litha_question: Option<String>,
 }
 
 impl EditorUi {
     /// Builds the editor around `state`, whose Output sink must come from `output`.
     pub fn new(state: EditorState, output: OutputPanel) -> EditorUi {
+        let mut actions = default_actions();
+        let tools = EditorTools::new(&mut actions);
+        let input_actions = InputActionsDock::new(&state.world, &mut actions);
+        let colour = ColourDock::new(&state, &mut actions);
+        let style_picker = StylePicker::new(&mut actions);
         let mut ui = EditorUi {
             state,
-            actions: default_actions(),
+            actions,
+            style_picker,
             keymap: Keymap::metallic(),
             output,
             viewport: Viewport::new(),
+            tools,
+            input_actions,
+            colour,
+            toolbar: Toolbar::new(),
             explorer: Explorer::new(),
             properties: Properties::new(),
             header: ViewportHeader::new(),
@@ -126,10 +159,17 @@ impl EditorUi {
             settings_requested: false,
             play_input: PlayInput::new(),
             play_tree: PlayTree::new(),
+            palette: CommandPalette::new(),
+            litha_question: None,
         };
         ui.viewport.frame_all(&ui.state);
         ui.sync_hold_keys();
         ui
+    }
+
+    /// Where last frame's toolbar put its groups and which collapsed into the "»" menu.
+    pub fn toolbar_layout(&self) -> &ToolbarLayout {
+        self.toolbar.layout()
     }
 
     /// Copies the held keys (V, Space) from the keymap into the viewport.
@@ -243,6 +283,61 @@ impl EditorUi {
         self.actions.run(id, &mut self.state);
     }
 
+    /// The building tools' keys, before the contextual toolbar and the hint card see Esc:
+    /// [`KeyContext::Popover`] while a tool popover is open, [`KeyContext::Tool`] while the
+    /// brush or Measure is on over the viewport. A key is claimed only when its action is enabled
+    /// (the open popover or tool handles it); any other key stays for [`EditorUi::keys`]. During a
+    /// tool gesture only `tool.cancel` (Esc) runs; during any other gesture nothing does.
+    fn tool_keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
+        // A focused contextual-toolbar button does not count: the popovers' Esc comes first.
+        let focused = ctx.egui_wants_keyboard_input() && !self.context_bar.has_focus();
+        if self.state.play.is_playing() || right_down || focused || self.viewport.is_editing_delta()
+        {
+            return;
+        }
+        let mut contexts = [KeyContext::Popover; 2];
+        let mut active = 0;
+        if self.tools.popover_keys() {
+            active = 1;
+        }
+        if self.tools.tool_keys(viewport_hovered) {
+            contexts[active] = KeyContext::Tool;
+            active += 1;
+        }
+        if active == 0 {
+            return;
+        }
+        let tool_gesture = self.tools.gesture();
+        if self.state.gesture_active() && !tool_gesture {
+            return;
+        }
+        let mut pressed = std::mem::take(&mut self.pressed);
+        let (actions, state) = (&self.actions, &self.state);
+        self.keymap
+            .pressed_where(ctx, &contexts[..active], &mut pressed, |id| {
+                (!tool_gesture || id == "tool.cancel")
+                    && actions.get(id).is_some_and(|a| a.is_enabled(state))
+            });
+        if pressed
+            .iter()
+            .any(|a| *a == "popover.close" || *a == "tool.cancel")
+        {
+            // The tool took Esc: the contextual toolbar keeps its focus for the next one.
+            self.context_bar.keep_focus();
+        }
+        for &id in &pressed {
+            self.run_action(id);
+        }
+        self.pressed = pressed;
+    }
+
+    /// True when the hint card must wait: a viewport drag or flight, Play, or any gesture
+    /// ([`EditorState::gesture_active`]: preview, Properties scrub, brush stroke, lasso, array
+    /// handle).
+    fn hints_blocked(&self) -> bool {
+        self.viewport.is_busy() || self.state.play.is_playing() || self.state.gesture_active()
+    }
+
     fn keys(&mut self, ctx: &egui::Context, viewport_hovered: bool, right_down: bool) {
         let playing = self.state.play.is_playing();
         // While playing, a focused button must not keep Esc from stopping: only text counts.
@@ -253,22 +348,31 @@ impl EditorUi {
                 || self.viewport.is_editing_delta()
                 || self.context_bar.has_focus()
         };
-        // A gesture holds values in the preview overlay: no global action runs until it ends
-        // (Esc cancels it in the viewport or in Properties).
-        let busy = !playing && (self.viewport.is_dragging() || self.properties.is_busy());
+        // A gesture (preview overlay, viewport drag, Properties scrub, brush stroke, lasso, array
+        // handle) is open: no action runs until it ends. Esc cancels it where it lives; a tool
+        // gesture's Esc is `tool.cancel` (EditorUi::tool_keys, earlier in the frame).
+        let busy = !playing && self.state.gesture_active();
+        let fly = right_down;
+        // At most Global and Viewport (or Global and Play): no allocation. The tools' Popover
+        // and Tool contexts ran already (EditorUi::tool_keys).
         let mut contexts = [KeyContext::Global; 2];
         let mut active = 0;
+        let mut push = |c| {
+            contexts[active] = c;
+            active += 1;
+        };
         if !typing {
-            active = 1;
             if playing {
+                push(KeyContext::Global);
                 // With the unsaved-changes prompt open, Esc belongs to the prompt.
                 if self.confirm.is_none() {
-                    contexts[1] = KeyContext::Play;
-                    active = 2;
+                    push(KeyContext::Play);
                 }
-            } else if viewport_hovered && !right_down && !busy {
-                contexts[1] = KeyContext::Viewport;
-                active = 2;
+            } else {
+                push(KeyContext::Global);
+                if viewport_hovered && !fly && !busy {
+                    push(KeyContext::Viewport);
+                }
             }
         }
         let contexts = &contexts[..active];
@@ -298,7 +402,7 @@ impl EditorUi {
     }
 
     fn hint(&mut self, event: HintEvent) {
-        let blocked = self.viewport.is_busy() || self.state.play.is_playing();
+        let blocked = self.hints_blocked();
         self.hints.note(&event, std::time::Instant::now(), blocked);
     }
 
@@ -337,8 +441,15 @@ impl EditorUi {
     /// keyboard; on failure Output says why and editing goes on.
     fn start_play(&mut self, ctx: &egui::Context, id: &'static str) {
         self.scripts.flush(&mut self.state);
+        self.colour.close(&mut self.state);
+        self.style_picker.close(&mut self.state);
         self.properties.finish_gesture(&mut self.state);
         self.viewport.cancel_drag(&mut self.state);
+        self.tools.cancel_gestures();
+        for g in [Gesture::Viewport, Gesture::Properties, Gesture::Tool] {
+            self.state.set_gesture(g, false);
+        }
+        self.palette.close();
         if self.state.start_play(id) {
             self.scripts.show_scene();
             self.play_input = PlayInput::new();
@@ -374,6 +485,48 @@ impl EditorUi {
         }
     }
 
+    /// Opens the command palette (Ctrl+K). The title bar's search field calls this too.
+    pub fn open_command_palette(&mut self) {
+        self.open_command_palette_with("");
+    }
+
+    /// Opens the command palette with `text` typed (">" lists commands only). Not while playing
+    /// or during a gesture.
+    pub fn open_command_palette_with(&mut self, text: &str) {
+        // Not mid-gesture either (a drag, a gizmo, a Properties scrub or a tool): the palette's
+        // choices are edits, and an edit now would land inside the open gesture.
+        if self.state.play.is_playing() || self.viewport.is_busy() || self.state.gesture_active() {
+            return;
+        }
+        self.palette.open(text, &self.state.project_dir);
+    }
+
+    /// The question the creator last asked Litha from the palette (for the Litha panel).
+    pub fn take_litha_question(&mut self) -> Option<String> {
+        self.litha_question.take()
+    }
+
+    /// Carries out what was picked in the palette.
+    fn apply_palette(&mut self, ctx: &egui::Context, choice: Choice) {
+        match choice {
+            Choice::Select(ids) => self.state.selection.set(ids),
+            Choice::Run(id) => self.run_action(id),
+            Choice::Insert { class, parent, at } => {
+                self.state.insert(class, parent, Some(at));
+            }
+            Choice::Asset(rel) => {
+                ctx.copy_text(rel.clone());
+                self.state.note(format!("Copied the path {rel}"));
+            }
+            Choice::Learn(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            Choice::AskLitha(question) => {
+                self.state
+                    .note("Litha arrives in milestone 7; your question is kept for it".into());
+                self.litha_question = Some(question);
+            }
+        }
+    }
+
     fn requests(&mut self, ctx: &egui::Context) -> Option<EditorExit> {
         let mut exit = None;
         for r in self.state.take_requests() {
@@ -387,6 +540,15 @@ impl EditorUi {
                 UiRequest::OpenSettings => self.settings_requested = true,
                 UiRequest::StartPlay(id) => self.start_play(ctx, id),
                 UiRequest::CloseGame => exit = exit.or(self.close_game()),
+                UiRequest::OpenPalette(text) => self.open_command_palette_with(text),
+                UiRequest::InsertAtCursor => {
+                    let pos = ctx
+                        .input(|i| i.pointer.latest_pos())
+                        .unwrap_or_else(|| self.viewport.rect().center());
+                    let parent = crate::palette::insert_parent(&self.state);
+                    self.palette
+                        .open_insert(pos, self.state.insert_point, parent);
+                }
             }
         }
         exit
@@ -522,16 +684,52 @@ impl EditorUi {
                             &mut self.state,
                             &self.keymap,
                         );
+                        ui.separator();
+                        self.actions.menu_items(
+                            ui,
+                            &[
+                                "select.similar",
+                                "select.mode_box",
+                                "select.mode_lasso",
+                                "select.mode_paint",
+                                "colour.open",
+                            ],
+                            &mut self.state,
+                            &self.keymap,
+                        );
                     });
                     ui.menu_button("View", |ui| {
                         self.actions.menu_items(
                             ui,
-                            &["view.frame_selection", "view.frame_all", "snap.soft"],
+                            &[
+                                "view.frame_selection",
+                                "view.frame_all",
+                                "snap.soft",
+                                crate::editor_input_actions::TOGGLE_ID,
+                            ],
                             &mut self.state,
                             &self.keymap,
                         );
                         ui.separator();
                         ui.checkbox(&mut self.context_bar.enabled, "Contextual toolbar");
+                    });
+                    ui.menu_button("Build", |ui| {
+                        self.actions.menu_items(
+                            ui,
+                            &[
+                                "build.align",
+                                "build.distribute",
+                                "build.mirror",
+                                "build.mirror_copy",
+                                "build.array",
+                                "tool.brush",
+                                "tool.measure",
+                            ],
+                            &mut self.state,
+                            &self.keymap,
+                        );
+                        ui.separator();
+                        self.tools.mirror_axis_menu(ui);
                     });
                     ui.menu_button("Insert", |ui| {
                         for &class in INSERTABLE {
@@ -582,11 +780,10 @@ impl EditorUi {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     ui.spacing_mut().interact_size.y = 28.0;
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Edit, &mut self.state, &self.keymap);
-                    ui.separator();
-                    self.actions
-                        .toolbar(ui, ToolbarGroup::Play, &mut self.state, &self.keymap);
+                    // Edit, Play, View and Build (Tools, Settings and Snap are in the viewport
+                    // header). Groups that do not fit collapse into the "»" menu (crate::toolbar).
+                    self.toolbar
+                        .show(ui, &mut self.actions, &mut self.state, &self.keymap);
                 });
             });
 
@@ -698,11 +895,30 @@ impl EditorUi {
                             playing_banner(ui, "Edit values, read-only while playing.");
                             ui.add_enabled_ui(false, |ui| self.properties.ui(ui, &mut self.state));
                         } else {
+                            // The owner may edit during its own gesture; the flag is its state
+                            // after it ran (see EditorState::gesture_active).
+                            self.state.set_gesture(Gesture::Properties, false);
                             self.properties.ui(ui, &mut self.state);
+                            self.state
+                                .set_gesture(Gesture::Properties, self.properties.is_busy());
                         }
                     },
                 );
             });
+        if let Some((prop, at)) = self.properties.take_colour_request() {
+            let pos = at.left_top() - egui::vec2(crate::colour::popover::WIDTH + 12.0, 120.0);
+            self.colour.open(&self.state, &prop, pos);
+        }
+        if self.input_actions.is_open() {
+            egui::Panel::right("input_actions")
+                .default_size(560.0)
+                .min_size(420.0)
+                .resizable(true)
+                .frame(panel::frame())
+                .show(ui, |ui| self.input_actions.ui(ui, &mut self.state));
+        } else {
+            self.input_actions.follow_history(&mut self.state);
+        }
         egui::Panel::bottom("output")
             .default_size(200.0)
             .min_size(120.0)
@@ -724,14 +940,49 @@ impl EditorUi {
                     self.header
                         .ui(ui, &mut self.actions, &mut self.state, &self.keymap);
                     let before = ui.available_rect_before_wrap();
+                    self.viewport.capture_pointer = self.tools.captures_pointer(&self.state);
+                    // Each gesture owner may edit during its own gesture; the flag is its
+                    // state after it ran (see EditorState::gesture_active).
+                    self.state.set_gesture(Gesture::Viewport, false);
                     self.viewport.ui(ui, &mut self.state, render_state);
+                    self.state
+                        .set_gesture(Gesture::Viewport, self.viewport.is_dragging());
                     viewport_hovered = ui.rect_contains_pointer(before);
+                    // The tools read the picker while they edit the state; it is put back after.
+                    let picks = std::mem::take(&mut self.state.picks);
+                    let cx = ViewContext {
+                        rect: self.viewport.rect(),
+                        view: self.viewport.view(),
+                        picks: &picks,
+                        pointer: ui.ctx().pointer_latest_pos().filter(|_| viewport_hovered),
+                        hovered: self.viewport.hovered(),
+                    };
+                    self.state.set_gesture(Gesture::Tool, false);
+                    self.tools.viewport(ui, &mut self.state, &cx);
+                    self.state.set_gesture(Gesture::Tool, self.tools.gesture());
+                    self.state.picks = picks;
                 } else {
                     self.scripts.editor(ui, &mut self.state);
                 }
             });
 
+        // The colour popover first: it is the topmost and takes its Esc before anything below.
+        self.colour
+            .show(&ctx, &mut self.state, self.viewport.hovered());
+        // Then the style picker: its Esc, arrows, Space and Enter come before the tools' keys.
+        self.style_picker
+            .show(&ctx, &mut self.state, self.viewport.rect(), render_state);
+        self.tools.ui(&ctx, &mut self.state);
+        // Then the tool popovers' and the brush/measure keys (Esc, Enter, letters, [ ]), before
+        // the contextual toolbar and the hint card can take Esc.
+        let right_down = ctx.input(|i| i.pointer.secondary_down());
+        if !played {
+            self.tool_keys(&ctx, viewport_hovered, right_down);
+        }
+
         let top = self.viewport.rect().top();
+        // Hidden while a building tool has the pointer (brush, measure, lasso, paint, array).
+        self.context_bar.suppressed = self.tools.captures_pointer(&self.state);
         self.context_bar.ui(
             &ctx,
             &mut self.state,
@@ -742,12 +993,20 @@ impl EditorUi {
         );
 
         self.watch_hints();
-        let blocked = self.viewport.is_busy() || self.state.play.is_playing();
+        let blocked = self.hints_blocked() || self.palette.is_open();
         self.hints.ui(&ctx, self.viewport.rect(), blocked);
 
+        // Last of the overlays, so it draws over the context bar and hints.
+        if let Some(choice) = self
+            .palette
+            .show(&ctx, &self.state, &self.actions, &self.keymap)
+        {
+            self.apply_palette(&ctx, choice);
+        }
         if !played {
             let right_down = ctx.input(|i| i.pointer.secondary_down());
             self.keys(&ctx, viewport_hovered, right_down);
+            self.state.set_gesture(Gesture::Tool, self.tools.gesture());
         }
         if let Some(done) = self.requests(&ctx) {
             exit = done;

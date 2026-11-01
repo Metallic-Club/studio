@@ -22,13 +22,79 @@ Host-injected client action events likewise have no receiver and are discarded o
 access keeps its existing client-only restriction.
 The default `ScriptHost::new` and the current Game/Studio combined mode keep their existing behavior.
 
-This role is a scripting foundation only. It adds no network transport, player admission, dedicated-server process,
-ModuleScript/require loader or playable multiplayer. The separate scheduler correctness work in #173 and the later
-process/transport/isolation work remain necessary for eventual hosting; M2 epic #15 acceptance is unchanged.
+`ScriptHost::with_role(world, output, ScriptRole::{Combined, Server, Client})` selects a
+fixed VM role; `role()` reports it. A Client host starts one client VM and creates no
+Player, GUI or Character. Before `set_local_player(player)`, no LocalScript runs.
+Binding accepts only a live Player directly under this World's built-in Players service.
+After binding, the next step runs enabled LocalScripts under the existing
+StarterPlayerScripts path, the local Player's PlayerGui, or its current Character.
+Another Player's private GUI and server Scripts do not run in this Client VM.
+Rebinding cancels old client-owned tasks/connections and reruns eligible scripts in the
+new context. Pending action and GUI input from the old binding is discarded; assigning
+the same valid binding is a no-op and retains its queued input. Local removal or an
+invalidated binding also clears pending GUI input. Character-reference or ownership changes recheck eligibility without
+restarting unrelated starter/GUI scripts. This is execution policy over a trusted World,
+not authentication or replication filtering.
+Client input/lifecycle dispatch also prunes invalid owners before executing handlers.
+This prune does not start new scripts or consume the journal changes needed by step;
+input execution waits when a World borrow prevents validating the current scope.
+Client step likewise postpones all Lua work until the World is readable; queued
+valid work and held frame deadlines remain intact. Server/Combined stepping keeps
+its existing behavior.
+
+The host's trusted player lifecycle APIs do not create or destroy World instances:
+
+- `add_player(player)` registers an existing world-local Player and queues PlayerAdded.
+  Duplicate registration returns false. GetPlayers includes the player when Added fires.
+- `remove_player(player)` returns false after the first removal. In a running session,
+  a pending Added fires before Removing, and the player is still in GetPlayers during
+  immediate Removing dispatch. The caller destroys the Player and Character after removal and before the
+  next step; normal journal synchronization then cancels destroyed scripts' owned work.
+  Stale registered handles are forgotten without callbacks; unknown handles are no-ops.
+- `set_local_player(player)` is Client-only and separate from roster registration.
+  Stale/non-Player/misparented bindings or additions error without replacing valid state.
+  A busy World rejects lifecycle mutations without partially changing them.
+- `stop` drops VM/session work, retaining the World and registrations. Restart validates
+  live handles and replays Added once in World child order. Stale bindings clear, and
+  recreated same-name players require explicit registration/binding. A removed local
+  Client remains running but unbound until a later valid binding.
+
+Lifecycle events use the existing signal/resume budgets. A callback may yield or be
+deferred, so removal does not promise that every handler finishes before destruction.
+GetPlayers reads the current roster; a deferred callback may see the player already removed.
+PlayerScripts class-dependent coverage remains separate while its core registration
+is pending; this layer does not fabricate a replacement class or clone player containers.
+
+These roles are a scripting foundation only. They add no network transport, player admission,
+dedicated-server process or playable multiplayer. The ModuleScript loader below is retained. Existing
+sandbox/scheduler behavior is retained; process/transport/isolation work remains separate.
+M2 epic #15 acceptance is unchanged.
 
 ## Globals
-`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
-All API tables are read-only.
+`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Ray`, `Enum`.
+
+## ModuleScript and `require`
+`ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
+sandboxed Luau under the requiring thread's deadline (it may `task.wait`), and returns the module's single return value to every
+caller; `script` inside the module is the ModuleScript. The cache is scoped to the VM, so the server VM and the client VM of a
+host each run a module once. Explicit Server and Client hosts use the same loader rules. A Client rebind retains completed
+module values in its existing VM, while stopping that Client script releases any unfinished load it owns. Restarting the
+host creates a fresh cache. Rules, as in Roblox:
+
+- the module must return exactly one value (`nil` counts): otherwise `<Full.Name>: Module code did not return exactly one value`;
+- a cyclic require errors with `Requested module was required recursively` instead of hanging;
+- an error in the module (including a syntax error) propagates to the requiring script with the module's own position, e.g.
+  `ReplicatedStorage.Config:3: boom`, and is cached: later requires raise the same error without running the module again;
+- only a `ModuleScript` instance is accepted: anything else raises `Attempted to call require with invalid argument(s).`;
+- the cached value is kept for the life of the VM; changing `Source` afterwards has no effect until the VM restarts.
+
+A second script that requires a module while another thread is still loading it (the module yielded, for example in
+`task.wait`) **waits** for it and gets the same value; it is a cycle only when the requiring thread is the loading thread or
+the loader is itself waiting on a module the requiring thread is loading. A script that is stopped while loading a module
+releases it, so the next `require` loads it afresh. If the thread loading a module dies without reporting (a timeout outside
+the module's own error handling), the module is marked failed with `<Full.Name>: Requested module experienced an error while
+loading`, and every later `require` raises that. A client VM cannot require a ModuleScript under `ServerScriptService` or
+`ServerStorage`: it raises `Attempted to require a ModuleScript that is only available on the server`.
 
 ## Instance
 - `Instance.new(class, parent?)`. Services cannot be created; an unknown class errors.
@@ -48,6 +114,75 @@ part.Position = Vector3.new(0, 10, 0)
 print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
 ```
 
+## Attributes
+Any instance (parts, models, services, scripts) can carry named values outside its class properties.
+
+- `inst:SetAttribute(name, value)`; a `nil` value removes it. `inst:GetAttribute(name)` is `nil` when unset.
+  `inst:GetAttributes()` returns a new table `name -> value`.
+- Value types: boolean, number, string, `Vector3`, `Color3`, `UDim2`, `CFrame`, `nil`. Numbers must be finite; a string is at
+  most 65536 bytes; one instance holds at most 1024 attributes.
+- Names: 1 to 100 characters, ASCII letters, digits and `_`, and not starting with `RBX` (any case). A bad name or value
+  raises an error naming the problem. Setting the value an attribute already has changes and fires nothing.
+- `inst.AttributeChanged:Connect(function(name) ... end)` and `inst:GetAttributeChangedSignal(name):Connect(function() ... end)`
+  fire for a set, change or removal. Like the other signals they run in the next `step`, whoever made the change (this VM, the
+  other VM or the editor); the handler reads the current value with `GetAttribute`, so two changes in one step fire twice and
+  both see the last value. `GetAttributeChangedSignal(name)` checks the name like `SetAttribute` does, and a VM can make
+  signals for at most 4096 different attribute names. No event is dropped silently: the world keeps every change until each
+  VM has read it (hundreds of thousands fit), and when a step runs out of time the rest of the events wait in that
+  log and are delivered in the next steps, in order (the handler queue is not used for them). The log holds 262,144 unread
+  changes; one more drops the oldest half (about 131,000), and the VM then warns `attribute change events were lost` and
+  continues with the rest, so only a backlog that large loses events. Nothing is dropped below that.
+- Attribute data is outside the VM's memory cap, so a world holds at most 16 MiB of it (names, values and, with tags,
+  tags); beyond that `SetAttribute` and `Clone()` raise a budget error until something is removed or destroyed.
+- `Clone()` copies attributes; scene files store them (`attributes: [("Name", Value), ...]` per instance, written only when
+  there are any, so older files and older Studios keep working); Studio shows them under **Attributes** in Properties (add,
+  edit Bool/Number/String, remove; every change is one undo step).
+- Core: `World::set_attribute`, `attribute`, `attributes`, and the bounded attribute log (`attribute_cursor`,
+  `attribute_changes_since`) that readers such as the script VMs and, later, replication (#305) follow.
+
+## Tags and CollectionService
+Tags are text labels on instances (Roblox's `CollectionService`). `game:GetService("CollectionService")` (or
+`game.CollectionService`):
+
+- `CS:AddTag(instance, tag)`, `CS:RemoveTag(instance, tag)`, `CS:HasTag(instance, tag)`, `CS:GetTags(instance)` (sorted array),
+  and the same as instance methods: `inst:AddTag(tag)`, `inst:RemoveTag(tag)`, `inst:HasTag(tag)`, `inst:GetTags()`.
+- `CS:GetTagged(tag)` returns the instances that carry the tag **and are in the game** (they descend from a service; a
+  detached instance, a fresh `Clone()` or an instance with no parent is not returned until it is parented). It looks the tag up
+  in an index, so its cost follows the number of tagged instances, not the size of the tree. Order: by instance id. Destroyed
+  instances are gone from every set. `CS:GetAllTags()` lists every tag some instance carries (sorted).
+- `CS:GetInstanceAddedSignal(tag)` and `CS:GetInstanceRemovedSignal(tag)` pass the instance. They fire when the tag is added or
+  removed on an instance in the game, when a tagged instance enters the game (parented under a service) or leaves it
+  (parented to nil), and, for removed, when a tagged instance is destroyed (the handler gets the destroyed instance). Like the
+  other signals they run in the next `step`, whoever made the change; connecting does not replay existing instances, so also
+  loop over `GetTagged(tag)`. `GetInstanceAddedSignal` and `GetInstanceRemovedSignal` check the tag like `AddTag` does, and a VM can make signals for at most 4096 different tags. Every change is delivered (destroying thousands of tagged instances fires one removal each; the world keeps changes until every VM has read them, and when a step runs out of time the remaining events wait in that log and are delivered in the next steps, in order: 20,000 tagged instances destroyed at once reach `GetInstanceRemovedSignal` handlers one by one over several steps. The log holds 262,144 unread changes; one more drops the oldest half, the VM warns `tag events were lost` and continues with the rest). Tags share the 16 MiB attribute data budget of a world.
+- A tag is 1 to 255 bytes without control characters; an instance holds at most 256 tags. Tagging twice or removing a missing
+  tag does nothing. `Clone()` copies tags; scene files store them (`tags: ["A", "B"]` per instance, only when present, so older
+  files and older Studios keep working); Studio shows them under **Tags** in Properties (add and remove, one undo step each).
+- Core: `World::add_tag`, `remove_tag`, `has_tag`, `tags`, `tagged`, `all_tags`, `is_in_tree`, and the bounded tag log
+  (`tag_cursor`, `tag_changes_since`) the script VMs follow. Tagged-subtree bookkeeping on reparent and destroy only runs
+  while some tag exists in the world.
+
+## Camera
+`workspace.CurrentCamera` is a `Camera` instance under the Workspace (nil in a bare script host; `Game` creates it when it
+starts). Properties: `CFrame`, `FieldOfView` (vertical, degrees, 1 to 120, default 70), `CameraType`
+(`Enum.CameraType.Custom`, `Scriptable` or `Fixed`; a string name is accepted when writing) and `ViewportSize` (a read-only
+`Vector2`, the size of the viewport the game is drawn in; 1280 x 720 until the host reports one).
+
+- **Custom** (the default): the game's third-person camera. Every frame it publishes its pose to `CFrame` and `FieldOfView`, so
+  `workspace.CurrentCamera.CFrame` is where the camera is; writes are overwritten the next frame.
+- **Scriptable** (and **Fixed**, the same here): the script's `CFrame` and `FieldOfView` are the camera. Set `CameraType` back
+  to `Custom` and the game's camera takes over again. The drawn camera has no roll (its up is always +Y), and a camera looking
+  straight up or down is nudged a hair so it stays valid.
+- `camera:ViewportPointToRay(x, y, depth?)` and `camera:ScreenPointToRay(x, y, depth?)` return a `Ray` whose `Direction` is a
+  unit vector and whose `Origin` is the camera position moved `depth` studs along it. `camera:WorldToViewportPoint(point)` and
+  `camera:WorldToScreenPoint(point)` return `Vector3(x, y, depth)` and whether the point is in front of the camera and inside
+  the viewport; behind the camera `depth` is negative. `Viewport` coordinates start at the top left of the viewport; `Screen`
+  coordinates start below the GUI inset (`Game::set_gui_inset`), so `ScreenPointToRay(x, y)` is `ViewportPointToRay(x, y + inset)`.
+- `Ray.new(origin, direction)`: `Origin`, `Direction`, `Unit` (a ray with a unit direction), `ray:ClosestPoint(point)` and
+  `ray:Distance(point)` (the ray is the segment from `Origin` to `Origin + Direction`), `==`.
+- Hosts: `Game::set_viewport_size` (done by `Game::render` with the size it draws) and `Game::set_gui_inset`; the units are
+  whatever the host uses for both.
+
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,
   unary `-`, `==`.
@@ -60,7 +195,10 @@ print(workspace:WaitForChild("Spawn", 5), #workspace:GetChildren())
     `new(x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22)`, `CFrame.identity`, `lookAt(at, target, up?)`,
     `Angles(rx, ry, rz)` = `fromEulerAnglesXYZ` (Rx * Ry * Rz: Z is applied first), `fromEulerAnglesYXZ` =
     `fromOrientation` (Ry * Rx * Rz), `fromEulerAngles(rx, ry, rz, order?)` with `Enum.RotationOrder` (default XYZ),
-    `fromAxisAngle(axis, angle)`, `fromMatrix(pos, vX, vY, vZ?)`.
+    `fromAxisAngle(axis, angle)`, `fromMatrix(pos, vX, vY, vZ?)`. The 12-number `new` re-orthonormalises its matrix
+    the way a property stores it (an orthonormal matrix is kept as given, a scaled or skewed one keeps its look
+    vector); a finite matrix that cannot be fixed (zero or parallel columns) gets the identity rotation. `fromMatrix`
+    keeps its axes as given.
   - Fields: `Position`, `X Y Z`, `Rotation`, `LookVector`, `RightVector`, `UpVector`, `XVector`, `YVector`, `ZVector`.
   - Methods: `Inverse`, `Lerp(goal, alpha)` (position linear, rotation along the shortest arc), `ToWorldSpace`,
     `ToObjectSpace`, `PointToWorldSpace`, `PointToObjectSpace`, `VectorToWorldSpace`, `VectorToObjectSpace` (each takes
@@ -108,8 +246,9 @@ Code: `metallic_core::transform`, shared with Studio's building tools. Spec: `do
   so does `Resize`. `ScaleTo` and `PivotTo` compute and check every new value first. If a part would leave the size
   limits, or a position would overflow, they error and change nothing (`GetScale` included).
 - **CFrame properties.** `PivotOffset`, `WorldPivot`, `BasePart.CFrame` and `PivotTo`'s target are made orthonormal on
-  write. A scaled or skewed matrix keeps its right axis and corrects the others (`CFrame:Orthonormalize`), so
-  `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate rotation (for example all zeros) errors.
+  write (every CFrame property is, in `World::set`). A scaled or skewed matrix keeps its right axis and corrects up
+  and right (`CFrame:Orthonormalize`), so `PivotTo(cf)` then `GetPivot()` returns `cf:Orthonormalize()`. A degenerate
+  rotation (for example all zeros from `fromMatrix`) errors.
 - `Model:GetBoundingBox()` returns `(CFrame, Vector3)`: the box around every BasePart descendant, oriented like the
   PrimaryPart (or the pivot when there is none). An empty model returns its pivot and size 0.
   `Model:GetExtentsSize()` returns that size.
@@ -127,12 +266,12 @@ local cf, size = door:GetBoundingBox()
 
 | Signal | Arguments | Fired when |
 |---|---|---|
-| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched` |
-| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced); pairs with `Touched`. If the
-character part was destroyed by then, `hit` is the destroyed instance (its members can no longer be read) Part-to-part contacts report `Touched` only |
+| `BasePart.Touched` | `hit` | the runtime calls `ScriptHost::touched(part, hit)`; when a character touches the part, `hit` is the character part touching it: a body part (`Head`, `UpperTorso`, `LeftHand`, ...) whose touch volume follows the animated avatar, or the `HumanoidRootPart` for the movement capsule (either way `hit.Parent` is the character Model). Each character part fires its own `Touched`. Two characters' parts touch each other too: each fires `Touched` with the other's part, once per contact |
+| `BasePart.TouchEnded` | `hit` | the runtime calls `ScriptHost::touch_ended(part, hit)` when a character part stops touching the part (it separated, the character died, or the character was destroyed or replaced; two characters' touching parts end the same way), and when two ordinary parts that reported `Touched` stop touching (they separated, one was destroyed, or one changed `Size`, `Shape` or `CanCollide`), on both parts that still exist, once. If the other part was destroyed by then, `hit` is the destroyed instance. Pairs with `Touched` |
 | `Humanoid.Died` | none | the runtime calls `ScriptHost::humanoid_died` |
 | `Player.CharacterAdded` | `model` | the runtime calls `ScriptHost::character_added` (also sets `Player.Character`) |
-| `Players.PlayerAdded` | `player` | first `step` after combined-host `start`, for `Player1`; no synthetic event in the server-only host |
+| `Players.PlayerAdded` | `player` | queued registration on the next step; Combined also registers Player1; pending Added is flushed before active removal |
+| `Players.PlayerRemoving` | `player` | `remove_player`, before caller-owned destruction; no synthetic removal on stop |
 | `RunService.Heartbeat` | `dt` | every `step` |
 
 ```lua

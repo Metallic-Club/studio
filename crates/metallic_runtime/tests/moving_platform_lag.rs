@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! #374 / #273: a platform a `Heartbeat` script moves every tick carries its rider at most one
 //! tick behind where the script put it (it used to be two), in the M2 tick order.
 

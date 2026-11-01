@@ -338,6 +338,11 @@ impl Budget {
         self.sched.owner_of(thread)
     }
 
+    /// True while the debugger has this VM paused (handlers then wait).
+    pub(crate) fn paused(&self) -> bool {
+        self.sched.debug.is_paused()
+    }
+
     /// The owner id of the script whose code is running now (0 outside any script).
     pub(crate) fn current_owner(&self) -> u64 {
         self.sched.current_owner()
@@ -406,6 +411,8 @@ impl ScriptVm {
     fn setup(lua: &Lua, sched: &Rc<Scheduler>) -> mlua::Result<Table> {
         let globals = lua.globals();
         let tostring: Function = globals.get("tostring")?;
+        // Full debug info (local and upvalue names) for the debugger; no runtime cost.
+        lua.set_compiler(mlua::chunk::Compiler::new().set_debug_level(2));
 
         // Needs `debug`, `xpcall`, `coroutine`: must run before they are removed.
         task_lib::install(lua, sched)?;
@@ -493,6 +500,12 @@ impl ScriptVm {
         let lib = globals.clone();
         lua.sandbox(true)?;
         Ok(lib)
+    }
+
+    /// The tables every script environment is made from (`lib` and `_G`), for code that loads
+    /// chunks itself (`require`).
+    pub(crate) fn env_parts(&self) -> (Table, Table) {
+        (self.lib.clone(), self.shared_g.clone())
     }
 
     /// Which side this VM runs on.
@@ -583,21 +596,18 @@ impl ScriptVm {
         let to_err = |e: Error| ScriptError {
             message: format_error(&e),
         };
-        let env = self.lua.create_table().map_err(to_err)?;
-        let meta = self.lua.create_table().map_err(to_err)?;
-        meta.set("__index", self.lib.clone()).map_err(to_err)?;
-        env.set_metatable(Some(meta)).map_err(to_err)?;
-        env.set("_G", self.shared_g.clone()).map_err(to_err)?;
-        for (name, value) in globals {
-            env.set(name, value).map_err(to_err)?;
-        }
+        let env = script_env(&self.lua, &self.lib, &self.shared_g, globals).map_err(to_err)?;
         let function = self
             .lua
             .load(source)
             .set_name(format!("={chunk_name}"))
-            .set_environment(env)
+            .set_environment(env.clone())
             .into_function()
             .map_err(to_err)?;
+        self.sched
+            .debug
+            .breakpoints
+            .on_load(&self.lua, owner, &function, &env);
         let (thread, args) = self
             .sched
             .as_owner(owner, || {
@@ -619,10 +629,34 @@ impl ScriptVm {
         self.sched.step(now);
     }
 
+    /// The scheduler, for the debugger.
+    pub(crate) fn sched(&self) -> &Scheduler {
+        &self.sched
+    }
+
     /// Drops the VM together with every pending `task.wait`/`task.delay`.
     pub fn shutdown(self) {
         self.sched.clear();
     }
+}
+
+/// A script environment: an empty table that reads through to the library, with the shared `_G`
+/// and `globals` (for example `script`) set in it.
+pub(crate) fn script_env(
+    lua: &Lua,
+    lib: &Table,
+    shared_g: &Table,
+    globals: Vec<(&str, Value)>,
+) -> mlua::Result<Table> {
+    let env = lua.create_table()?;
+    let meta = lua.create_table()?;
+    meta.set("__index", lib.clone())?;
+    env.set_metatable(Some(meta))?;
+    env.set("_G", shared_g.clone())?;
+    for (name, value) in globals {
+        env.set(name, value)?;
+    }
+    Ok(env)
 }
 
 /// `"<chunk>:<line>: "` of the nearest script frame at or above stack `level`, skipping C

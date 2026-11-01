@@ -7,6 +7,7 @@ fn vs_skinned(v: SkinIn) -> VOut {
     let s = min(v.slot, 7u);
     var out: VOut;
     out.clip = g.view_proj * wp;
+    out.view_depth = out.clip.w;
     out.world_pos = wp.xyz;
     // Joint matrices carry rotation and uniform scale only, so the normal needs no inverse.
     out.world_n = normalize((m * vec4<f32>(v.normal, 0.0)).xyz);
@@ -14,7 +15,11 @@ fn vs_skinned(v: SkinIn) -> VOut {
     out.local_p = v.pos * skin.params.x;
     out.local_n = v.normal;
     out.color = skin.slot_color[s];
-    out.material = skin.slot_material[s];
+    let sm = skin.slot_material[s];
+    // The place Look's Character row picks the shading model; the slot keeps its own surface.
+    out.material = vec4<u32>(CHARACTER_ROW, 0u, u32(sm.z + 0.5), 0u);
+    out.surf = sm.xy;
+    out.unlit = unlit_colour(CHARACTER_ROW, out.color.rgb);
     return out;
 }
 
@@ -51,7 +56,7 @@ fn fs_toon(in: VOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_n);
     let v = normalize(g.camera_pos.xyz - in.world_pos);
     let ndl = dot(n, g.sun_dir.xyz);
-    let sh = shadow_factor(in.world_pos, n, 1.0 / in.clip.w, in.clip.xy);
+    let sh = shadow_factor(in.world_pos, n, in.view_depth, in.clip.xy);
     // Soft band edges: a few hundredths of the light range, about a pixel or two wide. The
     // band sits a little past the true terminator so planes turned partly away read as shade.
     // The cast-shadow term stays as soft as the filtered shadow map: a hard step on it shows the

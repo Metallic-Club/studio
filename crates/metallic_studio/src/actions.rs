@@ -49,6 +49,10 @@ pub enum ToolbarGroup {
     Snap,
     /// Undo, redo.
     Edit,
+    /// Building operations on the selection: align, mirror, array, select similar.
+    Build,
+    /// Panels that open and close (Input actions).
+    View,
     /// Play cluster (centred): play modes and Stop.
     Play,
 }
@@ -136,7 +140,11 @@ impl ActionRegistry {
     }
 
     /// Adds an action, replacing one with the same id.
-    pub fn register(&mut self, action: Action) {
+    ///
+    /// Every action not in [`PLAY_SAFE`] is disabled while a play session runs, whoever
+    /// registers it and whenever (the building tools, panels and later registrations too).
+    pub fn register(&mut self, mut action: Action) {
+        lock_while_playing(&mut action);
         if let Some(i) = self.actions.iter().position(|a| a.id == action.id) {
             self.actions[i] = action;
         } else {
@@ -274,6 +282,42 @@ impl ActionRegistry {
         }
         if let Some(id) = clicked {
             self.run(id, state);
+        }
+    }
+
+    /// The overflow menu of the top toolbar ([`crate::toolbar`]): every action of `groups`, a
+    /// separator between groups, each with its label, shortcut, checked state and accessory.
+    pub fn overflow_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        groups: &[ToolbarGroup],
+        state: &mut EditorState,
+        keymap: &Keymap,
+    ) {
+        let mut clicked = None;
+        for (n, &group) in groups.iter().enumerate() {
+            if n > 0 {
+                ui.separator();
+            }
+            for a in self.actions.iter_mut().filter(|a| a.group == group) {
+                let button = egui::Button::new(a.label.as_str())
+                    .shortcut_text(keymap.label(a.id))
+                    .selected(a.is_checked(state));
+                let enabled = a.is_enabled(state);
+                ui.horizontal(|ui| {
+                    if theme::add_enabled(ui, enabled, button).clicked() {
+                        clicked = Some(a.id);
+                    }
+                    if let Some(acc) = &mut a.accessory {
+                        // A disabled action's accessory is disabled too.
+                        ui.add_enabled_ui(enabled, |ui| acc(ui, state));
+                    }
+                });
+            }
+        }
+        if let Some(id) = clicked {
+            self.run(id, state);
+            ui.close();
         }
     }
 
@@ -829,6 +873,27 @@ pub fn default_actions() -> ActionRegistry {
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::FrameAll),
     ));
+    r.register(Action::new(
+        "palette.open",
+        "Search or run a command",
+        Icon::Text("K"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::OpenPalette("")),
+    ));
+    r.register(Action::new(
+        "palette.commands",
+        "Run a command",
+        Icon::Text(">"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::OpenPalette(">")),
+    ));
+    r.register(Action::new(
+        "insert.at_cursor",
+        "Insert at cursor",
+        Icon::Text("A"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::InsertAtCursor),
+    ));
     r.register(
         Action::new("play.start", "Play", Icon::Play, ToolbarGroup::Play, |s| {
             s.request(UiRequest::StartPlay("play.start"))
@@ -845,7 +910,6 @@ pub fn default_actions() -> ActionRegistry {
         )
         .enabled(|s| s.play.is_playing()),
     );
-    lock_while_playing(&mut r);
     r
 }
 
@@ -908,19 +972,17 @@ pub const PLAY_SAFE: &[&str] = &[
     "settings.open",
 ];
 
-/// Disables every action not in [`PLAY_SAFE`] while playing (tools, snapping, pivots, edit
-/// commands, selection, view framing). A disabled action also leaves its shortcut to the game.
-/// Actions registered later decide for themselves.
-fn lock_while_playing(r: &mut ActionRegistry) {
-    for a in &mut r.actions {
-        if PLAY_SAFE.contains(&a.id) {
-            continue;
-        }
-        let before = a.enabled.take();
-        a.enabled = Some(Box::new(move |s: &EditorState| {
-            !s.play.is_playing() && before.as_ref().is_none_or(|f| f(s))
-        }));
+/// Disables `a` while playing unless it is in [`PLAY_SAFE`] (tools, snapping, pivots, edit
+/// commands, selection, view framing, building tools, panels). A disabled action also leaves its
+/// shortcut to the game. Called by [`ActionRegistry::register`] for every registration.
+fn lock_while_playing(a: &mut Action) {
+    if PLAY_SAFE.contains(&a.id) {
+        return;
     }
+    let before = a.enabled.take();
+    a.enabled = Some(Box::new(move |s: &EditorState| {
+        !s.play.is_playing() && before.as_ref().is_none_or(|f| f(s))
+    }));
 }
 
 #[cfg(test)]
@@ -942,7 +1004,9 @@ mod tests {
 
     #[test]
     fn every_bound_key_has_an_action() {
-        let r = default_actions();
+        // The editor's registry: the built-in actions plus the building tools and panels.
+        let ui = crate::editor_ui::EditorUi::new(state(), crate::output::OutputPanel::new());
+        let r = &ui.actions;
         for b in Keymap::metallic().bindings() {
             if b.action.starts_with("drag.")
                 || b.action.starts_with("output.")
@@ -983,8 +1047,18 @@ mod tests {
             .filter(|b| b.chord == esc)
             .map(|b| b.action)
             .collect();
-        // play.stop only in the Play context (while a game runs).
-        assert_eq!(on_esc, ["play.stop", "edit.deselect", "drag.cancel"]);
+        // Esc closes a building popover or cancels a tool gesture first (#319), stops the game
+        // only in the Play context, and never closes the game.
+        assert_eq!(
+            on_esc,
+            [
+                "popover.close",
+                "tool.cancel",
+                "play.stop",
+                "edit.deselect",
+                "drag.cancel"
+            ]
+        );
         let mut r = default_actions();
         let mut s = state();
         assert!(r.run("file.close", &mut s));
