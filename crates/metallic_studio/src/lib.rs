@@ -79,6 +79,7 @@ pub mod settings_ui;
 pub mod snapping;
 pub mod splash;
 pub mod start_screen;
+pub mod style_picker;
 pub mod templates;
 pub mod theme;
 pub mod tokens;

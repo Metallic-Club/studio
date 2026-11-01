@@ -674,7 +674,7 @@ fn the_context_bar_lets_go_of_focus_after_an_outside_click() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     // Viewport shortcuts work again: E picks Rotate (pointer over the viewport, clear of the
-    // bar, which sits under the selection).
+    // bar, which sits under the selection and is wider with the Style button).
     let vp = h.state().viewport.rect();
     h.hover_at(egui::pos2(vp.center().x, vp.top() + 40.0));
     h.run_steps(2);
