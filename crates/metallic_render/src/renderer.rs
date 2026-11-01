@@ -3,9 +3,12 @@
 use crate::bloom::{BLOOM_PASS, BloomPass};
 use crate::camera::{Camera, FAR, NEAR};
 use crate::context::{RenderContext, RenderError};
+use crate::edges::EdgePass;
 use crate::exposure::{AutoExposure, ExposureGpu, ExposureState};
 use crate::lighting::{LightingInputs, LightingUniform, evaluate, reference_exposure};
+use crate::lut::Lut3d;
 use crate::meshes::{MeshKind, Vertex};
+use crate::mlaa::{MLAA_PASS, MlaaPass};
 use crate::post::{HDR_FORMAT, LDR_FORMAT, PostChain, PostContext, PostSlot, hdr_format_for};
 use crate::scene::{InstanceRaw, Scene};
 use crate::shading::{MAX_ROWS, MaterialRow, MaterialTable, Shading};
@@ -56,6 +59,16 @@ const SKY_PARTS: &[&str] = &[
 ];
 const SHADOW_PARTS: &[&str] = &[SKIN_COMMON_WGSL, SHADOW_WGSL];
 const FINISH_PARTS: &[&str] = &[COLOR_WGSL, TONECURVE_WGSL, FINISH_WGSL];
+const PREPASS_WGSL: &str = include_str!("../shaders/prepass.wgsl");
+const PREPASS_PARTS: &[&str] = &[
+    COLOR_WGSL,
+    TONECURVE_WGSL,
+    COMMON_WGSL,
+    SKIN_COMMON_WGSL,
+    PREPASS_WGSL,
+];
+/// Format of the geometry prepass target (normal and linear depth).
+const GEOMETRY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Overall quality preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -216,6 +229,15 @@ struct Attachments {
     hdr: [Option<wgpu::TextureView>; 2],
     ldr: [Option<wgpu::TextureView>; 2],
     finish_groups: [Option<wgpu::BindGroup>; 2],
+    /// Geometry prepass target and its own single-sampled depth, made while a pass reads them.
+    geometry: Option<(wgpu::TextureView, wgpu::TextureView)>,
+}
+
+/// Pipelines of the geometry prepass (`shaders/prepass.wgsl`), made on first use.
+struct PrepassPipelines {
+    parts: wgpu::RenderPipeline,
+    skinned: wgpu::RenderPipeline,
+    skinned_hull: wgpu::RenderPipeline,
 }
 
 /// The finish pass's GPU objects; pipelines are made per target format on first use.
@@ -225,10 +247,15 @@ struct FinishGpu {
     module: wgpu::ShaderModule,
     uniform: wgpu::Buffer,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    /// The grade LUT (identity until `Renderer::set_lut`), its edge length and strength.
+    lut: wgpu::TextureView,
+    lut_size: u32,
+    lut_strength: f32,
+    lut_sampler: wgpu::Sampler,
 }
 
 impl FinishGpu {
-    fn new(device: &wgpu::Device) -> FinishGpu {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> FinishGpu {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic finish layout"),
             entries: &[
@@ -252,6 +279,22 @@ impl FinishGpu {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -270,7 +313,42 @@ impl FinishGpu {
                 mapped_at_creation: false,
             }),
             pipelines: Vec::new(),
+            lut: lut_texture(device, queue, &Lut3d::identity(2)),
+            lut_size: 2,
+            lut_strength: 0.0,
+            lut_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("metallic lut sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
         }
+    }
+
+    /// The finish bind group reading HDR target `hdr`.
+    fn group(&self, device: &wgpu::Device, hdr: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("metallic finish group"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(hdr),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.lut),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.lut_sampler),
+                },
+            ],
+        })
     }
 
     fn pipeline(
@@ -312,6 +390,37 @@ impl FinishGpu {
         };
         &self.pipelines[i].1
     }
+}
+
+/// A filterable 3D texture holding `lut`.
+fn lut_texture(device: &wgpu::Device, queue: &wgpu::Queue, lut: &Lut3d) -> wgpu::TextureView {
+    let n = lut.size();
+    let size = wgpu::Extent3d {
+        width: n,
+        height: n,
+        depth_or_array_layers: n,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("metallic grade lut"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        bytemuck::cast_slice(&lut.texels()),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(n * 8),
+            rows_per_image: Some(n),
+        },
+        size,
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 fn color_target(
@@ -394,6 +503,7 @@ pub struct Renderer {
     scratch_cascades: Vec<Cascade>,
     globals: wgpu::Buffer,
     global_layout: wgpu::BindGroupLayout,
+    prepass: Option<PrepassPipelines>,
     shadow_layout: wgpu::BindGroupLayout,
     skin_layout: wgpu::BindGroupLayout,
     global_group: wgpu::BindGroup,
@@ -554,7 +664,7 @@ impl Renderer {
             &skin_layout,
         );
         let blended = InstanceBuffer::new(&device, 256);
-        let finish_gpu = FinishGpu::new(&device);
+        let finish_gpu = FinishGpu::new(&device, &queue);
         let mut renderer = Renderer {
             device,
             queue,
@@ -600,6 +710,7 @@ impl Renderer {
             cascade_slots,
             pipelines,
             attachments: None,
+            prepass: None,
             skinned_models: Vec::new(),
             skin_slots: Vec::new(),
             skinned_draws: Vec::new(),
@@ -607,7 +718,11 @@ impl Renderer {
             draws: AtomicU32::new(0),
         };
         renderer.meter_supported = crate::exposure::supported(&renderer.device);
+        renderer.post.push(Box::new(EdgePass::default()));
         renderer.post.push(Box::new(BloomPass::default()));
+        let mut aa = MlaaPass::default();
+        aa.enabled = settings.samples() == 1;
+        renderer.post.push(Box::new(aa));
         renderer.set_lighting(&LightingInputs::default());
         renderer
     }
@@ -623,6 +738,10 @@ impl Renderer {
             return;
         }
         self.settings = settings;
+        // Morphological AA stands in for MSAA when MSAA is off.
+        if let Some(aa) = self.post.get_mut::<MlaaPass>(MLAA_PASS) {
+            aa.enabled = settings.samples() == 1;
+        }
         self.shadow_map = ShadowMap::new(
             &self.device,
             settings.shadow_resolution(),
@@ -671,6 +790,33 @@ impl Renderer {
     /// first metered frame.
     pub fn read_exposure(&self) -> Option<ExposureState> {
         self.meter.as_ref()?.read(&self.device, &self.queue)
+    }
+
+    /// Sets the grade LUT ([`crate::lut`]) and how strongly it applies, 0 (off) .. 1. `None`
+    /// keeps the current table and only changes the strength. The table is uploaded here, once.
+    pub fn set_lut(&mut self, lut: Option<&Lut3d>, strength: f32) {
+        self.finish_gpu.lut_strength = if strength.is_finite() {
+            strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let Some(lut) = lut else {
+            return;
+        };
+        self.finish_gpu.lut = lut_texture(&self.device, &self.queue, lut);
+        self.finish_gpu.lut_size = lut.size();
+        if let Some(att) = self.attachments.as_mut() {
+            for (group, hdr) in att.finish_groups.iter_mut().zip(&att.hdr) {
+                if let Some(view) = hdr {
+                    *group = Some(self.finish_gpu.group(&self.device, view));
+                }
+            }
+        }
+    }
+
+    /// The grade LUT's strength (0 when off).
+    pub fn lut_strength(&self) -> f32 {
+        self.finish_gpu.lut_strength
     }
 
     /// The post chain, to add, remove or reorder full-screen passes (see [`crate::post`]).
@@ -881,6 +1027,7 @@ impl Renderer {
             hdr: [None, None],
             ldr: [None, None],
             finish_groups: [None, None],
+            geometry: None,
         });
         self.ensure_hdr(0);
     }
@@ -894,20 +1041,7 @@ impl Renderer {
             return;
         }
         let view = color_target(&self.device, "metallic hdr", att.size, self.hdr_format);
-        att.finish_groups[i] = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("metallic finish group"),
-            layout: &self.finish_gpu.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.finish_gpu.uniform.as_entire_binding(),
-                },
-            ],
-        }));
+        att.finish_groups[i] = Some(self.finish_gpu.group(&self.device, &view));
         att.hdr[i] = Some(view);
     }
 
@@ -1049,6 +1183,7 @@ impl Renderer {
         }
         self.scratch_cascades = cascades;
         self.ensure_post_targets();
+        let geometry = self.ensure_geometry();
 
         let Some(att) = self.attachments.as_ref() else {
             return;
@@ -1084,6 +1219,9 @@ impl Renderer {
             self.draw_opaque(&mut pass);
             pass.set_pipeline(&self.pipelines.skinned_shadow);
             self.draw_skinned(&mut pass, None);
+        }
+        if geometry {
+            self.draw_prepass(&mut encoder, att);
         }
 
         let keep_depth = self.post.reads_depth();
@@ -1144,7 +1282,7 @@ impl Renderer {
         // Meter the scene before the HDR passes: they may rewrite alpha, which marks toon
         // pixels the meter must skip.
         self.meter_frame(&mut encoder);
-        self.post_and_finish(&mut encoder, target, camera, keep_depth);
+        self.post_and_finish(&mut encoder, target, camera, keep_depth, geometry);
         if let Some(t) = &mut self.gpu_timer {
             encoder.write_timestamp(&t.set, 1);
             encoder.resolve_query_set(&t.set, 0..2, &t.resolve, 0);
@@ -1281,6 +1419,7 @@ impl Renderer {
         target: &wgpu::TextureView,
         camera: &Camera,
         keep_depth: bool,
+        geometry: bool,
     ) {
         let Some(att) = self.attachments.as_ref() else {
             return;
@@ -1307,6 +1446,7 @@ impl Renderer {
                 size,
                 depth: keep_depth.then_some(&att.depth),
                 depth_samples: samples,
+                geometry: att.geometry.as_ref().filter(|_| geometry).map(|g| &g.0),
                 camera,
             });
             cur = 1 - cur;
@@ -1317,7 +1457,12 @@ impl Renderer {
             Some(v) if ldr_count > 0 => (v, LDR_FORMAT),
             _ => (target, self.format),
         };
-        let uniform = FinishUniform::new(&self.finish, self.sky.exposure, finish_format.is_srgb());
+        let uniform = FinishUniform::new(
+            &self.finish,
+            self.sky.exposure,
+            finish_format.is_srgb(),
+            (self.finish_gpu.lut_strength, self.finish_gpu.lut_size),
+        );
         self.queue
             .write_buffer(&self.finish_gpu.uniform, 0, bytemuck::bytes_of(&uniform));
         if let Some(group) = &att.finish_groups[cur] {
@@ -1367,6 +1512,7 @@ impl Renderer {
                 size,
                 depth: keep_depth.then_some(&att.depth),
                 depth_samples: samples,
+                geometry: att.geometry.as_ref().filter(|_| geometry).map(|g| &g.0),
                 camera,
             });
             cur = 1 - cur;
@@ -1382,6 +1528,67 @@ impl Renderer {
     /// post chain is not counted).
     pub fn draw_calls(&self) -> u32 {
         self.draws.load(Ordering::Relaxed)
+    }
+    /// Makes the geometry prepass pipelines and targets when an enabled pass reads them and
+    /// the adapter can render [`GEOMETRY_FORMAT`]; true when the prepass should run.
+    fn ensure_geometry(&mut self) -> bool {
+        if !self.post.reads_geometry() || self.hdr_format != HDR_FORMAT {
+            return false;
+        }
+        if self.prepass.is_none() {
+            self.prepass = Some(make_prepass(
+                &self.device,
+                &self.global_layout,
+                &self.skin_layout,
+            ));
+        }
+        let Some(att) = self.attachments.as_mut() else {
+            return false;
+        };
+        if att.geometry.is_none() {
+            att.geometry = Some((
+                color_target(&self.device, "metallic geometry", att.size, GEOMETRY_FORMAT),
+                make_depth(&self.device, att.size, 1, false),
+            ));
+        }
+        true
+    }
+
+    /// The geometry prepass: opaque parts and skinned meshes into the geometry target.
+    fn draw_prepass(&self, encoder: &mut wgpu::CommandEncoder, att: &Attachments) {
+        let (Some(p), Some((color, depth))) = (&self.prepass, &att.geometry) else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("metallic geometry prepass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: color,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_bind_group(0, &self.global_group, &[]);
+        pass.set_pipeline(&p.parts);
+        self.draw_opaque(&mut pass);
+        pass.set_pipeline(&p.skinned);
+        self.draw_skinned(&mut pass, Some(SkinStyle::Standard));
+        pass.set_pipeline(&p.skinned_hull);
+        self.draw_skinned(&mut pass, Some(SkinStyle::Toon));
     }
 
     fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -1670,6 +1877,87 @@ fn shader(device: &wgpu::Device, label: &str, parts: &[&str]) -> wgpu::ShaderMod
     })
 }
 
+fn make_prepass(
+    device: &wgpu::Device,
+    global_layout: &wgpu::BindGroupLayout,
+    skin_layout: &wgpu::BindGroupLayout,
+) -> PrepassPipelines {
+    let module = shader(device, "metallic geometry prepass", PREPASS_PARTS);
+    let parts_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("metallic prepass layout"),
+        bind_group_layouts: &[Some(global_layout)],
+        immediate_size: 0,
+    });
+    let skinned_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("metallic prepass skinned layout"),
+        bind_group_layouts: &[Some(global_layout), Some(skin_layout)],
+        immediate_size: 0,
+    });
+    let pipeline = |label: &str,
+                    layout: &wgpu::PipelineLayout,
+                    vs: &str,
+                    fs: &str,
+                    buffers: &[Option<wgpu::VertexBufferLayout<'_>>]| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some(vs),
+                compilation_options: Default::default(),
+                buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some(fs),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: GEOMETRY_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    PrepassPipelines {
+        parts: pipeline(
+            "metallic prepass parts",
+            &parts_layout,
+            "vs_part",
+            "fs_edges",
+            &vertex_layouts().map(Some),
+        ),
+        skinned: pipeline(
+            "metallic prepass skinned",
+            &skinned_pipeline_layout,
+            "vs_skin",
+            "fs_edges",
+            &[Some(skinned_layout())],
+        ),
+        skinned_hull: pipeline(
+            "metallic prepass skinned hull",
+            &skinned_pipeline_layout,
+            "vs_skin",
+            "fs_hull",
+            &[Some(skinned_layout())],
+        ),
+    }
+}
+
 fn make_pipelines(
     device: &wgpu::Device,
     samples: u32,
@@ -1910,5 +2198,6 @@ mod tests {
         validate_wgsl("sky", SKY_PARTS);
         validate_wgsl("shadow", SHADOW_PARTS);
         validate_wgsl("finish", FINISH_PARTS);
+        validate_wgsl("prepass", PREPASS_PARTS);
     }
 }

@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! Character touches through the whole frame loop: the body volumes report `Touched` and
 //! `TouchEnded` with the touching body part, and both sides fire.
 use metallic_core::{Value, Vec3, World};

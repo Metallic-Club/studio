@@ -432,6 +432,16 @@ pub fn keycap(ui: &mut Ui, keys: &str) -> Response {
     response
 }
 
+/// Paints a keycap whose right edge centre is `right` (palette rows, menus drawn by hand);
+/// returns its rectangle.
+pub fn keycap_at(painter: &Painter, right: egui::Pos2, keys: &str) -> Rect {
+    let galley = layout(painter, keys, fonts::caption(), theme::text_2());
+    let size = keycap_size(&galley);
+    let rect = Rect::from_min_size(egui::pos2(right.x - size.x, right.y - size.y / 2.0), size);
+    paint_keycap(painter, rect, galley, theme::bg_active());
+    rect
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

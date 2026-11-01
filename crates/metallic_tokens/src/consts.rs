@@ -194,6 +194,9 @@ pub const DANGER_HOVER: [u8; 4] = [163, 68, 62, 255];
 /// `role.on-danger` (= `primitive.g.100`)
 pub const ON_DANGER: [u8; 4] = [230, 228, 234, 255];
 
+/// `role.caption-close`
+pub const CAPTION_CLOSE: [u8; 4] = [196, 43, 28, 255];
+
 /// `space.s1`
 pub const S1: f32 = 2.0;
 

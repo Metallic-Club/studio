@@ -35,6 +35,7 @@
 //!
 //! The right side mirrors X. Each body part instance is a box that holds its capsule: its Size
 //! is the capsule's extent in the rest frame.
+use crate::limbs::WorldVolumes;
 use crate::{PhysicsWorld, to_vector};
 use metallic_core::{CFrame, InstanceId, Vec3};
 use rapier3d::parry::bounding_volume::{Aabb, BoundingVolume};
@@ -58,6 +59,22 @@ pub struct TouchQueryCost {
     pub dropped: usize,
     /// Queries of this character so far that reached the cap.
     pub capped_queries: u64,
+    /// Other characters its volumes were tested against, at most
+    /// [`crate::MAX_CHARACTER_PAIRS`].
+    pub characters: usize,
+    /// Capsule tests against those characters, at most 256 each.
+    pub character_tests: usize,
+    /// Overlapping characters left out because that cap was reached.
+    pub characters_dropped: usize,
+}
+
+impl TouchQueryCost {
+    pub(crate) fn with_characters(mut self, c: crate::limbs::PairCost) -> TouchQueryCost {
+        self.characters = c.characters;
+        self.character_tests = c.tests;
+        self.characters_dropped = c.dropped;
+        self
+    }
 }
 
 /// How much the touch query grows the movement capsule and every body volume, in studs.
@@ -283,6 +300,9 @@ pub(crate) struct TouchVolumes {
     pub dropped: usize,
     /// Queries so far that hit the cap.
     pub capped_queries: u64,
+    /// The volumes in world space after the last query (for touches between characters);
+    /// `None` before the first query, after `clear`, or when they were not finite.
+    pub world: Option<WorldVolumes>,
 }
 
 impl Default for TouchVolumes {
@@ -296,6 +316,7 @@ impl Default for TouchVolumes {
             tested_parts: 0,
             tests: 0,
             dropped: 0,
+            world: None,
             capped_queries: 0,
         }
     }
@@ -323,7 +344,7 @@ impl TouchVolumes {
     pub fn query(
         &mut self,
         physics: &PhysicsWorld,
-        own: &[ColliderHandle],
+        skip: &dyn Fn(ColliderHandle) -> bool,
         probe: &Capsule,
         probe_pose: &Pose,
         pose: &BodyPose,
@@ -347,10 +368,12 @@ impl TouchVolumes {
             bounds.merge(b);
         }
         if !finite(&bounds) {
+            self.world = None;
             return;
         }
-        let skip = |h: ColliderHandle, _: &rapier3d::prelude::Collider| !own.contains(&h);
-        let queries = physics.queries(QueryFilter::default().predicate(&skip));
+        self.world = Some(world_volumes(&volumes, &boxes, probe, probe_pose, bounds));
+        let keep = |h: ColliderHandle, _: &rapier3d::prelude::Collider| !skip(h);
+        let queries = physics.queries(QueryFilter::default().predicate(&keep));
 
         // 1. Parts that touch already.
         self.kept.extend(self.touching.iter().map(|c| c.part));
@@ -361,7 +384,7 @@ impl TouchVolumes {
                 break;
             }
             if let Some(handle) = physics.collider_of(part)
-                && !own.contains(&handle)
+                && !skip(handle)
             {
                 self.candidates.push(Candidate {
                     distance: 0.0,
@@ -451,8 +474,30 @@ impl TouchVolumes {
 
     /// Ends every contact (the character died or is gone): calls `ended` for each.
     pub fn clear(&mut self, ended: impl FnMut(Contact)) {
+        self.world = None;
         self.next.clear();
         self.commit(|_| {}, ended);
+    }
+}
+
+/// The body volumes and the movement capsule (`probe` at `probe_pose`) in world space.
+fn world_volumes(
+    volumes: &[Capsule; BODY_PART_COUNT],
+    boxes: &[Aabb; BODY_PART_COUNT],
+    probe: &Capsule,
+    probe_pose: &Pose,
+    bounds: Aabb,
+) -> WorldVolumes {
+    let probe_world = Capsule::new(
+        probe_pose * probe.segment.a,
+        probe_pose * probe.segment.b,
+        probe.radius,
+    );
+    let probe_box = probe.compute_aabb(probe_pose);
+    WorldVolumes {
+        shapes: std::array::from_fn(|i| volumes.get(i).copied().unwrap_or(probe_world)),
+        boxes: std::array::from_fn(|i| boxes.get(i).copied().unwrap_or(probe_box)),
+        bounds,
     }
 }
 
@@ -480,6 +525,20 @@ fn diff(
     started: &mut impl FnMut(Contact),
     ended: &mut impl FnMut(Contact),
 ) {
+    diff_sorted(
+        before,
+        now,
+        |c, start| if start { started(c) } else { ended(c) },
+    );
+}
+
+/// Calls `changed(x, false)` for what is only in `before` and `changed(x, true)` for what is
+/// only in `now` (both sorted, no duplicates), in sorted order.
+pub(crate) fn diff_sorted<T: Ord + Copy>(
+    before: &[T],
+    now: &[T],
+    mut changed: impl FnMut(T, bool),
+) {
     let (mut i, mut j) = (0, 0);
     while i < before.len() || j < now.len() {
         match (before.get(i), now.get(j)) {
@@ -488,15 +547,15 @@ fn diff(
                 j += 1;
             }
             (Some(a), Some(b)) if a < b => {
-                ended(*a);
+                changed(*a, false);
                 i += 1;
             }
             (Some(a), None) => {
-                ended(*a);
+                changed(*a, false);
                 i += 1;
             }
             (_, Some(b)) => {
-                started(*b);
+                changed(*b, true);
                 j += 1;
             }
             (None, None) => break,
@@ -606,7 +665,7 @@ mod tests {
             let pose = BodyPose::rest(if k.is_multiple_of(2) { 0.0 } else { 90.0 });
             let root = Vec3::new(0.0, 3.0, 0.0);
             let probe_pose = Pose::from_translation(to_vector(root - Vec3::new(0.0, 0.48, 0.0)));
-            volumes.query(&physics, &[], &probe, &probe_pose, &pose, root);
+            volumes.query(&physics, &|_| false, &probe, &probe_pose, &pose, root);
             let (mut started, mut ended) = (0, 0);
             volumes.commit(|_| started += 1, |_| ended += 1);
             started + ended

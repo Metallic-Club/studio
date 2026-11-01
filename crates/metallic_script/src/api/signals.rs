@@ -44,6 +44,8 @@ pub(crate) enum EventKind {
     CharacterAdded,
     /// `Players.PlayerAdded(player)`
     PlayerAdded,
+    /// `Players.PlayerRemoving(player)`
+    PlayerRemoving,
     /// `RunService.Heartbeat(dt)`
     Heartbeat,
     /// `RemoteEvent.OnServerEvent(player, ...)`
@@ -60,6 +62,14 @@ pub(crate) enum EventKind {
     StateChanged,
     /// `UserInputService.LastInputTypeChanged(type)`
     LastInputTypeChanged,
+    /// `Instance.AttributeChanged(name)` for id 0, `GetAttributeChangedSignal(name)` for the
+    /// interned name id of that attribute (no arguments).
+    AttributeChanged(u32),
+    /// `CollectionService:GetInstanceAddedSignal(tag)`: the interned tag id; the instance is the
+    /// argument.
+    TagAdded(u32),
+    /// `CollectionService:GetInstanceRemovedSignal(tag)`.
+    TagRemoved(u32),
     /// A GUI element's pointer event (`Activated`, `MouseEnter`, ...).
     Gui(super::gui::GuiEventKind),
 }
@@ -120,6 +130,11 @@ impl Hub {
         }
     }
 
+    /// How many handlers `key` has.
+    fn count(&self, key: SignalKey) -> usize {
+        self.connections.borrow().get(&key).map_or(0, Vec::len)
+    }
+
     fn snapshot(&self, key: SignalKey) -> Vec<(Function, Rc<Cell<bool>>, u64)> {
         self.connections
             .borrow()
@@ -170,9 +185,35 @@ pub(crate) struct Pacing {
     keep_deadline: Cell<bool>,
     /// How many times a handler's arguments were built (a test hook for the dispatch cost).
     args_built: Cell<u64>,
+    /// Handler calls made in the current step, for `HostShared::step_handler_limit`.
+    handlers_this_step: Cell<usize>,
+}
+
+/// Ends only a dispatch budget established by its own external lifecycle call.
+pub(crate) struct DispatchBudget<'a> {
+    state: &'a ApiState,
+    owned: bool,
+}
+
+impl Drop for DispatchBudget<'_> {
+    fn drop(&mut self) {
+        if self.owned {
+            self.state.end_step();
+        }
+    }
 }
 
 impl ApiState {
+    /// Uses an active/held frame deadline, or establishes the ordinary aggregate deadline
+    /// for a call outside step. Dropping the guard never clears a caller-owned deadline.
+    pub(crate) fn dispatch_budget(&self) -> DispatchBudget<'_> {
+        let owned = self.pacing.deadline.get().is_none();
+        if owned {
+            self.restart_step();
+        }
+        DispatchBudget { state: self, owned }
+    }
+
     /// Starts the time budget of one `step`.
     pub(crate) fn begin_step(&self) {
         if self.pacing.keep_deadline.replace(false) {
@@ -182,6 +223,7 @@ impl ApiState {
             Instant::now() + Duration::from_secs_f64(STEP_BUDGET_SEC),
         ));
         self.pacing.warned_full.set(false);
+        self.pacing.handlers_this_step.set(0);
     }
 
     /// Starts a time budget at once, dropping any held one (see `hold_step_deadline`).
@@ -211,6 +253,27 @@ impl ApiState {
             .deadline
             .get()
             .is_some_and(|d| Instant::now() >= d)
+            || self
+                .shared
+                .step_handler_limit
+                .get()
+                .is_some_and(|n| self.pacing.handlers_this_step.get() >= n)
+    }
+
+    /// Whether the lifecycle events (tag added or removed, attribute changed) of a log can be
+    /// handed to `handlers` handlers now. They are not dropped by the handler queue: when this step is out of time
+    /// or the deferred queue has no room for that many calls, the reader stays at the event and
+    /// takes it up again in the next step, in order. The events wait in the world's log (which
+    /// holds hundreds of thousands) instead of in the handler queue.
+    pub(crate) fn lifecycle_room(&self, handlers: usize) -> bool {
+        handlers == 0
+            || (!self.over_budget()
+                && self.pacing.deferred.borrow().len() + handlers <= MAX_DEFERRED)
+    }
+
+    /// How many handlers `key` has.
+    pub(crate) fn handler_count(&self, key: SignalKey) -> usize {
+        self.hub.count(key)
     }
 
     /// Runs handler calls that an earlier step had no time for, oldest first.
@@ -294,6 +357,9 @@ impl ApiState {
 
     /// Runs one handler in its own thread; tracks consecutive timeouts of its script.
     fn run_handler(&self, func: Function, owner: u64, values: Vec<Value>) {
+        self.pacing
+            .handlers_this_step
+            .set(self.pacing.handlers_this_step.get() + 1);
         let name = func.info().short_src.unwrap_or_default();
         let mut all = Vec::with_capacity(values.len() + 1);
         all.push(Value::Function(func));

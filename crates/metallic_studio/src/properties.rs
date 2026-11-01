@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
 use metallic_core::classes::{PropDef, all_properties, find_property};
+use metallic_core::look_override;
 use metallic_core::{CFrame, InstanceId, UDim2, Value, Vec3};
 
 use crate::commands::{Command, PropName};
@@ -34,6 +35,28 @@ fn fmt_drag(n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
     }
 }
 
+/// What a number attribute's drag asked for this frame.
+enum AttributeScrub {
+    /// The attribute now has this value (a frame of a drag).
+    Value(String, f64),
+    /// The drag ended.
+    End,
+}
+
+/// A short text for an attribute value the panel cannot edit.
+fn attribute_summary(value: &Value) -> String {
+    match value {
+        Value::Vector3(v) => format!("Vector3({}, {}, {})", v.x, v.y, v.z),
+        Value::Color3(c) => format!("Color3({}, {}, {})", c.r, c.g, c.b),
+        Value::UDim2(u) => format!(
+            "UDim2({}, {}, {}, {})",
+            u.x_scale, u.x_offset, u.y_scale, u.y_offset
+        ),
+        Value::CFrame(_) => "CFrame".to_string(),
+        _ => String::new(),
+    }
+}
+
 /// Section of a property, in display order.
 fn section(prop: &str) -> usize {
     match prop {
@@ -46,7 +69,8 @@ fn section(prop: &str) -> usize {
         | "TextColor3"
         | "TextSize"
         | "Text"
-        | "Visible" => 1,
+        | "Visible"
+        | "LookOverride" => 1,
         "Position" | "Orientation" | "Size" => 2,
         "Anchored" | "CanCollide" => 3,
         "Enabled" => 4,
@@ -66,8 +90,25 @@ pub struct Properties {
     cancelled: bool,
     /// Text being typed into a string field, by property name.
     text: HashMap<String, String>,
+    /// The Attributes section: text being typed into string attributes, by attribute name.
+    attr_text: HashMap<String, String>,
+    /// The Attributes section: name and type (0 Bool, 1 Number, 2 String) of the attribute to add.
+    attr_new_name: String,
+    attr_new_kind: usize,
+    /// A number attribute being scrubbed: its first value, so the whole drag is one undo step.
+    attr_gesture: Option<AttrGesture>,
+    /// The Tags section: the tag being typed.
+    tag_new: String,
     /// A Color3 row was clicked: the property and the swatch's rectangle.
     colour_request: Option<(String, egui::Rect)>,
+}
+
+/// The open scrub of a number attribute.
+struct AttrGesture {
+    id: InstanceId,
+    name: String,
+    /// The value before the drag (`Nil` when it did not exist).
+    old: Value,
 }
 
 /// What a widget asked for this frame.
@@ -108,6 +149,58 @@ impl Properties {
         }
     }
 
+    /// Live value of a number attribute while it is dragged: the world takes it at once and the
+    /// history gets nothing until [`Self::end_attribute_scrub`], which records the whole drag as
+    /// one step (from the value before the first call).
+    pub fn scrub_attribute(
+        &mut self,
+        state: &mut EditorState,
+        id: InstanceId,
+        name: &str,
+        value: f64,
+    ) {
+        if self
+            .attr_gesture
+            .as_ref()
+            .is_some_and(|g| g.id != id || g.name != name)
+        {
+            self.end_attribute_scrub(state);
+        }
+        if self.attr_gesture.is_none() {
+            let old = state
+                .world
+                .attribute(id, name)
+                .cloned()
+                .unwrap_or(Value::Nil);
+            self.attr_gesture = Some(AttrGesture {
+                id,
+                name: name.to_string(),
+                old,
+            });
+        }
+        let _ = state.world.set_attribute(id, name, Value::Number(value));
+    }
+
+    /// Ends the drag of a number attribute and records it as one undo step, if it changed.
+    pub fn end_attribute_scrub(&mut self, state: &mut EditorState) {
+        let Some(g) = self.attr_gesture.take() else {
+            return;
+        };
+        let new = state
+            .world
+            .attribute(g.id, &g.name)
+            .cloned()
+            .unwrap_or(Value::Nil);
+        if new != g.old {
+            state.record(Command::SetAttribute {
+                id: g.id,
+                name: g.name,
+                old: g.old,
+                new,
+            });
+        }
+    }
+
     /// Shows `value` for `prop` on the selection as a live scrub would (pointer held): it is
     /// previewed, and recorded as one step when the pointer is released. For scripted checks.
     pub fn scrub(&mut self, state: &mut EditorState, prop: &str, value: Value) {
@@ -144,6 +237,7 @@ impl Properties {
         let pointer_down = ui.input(|i| i.pointer.primary_down());
         if !pointer_down {
             self.finish_gesture(state);
+            self.end_attribute_scrub(state);
             self.cancelled = false;
         } else if self.gesture.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.cancel_gesture(state);
@@ -192,6 +286,8 @@ impl Properties {
         props.retain(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter));
 
         let mut edits: Vec<Edit> = Vec::new();
+        let mut attribute_edit: Option<Command> = None;
+        let mut attribute_scrub: Option<AttributeScrub> = None;
         // Inputs in the property column are 24 px rows (spec 4.3).
         ui.spacing_mut().interact_size.y = crate::theme::ROW_HEIGHT;
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -219,11 +315,214 @@ impl Properties {
                         }
                     });
                 }
+                if ids.len() == 1 {
+                    let (attr, scrub) = self.attributes_section(ui, state, active);
+                    let tag = self.tags_section(ui, state, active);
+                    attribute_edit = attr.or(tag);
+                    attribute_scrub = scrub;
+                }
             });
 
         for e in edits {
             self.commit(state, &ids, e, pointer_down);
         }
+        match attribute_scrub {
+            Some(AttributeScrub::Value(name, value)) => {
+                self.scrub_attribute(state, active, &name, value);
+            }
+            Some(AttributeScrub::End) => self.end_attribute_scrub(state),
+            None => {}
+        }
+        if let Some(cmd) = attribute_edit {
+            self.end_attribute_scrub(state);
+            let _ = state.apply(cmd);
+        }
+    }
+
+    /// The Tags section of one instance: remove tags and add a new one. Returns the command for
+    /// the one change made this frame, if any.
+    fn tags_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &EditorState,
+        id: InstanceId,
+    ) -> Option<Command> {
+        let mut out = None;
+        let tags: Vec<String> = state.world.tags(id).map(str::to_string).collect();
+        egui::CollapsingHeader::new(
+            RichText::new("Tags")
+                .font(crate::theme::fonts::strong())
+                .color(crate::theme::text_2()),
+        )
+        .default_open(true)
+        .show(ui, |ui| {
+            for tag in &tags {
+                ui.horizontal(|ui| {
+                    ui.label(tag.as_str());
+                    if ui.small_button("Remove").clicked() {
+                        out = Some(Command::SetTag {
+                            id,
+                            tag: tag.clone(),
+                            on: false,
+                            changed: false,
+                        });
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.tag_new)
+                        .hint_text("New tag")
+                        .desired_width(140.0),
+                );
+                let tag = self.tag_new.trim().to_string();
+                let problem = metallic_core::check_tag(&tag).err().or_else(|| {
+                    state
+                        .world
+                        .has_tag(id, &tag)
+                        .then(|| "already tagged".into())
+                });
+                let add = ui.add_enabled(problem.is_none(), egui::Button::new("Add"));
+                let enter = response.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && problem.is_none();
+                if (add.clicked() || enter) && problem.is_none() {
+                    out = Some(Command::SetTag {
+                        id,
+                        tag,
+                        on: true,
+                        changed: false,
+                    });
+                    self.tag_new.clear();
+                }
+            });
+        });
+        out
+    }
+
+    /// The Attributes section of one instance: edit, remove and add attributes. Returns the
+    /// command for the one change made this frame, if any (each change is one undo step).
+    fn attributes_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &EditorState,
+        id: InstanceId,
+    ) -> (Option<Command>, Option<AttributeScrub>) {
+        let mut out = None;
+        let mut scrub = None;
+        let attributes: Vec<(String, Value)> = state
+            .world
+            .attributes(id)
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        let set = |name: &str, old: &Value, new: Value| Command::SetAttribute {
+            id,
+            name: name.to_string(),
+            old: old.clone(),
+            new,
+        };
+        egui::CollapsingHeader::new(
+            RichText::new("Attributes")
+                .font(crate::theme::fonts::strong())
+                .color(crate::theme::text_2()),
+        )
+        .default_open(true)
+        .show(ui, |ui| {
+            for (name, value) in &attributes {
+                ui.horizontal(|ui| {
+                    ui.label(name.as_str());
+                    match value {
+                        Value::Bool(b) => {
+                            let mut now = *b;
+                            if ui.checkbox(&mut now, "").changed() {
+                                out = Some(set(name, value, Value::Bool(now)));
+                            }
+                        }
+                        Value::Number(n) => {
+                            let mut now = *n;
+                            let response = ui.add(egui::DragValue::new(&mut now).speed(0.1));
+                            if response.changed() {
+                                if response.dragged() {
+                                    // Every frame of a drag: live, one undo step at the end.
+                                    scrub = Some(AttributeScrub::Value(name.clone(), now));
+                                } else {
+                                    out = Some(set(name, value, Value::Number(now)));
+                                }
+                            }
+                            if response.drag_stopped() {
+                                scrub = Some(AttributeScrub::End);
+                            }
+                        }
+                        Value::String(text) => {
+                            let buffer = self
+                                .attr_text
+                                .entry(name.clone())
+                                .or_insert_with(|| text.clone());
+                            let response = ui.add(
+                                egui::TextEdit::singleline(buffer).desired_width(f32::INFINITY),
+                            );
+                            if response.lost_focus() {
+                                let typed = std::mem::take(buffer);
+                                self.attr_text.remove(name);
+                                if typed != *text {
+                                    out = Some(set(name, value, Value::String(typed)));
+                                }
+                            }
+                        }
+                        other => {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} (edit in a script)",
+                                    attribute_summary(other)
+                                ))
+                                .color(ui_tokens().text_dim),
+                            );
+                        }
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        out = Some(set(name, value, Value::Nil));
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.attr_new_name)
+                        .hint_text("New attribute name")
+                        .desired_width(140.0),
+                );
+                egui::ComboBox::from_id_salt("attribute-type")
+                    .selected_text(["Bool", "Number", "String"][self.attr_new_kind])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in ["Bool", "Number", "String"].iter().enumerate() {
+                            ui.selectable_value(&mut self.attr_new_kind, i, *label);
+                        }
+                    });
+                let name = self.attr_new_name.trim().to_string();
+                let problem = metallic_core::check_attribute_name(&name)
+                    .err()
+                    .or_else(|| {
+                        state
+                            .world
+                            .attribute(id, &name)
+                            .map(|_| "that attribute already exists".to_string())
+                    });
+                let add = ui.add_enabled(problem.is_none(), egui::Button::new("Add"));
+                if let Some(problem) = &problem
+                    && !name.is_empty()
+                {
+                    add.on_disabled_hover_text(problem);
+                } else if add.clicked() {
+                    let value = match self.attr_new_kind {
+                        0 => Value::Bool(false),
+                        1 => Value::Number(0.0),
+                        _ => Value::String(String::new()),
+                    };
+                    out = Some(set(&name, &Value::Nil, value));
+                    self.attr_new_name.clear();
+                }
+            });
+        });
+        (out, scrub)
     }
 
     fn row(
@@ -260,8 +559,14 @@ impl Properties {
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_min_size(egui::vec2(label_w, crate::theme::ROW_HEIGHT));
+                    // LookOverride shows as "Style" (building-tools spec 12.5).
+                    let shown = if p.name == look_override::PROPERTY {
+                        "Style"
+                    } else {
+                        p.name
+                    };
                     let label = ui.add(
-                        egui::Label::new(RichText::new(p.name).color(crate::theme::text_2()))
+                        egui::Label::new(RichText::new(shown).color(crate::theme::text_2()))
                             .truncate(),
                     );
                     label.on_hover_text(format!(
@@ -301,6 +606,17 @@ impl Properties {
                         );
                         if r.changed() {
                             edits.push(Edit::Set(name, Value::Number(v)));
+                        }
+                    }
+                    (Value::String(s), _) if p.name == look_override::PROPERTY => {
+                        // "Inherit · Realistic" or the style; a click opens the style picker.
+                        let text = style_row_text(state, active, s);
+                        if ui
+                            .add(egui::Button::new(text).min_size(egui::vec2(160.0, 0.0)))
+                            .on_hover_text("Open the style picker (L)")
+                            .clicked()
+                        {
+                            state.request(UiRequest::RunAction(crate::style_picker::OPEN_ID));
                         }
                     }
                     (Value::String(s), Some(allowed)) => {
@@ -606,6 +922,21 @@ fn with_component(value: &Value, i: usize, x: f64) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// The Style row's text: the stored style, or "Inherit · <what it resolves to>".
+fn style_row_text(state: &EditorState, id: InstanceId, stored: &str) -> String {
+    if stored != look_override::INHERIT {
+        return look_override::display_name(stored)
+            .unwrap_or(stored)
+            .to_string();
+    }
+    let resolved = look_override::resolve(&state.world, id)
+        .unwrap_or_else(|| crate::style_picker::place_look(&state.world));
+    format!(
+        "Inherit · {}",
+        look_override::display_name(resolved).unwrap_or(resolved)
+    )
 }
 
 #[cfg(test)]

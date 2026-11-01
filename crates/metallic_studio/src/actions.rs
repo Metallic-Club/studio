@@ -882,6 +882,27 @@ pub fn default_actions() -> ActionRegistry {
         ToolbarGroup::Hidden,
         |s| s.request(UiRequest::FrameAll),
     ));
+    r.register(Action::new(
+        "palette.open",
+        "Search or run a command",
+        Icon::Text("K"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::OpenPalette("")),
+    ));
+    r.register(Action::new(
+        "palette.commands",
+        "Run a command",
+        Icon::Text(">"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::OpenPalette(">")),
+    ));
+    r.register(Action::new(
+        "insert.at_cursor",
+        "Insert at cursor",
+        Icon::Text("A"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::InsertAtCursor),
+    ));
     r.register(
         Action::new("play.start", "Play", Icon::Play, ToolbarGroup::Play, |s| {
             s.request(UiRequest::StartPlay("play.start"))

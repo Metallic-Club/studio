@@ -267,6 +267,11 @@
       "$type": "color",
       "$value": "{primitive.g.100}",
       "$description": "Text on danger"
+    },
+    "caption-close": {
+      "$type": "color",
+      "$value": "#c42b1c",
+      "$description": "Hovered close button of the window's own title bar: the Windows system red, the same in every theme; its glyph is on-danger"
     }
   },
   "space": {

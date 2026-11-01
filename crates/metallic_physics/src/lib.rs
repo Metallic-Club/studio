@@ -11,7 +11,9 @@
 //! friction and restitution (see [`material_props`]). An anchored part whose `Position` or
 //! `Orientation` was changed since the last step is moved as a kinematic body for that step, with
 //! linear and angular velocity derived from the move, so parts standing on it are carried along
-//! and parts in its way are pushed, by rotating movers too.
+//! and parts in its way are pushed, by rotating movers too. A move faster than
+//! [`TELEPORT_SPEED`] or a turn faster than [`TELEPORT_ANGULAR_SPEED`] is a teleport instead:
+//! plain reposition, zero velocity.
 //!
 //! Characters: [`spawn_character`] builds a Roblox-style character Model (a `HumanoidRootPart`
 //! and 15 invisible R15 body parts that the runtime draws the skinned avatar over) for a Player
@@ -31,6 +33,7 @@ mod alloc_count;
 mod avatar;
 mod body;
 mod character;
+mod limbs;
 mod sync;
 mod touched;
 
@@ -41,6 +44,7 @@ pub use character::{
     MoveInput, RESPAWN_DELAY, ROOT_HEIGHT, RUN_MULTIPLIER, SupportContact, WORLD_LIMIT,
     place_character, spawn_character,
 };
+pub use limbs::MAX_CHARACTER_PAIRS;
 pub use sync::{MaterialProps, material_props};
 
 use metallic_core::{InstanceId, Value, Vec3, World};
@@ -59,6 +63,20 @@ pub const GRAVITY: f64 = 196.2;
 pub const MAX_STEP: f64 = 0.25;
 /// Length of one fixed simulation substep in seconds.
 pub const SUBSTEP: f64 = 1.0 / 240.0;
+/// Speed in studs/s above which a move of an anchored part counts as a teleport.
+///
+/// [`PhysicsWorld::step`] derives an anchored part's velocity as distance / simulated time.
+/// Above this limit (e.g. a script resetting a platform 50 studs in one frame) the part is
+/// repositioned with zero derived velocity instead of being swept as a kinematic body, so parts
+/// touching it are not launched.
+pub const TELEPORT_SPEED: f64 = 500.0;
+/// Angular speed in radians/s (4 turns per second) above which a rotation of an anchored part
+/// counts as a teleport.
+///
+/// Like [`TELEPORT_SPEED`] for turns: a script that flips a platform 170° in one frame is
+/// re-oriented with zero derived angular velocity instead of sweeping at thousands of degrees
+/// per second and flinging parts on it. Spinners slower than this still push and carry.
+pub const TELEPORT_ANGULAR_SPEED: f64 = 4.0 * std::f64::consts::TAU;
 
 /// Collision group of character parts; they interact with everything except each other.
 const CHARACTER_GROUP: Group = Group::GROUP_1;
@@ -70,7 +88,8 @@ pub struct RayHit {
     pub instance: InstanceId,
     /// World position of the hit.
     pub position: Vec3,
-    /// Surface normal at the hit (unit length, pointing away from the surface).
+    /// Surface normal at the hit (unit length, pointing away from the surface). A ray that
+    /// starts inside a part hits it at distance 0; the normal is then the reversed ray direction.
     pub normal: Vec3,
     /// Distance from the ray origin to the hit, in studs.
     pub distance: f64,
@@ -102,6 +121,9 @@ pub struct PhysicsWorld {
     accumulator: f64,
     /// Replica mode: no body is ever integrated (see [`PhysicsWorld::new_replica`]).
     replica: bool,
+    /// Whether Rapier has stepped: from then on [`PhysicsWorld::sync_from`] must not run
+    /// Rapier's collision pipeline (see there).
+    stepped: bool,
 }
 
 impl Default for PhysicsWorld {
@@ -168,6 +190,7 @@ impl PhysicsWorld {
             characters: HashSet::new(),
             accumulator: 0.0,
             replica: false,
+            stepped: false,
         }
     }
 
@@ -197,8 +220,9 @@ impl PhysicsWorld {
             .copied()
             .collect();
         for id in gone {
-            self.remove_entry(id);
+            self.remove_entry(id, touched::Removed::Gone);
         }
+        let mut added = Vec::new();
         for (id, character) in parts {
             let Some(state) = sync::read_part(world, id) else {
                 continue;
@@ -208,18 +232,36 @@ impl PhysicsWorld {
                 .get(&id)
                 .is_some_and(|e| e.signature != state.signature(character));
             if stale {
-                self.remove_entry(id);
+                self.remove_entry(id, touched::Removed::Rebuilt);
             }
             if !self.entries.contains_key(&id) {
-                self.add_entry(id, &state, character);
+                added.push(self.add_entry(id, &state, character));
             }
         }
-        // Refresh the broad phase so raycasts work before the first step.
-        self.rapier.detect_collisions(&(), &self.collector);
-        self.collect_touches();
+        if self.stepped {
+            // Rapier 0.36.1's collision pipeline (`detect_collisions`) takes the change flags of
+            // bodies inserted since the last step without giving them an island, so once the
+            // simulation runs, a body added or rebuilt here would never be linked to what it
+            // touches (#423; a debug assertion in Rapier's island manager, and a broken island
+            // in release). Only the query tree is updated, so raycasts see new colliders at
+            // once; their contacts start in the next step.
+            let r = &mut self.rapier;
+            for handle in added {
+                if let Some(co) = r.colliders.get(handle) {
+                    let aabb = co.compute_broad_phase_aabb(&r.integration_parameters, &r.bodies);
+                    r.broad_phase
+                        .set_aabb(&r.integration_parameters, handle, aabb);
+                }
+            }
+        } else {
+            // Refresh the broad phase so raycasts work before the first step; the first step
+            // builds the islands from scratch.
+            self.rapier.detect_collisions(&(), &self.collector);
+            self.collect_touches();
+        }
     }
 
-    fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) {
+    fn add_entry(&mut self, id: InstanceId, s: &PartState, character: bool) -> ColliderHandle {
         let mat = sync::material_props(&s.material);
         let pose = to_pose(s.position, s.orientation);
         let builder = if s.anchored || self.replica {
@@ -268,13 +310,14 @@ impl PhysicsWorld {
         if character {
             self.characters.insert(id);
         }
+        collider
     }
 
-    fn remove_entry(&mut self, id: InstanceId) {
+    fn remove_entry(&mut self, id: InstanceId, why: touched::Removed) {
         if let Some(e) = self.entries.remove(&id) {
             self.owners.remove(&e.collider);
             self.rapier.remove_body(e.body);
-            self.touches.forget(id);
+            self.touches.forget(id, why);
             self.characters.remove(&id);
         }
     }
@@ -291,10 +334,12 @@ impl PhysicsWorld {
     /// Before simulating, a changed `Position`/`Orientation` is applied: an anchored part is moved
     /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`];
     /// angular velocity = shortest-arc rotation / simulated time, see [`Self::angular_velocity`]),
-    /// so it sweeps through the move and pushes or carries loose parts; an unanchored part is
-    /// teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`] (0.25 s) so a long
-    /// frame cannot spiral; a negative or non-finite `dt` (NaN, infinity) counts as 0, so that
-    /// call simulates nothing and later calls work normally.
+    /// so it sweeps through the move and pushes or carries loose parts. When the velocity exceeds
+    /// [`TELEPORT_SPEED`] or the angular velocity exceeds [`TELEPORT_ANGULAR_SPEED`], it is just
+    /// repositioned with zero velocity instead. An unanchored part is teleported and its velocity
+    /// cleared. `dt` is clamped to [`MAX_STEP`] (0.25 s) so a long frame cannot spiral; a
+    /// negative or non-finite `dt` (NaN, infinity) counts as 0, so that call simulates nothing
+    /// and later calls work normally.
     ///
     /// Callers must call [`Self::sync_from`] after adding, removing or reconfiguring parts
     /// (Size, Shape, Material, Anchored, CanCollide, reparenting); until then `step` keeps using
@@ -339,12 +384,17 @@ impl PhysicsWorld {
                     let v = (state.position - e.last_position) * (1.0 / sim_time);
                     let w =
                         angular_velocity_between(e.last_orientation, state.orientation, sim_time);
-                    e.derived_velocity = v;
-                    e.derived_angular_velocity = w;
-                    body.set_body_type(RigidBodyType::KinematicVelocityBased, true);
-                    body.set_linvel(to_vector(v), true);
-                    body.set_angvel(to_vector(w), true);
-                    movers.push((id, to_pose(state.position, state.orientation)));
+                    if v.magnitude() > TELEPORT_SPEED || w.magnitude() > TELEPORT_ANGULAR_SPEED {
+                        // Teleport: plain reposition, no derived velocity or angular velocity (#34).
+                        body.set_position(to_pose(state.position, state.orientation), true);
+                    } else {
+                        e.derived_velocity = v;
+                        e.derived_angular_velocity = w;
+                        body.set_body_type(RigidBodyType::KinematicVelocityBased, true);
+                        body.set_linvel(to_vector(v), true);
+                        body.set_angvel(to_vector(w), true);
+                        movers.push((id, to_pose(state.position, state.orientation)));
+                    }
                 }
             } else if moved {
                 body.set_position(to_pose(state.position, state.orientation), true);
@@ -357,6 +407,7 @@ impl PhysicsWorld {
 
         for _ in 0..substeps {
             self.rapier.step_with_events(&(), &self.collector);
+            self.stepped = true;
         }
 
         // Land movers exactly on their target and make them fixed again.
@@ -400,6 +451,8 @@ impl PhysicsWorld {
             }
         }
         self.collect_touches();
+        // Rebuilt parts' pairs that did not touch again in this step end now.
+        self.touches.settle();
     }
 
     /// Current velocity of a part in studs per second: the body velocity for unanchored parts,
@@ -499,10 +552,18 @@ impl PhysicsWorld {
             .cast_ray_and_get_normal(&ray, max as f32, true, filter)?;
         let instance = *self.owners.get(&handle)?;
         let distance = f64::from(hit.time_of_impact);
+        // A ray starting inside a collider hits at distance 0 with a zero normal (#34).
+        let n = from_vector(hit.normal);
+        let len = n.magnitude();
+        let normal = if len > 1e-6 && len.is_finite() {
+            n * (1.0 / len)
+        } else {
+            unit * -1.0
+        };
         Some(RayHit {
             instance,
             position: origin + unit * distance,
-            normal: from_vector(hit.normal),
+            normal,
             distance,
         })
     }
@@ -529,5 +590,17 @@ impl PhysicsWorld {
     /// [`CharacterEvent::Touched`].
     pub fn drain_touched(&mut self) -> Vec<(InstanceId, InstanceId)> {
         self.touches.drain()
+    }
+
+    /// Returns the part pairs that stopped touching since the last call: one entry for each pair
+    /// that [`Self::drain_touched`] reported, when its parts separate or one of them is removed
+    /// (destroyed, or out of the Workspace; the runtime fires `TouchEnded` on both, which reaches
+    /// scripts on the part that still exists). A part rebuilt in place (Size, Shape or
+    /// CanCollide changed) that still touches reports neither an end nor a new start. Pairs
+    /// involving a character part are never reported (see [`CharacterEvent::TouchEnded`]).
+    /// Drain [`Self::drain_touched`] first: a pair that started and stopped since the last
+    /// drain is in both.
+    pub fn drain_touch_ended(&mut self) -> Vec<(InstanceId, InstanceId)> {
+        self.touches.drain_ended()
     }
 }

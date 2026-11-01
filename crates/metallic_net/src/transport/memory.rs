@@ -14,8 +14,10 @@ use std::time::Duration;
 
 use super::conditioner::Rng;
 use super::limits::{DatagramLimiter, HELLO_TIMEOUT, IDLE_TIMEOUT, KEEP_ALIVE, MAX_DATAGRAM};
+use super::receive::ReceiveState;
 use super::{
-    Channel, CloseReason, Connection, Incoming, LinkConditioner, LinkStats, Listener, Side,
+    Channel, CloseReason, Connection, Incoming, LinkConditioner, LinkStats, Listener, PollBudget,
+    PollReport, Side,
 };
 use crate::NetError;
 
@@ -104,7 +106,8 @@ struct End {
     alive: bool,
     /// True once closed; nothing more is reported or sent.
     closed: bool,
-    inbox: Vec<Incoming>,
+    inbox: VecDeque<Incoming>,
+    receive: ReceiveState,
     stats: LinkStats,
     last_recv: Duration,
     last_sent: Duration,
@@ -121,7 +124,8 @@ impl End {
             side,
             alive: true,
             closed: false,
-            inbox: Vec::new(),
+            inbox: VecDeque::new(),
+            receive: ReceiveState::default(),
             stats: LinkStats::default(),
             last_recv: now,
             last_sent: now,
@@ -214,7 +218,9 @@ impl NetState {
         }
         self.ends[end].closed = true;
         if report {
-            self.ends[end].inbox.push(Incoming::Closed(reason.clone()));
+            self.ends[end]
+                .inbox
+                .push_back(Incoming::Closed(reason.clone()));
         } else {
             self.ends[end].inbox.clear();
         }
@@ -233,7 +239,7 @@ impl NetState {
             Packet::KeepAlive => {}
             Packet::Close(reason) => {
                 end.closed = true;
-                end.inbox.push(Incoming::Closed(reason));
+                end.inbox.push_back(Incoming::Closed(reason));
             }
             Packet::Datagram(bytes) => {
                 if end.side == Side::Server && !end.limiter.allow(now) {
@@ -241,7 +247,7 @@ impl NetState {
                 } else {
                     end.stats.datagrams_received += 1;
                     end.stats.bytes_received += bytes.len() as u64;
-                    end.inbox.push(Incoming::Datagram(bytes));
+                    end.inbox.push_back(Incoming::Datagram(bytes));
                 }
             }
             Packet::Reliable(channel, frame) => {
@@ -258,7 +264,7 @@ impl NetState {
                 if channel == Channel::Control {
                     end.hello_deadline = None;
                 }
-                end.inbox.push(Incoming::Reliable { channel, frame });
+                end.inbox.push_back(Incoming::Reliable { channel, frame });
             }
         }
     }
@@ -291,7 +297,7 @@ impl NetState {
             } else if end.last_recv + IDLE_TIMEOUT <= now {
                 // Like QUIC's idle timeout: silent, each side decides on its own.
                 end.closed = true;
-                end.inbox.push(Incoming::Closed(CloseReason::Timeout));
+                end.inbox.push_back(Incoming::Closed(CloseReason::Timeout));
             } else if end.last_sent + KEEP_ALIVE <= now {
                 self.send_unreliable_packet(id, Packet::KeepAlive);
             }
@@ -380,7 +386,13 @@ impl Connection for MemoryConnection {
     }
 
     fn poll(&mut self, out: &mut Vec<Incoming>) {
-        out.append(&mut lock(&self.state).ends[self.end].inbox);
+        self.poll_bounded(out, PollBudget::UNRESTRICTED);
+    }
+
+    fn poll_bounded(&mut self, out: &mut Vec<Incoming>, budget: PollBudget) -> PollReport {
+        let mut state = lock(&self.state);
+        let End { receive, inbox, .. } = &mut state.ends[self.end];
+        receive.poll(out, budget, || inbox.pop_front())
     }
 
     fn rtt(&self) -> Duration {
@@ -392,7 +404,12 @@ impl Connection for MemoryConnection {
     }
 
     fn close(&mut self, reason: CloseReason) {
-        lock(&self.state).shut(self.end, reason, false);
+        let mut state = lock(&self.state);
+        state.shut(self.end, reason, false);
+        // A peer may already have closed while an oversized head was retained. Local close
+        // still discards all pending delivery, including that earlier peer-close event.
+        state.ends[self.end].receive.close();
+        state.ends[self.end].inbox.clear();
     }
 
     fn remote_addr(&self) -> Option<SocketAddr> {
@@ -405,6 +422,7 @@ impl Drop for MemoryConnection {
         let mut state = lock(&self.state);
         let end = &mut state.ends[self.end];
         end.alive = false;
-        end.inbox = Vec::new();
+        end.inbox = VecDeque::new();
+        end.receive.close();
     }
 }

@@ -1,0 +1,4 @@
+# rust-lld ships with the Rust toolchain and links faster than MSVC link.exe.
+# Measured on Studio (12 threads, -j 6): full dev build 237 s -> 202 s; one-file rebuild 7.6 s -> 7.1 s.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
