@@ -20,7 +20,8 @@ base when the generic binding (#462) opens. No script behaviour or binding code 
 - **Separate suite and report.** `test_measure.py` pins `WORKLOADS` to the five core names, and existing tests must not
   change. The core binary also stays built exactly as before, by its own `cargo build`.
 - **The work runs on a resumed `task.wait` thread, not a Heartbeat handler.** `dispatch` defers a handler once the 0.25 s
-  wall-clock step budget has passed, which Valgrind could reach. The first due thread of a step is always resumed.
+  wall-clock step budget has passed, which Valgrind could reach. The first due thread is checked against a timer that has
+  only just started; if a stall still skipped it, the result would never print and validation refuses the run.
 - **Each collection function steps to a different time.** Identical bodies could be merged into one symbol, and
   `--toggle-collect` would then find nothing for the others. A test guards this, but only means something with `--release`.
 - **`--new` is decided from the base checkout, before the copy.** The workflow already copies the head's workload source

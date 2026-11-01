@@ -6,7 +6,8 @@
 //! printing the result and validating it all happen outside the named Callgrind functions and
 //! outside `elapsed_ns`. The work runs on a resumed thread rather than in a Heartbeat handler
 //! because a handler is deferred once the step's wall-clock budget has passed, which a run under
-//! Valgrind could reach; the first due thread of a step is always resumed.
+//! Valgrind could reach. The first due thread of a step is checked against a timer that has only
+//! just started; if a stall still skipped it, the result would never print and validation refuses.
 use metallic_core::{InstanceId, Value, Vec3, World};
 use metallic_script::{OutputSink, ScriptHost};
 use std::cell::RefCell;
