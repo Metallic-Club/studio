@@ -261,6 +261,9 @@ apps.
   channel, drops counted; `ScriptOutput` adapts it to Luau output), `play.rs` (`PlayMode`/`PlaySession` with
   start, status and stop hooks; Play #11 and Team Test A12 register here). Editor panels read colours, font sizes
   and metrics only through `tokens.rs` (`ui_tokens()`), so the theme swap (S2) changes one file.
+  Initial Explorer reparent capture suppresses selected descendants before excluding roots already under the
+  destination. All-no-op drops use the existing Nothing path before history acceptance, preserving undo/redo,
+  parked ids and saved cleanliness; mixed drops record only genuine moves.
   Command palette (#128): `palette.rs` (`CommandPalette`) searches objects (one row per name and class, Enter
   selects all), game-folder files, every registered action with its keymap shortcut plus "Insert <class>", guides
   given with `set_guides`, and an always-last "Ask Litha" row. It returns a `palette::Choice` that `EditorUi`
