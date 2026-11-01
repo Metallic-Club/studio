@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! A game paused in the script debugger holds its simulation still.
 
 use std::cell::RefCell;
