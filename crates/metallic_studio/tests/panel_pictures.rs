@@ -1,8 +1,9 @@
 //! Pictures of the Properties panel and the Insert lists, for comparing a change by eye (#473).
-//! They render with no window, on the wgpu adapter the test harness picks, so nothing pops up.
+//! They render with no window, on the wgpu adapter the test harness picks, so nothing pops up. A
+//! relative `METALLIC_PICTURES_DIR` is relative to this crate, so pass a full path.
 //!
 //! ```text
-//! METALLIC_PICTURES_DIR=out cargo test -p metallic_studio --test panel_pictures -j 4 -- --ignored
+//! METALLIC_PICTURES_DIR=/full/path cargo test -p metallic_studio --test panel_pictures -j 4 -- --ignored
 //! ```
 use eframe::egui::{self, Color32, ColorImage, Event, Key, Modifiers};
 use egui_kittest::Harness;
