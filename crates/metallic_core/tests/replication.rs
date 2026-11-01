@@ -225,8 +225,9 @@ fn lighting_bookkeeping_ranges_preserve_authoritative_values() {
         property_value(&world, lighting, "ClockTime", None),
         Some(Value::Number(1.0))
     );
-    for (name, expected) in [("Atmosphere", 28), ("ColorGradingEffect", 33)] {
-        assert_eq!(classes::registry_classes()[expected].name, name);
+    for name in ["Atmosphere", "ColorGradingEffect"] {
+        let index = usize::from(classes::class_index(name).unwrap());
+        assert_eq!(classes::registry_classes()[index].name, name);
     }
     let classes = classes::registry_classes();
     let lighting_end = classes
@@ -237,21 +238,19 @@ fn lighting_bookkeeping_ranges_preserve_authoritative_values() {
         .iter()
         .position(|class| class.name == "ServerStorage")
         .unwrap();
-    assert!(
-        storage > lighting_end,
-        "existing main class indices stay intact"
-    );
+    assert!(storage > lighting_end, "classes are sorted by name");
 }
 
 #[test]
 fn gui_class_prefix_and_normalized_look_values_match_current_main() {
-    for (name, index) in [
-        ("GuiButton", 34),
-        ("TextButton", 35),
-        ("ImageButton", 36),
-        ("ModuleScript", 37),
-        ("ServerStorage", 38),
+    for name in [
+        "GuiButton",
+        "TextButton",
+        "ImageButton",
+        "ModuleScript",
+        "ServerStorage",
     ] {
+        let index = usize::from(classes::class_index(name).unwrap());
         assert_eq!(classes::registry_classes()[index].name, name);
     }
     let mut world = World::new_with_services();
@@ -276,15 +275,16 @@ fn gui_class_prefix_and_normalized_look_values_match_current_main() {
 }
 
 /// The golden schema fingerprint. New classes and properties replicate by default, so this is the
-/// tripwire: any change to a class, a property (name, type, default, order, range, allowed values,
-/// `hidden`, `repl`, normalizer contract) or the class order changes the hash and fails here.
+/// tripwire: any change to a class, a member (name, kind, signature, context; for a property also
+/// type, default, order, range, allowed values, `hidden`, `repl`, normalizer contract) or the class
+/// order changes the hash and fails here.
 ///
 /// To update it on purpose: run `cargo run -p metallic_core --example registry_hash`, paste the
 /// printed hex below, and say in the PR which schema change moved it (old and new peers then
 /// refuse each other with `UpdateRequired`). If the change was not intended, fix the registry.
 #[test]
 fn registry_hash_is_pinned() {
-    const GOLDEN: &str = "b4b1e5ab663d9778e28b25a5897403e47351125a2c2ecc0ae87e856e4f6e07ff";
+    const GOLDEN: &str = "0ad5b656fcbb981cb495f8dca61aad0d87d4158850fbcbc7551031307c5453fa";
     let hash = registry_hash().expect("the built-in registry is well formed");
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(

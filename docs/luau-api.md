@@ -97,7 +97,7 @@ loading`, and every later `require` raises that. A client VM cannot require a Mo
 `ServerStorage`: it raises `Attempted to require a ModuleScript that is only available on the server`.
 
 ## Instance
-- `Instance.new(class, parent?)`. Services cannot be created; an unknown class errors.
+- `Instance.new(class, parent?)`. Services and abstract classes (`BasePart`, `PVInstance`, ...) cannot be created; an unknown class errors.
 - Members: `Name`, `Parent`, `ClassName` (read-only), `FindFirstChild(name, recursive?)`, `WaitForChild(name, timeout?)`,
   `GetChildren()`, `GetDescendants()`, `IsA(class)`, `Destroy()`, `Clone()`, and every registry property of the class by name.
 - `instance.ChildName` finds a child. Unknown member: `<Name> is not a valid member of <ClassName>`.

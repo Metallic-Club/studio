@@ -2,7 +2,7 @@
 pub mod edit;
 
 use crate::CoreError;
-use crate::classes::{self, class_def, default_value, default_value_ref, find_property};
+use crate::classes::{self, ClassFlags, ClassId, registry};
 use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
@@ -144,7 +144,7 @@ impl InstanceId {
 
 #[derive(Clone)]
 struct Node {
-    class: &'static str,
+    class: ClassId,
     parent: Option<InstanceId>,
     children: Vec<InstanceId>,
     /// Only values that were set; everything else uses the class default.
@@ -192,6 +192,26 @@ pub struct World {
     tag_log: TagLog,
     /// Bytes of attribute data held, against `MAX_EXTRAS_BYTES`.
     extras_bytes: usize,
+}
+
+/// What a property reads when `node` stores nothing under `prop`: the class default, or what is
+/// stored under the real name when `prop` is an alias. `None` when there is no such property.
+#[inline(never)]
+fn unset_value<'a>(node: &'a Node, prop: &str) -> Option<&'a Value> {
+    let class = registry().resolved(node.class);
+    let (def, index) = class.property(prop)?;
+    let stored = (def.name != prop)
+        .then(|| node.props.get(def.name))
+        .flatten();
+    Some(stored.unwrap_or(&class.defaults[usize::from(index.0)]))
+}
+
+#[cold]
+fn unknown_property(node: &Node, prop: &str) -> CoreError {
+    CoreError::UnknownProperty {
+        class: registry().resolved(node.class).name().to_string(),
+        property: prop.to_string(),
+    }
 }
 
 impl World {
@@ -310,10 +330,16 @@ impl World {
     pub fn new_with_services() -> World {
         let mut w = World::new_empty();
         for s in SERVICES {
-            let id = w.alloc(s, None, BTreeMap::new(), true);
+            // A malformed registry is empty; `registry_hash` reports why.
+            let Some(class) = registry().class_id(s) else {
+                continue;
+            };
+            let id = w.alloc(class, None, BTreeMap::new(), true);
             w.roots.push(id);
-            if *s == "StarterPlayer" {
-                let c = w.alloc("StarterPlayerScripts", Some(id), BTreeMap::new(), true);
+            if *s == "StarterPlayer"
+                && let Some(scripts) = registry().class_id("StarterPlayerScripts")
+            {
+                let c = w.alloc(scripts, Some(id), BTreeMap::new(), true);
                 w.link_child(id, c);
             }
         }
@@ -322,7 +348,7 @@ impl World {
 
     fn alloc(
         &mut self,
-        class: &'static str,
+        class: ClassId,
         parent: Option<InstanceId>,
         props: BTreeMap<String, Value>,
         builtin: bool,
@@ -390,6 +416,7 @@ impl World {
 
     /// The parentless built-in service with this class name, e.g. `root("Workspace")`.
     pub fn root(&self, class: &str) -> Option<InstanceId> {
+        let class = registry().class_id(class)?;
         self.roots
             .iter()
             .copied()
@@ -398,6 +425,11 @@ impl World {
 
     /// The class name of an instance, or `None` if it does not exist.
     pub fn class_name(&self, id: InstanceId) -> Option<&'static str> {
+        self.node(id).map(|n| registry().resolved(n.class).name())
+    }
+
+    /// The class of an instance as a [`ClassId`], or `None` if it does not exist.
+    pub fn class_id(&self, id: InstanceId) -> Option<ClassId> {
         self.node(id).map(|n| n.class)
     }
 
@@ -413,20 +445,28 @@ impl World {
 
     /// Creates an instance of `class` (appended as the last child of `parent`, if any).
     ///
-    /// Errors: [`CoreError::UnknownClass`], or [`CoreError::InvalidInstance`] if `parent` does not exist.
+    /// Errors: [`CoreError::UnknownClass`], [`CoreError::AbstractClass`], or
+    /// [`CoreError::InvalidInstance`] if `parent` does not exist. Abstract classes are refused
+    /// here, so also by scene load; refusing services is `Instance.new`'s job (engine code and
+    /// `new_empty` worlds may still build a service tree by hand).
     /// Fires `child_added` when a parent is given.
     pub fn create(
         &mut self,
         class: &str,
         parent: Option<InstanceId>,
     ) -> Result<InstanceId, CoreError> {
-        let def = class_def(class).ok_or_else(|| CoreError::UnknownClass(class.to_string()))?;
+        let resolved = registry()
+            .class_by_name(class)
+            .ok_or_else(|| CoreError::UnknownClass(class.to_string()))?;
+        if resolved.desc.flags.contains(ClassFlags::ABSTRACT) {
+            return Err(CoreError::AbstractClass(class.to_string()));
+        }
         if let Some(p) = parent
             && !self.is_alive(p)
         {
             return Err(CoreError::InvalidInstance);
         }
-        let id = self.alloc(def.name, parent, BTreeMap::new(), false);
+        let id = self.alloc(resolved.id, parent, BTreeMap::new(), false);
         match parent {
             Some(p) => {
                 self.link_child(p, id);
@@ -619,15 +659,12 @@ impl World {
     pub fn get(&self, id: InstanceId, prop: &str) -> Result<Value, CoreError> {
         let node = self.node(id).ok_or(CoreError::InvalidInstance)?;
         let value = match node.props.get(prop) {
-            Some(v) => v.clone(),
-            None => default_value(node.class, prop).ok_or_else(|| CoreError::UnknownProperty {
-                class: node.class.to_string(),
-                property: prop.to_string(),
-            })?,
+            Some(v) => v,
+            None => unset_value(node, prop).ok_or_else(|| unknown_property(node, prop))?,
         };
         Ok(match value {
-            Value::Ref(Some(r)) if !self.is_alive(r) => Value::Ref(None),
-            v => v,
+            Value::Ref(Some(r)) if !self.is_alive(*r) => Value::Ref(None),
+            v => v.clone(),
         })
     }
 
@@ -643,12 +680,7 @@ impl World {
         let node = self.node(id).ok_or(CoreError::InvalidInstance)?;
         let value = match node.props.get(prop) {
             Some(v) => v,
-            None => {
-                default_value_ref(node.class, prop).ok_or_else(|| CoreError::UnknownProperty {
-                    class: node.class.to_string(),
-                    property: prop.to_string(),
-                })?
-            }
+            None => unset_value(node, prop).ok_or_else(|| unknown_property(node, prop))?,
         };
         Ok(match value {
             Value::Ref(Some(r)) if !self.is_alive(*r) => &NULL_REFERENCE,
@@ -667,11 +699,13 @@ impl World {
     /// neither properties, the change journal, nor signals. Properties with a registry range
     /// ([`crate::classes::NumRange`]) are clamped (or wrapped) into it. Fires `property_changed` when an accepted value changes.
     pub fn set(&mut self, id: InstanceId, prop: &str, value: Value) -> Result<(), CoreError> {
-        let class = self.node(id).ok_or(CoreError::InvalidInstance)?.class;
-        let def = find_property(class, prop).ok_or_else(|| CoreError::UnknownProperty {
-            class: class.to_string(),
-            property: prop.to_string(),
-        })?;
+        let class = registry().resolved(self.node(id).ok_or(CoreError::InvalidInstance)?.class);
+        let (def, index) = class
+            .property(prop)
+            .ok_or_else(|| CoreError::UnknownProperty {
+                class: class.name().to_string(),
+                property: prop.to_string(),
+            })?;
         if value.value_type() != def.ty {
             return Err(CoreError::TypeMismatch {
                 property: prop.to_string(),
@@ -723,16 +757,16 @@ impl World {
                 }
             }
         }
-        let old = self.get(id, prop)?;
-        let is_default = default_value(class, prop).as_ref() == Some(&value);
+        let changed = self.get_ref(id, prop)? != &value;
+        let is_default = class.defaults[usize::from(index.0)] == value;
         if let Some(n) = self.node_mut(id) {
             if is_default {
-                n.props.remove(prop);
+                n.props.remove(def.name);
             } else {
-                n.props.insert(prop.to_string(), value.clone());
+                n.props.insert(def.name.to_string(), value.clone());
             }
         }
-        if old != value {
+        if changed {
             self.record(id, Some(JournalKind::Property(def)));
             // Avoid hashing when no property signal has been registered. The validated registry
             // name is static, so even an unrelated signal needs no temporary owned lookup name.
@@ -755,9 +789,9 @@ impl World {
     pub fn property_changed(&mut self, id: InstanceId, prop: &str) -> &mut Signal<Value> {
         let name = match self
             .node(id)
-            .and_then(|node| find_property(node.class, prop))
+            .and_then(|node| registry().resolved(node.class).property(prop))
         {
-            Some(def) => Cow::Borrowed(def.name),
+            Some((def, _)) => Cow::Borrowed(def.name),
             None => Cow::Owned(prop.to_string()),
         };
         self.prop_signals.entry((id, name)).or_default()
@@ -766,7 +800,7 @@ impl World {
     /// True when the instance's class is `class` or inherits from it.
     pub fn is_a(&self, id: InstanceId, class: &str) -> bool {
         self.node(id)
-            .is_some_and(|n| classes::is_subclass(n.class, class))
+            .is_some_and(|n| registry().resolved(n.class).is_a_named(class))
     }
 
     /// Copies an instance and its descendants into a new parentless subtree and returns its root.

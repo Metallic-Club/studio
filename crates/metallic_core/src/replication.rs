@@ -5,62 +5,35 @@
 //! observation; it never grants access to a player's private containers.
 //! This is the play-client policy, not the separately authorized edit-session snapshot policy.
 
-use crate::classes::{self, ClassDef, PropDef, Repl};
+use crate::classes::{
+    self, Member, MemberContext, MemberKind, MethodImpl, Param, PropAccess, PropDef, Registry,
+    Repl, Ty,
+};
 use crate::{InstanceId, Value, World};
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
-/// Fingerprint of class order, inheritance, effective property order/types/defaults, enums and
-/// replication/hidden metadata. Version 4 includes declared string-normalization contract ids,
-/// numeric clamp/wrap ranges, and boxed CFrames by their 12 row-major
-/// components, never their allocation address. All lengths and numeric bits use little endian.
+pub use crate::classes::SchemaError;
+
+/// Fingerprint of class order, inheritance, flags, every member in id order with its signature and
+/// context, effective property defaults and replication/hidden metadata. Includes declared
+/// string-normalization contract ids, numeric clamp/wrap ranges, and boxed CFrames by their 12
+/// row-major components, never their allocation address. Descriptions, categories and function
+/// addresses are not hashed. All lengths and numeric bits use little endian.
 ///
-/// Protocol peers must compare this hash before interpreting class-relative property indices.
-/// It is a compatibility fingerprint, not an authentication credential or a world-state hash.
+/// Protocol peers must compare this hash before interpreting class or property indices. It is a
+/// compatibility fingerprint, not an authentication credential or a world-state hash.
 ///
-/// Computed once. Errors: a [`SchemaError`] when the built-in registry is malformed (an unknown
-/// superclass, an inheritance cycle, too many properties, or a normalizer without its contract
-/// id). The test `registry_hash_is_pinned` keeps the built-in registry valid; a peer that still
-/// gets an error must refuse to connect rather than guess.
+/// Computed once. Errors: a [`SchemaError`] when the built-in classes do not resolve. The tests
+/// `registry_hash_is_pinned` and `every_discovered_class_resolves` keep them valid; a peer that
+/// still gets an error must refuse to connect rather than guess.
 pub fn registry_hash() -> Result<[u8; 32], SchemaError> {
     static HASH: LazyLock<Result<[u8; 32], SchemaError>> =
-        LazyLock::new(|| hash_schema(classes::registry_classes()));
+        LazyLock::new(|| match classes::registry_error() {
+            Some(error) => Err(error),
+            None => Ok(hash_registry(classes::registry())),
+        });
     *HASH
-}
-
-/// Why a class registry has no fingerprint. Each variant names the class (and property) at fault.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum SchemaError {
-    /// A class names a superclass that is not in the registry.
-    #[error("class {class} names unregistered superclass {superclass}")]
-    UnknownSuperclass {
-        /// The class with the bad superclass.
-        class: &'static str,
-        /// The missing superclass name.
-        superclass: &'static str,
-    },
-    /// Following superclasses from this class never reaches a root.
-    #[error("class {0} has an inheritance cycle")]
-    InheritanceCycle(&'static str),
-    /// The class has more properties (inherited ones included) than a `u16` index can address.
-    #[error("class {0} has more than 65,536 properties")]
-    PropertyIndexOverflow(&'static str),
-    /// A property has a normalizer without a contract id, or a contract id without a normalizer.
-    #[error("property {class}.{property} must declare normalize and normalize_schema_id together")]
-    UnpairedNormalizer {
-        /// The class declaring the property.
-        class: &'static str,
-        /// The property.
-        property: &'static str,
-    },
-    /// A property's normalization contract id is empty.
-    #[error("property {class}.{property} has an empty normalization schema id")]
-    EmptyNormalizationId {
-        /// The class declaring the property.
-        class: &'static str,
-        /// The property.
-        property: &'static str,
-    },
 }
 
 fn field(hash: &mut Sha256, bytes: &[u8]) {
@@ -106,91 +79,167 @@ fn hash_value(hash: &mut Sha256, value: &Value) {
     }
 }
 
-fn hash_schema(classes: &[ClassDef]) -> Result<[u8; 32], SchemaError> {
-    let mut hash = Sha256::new();
-    hash.update(b"metallic-registry-v4\0");
-    hash.update((classes.len() as u64).to_le_bytes());
-    for class in classes {
-        field(&mut hash, class.name.as_bytes());
-        hash.update([u8::from(class.superclass.is_some())]);
-        if let Some(parent) = class.superclass {
-            field(&mut hash, parent.as_bytes());
+fn optional_field(hash: &mut Sha256, text: Option<&str>) {
+    hash.update([u8::from(text.is_some())]);
+    if let Some(text) = text {
+        field(hash, text.as_bytes());
+    }
+}
+
+fn hash_context(hash: &mut Sha256, context: MemberContext) {
+    hash.update([match context {
+        MemberContext::Any => 0,
+        MemberContext::Server => 1,
+        MemberContext::Client => 2,
+    }]);
+}
+
+fn hash_ty(hash: &mut Sha256, ty: &Ty) {
+    let tag = match ty {
+        Ty::Nil => 0,
+        Ty::Bool => 1,
+        Ty::Int => 2,
+        Ty::Number => 3,
+        Ty::String => 4,
+        Ty::Instance(_) => 5,
+        Ty::Vector3 => 6,
+        Ty::CFrame => 7,
+        Ty::Color3 => 8,
+        Ty::UDim2 => 9,
+        Ty::Enum(_) => 10,
+        Ty::Array(_) => 11,
+        Ty::Map(_) => 12,
+        Ty::Function(_) => 13,
+        Ty::Optional(_) => 14,
+        Ty::Tuple(_) => 15,
+        Ty::Any => 16,
+    };
+    hash.update([tag]);
+    match ty {
+        Ty::Instance(class) => optional_field(hash, *class),
+        Ty::Enum(name) => field(hash, name.as_bytes()),
+        Ty::Array(inner) | Ty::Map(inner) | Ty::Optional(inner) => hash_ty(hash, inner),
+        Ty::Function(signature) => {
+            hash_tys(hash, signature.params);
+            hash_ty(hash, signature.returns);
         }
-        let mut chain = vec![class];
-        let mut parent = class.superclass;
-        while let Some(name) = parent {
-            let next =
-                classes
-                    .iter()
-                    .find(|c| c.name == name)
-                    .ok_or(SchemaError::UnknownSuperclass {
-                        class: class.name,
-                        superclass: name,
-                    })?;
-            if chain.len() >= classes.len() {
-                return Err(SchemaError::InheritanceCycle(class.name));
-            }
-            chain.push(next);
-            parent = next.superclass;
-        }
-        let properties: Vec<(&ClassDef, &PropDef)> = chain
-            .iter()
-            .rev()
-            .flat_map(|c| c.props.iter().map(move |p| (*c, p)))
-            .collect();
-        if properties.len() > usize::from(u16::MAX) + 1 {
-            return Err(SchemaError::PropertyIndexOverflow(class.name));
-        }
-        hash.update((properties.len() as u64).to_le_bytes());
-        for (owner, property) in properties {
-            field(&mut hash, property.name.as_bytes());
-            field(&mut hash, property.ty.name().as_bytes());
-            hash.update([match property.repl {
-                Repl::Replicated => 0,
-                Repl::ServerOnly => 1,
-            }]);
-            hash.update([u8::from(property.hidden)]);
-            hash.update([u8::from(property.range.is_some())]);
-            if let Some(range) = property.range {
-                hash.update(range.min.to_bits().to_le_bytes());
-                hash.update(range.max.to_bits().to_le_bytes());
-                hash.update([u8::from(range.wrap)]);
-            }
-            match (property.normalize.is_some(), property.normalize_schema_id) {
-                (false, None) => hash.update([0]),
-                (true, Some("")) => {
-                    return Err(SchemaError::EmptyNormalizationId {
-                        class: owner.name,
-                        property: property.name,
-                    });
-                }
-                (true, Some(id)) => {
-                    hash.update([1]);
-                    field(&mut hash, id.as_bytes());
-                }
-                _ => {
-                    return Err(SchemaError::UnpairedNormalizer {
-                        class: owner.name,
-                        property: property.name,
-                    });
-                }
-            }
-            hash.update([u8::from(property.allowed.is_some())]);
-            if let Some(values) = property.allowed {
-                hash.update((values.len() as u64).to_le_bytes());
-                for value in values {
-                    field(&mut hash, value.as_bytes());
-                }
-            }
-            let value = if property.name == "Name" {
-                Value::String(class.name.into())
-            } else {
-                (property.default)()
-            };
-            hash_value(&mut hash, &value);
+        Ty::Tuple(items) => hash_tys(hash, items),
+        _ => {}
+    }
+}
+
+fn hash_tys(hash: &mut Sha256, items: &[Ty]) {
+    hash.update((items.len() as u64).to_le_bytes());
+    for item in items {
+        hash_ty(hash, item);
+    }
+}
+
+fn hash_params(hash: &mut Sha256, params: &[Param]) {
+    hash.update((params.len() as u64).to_le_bytes());
+    for param in params {
+        field(hash, param.name.as_bytes());
+        hash_ty(hash, &param.ty);
+        hash.update([u8::from(param.optional)]);
+    }
+}
+
+fn hash_property(hash: &mut Sha256, property: &PropDef, default: &Value) {
+    field(hash, property.ty.name().as_bytes());
+    hash.update([match property.repl {
+        Repl::Replicated => 0,
+        Repl::ServerOnly => 1,
+    }]);
+    hash.update([u8::from(property.range.is_some())]);
+    if let Some(range) = property.range {
+        hash.update(range.min.to_bits().to_le_bytes());
+        hash.update(range.max.to_bits().to_le_bytes());
+        hash.update([u8::from(range.wrap)]);
+    }
+    // Resolution checked that the normalizer and its contract id come together.
+    optional_field(hash, property.normalize_schema_id);
+    hash.update([u8::from(property.allowed.is_some())]);
+    if let Some(values) = property.allowed {
+        hash.update((values.len() as u64).to_le_bytes());
+        for value in values {
+            field(hash, value.as_bytes());
         }
     }
-    Ok(hash.finalize().into())
+    hash.update([u8::from(property.readonly)]);
+    // #464 adds computed properties as 1 (read-only) and 2 (settable).
+    hash.update([match property.access {
+        PropAccess::Stored => 0,
+    }]);
+    hash.update([u8::from(property.saved)]);
+    optional_field(hash, property.enum_type);
+    optional_field(hash, property.deprecated);
+    hash_value(hash, default);
+}
+
+fn hash_member(hash: &mut Sha256, member: &Member, owner: &str, defaults: &[Value]) {
+    hash.update([match member.kind {
+        MemberKind::Property { .. } => 0,
+        MemberKind::Method { .. } => 1,
+        MemberKind::Signal { .. } => 2,
+        MemberKind::Callback { .. } => 3,
+    }]);
+    field(hash, member.name().as_bytes());
+    let aliases = member.aliases();
+    hash.update((aliases.len() as u64).to_le_bytes());
+    for alias in aliases {
+        field(hash, alias.as_bytes());
+    }
+    field(hash, owner.as_bytes());
+    hash_context(hash, member.context);
+    hash.update([u8::from(member.hidden)]);
+    match member.kind {
+        MemberKind::Property { desc, index } => {
+            hash_property(hash, desc, &defaults[usize::from(index.0)]);
+        }
+        MemberKind::Method { desc, .. } => {
+            hash_params(hash, desc.params);
+            hash.update([u8::from(desc.variadic.is_some())]);
+            if let Some(variadic) = &desc.variadic {
+                hash_ty(hash, variadic);
+            }
+            hash_ty(hash, &desc.returns);
+            hash.update([u8::from(desc.yields)]);
+            // 0 is reserved for `Native`, which arrives with #461.
+            hash.update([match desc.implementation {
+                MethodImpl::Host => 1,
+                MethodImpl::Luau => 2,
+            }]);
+            optional_field(hash, desc.deprecated);
+        }
+        MemberKind::Signal { desc, .. } => {
+            hash_params(hash, desc.params);
+            hash.update([u8::from(desc.parameterized)]);
+            optional_field(hash, desc.deprecated);
+        }
+        MemberKind::Callback { desc, .. } => {
+            hash_params(hash, desc.params);
+            hash_ty(hash, &desc.returns);
+        }
+    }
+}
+
+fn hash_registry(registry: &Registry) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"metallic-registry-v5\0");
+    hash.update((registry.classes().len() as u64).to_le_bytes());
+    for class in registry.classes() {
+        field(&mut hash, class.name().as_bytes());
+        optional_field(&mut hash, class.desc.superclass);
+        hash.update([class.desc.flags.bits()]);
+        optional_field(&mut hash, class.desc.deprecated_by);
+        hash_context(&mut hash, class.desc.context);
+        hash.update((class.members.len() as u64).to_le_bytes());
+        for member in &class.members {
+            let owner = registry.resolved(member.owner).name();
+            hash_member(&mut hash, member, owner, &class.defaults);
+        }
+    }
+    hash.finalize().into()
 }
 
 fn owner_of(world: &World, container: InstanceId) -> Option<InstanceId> {
@@ -297,44 +346,42 @@ pub fn property_value(
 mod tests {
     use super::*;
     use crate::ValueType;
+    use crate::classes::ClassDef;
+
+    /// Resolves and hashes a fixture set. Fixtures are built at run time, and resolved classes
+    /// need `'static` descriptors, so they leak; these are tests.
+    fn hash_schema(classes: &[ClassDef]) -> Result<[u8; 32], SchemaError> {
+        let classes: Vec<&'static ClassDef> = classes
+            .iter()
+            .map(|class| &*Box::leak(Box::new(*class)))
+            .collect();
+        classes::resolve(&classes).map(|registry| hash_registry(&registry))
+    }
 
     fn ok_hash(classes: &[ClassDef]) -> [u8; 32] {
         hash_schema(classes).unwrap()
     }
 
     fn base(prop: PropDef) -> ClassDef {
-        ClassDef {
-            name: "Fixture",
-            superclass: None,
-            props: Box::leak(vec![prop].into_boxed_slice()),
-        }
+        ClassDef::new("Fixture", None).props(Box::leak(vec![prop].into_boxed_slice()))
     }
 
     fn prop() -> PropDef {
-        PropDef {
-            name: "Flag",
-            ty: ValueType::Bool,
-            default: || Value::Bool(false),
-            allowed: None,
-            repl: Repl::Replicated,
-            hidden: false,
-            range: None,
-            normalize: None,
-            normalize_schema_id: None,
-        }
+        PropDef::new("Flag", ValueType::Bool, || Value::Bool(false))
     }
 
     #[test]
     fn fingerprint_covers_property_metadata_defaults_order_and_class_identity() {
         let original = ok_hash(&[base(prop())]);
         assert_eq!(original, ok_hash(&[base(prop())]));
-        // Independent Python SHA-256 fixture for version 4's explicit byte encoding.
+        // Independent fixture for version 5's explicit byte encoding: the stream written by hand
+        // with `printf` and piped through `sha256sum`, no Rust involved.
         assert_eq!(
             original,
             [
-                0x62, 0xf7, 0x65, 0x56, 0x16, 0x36, 0x48, 0x9b, 0xab, 0x87, 0x91, 0x0b, 0x22, 0x1e,
-                0x0a, 0xdc, 0xa5, 0x8a, 0x3c, 0x9d, 0x0b, 0xc6, 0x5f, 0x1c, 0xe2, 0x9b, 0x7c, 0x75,
-                0xfd, 0xf8, 0x0e, 0x9a
+                0xda, 0xba, 0x89, 0x63, 0x6d, 0xc2, 0xbb, 0xdc, 0xd9, 0x2e, 0x9b, 0x39, 0x18, 0x79,
+                0x5d, 0xeb, 0xd3, 0xc7, 0x01, 0x4e, 0x36, 0x5a, 0x9a, 0x42, 0x1d, 0x3a, 0xc7, 0xf1,
+                0x5a, 0x9c, 0x3c, 0xb4
             ]
         );
         let mut changed = prop();
@@ -357,18 +404,65 @@ mod tests {
         assert_ne!(original, ok_hash(&[base(changed)]));
         assert_ne!(
             original,
-            ok_hash(&[
-                base(prop()),
-                ClassDef {
-                    name: "Added",
-                    superclass: None,
-                    props: &[]
-                }
-            ])
+            ok_hash(&[base(prop()), ClassDef::new("Added", None)])
         );
         let mut changed = base(prop());
         changed.name = "Changed";
         assert_ne!(original, ok_hash(&[changed]));
+    }
+
+    #[test]
+    fn fingerprint_covers_flags_and_signatures_but_not_descriptions() {
+        use crate::classes::{ClassFlags, MemberContext, MethodDesc, Param, SignalDesc, Ty};
+        static SIGNAL: SignalDesc = SignalDesc::new("Fired");
+        static SIGNAL_WITH_PAYLOAD: SignalDesc =
+            SignalDesc::new("Fired").params(&[Param::new("amount", Ty::Number)]);
+        static DESCRIBED_SIGNAL: SignalDesc = SignalDesc::new("Fired").describe("Text.");
+        static PLAIN: [&SignalDesc; 1] = [&SIGNAL];
+        static PAYLOAD: [&SignalDesc; 1] = [&SIGNAL_WITH_PAYLOAD];
+        static DESCRIBED: [&SignalDesc; 1] = [&DESCRIBED_SIGNAL];
+        let method = MethodDesc::host("Do");
+        let class = |methods: &'static [MethodDesc], signals: &'static [&'static SignalDesc]| {
+            ClassDef::new("Fixture", None)
+                .methods(methods)
+                .signals(signals)
+        };
+        let leak = |method| -> &'static [MethodDesc] { Box::leak(vec![method].into_boxed_slice()) };
+        let original = ok_hash(&[class(leak(method), &PLAIN)]);
+        assert_eq!(original, ok_hash(&[class(leak(method), &PLAIN)]));
+        for changed in [
+            method.returns(Ty::Bool),
+            method.params(const { &[Param::new("x", Ty::Number)] }),
+            method.params(const { &[Param::new("x", Ty::Number).optional()] }),
+            method.params(const { &[Param::new("y", Ty::Number)] }),
+            method.context(MemberContext::Server),
+            MethodDesc {
+                yields: true,
+                ..method
+            },
+            MethodDesc {
+                variadic: Some(Ty::Any),
+                ..method
+            },
+            MethodDesc {
+                implementation: crate::classes::MethodImpl::Luau,
+                ..method
+            },
+        ] {
+            assert_ne!(original, ok_hash(&[class(leak(changed), &PLAIN)]));
+        }
+        assert_ne!(original, ok_hash(&[class(leak(method), &PAYLOAD)]));
+        assert_ne!(
+            original,
+            ok_hash(&[class(leak(method), &PLAIN).flags(ClassFlags::ABSTRACT)])
+        );
+        // A changed tooltip must not split peers.
+        assert_eq!(
+            original,
+            ok_hash(&[class(leak(method.describe("Text.")), &DESCRIBED)
+                .describe("Text.")
+                .category("Text")])
+        );
     }
 
     #[test]
@@ -440,11 +534,7 @@ mod tests {
 
     #[test]
     fn malformed_inheritance_is_an_error_not_a_panic() {
-        let orphan = ClassDef {
-            name: "Orphan",
-            superclass: Some("Missing"),
-            props: &[],
-        };
+        let orphan = ClassDef::new("Orphan", Some("Missing"));
         assert_eq!(
             hash_schema(&[orphan]),
             Err(SchemaError::UnknownSuperclass {
@@ -452,16 +542,8 @@ mod tests {
                 superclass: "Missing"
             })
         );
-        let a = ClassDef {
-            name: "A",
-            superclass: Some("B"),
-            props: &[],
-        };
-        let b = ClassDef {
-            name: "B",
-            superclass: Some("A"),
-            props: &[],
-        };
+        let a = ClassDef::new("A", Some("B"));
+        let b = ClassDef::new("B", Some("A"));
         assert_eq!(
             hash_schema(&[a, b]),
             Err(SchemaError::InheritanceCycle("A"))
@@ -555,34 +637,20 @@ mod tests {
         let single = ok_hash(&[base(prop())]);
         let mut extra = prop();
         extra.name = "Extra";
-        let pair = ClassDef {
-            name: "Fixture",
-            superclass: None,
-            props: Box::leak(vec![prop(), extra].into_boxed_slice()),
-        };
+        let pair =
+            ClassDef::new("Fixture", None).props(Box::leak(vec![prop(), extra].into_boxed_slice()));
         let pair_hash = ok_hash(&[pair]);
         assert_ne!(single, pair_hash);
         let mut extra = prop();
         extra.name = "Extra";
-        let reversed = ClassDef {
-            name: "Fixture",
-            superclass: None,
-            props: Box::leak(vec![extra, prop()].into_boxed_slice()),
-        };
+        let reversed =
+            ClassDef::new("Fixture", None).props(Box::leak(vec![extra, prop()].into_boxed_slice()));
         assert_ne!(pair_hash, ok_hash(&[reversed]));
         let schema = |parent| {
             [
                 base(prop()),
-                ClassDef {
-                    name: "OtherBase",
-                    superclass: None,
-                    props: &[],
-                },
-                ClassDef {
-                    name: "Derived",
-                    superclass: Some(parent),
-                    props: &[],
-                },
+                ClassDef::new("OtherBase", None),
+                ClassDef::new("Derived", Some(parent)),
             ]
         };
         assert_ne!(ok_hash(&schema("Fixture")), ok_hash(&schema("OtherBase")));

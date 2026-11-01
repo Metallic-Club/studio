@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use metallic_core::classes::{find_property, is_subclass};
+use metallic_core::classes::{class_def, find_property, is_subclass};
 use metallic_core::transform;
 use metallic_core::{CoreError, InstanceId, Value as CoreValue};
 use mlua::{
@@ -632,7 +632,9 @@ pub(crate) fn constructor(lua: &Lua, state: &Rc<ApiState>) -> mlua::Result<Table
     table.set(
         "new",
         errors::guarded_fn(lua, move |lua, (class, parent): (String, Option<Value>)| {
-            if super::services::is_service(&class) {
+            // Unknown classes fall through to `create`, after the parent check, as before.
+            let refused = class_def(&class).is_some_and(|def| !def.is_creatable());
+            if refused || super::services::is_service(&class) {
                 return Err(lua_error(format!(
                     "Unable to create an Instance of type \"{class}\""
                 )));

@@ -31,7 +31,8 @@ apps.
 
 ## Crates
 - **metallic_core** (Task 2): the Roblox-style world. `World` owns a tree of Instances addressed by generational
-  `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes.rs`) with typed
+  `InstanceId`; `Value` (Nil, Bool, Number, String, Vector3, Color3, UDim2, Ref, CFrame); a class registry (`classes/`: one file per class,
+  discovered by `build.rs`, resolved once into flat per-class tables; see "How to add a class") with typed
   properties and defaults; `Signal<Args>` with opaque connection IDs shared across argument types (foreign IDs
   cannot disconnect a handler, identities are never reused, exhaustion panics before registration);
   property-signal keys borrow known static registry names and own unknown/unresolved registration names,
@@ -567,7 +568,7 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 
 ## Audio wiring (planned, after Task 8)
 `metallic_audio` is ready; the runtime and Luau sides are not written yet. The plan:
-- **Classes in `metallic_core/src/classes.rs`** (Roblox defaults; read-only ones are runtime-maintained):
+- **Class files in `metallic_core/src/classes/`** (Roblox defaults; read-only ones are runtime-maintained):
   - `Sound`: `SoundId` (String), `Volume` (Number 0.5), `PlaybackSpeed` (Number 1), `Looped` (Bool false),
     `Playing` (Bool false), `TimePosition` (Number 0), `TimeLength` (Number 0, read-only), `IsPlaying` (Bool,
     read-only), `IsPaused` (Bool, read-only), `RollOffMode` (enum string "Inverse"; also "Linear", "LinearSquare",
@@ -594,13 +595,22 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
   Stopped` fire from the method calls, `Ended`/`DidLoop` from engine events; `SoundService:PlayLocalSound(sound)`.
   Line items go in `docs/luau-api.md` when added.
 
+## How to add a class
+Create `crates/metallic_core/src/classes/<group>/<class>.rs` exporting `pub static CLASS: ClassDesc` (copy a small one,
+such as `parts/checkpoint.rs`). Nothing else changes: `build.rs` finds the file, and inheritance comes only from the
+superclass name, never from the folder. Set `ClassFlags::CREATABLE` to let `Instance.new` make it. Declare only its own
+members: redeclaring an inherited one is an error without `overrides()`, and `defaults`/`hide` change an inherited one
+in place. Run `cargo test -p metallic_core`: the resolution checks run, and `registry_hash_is_pinned` asks you to update
+the golden hash on purpose (`cargo run -p metallic_core --example registry_hash`). `cargo fmt` does not follow the
+generated module tree, so run `rustfmt --edition 2024` on the new file; CI checks the folder. Design:
+`docs/design/class-system.md`.
+
 ## Where to add things
-- **A new Instance class or property:** `metallic_core/src/classes.rs` (registry entry with defaults), a test in
-  `tests/tree.rs`; the Luau API picks up registry properties by name; Studio's Properties panel too. Add to Insert menu if
-  creators should create it.
+- **A new Instance class or property:** one class file (see "How to add a class"), a test in `tests/tree.rs`; the Luau API
+  picks up registry properties by name; Studio's Properties panel too. Add to Insert menu if creators should create it.
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
-- **A material:** the material list in `classes.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
+- **A material:** the material list in `classes/lists.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
   procedural detail), and density/friction in `metallic_physics`. The material table has one spare row per style
   (`ROWS_PER_STYLE` in `shading.rs`, and `CHARACTER_ROW` in `scene.wgsl`, moves up by one). Test `material_table_has_every_registry_material`
   must still pass.
@@ -632,10 +642,24 @@ game never holds a `World` borrow while scripts run. `Game::start` runs the scri
 
 `metallic_core::classes` defines registry-level `Repl` eligibility and class-relative `property_index` /
 `property_by_index` lookups in base-first declaration order. `replication::registry_hash()` returns a cached
-SHA-256 compatibility fingerprint of ordered class names, inheritance, effective properties, types, defaults,
-allowed values and policy. Its versioned encoding uses explicit lengths and little-endian numeric bits. Peers
+SHA-256 compatibility fingerprint of the classes in id order: inheritance, flags, every member in id order with its
+kind, owner, context and signature, effective property types and defaults, allowed values and policy (encoding v5,
+`docs/design/class-system.md` section 4.3). Descriptions and categories are not hashed: a changed tooltip must not
+split peers. Its versioned encoding uses explicit lengths and little-endian numeric bits. Peers
 must agree on this fingerprint before using property indices; it is neither a credential nor a scene hash.
-It returns `Result<[u8; 32], SchemaError>` (no panics): a malformed registry is a typed error and the peer refuses to connect. The test `registry_hash_is_pinned` holds the golden value; any class or property change must update it on purpose (the `registry_hash` example prints the new value). `classes::class_index` / `class_at` give the wire class index, and `metallic_core::{orientation_to_quat, quat_to_orientation}` (moved from physics) convert `Orientation` for the wire.
+It returns `Result<[u8; 32], SchemaError>` (no panics): a malformed registry is a typed error and the peer refuses to connect. The test `registry_hash_is_pinned` holds the golden value; any class or property change must update it on purpose (the `registry_hash` example prints the new value). `classes::class_index` / `class_at` give the wire class index (a `ClassId`: classes sorted by name, so adding a class moves later ones; nothing persists one), and `metallic_core::{orientation_to_quat, quat_to_orientation}` (moved from physics) convert `Orientation` for the wire.
+
+World nodes store a `ClassId`, so `World::get` goes node, resolved class, per-class name table (entries grouped by name
+length), `PropertyIndex`, stored value or `defaults[index]`, and never walks the superclass chain. By the prefix rule an
+inherited member keeps its `MemberId` and `PropertyIndex` in every subclass. `class_def`, `find_property`, `is_subclass`,
+`all_properties`, `class_index`/`class_at`, `property_index`/`property_by_index`, `default_value(_ref)` and
+`registry_classes` are thin wrappers over `classes::registry()`. Abstract classes (`Instance`, `BasePart`, `PVInstance`,
+`GuiBase2d`, `GuiObject`, `LuaSourceContainer`, `BaseScript`, `BaseRemoteEvent`, `ServiceProvider`, `DataModel`) are
+refused by `World::create`, so also by scene load; `Instance.new` also refuses `SERVICE` classes and anything else
+without `CREATABLE`. `World::create` still accepts services for engine code and hand-built worlds. Method and signal lists
+exist in the descriptors but stay signature-only (`PVInstance.GetPivot`, `PivotTo`) until #461-#465 route calls through
+them; the Luau binding still dispatches its own tables. Inserted abstract classes change no existing `IsA` answer: a test
+holds the table recorded from the old `classes.rs`.
 
 `replication::{instance_visible, property_visible, property_value}` implement the play-client filter. They hide
 ServerStorage/ServerScriptService subtrees and server Script.Source, restrict private PlayerGui/PlayerScripts
@@ -646,11 +670,11 @@ policy. Combined-mode client/server VMs still share one World until the runtime 
 
 Core definitions now include ServerStorage (a standard service), ModuleScript, RemoteFunction,
 UnreliableRemoteEvent and PlayerScripts. Registration does not implement require or the new classes' Luau remote
-methods. Existing class order is retained by appending definitions. The small `registry_hash` core example prints
+methods. The small `registry_hash` core example prints
 only the fingerprint for comparing separate processes, without loading creator content.
 
-The replication registry fingerprint's v2 encoding includes hidden-property metadata and boxed CFrame defaults
-as 12 row-major little-endian f64 bit patterns. Allocation addresses are excluded. PropDef.hidden hides engine
+The replication registry fingerprint includes hidden-property metadata and boxed CFrame defaults
+as 12 row-major little-endian f64 bit patterns. Allocation addresses are excluded. PropDesc.hidden hides engine
 bookkeeping from Luau/Properties UI; it does not suppress replication. Confidentiality uses Repl plus instance,
 server-source and player-owner visibility. This lets client-side transform helpers receive the registered state.
 

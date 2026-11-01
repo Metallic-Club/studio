@@ -1,8 +1,9 @@
 //! Core data model of the Metallic Engine: a Roblox-style Instance tree.
 //!
 //! A [`World`] owns every instance of one game. Each instance has a class (see
-//! [`classes`]), a name, typed properties ([`Value`]) whose defaults come from the class
-//! registry, one optional parent and an ordered list of children. Instances are addressed
+//! [`classes`]: one file per class, resolved once into flat tables), a name, typed properties
+//! ([`Value`]) whose defaults come from the class registry, one optional parent and an ordered
+//! list of children. Instances are addressed
 //! by [`InstanceId`], a generational handle that stays invalid after the instance is
 //! destroyed. [`World::get_ref`] borrows values and shared defaults without cloning;
 //! [`World::get`] retains the owned-value interface. Scenes are saved to and loaded from a diff-friendly text file
@@ -46,6 +47,9 @@ pub enum CoreError {
     /// The class name is not in the class registry.
     #[error("unknown class `{0}`")]
     UnknownClass(String),
+    /// The class is abstract: it exists for inheritance and `IsA`, never as an instance.
+    #[error("class `{0}` is abstract")]
+    AbstractClass(String),
     /// The class has no property with this name.
     #[error("class `{class}` has no property `{property}`")]
     UnknownProperty {

@@ -1,0 +1,43 @@
+Instance: Instance
+Workspace: Instance Workspace
+Players: Instance Players
+PlayerGui: Instance PlayerGui
+ReplicatedStorage: Instance ReplicatedStorage
+ServerScriptService: Instance ServerScriptService
+StarterPlayer: Instance StarterPlayer
+StarterPlayerScripts: Instance StarterPlayerScripts
+StarterGui: Instance StarterGui
+Lighting: Instance Lighting
+RunService: Instance RunService
+Folder: Instance Folder
+Model: Instance Model
+BasePart: Instance BasePart
+Part: Instance BasePart Part
+SpawnLocation: Instance BasePart Part SpawnLocation
+Checkpoint: Instance BasePart Part Checkpoint
+Script: Instance Script
+LocalScript: Instance Script LocalScript
+RemoteEvent: Instance RemoteEvent
+Humanoid: Instance Humanoid
+ScreenGui: Instance ScreenGui
+Frame: Instance Frame
+TextLabel: Instance Frame TextLabel
+Player: Instance Player
+InputContext: Instance InputContext
+InputAction: Instance InputAction
+InputBinding: Instance InputBinding
+Atmosphere: Instance Atmosphere
+Sky: Instance Sky
+Clouds: Instance Clouds
+BloomEffect: Instance BloomEffect
+ColorCorrectionEffect: Instance ColorCorrectionEffect
+ColorGradingEffect: Instance ColorGradingEffect
+GuiButton: Instance Frame GuiButton
+TextButton: Instance Frame GuiButton TextButton
+ImageButton: Instance Frame GuiButton ImageButton
+ModuleScript: Instance ModuleScript
+ServerStorage: Instance ServerStorage
+RemoteFunction: Instance RemoteFunction
+UnreliableRemoteEvent: Instance UnreliableRemoteEvent
+PlayerScripts: Instance PlayerScripts
+Camera: Instance Camera
