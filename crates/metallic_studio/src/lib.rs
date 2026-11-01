@@ -46,6 +46,7 @@ pub mod colour;
 pub mod commands;
 pub mod context_bar;
 pub mod data_dirs;
+pub mod devmode;
 pub mod editor;
 pub mod editor_colour;
 pub mod editor_input_actions;

@@ -42,6 +42,10 @@ pub enum Scene {
     Editor,
     /// The same editor with Play running (the game drawn in the viewport).
     Playing,
+    /// Play running with developer mode on: the performance overlay and the Instance inspector.
+    DevMode,
+    /// The editor with the Log and Feature flags panels open (developer mode).
+    DevPanels,
     /// The same editor with the Ctrl+K palette open on a query.
     Palette,
     /// The colour popover demo (stand-in until the editor's Properties panel exists).
@@ -99,6 +103,8 @@ impl Options {
                         "error" => Scene::Error,
                         "editor" => Scene::Editor,
                         "playing" => Scene::Playing,
+                        "devmode" => Scene::DevMode,
+                        "devpanels" => Scene::DevPanels,
                         "palette" => Scene::Palette,
                         "colour" | "color" => Scene::Colour,
                         "components" => Scene::Components,
@@ -216,6 +222,23 @@ impl StudioApp {
             Scene::Playing if shot => {
                 EditorUi::demo(&templates_dir().join("parkour")).map_or(Phase::Start, |mut e| {
                     e.state.start_play("play.start");
+                    Phase::Opened(Box::new(e))
+                })
+            }
+            Scene::DevMode if shot => {
+                EditorUi::demo(&templates_dir().join("parkour")).map_or(Phase::Start, |mut e| {
+                    e.state.start_play("play.start");
+                    e.state.dev.overlay = true;
+                    e.state.dev.inspector = true;
+                    Phase::Opened(Box::new(e))
+                })
+            }
+            Scene::DevPanels if shot => {
+                EditorUi::demo(&templates_dir().join("parkour")).map_or(Phase::Start, |mut e| {
+                    e.state.dev.log = true;
+                    e.state.dev.flags = true;
+                    e.state.flags.set("new_shadows", true);
+                    e.state.flags.set("gpu.culling", false);
                     Phase::Opened(Box::new(e))
                 })
             }
@@ -369,6 +392,7 @@ impl eframe::App for StudioApp {
                     Some(StartAction::OpenProject { name, path }) => match EditorUi::open(&path) {
                         Ok(mut editor) => {
                             editor.hints = crate::hints::Hints::load_default();
+                            editor.state.flags = crate::devmode::FeatureFlags::load_default();
                             self.phase = Phase::Opened(Box::new(editor));
                             self.opened_name = name;
                         }
@@ -394,6 +418,7 @@ impl eframe::App for StudioApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 }
                 editor.hints.show_tips = self.settings.settings.show_tips;
+                editor.state.dev.enabled = self.settings.settings.dev_mode().enabled;
                 let exit = editor.ui(ui, frame.wgpu_render_state());
                 if editor.take_settings_request() {
                     self.settings_open = true;

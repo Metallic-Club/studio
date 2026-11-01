@@ -121,6 +121,11 @@ impl Game {
         self.last_camera
     }
 
+    /// The scripts' VM memory, waiting threads and running scripts (developer overlay, #14).
+    pub fn script_stats(&self) -> metallic_script::ScriptStats {
+        self.simulation.scripts.stats()
+    }
+
     /// True between [`Game::start`] and [`Game::stop`].
     pub fn is_running(&self) -> bool {
         self.simulation.running

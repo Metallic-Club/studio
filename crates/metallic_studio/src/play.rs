@@ -110,6 +110,10 @@ pub trait PlayView {
     /// Lends the play world read-only for the duration of `inspect` (Explorer's play tree). Does
     /// nothing after Stop or while the world is borrowed.
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World));
+    /// The game's script VMs now, for the developer overlay (#14); `None` when unknown.
+    fn script_stats(&self) -> Option<metallic_runtime::ScriptStats> {
+        None
+    }
 }
 
 /// Something that happened to play state.

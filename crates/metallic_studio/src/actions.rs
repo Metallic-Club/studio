@@ -143,8 +143,15 @@ impl ActionRegistry {
     ///
     /// Every action not in [`PLAY_SAFE`] is disabled while a play session runs, whoever
     /// registers it and whenever (the building tools, panels and later registrations too).
+    ///
+    /// A `dev.*` action (see [`crate::devmode`]) is instead disabled while developer mode is
+    /// off, and stays usable during Play.
     pub fn register(&mut self, mut action: Action) {
-        lock_while_playing(&mut action);
+        if crate::devmode::is_dev_action(action.id) {
+            only_in_developer_mode(&mut action);
+        } else {
+            lock_while_playing(&mut action);
+        }
         if let Some(i) = self.actions.iter().position(|a| a.id == action.id) {
             self.actions[i] = action;
         } else {
@@ -356,7 +363,9 @@ impl ActionRegistry {
         let mut clicked = None;
         for &id in ids {
             let Some(a) = self.get(id) else { continue };
-            let button = egui::Button::new(&a.label).shortcut_text(keymap.label(id));
+            let button = egui::Button::new(&a.label)
+                .shortcut_text(keymap.label(id))
+                .selected(a.is_checked(state));
             if theme::add_enabled(ui, a.is_enabled(state), button).clicked() {
                 clicked = Some(id);
             }
@@ -910,7 +919,60 @@ pub fn default_actions() -> ActionRegistry {
         )
         .enabled(|s| s.play.is_playing()),
     );
+    register_dev_actions(&mut r);
     r
+}
+
+/// The built-in developer tools (#14). Other `dev.*` actions join the Developer menu the same
+/// way.
+fn register_dev_actions(r: &mut ActionRegistry) {
+    r.register(
+        Action::new(
+            "dev.overlay",
+            "Performance overlay",
+            Icon::Text("F3"),
+            ToolbarGroup::Hidden,
+            |s| s.dev.overlay = !s.dev.overlay,
+        )
+        .checked(|s| s.dev.overlay),
+    );
+    r.register(
+        Action::new(
+            "dev.log",
+            "Log",
+            Icon::Text("L"),
+            ToolbarGroup::Hidden,
+            |s| s.dev.log = !s.dev.log,
+        )
+        .checked(|s| s.dev.log),
+    );
+    r.register(
+        Action::new(
+            "dev.inspector",
+            "Instance inspector",
+            Icon::Text("I"),
+            ToolbarGroup::Hidden,
+            |s| s.dev.inspector = !s.dev.inspector,
+        )
+        .checked(|s| s.dev.inspector),
+    );
+    r.register(
+        Action::new(
+            "dev.flags",
+            "Feature flags",
+            Icon::Text("F"),
+            ToolbarGroup::Hidden,
+            |s| s.dev.flags = !s.dev.flags,
+        )
+        .checked(|s| s.dev.flags),
+    );
+    r.register(Action::new(
+        "dev.report_bug",
+        "Report a bug…",
+        Icon::Text("!"),
+        ToolbarGroup::Hidden,
+        |s| s.request(UiRequest::ReportBug),
+    ));
 }
 
 /// A ghost chip showing an increment; a click opens the list of `steps`, the mouse wheel over it
@@ -971,6 +1033,14 @@ pub const PLAY_SAFE: &[&str] = &[
     "file.close",
     "settings.open",
 ];
+
+/// Disables a `dev.*` action while developer mode is off.
+fn only_in_developer_mode(a: &mut Action) {
+    let before = a.enabled.take();
+    a.enabled = Some(Box::new(move |s: &EditorState| {
+        s.dev.enabled && before.as_ref().is_none_or(|f| f(s))
+    }));
+}
 
 /// Disables `a` while playing unless it is in [`PLAY_SAFE`] (tools, snapping, pivots, edit
 /// commands, selection, view framing, building tools, panels). A disabled action also leaves its

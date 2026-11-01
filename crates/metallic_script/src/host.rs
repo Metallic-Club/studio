@@ -100,6 +100,15 @@ pub struct ScriptHost {
 }
 
 impl ScriptHost {
+    /// VM memory, waiting threads and running scripts now (developer overlay, #14).
+    pub fn stats(&self) -> crate::ScriptStats {
+        crate::ScriptStats {
+            server: self.server.as_ref().map(|s| s.vm.stats()),
+            client: self.client.as_ref().map(|s| s.vm.stats()),
+            running_scripts: self.running.len(),
+        }
+    }
+
     /// Creates a combined server/client host that is not running yet.
     /// Output of all scripts goes to `output`; [`Self::start`] creates the local player.
     pub fn new(world: Rc<RefCell<World>>, output: Rc<dyn OutputSink>) -> ScriptHost {

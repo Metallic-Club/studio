@@ -207,6 +207,8 @@ pub enum UiRequest {
     OpenSettings,
     /// Close the game, asking first when it has unsaved changes (Ctrl+W, like File > Close game).
     CloseGame,
+    /// Write a bug report zip and open its folder (Developer > Report a bug).
+    ReportBug,
     /// Open the command palette with this text typed ("" for Ctrl+K, ">" for Ctrl+Shift+P).
     OpenPalette(&'static str),
     /// Open the Insert palette at the cursor (Shift+A over the viewport).
@@ -251,6 +253,10 @@ pub struct EditorState {
     pub can_save: bool,
     /// Where Insert puts a new part: the surface under the cursor, updated by the viewport.
     pub insert_point: Vec3,
+    /// Developer mode and which developer tools are shown (#14).
+    pub dev: crate::devmode::DevState,
+    /// Feature flags from `flags.toml` (empty and unsaved until the app loads them).
+    pub flags: crate::devmode::FeatureFlags,
     requests: Vec<UiRequest>,
     note: Option<(String, Instant)>,
     gestures: [bool; Gesture::COUNT],
@@ -304,6 +310,8 @@ impl EditorState {
             play,
             can_save: true,
             insert_point: Vec3::new(0.0, 0.5, 0.0),
+            dev: crate::devmode::DevState::default(),
+            flags: crate::devmode::FeatureFlags::new(),
             requests: Vec::new(),
             note: None,
             gestures: [false; Gesture::COUNT],

@@ -22,6 +22,8 @@ use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
 use crate::context_bar::ContextBar;
+use crate::devmode::bug_report::{self, BugReport, Redactor, ReportJob};
+use crate::devmode::{self, DevTools, flags, inspector, log_view, overlay};
 use crate::editor::{EditorState, Gesture, INSERTABLE, UiRequest};
 use crate::editor_colour::ColourDock;
 use crate::editor_input_actions::InputActionsDock;
@@ -117,6 +119,8 @@ pub struct EditorUi {
     save_error: Option<String>,
     /// The creator asked for Settings; the app shows the dialog.
     settings_requested: bool,
+    /// The developer tools' state (#14); what is shown is in `state.dev`.
+    pub dev: DevTools,
     /// Keyboard and mouse state of the running game's input.
     play_input: PlayInput,
     /// Explorer's read-only tree of the play world.
@@ -157,6 +161,7 @@ impl EditorUi {
             confirm: None,
             save_error: None,
             settings_requested: false,
+            dev: DevTools::default(),
             play_input: PlayInput::new(),
             play_tree: PlayTree::new(),
             palette: CommandPalette::new(),
@@ -540,6 +545,7 @@ impl EditorUi {
                 UiRequest::OpenSettings => self.settings_requested = true,
                 UiRequest::StartPlay(id) => self.start_play(ctx, id),
                 UiRequest::CloseGame => exit = exit.or(self.close_game()),
+                UiRequest::ReportBug => self.start_bug_report(ctx),
                 UiRequest::OpenPalette(text) => self.open_command_palette_with(text),
                 UiRequest::InsertAtCursor => {
                     let pos = ctx
@@ -552,6 +558,121 @@ impl EditorUi {
             }
         }
         exit
+    }
+
+    /// The developer tools for this frame: the overlay, the open windows and a bug report that
+    /// is waiting for its capture.
+    fn dev_tools(&mut self, ctx: &egui::Context, render_state: Option<&egui_wgpu::RenderState>) {
+        if self.dev.gpu.is_none()
+            && let Some(rs) = render_state
+        {
+            let info = rs.adapter.get_info();
+            self.dev.gpu = Some(format!("{} ({:?})", info.name, info.backend));
+        }
+        self.finish_bug_report(ctx);
+        let dev = self.state.dev;
+        if !dev.enabled {
+            return;
+        }
+        if dev.overlay {
+            self.dev.overlay.record(ctx.input(|i| i.unstable_dt));
+            let playing = self.state.play.is_playing();
+            if self.dev.overlay.counts_due() {
+                let mut counts = None;
+                if let Some(view) = self.state.play.view() {
+                    view.inspect_world(&mut |w| counts = Some(overlay::count(w)));
+                }
+                let counts = counts.unwrap_or_else(|| overlay::count(&self.state.world));
+                self.dev.overlay.set_counts(counts);
+            }
+            let stats = overlay::OverlayStats {
+                draw_calls: self.viewport.draw_calls(),
+                scripts: self.state.play.view().and_then(|v| v.script_stats()),
+                playing,
+            };
+            self.dev.overlay.show(ctx, self.viewport.rect(), &stats);
+            ctx.request_repaint();
+        } else {
+            self.dev.overlay.reset();
+        }
+        if dev.log && !self.dev.log.show(ctx) {
+            self.state.dev.log = false;
+        }
+        if dev.inspector && !inspector::show(ctx, &self.state.world, self.state.selection.ids()) {
+            self.state.dev.inspector = false;
+        }
+        if dev.flags && !flags::panel(ctx, &mut self.state.flags, &mut self.dev.new_flag) {
+            self.state.dev.flags = false;
+        }
+    }
+
+    /// Developer > Report a bug: asks for a window capture; the report is written when it
+    /// arrives, or without it after a short wait.
+    fn start_bug_report(&mut self, ctx: &egui::Context) {
+        if self.dev.report.is_none() {
+            self.dev.report = Some(ReportJob::start(ctx));
+            self.state.note("Writing a bug report…".to_owned());
+        }
+    }
+
+    /// The report this editor would write now, with `screenshot_png` as the capture.
+    pub fn bug_report(&self, screenshot_png: Option<Vec<u8>>) -> BugReport {
+        let mut output = String::new();
+        for l in self.output.log.lines() {
+            output.push_str(&format!(
+                "{:9.3} {:?} {:?}: {}\n",
+                l.time, l.level, l.tag, l.text
+            ));
+        }
+        BugReport {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            channel: devmode::build_channel().as_str().to_owned(),
+            gpu: self.dev.gpu.clone().unwrap_or_else(|| "none".to_owned()),
+            os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            log: log_view::text(),
+            output,
+            screenshot_png,
+        }
+    }
+
+    fn finish_bug_report(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.dev.report else { return };
+        let Some(png) = job.poll() else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            return;
+        };
+        self.dev.report = None;
+        if !self.state.can_save {
+            self.state
+                .note("Bug reports are not written in this mode".to_owned());
+            return;
+        }
+        let Some(dir) = bug_report::reports_dir() else {
+            self.state
+                .note("No folder for bug reports was found".to_owned());
+            return;
+        };
+        if let Some(parent) = dir.parent()
+            && let Err(e) = crate::data_dirs::create_owned(parent)
+        {
+            log::warn!("could not create the bug reports folder: {e}");
+        }
+        let report = self.bug_report(png);
+        match report.write(&dir, bug_report::now_unix(), &Redactor::for_this_machine()) {
+            Ok(path) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                log::info!("bug report written: {name}");
+                self.state
+                    .note(format!("Bug report saved as {name}; its folder is open"));
+                bug_report::open_folder(&dir);
+            }
+            Err(e) => self
+                .state
+                .note(format!("Could not write the bug report: {e}")),
+        }
     }
 
     /// Draws one frame. `render_state` is eframe's wgpu state (None without a GPU).
@@ -756,6 +877,19 @@ impl EditorUi {
                         self.actions
                             .menu_items(ui, &ids, &mut self.state, &self.keymap);
                     });
+                    if self.state.dev.enabled {
+                        // Every `dev.*` action, built in or registered by another tool.
+                        ui.menu_button("Developer", |ui| {
+                            let ids: Vec<&'static str> = self
+                                .actions
+                                .iter()
+                                .filter(|a| devmode::is_dev_action(a.id))
+                                .map(|a| a.id)
+                                .collect();
+                            self.actions
+                                .menu_items(ui, &ids, &mut self.state, &self.keymap);
+                        });
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let dirty = self.state.is_dirty();
                         ui.label(
@@ -995,6 +1129,7 @@ impl EditorUi {
         self.watch_hints();
         let blocked = self.hints_blocked() || self.palette.is_open();
         self.hints.ui(&ctx, self.viewport.rect(), blocked);
+        self.dev_tools(&ctx, render_state);
 
         // Last of the overlays, so it draws over the context bar and hints.
         if let Some(choice) = self

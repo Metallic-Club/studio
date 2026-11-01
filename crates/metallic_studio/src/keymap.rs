@@ -172,6 +172,7 @@ pub const METALLIC_PRESET: &[(&str, &str, KeyContext)] = &[
     ("brush.radius_up", "]", KeyContext::Tool),
     ("play.start", "F5", KeyContext::Global),
     ("play.stop", "Shift+F5", KeyContext::Global),
+    ("dev.overlay", "F3", KeyContext::Global),
     ("play.stop", "Escape", KeyContext::Play),
     ("output.clear", "Ctrl+L", KeyContext::Global),
     // Esc never closes the game: it closes a building popover or cancels a tool (above), clears

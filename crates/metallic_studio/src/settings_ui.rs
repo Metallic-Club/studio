@@ -164,6 +164,19 @@ fn body(ui: &mut Ui, settings: &mut Settings, out: &mut Outcome) {
 
     section(
         ui,
+        "Developer mode",
+        "Shows the Developer menu: performance overlay (F3), log, Instance inspector, feature          flags and Report a bug. On by default in dev builds.",
+    );
+    ui.add_space(8.0);
+    let mut dev = settings.dev_mode().enabled;
+    if ui.checkbox(&mut dev, "Developer mode").changed() {
+        settings.developer_mode = Some(dev);
+        out.changed = true;
+    }
+    ui.add_space(24.0);
+
+    section(
+        ui,
         "About",
         "The fonts, icons and libraries Metallic Studio is built with, and their licences.",
     );

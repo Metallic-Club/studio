@@ -190,6 +190,10 @@ impl PlayView for LocalPlaySession {
     fn inspect_world(&self, inspect: &mut dyn FnMut(&World)) {
         let _ = self.inspect_world(|world| inspect(world));
     }
+
+    fn script_stats(&self) -> Option<metallic_runtime::ScriptStats> {
+        self.game.as_ref().map(|game| game.0.script_stats())
+    }
 }
 
 #[cfg(test)]
