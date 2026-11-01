@@ -1,0 +1,5 @@
+body_front: IoU 0.852 (offset +8 px, concept height 622 px)
+body_front34: IoU 0.835 (offset -9 px, concept height 623 px)
+body_side: IoU 0.910 (offset -1 px, concept height 624 px)
+body_back: IoU 0.856 (offset +5 px, concept height 625 px)
+body_back34: IoU 0.816 (offset +0 px, concept height 623 px)

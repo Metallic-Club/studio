@@ -1,3 +1,4 @@
+#![cfg(feature = "presentation")]
 //! The Parkour template and the game loop that plays it.
 use metallic_core::{Color3, InstanceId, Value, Vec3, World, load_scene};
 use metallic_physics::HumanoidState;
@@ -134,6 +135,33 @@ fn parkour_template_has_the_required_content() {
             w.full_name(s)
         );
     }
+}
+
+#[test]
+fn every_one_stud_slab_has_its_faces_on_the_grid() {
+    // Studio's grid rule (spec 2.2) snaps a part's bounding-box min corner, so a 1-stud slab is
+    // on the 1-stud grid when its bottom (and so its top) is a whole stud. Walkable tops of the
+    // course, its lava and the moving platforms are whole studs (#372).
+    let w = load_scene(&template().join("main.mscene")).expect("load");
+    let mut slabs = 0;
+    for id in all(&w) {
+        if !w.is_a(id, "BasePart") || w.get(id, "Size").is_err() {
+            continue;
+        }
+        let size = vec3(&w, id, "Size");
+        let turned = vec3(&w, id, "Orientation");
+        if (size.y - 1.0).abs() > 1e-9 || turned != Vec3::new(0.0, 0.0, 0.0) {
+            continue;
+        }
+        slabs += 1;
+        let bottom = vec3(&w, id, "Position").y - 0.5;
+        let name = w.get(id, "Name").ok();
+        assert!(
+            (bottom - bottom.round()).abs() < 1e-9,
+            "{name:?}: bottom face at y = {bottom}"
+        );
+    }
+    assert!(slabs > 60, "{slabs} slabs checked");
 }
 
 #[test]

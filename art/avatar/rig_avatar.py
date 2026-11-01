@@ -55,16 +55,17 @@ def bone_table():
     a, b, c = BA.hand_frame()
     t = {
         "root": (Vector((0, 0, 0)), Vector((0, -0.25, 0)), UP, None),
-        "hips": (Vector((0, 0.0, 0.760)), Vector((0, 0.0, 0.845)), FRONT, "root"),
-        "spine": (Vector((0, 0.004, 0.845)), Vector((0, 0.004, 0.935)), FRONT, "hips"),
-        "chest": (Vector((0, 0.004, 0.935)), Vector((0, 0.006, 1.020)), FRONT, "spine"),
-        "upperChest": (Vector((0, 0.006, 1.020)), Vector((0, 0.010, 1.100)), FRONT, "chest"),
-        "neck": (Vector((0, 0.010, 1.100)), Vector((0, 0.010, 1.190)), FRONT, "upperChest"),
-        "head": (Vector((0, 0.010, 1.190)), Vector((0, 0.010, 1.420)), FRONT, "neck"),
+        # v3 proportions (see docs/agents/avatar-v3-model.md for the v2 values)
+        "hips": (Vector((0, 0.0, 0.760)), Vector((0, 0.0, 0.850)), FRONT, "root"),
+        "spine": (Vector((0, 0.004, 0.850)), Vector((0, 0.004, 0.950)), FRONT, "hips"),
+        "chest": (Vector((0, 0.004, 0.950)), Vector((0, 0.006, 1.035)), FRONT, "spine"),
+        "upperChest": (Vector((0, 0.006, 1.035)), Vector((0, 0.010, 1.115)), FRONT, "chest"),
+        "neck": (Vector((0, 0.010, 1.115)), Vector((0, 0.010, 1.185)), FRONT, "upperChest"),
+        "head": (Vector((0, 0.010, 1.185)), Vector((0, 0.010, 1.420)), FRONT, "neck"),
     }
     for side, s in SIDES:
         P = side
-        t[P + "Shoulder"] = (mx(Vector((0.022, 0.004, 1.072)), s), mx(sk["SHOULDER"], s), UP, "upperChest")
+        t[P + "Shoulder"] = (mx(Vector((0.024, 0.006, 1.088)), s), mx(sk["SHOULDER"], s), UP, "upperChest")
         t[P + "UpperArm"] = (mx(sk["SHOULDER"], s), mx(sk["ELBOW"], s), FRONT, P + "Shoulder")
         t[P + "LowerArm"] = (mx(sk["ELBOW"], s), mx(sk["WRIST"], s), FRONT, P + "UpperArm")
         t[P + "Hand"] = (mx(sk["WRIST"], s), mx(sk["HAND_END"], s), mx(c, s), P + "LowerArm")
@@ -203,9 +204,9 @@ def chain_weights(s, joints, bones, k):
     return {b: x for b, x in w.items() if x > 1e-4}
 
 
-TORSO_Z = [(0.800, {"hips": 1.0}), (0.845, {"hips": 0.5, "spine": 0.5}), (0.890, {"spine": 1.0}),
-           (0.935, {"spine": 0.5, "chest": 0.5}), (0.990, {"chest": 1.0}),
-           (1.035, {"chest": 0.3, "upperChest": 0.7}), (1.062, {"upperChest": 1.0})]
+TORSO_Z = [(0.815, {"hips": 1.0}), (0.850, {"hips": 0.5, "spine": 0.5}), (0.900, {"spine": 1.0}),
+           (0.950, {"spine": 0.5, "chest": 0.5}), (1.000, {"chest": 1.0}),
+           (1.048, {"chest": 0.3, "upperChest": 0.7}), (1.076, {"upperChest": 1.0})]
 
 
 def torso_weights(co):
@@ -223,7 +224,7 @@ def torso_weights(co):
                     w[b] = w0.get(b, 0) * (1 - t) + w1.get(b, 0) * t
                 break
     # The shoulder tops ride on the shoulder bones (shrug, arm raised).
-    sh = smooth01((abs(co.x) - 0.075) / 0.050) * smooth01((z - 0.985) / 0.045) * 0.9
+    sh = smooth01((abs(co.x) - 0.075) / 0.050) * smooth01((z - 1.000) / 0.045) * 0.9
     if sh > 0:
         w = {b: x * (1 - sh) for b, x in w.items()}
         w[("left" if co.x > 0 else "right") + "Shoulder"] = sh
@@ -413,16 +414,48 @@ def write_action(arm, name, frames, loop):
     return act, slot
 
 
+def clear_toes(arm, basis, side, points):
+    """A foot rolling onto its toes bends them up at the joint; it never pushes the toe tip into
+    the floor. If the tip is below z = 0, turn the toes about their own hinge (X) just enough
+    to bring it to the floor, in the baked frame `basis`. Returns the corrected sole points."""
+    heel, ball, tip = points
+    if tip.z >= 0.0:
+        return points
+    tb = arm.pose.bones[side + "Toes"]
+    joint = tb.head.copy()
+    axis = tb.matrix.col[0].to_3d().normalized()
+    rel = tip - joint
+
+    def z(deg):
+        return (joint + Matrix.Rotation(math.radians(deg), 3, axis) @ rel).z
+    sign = 1.0 if z(5) > z(-5) else -1.0
+    lo, hi = 0.0, 90.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if z(sign * mid) < 0:
+            lo = mid
+        else:
+            hi = mid
+    loc, q = basis[side + "Toes"]
+    basis[side + "Toes"] = (loc, q @ Quaternion((1, 0, 0), math.radians(sign * hi)))
+    return heel, ball, joint + Matrix.Rotation(math.radians(sign * hi), 3, axis) @ rel
+
+
 def bake_clip(arm, clip):
     import anim_clips as AC
     frames, contacts = [], []
     for f in range(clip.length + 1):
         apply_pose(arm, clip.sample(f))
-        frames.append(read_basis(arm))
-        contacts.append({s: AC.contact_points(arm.pose.bones, s) for s in ("left", "right")})
+        basis = read_basis(arm)
+        cp = {s: AC.contact_points(arm.pose.bones, s) for s in ("left", "right")}
+        for s in ("left", "right"):
+            cp[s] = clear_toes(arm, basis, s, cp[s])
+        frames.append(basis)
+        contacts.append(cp)
     act, slot = write_action(arm, clip.name, frames, clip.loop)
     if clip.speed:
         act["speed"] = clip.speed
+    act["source"] = clip.meta.get("source", "procedural")
     return act, slot, frames, contacts
 
 
@@ -466,7 +499,47 @@ def foot_slip(clip, contacts, speed):
     return res
 
 
+def ground_slip(clip, contacts):
+    """For clips played standing still: the most a heel or ball point that touches the ground
+    (within 6 mm) in two consecutive frames moves along the ground, per side, in metres per frame.
+    A planted foot should not move at all."""
+    res = []
+    for side in ("left", "right"):
+        worst = 0.0
+        for f in range(clip.length):
+            for k in range(2):
+                p0, p1 = contacts[f][side][k], contacts[f + 1][side][k]
+                if p0.z > 0.006 or p1.z > 0.006:
+                    continue
+                worst = max(worst, Vector((p1.x - p0.x, p1.y - p0.y)).length)
+        res.append(worst)
+    return res
+
+
+# Clips played in the air, in water or on a ladder: their feet are not on the floor, so the floor
+# check skips them (as it skips one-frame stills: concept poses and rig tests).
+AIRBORNE = {"fall", "swim", "swim_idle", "climb"}
+# Deepest a heel, ball or toe tip may go below the floor (z = 0) in any other clip.
+FLOOR_TOLERANCE = 0.005
+
+
+def floor_penetration(contacts):
+    """Lowest heel, ball or toe-tip point over the clip (metres; negative = below the floor) and
+    the frame and point where it happens."""
+    worst = (float("inf"), None, None)
+    for f, c in enumerate(contacts):
+        for side in ("left", "right"):
+            for name, p in zip(("heel", "ball", "toe"), c[side]):
+                if p.z < worst[0]:
+                    worst = (p.z, f, f"{side} {name}")
+    return worst
+
+
 def export_glb(path, arm, meshes, clips):
+    # Key times in the glb are frame / scene fps: without this the factory 24 fps stretches every
+    # clip by 30/24 (the first Phase B export had that bug).
+    bpy.context.scene.render.fps = FPS
+    bpy.context.scene.render.fps_base = 1.0
     bpy.ops.object.select_all(action="DESELECT")
     arm.select_set(True)
     hidden = [m for m in meshes if m.hide_get()]
@@ -506,6 +579,10 @@ def export_glb(path, arm, meshes, clips):
 def validate_glb(path, clips):
     """Re-import into an empty scene and check bones, influences, materials and clips."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    # The importer turns key times into frames at the scene rate; at the factory 24 fps a clip
+    # exported at 24 fps would also read back with the right frame count, hiding a time-scale bug.
+    bpy.context.scene.render.fps = FPS
+    bpy.context.scene.render.fps_base = 1.0
     bpy.ops.import_scene.gltf(filepath=path)
     arms = [o for o in bpy.data.objects if o.type == "ARMATURE"]
     # The importer adds an "Icosphere" bone-display mesh of its own; only check the avatar meshes.
@@ -563,6 +640,7 @@ def main():
     if a.only:
         clips = [c for c in clips if c.name in a.only]
     info = {}
+    below = []
     for c in clips:
         act, slot, frames, contacts = bake_clip(arm, c)
         entry = {"frames": c.length + 1, "first": 0, "last": c.length, "seconds": round(c.length / FPS, 4),
@@ -571,9 +649,20 @@ def main():
         if c.speed:
             slip = foot_slip(c, contacts, c.speed)
             entry["max_planted_foot_slip_mm_per_frame"] = [round(x * 1000, 2) for x in slip]
+        elif c.length > 0:
+            entry["max_ground_slip_mm_per_frame"] = [round(x * 1000, 2) for x in ground_slip(c, contacts)]
+        z, f, where = floor_penetration(contacts)
+        entry["min_sole_z_mm"] = round(z * 1000, 1)
+        if c.name not in AIRBORNE and c.length > 0 and z < -FLOOR_TOLERANCE:
+            below.append(f"{c.name}: {where} {z * 1000:.1f} mm below the floor at frame {f}")
         info[c.name] = entry
         print(f"[clip] {c.name}: 0..{c.length} loop={c.loop} {c.meta} "
-              f"{'slip(mm/frame)=' + str(entry.get('max_planted_foot_slip_mm_per_frame')) if c.speed else ''}")
+              f"slip={entry.get('max_planted_foot_slip_mm_per_frame') or entry.get('max_ground_slip_mm_per_frame')}")
+    if below:
+        # Automatic check: no heel, ball or toe may sink into the floor in a grounded clip.
+        raise SystemExit("[floor] FAIL: " + "; ".join(below))
+    print(f"[floor] ok: no sole point more than {FLOOR_TOLERANCE * 1000:.0f} mm below the floor "
+          f"(airborne clips {sorted(AIRBORNE)} skipped)")
     assign_action(arm, None)
     reset_pose(arm)
     # FK mode by default: the baked clips play as they are; an animator switches a limb to IK.

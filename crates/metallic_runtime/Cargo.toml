@@ -5,14 +5,41 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = ["presentation"]
+presentation = ["dep:metallic_render", "dep:egui", "dep:wgpu"]
+
 [dependencies]
+metallic_anim = { path = "../metallic_anim" }
+metallic_asset.workspace = true
+glam = "0.30.10"
 metallic_core.workspace = true
 metallic_physics.workspace = true
 metallic_script.workspace = true
-metallic_render.workspace = true
+metallic_render = { workspace = true, optional = true }
 # egui's bundled fonts (OFL-1.1 / Ubuntu-font-1.0, Ruling R11; texts in LICENSES/).
-egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
+egui = { version = "0.37.0", default-features = false, features = ["default_fonts"], optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
 thiserror = "2.0.21"
-wgpu = "30.0.1"
+wgpu = { version = "30.0.1", optional = true }
 toml = "1.1.8"
+
+[dev-dependencies]
+metallic_tokens.workspace = true
+png = "0.18.1"
+tempfile = "3"
+criterion.workspace = true
+
+[[bench]]
+name = "input_eval"
+harness = false
+required-features = ["presentation"]
+
+[[example]]
+name = "avatar_shots"
+required-features = ["presentation"]
+
+[[bin]]
+name = "metallic-sim"
+path = "src/bin/metallic-sim.rs"

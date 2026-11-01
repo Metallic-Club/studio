@@ -1,0 +1,109 @@
+name: Performance
+
+on:
+  pull_request:
+  schedule:
+    - cron: '30 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  instructions:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 4
+      CARGO_PROFILE_RELEASE_DEBUG: 1
+      RUSTFLAGS: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+      - name: Install measurement tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y valgrind
+          rustup toolchain install "$(sed -n 's/channel = "\(.*\)"/\1/p' head/rust-toolchain.toml)" --profile minimal
+      - name: Test the gate failure policy
+        run: python3 -m unittest discover -s head/tools/perf -p 'test_*.py' -v
+      - name: Use identical workload source and compiler for both revisions
+        run: |
+          mkdir -p base/crates/metallic_core/examples
+          cp head/crates/metallic_core/examples/perf_ci.rs base/crates/metallic_core/examples/perf_ci.rs
+          cp head/rust-toolchain.toml base/rust-toolchain.toml
+      - name: Build base
+        working-directory: base
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/base
+        run: cargo build --locked --release -p metallic_core --example perf_ci
+      - name: Build head
+        working-directory: head
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/head
+        run: cargo build --locked --release -p metallic_core --example perf_ci
+      - name: Measure base and head
+        working-directory: head
+        run: |
+          python3 tools/perf/measure.py collect --binary ../target/base/release/examples/perf_ci --source crates/metallic_core/examples/perf_ci.rs --output ../results/base/report.json --revision '${{ github.event.pull_request.base.sha }}'
+          python3 tools/perf/measure.py collect --binary ../target/head/release/examples/perf_ci --source crates/metallic_core/examples/perf_ci.rs --output ../results/head/report.json --revision '${{ github.event.pull_request.head.sha }}'
+      - name: Gate at five percent instruction growth
+        working-directory: head
+        run: python3 tools/perf/measure.py compare --base ../results/base/report.json --head ../results/head/report.json --threshold 5 --summary ../results/comparison.md
+      - name: Publish comparison
+        if: always()
+        run: |
+          if [ -f results/comparison.md ]; then
+            cat results/comparison.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Instruction comparison unavailable; inspect the failed collection/build step.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-instructions-${{ github.event.pull_request.head.sha }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  walltime:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 4
+      CARGO_PROFILE_RELEASE_DEBUG: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Build fixed workloads
+        run: cargo build --locked --release -p metallic_core --example perf_ci
+      - name: Record native wall-time samples and environment
+        run: python3 tools/perf/measure.py collect --metric walltime --repeats 5 --binary target/release/examples/perf_ci --source crates/metallic_core/examples/perf_ci.rs --output results/walltime.json --revision "$GITHUB_SHA"
+      - name: Record Criterion trends
+        run: cargo bench --locked -p metallic_core --bench world -- --noplot --sample-size 20 --warm-up-time 1 --measurement-time 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-walltime-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            results/
+            target/criterion/
+          if-no-files-found: warn
+          retention-days: 90
