@@ -252,14 +252,33 @@ impl Explorer {
                 ui_tokens().body(),
                 ui_tokens().text,
             );
+            let mut meta_left = rect.right() - 6.0;
             if let Some(meta) = meta_text(state, row.id, class) {
-                painter.text(
-                    egui::pos2(rect.right() - 6.0, cy),
-                    egui::Align2::RIGHT_CENTER,
-                    meta,
-                    ui_tokens().small(),
-                    ui_tokens().text_dim,
+                meta_left = painter
+                    .text(
+                        egui::pos2(rect.right() - 6.0, cy),
+                        egui::Align2::RIGHT_CENTER,
+                        meta,
+                        ui_tokens().small(),
+                        ui_tokens().text_dim,
+                    )
+                    .left();
+            }
+            // A 12 px style glyph when the row has its own LookOverride (spec 12.5).
+            if let Some(style) = metallic_core::look_override::own(&state.world, row.id) {
+                let glyph = egui::Rect::from_center_size(
+                    egui::pos2(meta_left - 12.0, cy),
+                    egui::vec2(12.0, 12.0),
                 );
+                paint_style_glyph(&painter, glyph);
+                if resp.hovered()
+                    && resp
+                        .hover_pos()
+                        .is_some_and(|p| glyph.expand(2.0).contains(p))
+                {
+                    let name = metallic_core::look_override::display_name(style).unwrap_or(style);
+                    resp.clone().on_hover_text(format!("Style: {name}"));
+                }
             }
         }
 
@@ -420,6 +439,22 @@ fn meta_text(state: &EditorState, id: InstanceId, class: &str) -> Option<String>
         _ if state.world.is_builtin(id) => None,
         c => Some(c.to_string()),
     }
+}
+
+/// The style glyph: a small diamond in the accent colour.
+fn paint_style_glyph(painter: &egui::Painter, r: egui::Rect) {
+    let c = r.center();
+    let h = r.width() * 0.4;
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(c.x, c.y - h),
+            egui::pos2(c.x + h, c.y),
+            egui::pos2(c.x, c.y + h),
+            egui::pos2(c.x - h, c.y),
+        ],
+        ui_tokens().accent,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// The open / closed caret of a tree row with children.

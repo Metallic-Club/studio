@@ -231,6 +231,27 @@ impl Simulation {
         }
         // Parts the scene already has are hit by a raycast at the top of a script.
         self.sync_physics_now();
+        // Startup scripts run immediately and may remove an existing Character before
+        // the first tick can observe it. Remember only already-spawned server Players.
+        let spawned_players = if self.combined {
+            Vec::new()
+        } else {
+            let world = self
+                .world
+                .try_borrow()
+                .map_err(|_| RuntimeError::Start("the world is busy".into()))?;
+            world.root("Players").map_or_else(Vec::new, |players| {
+                world
+                    .children(players)
+                    .iter()
+                    .copied()
+                    .filter(|&player| {
+                        world.is_a(player, "Player")
+                            && matches!(world.get_ref(player, "Character"), Ok(Value::Ref(Some(_))))
+                    })
+                    .collect()
+            })
+        };
         self.scripts
             .start()
             .map_err(|e| RuntimeError::Start(e.message))?;
@@ -254,6 +275,8 @@ impl Simulation {
         self.ticks = 0;
         self.character_gone = 0.0;
         self.server_gone.clear();
+        self.server_gone
+            .extend(spawned_players.into_iter().map(|player| (player, 0.0)));
         self.running = true;
         Ok(())
     }

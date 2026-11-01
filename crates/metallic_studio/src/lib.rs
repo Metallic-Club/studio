@@ -31,8 +31,8 @@
 //! [`editor_colour`] hosts the colour popover for Properties' Color3 rows. [`data_dirs`] comes
 //! from main.
 //!
-//! [`splash`] is the startup window; [`widgets`] holds Studio's own buttons, plates, cards,
-//! toasts and the cut.
+//! [`splash`] is the startup window; [`title_bar`] is the window's own title bar on Windows;
+//! [`widgets`] holds Studio's own buttons, plates, cards, toasts and the cut.
 //!
 //! Library code returns [`StudioError`]; only `main.rs` decides what to show on failure.
 
@@ -79,8 +79,10 @@ pub mod settings_ui;
 pub mod snapping;
 pub mod splash;
 pub mod start_screen;
+pub mod style_picker;
 pub mod templates;
 pub mod theme;
+pub mod title_bar;
 pub mod tokens;
 pub mod toolbar;
 pub mod tools;

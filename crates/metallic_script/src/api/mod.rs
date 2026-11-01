@@ -53,6 +53,9 @@ pub(crate) struct HostShared {
     pub(crate) input: input::InputShared,
     /// What `workspace:Raycast` asks (set by the host that owns the physics).
     pub(crate) scene: RefCell<Option<Rc<dyn crate::SceneQuery>>>,
+    /// A test and throttling hook: after this many handler calls in a step, the step counts as
+    /// out of time (see `ScriptHost::set_step_handler_limit`).
+    pub(crate) step_handler_limit: Cell<Option<usize>>,
 }
 
 /// Everything the API functions of one VM need.

@@ -365,6 +365,10 @@ fn destroying_thousands_of_tagged_instances_fires_every_removal() {
 #[test]
 fn twenty_thousand_tagged_destroys_reach_the_manager_without_losing_one() {
     let mut rig = Rig::new();
+    // Every step runs out of time after 500 handler calls, on any machine: the 40,000 events
+    // of this test cannot be handled in one step and must not be dropped by the handler queue
+    // (it holds 10,000 calls).
+    rig.host.set_step_handler_limit(Some(500));
     rig.server_script(
         "Manager",
         "local CS = game:GetService('CollectionService')

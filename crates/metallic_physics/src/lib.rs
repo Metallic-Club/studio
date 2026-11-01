@@ -11,7 +11,9 @@
 //! friction and restitution (see [`material_props`]). An anchored part whose `Position` or
 //! `Orientation` was changed since the last step is moved as a kinematic body for that step, with
 //! linear and angular velocity derived from the move, so parts standing on it are carried along
-//! and parts in its way are pushed, by rotating movers too.
+//! and parts in its way are pushed, by rotating movers too. A move faster than
+//! [`TELEPORT_SPEED`] or a turn faster than [`TELEPORT_ANGULAR_SPEED`] is a teleport instead:
+//! plain reposition, zero velocity.
 //!
 //! Characters: [`spawn_character`] builds a Roblox-style character Model (a `HumanoidRootPart`
 //! and 15 invisible R15 body parts that the runtime draws the skinned avatar over) for a Player
@@ -61,6 +63,20 @@ pub const GRAVITY: f64 = 196.2;
 pub const MAX_STEP: f64 = 0.25;
 /// Length of one fixed simulation substep in seconds.
 pub const SUBSTEP: f64 = 1.0 / 240.0;
+/// Speed in studs/s above which a move of an anchored part counts as a teleport.
+///
+/// [`PhysicsWorld::step`] derives an anchored part's velocity as distance / simulated time.
+/// Above this limit (e.g. a script resetting a platform 50 studs in one frame) the part is
+/// repositioned with zero derived velocity instead of being swept as a kinematic body, so parts
+/// touching it are not launched.
+pub const TELEPORT_SPEED: f64 = 500.0;
+/// Angular speed in radians/s (4 turns per second) above which a rotation of an anchored part
+/// counts as a teleport.
+///
+/// Like [`TELEPORT_SPEED`] for turns: a script that flips a platform 170° in one frame is
+/// re-oriented with zero derived angular velocity instead of sweeping at thousands of degrees
+/// per second and flinging parts on it. Spinners slower than this still push and carry.
+pub const TELEPORT_ANGULAR_SPEED: f64 = 4.0 * std::f64::consts::TAU;
 
 /// Collision group of character parts; they interact with everything except each other.
 const CHARACTER_GROUP: Group = Group::GROUP_1;
@@ -72,7 +88,8 @@ pub struct RayHit {
     pub instance: InstanceId,
     /// World position of the hit.
     pub position: Vec3,
-    /// Surface normal at the hit (unit length, pointing away from the surface).
+    /// Surface normal at the hit (unit length, pointing away from the surface). A ray that
+    /// starts inside a part hits it at distance 0; the normal is then the reversed ray direction.
     pub normal: Vec3,
     /// Distance from the ray origin to the hit, in studs.
     pub distance: f64,
@@ -328,10 +345,12 @@ impl PhysicsWorld {
     /// Before simulating, a changed `Position`/`Orientation` is applied: an anchored part is moved
     /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`];
     /// angular velocity = shortest-arc rotation / simulated time, see [`Self::angular_velocity`]),
-    /// so it sweeps through the move and pushes or carries loose parts; an unanchored part is
-    /// teleported and its velocity cleared. `dt` is clamped to [`MAX_STEP`] (0.25 s) so a long
-    /// frame cannot spiral; a negative or non-finite `dt` (NaN, infinity) counts as 0, so that
-    /// call simulates nothing and later calls work normally.
+    /// so it sweeps through the move and pushes or carries loose parts. When the velocity exceeds
+    /// [`TELEPORT_SPEED`] or the angular velocity exceeds [`TELEPORT_ANGULAR_SPEED`], it is just
+    /// repositioned with zero velocity instead. An unanchored part is teleported and its velocity
+    /// cleared. `dt` is clamped to [`MAX_STEP`] (0.25 s) so a long frame cannot spiral; a
+    /// negative or non-finite `dt` (NaN, infinity) counts as 0, so that call simulates nothing
+    /// and later calls work normally.
     ///
     /// Callers must call [`Self::sync_from`] after adding, removing or reconfiguring parts
     /// (Size, Shape, Material, Anchored, CanCollide, reparenting); until then `step` keeps using
@@ -376,12 +395,17 @@ impl PhysicsWorld {
                     let v = (state.position - e.last_position) * (1.0 / sim_time);
                     let w =
                         angular_velocity_between(e.last_orientation, state.orientation, sim_time);
-                    e.derived_velocity = v;
-                    e.derived_angular_velocity = w;
-                    body.set_body_type(RigidBodyType::KinematicVelocityBased, true);
-                    body.set_linvel(to_vector(v), true);
-                    body.set_angvel(to_vector(w), true);
-                    movers.push((id, to_pose(state.position, state.orientation)));
+                    if v.magnitude() > TELEPORT_SPEED || w.magnitude() > TELEPORT_ANGULAR_SPEED {
+                        // Teleport: plain reposition, no derived velocity or angular velocity (#34).
+                        body.set_position(to_pose(state.position, state.orientation), true);
+                    } else {
+                        e.derived_velocity = v;
+                        e.derived_angular_velocity = w;
+                        body.set_body_type(RigidBodyType::KinematicVelocityBased, true);
+                        body.set_linvel(to_vector(v), true);
+                        body.set_angvel(to_vector(w), true);
+                        movers.push((id, to_pose(state.position, state.orientation)));
+                    }
                 }
             } else if moved {
                 body.set_position(to_pose(state.position, state.orientation), true);
@@ -571,18 +595,24 @@ impl PhysicsWorld {
             let (handle, hit) = self
                 .rapier
                 .cast_ray_and_get_normal(&ray, max as f32, true, filter)?;
-            let normal = from_vector(hit.normal);
-            if normal.magnitude() < 0.5 {
+            let n = from_vector(hit.normal);
+            let len = n.magnitude();
+            if len < 0.5 {
                 // Started inside this collider (distance 0, no normal): look past it.
                 inside.insert(handle);
                 continue;
             }
+            let normal = if len > 1e-6 && len.is_finite() {
+                n * (1.0 / len)
+            } else {
+                unit * -1.0
+            };
             let instance = *self.owners.get(&handle)?;
             let distance = f64::from(hit.time_of_impact);
             return Some(RayHit {
                 instance,
                 position: origin + unit * distance,
-                normal: normal.unit(),
+                normal,
                 distance,
             });
         }

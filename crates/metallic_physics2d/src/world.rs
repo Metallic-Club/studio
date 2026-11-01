@@ -247,6 +247,7 @@ impl PhysicsWorld2d {
     /// New bodies and joints are created, ones whose description changed (anything except
     /// the pose) are rebuilt, and ones no longer in the scene are removed. Poses are not read
     /// here: [`Self::step`] applies them. The scene is validated first; on error nothing changes.
+    /// Contacts and queries refresh without advancing time or integrating bodies.
     pub fn sync_from(&mut self, scene: &Scene2d) -> Result<(), Physics2dError> {
         self.validate_scene(scene)?;
         let alive: HashSet<BodyId> = scene.bodies.iter().map(|b| b.id).collect();
@@ -259,7 +260,6 @@ impl PhysicsWorld2d {
         for id in gone {
             self.remove_body(id);
         }
-        let mut added = Vec::new();
         for desc in &scene.bodies {
             let stale = self
                 .bodies
@@ -270,23 +270,22 @@ impl PhysicsWorld2d {
             }
             if !self.bodies.contains_key(&desc.id) {
                 self.add_body(desc)?;
-                added.push(desc.id);
             }
         }
         self.sync_joints(scene)?;
-        // Refresh the broad phase so queries work before the first step.
-        self.rapier.detect_collisions(&self.hooks, &self.collector);
-        // That collision-only pass consumes the list of new bodies without putting them in the
-        // island manager, so a dynamic body would never be simulated (and would trip rapier's
-        // island assertion on first contact). Mark them modified again so the next `step`
-        // registers them.
-        for id in added {
-            if let Some(e) = self.bodies.get(&id) {
-                let _ = self.rapier.bodies.get_mut(e.handle);
-            }
-        }
+        self.refresh_collisions();
         self.collect_events();
         Ok(())
+    }
+
+    fn refresh_collisions(&mut self) {
+        // The collision-only pipeline clears new-body changes without registering their
+        // persistent islands. A zero-time physics step links already-touching contacts first,
+        // then returns before dynamics/CCD. Keep the configured real-tick duration unchanged.
+        let dt = self.rapier.integration_parameters.dt;
+        self.rapier.integration_parameters.dt = 0.0;
+        self.rapier.step_with_events(&self.hooks, &self.collector);
+        self.rapier.integration_parameters.dt = dt;
     }
 
     fn validate_scene(&self, scene: &Scene2d) -> Result<(), Physics2dError> {
