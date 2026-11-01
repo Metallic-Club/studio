@@ -36,6 +36,11 @@ figures, interface font), and the stray line across the editor viewport is gone.
 - Screenshots (1440x900, debug build, crops) in `docs/agents/477-studio-ui-polish/`: `palette-*`,
   `playing-properties-*`, `properties-part-*` (Jump1 selected), `viewport-*` (the arch, y 180-290).
 
+## Checks (2026-10-31, after 3eb1de9)
+- `cargo test --workspace --no-fail-fast -j 4`: 2126 passed, 1 failed: `metallic_render` `gpu_timing_measures_a_frame_where_supported`
+  (GPU timestamp read 0 ms; fails alone too; the render crate is untouched here, so it is this PC's GPU timing).
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: clean. `cargo deny check licenses`: licenses ok.
+
 ## Next
 - Owner: regenerate the Parkour thumbnail (`templates/parkour/preview.png`, #454 item 6); it still shows the
   ground.
