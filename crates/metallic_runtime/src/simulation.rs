@@ -185,6 +185,7 @@ impl Simulation {
         if self.running {
             return Ok(());
         }
+        self.ensure_camera();
         // Startup scripts run immediately and may remove an existing Character before
         // the first tick can observe it. Remember only already-spawned server Players.
         let spawned_players = if self.combined {
@@ -233,6 +234,23 @@ impl Simulation {
             .extend(spawned_players.into_iter().map(|player| (player, 0.0)));
         self.running = true;
         Ok(())
+    }
+
+    /// Makes sure the Workspace has the `Camera` that `workspace.CurrentCamera` returns.
+    fn ensure_camera(&mut self) {
+        let Ok(mut world) = self.world.try_borrow_mut() else {
+            return;
+        };
+        let Some(workspace) = world.root("Workspace") else {
+            return;
+        };
+        let has = world
+            .children(workspace)
+            .iter()
+            .any(|&c| world.class_name(c) == Some("Camera"));
+        if !has && let Ok(camera) = world.create("Camera", Some(workspace)) {
+            let _ = world.set(camera, "Name", Value::String("Camera".into()));
+        }
     }
 
     /// Finds `Player1` (created by the script host), gives it the StarterGui and a character.

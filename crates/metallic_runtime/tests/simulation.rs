@@ -463,6 +463,11 @@ mod game_parity {
             );
             for def in classes::all_properties(class) {
                 h.eat(def.name.as_bytes());
+                // A Camera is per-client state: the combined game publishes the view it draws,
+                // a server has no view.
+                if class == "Camera" && def.repl == classes::Repl::ServerOnly {
+                    continue;
+                }
                 match world.get(id, def.name) {
                     Ok(Value::Ref(target)) => {
                         let at = target
@@ -484,6 +489,12 @@ mod game_parity {
         let mut world = World::new_with_services();
         floor(&mut world);
         let ws = world.root("Workspace").unwrap();
+        // Both runtimes add a `Camera` when the scene has none; having it already keeps the
+        // creation order (and so the ids) the same on both sides of this comparison.
+        let camera = world.create("Camera", Some(ws)).unwrap();
+        world
+            .set(camera, "Name", Value::String("Camera".into()))
+            .unwrap();
         let at = |x, y, z| Vec3::new(x, y, z);
         part(
             &mut world,

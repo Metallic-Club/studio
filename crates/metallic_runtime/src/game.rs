@@ -154,6 +154,81 @@ impl Game {
         Ok(())
     }
 
+    /// Keeps the `Camera` instance and the drawn camera in step. While its `CameraType` is
+    /// `Custom` the game's camera is published to the instance (so scripts read where the
+    /// camera is); with `Scriptable` or `Fixed` the instance's `CFrame` and `FieldOfView` are
+    /// the camera. The drawn camera has no roll: its up is always +Y.
+    fn sync_camera(&mut self) {
+        let world = Rc::clone(&self.simulation.world);
+        let Ok(mut world) = world.try_borrow_mut() else {
+            return;
+        };
+        let Some(workspace) = world.root("Workspace") else {
+            return;
+        };
+        let Some(camera) = world.children(workspace).iter().copied().find(|&c| {
+            world.class_name(c) == Some("Camera")
+                && matches!(world.get_ref(c, "Name"), Ok(Value::String(n)) if n == "Camera")
+        }) else {
+            return;
+        };
+        let scripted =
+            !matches!(world.get_ref(camera, "CameraType"), Ok(Value::String(t)) if t == "Custom");
+        if scripted {
+            let pose = match world.get_ref(camera, "CFrame") {
+                Ok(Value::CFrame(cf)) if cf.is_finite() => **cf,
+                _ => return,
+            };
+            let fov = match world.get_ref(camera, "FieldOfView") {
+                Ok(Value::Number(n)) => *n as f32,
+                _ => self.last_camera.fov_deg,
+            };
+            let look = pose.look_vector();
+            // Straight up or down would have no horizontal direction to draw with: lean a hair.
+            let look = if look.x.abs() + look.z.abs() < 1e-6 {
+                Vec3::new(look.x + 1e-4, look.y, look.z)
+            } else {
+                look
+            };
+            let at = pose.position + look;
+            self.last_camera = Camera {
+                position: GVec3::new(
+                    pose.position.x as f32,
+                    pose.position.y as f32,
+                    pose.position.z as f32,
+                ),
+                look_at: GVec3::new(at.x as f32, at.y as f32, at.z as f32),
+                fov_deg: fov,
+            };
+        } else {
+            let eye = Vec3::new(
+                f64::from(self.last_camera.position.x),
+                f64::from(self.last_camera.position.y),
+                f64::from(self.last_camera.position.z),
+            );
+            let at = Vec3::new(
+                f64::from(self.last_camera.look_at.x),
+                f64::from(self.last_camera.look_at.y),
+                f64::from(self.last_camera.look_at.z),
+            );
+            let pose = metallic_core::CFrame::look_at(eye, at, Vec3::new(0.0, 1.0, 0.0));
+            let _ = world.set(camera, "CFrame", Value::CFrame(Box::new(pose)));
+            let _ = world.set(
+                camera,
+                "FieldOfView",
+                Value::Number(f64::from(self.last_camera.fov_deg)),
+            );
+        }
+    }
+
+    /// Reports the size of the viewport the game is drawn in (points), for the scripts'
+    /// `Camera.ViewportSize` and the projection methods. Call it when the window resizes.
+    pub fn set_viewport_size(&mut self, width: f32, height: f32) {
+        self.simulation
+            .scripts
+            .set_viewport_size(f64::from(width), f64::from(height));
+    }
+
     /// Stops the scripts, retaining the last World state.
     pub fn stop(&mut self) {
         self.simulation.stop();
@@ -304,6 +379,7 @@ impl Game {
         self.last_camera =
             self.camera
                 .camera(self.focus, &self.simulation.physics, &ignore, dt as f32);
+        self.sync_camera();
         FrameOutput {
             camera: self.last_camera,
             ticks,
@@ -314,6 +390,10 @@ impl Game {
     /// Brings `renderer` up to date with the world and draws the frame into `target` (`size` in
     /// pixels) with the camera of the last [`Game::frame`].
     pub fn render(&self, renderer: &mut Renderer, target: &wgpu::TextureView, size: (u32, u32)) {
+        // The size drawn is the viewport the scripts' camera methods work in.
+        self.simulation
+            .scripts
+            .set_viewport_size(f64::from(size.0), f64::from(size.1));
         self.render_from(renderer, target, size, &self.last_camera);
     }
 
@@ -364,6 +444,9 @@ impl Game {
         } else {
             0.0
         };
+        self.simulation
+            .scripts
+            .set_gui_inset(f64::from(self.gui_inset));
     }
 
     /// The GUI inset in points.

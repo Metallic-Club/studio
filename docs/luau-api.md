@@ -71,7 +71,7 @@ sandbox/scheduler behavior is retained; process/transport/isolation work remains
 M2 epic #15 acceptance is unchanged.
 
 ## Globals
-`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Enum`.
+`game`, `workspace`, `script`, `print`, `warn`, `task` (`wait`, `spawn`, `delay`), `require`, `Instance`, `Vector3`, `Vector2`, `CFrame`, `Color3`, `UDim2`, `Ray`, `Enum`.
 
 ## ModuleScript and `require`
 `ModuleScript` (property `Source`) never runs by itself. `require(moduleScript)` runs its `Source` once per script VM, as ordinary
@@ -161,6 +161,27 @@ Tags are text labels on instances (Roblox's `CollectionService`). `game:GetServi
 - Core: `World::add_tag`, `remove_tag`, `has_tag`, `tags`, `tagged`, `all_tags`, `is_in_tree`, and the bounded tag log
   (`tag_cursor`, `tag_changes_since`) the script VMs follow. Tagged-subtree bookkeeping on reparent and destroy only runs
   while some tag exists in the world.
+
+## Camera
+`workspace.CurrentCamera` is a `Camera` instance under the Workspace (nil in a bare script host; `Game` creates it when it
+starts). Properties: `CFrame`, `FieldOfView` (vertical, degrees, 1 to 120, default 70), `CameraType`
+(`Enum.CameraType.Custom`, `Scriptable` or `Fixed`; a string name is accepted when writing) and `ViewportSize` (a read-only
+`Vector2`, the size of the viewport the game is drawn in; 1280 x 720 until the host reports one).
+
+- **Custom** (the default): the game's third-person camera. Every frame it publishes its pose to `CFrame` and `FieldOfView`, so
+  `workspace.CurrentCamera.CFrame` is where the camera is; writes are overwritten the next frame.
+- **Scriptable** (and **Fixed**, the same here): the script's `CFrame` and `FieldOfView` are the camera. Set `CameraType` back
+  to `Custom` and the game's camera takes over again. The drawn camera has no roll (its up is always +Y), and a camera looking
+  straight up or down is nudged a hair so it stays valid.
+- `camera:ViewportPointToRay(x, y, depth?)` and `camera:ScreenPointToRay(x, y, depth?)` return a `Ray` whose `Direction` is a
+  unit vector and whose `Origin` is the camera position moved `depth` studs along it. `camera:WorldToViewportPoint(point)` and
+  `camera:WorldToScreenPoint(point)` return `Vector3(x, y, depth)` and whether the point is in front of the camera and inside
+  the viewport; behind the camera `depth` is negative. `Viewport` coordinates start at the top left of the viewport; `Screen`
+  coordinates start below the GUI inset (`Game::set_gui_inset`), so `ScreenPointToRay(x, y)` is `ViewportPointToRay(x, y + inset)`.
+- `Ray.new(origin, direction)`: `Origin`, `Direction`, `Unit` (a ray with a unit direction), `ray:ClosestPoint(point)` and
+  `ray:Distance(point)` (the ray is the segment from `Origin` to `Origin + Direction`), `==`.
+- Hosts: `Game::set_viewport_size` (done by `Game::render` with the size it draws) and `Game::set_gui_inset`; the units are
+  whatever the host uses for both.
 
 ## Datatypes
 - `Vector3.new(x, y, z)`: `X Y Z Magnitude Unit`, `+ - *` (vector * number, number * vector, vector * vector), also `/ number`,

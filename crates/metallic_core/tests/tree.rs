@@ -258,3 +258,30 @@ fn player_gui_is_a_registered_class_with_unique_bits() {
     let again = w.create("PlayerGui", Some(player)).unwrap();
     assert_ne!(again.to_bits(), gui.to_bits());
 }
+
+#[test]
+fn camera_class_has_a_pose_a_clamped_field_of_view_and_a_type() {
+    let mut w = World::new_with_services();
+    let ws = w.root("Workspace").unwrap();
+    let cam = w.create("Camera", Some(ws)).unwrap();
+    assert_eq!(w.get(cam, "FieldOfView").unwrap(), Value::Number(70.0));
+    assert_eq!(
+        w.get(cam, "CameraType").unwrap(),
+        Value::String("Custom".into())
+    );
+    assert_eq!(
+        w.get(cam, "CFrame").unwrap(),
+        Value::CFrame(Box::new(CFrame::IDENTITY))
+    );
+    w.set(cam, "FieldOfView", Value::Number(500.0)).unwrap();
+    assert_eq!(w.get(cam, "FieldOfView").unwrap(), Value::Number(120.0));
+    w.set(cam, "FieldOfView", Value::Number(-3.0)).unwrap();
+    assert_eq!(w.get(cam, "FieldOfView").unwrap(), Value::Number(1.0));
+    w.set(cam, "CameraType", Value::String("Scriptable".into()))
+        .unwrap();
+    assert!(
+        w.set(cam, "CameraType", Value::String("Orbital".into()))
+            .is_err()
+    );
+    assert!(w.set(cam, "FieldOfView", Value::Number(f64::NAN)).is_err());
+}

@@ -292,6 +292,24 @@ impl ScriptHost {
         }
     }
 
+    /// Reports the size of the viewport the game is drawn in, in pixels, to the camera
+    /// methods (`ViewportSize`, `ViewportPointToRay`, `WorldToViewportPoint`, ...). Until it is
+    /// called they assume 1280 x 720. Non-positive or non-finite sizes are ignored.
+    pub fn set_viewport_size(&self, width: f64, height: f64) {
+        if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+            self.shared.viewport.set([width, height]);
+        }
+    }
+
+    /// Reports the GUI inset (the strip at the top that ScreenGuis leave free) in pixels, for
+    /// `ScreenPointToRay` and `WorldToScreenPoint`.
+    pub fn set_gui_inset(&self, pixels: f64) {
+        self.shared.gui_inset.set(if pixels.is_finite() {
+            pixels.max(0.0)
+        } else {
+            0.0
+        });
+    }
     /// Makes a step count as out of time after `limit` handler calls (`None`: only the clock
     /// decides, the default). A throttle for hosts that want to spread a burst of events, and
     /// the hook the tests use to make a step run out of time on any machine: handlers past the

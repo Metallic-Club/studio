@@ -35,6 +35,10 @@ const CLASS_METHODS: &[(&str, &str)] = &[
     ("FireServer", "RemoteEvent"),
     ("FireClient", "RemoteEvent"),
     ("FireAllClients", "RemoteEvent"),
+    ("ViewportPointToRay", "Camera"),
+    ("ScreenPointToRay", "Camera"),
+    ("WorldToViewportPoint", "Camera"),
+    ("WorldToScreenPoint", "Camera"),
     ("GetState", "InputAction"),
     ("GetHoldProgress", "InputAction"),
     // PVInstance methods: BasePart and Model (PVInstance itself is not a registry class).
@@ -325,6 +329,25 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             let cf = transform::world_pivot(&*state.world()?, this.id).map_err(core_error)?;
             return Ok(Value::UserData(lua.create_userdata(LuaCFrame(cf))?));
         }
+        "CurrentCamera" if class == "Workspace" => {
+            let camera = super::camera::current_camera(&*state.world()?);
+            return state.wrap_opt(lua, camera);
+        }
+        "ViewportSize" if class == "Camera" => {
+            let [w, h] = state.shared.viewport_size();
+            return Ok(Value::UserData(
+                lua.create_userdata(super::datatypes::LuaVector2([w, h]))?,
+            ));
+        }
+        // An enum in scripts (`camera.CameraType == Enum.CameraType.Scriptable`); the property
+        // itself is stored as its name.
+        "CameraType" if class == "Camera" => {
+            let name = match state.world()?.get_ref(this.id, "CameraType") {
+                Ok(CoreValue::String(s)) => s.clone(),
+                _ => "Custom".to_string(),
+            };
+            return Ok(state.enum_value("CameraType", &name));
+        }
         "LocalPlayer" if class == "Players" => {
             let player = match state.context {
                 crate::vm::Context::Client => state.shared.local_player.get(),
@@ -378,6 +401,8 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
     let class = this.class()?;
     match key {
         "ClassName" => Err(lua_error("ClassName is read-only")),
+        "CurrentCamera" if class == "Workspace" => Err(lua_error("CurrentCamera is read-only")),
+        "ViewportSize" if class == "Camera" => Err(lua_error("ViewportSize is read-only")),
         "Parent" => set_parent(this, value),
         "CFrame" if is_subclass(class, "BasePart") => {
             let cf = cframe(value).ok_or_else(|| {
