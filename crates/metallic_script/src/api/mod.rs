@@ -10,6 +10,7 @@ mod attributes;
 mod camera;
 mod cframe;
 mod datatypes;
+mod enums;
 mod errors;
 mod gui;
 pub(crate) mod host_methods;
@@ -94,7 +95,7 @@ pub(crate) struct ApiState {
     /// Instance methods by name (`FindFirstChild`, `GetPlayers`, ...).
     methods: HashMap<&'static str, Function>,
     /// `Enum` and its items.
-    enums: input::Enums,
+    enums: enums::Enums,
     /// Actions bound with `ContextActionService:BindAction`, by name.
     bound: RefCell<HashMap<String, input::Bound>>,
     /// `Cancel` calls for actions unbound while pressed.
@@ -180,7 +181,7 @@ fn build(
         methods.insert(name, function);
     }
 
-    let enums = input::Enums::install(lua)?;
+    let enums = enums::Enums::install(lua)?;
     let bind_wrapper = input::bind_wrapper(lua, &enums)?;
     let (world_cursor, tag_cursor) = {
         let w = world.borrow();

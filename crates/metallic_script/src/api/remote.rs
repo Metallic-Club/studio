@@ -13,6 +13,7 @@ use std::rc::Rc;
 use super::datatypes::{
     LuaColor3, LuaUDim2, LuaVector2, LuaVector3, color, udim2, vector, vector2,
 };
+use super::enums::enum_item;
 use super::instance::LuaInstance;
 use super::signals::EventKind;
 use super::{ApiState, lua_error};
@@ -46,6 +47,8 @@ pub(crate) enum Wire {
     Color3(Color3),
     UDim2(UDim2),
     Instance(InstanceId),
+    /// `(enum, item)`; the receiving VM gives its own item object.
+    EnumItem(&'static str, &'static str),
     Table(Vec<(Wire, Wire)>),
 }
 
@@ -141,6 +144,8 @@ impl ApiState {
                         return Err(lua_error(format!("{} has been destroyed", inst.name())));
                     }
                     Wire::Instance(inst.id)
+                } else if let Some((enum_name, name, _)) = enum_item(value) {
+                    Wire::EnumItem(enum_name, name)
                 } else {
                     return Err(lua_error("cannot send userdata"));
                 }
@@ -164,6 +169,7 @@ impl ApiState {
                 let alive = self.world()?.is_alive(*id);
                 self.wrap_opt(lua, alive.then_some(*id))?
             }
+            Wire::EnumItem(enum_name, name) => self.enum_value(enum_name, name),
             Wire::Table(pairs) => {
                 let table = lua.create_table()?;
                 for (k, v) in pairs {

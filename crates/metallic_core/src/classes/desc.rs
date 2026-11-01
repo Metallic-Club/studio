@@ -110,6 +110,72 @@ impl NumRange {
     }
 }
 
+/// A set of named values: `Enum.<name>.<item>` in Luau, and an enum in every generated language.
+///
+/// Declared next to the class that owns it ([`ClassDesc::enums`]), or under `classes/enums/` when
+/// no one class does. A property of this type stores the item name as a String, so scene files
+/// and the replication and Studio paths see plain names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumDesc {
+    /// The name scripts use. Unique in the registry.
+    pub name: &'static str,
+    /// Item names. A property's `allowed` is this same slice.
+    pub items: &'static [&'static str],
+    /// One `Value` per item; `None` numbers the items from 0 in order.
+    pub numbers: Option<&'static [i64]>,
+    /// `(old name, item)`: old names that still resolve to that item, in scripts and scene files.
+    pub aliases: &'static [(&'static str, &'static str)],
+    /// One or two sentences for tooltips and the reference. Not hashed.
+    pub description: &'static str,
+}
+
+impl EnumDesc {
+    /// An enum whose items are numbered from 0.
+    pub const fn new(name: &'static str, items: &'static [&'static str]) -> EnumDesc {
+        EnumDesc {
+            name,
+            items,
+            numbers: None,
+            aliases: &[],
+            description: "",
+        }
+    }
+
+    /// Gives each item its own `Value`, in `items` order.
+    pub const fn numbers(mut self, numbers: &'static [i64]) -> EnumDesc {
+        self.numbers = Some(numbers);
+        self
+    }
+
+    /// Old names that still resolve to an item: `(old name, item)`.
+    pub const fn aliases(mut self, aliases: &'static [(&'static str, &'static str)]) -> EnumDesc {
+        self.aliases = aliases;
+        self
+    }
+
+    /// Text for tooltips and the reference.
+    pub const fn describe(mut self, description: &'static str) -> EnumDesc {
+        self.description = description;
+        self
+    }
+
+    /// The `Value` of the item at `index`, which must be in range.
+    pub fn value_at(&self, index: usize) -> i64 {
+        match self.numbers {
+            Some(numbers) => numbers[index],
+            None => index as i64,
+        }
+    }
+
+    /// The item an old name stands for.
+    pub fn alias_target(&self, old: &str) -> Option<&'static str> {
+        self.aliases
+            .iter()
+            .find(|(name, _)| *name == old)
+            .map(|(_, item)| *item)
+    }
+}
+
 /// How a property's value is held. `Computed { get, set }` arrives with #464.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropAccess {
@@ -150,8 +216,9 @@ pub struct PropDesc {
     pub saved: bool,
     /// Old names that still resolve to this member.
     pub aliases: &'static [&'static str],
-    /// The enum this String property holds an item name of (#469).
-    pub enum_type: Option<&'static str>,
+    /// The enum this String property holds an item name of. Set with [`PropDesc::enum_of`], which
+    /// also derives `allowed` from it. Stored values stay plain names; bindings show the item.
+    pub enum_type: Option<&'static EnumDesc>,
     /// Replaces an inherited property of the same name and type.
     pub overrides: bool,
     /// Who may use it; `None` takes the class default.
@@ -213,6 +280,13 @@ impl PropDesc {
         self
     }
 
+    /// Holds an item name of `desc`: `allowed` is its items, and its aliases are accepted on write.
+    pub const fn enum_of(mut self, desc: &'static EnumDesc) -> PropDesc {
+        self.allowed = Some(desc.items);
+        self.enum_type = Some(desc);
+        self
+    }
+
     /// Marks engine bookkeeping that scripts and the Properties panel do not show.
     pub const fn hidden(mut self) -> PropDesc {
         self.hidden = true;
@@ -258,6 +332,15 @@ impl PropDesc {
     pub const fn describe(mut self, description: &'static str) -> PropDesc {
         self.description = description;
         self
+    }
+
+    /// What a String write outside `allowed` is stored as: the normalizer's answer, or the item an
+    /// enum alias stands for. `None` refuses the write.
+    pub fn stored_form(&self, text: &str) -> Option<&'static str> {
+        match self.normalize {
+            Some(normalize) => normalize(text),
+            None => self.enum_type?.alias_target(text),
+        }
     }
 }
 
@@ -599,6 +682,8 @@ pub struct ClassDesc {
     pub defaults: &'static [DefaultOverride],
     /// Inherited members hidden from scripts, Studio and docs for this class and its subclasses.
     pub hide: &'static [&'static str],
+    /// Enums this class owns.
+    pub enums: &'static [EnumDesc],
 }
 
 impl ClassDesc {
@@ -618,6 +703,7 @@ impl ClassDesc {
             callbacks: &[],
             defaults: &[],
             hide: &[],
+            enums: &[],
         }
     }
 
@@ -672,6 +758,12 @@ impl ClassDesc {
     /// Hides inherited members.
     pub const fn hide(mut self, hide: &'static [&'static str]) -> ClassDesc {
         self.hide = hide;
+        self
+    }
+
+    /// Declares the enums this class owns.
+    pub const fn enums(mut self, enums: &'static [EnumDesc]) -> ClassDesc {
+        self.enums = enums;
         self
     }
 

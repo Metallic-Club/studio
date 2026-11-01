@@ -18,6 +18,13 @@
 //! `cargo test -p metallic_core`: the resolution checks run, and `registry_hash_is_pinned` tells
 //! you to update the golden hash on purpose. `cargo fmt` does not follow discovered modules, so
 //! format new files with `rustfmt --edition 2024 --check <file>` (CI checks the folder).
+//!
+//! # Adding an enum
+//!
+//! Write a `const` [`EnumDesc`] in the class file that owns it, list it in that class's
+//! [`enums`](ClassDesc::enums) and declare the property with `enumerated(name, default, &ENUM)`.
+//! An enum no one class owns goes in `src/classes/enums/<name>.rs` with a `pub static ENUMS`. The
+//! property stays a String holding the item name, and `Enum.<name>` appears in Luau.
 use crate::value::Value;
 use std::sync::LazyLock;
 
@@ -34,21 +41,18 @@ pub use call::{
     check_arguments, conforms,
 };
 pub use desc::{
-    ArgCheck, CallbackDesc, ClassDesc, ClassFlags, DefaultOverride, FunctionSig, MemberContext,
-    MethodDesc, MethodImpl, NumRange, Param, PropAccess, PropDesc, Repl, SignalDesc, Ty,
+    ArgCheck, CallbackDesc, ClassDesc, ClassFlags, DefaultOverride, EnumDesc, FunctionSig,
+    MemberContext, MethodDesc, MethodImpl, NumRange, Param, PropAccess, PropDesc, Repl, SignalDesc,
+    Ty,
 };
 pub use host_api::{
     Handle, HostApi, HostCall, HostMethodError, HostMethodFn, HostMethods, MethodDispatch,
     member_of,
 };
-pub use lists::{
-    CAMERA_TYPES, INPUT_ACTION_TYPES, INPUT_ROLES, INPUT_TRIGGERS, LIGHTING_STYLES, MATERIALS,
-    MAX_HUMANOID_HEALTH, MAX_JUMP_POWER, MAX_SLOPE_ANGLE, MAX_WALK_SPEED, SHAPES,
-    TONEMAPPER_PRESETS, TOUCH_LAYOUTS, TOUCH_SLOTS,
-};
+pub use lists::{MAX_HUMANOID_HEALTH, MAX_JUMP_POWER, MAX_SLOPE_ANGLE, MAX_WALK_SPEED};
 pub use resolve::{
-    ClassId, DeclId, Member, MemberId, MemberKind, PropertyIndex, Registry, ResolvedClass,
-    SchemaError, resolve,
+    ClassId, DeclId, EnumId, Member, MemberId, MemberKind, PropertyIndex, Registry, ResolvedClass,
+    ResolvedEnum, SchemaError, resolve, resolve_with_enums,
 };
 
 /// The discovered class files and the `ALL_CLASSES` list `build.rs` generates.
@@ -56,6 +60,12 @@ pub use resolve::{
 mod discovered {
     include!(concat!(env!("OUT_DIR"), "/classes_generated.rs"));
 }
+
+pub use discovered::enums::key_code::KEY_CODE;
+pub use discovered::enums::user_input_type::USER_INPUT_TYPE;
+
+/// The item names of `Enum.Material`, for crates with one table row per material.
+pub const MATERIALS: &[&str] = discovered::parts::base_part::MATERIAL.items;
 
 /// The name [`PropDesc`] had before #460; callers migrate later.
 pub type PropDef = PropDesc;
@@ -66,10 +76,12 @@ pub type ClassDef = ClassDesc;
 /// closed, and [`registry_error`] (and so `registry_hash`) gives the reason. A test keeps the
 /// built-in classes valid.
 static REGISTRY: LazyLock<(Registry, Option<SchemaError>)> =
-    LazyLock::new(|| match resolve(discovered::ALL_CLASSES) {
-        Ok(registry) => (registry, None),
-        Err(error) => (Registry::empty(), Some(error)),
-    });
+    LazyLock::new(
+        || match resolve_with_enums(discovered::ALL_CLASSES, discovered::ALL_ENUMS) {
+            Ok(registry) => (registry, None),
+            Err(error) => (Registry::empty(), Some(error)),
+        },
+    );
 
 /// The resolved built-in classes.
 #[inline]
