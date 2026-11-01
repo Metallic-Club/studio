@@ -67,6 +67,8 @@ fn real_pairs() -> Vec<Pair> {
     for bg in ["danger", "danger-hover"] {
         out.push(pair("on-danger", bg, TEXT));
     }
+    // The close glyph of Studio's title bar is an icon, not text: 3:1.
+    out.push(pair("on-danger", "caption-close", CONTROL));
     for fg in ["text-1", "text-2"] {
         out.push(pair(fg, "select", TEXT));
     }

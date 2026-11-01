@@ -16,6 +16,7 @@ use crate::settings_ui;
 use crate::splash::{self, Splash};
 use crate::start_screen::{self, StartAction, StartScreen};
 use crate::templates::{TemplateInfo, list_templates, templates_dir};
+use crate::title_bar::{self, TitleBar, TitleBarInput};
 use crate::{StudioError, theme, widgets};
 
 /// The brand icon (a placeholder until the final brand files arrive).
@@ -159,6 +160,10 @@ pub struct StudioApp {
     settings_open: bool,
     /// The Third-party licences screen, while it is showing.
     licences: Option<Licences>,
+    /// The window's own title bar (Windows; see [`title_bar`]).
+    title_bar: TitleBar,
+    /// The open game's name, for the title bar.
+    opened_name: String,
 }
 
 /// Decodes the embedded brand icon.
@@ -239,6 +244,12 @@ impl StudioApp {
                 _ => None,
             },
             screenshot: options.screenshot.clone().map(ScreenshotJob::new),
+            title_bar: TitleBar::new(),
+            opened_name: if options.scene == Scene::Editor {
+                "Parkour".to_owned()
+            } else {
+                String::new()
+            },
             options,
             icon,
         };
@@ -325,6 +336,7 @@ impl eframe::App for StudioApp {
             // Cheap when nothing changed; follows the system theme while "System" is chosen.
             settings::apply_settings(&ctx, &self.settings.settings);
         }
+        self.title_bar(ui, frame);
         match &mut self.phase {
             Phase::Colour(demo) => {
                 if demo.show(ui) {
@@ -358,6 +370,7 @@ impl eframe::App for StudioApp {
                         Ok(mut editor) => {
                             editor.hints = crate::hints::Hints::load_default();
                             self.phase = Phase::Opened(Box::new(editor));
+                            self.opened_name = name;
                         }
                         Err(e) => {
                             log::warn!("could not open {name}: {e}");
@@ -424,6 +437,46 @@ impl eframe::App for StudioApp {
         }
         if let Some(job) = &mut self.screenshot {
             job.tick(&ctx);
+        }
+    }
+}
+
+impl StudioApp {
+    /// The window's own title bar, as a 40 px top panel above every screen (Windows only; the
+    /// splash has none).
+    fn title_bar(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
+        if !title_bar::CUSTOM {
+            return;
+        }
+        // Hook the window on the first frame, splash included, so the window never shows with
+        // winit's non-client strip once it is the main window (see title_bar.rs).
+        self.title_bar.attach(frame, ui.ctx());
+        if self.splash_window {
+            self.title_bar.hide();
+            return;
+        }
+        let input = TitleBarInput {
+            title: match self.phase {
+                Phase::Opened(_) => self.opened_name.as_str(),
+                _ => WINDOW_TITLE,
+            },
+            icon: self.icon.as_ref(),
+            // In the editor Ctrl+K is grid snapping; on the start screen it is the search's.
+            start_screen: !matches!(self.phase, Phase::Opened(_)),
+            search_shortcut: matches!(self.phase, Phase::Start)
+                && !self.settings_open
+                && self.licences.is_none(),
+        };
+        let bar = &mut self.title_bar;
+        let out = egui::Panel::top("title_bar")
+            .exact_size(title_bar::HEIGHT)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(egui::Frame::new())
+            .show(ui, |ui| bar.show(ui, &input))
+            .inner;
+        if out.open_settings {
+            self.settings_open = true;
         }
     }
 }
