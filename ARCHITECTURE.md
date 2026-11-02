@@ -618,6 +618,20 @@ the golden hash on purpose (`cargo run -p metallic_core --example registry_hash`
 generated module tree, so run `rustfmt --edition 2024` on the new file; CI checks the folder. Design:
 `docs/design/class-system.md`.
 
+To give a class an enum, declare it beside the class and use it for the property:
+```rust
+const SHAPE: EnumDesc = EnumDesc::new("PartType", &["Block", "Ball", "Cylinder", "Wedge"]);
+
+pub static CLASS: ClassDesc = ClassDesc::new("BasePart", Some("PVInstance"))
+    .enums(&[SHAPE])
+    .props(&[enumerated("Shape", || Value::String("Block".into()), &SHAPE)]);
+```
+`Enum.PartType` then exists in Luau, the property reads as an `EnumItem` and takes the item or its name, and `allowed` comes from
+the items. Storage stays a String holding the name, so scene files, Studio and replication see names. `.numbers(&[..])` gives
+items their own `Value` (default: position from 0); `.aliases(&[("Old", "New")])` keeps an old name working in scripts and
+scene files. An enum no one class owns goes in `classes/enums/<name>.rs` with a `pub static ENUMS: &[EnumDesc]`, which
+`build.rs` finds. A bad enum is a `SchemaError` when the registry resolves, and `registry_hash` covers enums.
+
 ## How to write a method
 Methods are written once, in the class file, with no knowledge of any scripting language (`classes/call.rs`; design section
 5). **Nothing routes a script call here until #462, and existing methods move with #465-#467: a method declared today is not
@@ -658,7 +672,7 @@ MethodDesc::native("SetLit", set_lit)
   picks up registry properties by name; Studio's Properties panel too. Add to Insert menu if creators should create it.
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
-- **A material:** the material list in `classes/lists.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
+- **A material:** the `MATERIAL` enum in `classes/parts/base_part.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,
   procedural detail), and density/friction in `metallic_physics`. The material table has one spare row per style
   (`ROWS_PER_STYLE` in `shading.rs`, and `CHARACTER_ROW` in `scene.wgsl`, moves up by one). Test `material_table_has_every_registry_material`
   must still pass.

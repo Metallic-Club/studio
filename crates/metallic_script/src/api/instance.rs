@@ -14,6 +14,7 @@ use mlua::{
 
 use super::cframe::{LuaCFrame, cframe};
 use super::datatypes::lua_to_value;
+use super::enums::enum_write;
 use super::errors;
 use super::signals::{EventKind, LuaSignal};
 use super::{ApiState, lua_error};
@@ -339,15 +340,6 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
                 lua.create_userdata(super::datatypes::LuaVector2([w, h]))?,
             ));
         }
-        // An enum in scripts (`camera.CameraType == Enum.CameraType.Scriptable`); the property
-        // itself is stored as its name.
-        "CameraType" if class == "Camera" => {
-            let name = match state.world()?.get_ref(this.id, "CameraType") {
-                Ok(CoreValue::String(s)) => s.clone(),
-                _ => "Custom".to_string(),
-            };
-            return Ok(state.enum_value("CameraType", &name));
-        }
         "LocalPlayer" if class == "Players" => {
             let player = match state.context {
                 crate::vm::Context::Client => state.shared.local_player.get(),
@@ -384,8 +376,11 @@ fn index(lua: &Lua, this: &LuaInstance, key: Value) -> mlua::Result<Value> {
             key: (this.id, kind),
         })?));
     }
-    if find_property(class, key).is_some_and(|d| !d.hidden) {
-        return state.get_property(lua, this.id, key);
+    if let Some(def) = find_property(class, key).filter(|d| !d.hidden) {
+        return match def.enum_type {
+            Some(desc) => state.get_enum_property(lua, this.id, key, desc),
+            None => state.get_property(lua, this.id, key),
+        };
     }
     let child = state.world()?.find_first_child(this.id, key);
     match child {
@@ -432,7 +427,10 @@ fn new_index(this: &LuaInstance, key: Value, value: &Value) -> mlua::Result<()> 
                     Err(not_a_member(key, class))
                 };
             };
-            let mut converted = lua_to_value(value, def.ty, key)?;
+            let mut converted = match def.enum_type {
+                Some(desc) => enum_write(value, desc, key)?,
+                None => lua_to_value(value, def.ty, key)?,
+            };
             // Like Roblox, a part's Size is clamped to 0.001..=2048 studs per axis.
             if key == "Size"
                 && let CoreValue::Vector3(size) = converted

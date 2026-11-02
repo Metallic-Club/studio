@@ -2,10 +2,14 @@
 //! (docs/research/2026-10-30-lighting.md section 5). Presets: `crate::lighting`.
 use crate::classes::prelude::*;
 
+/// `Lighting.LightingStyle` values.
+const LIGHTING_STYLE: EnumDesc = EnumDesc::new("LightingStyle", &["Realistic", "Soft"]);
+
 pub static CLASS: ClassDesc = ClassDesc::new("Lighting", Some("Instance"))
     .flags(ClassFlags::SERVICE)
     .category("Services")
     .describe("The sun, ambient light, exposure and fog of the world; holds the effect classes.")
+    .enums(&[LIGHTING_STYLE])
     .props(&[
         PropDesc::new("ClockTime", ValueType::Number, || Value::Number(14.5)).wrapped(0.0, 24.0),
         num("GeographicLatitude", || Value::Number(41.73), -90.0, 90.0),
@@ -19,10 +23,10 @@ pub static CLASS: ClassDesc = ClassDesc::new("Lighting", Some("Instance"))
         num("EnvironmentSpecularScale", || Value::Number(1.0), 0.0, 1.0),
         PropDesc::new("GlobalShadows", ValueType::Bool, || Value::Bool(true)),
         num("ShadowSoftness", || Value::Number(0.2), 0.0, 1.0),
-        choice(
+        enumerated(
             "LightingStyle",
             || Value::String("Realistic".into()),
-            LIGHTING_STYLES,
+            &LIGHTING_STYLE,
         ),
         color("FogColor", || {
             Value::Color3(Color3::new(192.0, 192.0, 192.0))
