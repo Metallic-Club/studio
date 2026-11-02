@@ -216,6 +216,9 @@ fn unknown_property(node: &Node, prop: &str) -> CoreError {
 
 impl World {
     /// An empty world with no instances at all.
+    ///
+    /// Useful for in-memory trees. Scene format v1 requires the canonical built-ins;
+    /// use [`World::new_with_services`] for a world that [`crate::save_scene`] can preserve.
     pub fn new_empty() -> World {
         World {
             slots: Vec::new(),

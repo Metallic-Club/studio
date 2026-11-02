@@ -43,7 +43,15 @@ apps.
   `attribute_changes_since`) and tags (same record, plus a tag-to-instances index so `tagged` never scans the tree,
   and a tag log for the instance-added/removed signals; reparent and destroy only walk a subtree while some tag exists);
   `save_scene`/`load_scene` for the RON text format (one scene per file,
-  only non-default properties, stable order). `World::get_ref` borrows stored properties and immutable registry
+  only non-default properties, stable order). Scene saves preflight the tree, resolve reference indices through
+  a hash map, and sync a temporary sibling file before replacing the destination. Both directions enforce
+  `MAX_SCENE_DEPTH` (32 instance levels); loading rejects unknown fields, duplicate property names, unmatched
+  built-in markers and dangling references. Scene-specific Serde mirrors also reject unknown members inside
+  vector, color and UDim2 values. Saves require every canonical built-in exactly once at its standard location;
+  builtinless utility worlds cannot be preserved by the v1 loader and are rejected before writing. Windows
+  sharing/access-denied rename failures receive three bounded retries. Replacement changes filesystem identity:
+  symlinks/hard links, ACLs and alternate streams are not preserved (see `save_scene` docs).
+  `World::get_ref` borrows stored properties and immutable registry
   defaults; `classes::default_value_ref` exposes stable defaults, including concrete-class `Name` values. The shared
   default cache initializes once, then successful borrowed reads do not allocate. The owned `get` and
   `classes::default_value` paths remain compatible; references to destroyed instances read as `Ref(None)` through

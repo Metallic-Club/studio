@@ -7,7 +7,8 @@
 //! by [`InstanceId`], a generational handle that stays invalid after the instance is
 //! destroyed. [`World::get_ref`] borrows values and shared defaults without cloning;
 //! [`World::get`] retains the owned-value interface. Scenes are saved to and loaded from a diff-friendly text file
-//! ([`save_scene`], [`load_scene`]).
+//! ([`save_scene`], [`load_scene`]). Saves replace the destination only after a temporary file
+//! has been written and synced; nesting is limited to [`MAX_SCENE_DEPTH`] instance levels.
 //! [`World::set`] rejects non-finite numeric components before changing state, recording a
 //! journal entry, or dispatching a property-change signal.
 //! [`World::changes_since`] reports deduplicated instance invalidations;
@@ -39,7 +40,7 @@ pub use instance::{
     MAX_EXTRAS_BYTES, MAX_TAG, MAX_TAGS, TagChange, TagChanges, TagCursor, World,
     check_attribute_name, check_attribute_value, check_tag,
 };
-pub use scene_file::{load_scene, save_scene};
+pub use scene_file::{MAX_SCENE_DEPTH, load_scene, save_scene};
 pub use signal::{ConnectionId, Signal};
 pub use value::{Color3, UDim2, Value, ValueType, Vec3, orientation_to_quat, quat_to_orientation};
 

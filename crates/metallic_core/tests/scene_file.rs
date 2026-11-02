@@ -11,6 +11,8 @@ fn sample() -> (World, InstanceId) {
     let p = w.create("Part", Some(m)).unwrap();
     w.set(p, "Position", Value::Vector3(Vec3::new(1.0, 2.5, -3.0)))
         .unwrap();
+    w.set(p, "Color", Value::Color3(Color3::new(12.0, 34.5, 56.0)))
+        .unwrap();
     w.set(p, "Material", Value::String("Glass".into())).unwrap();
     let q = w.create("Part", Some(m)).unwrap();
     w.set(q, "Anchored", Value::Bool(true)).unwrap();
