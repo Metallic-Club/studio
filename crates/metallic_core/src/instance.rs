@@ -7,7 +7,7 @@ use crate::signal::Signal;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod extras;
@@ -18,7 +18,7 @@ pub use extras::{
 };
 use extras::{AttributeLog, Extras, TagLog};
 
-/// Most journal entries kept before the oldest half is dropped.
+/// Number of most recent mutation entries retained in the ring.
 const JOURNAL_LIMIT: usize = 16384;
 static NEXT_WORLD_UID: AtomicU64 = AtomicU64::new(1);
 static NULL_REFERENCE: Value = Value::Ref(None);
@@ -183,7 +183,7 @@ pub struct World {
     prop_signals: HashMap<(InstanceId, Cow<'static, str>), Signal<Value>>,
     uid: u64,
     revision: u64,
-    journal: Vec<JournalEntry>,
+    journal: VecDeque<JournalEntry>,
     /// Journal entries with a revision up to this value were dropped.
     journal_floor: u64,
     attribute_log: AttributeLog,
@@ -228,7 +228,7 @@ impl World {
             prop_signals: HashMap::new(),
             uid: NEXT_WORLD_UID.fetch_add(1, Ordering::Relaxed),
             revision: 0,
-            journal: Vec::new(),
+            journal: VecDeque::new(),
             journal_floor: 0,
             attribute_log: AttributeLog::default(),
             tag_index: HashMap::new(),
@@ -239,16 +239,16 @@ impl World {
 
     fn record(&mut self, id: InstanceId, kind: Option<JournalKind>) {
         self.revision += 1;
-        self.journal.push(JournalEntry {
+        if self.journal.len() == JOURNAL_LIMIT
+            && let Some(entry) = self.journal.pop_front()
+        {
+            self.journal_floor = entry.revision;
+        }
+        self.journal.push_back(JournalEntry {
             revision: self.revision,
             id,
             kind,
         });
-        if self.journal.len() > JOURNAL_LIMIT {
-            let cut = self.journal.len() / 2;
-            self.journal_floor = self.journal[cut - 1].revision;
-            self.journal.drain(..cut);
-        }
     }
 
     fn record_subtree(&mut self, id: InstanceId) {
@@ -270,16 +270,19 @@ impl World {
 
     /// Instances changed since `cursor` plus a new cursor to continue from. Every mutation
     /// (`create`, `destroy`, `set_parent`, `set_parent_at`, `set` with a new value, `clone_subtree`) is recorded; this
-    /// needs only `&World`. The journal is bounded: when it no longer reaches back to `cursor`,
-    /// or `cursor` came from a different world, the result is [`Changes::Overflow`].
+    /// needs only `&World`. The journal retains the most recent 16,384 mutations (before
+    /// deduplication), dropping one oldest entry at a time. When it no longer reaches back to
+    /// `cursor`, or `cursor` came from a different world, the result is [`Changes::Overflow`].
     pub fn changes_since(&self, cursor: ChangeCursor) -> (Changes, ChangeCursor) {
         let now = self.change_cursor();
         let Some(start) = self.journal_start(cursor) else {
             return (Changes::Overflow, now);
         };
         let mut seen = HashSet::new();
-        let ids = self.journal[start..]
+        let ids = self
+            .journal
             .iter()
+            .skip(start)
             .filter(|entry| seen.insert(entry.id))
             .map(|entry| entry.id)
             .collect();
@@ -305,8 +308,9 @@ impl World {
         let Some(start) = self.journal_start(cursor) else {
             return (DetailedChanges::Overflow, now);
         };
-        let changes = self.journal[start..]
-            .iter()
+        let changes = self
+            .journal
+            .range(start..)
             .filter_map(|entry| {
                 entry.kind.map(|kind| Change {
                     id: entry.id,
@@ -887,7 +891,7 @@ impl World {
             prop_signals: HashMap::new(),
             uid: NEXT_WORLD_UID.fetch_add(1, Ordering::Relaxed),
             revision: 0,
-            journal: Vec::new(),
+            journal: VecDeque::new(),
             journal_floor: 0,
             attribute_log: AttributeLog::default(),
             tag_index: self.tag_index.clone(),

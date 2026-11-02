@@ -73,12 +73,12 @@ apps.
   identity, and count the owned transform payload against request/receipt limits. Generic Set follows low-level
   World property validation; it does not invoke high-level pivot/scale helpers or invent new field permissions.
   Change journal (#59): each mutation (`create`, `destroy`, `set_parent` to a new parent, a `set_parent_at` reorder,
-  `set` with a new value, `clone_subtree`) appends the instance id to a per-world journal, bounded at 16,384 entries
-  (`JOURNAL_LIMIT`; the oldest half is dropped when it is full). `World::change_cursor()` marks a position, and
-  `changes_since(cursor)` returns `Changes::Ids` (deduplicated, in order of first change, destroyed ids included) plus
-  a new cursor, or `Changes::Overflow` when the journal no longer reaches back or the cursor is from another world:
-  then re-read everything. It needs only `&World`; the renderer's `Scene::sync`, physics re-sync, `LookOverrides`,
-  audio and input mirroring read it.
+  `set` with a new value, `clone_subtree`) appends the instance id to a per-world journal. The change journal keeps the
+  most recent 16,384 mutation entries (`JOURNAL_LIMIT`) in a ring. `World::change_cursor()` marks a position, and
+  `changes_since(cursor)` returns `Changes::Ids` (the retained suffix deduplicated, in order of first change, destroyed
+  ids included) plus a new cursor, or `Changes::Overflow` when the cursor is older than that retained window or is from
+  another world: then a full rescan is required. It needs only `&World`; the renderer's `Scene::sync`, physics re-sync,
+  `LookOverrides`, audio and input mirroring read it.
   `change_cursor` feeds independent readers: `changes_since` deduplicates coarse instance invalidations;
   `changes_since_detailed` returns ordered `Change { id, kind }` notices for creation, destruction, direct
   reparent operations, explicit same-parent/root reorders and properties. `Reordered` identifies the moved sibling;
@@ -89,8 +89,8 @@ apps.
   token on read. Both readers share the same bounded retention/overflow boundary, including coarse-only
   descendant invalidations after reparent. Clones record creations in deterministic parent-before-child order.
   The detailed feed retains current-state invalidations, not historic values or a durable editing operation log.
-  This A1 foundation leaves the existing half-drop history algorithm unchanged; full-capacity ring PR #186
-  remains a separate integration, as do A2 wire property indices/filtering and the M2 transport/operation log.
+  This A1 foundation shares the full-capacity ring history; A2 wire property indices/filtering and the M2
+  transport/operation log remain separate integrations.
   `CFrame` (`cframe.rs`) is the rigid-transform math with Roblox conventions (row-major rotation, Euler orders,
   look-at, inverse, lerp); `Value::CFrame` (boxed, so `Value` stays 40 bytes) stores `BasePart.PivotOffset` and
   `Model.WorldPivot`. `World::set` (so also the scene loader) stores every CFrame through `CFrame::try_orthonormalize`:
