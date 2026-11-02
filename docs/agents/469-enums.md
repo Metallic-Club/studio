@@ -122,3 +122,15 @@ find crates/metallic_core/src/classes -mindepth 2 -name '*.rs' -print0 | xargs -
 ## Open questions
 None blocking. `Enum.PartType` does not exist (the design names the enum `Shape`), so a Roblox script's
 `part.Shape = Enum.PartType.Ball` errors; `GetEnumItems` and `typeof(Enum.Material) == "Enum"` are not implemented either.
+
+## Last check results (on base c007d15)
+`cargo test --workspace -j 4 --no-fail-fast`: 2397 passed, 7 failed, 9 ignored. Rerun alone, six passed (load, #497):
+`metallic_runtime --test sim_runner argument_load_and_script_failures_return_nonzero`; `metallic_script --test task_threads`
+`native_wrap_cannot_bypass_ownership_of_an_adopted_thread`, `ordinary_coroutines_preserve_opaque_rust_error_object_identity`,
+`duplicate_admission_is_rejected_and_closed_queued_threads_are_silent`; `metallic_studio --test local_play`
+`combined_output_preserves_server_client_and_error_text_without_false_attribution`; `metallic_studio --test play`
+`script_errors_go_to_output_with_the_play_tag`. The seventh still fails alone and is the known #436: `metallic_render --test
+shading gpu_timing_measures_a_frame_where_supported`. Parkour: `parkour_smoke_scene_passes_headless`,
+`parkour_template_has_the_required_content` and `the_shipped_parkour_template_creates_a_loadable_game` pass.
+`cargo clippy --workspace --all-targets -j 4 -- -D warnings`: clean. `cargo deny check licenses`: licenses ok.
+`cargo fmt --all -- --check` and the class-file rustfmt step: clean.
