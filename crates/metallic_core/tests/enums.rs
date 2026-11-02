@@ -21,7 +21,7 @@ fn enums_are_sorted_and_know_their_owner() {
     }
     let owner = |name: &str| registry().enum_by_name(name).unwrap().owner;
     assert_eq!(owner("Material"), Some("BasePart"));
-    assert_eq!(owner("Shape"), Some("BasePart"));
+    assert_eq!(owner("PartType"), Some("BasePart"));
     assert_eq!(owner("InputActionType"), Some("InputAction"));
     assert_eq!(owner("CameraType"), Some("Camera"));
     assert_eq!(owner("LightingStyle"), Some("Lighting"));
@@ -54,7 +54,7 @@ fn each_enum_property_allows_exactly_its_items() {
         (
             "Part",
             "Shape",
-            "Shape",
+            "PartType",
             &["Block", "Ball", "Cylinder", "Wedge"],
         ),
         (

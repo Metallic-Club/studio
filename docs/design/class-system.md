@@ -516,7 +516,7 @@ may set a default for its own members.
 ## 9. Enums and data types
 
 **Enums** (#469): `EnumDesc { name, items: &[&str], numbers: Option<&[i64]>, aliases: &[(old, item)], description }`,
-declared in the class file that owns them (`Material` and `Shape` in `base_part.rs`, `InputActionType` in `input_action.rs`). Enums used by
+declared in the class file that owns them (`Material` and `PartType` in `base_part.rs`, `InputActionType` in `input_action.rs`). Enums used by
 several classes live in `classes/enums/<name>.rs`. The `Enum` global, Studio dropdowns, `.d.luau` and WIT enums are
 built from them.
 

@@ -24,7 +24,7 @@ fn an_item_and_its_name_both_write_and_core_stores_the_name() {
         print(part.Material.Name)
         part.Material = "Glass"
         print(part.Material.Name)
-        part.Shape = Enum.Shape.Ball
+        part.Shape = Enum.PartType.Ball
         "#);
     assert_eq!(lines, ["print:Metal", "print:Glass"]);
     let world = rig.world.borrow();
@@ -90,7 +90,7 @@ fn enum_item_has_name_value_and_enum_type() {
         local metal = Enum.Material.Metal
         print(metal.Name, metal.Value, typeof(metal))
         print(metal.EnumType == Enum.Material, tostring(metal.EnumType))
-        print(metal.EnumType.Metal == metal, Enum.Shape.Wedge.Value)
+        print(metal.EnumType.Metal == metal, Enum.PartType.Wedge.Value)
         print(Enum.ContextActionPriority.High.Value, tostring(Enum))
         print(pcall(function() metal.Name = "x" end))
         print(pcall(function() Enum.Material.Metal = 1 end))
@@ -108,7 +108,7 @@ fn a_bad_name_item_or_type_is_a_clear_error_and_changes_nothing() {
     let (_, lines) = run(r#"
         part.Material = "Metal"
         print(pcall(function() part.Material = "Lava" end))
-        print(pcall(function() part.Material = Enum.Shape.Ball end))
+        print(pcall(function() part.Material = Enum.PartType.Ball end))
         print(pcall(function() part.Material = 5 end))
         print(pcall(function() part.Material = nil end))
         print(pcall(function() part.Material = part end))
@@ -125,7 +125,7 @@ fn a_bad_name_item_or_type_is_a_clear_error_and_changes_nothing() {
     has(0, &["`Material`", "`Lava`", "Metal"]);
     has(
         1,
-        &["property Material", "Enum.Material", "Enum.Shape.Ball"],
+        &["property Material", "Enum.Material", "Enum.PartType.Ball"],
     );
     has(2, &["property Material", "Enum.Material", "got number"]);
     has(3, &["property Material", "Enum.Material", "got nil"]);
@@ -216,7 +216,7 @@ fn an_item_read_from_a_property_goes_through_a_remote() {
         "Server",
         r#"
         game:GetService("ReplicatedStorage").Ping.OnServerEvent:Connect(function(_, a, t)
-            print(typeof(a), a == Enum.Material.Plastic, t.inner == Enum.Shape.Ball)
+            print(typeof(a), a == Enum.Material.Plastic, t.inner == Enum.PartType.Ball)
         end)
         "#,
     );
@@ -224,7 +224,7 @@ fn an_item_read_from_a_property_goes_through_a_remote() {
         "Client",
         r#"
         local ping = game:GetService("ReplicatedStorage"):WaitForChild("Ping")
-        ping:FireServer(workspace.Brick.Material, { inner = Enum.Shape.Ball })
+        ping:FireServer(workspace.Brick.Material, { inner = Enum.PartType.Ball })
         "#,
     );
     rig.host.start().unwrap();

@@ -620,13 +620,13 @@ generated module tree, so run `rustfmt --edition 2024` on the new file; CI check
 
 To give a class an enum, declare it beside the class and use it for the property:
 ```rust
-const SHAPE: EnumDesc = EnumDesc::new("Shape", &["Block", "Ball", "Cylinder", "Wedge"]);
+const SHAPE: EnumDesc = EnumDesc::new("PartType", &["Block", "Ball", "Cylinder", "Wedge"]);
 
 pub static CLASS: ClassDesc = ClassDesc::new("BasePart", Some("PVInstance"))
     .enums(&[SHAPE])
     .props(&[enumerated("Shape", || Value::String("Block".into()), &SHAPE)]);
 ```
-`Enum.Shape` then exists in Luau, the property reads as an `EnumItem` and takes the item or its name, and `allowed` comes from
+`Enum.PartType` then exists in Luau, the property reads as an `EnumItem` and takes the item or its name, and `allowed` comes from
 the items. Storage stays a String holding the name, so scene files, Studio and replication see names. `.numbers(&[..])` gives
 items their own `Value` (default: position from 0); `.aliases(&[("Old", "New")])` keeps an old name working in scripts and
 scene files. An enum no one class owns goes in `classes/enums/<name>.rs` with a `pub static ENUMS: &[EnumDesc]`, which

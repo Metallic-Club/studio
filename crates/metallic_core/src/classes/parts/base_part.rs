@@ -18,8 +18,8 @@ pub const MATERIAL: EnumDesc = EnumDesc::new(
     ],
 );
 
-/// Shapes a part may have.
-const SHAPE: EnumDesc = EnumDesc::new("Shape", &["Block", "Ball", "Cylinder", "Wedge"]);
+/// Shapes a part may have (`Enum.PartType`, the name scripts know; the property stays `Shape`).
+const SHAPE: EnumDesc = EnumDesc::new("PartType", &["Block", "Ball", "Cylinder", "Wedge"]);
 
 pub static CLASS: ClassDesc = ClassDesc::new("BasePart", Some("PVInstance"))
     .flags(ClassFlags::ABSTRACT)

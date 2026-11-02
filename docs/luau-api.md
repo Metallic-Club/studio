@@ -176,7 +176,7 @@ Enum properties read as an `EnumItem` and take the item or its name:
 
 | Class | Property | Enum |
 |---|---|---|
-| `BasePart` | `Material`, `Shape` | `Enum.Material`, `Enum.Shape` |
+| `BasePart` | `Material`, `Shape` | `Enum.Material`, `Enum.PartType` |
 | `Camera` | `CameraType` | `Enum.CameraType` |
 | `InputAction` | `Type`, `Trigger`, `Role`, `TouchSlot`, `TouchLayout` | `Enum.InputActionType`, `Enum.InputTrigger`, `Enum.InputRole`, `Enum.TouchSlot`, `Enum.TouchLayout` |
 | `Lighting` | `LightingStyle` | `Enum.LightingStyle` |
@@ -192,7 +192,7 @@ print(part.Material)                     --> Enum.Material.Metal
 
 A name that is no item, or an item of another enum, is an error and changes nothing:
 ``invalid value for `Material`: `Lava` is not one of [...]``, `invalid value for property Material: expected Enum.Material,
-got Enum.Shape.Ball`.
+got Enum.PartType.Ball`.
 
 Since #469 these properties read as an item, not a string. A script that held a string changes like this:
 

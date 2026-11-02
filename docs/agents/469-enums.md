@@ -9,7 +9,7 @@ intended script-visible change), writes take the item or its name, and core keep
 ## Done
 - `EnumDesc` in `classes/desc.rs`; `ClassDesc::enums`; `pub static ENUMS` in `classes/enums/*.rs`, found by `build.rs`.
 - `ResolvedEnum`, `EnumId`, `Registry::enums`, `enum_by_name`, `resolve_with_enums`, seven new `SchemaError` variants.
-- Enums declared: `Material`, `Shape` (`base_part.rs`); `InputActionType`, `InputTrigger`, `InputRole`, `TouchSlot`,
+- Enums declared: `Material`, `PartType` (`base_part.rs`; the property is still `Shape`); `InputActionType`, `InputTrigger`, `InputRole`, `TouchSlot`,
   `TouchLayout` (`input_action.rs`); `CameraType` (`camera.rs`); `LightingStyle` (`lighting.rs`); `TonemapperPreset`
   (`color_grading_effect.rs`); `KeyCode`, `UserInputType`, `UserInputState`, `ContextActionResult`, `ContextActionPriority`,
   `PreferredInput`, `RotationOrder`, `NormalId` (`classes/enums/`).
@@ -120,8 +120,7 @@ find crates/metallic_core/src/classes -mindepth 2 -name '*.rs' -print0 | xargs -
 ```
 
 ## Open questions
-None blocking. `Enum.PartType` does not exist (the design names the enum `Shape`), so a Roblox script's
-`part.Shape = Enum.PartType.Ball` errors; `GetEnumItems` and `typeof(Enum.Material) == "Enum"` are not implemented either.
+`GetEnumItems` and `typeof(Enum.Material) == "Enum"` are not implemented either.
 
 ## Last check results (on base c007d15)
 `cargo test --workspace -j 4 --no-fail-fast`: 2397 passed, 7 failed, 9 ignored. Rerun alone, six passed (load, #497):
