@@ -11,8 +11,8 @@ the editor with no Studio change.
   `VisibleWhen`, `readonly`), `ClassDesc::insert` (`InsertEntry`: `.insert_order(n)`, `.no_insert()`), `ClassDesc::icon_like`,
   `Registry::insertable()`, `SchemaError::VisibleWhenWithoutProperty`. None of it is hashed: `registry_hash_is_pinned`
   passes with the golden unchanged.
-- **Class files.** Sections, number units, the Style label and the Script and StylePicker widgets moved into them; a
-  description on all 280 class-property pairs is a test now (hidden ones excepted). 13 classes have an insert order and
+- **Class files.** Sections, number units, the Style label and the Script and StylePicker widgets moved into them. Every
+  class and every property that is not hidden has a description, and a test holds that. 13 classes have an insert order and
   19 have `.no_insert()`. The abstract classes' icon rows moved from `class_icon` to `.icon_like(...)`.
 - **Studio.** `properties.rs` lost `section`, `SECTION_NAMES` and the name matches in `number_kind` and `row`. `sections()`
   groups the rows, `row_label()` and `row_tooltip()` come from the descriptor. `INSERTABLE` is gone: `editor::insertable()`
@@ -81,4 +81,17 @@ Nothing for the issue. Not pushed; the PR is the conductor's batch.
 None blocking. Which of the 19 hidden classes should be offered (`Frame` first, perhaps) is for the owner.
 
 ## Last check results
-See the section below, kept current by the last commit.
+On code commit `b710e55` (rebased on `c007d15`); the commit after it adds only the `after/` pictures and this section.
+- `cargo fmt --all -- --check`: clean. Class-file rustfmt step: clean. `cargo deny check licenses`: `licenses ok`.
+- `cargo clippy --workspace --all-targets -j 4 -- -D warnings`: clean.
+- `registry_hash_is_pinned`: passes, golden unchanged.
+- `cargo test --workspace -j 4 --no-fail-fast`, one run: 2377 passed, 9 failed, 10 ignored. Each failing target rerun alone:
+  - `metallic_runtime --test camera_api`: 10 passed (failed in the full run: `ray_is_a_datatype`).
+  - `metallic_runtime --test touch_controls`: 3 passed (failed: all three, `a_touch_press_fires_the_input_action`,
+    `get_button_returns_the_overlay_button_of_a_bound_action`, `set_title_while_held_keeps_the_press`).
+  - `metallic_studio --test local_play`: 8 passed (failed: `combined_output_preserves_server_client_and_error_text_without_false_attribution`,
+    `drop_with_pending_delay_and_wait_fires_nothing_in_new_session`, `stop_with_pending_delay_and_wait_fires_nothing_after_stop`).
+  - `metallic_studio --test play`: 13 passed (failed: `script_errors_go_to_output_with_the_play_tag`).
+  - `metallic_render --test shading`: 4 passed, 1 failed, `gpu_timing_measures_a_frame_where_supported`, the known #436.
+  So 8 of the 9 failed only in the full run, which fits #497 (load); that cause is not proven for each test. The workspace
+  has not had a fully green run.
