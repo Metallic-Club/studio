@@ -8,7 +8,7 @@
 
 use std::rc::Rc;
 
-use metallic_core::classes::{self, EnumDesc, Registry};
+use metallic_core::classes::{self, EnumDesc, EnumItemRef, Registry};
 use metallic_core::{InstanceId, Value as CoreValue};
 use mlua::{AnyUserData, Lua, MetaMethod, Table, UserData, UserDataFields, UserDataMethods, Value};
 
@@ -16,15 +16,14 @@ use super::{ApiState, errors, lua_error};
 
 /// A value of an `Enum`.
 pub(crate) struct LuaEnumItem {
-    enum_name: &'static str,
-    name: &'static str,
+    item: EnumItemRef,
     value: i64,
 }
 
 impl UserData for LuaEnumItem {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_meta_field(MetaMethod::Type, "EnumItem");
-        fields.add_field_method_get("Name", |_, this| Ok(this.name));
+        fields.add_field_method_get("Name", |_, this| Ok(this.item.item()));
         fields.add_field_method_get("Value", |_, this| Ok(this.value));
         fields.add_field_function_get("EnumType", |_, this: AnyUserData| {
             this.user_value::<Table>()
@@ -33,13 +32,17 @@ impl UserData for LuaEnumItem {
 
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_function(MetaMethod::Eq, |_, (a, b): (Value, Value)| {
-            Ok(match (enum_item(&a), enum_item(&b)) {
-                (Some(a), Some(b)) => a.0 == b.0 && a.1 == b.1,
-                _ => false,
-            })
+            Ok(matches!(
+                (enum_item_ref(&a), enum_item_ref(&b)),
+                (Some(a), Some(b)) if a == b
+            ))
         });
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
-            Ok(format!("Enum.{}.{}", this.enum_name, this.name))
+            Ok(format!(
+                "Enum.{}.{}",
+                this.item.enum_name(),
+                this.item.item()
+            ))
         });
     }
 }
@@ -50,7 +53,15 @@ pub(crate) fn enum_item(v: &Value) -> Option<(&'static str, &'static str, i64)> 
         Value::UserData(ud) => ud
             .borrow::<LuaEnumItem>()
             .ok()
-            .map(|i| (i.enum_name, i.name, i.value)),
+            .map(|i| (i.item.enum_name(), i.item.item(), i.value)),
+        _ => None,
+    }
+}
+
+/// An `EnumItem` value as it crosses the host interface. [`ApiState::enum_ref_value`] is the inverse.
+pub(crate) fn enum_item_ref(v: &Value) -> Option<EnumItemRef> {
+    match v {
+        Value::UserData(ud) => ud.borrow::<LuaEnumItem>().ok().map(|i| i.item),
         _ => None,
     }
 }
@@ -77,8 +88,7 @@ impl Enums {
             let mut objects = Vec::with_capacity(desc.items.len());
             for (index, name) in desc.items.iter().enumerate() {
                 let ud = lua.create_userdata(LuaEnumItem {
-                    enum_name: desc.name,
-                    name,
+                    item: EnumItemRef::new(desc.name, name),
                     value: desc.value_at(index),
                 })?;
                 // A user value, so the item keeps its enum table alive without a strong Rust ref.
@@ -143,6 +153,11 @@ fn strict(lua: &Lua, table: &Table, label: String, printed: &'static str) -> mlu
 impl ApiState {
     pub(crate) fn enum_value(&self, enum_name: &str, name: &str) -> Value {
         self.enums.item(enum_name, name)
+    }
+
+    /// This VM's object for an item from another VM or from the host interface.
+    pub(crate) fn enum_ref_value(&self, item: EnumItemRef) -> Value {
+        self.enums.item(item.enum_name(), item.item())
     }
 
     /// Reads an enum property as its item. Writes are checked against the items and defaults are

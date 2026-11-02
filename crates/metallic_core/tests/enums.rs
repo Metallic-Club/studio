@@ -1,8 +1,8 @@
 //! Enums in the class registry (#469): declared with a class or under `classes/enums/`, checked
 //! when the registry resolves, and invisible to storage: an enum property stays a String.
 use metallic_core::classes::{
-    ClassDesc, EnumDesc, PropDesc, SchemaError, find_property, registry, resolve,
-    resolve_with_enums,
+    ClassDesc, EnumDesc, EnumItemRef, MemberKind, PropDesc, SchemaError, ScriptValue, Ty,
+    find_property, registry, resolve, resolve_with_enums,
 };
 use metallic_core::*;
 
@@ -393,4 +393,91 @@ fn shared_enums_resolve_without_an_owner() {
     static SHARED: [EnumDesc; 1] = [EnumDesc::new("E", &["A"])];
     let registry = resolve_with_enums(&[], &[&SHARED]).unwrap();
     assert_eq!(registry.enum_by_name("E").unwrap().owner, None);
+}
+
+// ---- The host interface (#461): a language sees items, storage keeps names.
+
+#[test]
+fn a_stored_name_crosses_the_host_interface_as_its_item() {
+    let material = find_property("Part", "Material").unwrap();
+    let wood = EnumItemRef::new("Material", "Wood");
+    assert_eq!(
+        material.script_value(&Value::String("Wood".into())),
+        ScriptValue::EnumItem(wood)
+    );
+    assert_eq!(
+        material.stored_item(wood),
+        Some(Value::String("Wood".into()))
+    );
+    // Another enum's item and a made-up item are refused; the host reports the error.
+    assert_eq!(
+        material.stored_item(EnumItemRef::new("Shape", "Ball")),
+        None
+    );
+    assert_eq!(
+        material.stored_item(EnumItemRef::new("Material", "Lava")),
+        None
+    );
+
+    // A property that is not an enum is what it always was.
+    let name = find_property("Part", "Name").unwrap();
+    assert_eq!(
+        name.script_value(&Value::String("Wood".into())),
+        ScriptValue::String("Wood".into())
+    );
+    assert_eq!(name.stored_item(wood), None);
+}
+
+#[test]
+fn an_item_ref_from_an_alias_is_the_item() {
+    assert_eq!(
+        OLD.item_ref("Old"),
+        Some(EnumItemRef::new("Fixture", "New"))
+    );
+    assert_eq!(
+        OLD.item_ref("New"),
+        Some(EnumItemRef::new("Fixture", "New"))
+    );
+    assert_eq!(OLD.item_ref("Nope"), None);
+}
+
+/// The argument check compares an item with `Ty::Enum` by enum name, so a typo in a signature would
+/// refuse every value. No resolve check: fixture classes name enums their fixture does not declare.
+#[test]
+fn every_enum_a_built_in_signature_names_exists() {
+    fn check(ty: &Ty, member: &str) {
+        match ty {
+            Ty::Enum(name) => assert!(
+                registry().enum_by_name(name).is_some(),
+                "{member} names Enum.{name}"
+            ),
+            Ty::Array(inner) | Ty::Map(inner) | Ty::Optional(inner) => check(inner, member),
+            Ty::Tuple(items) => items.iter().for_each(|item| check(item, member)),
+            Ty::Function(signature) => {
+                signature.params.iter().for_each(|p| check(p, member));
+                check(signature.returns, member);
+            }
+            _ => {}
+        }
+    }
+    for class in registry().classes() {
+        for member in &class.members {
+            let name = member.name();
+            match member.kind {
+                MemberKind::Method { desc, .. } => {
+                    desc.params.iter().for_each(|p| check(&p.ty, name));
+                    desc.variadic.iter().for_each(|ty| check(ty, name));
+                    check(&desc.returns, name);
+                }
+                MemberKind::Signal { desc, .. } => {
+                    desc.params.iter().for_each(|p| check(&p.ty, name));
+                }
+                MemberKind::Callback { desc, .. } => {
+                    desc.params.iter().for_each(|p| check(&p.ty, name));
+                    check(&desc.returns, name);
+                }
+                MemberKind::Property { .. } => {}
+            }
+        }
+    }
 }

@@ -2,7 +2,7 @@
 //!
 //! Everything here is plain `const` data with nothing specific to one scripting language.
 //! [`resolve`](super::resolve()) turns these into flat per-class tables.
-use super::call::MethodFn;
+use super::call::{EnumItemRef, MethodFn, ScriptValue};
 use crate::value::{Color3, Value, ValueType};
 
 /// What a class is allowed to be. See `docs/design/class-system.md` section 3.1.
@@ -165,6 +165,13 @@ impl EnumDesc {
             Some(numbers) => numbers[index],
             None => index as i64,
         }
+    }
+
+    /// The item with this name or alias, as it crosses the host interface.
+    pub fn item_ref(&self, name: &str) -> Option<EnumItemRef> {
+        let item = self.items.iter().find(|item| **item == name).copied();
+        let item = item.or_else(|| self.alias_target(name))?;
+        Some(EnumItemRef::new(self.name, item))
     }
 
     /// The item an old name stands for.
@@ -332,6 +339,27 @@ impl PropDesc {
     pub const fn describe(mut self, description: &'static str) -> PropDesc {
         self.description = description;
         self
+    }
+
+    /// A stored value as every language's script sees it: an enum property's name becomes its item.
+    /// `HostApi::get_property` goes through this, so storage can stay a String.
+    pub fn script_value(&self, stored: &Value) -> ScriptValue {
+        if let (Some(desc), Value::String(name)) = (self.enum_type, stored)
+            && let Some(item) = desc.item_ref(name)
+        {
+            return ScriptValue::EnumItem(item);
+        }
+        ScriptValue::from(stored)
+    }
+
+    /// What a script's item stores on this property: its name, or `None` when it is not an item of
+    /// this property's enum. `HostApi::set_property` goes through this; a name needs no conversion.
+    pub fn stored_item(&self, item: EnumItemRef) -> Option<Value> {
+        let desc = self
+            .enum_type
+            .filter(|desc| desc.name == item.enum_name())?;
+        let name = desc.items.iter().find(|name| **name == item.item())?;
+        Some(Value::String((*name).to_owned()))
     }
 
     /// What a String write outside `allowed` is stored as: the normalizer's answer, or the item an
