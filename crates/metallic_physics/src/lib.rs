@@ -15,6 +15,12 @@
 //! [`TELEPORT_SPEED`] or a turn faster than [`TELEPORT_ANGULAR_SPEED`] is a teleport instead:
 //! plain reposition, zero velocity.
 //!
+//! Elapsed time is consumed in [`SUBSTEP`] (1/240 s) quanta. Ordinary frames batch up to
+//! [`MAX_PIPELINE_STEP`] (1/60 s) into one Rapier pipeline call with four internal solver
+//! integration substeps. Gameplay sensors, non-character kinematic movers, and fast/small
+//! awake bodies keep the former 1/240 s collision cadence. Solver substeps do not replace
+//! collision detection. [`PhysicsWorld::last_step_pipeline_steps`] exposes the actual work.
+//!
 //! Characters: [`spawn_character`] builds a Roblox-style character Model (a `HumanoidRootPart`
 //! and 15 invisible R15 body parts that the runtime draws the skinned avatar over) for a Player
 //! and [`CharacterController`] moves it each frame (walk, jump, slopes, steps, moving platforms,
@@ -36,6 +42,9 @@ mod character;
 mod limbs;
 mod sync;
 mod touched;
+
+#[cfg(test)]
+mod step_tests;
 
 pub use avatar::VIOLET;
 pub use body::{BODY_PART_COUNT, BodyPart, BodyPose, MAX_TOUCH_CANDIDATES, TouchQueryCost};
@@ -62,8 +71,12 @@ pub const GRAVITY: f64 = 196.2;
 /// Longest finite `dt` a [`PhysicsWorld::step`] or [`CharacterController::step`] call simulates,
 /// in seconds; larger values are clamped.
 pub const MAX_STEP: f64 = 0.25;
-/// Length of one fixed simulation substep in seconds.
+/// Smallest consumed simulation-time quantum in seconds.
 pub const SUBSTEP: f64 = 1.0 / 240.0;
+/// Maximum duration of one full Rapier pipeline step, before its internal solver substeps.
+pub const MAX_PIPELINE_STEP: f64 = 1.0 / 60.0;
+
+const PIPELINE_QUANTA: usize = 4;
 /// Speed in studs/s above which a move of an anchored part counts as a teleport.
 ///
 /// [`PhysicsWorld::step`] derives an anchored part's velocity as distance / simulated time.
@@ -120,6 +133,7 @@ pub struct PhysicsWorld {
     /// Synced parts that belong to a character; [`Self::drain_touched`] never reports them.
     characters: HashSet<InstanceId>,
     accumulator: f64,
+    last_step_pipeline_steps: usize,
     /// Replica mode: no body is ever integrated (see [`PhysicsWorld::new_replica`]).
     replica: bool,
     /// Whether Rapier has stepped: from then on [`PhysicsWorld::sync_from`] must not run
@@ -177,11 +191,13 @@ fn close(a: Vec3, b: Vec3) -> bool {
 }
 
 impl PhysicsWorld {
-    /// Creates an empty simulation with studs-scale gravity and a fixed 1/240 s substep.
+    /// Creates an empty simulation with studs-scale gravity, a 1/240 s elapsed-time quantum,
+    /// and four internal solver integration substeps per full Rapier pipeline call.
     pub fn new() -> Self {
         let mut rapier = RapierWorld::new();
         rapier.gravity = Vector::new(0.0, -(GRAVITY as f32), 0.0);
         rapier.integration_parameters.dt = SUBSTEP as f32;
+        rapier.integration_parameters.num_solver_iterations = 4;
         PhysicsWorld {
             rapier,
             entries: HashMap::new(),
@@ -190,6 +206,7 @@ impl PhysicsWorld {
             touches: TouchTracker::default(),
             characters: HashSet::new(),
             accumulator: 0.0,
+            last_step_pipeline_steps: 0,
             replica: false,
             stepped: false,
         }
@@ -328,9 +345,15 @@ impl PhysicsWorld {
         self.touches.apply(events, &self.owners, &self.characters);
     }
 
-    /// Advances the simulation by `dt` seconds in fixed 1/240 s substeps (the remainder is
-    /// carried over to the next call) and writes `Position`/`Orientation` of unanchored parts
-    /// back into `world`.
+    /// Consumes `dt` in 1/240 s quanta (carrying the remainder to the next call) and writes
+    /// `Position`/`Orientation` of unanchored parts back into `world`. Ordinary frames batch
+    /// up to [`MAX_PIPELINE_STEP`] per full Rapier call, with four internal solver substeps.
+    ///
+    /// Gameplay sensors, non-character kinematic movers, and awake dynamic bodies that could
+    /// cross their own smallest half extent in a batched tick retain 1/240 s outer steps.
+    /// The motion estimate includes angular motion and gravity over a catch-up frame.
+    /// This preserves finer contact sampling for those cases; it is not continuous collision
+    /// detection. Small/high-refresh frames do not wait for a 1/60 s accumulator.
     ///
     /// Before simulating, a changed `Position`/`Orientation` is applied: an anchored part is moved
     /// as a kinematic body (velocity = distance / simulated time, see [`Self::velocity`];
@@ -346,6 +369,7 @@ impl PhysicsWorld {
     /// (Size, Shape, Material, Anchored, CanCollide, reparenting); until then `step` keeps using
     /// the Anchored value the body was last synced with. Parts not yet synced are ignored.
     pub fn step(&mut self, world: &mut World, dt: f64) {
+        self.last_step_pipeline_steps = 0;
         let dt = if dt.is_finite() {
             dt.clamp(0.0, MAX_STEP)
         } else {
@@ -366,6 +390,7 @@ impl PhysicsWorld {
         let ids: Vec<InstanceId> = self.entries.keys().copied().collect();
         // (part, target pose) of anchored parts moving this step.
         let mut movers: Vec<(InstanceId, Pose)> = Vec::new();
+        let mut fine_contacts = false;
         for &id in &ids {
             let Some(state) = sync::read_part(world, id) else {
                 continue;
@@ -373,6 +398,9 @@ impl PhysicsWorld {
             let Some(e) = self.entries.get_mut(&id) else {
                 continue;
             };
+            // Sensors need collision sampling, not just solver integration. Character touches
+            // are handled by the character controller and excluded from this physics queue.
+            fine_contacts |= !e.signature.character && !e.signature.can_collide;
             let moved = !close(state.position, e.last_position)
                 || !close(state.orientation, e.last_orientation);
             let Some(body) = self.rapier.bodies.get_mut(e.body) else {
@@ -382,6 +410,7 @@ impl PhysicsWorld {
                 e.derived_velocity = Vec3::default();
                 e.derived_angular_velocity = Vec3::default();
                 if moved {
+                    fine_contacts |= !e.signature.character;
                     let v = (state.position - e.last_position) * (1.0 / sim_time);
                     let w =
                         angular_velocity_between(e.last_orientation, state.orientation, sim_time);
@@ -402,12 +431,34 @@ impl PhysicsWorld {
                 body.set_linvel(Vector::ZERO, true);
                 body.set_angvel(Vector::ZERO, true);
             }
+            if body.is_dynamic() && !body.is_sleeping() && !e.signature.character {
+                let (smallest_half_extent, radius) = self.rapier.colliders.get(e.collider).map_or(
+                    (0.0, f64::INFINITY),
+                    |collider| {
+                        let half = collider.shape().compute_local_aabb().half_extents();
+                        (f64::from(half.min_element()), f64::from(half.length()))
+                    },
+                );
+                let window = sim_time.min(MAX_PIPELINE_STEP);
+                let peak_speed = from_vector(body.linvel()).magnitude() + GRAVITY * sim_time;
+                let angular_speed = from_vector(body.angvel()).magnitude();
+                let motion = (peak_speed + angular_speed * radius) * window;
+                // Keep the former collision cadence when a body could cross its own smallest
+                // half extent in one batched tick, including gravity during a catch-up frame.
+                fine_contacts |= !motion.is_finite() || motion > smallest_half_extent;
+            }
             e.last_position = state.position;
             e.last_orientation = state.orientation;
         }
 
-        for _ in 0..substeps {
+        let mut remaining = substeps;
+        let batch_limit = if fine_contacts { 1 } else { PIPELINE_QUANTA };
+        while remaining > 0 {
+            let batch = remaining.min(batch_limit);
+            self.rapier.integration_parameters.dt = (SUBSTEP * batch as f64) as f32;
             self.rapier.step_with_events(&(), &self.collector);
+            self.last_step_pipeline_steps += 1;
+            remaining -= batch;
             self.stepped = true;
         }
 
@@ -454,6 +505,14 @@ impl PhysicsWorld {
         self.collect_touches();
         // Rebuilt parts' pairs that did not touch again in this step end now.
         self.touches.settle();
+    }
+
+    /// Number of full Rapier pipeline simulations in the last [`Self::step`] call.
+    ///
+    /// This excludes internal solver substeps and synchronization-only collision detection.
+    /// It is zero when the elapsed-time accumulator has not reached [`SUBSTEP`].
+    pub fn last_step_pipeline_steps(&self) -> usize {
+        self.last_step_pipeline_steps
     }
 
     /// Current velocity of a part in studs per second: the body velocity for unanchored parts,

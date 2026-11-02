@@ -109,7 +109,10 @@ apps.
   Destroying a slot at its final
   `u32` generation retires it permanently, preserving stale-handle rejection without changing the   64-bit ID layout.
 - **metallic_physics** (Tasks 4-5): `PhysicsWorld` wraps Rapier behind our own interface: `sync_from(&World)`,
-  `step(&mut World, dt)` (1/240 s substeps), `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`. Before the
+  `step(&mut World, dt)` (1/240 s elapsed-time quanta, batching up to 1/60 s Rapier calls with four internal solver
+  substeps), `last_step_pipeline_steps`, `velocity`/`angular_velocity`, `raycast`, `drain_touched`, `drain_touch_ended`.
+  Gameplay sensors, non-character kinematic movers, and fast/small awake bodies retain 1/240 s collision sampling.
+  `MAX_PIPELINE_STEP` caps each batched pipeline call; small/high-refresh frames keep the original accumulator latency. Before the
   first step `sync_from` runs Rapier's collision pipeline (raycasts and touches work at once; the first step builds the
   islands); after it, only the query tree (`BroadPhaseBvh::set_aabb`), since that pipeline leaves bodies inserted after a
   step out of the islands in Rapier 0.36.1 (#423); their contacts start in the next step. Anchored parts that
