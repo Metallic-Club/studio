@@ -117,6 +117,224 @@ pub enum PropAccess {
     Stored,
 }
 
+/// A titled group of rows in the Studio Properties panel. A class file may use its own: sections
+/// sort by `order`, then by name, so `Section::new("Beacon", 50)` lands between Data and Appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Section {
+    /// The title.
+    pub name: &'static str,
+    /// Lower comes first.
+    pub order: u16,
+}
+
+impl Section {
+    /// The default: what a class is, its own settings.
+    pub const DATA: Section = Section::new("Data", 0);
+    /// How it looks.
+    pub const APPEARANCE: Section = Section::new("Appearance", 100);
+    /// Where it is and how big.
+    pub const TRANSFORM: Section = Section::new("Transform", 200);
+    /// How it collides and moves.
+    pub const PHYSICS: Section = Section::new("Physics", 300);
+    /// Whether it runs.
+    pub const BEHAVIOUR: Section = Section::new("Behaviour", 400);
+
+    /// A section with this title and place.
+    pub const fn new(name: &'static str, order: u16) -> Section {
+        Section { name, order }
+    }
+}
+
+/// What a number measures, which decides how Studio shows it and how fast it drags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberUnit {
+    /// Lengths and other measures with no unit of their own.
+    Studs,
+    /// Angles.
+    Degrees,
+    /// A 0-1 fraction.
+    Fraction,
+    /// A whole number.
+    Integer,
+}
+
+/// The control a property gets in the Studio Properties panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Widget {
+    /// Chosen from the value: checkbox, number field, text field, colour swatch, or a dropdown when
+    /// the property has `allowed`. A number with a 0-1 range shows as a fraction.
+    Auto,
+    /// A number slider between these values.
+    Slider {
+        /// The left end.
+        min: f64,
+        /// The right end.
+        max: f64,
+    },
+    /// Number fields that scrub on drag, in this unit (one field, or one per axis of a Vector3).
+    Drag(NumberUnit),
+    /// A text box several lines tall.
+    Multiline,
+    /// A text field holding an asset. Studio has no asset picker yet, so it looks like `Auto`.
+    Asset,
+    /// A dropdown of these values, for a String whose writes are not limited to them. A property
+    /// with `allowed` needs no widget: `Auto` already gives it a dropdown.
+    Enum(&'static [&'static str]),
+    /// A button that opens the text in the script editor.
+    Script,
+    /// A button that opens the style picker.
+    StylePicker,
+}
+
+/// When a property's row shows. It is checked against the same class's other properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisibleWhen {
+    /// This Bool property has this value.
+    Is(&'static str, bool),
+    /// This String property has one of these values.
+    OneOf(&'static str, &'static [&'static str]),
+}
+
+impl VisibleWhen {
+    /// The property the condition reads.
+    pub const fn property(&self) -> &'static str {
+        match *self {
+            VisibleWhen::Is(property, _) | VisibleWhen::OneOf(property, _) => property,
+        }
+    }
+
+    /// True when `value`, the current value of [`Self::property`], meets the condition. A missing
+    /// value or one of another type does not.
+    pub fn holds(&self, value: Option<&Value>) -> bool {
+        match (*self, value) {
+            (VisibleWhen::Is(_, want), Some(Value::Bool(have))) => want == *have,
+            (VisibleWhen::OneOf(_, values), Some(Value::String(have))) => {
+                values.contains(&have.as_str())
+            }
+            _ => false,
+        }
+    }
+}
+
+/// How the Studio Properties panel shows a property. Display only, so it is not part of
+/// `registry_hash` and two peers may differ in it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Editor {
+    /// The section its row goes in.
+    pub section: Section,
+    /// Lower comes first within the section; equal keeps declaration order, base class first.
+    pub order: u16,
+    /// Shown instead of the property name.
+    pub label: Option<&'static str>,
+    /// The control.
+    pub widget: Widget,
+    /// The row only shows while this holds.
+    pub visible_when: Option<VisibleWhen>,
+    /// Shown but not editable in Studio. Scripts are a separate matter: see [`PropDesc::readonly`].
+    pub readonly: bool,
+}
+
+impl Editor {
+    /// In [`Section::DATA`], named by the property, with the [`Widget::Auto`] control.
+    pub const fn new() -> Editor {
+        Editor::section(Section::DATA)
+    }
+
+    /// The same defaults, in this section.
+    pub const fn section(section: Section) -> Editor {
+        Editor {
+            section,
+            order: 0,
+            label: None,
+            widget: Widget::Auto,
+            visible_when: None,
+            readonly: false,
+        }
+    }
+
+    /// Places the row within its section.
+    pub const fn order(mut self, order: u16) -> Editor {
+        self.order = order;
+        self
+    }
+
+    /// Shows this instead of the property name.
+    pub const fn label(mut self, label: &'static str) -> Editor {
+        self.label = Some(label);
+        self
+    }
+
+    /// A slider between `min` and `max`.
+    pub const fn slider(mut self, min: f64, max: f64) -> Editor {
+        self.widget = Widget::Slider { min, max };
+        self
+    }
+
+    /// Number fields in this unit.
+    pub const fn drag(mut self, unit: NumberUnit) -> Editor {
+        self.widget = Widget::Drag(unit);
+        self
+    }
+
+    /// A text box several lines tall.
+    pub const fn multiline(mut self) -> Editor {
+        self.widget = Widget::Multiline;
+        self
+    }
+
+    /// An asset field.
+    pub const fn asset(mut self) -> Editor {
+        self.widget = Widget::Asset;
+        self
+    }
+
+    /// A dropdown of these values.
+    pub const fn enumerated(mut self, values: &'static [&'static str]) -> Editor {
+        self.widget = Widget::Enum(values);
+        self
+    }
+
+    /// A button that opens the script editor.
+    pub const fn script(mut self) -> Editor {
+        self.widget = Widget::Script;
+        self
+    }
+
+    /// A button that opens the style picker.
+    pub const fn style_picker(mut self) -> Editor {
+        self.widget = Widget::StylePicker;
+        self
+    }
+
+    /// Shows the row only while `condition` holds.
+    pub const fn visible_when(mut self, condition: VisibleWhen) -> Editor {
+        self.visible_when = Some(condition);
+        self
+    }
+
+    /// Shown but not editable in Studio.
+    pub const fn readonly(mut self) -> Editor {
+        self.readonly = true;
+        self
+    }
+}
+
+impl Default for Editor {
+    fn default() -> Editor {
+        Editor::new()
+    }
+}
+
+/// Whether and where the Studio Insert lists offer a [`ClassFlags::CREATABLE`] class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertEntry {
+    /// Offered. Lower comes first. A category sits where its lowest number puts it, so its classes
+    /// stay together. The default sorts last, by name.
+    Listed(u16),
+    /// `Instance.new` can make it, but the lists do not offer it.
+    Hidden,
+}
+
 /// Definition of one property of a class.
 #[derive(Clone, Copy)]
 pub struct PropDesc {
@@ -160,6 +378,8 @@ pub struct PropDesc {
     pub deprecated: Option<&'static str>,
     /// One or two sentences for tooltips and the reference. Not hashed.
     pub description: &'static str,
+    /// How the Studio Properties panel shows it. Not hashed.
+    pub editor: Editor,
 }
 
 impl PropDesc {
@@ -184,6 +404,7 @@ impl PropDesc {
             context: None,
             deprecated: None,
             description: "",
+            editor: Editor::new(),
         }
     }
 
@@ -257,6 +478,12 @@ impl PropDesc {
     /// Text for tooltips and the reference.
     pub const fn describe(mut self, description: &'static str) -> PropDesc {
         self.description = description;
+        self
+    }
+
+    /// How the Studio Properties panel shows it.
+    pub const fn editor(mut self, editor: Editor) -> PropDesc {
+        self.editor = editor;
         self
     }
 }
@@ -581,6 +808,11 @@ pub struct ClassDesc {
     pub flags: ClassFlags,
     /// Insert menu and docs grouping. Not hashed.
     pub category: &'static str,
+    /// Its place in the Studio Insert lists, when `CREATABLE`. Not hashed.
+    pub insert: InsertEntry,
+    /// Draw it with the icon of this class instead of working one out from its superclass. Not
+    /// hashed.
+    pub icon_like: Option<&'static str>,
     /// One or two sentences for tooltips and the reference. Not hashed.
     pub description: &'static str,
     /// The class that replaces this one, with [`ClassFlags::DEPRECATED`].
@@ -609,6 +841,8 @@ impl ClassDesc {
             superclass,
             flags: ClassFlags::NONE,
             category: "",
+            insert: InsertEntry::Listed(u16::MAX),
+            icon_like: None,
             description: "",
             deprecated_by: None,
             context: MemberContext::Any,
@@ -630,6 +864,24 @@ impl ClassDesc {
     /// Sets the docs and Insert menu grouping.
     pub const fn category(mut self, category: &'static str) -> ClassDesc {
         self.category = category;
+        self
+    }
+
+    /// Places it in the Studio Insert lists. See [`InsertEntry::Listed`].
+    pub const fn insert_order(mut self, order: u16) -> ClassDesc {
+        self.insert = InsertEntry::Listed(order);
+        self
+    }
+
+    /// Leaves it out of the Studio Insert lists; `Instance.new` can still make it.
+    pub const fn no_insert(mut self) -> ClassDesc {
+        self.insert = InsertEntry::Hidden;
+        self
+    }
+
+    /// Draws it with the icon of `class`.
+    pub const fn icon_like(mut self, class: &'static str) -> ClassDesc {
+        self.icon_like = Some(class);
         self
     }
 

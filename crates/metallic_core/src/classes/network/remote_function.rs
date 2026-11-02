@@ -4,4 +4,5 @@ use crate::classes::prelude::*;
 pub static CLASS: ClassDesc = ClassDesc::new("RemoteFunction", Some("Instance"))
     .flags(ClassFlags::CREATABLE)
     .category("Network")
+    .no_insert()
     .describe("Calls a function across the network and waits for its result.");

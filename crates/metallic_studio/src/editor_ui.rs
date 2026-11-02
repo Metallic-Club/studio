@@ -22,7 +22,7 @@ use eframe::egui_wgpu;
 
 use crate::actions::{ActionRegistry, ToolbarGroup, default_actions};
 use crate::context_bar::ContextBar;
-use crate::editor::{EditorState, Gesture, INSERTABLE, UiRequest};
+use crate::editor::{EditorState, Gesture, UiRequest, insertable, with_class_tooltip};
 use crate::editor_colour::ColourDock;
 use crate::editor_input_actions::InputActionsDock;
 use crate::editor_tools::{EditorTools, ViewContext};
@@ -732,9 +732,9 @@ impl EditorUi {
                         self.tools.mirror_axis_menu(ui);
                     });
                     ui.menu_button("Insert", |ui| {
-                        for &class in INSERTABLE {
-                            if theme::add_enabled(ui, !playing, egui::Button::new(class)).clicked()
-                            {
+                        for &class in insertable() {
+                            let button = theme::add_enabled(ui, !playing, egui::Button::new(class));
+                            if with_class_tooltip(button, class).clicked() {
                                 let parent = self
                                     .state
                                     .selection

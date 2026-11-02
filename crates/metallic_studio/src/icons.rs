@@ -7,7 +7,7 @@
 use std::f32::consts::{PI, TAU};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
-use metallic_core::classes::is_subclass;
+use metallic_core::classes::{class_def, is_subclass};
 
 /// A toolbar icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -718,11 +718,14 @@ impl ClassIcon {
     ];
 }
 
-/// The icon of `class`: by name, then by its nearest known superclass, else
-/// [`ClassIcon::Generic`]. `shape` is a part's `Shape` property ("Block", "Ball", "Cylinder",
-/// "Wedge"); it only changes the icon of plain parts.
+/// The icon of `class`: of the class its file names with `icon_like`, or else its own; by name,
+/// then by its nearest known superclass, else [`ClassIcon::Generic`]. `shape` is a part's `Shape`
+/// property ("Block", "Ball", "Cylinder", "Wedge"); it only changes the icon of plain parts.
 pub fn class_icon(class: &str, shape: Option<&str>) -> ClassIcon {
     use ClassIcon as C;
+    let class = class_def(class)
+        .and_then(|def| def.icon_like)
+        .unwrap_or(class);
     let by_name = match class {
         "Workspace" => Some(C::Workspace),
         "Folder" => Some(C::Folder),
@@ -757,13 +760,6 @@ pub fn class_icon(class: &str, shape: Option<&str>) -> ClassIcon {
         "InputContext" => Some(C::InputContext),
         "InputAction" => Some(C::InputAction),
         "InputBinding" => Some(C::InputBinding),
-        // Abstract classes have no instances to show; these keep every class drawable.
-        "PVInstance" => Some(C::Model),
-        "GuiBase2d" => Some(C::Gui),
-        "GuiObject" => Some(C::Frame),
-        "LuaSourceContainer" | "BaseScript" => Some(C::Script),
-        "BaseRemoteEvent" => Some(C::RemoteEvent),
-        "ServiceProvider" | "DataModel" => Some(C::Workspace),
         _ => None,
     };
     let icon = by_name.unwrap_or_else(|| {

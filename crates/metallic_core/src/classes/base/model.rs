@@ -5,12 +5,15 @@ use crate::classes::prelude::*;
 pub static CLASS: ClassDesc = ClassDesc::new("Model", Some("PVInstance"))
     .flags(ClassFlags::CREATABLE)
     .category("Base")
+    .insert_order(220)
     .describe("A group of parts that moves and scales as one, around one pivot.")
     .props(&[
-        PropDesc::new("PrimaryPart", ValueType::Ref, || Value::Ref(None)),
+        PropDesc::new("PrimaryPart", ValueType::Ref, || Value::Ref(None))
+            .describe("The part inside the model whose pivot is the model's pivot."),
         PropDesc::new("WorldPivot", ValueType::CFrame, || {
             Value::CFrame(Box::new(CFrame::IDENTITY))
-        }),
+        })
+        .describe("The point the model moves, turns and scales around."),
         // False until WorldPivot is first set: the pivot is then the bounding-box centre.
         PropDesc::new("WorldPivotSet", ValueType::Bool, || Value::Bool(false)).hidden(),
         // What `GetScale` returns; `ScaleTo` changes it.

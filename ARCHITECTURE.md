@@ -618,6 +618,32 @@ the golden hash on purpose (`cargo run -p metallic_core --example registry_hash`
 generated module tree, so run `rustfmt --edition 2024` on the new file; CI checks the folder. Design:
 `docs/design/class-system.md`.
 
+Studio reads the same file, so what it shows needs no Studio change. None of this is in `registry_hash`.
+- **Tooltips:** `.describe("...")` on the class and on every property a creator sees, in plain short sentences. A test
+  (`every_class_and_property_a_creator_sees_has_a_description`) asks for them.
+- **Insert lists** (Insert menu, Explorer right-click, Shift+A, Ctrl+K): a `CREATABLE` class is listed by `.category("...")`,
+  after the classes that set a number. `.insert_order(n)` places it: lower first, and a category sits where its lowest
+  number puts it. `.no_insert()` leaves it out while `Instance.new` can still make it.
+- **Icon:** by name in `class_icon`, else from the nearest known superclass. `.icon_like("Lighting")` borrows another
+  class's icon from the class file; `every_registry_class_has_its_own_icon` asks for it when neither gives one.
+- **Properties panel:** `.editor(...)` on a property, all optional. Without it, the row goes in Data, is named by the
+  property, and gets the control for its type (checkbox, number field, text field, colour swatch, or a dropdown with
+  `allowed`; a number with a 0-1 range shows as a fraction).
+  ```rust
+  PropDesc::new("Range", ValueType::Number, || Value::Number(16.0))
+      .editor(
+          Editor::section(Section::new("Beacon", 50)) // or Section::APPEARANCE, TRANSFORM, PHYSICS, BEHAVIOUR
+              .order(10)                              // within the section; equal keeps declaration order
+              .label("Reach")                         // shown instead of the name
+              .slider(0.0, 200.0)                     // or .drag(NumberUnit::Degrees), .multiline(), .asset(),
+                                                      // .enumerated(&["A", "B"]), .script(), .style_picker()
+              .visible_when(VisibleWhen::Is("Lit", true)) // or VisibleWhen::OneOf("Kind", &["A", "B"])
+              .readonly(),                            // shown but not editable in Studio
+      )
+      .describe("How far the beacon reaches, in studs.")
+  ```
+  A `visible_when` naming something that is not a property of the class fails resolution.
+
 ## How to write a method
 Methods are written once, in the class file, with no knowledge of any scripting language (`classes/call.rs`; design section
 5). **Nothing routes a script call here until #462, and existing methods move with #465-#467: a method declared today is not
@@ -655,7 +681,7 @@ MethodDesc::native("SetLit", set_lit)
 
 ## Where to add things
 - **A new Instance class or property:** one class file (see "How to add a class"), a test in `tests/tree.rs`; the Luau API
-  picks up registry properties by name; Studio's Properties panel too. Add to Insert menu if creators should create it.
+  picks up registry properties by name; Studio's Properties panel and Insert lists read the class file.
 - **A Luau API member:** `metallic_script/src/api/` (`instance.rs`, `datatypes.rs`, `services.rs`, `remote.rs`), a test
   in `tests/api.rs`, and a line in `docs/luau-api.md`.
 - **A material:** the material list in `classes/lists.rs`, its row in `metallic_render/src/materials.rs` (roughness, metalness,

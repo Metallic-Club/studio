@@ -1,7 +1,9 @@
 //! Properties: every registry property shared by the selected instances, in sections.
 //!
-//! Sections come in a fixed order: the class's own (Data), Appearance, Transform, Physics,
-//! Behaviour. Values that differ across a multi-selection show "Mixed". Number fields scrub on
+//! The class files decide what shows ([`metallic_core::classes::Editor`]): each property's section,
+//! label, control, visibility and whether it can be edited, and its tooltip. Sections sort by their
+//! own order: Data, Appearance, Transform, Physics, Behaviour, with any a class adds between
+//! them. Values that differ across a multi-selection show "Mixed". Number fields scrub on
 //! drag and accept expressions (`3*4`, `+2` adds to the current value, see [`crate::expr`]). Each
 //! shows by its kind (studs, degrees, 0-1 fraction, integer), right-aligned in the interface font
 //! ([`crate::widgets::number`]).
@@ -15,7 +17,7 @@
 use std::collections::HashMap;
 
 use eframe::egui::{self, RichText};
-use metallic_core::classes::{PropDef, all_properties, find_property};
+use metallic_core::classes::{NumberUnit, PropDef, Section, Widget, all_properties, find_property};
 use metallic_core::look_override;
 use metallic_core::{CFrame, InstanceId, UDim2, Value, Vec3};
 
@@ -32,16 +34,16 @@ const AXIS_WIDTH: f32 = 10.0;
 const PART_LABEL_WIDTH: f32 = 56.0;
 /// The narrowest a number field gets in a narrow panel.
 const MIN_FIELD_WIDTH: f32 = 36.0;
+/// How many lines a [`Widget::Multiline`] box shows.
+const MULTILINE_ROWS: usize = 3;
 
 /// How a Number property is shown (see [`crate::widgets::number`]).
 fn number_kind(p: &PropDef) -> NumberKind {
-    match p.name {
-        "ZIndex" | "DisplayOrder" | "Priority" | "UserId" | "PointerIndex" | "TouchOrder"
-        | "Order" | "TextSize" | "StarCount" => NumberKind::Integer,
-        "Orientation" | "GeographicLatitude" | "SunAngularSize" | "MoonAngularSize" => {
-            NumberKind::Degrees
-        }
-        name if name.ends_with("Transparency") => NumberKind::Fraction,
+    match p.editor.widget {
+        Widget::Drag(NumberUnit::Studs) => NumberKind::Studs,
+        Widget::Drag(NumberUnit::Degrees) => NumberKind::Degrees,
+        Widget::Drag(NumberUnit::Fraction) => NumberKind::Fraction,
+        Widget::Drag(NumberUnit::Integer) => NumberKind::Integer,
         _ => match p.range {
             Some(r) if r.min == 0.0 && r.max == 1.0 => NumberKind::Fraction,
             _ => NumberKind::Studs,
@@ -94,28 +96,44 @@ fn attribute_summary(value: &Value) -> String {
     }
 }
 
-/// Section of a property, in display order.
-fn section(prop: &str) -> usize {
-    match prop {
-        "Color"
-        | "Material"
-        | "Transparency"
-        | "Shape"
-        | "BackgroundColor3"
-        | "BackgroundTransparency"
-        | "TextColor3"
-        | "TextSize"
-        | "Text"
-        | "Visible"
-        | "LookOverride" => 1,
-        "Position" | "Orientation" | "Size" => 2,
-        "Anchored" | "CanCollide" => 3,
-        "Enabled" => 4,
-        _ => 0,
+/// `props` as the panel's sections, in display order. Rows sort by their order within a section;
+/// equal rows keep the order they came in, base class first.
+pub fn sections(props: &[&'static PropDef]) -> Vec<(Section, Vec<&'static PropDef>)> {
+    let mut sections: Vec<(Section, Vec<&'static PropDef>)> = Vec::new();
+    for &p in props {
+        match sections.iter_mut().find(|(s, _)| *s == p.editor.section) {
+            Some((_, rows)) => rows.push(p),
+            None => sections.push((p.editor.section, vec![p])),
+        }
+    }
+    sections.sort_by_key(|(s, _)| (s.order, s.name));
+    for (_, rows) in &mut sections {
+        rows.sort_by_key(|p| p.editor.order);
+    }
+    sections
+}
+
+/// The text of a property's row: its label, or its name when it has none.
+pub fn row_label(p: &PropDef) -> &'static str {
+    p.editor.label.unwrap_or(p.name)
+}
+
+/// A property's tooltip: the name scripts use, then what it does.
+fn row_tooltip(class: &str, p: &PropDef) -> String {
+    if p.description.is_empty() {
+        format!("{class}.{}", p.name)
+    } else {
+        format!("{class}.{}\n{}", p.name, p.description)
     }
 }
 
-const SECTION_NAMES: [&str; 5] = ["Data", "Appearance", "Transform", "Physics", "Behaviour"];
+/// True when `p`'s condition holds on every instance of `ids`, or it has none.
+fn row_visible(world: &metallic_core::World, ids: &[InstanceId], p: &PropDef) -> bool {
+    p.editor.visible_when.is_none_or(|when| {
+        ids.iter()
+            .all(|&id| when.holds(world.get_ref(id, when.property()).ok()))
+    })
+}
 
 /// Properties panel state.
 #[derive(Default)]
@@ -301,9 +319,10 @@ impl Properties {
                 format!("{} objects", ids.len())
             };
             ui.label(RichText::new(title).size(ui_tokens().title_size).strong());
-            ui.label(
+            let class_label = ui.label(
                 RichText::new(if ids.len() == 1 { class } else { "" }).color(ui_tokens().text_dim),
             );
+            crate::editor::with_class_tooltip(class_label, class);
         });
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
@@ -318,9 +337,13 @@ impl Properties {
             props.retain(|p| find_property(c, p.name).is_some());
         }
         // Engine bookkeeping (for example a Model's scale) is not shown.
-        props.retain(|p| !p.hidden);
+        props.retain(|p| !p.hidden && row_visible(&state.world, &ids, p));
         let filter = self.filter.to_lowercase();
-        props.retain(|p| filter.is_empty() || p.name.to_lowercase().contains(&filter));
+        props.retain(|p| {
+            filter.is_empty()
+                || p.name.to_lowercase().contains(&filter)
+                || row_label(p).to_lowercase().contains(&filter)
+        });
 
         let mut edits: Vec<Edit> = Vec::new();
         let mut attribute_edit: Option<Command> = None;
@@ -331,17 +354,9 @@ impl Properties {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (s, title) in SECTION_NAMES.iter().enumerate() {
-                    let in_section: Vec<&PropDef> = props
-                        .iter()
-                        .copied()
-                        .filter(|p| section(p.name) == s)
-                        .collect();
-                    if in_section.is_empty() {
-                        continue;
-                    }
+                for (section, in_section) in sections(&props) {
                     egui::CollapsingHeader::new(
-                        RichText::new(*title)
+                        RichText::new(section.name)
                             .font(crate::theme::fonts::strong())
                             .color(crate::theme::text_2()),
                     )
@@ -596,20 +611,13 @@ impl Properties {
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_min_size(egui::vec2(label_w, crate::theme::ROW_HEIGHT));
-                    // LookOverride shows as "Style" (building-tools spec 12.5).
-                    let shown = if p.name == look_override::PROPERTY {
-                        "Style"
-                    } else {
-                        p.name
-                    };
                     let label = ui.add(
-                        egui::Label::new(RichText::new(shown).color(crate::theme::text_2()))
+                        egui::Label::new(RichText::new(row_label(p)).color(crate::theme::text_2()))
                             .truncate(),
                     );
-                    label.on_hover_text(format!(
-                        "{}.{}",
+                    label.on_hover_text(row_tooltip(
                         state.world.class_name(active).unwrap_or(""),
-                        p.name
+                        p,
                     ));
                 },
             );
@@ -617,9 +625,14 @@ impl Properties {
                 ui.label(RichText::new("Mixed").color(ui_tokens().text_dim).italics());
             }
             let name = p.name.to_string();
+            // A dropdown offers the widget's list, or else the values the property allows.
+            let options = match p.editor.widget {
+                Widget::Enum(values) => Some(values),
+                _ => p.allowed,
+            };
             // While playing, values are read-only and drawn disabled.
-            ui.add_enabled_ui(!playing, |ui| {
-                match (&value, p.allowed) {
+            ui.add_enabled_ui(!playing && !p.editor.readonly, |ui| {
+                match (&value, options) {
                     (Value::Bool(b), _) => {
                         let mut v = *b;
                         if ui.checkbox(&mut v, "").changed() {
@@ -629,15 +642,23 @@ impl Properties {
                     (Value::Number(n), _) => {
                         let mut v = *n;
                         let cur = *n;
+                        // A slider goes in front of the same field, which shows the exact value.
+                        let slid = match p.editor.widget {
+                            Widget::Slider { min, max } => {
+                                let slider = egui::Slider::new(&mut v, min..=max).show_value(false);
+                                ui.add(slider).changed()
+                            }
+                            _ => false,
+                        };
                         let w = field_width(ui, 1, false);
                         let r = number::field(ui, &mut v, number_kind(p), w, move |s| {
                             eval_relative(s, cur)
                         });
-                        if r.changed() {
+                        if slid || r.changed() {
                             edits.push(Edit::Set(name, Value::Number(v)));
                         }
                     }
-                    (Value::String(s), _) if p.name == look_override::PROPERTY => {
+                    (Value::String(s), _) if p.editor.widget == Widget::StylePicker => {
                         // "Inherit · Realistic" or the style; a click opens the style picker.
                         let text = style_row_text(state, active, s);
                         if ui
@@ -661,7 +682,7 @@ impl Properties {
                             edits.push(Edit::Set(name, Value::String(chosen)));
                         }
                     }
-                    (Value::String(s), None) if p.name == "Source" => {
+                    (Value::String(s), None) if p.editor.widget == Widget::Script => {
                         let lines = s.lines().count();
                         if ui.button(format!("Edit script ({lines} lines)")).clicked() {
                             state.request(UiRequest::OpenScript(active));
@@ -669,8 +690,12 @@ impl Properties {
                     }
                     (Value::String(s), None) => {
                         let buf = self.text.entry(name.clone()).or_insert_with(|| s.clone());
-                        let r =
-                            ui.add(egui::TextEdit::singleline(buf).desired_width(f32::INFINITY));
+                        let edit = if p.editor.widget == Widget::Multiline {
+                            egui::TextEdit::multiline(buf).desired_rows(MULTILINE_ROWS)
+                        } else {
+                            egui::TextEdit::singleline(buf)
+                        };
+                        let r = ui.add(edit.desired_width(f32::INFINITY));
                         if r.lost_focus() {
                             if buf != s {
                                 edits.push(Edit::Set(name.clone(), Value::String(buf.clone())));
@@ -682,11 +707,7 @@ impl Properties {
                     }
                     (Value::Vector3(v), _) => {
                         let comps = [v.x, v.y, v.z];
-                        let kind = if p.name == "Orientation" {
-                            NumberKind::Degrees
-                        } else {
-                            NumberKind::Studs
-                        };
+                        let kind = number_kind(p);
                         let w = field_width(ui, 3, true);
                         for (axis, &c) in comps.iter().enumerate() {
                             axis_letter(ui, axis);
@@ -997,9 +1018,242 @@ mod tests {
 
     #[test]
     fn sections_keep_transform_together() {
+        let section = |prop: &str| find_property("Part", prop).unwrap().editor.section;
         assert_eq!(section("Position"), section("Size"));
-        assert_eq!(SECTION_NAMES[section("Anchored")], "Physics");
-        assert_eq!(SECTION_NAMES[section("Name")], "Data");
+        assert_eq!(section("Anchored").name, "Physics");
+        assert_eq!(section("Name").name, "Data");
+    }
+
+    /// The rows of `class` as the panel lists them, as (section, row text) pairs.
+    fn panel_rows(class: &str) -> Vec<(&'static str, &'static str)> {
+        let mut props = all_properties(class);
+        props.retain(|p| !p.hidden);
+        sections(&props)
+            .into_iter()
+            .flat_map(|(s, rows)| rows.into_iter().map(move |p| (s.name, row_label(p))))
+            .collect()
+    }
+
+    #[test]
+    fn part_model_script_and_gui_rows_keep_their_places() {
+        assert_eq!(
+            panel_rows("Part"),
+            [
+                ("Data", "Name"),
+                ("Data", "PivotOffset"),
+                ("Appearance", "Color"),
+                ("Appearance", "Material"),
+                ("Appearance", "Transparency"),
+                ("Appearance", "Shape"),
+                ("Appearance", "Style"),
+                ("Transform", "Position"),
+                ("Transform", "Orientation"),
+                ("Transform", "Size"),
+                ("Physics", "Anchored"),
+                ("Physics", "CanCollide"),
+            ]
+        );
+        assert_eq!(
+            panel_rows("Model"),
+            [
+                ("Data", "Name"),
+                ("Data", "PrimaryPart"),
+                ("Data", "WorldPivot"),
+                ("Appearance", "Style"),
+            ]
+        );
+        assert_eq!(
+            panel_rows("Script"),
+            [
+                ("Data", "Name"),
+                ("Data", "Source"),
+                ("Behaviour", "Enabled"),
+            ]
+        );
+        assert_eq!(
+            panel_rows("TextLabel"),
+            [
+                ("Data", "Name"),
+                ("Data", "ZIndex"),
+                ("Data", "Active"),
+                ("Data", "ClipsDescendants"),
+                ("Appearance", "BackgroundColor3"),
+                ("Appearance", "BackgroundTransparency"),
+                ("Appearance", "Visible"),
+                ("Appearance", "Text"),
+                ("Appearance", "TextColor3"),
+                ("Appearance", "TextSize"),
+                ("Transform", "Position"),
+                ("Transform", "Size"),
+            ]
+        );
+    }
+
+    /// The issue's acceptance: one class, in one descriptor, is all Insert and Properties need.
+    #[test]
+    fn a_new_class_shows_in_insert_and_properties_from_its_descriptor_alone() {
+        use metallic_core::ValueType;
+        use metallic_core::classes::{ClassDesc, ClassFlags, Editor, PropDesc, resolve};
+        static ROOT: ClassDesc = ClassDesc::new("Root", None)
+            .flags(ClassFlags::ABSTRACT)
+            .props(&[PropDesc::new("Name", ValueType::String, || {
+                Value::String(String::new())
+            })]);
+        static BEACON: ClassDesc = ClassDesc::new("Beacon", Some("Root"))
+            .flags(ClassFlags::CREATABLE)
+            .category("Effects")
+            .describe("A light that flashes.")
+            .props(&[
+                PropDesc::new("Range", ValueType::Number, || Value::Number(16.0))
+                    .editor(
+                        Editor::section(Section::new("Beacon", 50))
+                            .label("Reach")
+                            .slider(0.0, 200.0),
+                    )
+                    .describe("How far the light reaches, in studs."),
+            ]);
+        // No editor metadata and no insert order: everything has a default.
+        static PLAIN: ClassDesc = ClassDesc::new("Plain", Some("Root"))
+            .flags(ClassFlags::CREATABLE)
+            .props(&[PropDesc::new("Lit", ValueType::Bool, || Value::Bool(false))]);
+        static SECRET: ClassDesc = ClassDesc::new("Secret", Some("Root"))
+            .flags(ClassFlags::CREATABLE)
+            .no_insert();
+        let registry = resolve(&[&ROOT, &BEACON, &PLAIN, &SECRET]).unwrap();
+
+        let offered: Vec<&str> = registry.insertable().iter().map(|c| c.name).collect();
+        assert_eq!(offered, ["Plain", "Beacon"]);
+
+        let beacon = registry.class_by_name("Beacon").unwrap();
+        let shown = sections(&beacon.props);
+        let names: Vec<&str> = shown.iter().map(|(s, _)| s.name).collect();
+        assert_eq!(
+            names,
+            ["Data", "Beacon"],
+            "ordered by the section's own order"
+        );
+        let range = shown[1].1[0];
+        assert_eq!(row_label(range), "Reach");
+        assert_eq!(
+            row_tooltip("Beacon", range),
+            "Beacon.Range\nHow far the light reaches, in studs."
+        );
+        assert!(matches!(range.editor.widget, Widget::Slider { .. }));
+
+        let plain = registry.class_by_name("Plain").unwrap();
+        let lit = sections(&plain.props)[0].1[1];
+        assert_eq!(row_label(lit), "Lit");
+        assert_eq!(row_tooltip("Plain", lit), "Plain.Lit");
+    }
+
+    /// Controls no built-in class uses yet: a stand-in descriptor over a real property of a Part.
+    #[test]
+    fn slider_multiline_dropdown_and_readonly_draw_their_controls() {
+        use egui::accesskit::Role;
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use metallic_core::classes::{Editor, PropDesc};
+        use metallic_core::{ValueType, World};
+        static SLIDER: PropDesc = PropDesc::new("Transparency", ValueType::Number, || Value::Nil)
+            .editor(Editor::new().slider(0.0, 1.0));
+        static MULTILINE: PropDesc = PropDesc::new("Name", ValueType::String, || Value::Nil)
+            .editor(Editor::new().multiline());
+        static DROPDOWN: PropDesc = PropDesc::new("Name", ValueType::String, || Value::Nil)
+            .editor(Editor::new().enumerated(&["Part", "Other"]));
+        static READONLY: PropDesc = PropDesc::new("Transparency", ValueType::Number, || Value::Nil)
+            .editor(Editor::new().readonly());
+
+        fn draw(p: &'static PropDef) -> Harness<'static, (Properties, EditorState, InstanceId)> {
+            let mut world = World::new_with_services();
+            let ws = world.root("Workspace").unwrap();
+            let part = world.create("Part", Some(ws)).unwrap();
+            let output = crate::output::OutputPanel::new();
+            let state = EditorState::new(
+                world,
+                std::path::Path::new("."),
+                std::path::Path::new("unused.mscene"),
+                "Test",
+                output.log.sink(),
+            );
+            let mut themed = false;
+            // Number fields have no accessible name yet, and this harness draws one on its first
+            // run, where the check runs (the editor's harnesses draw no field until later).
+            let builder = Harness::builder().with_accessibility_check(false);
+            let mut h = builder.build_ui_state(
+                move |ui, (panel, state, part): &mut (Properties, EditorState, InstanceId)| {
+                    if !themed {
+                        crate::theme::apply(ui.ctx(), crate::theme::ThemeId::Graphite);
+                        themed = true;
+                        ui.ctx().request_repaint();
+                        return;
+                    }
+                    let ids = [*part];
+                    panel.row(ui, state, &ids, *part, p, &mut Vec::new());
+                },
+                (Properties::new(), state, part),
+            );
+            h.run_steps(3);
+            h
+        }
+
+        assert!(draw(&SLIDER).query_by_role(Role::Slider).is_some());
+        assert!(
+            draw(&MULTILINE)
+                .query_by_role(Role::MultilineTextInput)
+                .is_some()
+        );
+        assert!(draw(&DROPDOWN).query_by_role(Role::ComboBox).is_some());
+        let readonly = draw(&READONLY);
+        assert!(
+            readonly
+                .get_by_role(Role::SpinButton)
+                .accesskit_node()
+                .is_disabled()
+        );
+        let editable = draw(find_property("Part", "Transparency").unwrap());
+        assert!(
+            !editable
+                .get_by_role(Role::SpinButton)
+                .accesskit_node()
+                .is_disabled()
+        );
+    }
+
+    #[test]
+    fn rows_sort_by_order_then_keep_their_declaration_order() {
+        use metallic_core::ValueType;
+        use metallic_core::classes::{Editor, PropDesc};
+        static PROPS: [PropDesc; 3] = [
+            PropDesc::new("A", ValueType::Bool, || Value::Bool(false))
+                .editor(Editor::new().order(2)),
+            PropDesc::new("B", ValueType::Bool, || Value::Bool(false))
+                .editor(Editor::new().order(1)),
+            PropDesc::new("C", ValueType::Bool, || Value::Bool(false))
+                .editor(Editor::new().order(2)),
+        ];
+        let props: Vec<&'static PropDef> = PROPS.iter().collect();
+        let rows: Vec<&str> = sections(&props)[0].1.iter().map(|p| p.name).collect();
+        assert_eq!(rows, ["B", "A", "C"]);
+    }
+
+    #[test]
+    fn a_row_shows_only_while_its_condition_holds_on_every_selected_instance() {
+        use metallic_core::classes::{Editor, PropDesc, VisibleWhen};
+        use metallic_core::{ValueType, World};
+        let conditional = PropDesc::new("Size", ValueType::Vector3, || Value::Nil)
+            .editor(Editor::new().visible_when(VisibleWhen::OneOf("Shape", &["Ball", "Cylinder"])));
+        let mut world = World::new_with_services();
+        let ws = world.root("Workspace").unwrap();
+        let block = world.create("Part", Some(ws)).unwrap();
+        let ball = world.create("Part", Some(ws)).unwrap();
+        world
+            .set(ball, "Shape", Value::String("Ball".into()))
+            .unwrap();
+        assert!(row_visible(&world, &[ball], &conditional));
+        assert!(!row_visible(&world, &[block], &conditional));
+        assert!(!row_visible(&world, &[ball, block], &conditional));
+        let plain = PropDesc::new("Size", ValueType::Vector3, || Value::Nil);
+        assert!(row_visible(&world, &[block], &plain));
     }
 
     #[test]
