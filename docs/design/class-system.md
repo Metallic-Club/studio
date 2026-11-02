@@ -146,7 +146,7 @@ before children, as today.
 | `aliases` | new | Old names that still resolve to this member (same `MemberId`). |
 | `enum_type` | new | For enum-typed properties (section 9). |
 | `script_write` | new | A filter every language binding applies before `World::set` (today only `BasePart.Size` clamping). Not applied by scene load, so behaviour stays as today. |
-| `editor` | new | `group`, `order`, `label`, `widget` (auto, slider, drag, multiline, asset, enum), `visible_when`. For #473. |
+| `editor` | new | `section`, `order`, `label`, `widget` (auto, slider, drag, multiline, asset, enum, script, style picker), `visible_when`, `readonly` (in Studio; scripts are the field above). For #473. |
 | `context`, `deprecated`, `description` | new | Sections 8 and 12. |
 
 **Methods** (`MethodDesc`):
@@ -618,7 +618,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("Beacon", Some("Part"))
     .props(&[
         PropDesc::number("Range", 16.0)
             .range(0.0, 1000.0)
-            .editor(Editor::group("Beacon").order(10).slider(0.0, 200.0))
+            .editor(Editor::section(Section::new("Beacon", 50)).order(10).slider(0.0, 200.0))
             .describe("How far the glow reaches, in studs."),
         PropDesc::boolean("Lit", true).describe("Whether the beacon glows."),
         PropDesc::computed("Glow", Ty::Number, glow)

@@ -25,6 +25,10 @@
 //! [`enums`](ClassDesc::enums) and declare the property with `enumerated(name, default, &ENUM)`.
 //! An enum no one class owns goes in `src/classes/enums/<name>.rs` with a `pub static ENUMS`. The
 //! property stays a String holding the item name, and `Enum.<name>` appears in Luau.
+//!
+//! Studio reads this registry too: [`Registry::insertable`] is its Insert lists and
+//! [`PropDesc::editor`] says how the Properties panel shows a property. Neither is in
+//! `registry_hash`.
 use crate::value::Value;
 use std::sync::LazyLock;
 
@@ -41,9 +45,9 @@ pub use call::{
     check_arguments, conforms,
 };
 pub use desc::{
-    ArgCheck, CallbackDesc, ClassDesc, ClassFlags, DefaultOverride, EnumDesc, FunctionSig,
-    MemberContext, MethodDesc, MethodImpl, NumRange, Param, PropAccess, PropDesc, Repl, SignalDesc,
-    Ty,
+    ArgCheck, CallbackDesc, ClassDesc, ClassFlags, DefaultOverride, Editor, EnumDesc, FunctionSig,
+    InsertEntry, MemberContext, MethodDesc, MethodImpl, NumRange, NumberUnit, Param, PropAccess,
+    PropDesc, Repl, Section, SignalDesc, Ty, VisibleWhen, Widget,
 };
 pub use host_api::{
     Handle, HostApi, HostCall, HostMethodError, HostMethodFn, HostMethods, MethodDispatch,

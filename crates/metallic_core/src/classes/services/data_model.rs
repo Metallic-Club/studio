@@ -4,5 +4,6 @@ use crate::classes::prelude::*;
 pub static CLASS: ClassDesc = ClassDesc::new("DataModel", Some("ServiceProvider"))
     .flags(ClassFlags::ABSTRACT)
     .category("Services")
+    .icon_like("Workspace")
     // `game` stays a host object for now (design section 17), so no instance of this class exists.
     .describe("The root of a game: what `game` is.");

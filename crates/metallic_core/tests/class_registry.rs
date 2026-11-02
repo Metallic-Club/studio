@@ -1,8 +1,9 @@
 //! The class registry's rules: discovery, resolution checks, ids, flags, and that the migration
 //! from `classes.rs` (#460) changed no answer. Fixture class sets go through the public `resolve`.
 use metallic_core::classes::{
-    self, ClassDesc, ClassFlags, ClassId, MemberContext, MemberId, MemberKind, MethodDesc, Param,
-    PropDesc, PropertyIndex, Registry, ResolvedClass, SchemaError, SignalDesc, Ty, registry,
+    self, ClassDesc, ClassFlags, ClassId, Editor, MemberContext, MemberId, MemberKind, MethodDesc,
+    Param, PropDesc, PropertyIndex, Registry, ResolvedClass, SchemaError, Section, SignalDesc, Ty,
+    VisibleWhen, registry,
 };
 use metallic_core::{CoreError, Value, ValueType, World, load_scene};
 
@@ -804,4 +805,130 @@ fn ids_are_positions_in_name_order_and_decl_ids_are_dense() {
     }
     decls.sort_unstable();
     assert_eq!(decls, [0, 1, 2, 3]);
+}
+
+// ---- What Studio reads (#473) ------------------------------------------------------------------
+
+#[test]
+fn every_class_and_property_a_creator_sees_has_a_description() {
+    for class in registry().classes() {
+        assert!(
+            !class.desc.description.is_empty(),
+            "class {} has no describe(...)",
+            class.name()
+        );
+        for prop in class.props.iter().filter(|prop| !prop.hidden) {
+            assert!(
+                !prop.description.is_empty(),
+                "{}.{} has no describe(...): Studio shows it as a tooltip",
+                class.name(),
+                prop.name
+            );
+        }
+    }
+}
+
+#[test]
+fn insert_lists_hold_listed_creatable_classes_with_each_category_together() {
+    const FLAGS: ClassFlags = ClassFlags::CREATABLE;
+    static ROOT: ClassDesc = ClassDesc::new("Root", None).flags(ClassFlags::ABSTRACT);
+    static SECOND: ClassDesc = ClassDesc::new("A", Some("Root"))
+        .flags(FLAGS)
+        .category("Second")
+        .insert_order(20);
+    static FIRST: ClassDesc = ClassDesc::new("B", Some("Root"))
+        .flags(FLAGS)
+        .category("First")
+        .insert_order(10);
+    // Late in its category's order, but its category comes first.
+    static FIRST_LATE: ClassDesc = ClassDesc::new("C", Some("Root"))
+        .flags(FLAGS)
+        .category("First")
+        .insert_order(30);
+    // No order: last in its category, and a new category goes after the ordered ones.
+    static SECOND_NEW: ClassDesc = ClassDesc::new("D", Some("Root"))
+        .flags(FLAGS)
+        .category("Second");
+    static OTHER_NEW: ClassDesc = ClassDesc::new("E", Some("Root"))
+        .flags(FLAGS)
+        .category("Third");
+    static OTHER_NEW_TOO: ClassDesc = ClassDesc::new("F", Some("Root"))
+        .flags(FLAGS)
+        .category("Third");
+    static HIDDEN: ClassDesc = ClassDesc::new("G", Some("Root"))
+        .flags(FLAGS)
+        .category("First")
+        .no_insert();
+    static NOT_CREATABLE: ClassDesc = ClassDesc::new("H", Some("Root"))
+        .category("First")
+        .insert_order(1);
+    let registry = resolved(&[
+        &ROOT,
+        &SECOND,
+        &FIRST,
+        &FIRST_LATE,
+        &SECOND_NEW,
+        &OTHER_NEW,
+        &OTHER_NEW_TOO,
+        &HIDDEN,
+        &NOT_CREATABLE,
+    ]);
+    let names: Vec<&str> = registry
+        .insertable()
+        .iter()
+        .map(|class| class.name)
+        .collect();
+    assert_eq!(names, ["B", "C", "A", "D", "E", "F"]);
+}
+
+#[test]
+fn visible_when_reads_a_property_of_the_class() {
+    const NAMED: Editor = Editor::new().visible_when(VisibleWhen::Is("P", true));
+    static INHERITED: ClassDesc =
+        ClassDesc::new("Sub", Some("Base"))
+            .props(&[PropDesc::new("Q", ValueType::Bool, || Value::Bool(false)).editor(NAMED)]);
+    resolved(&[&BASE, &INHERITED]);
+    static TYPO: ClassDesc =
+        ClassDesc::new("Sub", Some("Base"))
+            .props(&[PropDesc::new("Q", ValueType::Bool, || Value::Bool(false))
+                .editor(Editor::new().visible_when(VisibleWhen::Is("Nope", true)))]);
+    assert_eq!(
+        error(&[&BASE, &TYPO]),
+        SchemaError::VisibleWhenWithoutProperty {
+            class: "Sub",
+            property: "Q",
+            reads: "Nope",
+        }
+    );
+}
+
+#[test]
+fn visible_when_holds_only_for_the_values_it_names() {
+    let on = VisibleWhen::Is("Lit", true);
+    assert_eq!(on.property(), "Lit");
+    assert!(on.holds(Some(&Value::Bool(true))));
+    assert!(!on.holds(Some(&Value::Bool(false))));
+    assert!(!on.holds(Some(&Value::Number(1.0))), "another type");
+    assert!(!on.holds(None), "no value");
+    let kinds = VisibleWhen::OneOf("Kind", &["Ball", "Cylinder"]);
+    assert!(kinds.holds(Some(&Value::String("Ball".into()))));
+    assert!(!kinds.holds(Some(&Value::String("Block".into()))));
+    assert!(!kinds.holds(Some(&Value::Bool(true))));
+}
+
+#[test]
+fn defaults_and_hide_keep_a_property_s_editor_metadata() {
+    const SHOWN: Editor = Editor::section(Section::PHYSICS).label("Shown");
+    static PARENT: ClassDesc =
+        ClassDesc::new("Parent", None).props(&[PropDesc::new("P", ValueType::Bool, || {
+            Value::Bool(false)
+        })
+        .editor(SHOWN)
+        .describe("Text.")]);
+    static CHANGED: ClassDesc =
+        ClassDesc::new("Changed", Some("Parent")).defaults(&[("P", || Value::Bool(true))]);
+    let registry = resolved(&[&PARENT, &CHANGED]);
+    let (prop, _) = class(&registry, "Changed").property("P").unwrap();
+    assert_eq!(prop.editor, SHOWN);
+    assert_eq!(prop.description, "Text.");
 }

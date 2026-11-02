@@ -20,13 +20,17 @@ const TONEMAPPER_PRESET: EnumDesc = EnumDesc::new(
 pub static CLASS: ClassDesc = ClassDesc::new("ColorGradingEffect", Some("Instance"))
     .flags(ClassFlags::CREATABLE)
     .category("Lighting")
+    .no_insert()
     .describe("Chooses the tone curve of the final image.")
     .enums(&[TONEMAPPER_PRESET])
     .props(&[
-        PropDesc::new("Enabled", ValueType::Bool, || Value::Bool(true)),
+        PropDesc::new("Enabled", ValueType::Bool, || Value::Bool(true))
+            .editor(Editor::section(Section::BEHAVIOUR))
+            .describe("Whether the effect is on."),
         enumerated(
             "TonemapperPreset",
             || Value::String("Default".into()),
             &TONEMAPPER_PRESET,
-        ),
+        )
+        .describe("The tone curve that turns the scene's light into screen colours."),
     ]);
