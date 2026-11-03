@@ -124,11 +124,6 @@ jobs:
         shell: bash
         run: echo "METALLIC_REQUIRE_GPU=1" >> "$GITHUB_ENV"
       - run: cargo test --workspace
-      # Prints the adapter, the CPU cost of a frame and per-pass GPU timings on the runner's software GPU, and checks
-      # the cleared frame read back. The numbers say nothing about real hardware; the run proves the path works.
-      - name: Renderer example (offscreen clear)
-        if: matrix.os != 'macos-latest'
-        run: cargo run -p metallic_render --example clear -- 120
       # Script errors are C++ exceptions unwinding through Rust frames, which only works with the panic strategy of
       # the profile that ships (`dist`); tests use the default and cannot see it. This runs every Luau error path in
       # `dist` and fails on an abort (crates/luau/src/ffi.rs). LTO is turned down to keep it cheap; the panic

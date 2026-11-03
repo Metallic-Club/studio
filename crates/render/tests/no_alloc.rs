@@ -176,17 +176,36 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
     let mut ours = Vec::with_capacity(FRAMES);
     let mut floor = Vec::with_capacity(FRAMES);
     for frame in 0..WARM_UP + FRAMES {
-        let (count, submission) = allocations_in(|| renderer.render(target.view()));
-        pacer.submitted(device, submission);
-        let (floor_count, submission) = allocations_in(|| hand_written_frame(device, queue, target.view(), &depth));
-        pacer.submitted(device, submission);
-        if frame >= WARM_UP {
-            ours.push(count);
-            floor.push(floor_count);
+        // Alternate which goes first: wgpu frees finished submissions (and allocates while doing so) inside whichever
+        // call comes after a wait, so a fixed order would charge that to one side.
+        for renderer_turn in [frame % 2 == 0, frame % 2 != 0] {
+            if renderer_turn {
+                let (count, submission) = allocations_in(|| renderer.render(target.view()));
+                pacer.submitted(device, submission);
+                if frame >= WARM_UP {
+                    ours.push(count);
+                }
+            } else {
+                let (count, submission) = allocations_in(|| hand_written_frame(device, queue, target.view(), &depth));
+                pacer.submitted(device, submission);
+                if frame >= WARM_UP {
+                    floor.push(count);
+                }
+            }
         }
     }
-    let (ours, floor) = (median(ours), median(floor));
-    eprintln!("allocations per frame (median of {FRAMES}): renderer {ours}, the same wgpu calls by hand {floor}");
+    eprintln!(
+        "allocations per frame over {FRAMES} frames: renderer {}..{} (median {}), the same wgpu calls by hand {}..{} \
+         (median {})",
+        ours.iter().min().unwrap(),
+        ours.iter().max().unwrap(),
+        median(ours.clone()),
+        floor.iter().min().unwrap(),
+        floor.iter().max().unwrap(),
+        median(floor.clone())
+    );
+    // The minimum is a frame with no maintenance by wgpu in it: exactly the recording cost.
+    let (ours, floor) = (*ours.iter().min().unwrap(), *floor.iter().min().unwrap());
     assert!(
         ours <= floor,
         "the renderer adds {} allocation(s) per frame",
