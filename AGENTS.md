@@ -36,7 +36,8 @@ The decisions behind the layout are in [`docs/adr/`](docs/adr/), and the map is 
    from the dump plus the hand-written `xtask/src/api/luau_prelude.d.luau`, which follows `crates/luau`'s data types
    and globals). CI fails when either is stale, and type-checks `api/samples/` against the definitions with luau-lsp.
    CI also runs `cargo check --workspace --exclude metallic_studio --exclude xtask --target <t>` for
-   `aarch64-linux-android` and `aarch64-apple-ios` (after `rustup target add <t>`), and macOS tests on `main`.
+   `aarch64-linux-android` on every PR, and macOS tests plus `aarch64-apple-ios` weekly and on manual dispatch
+   (`gh workflow run ci.yml -R Metallic-Club/studio`): macOS minutes cost 10x. Docs-only changes skip CI.
    PRs that touch `crates/` also run the **perf gate** (`.github/workflows/perf.yml`): it fails when a
    `metallic_core` hot path executes more than 5% more instructions than on the base. It needs Linux and Valgrind;
    see [`docs/perf.md`](docs/perf.md) to run it locally or add a workload.

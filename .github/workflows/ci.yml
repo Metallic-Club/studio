@@ -1,14 +1,21 @@
 # Checks every PR and every push to main. The same commands run locally; see AGENTS.md ("Check").
 #
-# Actions minutes are limited (free plan; Windows counts 2x, macOS 10x), so PRs run Linux and Windows only and
-# macOS tests run on pushes to main. Caches are saved from main only and restored by PRs.
+# Actions minutes are limited (free plan; Windows counts 2x, macOS 10x). PRs and pushes to main run Linux and
+# Windows. macOS (tests and the iOS check) runs weekly and on manual dispatch only: on every main push it cost about
+# a quarter of all billed minutes. Docs-only changes skip CI. Caches are saved from main only and restored by PRs.
 
 name: CI
 
 on:
   pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+  # macOS tests and the iOS check (see the header). The conductor also dispatches it before closing a milestone.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -95,9 +102,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS only on pushes to main: a macOS minute costs ten Linux minutes.
+        # macOS only on the weekly or dispatched run: a macOS minute costs ten Linux minutes.
         os: >-
-          ${{ github.event_name == 'push'
+          ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
               && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]')
               || fromJSON('["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
@@ -112,7 +119,7 @@ jobs:
       # The renderer's GPU tests (crates/render/tests) need an adapter, and runners have no GPU. Linux gets Mesa's
       # software rasterisers: lavapipe (Vulkan, the primary path) and llvmpipe through EGL (the GL fallback). Windows
       # has WARP, Direct3D 12's built-in software adapter. METALLIC_REQUIRE_GPU makes a missing adapter fail the
-      # tests instead of skipping them, so the renderer is really tested here. (macOS, on main only, skips without
+      # tests instead of skipping them, so the renderer is really tested here. (macOS, weekly only, skips without
       # one.)
       - name: Software GPU (Mesa lavapipe and llvmpipe)
         if: matrix.os == 'ubuntu-latest'
@@ -171,11 +178,12 @@ jobs:
           export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
           cargo check --workspace --exclude metallic_studio --exclude xtask --target aarch64-linux-android
 
-  # iOS needs Xcode's SDK, which only macOS runners have, and a macOS minute costs ten Linux minutes, so it runs on
-  # pushes to main only (like the macOS tests). A PR that breaks the iOS build is caught on main, one merge later.
+  # iOS needs the SDK that ships with Xcode, which only macOS runners have, and a macOS minute costs ten Linux
+  # minutes, so it runs weekly and on dispatch only (like the macOS tests). Android, checked on every PR, catches
+  # most portability breaks.
   cross-check-ios:
     name: Cross-target check (iOS)
-    if: github.event_name == 'push'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
