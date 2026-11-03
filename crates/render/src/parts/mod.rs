@@ -85,7 +85,9 @@ use metallic_core::glam::Vec3;
 use crate::cull::CullSettings;
 use crate::depth::{DEPTH_COMPARE, DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, depth_stencil_state};
 use crate::lighting::{ResolvedLighting, SceneLighting};
-use crate::lights::{FrameLights, LightSettings, LightStats, LocalLights, MAX_GPU_LIGHTS, MAX_SHADOW_TILES};
+use crate::lights::{
+    FrameLights, LightBindings, LightSettings, LightStats, LocalLights, MAX_GPU_LIGHTS, MAX_SHADOW_TILES,
+};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
 use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, ShadowStats};
 use crate::{GpuScene, PassId};
@@ -365,9 +367,12 @@ pub struct PartRenderer {
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds, so an unchanged frame skips the write.
     frame_uniforms: Option<FrameUniforms>,
-    /// The frame group of frames with local lights: the sun's and the lights' resources.
+    /// The frame group of frames with local lights: the sun's and the lights' resources. `None` until the first
+    /// frame that draws a light (their buffers do not exist before).
     frame_layout: wgpu::BindGroupLayout,
-    frame_group: wgpu::BindGroup,
+    frame_group: Option<wgpu::BindGroup>,
+    /// What the local lights' resources were when `frame_group` was made ([`LocalLights::revision`]).
+    frame_group_lights: (bool, u64),
     /// The frame group of the sky and of frames without local lights: the frame uniform, the materials and the
     /// sun's shadows alone.
     sun_layout: wgpu::BindGroupLayout,
@@ -569,15 +574,8 @@ impl PartRenderer {
             instance_layout.as_ref(),
             LightSettings::default(),
         );
-        let frame_group = frame_group(
-            device,
-            &frame_layout,
-            &frame_buffer,
-            &materials,
-            &shadows,
-            Some(&lights),
-        );
         let sun_group = frame_group_without_lights(device, &sun_layout, &frame_buffer, &materials, &shadows);
+        let frame_group_lights = lights.revision();
         let pipelines = create_pipelines(device, &shaders, binding, format, samples);
         let lighting = SceneLighting::default();
         Self {
@@ -591,7 +589,8 @@ impl PartRenderer {
             frame_buffer,
             frame_uniforms: None,
             frame_layout,
-            frame_group,
+            frame_group: None,
+            frame_group_lights,
             sun_layout,
             sun_group,
             instance_layout,
@@ -680,9 +679,8 @@ impl PartRenderer {
     /// Changes how local lights are drawn (a settings change: a new atlas size makes the atlas again, and every
     /// tile is drawn again).
     pub(crate) fn set_lights(&mut self, settings: LightSettings) {
-        if self.lights.configure(settings) {
-            self.rebuild_frame_group();
-        }
+        self.lights.configure(settings);
+        self.refresh_light_group();
     }
 
     /// Advances the local lights' fades by `step` seconds a frame instead of the wall time between frames.
@@ -690,15 +688,10 @@ impl PartRenderer {
         self.lights.set_fixed_step(step);
     }
 
+    /// Makes both frame groups again (the shadow maps were replaced).
     fn rebuild_frame_group(&mut self) {
-        self.frame_group = frame_group(
-            &self.device,
-            &self.frame_layout,
-            &self.frame_buffer,
-            &self.materials,
-            &self.shadows,
-            Some(&self.lights),
-        );
+        self.frame_group = None;
+        self.refresh_light_group();
         self.sun_group = frame_group_without_lights(
             &self.device,
             &self.sun_layout,
@@ -720,6 +713,28 @@ impl PartRenderer {
         cull: &CullSettings,
     ) {
         self.lights.prepare(scene, camera, width, height, cull);
+        self.refresh_light_group();
+    }
+
+    /// Makes the frame group with the local lights' resources when they first exist, or again when one of them was
+    /// replaced (the atlas made at its first shadow or dropped for a new size). A scene without lights never has
+    /// one.
+    fn refresh_light_group(&mut self) {
+        let revision = self.lights.revision();
+        if self.frame_group.is_some() && revision == self.frame_group_lights {
+            return;
+        }
+        self.frame_group_lights = revision;
+        self.frame_group = self.lights.bindings().map(|lights| {
+            frame_group(
+                &self.device,
+                &self.frame_layout,
+                &self.frame_buffer,
+                &self.materials,
+                &self.shadows,
+                Some(lights),
+            )
+        });
     }
 
     /// The shadow atlas's render target when tiles are drawn this frame.
@@ -937,7 +952,7 @@ impl PartRenderer {
     /// when no drawn light has one.
     fn light_variant(&self) -> Lights {
         let frame = self.lights.frame();
-        if frame.local[0] <= 0.0 {
+        if frame.local[0] <= 0.0 || self.frame_group.is_none() {
             Lights::None
         } else if frame.atlas[2] > 0.0 {
             Lights::Shadowed
@@ -958,7 +973,7 @@ impl PartRenderer {
     ) {
         let frame = match variant {
             Lights::None => &self.sun_group,
-            Lights::Unshadowed | Lights::Shadowed => &self.frame_group,
+            Lights::Unshadowed | Lights::Shadowed => self.frame_group.as_ref().unwrap_or(&self.sun_group),
         };
         render_pass.set_bind_group(0, frame, &[]);
         render_pass.set_vertex_buffer(0, self.meshes.vertices().slice(..));
@@ -993,7 +1008,7 @@ fn frame_group(
     frame: &wgpu::Buffer,
     materials: &MaterialTable,
     shadows: &ShadowMaps,
-    lights: Option<&LocalLights>,
+    lights: Option<LightBindings<'_>>,
 ) -> wgpu::BindGroup {
     let sun = [
         wgpu::BindGroupEntry {
@@ -1031,19 +1046,19 @@ fn frame_group(
             e3,
             wgpu::BindGroupEntry {
                 binding: 4,
-                resource: lights.light_buffer().as_entire_binding(),
+                resource: lights.lights.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 5,
-                resource: wgpu::BindingResource::TextureView(lights.cluster_view()),
+                resource: wgpu::BindingResource::TextureView(lights.clusters),
             },
             wgpu::BindGroupEntry {
                 binding: 6,
-                resource: lights.tile_buffer().as_entire_binding(),
+                resource: lights.tiles.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 7,
-                resource: wgpu::BindingResource::TextureView(lights.atlas_view()),
+                resource: wgpu::BindingResource::TextureView(lights.atlas),
             },
         ],
     })

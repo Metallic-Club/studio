@@ -602,6 +602,12 @@ A second pair of runs (off, Medium) agreed within 3% (render CPU p99 within 0.2 
 - **The cluster cap**: at 32 per cluster (the first Medium setting) the town overflowed 194 entries a frame (lights
   missing from a cluster, a hard edge); 48 never overflowed with a still camera and 15 entries in the walking
   camera's last frame, for 0.05 ms more GPU than 32.
+- **Memory**: a scene without local lights holds none of their GPU memory (`lights.gpu_bytes` in the JSON). The
+  first frame that draws a light makes the lights' uniform (16 KiB), the shadow tiles' (6 KiB) and the cluster
+  texture (232 KiB): 254 KiB. The first frame with a shadow adds the atlas at the size the settings say then (16 MiB
+  at Medium, 4 MiB at Low, 64 MiB at High), its casters' uniform (16 KiB) and their lists (4 KiB at first). The
+  pipelines are made with the renderer, so neither step compiles anything (ADR 0008 §9). The render test
+  `light_memory_is_made_when_first_needed` checks it.
 - **The perf gate's workloads** have no lights, and the sync must cost them nothing: a part's change pays one length
   test (are there lights at all?), and everything about lights is out of line (`#[inline(never)]`, the non-part
   path `#[cold]`). The first version of this change failed the gate with +6.6% and +6.7% on `render_sync_moving` and

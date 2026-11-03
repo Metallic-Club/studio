@@ -555,3 +555,47 @@ fn the_budget_fades_lights_in_and_out() {
         );
     }
 }
+
+/// A scene without local lights holds none of their GPU memory; the first light makes its buffers and the cluster
+/// texture, and only the first shadow makes the atlas, at the size the settings say then.
+#[test]
+fn light_memory_is_made_when_first_needed() {
+    let Some(context) = gpu() else { return };
+    let mut game = night_floor();
+    let mut frames = Frames::new(&context, &mut game, LightSettings::default());
+    frames.frame(&context, &mut game);
+    assert_eq!(
+        frames.renderer.light_stats().gpu_bytes,
+        0,
+        "GPU memory held by local lights in a scene without any"
+    );
+    let ws = game.workspace;
+    let lamp = light(
+        &mut game,
+        "PointLight",
+        ws,
+        CFrame::new(Vec3::new(0.0, 3.0, 0.0)),
+        [255, 255, 255],
+        1.0,
+        10.0,
+    );
+    frames.frame(&context, &mut game);
+    let unshadowed = frames.renderer.light_stats().gpu_bytes;
+    assert!(
+        unshadowed > 0 && unshadowed < 1 << 20,
+        "GPU memory held by one light without a shadow: {unshadowed} bytes, expected the buffers and the cluster \
+         texture only"
+    );
+    game.dm
+        .set_by_name(lamp, "Shadows", Value::Bool(true))
+        .expect("Shadows");
+    frames.frame(&context, &mut game);
+    let atlas = u64::from(LightSettings::default().atlas_resolution).pow(2) * 4;
+    let shadowed = frames.renderer.light_stats().gpu_bytes;
+    assert!(
+        shadowed >= unshadowed + atlas,
+        "GPU memory held once a light has a shadow: {shadowed} bytes, expected at least {} (the atlas)",
+        unshadowed + atlas
+    );
+    eprintln!("light GPU memory: none, {unshadowed} with a light, {shadowed} with a shadow");
+}

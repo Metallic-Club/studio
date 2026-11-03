@@ -67,6 +67,14 @@
 //! paths ([`crate::scene::InstanceBinding`]) light exactly alike. The shadow tiles' matrices are a second uniform
 //! array ([`MAX_SHADOW_TILES`]).
 //!
+//! # Memory
+//!
+//! A scene without local lights holds none of their GPU memory, and binds and draws what it did before they
+//! existed. The pipelines are made with the renderer (so the first light costs no compile, ADR 0008 §9), but the
+//! lights' uniform array (16 KiB), the shadow tiles' (6 KiB) and the cluster texture (232 KiB) are made on the first
+//! frame that draws a light, and the shadow atlas (16 MiB at Medium) with its casters' uniform (16 KiB) on the first
+//! frame with a shadow, at the size the settings say then.
+//!
 //! `DirectionalLight` instances (extra suns) are not drawn yet: see #123.
 
 mod atlas;
@@ -77,7 +85,7 @@ mod select;
 use std::time::Duration;
 
 pub use cluster::{CLUSTER_COUNT, CLUSTERS_X, CLUSTERS_Y, CLUSTERS_Z, FIRST_SLICE};
-pub(crate) use gpu::{FrameLights, LocalLights};
+pub(crate) use gpu::{FrameLights, LightBindings, LocalLights};
 
 /// The radiant intensity of `Brightness` 1, in the renderer's linear units: at 4 m it lights a surface facing it
 /// with 1 (a white one then reflects 1/π, about the shade at noon).
@@ -230,6 +238,9 @@ pub struct LightStats {
     pub max_per_cluster: u32,
     /// Light entries dropped because a cluster was full ([`LightSettings::per_cluster`]).
     pub overflow: u32,
+    /// GPU memory local lights hold, in bytes: none until a frame first draws a light, and the shadow atlas only
+    /// once a drawn light first has a shadow (see the [module documentation](self)).
+    pub gpu_bytes: u64,
     /// CPU time of selecting, clustering and packing the lights.
     pub cpu_time: Duration,
     /// CPU time of the shadow tiles' caster culls.

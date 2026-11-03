@@ -117,6 +117,9 @@ fn look_to(eye: Vec3, forward: Vec3, up: Vec3) -> Mat4 {
     )
 }
 
+/// The bytes of one tile in the tiles' uniform array ([`GpuTile`]).
+pub(crate) const TILE_SIZE: usize = size_of::<GpuTile>();
+
 /// One tile as the parts read it (`ShadowTile` in lights.wgsl): 96 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
@@ -208,6 +211,16 @@ pub(crate) struct AtlasStats {
     pub(crate) cull_time: Duration,
 }
 
+/// The atlas's GPU memory: the depth texture and the casters' matrices. Made when a drawn light first has a
+/// shadow, never for a scene without one.
+#[derive(Debug)]
+struct AtlasGpu {
+    sample_view: wgpu::TextureView,
+    render_view: wgpu::TextureView,
+    caster_uniform: wgpu::Buffer,
+    caster_group: wgpu::BindGroup,
+}
+
 /// The shadow atlas and everything that draws it. [`super::LocalLights`] owns one.
 #[derive(Debug)]
 pub(crate) struct ShadowAtlas {
@@ -219,8 +232,11 @@ pub(crate) struct ShadowAtlas {
     per_row: u32,
     /// Tiles in the atlas.
     capacity: usize,
-    sample_view: wgpu::TextureView,
-    render_view: wgpu::TextureView,
+    /// `None` until a drawn light first has a shadow (and again after a new atlas size, until the next one).
+    gpu: Option<AtlasGpu>,
+    /// Changes whenever the texture is made or dropped, so the bind groups that sample it are made again.
+    revision: u64,
+    caster_layout: wgpu::BindGroupLayout,
     /// Per tile: the light that holds it.
     owner: Vec<Option<Id>>,
     /// Per tile: the index of the light holding it this frame, or [`FREE`].
@@ -235,21 +251,19 @@ pub(crate) struct ShadowAtlas {
     list: Vec<u32>,
     gathered: Vec<GpuInstance>,
     ranges: Vec<(u16, u16, u32, u32)>,
-    list_buffer: wgpu::Buffer,
+    /// The casters' lists on the GPU, made with the first tile drawn.
+    list_buffer: Option<wgpu::Buffer>,
     visible: VisibleSet,
     /// The moving casters' bounding spheres, origin-relative, as of `dynamic_revision`.
     dynamic: Vec<(Vec3, f32)>,
     dynamic_revision: Option<u64>,
-    caster_uniform: wgpu::Buffer,
     caster_data: Vec<[f32; (UNIFORM_STRIDE / 4) as usize]>,
-    caster_group: wgpu::BindGroup,
     caster: wgpu::RenderPipeline,
     clear: wgpu::RenderPipeline,
     instance_layout: Option<wgpu::BindGroupLayout>,
     instance_group: Option<InstanceGroup>,
     /// The tiles of the lights drawn this frame, as the parts read them.
     table: Vec<GpuTile>,
-    table_buffer: wgpu::Buffer,
     uploaded_table: Vec<GpuTile>,
     stats: AtlasStats,
 }
@@ -277,32 +291,9 @@ impl ShadowAtlas {
                 count: None,
             }],
         });
-        let caster_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("metallic shadow atlas tiles (casters)"),
-            size: UNIFORM_STRIDE * MAX_SHADOW_TILES as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let caster_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("metallic shadow atlas tile"),
-            layout: &caster_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &caster_uniform,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(UNIFORM_SIZE),
-                }),
-            }],
-        });
-        let table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("metallic shadow atlas tiles"),
-            size: (size_of::<GpuTile>() * MAX_SHADOW_TILES) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let (resolution, tile, per_row, capacity) = layout(device, settings);
-        let (sample_view, render_view) = atlas_texture(device, resolution);
+        // The pipelines are made now, with the renderer (no hitch when the first shadow appears); the memory waits.
+        let caster = caster_pipeline(device, binding, &caster_layout, instance_layout);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -311,8 +302,9 @@ impl ShadowAtlas {
             tile,
             per_row,
             capacity,
-            sample_view,
-            render_view,
+            gpu: None,
+            revision: 0,
+            caster_layout,
             owner: vec![None; capacity],
             holder: vec![FREE; capacity],
             active: vec![false; capacity],
@@ -322,31 +314,72 @@ impl ShadowAtlas {
             list: Vec::new(),
             gathered: Vec::new(),
             ranges: Vec::new(),
-            list_buffer: list_buffer(device, binding, MIN_LIST_BYTES),
+            list_buffer: None,
             visible: VisibleSet::new(),
             dynamic: Vec::new(),
             dynamic_revision: None,
-            caster_uniform,
-            caster_data: vec![[0.0; (UNIFORM_STRIDE / 4) as usize]; MAX_SHADOW_TILES],
-            caster_group,
-            caster: caster_pipeline(device, binding, &caster_layout, instance_layout),
+            caster_data: Vec::new(),
+            caster,
             clear: clear_pipeline(device),
             instance_layout: instance_layout.cloned(),
             instance_group: None,
-            table: Vec::with_capacity(MAX_SHADOW_TILES),
-            table_buffer,
-            uploaded_table: Vec::with_capacity(MAX_SHADOW_TILES),
+            table: Vec::new(),
+            uploaded_table: Vec::new(),
             stats: AtlasStats::default(),
         }
     }
 
-    /// Applies `settings`' atlas and tile size, making the atlas again when they changed (a settings change, never per
-    /// frame). Returns whether the sampled view was replaced. Every tile is drawn again after a change.
+    /// Makes the atlas's texture and the casters' uniform, at the size the settings say now, when they do not exist
+    /// yet. Runs when a drawn light first has a shadow.
+    fn ensure_gpu(&mut self) {
+        if self.gpu.is_some() {
+            return;
+        }
+        let caster_uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("metallic shadow atlas tiles (casters)"),
+            size: UNIFORM_STRIDE * MAX_SHADOW_TILES as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let caster_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("metallic shadow atlas tile"),
+            layout: &self.caster_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &caster_uniform,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(UNIFORM_SIZE),
+                }),
+            }],
+        });
+        let (sample_view, render_view) = atlas_texture(&self.device, self.resolution);
+        self.gpu = Some(AtlasGpu {
+            sample_view,
+            render_view,
+            caster_uniform,
+            caster_group,
+        });
+        self.caster_data
+            .resize(MAX_SHADOW_TILES, [0.0; (UNIFORM_STRIDE / 4) as usize]);
+        self.table.reserve(MAX_SHADOW_TILES);
+        self.uploaded_table.reserve(MAX_SHADOW_TILES);
+        // A new texture holds no drawing.
+        for cache in &mut self.caches {
+            cache.valid = false;
+        }
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Applies `settings`' atlas and tile size (a settings change, never per frame). A new atlas size drops the
+    /// texture; the next frame with a shadow makes it at that size. Returns whether the sampled view changed. Every
+    /// tile is drawn again after a change.
     pub(crate) fn configure(&mut self, settings: &LightSettings) -> bool {
         let (resolution, tile, per_row, capacity) = layout(&self.device, settings);
-        let replaced = resolution != self.resolution;
+        let replaced = resolution != self.resolution && self.gpu.is_some();
         if replaced {
-            (self.sample_view, self.render_view) = atlas_texture(&self.device, resolution);
+            self.gpu = None;
+            self.revision = self.revision.wrapping_add(1);
         }
         self.resolution = resolution;
         self.tile = tile;
@@ -362,14 +395,22 @@ impl ShadowAtlas {
         replaced
     }
 
-    /// The atlas the parts sample.
-    pub(crate) fn sample_view(&self) -> &wgpu::TextureView {
-        &self.sample_view
+    /// The atlas the parts sample, once it exists.
+    pub(crate) fn sample_view(&self) -> Option<&wgpu::TextureView> {
+        self.gpu.as_ref().map(|gpu| &gpu.sample_view)
     }
 
-    /// The tiles' uniform the parts read.
-    pub(crate) fn table_buffer(&self) -> &wgpu::Buffer {
-        &self.table_buffer
+    /// The GPU memory the atlas holds, in bytes: its texture, the casters' uniform and their lists.
+    pub(crate) fn gpu_bytes(&self) -> u64 {
+        let texture = self.gpu.as_ref().map_or(0, |_| {
+            u64::from(self.resolution) * u64::from(self.resolution) * 4 + UNIFORM_STRIDE * MAX_SHADOW_TILES as u64
+        });
+        texture + self.list_buffer.as_ref().map_or(0, wgpu::Buffer::size)
+    }
+
+    /// Changes whenever [`ShadowAtlas::sample_view`] does.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// One texel in atlas coordinates.
@@ -382,14 +423,12 @@ impl ShadowAtlas {
         self.stats
     }
 
-    /// Whether any tile is drawn this frame.
-    pub(crate) fn has_jobs(&self) -> bool {
-        !self.jobs.is_empty()
-    }
-
-    /// The render target of the atlas pass.
-    pub(crate) fn render_view(&self) -> &wgpu::TextureView {
-        &self.render_view
+    /// The render target of the atlas pass, when tiles are drawn this frame.
+    pub(crate) fn target(&self) -> Option<&wgpu::TextureView> {
+        self.gpu
+            .as_ref()
+            .filter(|_| !self.jobs.is_empty())
+            .map(|gpu| &gpu.render_view)
     }
 
     /// Decides which drawn lights hold tiles this frame and moves their shadows' fades by `dt` seconds. `drawn` is
@@ -534,17 +573,23 @@ impl ShadowAtlas {
 
     /// Works out this frame's tiles for `shadowed` (the drawn lights holding tiles with some shadow, each with its
     /// first entry in the tile table written to `bases`), decides which tiles to draw again, culls their casters in
-    /// `scene` and uploads their lists, matrices and the tile table. `camera_offset` is the camera − the scene origin.
+    /// `scene` and uploads their lists, matrices and the tile table (into `table_buffer`, which exists whenever there
+    /// are drawn lights). `camera_offset` is the camera − the scene origin. The atlas's memory is made here, the first
+    /// time `shadowed` is not empty.
     pub(crate) fn prepare(
         &mut self,
         scene: &mut GpuScene,
         shadowed: &[ShadowedLight],
         bases: &mut [f32],
         camera_offset: Vec3,
+        table_buffer: Option<&wgpu::Buffer>,
     ) {
         self.jobs.clear();
         self.table.clear();
         self.list.clear();
+        if !shadowed.is_empty() {
+            self.ensure_gpu();
+        }
         self.ranges.clear();
         self.stats = AtlasStats::default();
         let to_camera = Mat4::from_translation(camera_offset);
@@ -636,12 +681,20 @@ impl ShadowAtlas {
             self.cull_jobs(scene);
             self.upload_lists(scene);
         }
-        if self.table != self.uploaded_table && !self.table.is_empty() {
+        if let Some(table_buffer) = table_buffer
+            && self.table != self.uploaded_table
+            && !self.table.is_empty()
+        {
             self.queue
-                .write_buffer(&self.table_buffer, 0, bytemuck::cast_slice(&self.table));
+                .write_buffer(table_buffer, 0, bytemuck::cast_slice(&self.table));
             self.uploaded_table.clear();
             self.uploaded_table.extend_from_slice(&self.table);
         }
+    }
+
+    /// Forgets what the tile table on the GPU holds (a new table buffer), so the next frame writes it.
+    pub(crate) fn table_replaced(&mut self) {
+        self.uploaded_table.clear();
     }
 
     /// Culls every job's casters into the frame's list and notes what each tile now holds.
@@ -704,28 +757,28 @@ impl ShadowAtlas {
                 bytemuck::cast_slice(&self.gathered)
             }
         };
-        if bytes.len() as u64 > self.list_buffer.size() {
-            let size = (bytes.len() as u64).next_power_of_two().max(MIN_LIST_BYTES);
-            self.list_buffer = list_buffer(&self.device, self.binding, size);
+        let size = (bytes.len() as u64).next_power_of_two().max(MIN_LIST_BYTES);
+        if self.list_buffer.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
+            self.list_buffer = Some(list_buffer(&self.device, self.binding, size));
         }
-        if !bytes.is_empty() {
-            self.queue.write_buffer(&self.list_buffer, 0, bytes);
+        if let Some(list) = self.list_buffer.as_ref()
+            && !bytes.is_empty()
+        {
+            self.queue.write_buffer(list, 0, bytes);
         }
-        self.queue
-            .write_buffer(&self.caster_uniform, 0, bytemuck::cast_slice(&self.caster_data));
+        if let Some(gpu) = self.gpu.as_ref() {
+            self.queue
+                .write_buffer(&gpu.caster_uniform, 0, bytemuck::cast_slice(&self.caster_data));
+        }
         self.refresh_instance_group(scene);
     }
 
     /// Makes the storage path's instance bind group again when a buffer it uses was replaced.
     fn refresh_instance_group(&mut self, scene: &GpuScene) {
-        let Some(layout) = self.instance_layout.as_ref() else {
+        let (Some(layout), Some(list)) = (self.instance_layout.as_ref(), self.list_buffer.as_ref()) else {
             return;
         };
-        let buffers = [
-            scene.buffer(Region::Static),
-            scene.buffer(Region::Dynamic),
-            &self.list_buffer,
-        ];
+        let buffers = [scene.buffer(Region::Static), scene.buffer(Region::Dynamic), list];
         if self
             .instance_group
             .as_ref()
@@ -750,11 +803,14 @@ impl ShadowAtlas {
         });
     }
 
-    /// Records the frame's tiles into `pass` (a depth pass into [`ShadowAtlas::render_view`] that loads the atlas):
-    /// each tile is cleared and its casters drawn, one instanced draw per mesh kind. Returns the draws, instances and
+    /// Records the frame's tiles into `pass` (a depth pass into [`ShadowAtlas::target`] that loads the atlas): each
+    /// tile is cleared and its casters drawn, one instanced draw per mesh kind. Returns the draws, instances and
     /// triangles.
     pub(crate) fn draw(&self, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
         let (mut draws, mut instances, mut triangles) = (0, 0, 0u64);
+        let (Some(gpu), Some(list)) = (self.gpu.as_ref(), self.list_buffer.as_ref()) else {
+            return (draws, instances, triangles);
+        };
         let mut ranges = self.ranges.iter().peekable();
         for (index, job) in self.jobs.iter().enumerate() {
             let tile = u32::from(job.tile);
@@ -764,7 +820,7 @@ impl ShadowAtlas {
             pass.set_pipeline(&self.clear);
             pass.draw(0..3, 0..1);
             pass.set_pipeline(&self.caster);
-            pass.set_bind_group(0, &self.caster_group, &[(u64::from(tile) * UNIFORM_STRIDE) as u32]);
+            pass.set_bind_group(0, &gpu.caster_group, &[(u64::from(tile) * UNIFORM_STRIDE) as u32]);
             pass.set_vertex_buffer(0, meshes.vertices().slice(..));
             pass.set_index_buffer(meshes.indices().slice(..), wgpu::IndexFormat::Uint32);
             match self.binding {
@@ -773,7 +829,7 @@ impl ShadowAtlas {
                         pass.set_bind_group(1, &group.group, &[]);
                     }
                 }
-                InstanceBinding::Vertex => pass.set_vertex_buffer(1, self.list_buffer.slice(..)),
+                InstanceBinding::Vertex => pass.set_vertex_buffer(1, list.slice(..)),
             }
             while let Some(&&(job_index, kind, first, count)) = ranges.peek() {
                 if usize::from(job_index) != index {

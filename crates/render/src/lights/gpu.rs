@@ -6,17 +6,18 @@ use std::time::Instant;
 use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
 
-use super::atlas::{ShadowAtlas, ShadowedLight};
+use super::atlas::{ShadowAtlas, ShadowedLight, TILE_SIZE};
 use super::cluster::{
-    CLUSTERS_X, CLUSTERS_Y, ClusterCamera, ClusterGrid, FIRST_SLICE, Slicing, TEXTURE_HEIGHT, TEXTURE_TEXELS,
-    TEXTURE_WIDTH,
+    CLUSTERS_X, CLUSTERS_Y, ClusterCamera, ClusterGrid, ClusterStats, FIRST_SLICE, Slicing, TEXTURE_HEIGHT,
+    TEXTURE_TEXELS, TEXTURE_WIDTH,
 };
 use super::select::{SelectView, influence, select};
-use super::{LIGHT_INTENSITY, LightSettings, LightStats, MAX_GPU_LIGHTS, SPOT_SOFTNESS};
+use super::{LIGHT_INTENSITY, LightSettings, LightStats, MAX_GPU_LIGHTS, MAX_SHADOW_TILES, SPOT_SOFTNESS};
 use crate::GpuScene;
 use crate::cull::{CullSettings, CullView};
 use crate::parts::{Camera, MeshPool};
 use crate::scene::{InstanceBinding, LightKind, SceneLight};
+use crate::shadow::SHADOW_FORMAT;
 
 /// The longest step a fade takes in one frame, in seconds: after a stall, lights fade on rather than jump.
 const MAX_STEP: f32 = 0.1;
@@ -70,20 +71,96 @@ impl GpuLight {
     }
 }
 
-/// Local lights on the GPU. [`crate::parts::PartRenderer`] owns one and binds its resources in the parts' frame
-/// group.
+/// The GPU memory of local lights, and the CPU copy of the cluster texture: made on the first frame that draws a
+/// light, never for a scene without one (the shadow atlas waits for the first shadow: [`ShadowAtlas`]).
 #[derive(Debug)]
-pub(crate) struct LocalLights {
-    queue: wgpu::Queue,
-    settings: LightSettings,
+struct LightBuffers {
     light_buffer: wgpu::Buffer,
-    lights: Vec<GpuLight>,
-    uploaded: Vec<GpuLight>,
+    /// The shadow tiles' uniform array.
+    tile_buffer: wgpu::Buffer,
     cluster_texture: wgpu::Texture,
     cluster_view: wgpu::TextureView,
+    /// What the frame group binds in place of the atlas until a light first has a shadow: 1 × 1 texel.
+    no_atlas: wgpu::TextureView,
     grid: ClusterGrid,
     uploaded_texels: Vec<u32>,
     uploaded_rows: u32,
+}
+
+impl LightBuffers {
+    fn new(device: &wgpu::Device) -> Self {
+        let uniform = |label, size: usize| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: size as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let texture = |label, width, height, format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let cluster_texture = texture(
+            "metallic light clusters",
+            TEXTURE_WIDTH,
+            TEXTURE_HEIGHT,
+            wgpu::TextureFormat::R32Uint,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let cluster_view = cluster_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let no_atlas = texture(
+            "metallic shadow atlas (none yet)",
+            1,
+            1,
+            SHADOW_FORMAT,
+            wgpu::TextureUsages::TEXTURE_BINDING,
+        )
+        .create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            light_buffer: uniform("metallic local lights", size_of::<GpuLight>() * MAX_GPU_LIGHTS),
+            tile_buffer: uniform("metallic shadow atlas tiles", TILE_SIZE * MAX_SHADOW_TILES),
+            cluster_texture,
+            cluster_view,
+            no_atlas,
+            grid: ClusterGrid::default(),
+            uploaded_texels: vec![0; TEXTURE_TEXELS],
+            uploaded_rows: 0,
+        }
+    }
+}
+
+/// What the frame group binds for local lights ([`LocalLights::bindings`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LightBindings<'a> {
+    pub(crate) lights: &'a wgpu::Buffer,
+    pub(crate) clusters: &'a wgpu::TextureView,
+    pub(crate) tiles: &'a wgpu::Buffer,
+    pub(crate) atlas: &'a wgpu::TextureView,
+}
+
+/// Local lights on the GPU. [`crate::parts::PartRenderer`] owns one and binds its resources in the parts' frame
+/// group. A scene without lights makes none of their GPU memory (see [`LightBuffers`] and the atlas).
+#[derive(Debug)]
+pub(crate) struct LocalLights {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    settings: LightSettings,
+    buffers: Option<LightBuffers>,
+    lights: Vec<GpuLight>,
+    uploaded: Vec<GpuLight>,
     atlas: ShadowAtlas,
     ranked: Vec<(f32, u32)>,
     drawn: Vec<u32>,
@@ -100,8 +177,8 @@ pub(crate) struct LocalLights {
 }
 
 impl LocalLights {
-    /// The lights' buffers, the cluster texture and the atlas for `settings`, on the instance path `binding` whose
-    /// storage-path instance group has `instance_layout`.
+    /// Local lights for `settings` on the instance path `binding`, whose storage-path instance group has
+    /// `instance_layout`. Makes their pipelines; their buffers and textures wait for the first light.
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -109,45 +186,20 @@ impl LocalLights {
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: LightSettings,
     ) -> Self {
-        let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("metallic local lights"),
-            size: (size_of::<GpuLight>() * MAX_GPU_LIGHTS) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let cluster_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("metallic light clusters"),
-            size: wgpu::Extent3d {
-                width: TEXTURE_WIDTH,
-                height: TEXTURE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Uint,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let cluster_view = cluster_texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
+            device: device.clone(),
             queue: queue.clone(),
             settings,
-            light_buffer,
-            lights: Vec::with_capacity(MAX_GPU_LIGHTS),
-            uploaded: Vec::with_capacity(MAX_GPU_LIGHTS),
-            cluster_texture,
-            cluster_view,
-            grid: ClusterGrid::default(),
-            uploaded_texels: vec![0; TEXTURE_TEXELS],
-            uploaded_rows: 0,
+            buffers: None,
+            lights: Vec::new(),
+            uploaded: Vec::new(),
             atlas: ShadowAtlas::new(device, queue, binding, instance_layout, &settings),
             ranked: Vec::new(),
-            drawn: Vec::with_capacity(MAX_GPU_LIGHTS),
-            spheres: Vec::with_capacity(MAX_GPU_LIGHTS),
-            shadowed: Vec::with_capacity(MAX_GPU_LIGHTS),
-            shadow_slots: Vec::with_capacity(MAX_GPU_LIGHTS),
-            bases: Vec::with_capacity(MAX_GPU_LIGHTS),
+            drawn: Vec::new(),
+            spheres: Vec::new(),
+            shadowed: Vec::new(),
+            shadow_slots: Vec::new(),
+            bases: Vec::new(),
             frame: FrameLights::default(),
             stats: LightStats::default(),
             last: None,
@@ -165,33 +217,39 @@ impl LocalLights {
         &self.settings
     }
 
-    /// Applies `settings` (a settings change, never per frame). Returns whether the atlas was made again, so the
-    /// bind groups that sample it must be made again.
-    pub(crate) fn configure(&mut self, settings: LightSettings) -> bool {
+    /// Applies `settings` (a settings change, never per frame). A new atlas size drops the atlas (the next shadow
+    /// makes it again), so the frame group must be made again: see [`LocalLights::revision`].
+    pub(crate) fn configure(&mut self, settings: LightSettings) {
         let atlas_changed = (settings.atlas_resolution, settings.tile_resolution)
             != (self.settings.atlas_resolution, self.settings.tile_resolution);
         self.settings = settings;
-        atlas_changed && self.atlas.configure(&settings)
+        if atlas_changed {
+            self.atlas.configure(&settings);
+        }
     }
 
-    /// The lights' uniform array.
-    pub(crate) fn light_buffer(&self) -> &wgpu::Buffer {
-        &self.light_buffer
+    /// Changes whenever what [`LocalLights::bindings`] returns does.
+    pub(crate) fn revision(&self) -> (bool, u64) {
+        (self.buffers.is_some(), self.atlas.revision())
     }
 
-    /// The cluster texture.
-    pub(crate) fn cluster_view(&self) -> &wgpu::TextureView {
-        &self.cluster_view
+    /// What the frame group binds for local lights, once a frame has drawn one.
+    pub(crate) fn bindings(&self) -> Option<LightBindings<'_>> {
+        let buffers = self.buffers.as_ref()?;
+        Some(LightBindings {
+            lights: &buffers.light_buffer,
+            clusters: &buffers.cluster_view,
+            tiles: &buffers.tile_buffer,
+            atlas: self.atlas.sample_view().unwrap_or(&buffers.no_atlas),
+        })
     }
 
-    /// The shadow atlas, sampled.
-    pub(crate) fn atlas_view(&self) -> &wgpu::TextureView {
-        self.atlas.sample_view()
-    }
-
-    /// The shadow tiles' uniform array.
-    pub(crate) fn tile_buffer(&self) -> &wgpu::Buffer {
-        self.atlas.table_buffer()
+    /// The GPU memory local lights hold, in bytes.
+    fn gpu_bytes(&self) -> u64 {
+        let buffers = self.buffers.as_ref().map_or(0, |b| {
+            b.light_buffer.size() + b.tile_buffer.size() + TEXTURE_TEXELS as u64 * 4 + 4
+        });
+        buffers + self.atlas.gpu_bytes()
     }
 
     /// What the frame uniform needs this frame.
@@ -206,7 +264,7 @@ impl LocalLights {
 
     /// The atlas's render target when tiles are drawn this frame.
     pub(crate) fn atlas_target(&self) -> Option<&wgpu::TextureView> {
-        self.atlas.has_jobs().then(|| self.atlas.render_view())
+        self.atlas.target()
     }
 
     /// Records the atlas's tiles into `pass` (see [`ShadowAtlas::draw`]).
@@ -241,7 +299,8 @@ impl LocalLights {
         self.lights.clear();
         let camera = camera.filter(|_| self.settings.enabled && self.stats.in_scene > 0);
         let Some(camera) = camera else {
-            self.atlas.prepare(scene, &[], &mut [], Vec3::ZERO);
+            self.atlas.prepare(scene, &[], &mut [], Vec3::ZERO, None);
+            self.stats.gpu_bytes = self.gpu_bytes();
             return;
         };
         let origin = scene.scene().origin();
@@ -294,10 +353,22 @@ impl LocalLights {
             }
             selection
         };
+        if !self.lights.is_empty() && self.buffers.is_none() {
+            // The first frame that draws a light: its buffers and textures from now on (the atlas waits for the
+            // first shadow).
+            self.buffers = Some(LightBuffers::new(&self.device));
+            self.uploaded.clear();
+            self.atlas.table_replaced();
+        }
         self.bases.clear();
         self.bases.resize(self.shadowed.len(), -1.0);
-        self.atlas
-            .prepare(scene, &self.shadowed, &mut self.bases, camera.position - origin);
+        self.atlas.prepare(
+            scene,
+            &self.shadowed,
+            &mut self.bases,
+            camera.position - origin,
+            self.buffers.as_ref().map(|b| &b.tile_buffer),
+        );
         let mut any_shadow = false;
         for (&slot, &base) in self.shadow_slots.iter().zip(&self.bases) {
             if let Some(light) = self.lights.get_mut(slot) {
@@ -310,43 +381,49 @@ impl LocalLights {
             }
         }
 
-        let far = self
-            .spheres
-            .iter()
-            .map(|&(center, radius)| center.z + radius)
-            .fold(0.0f32, f32::max);
-        let slicing = Slicing::new(far);
-        let tan_y = (camera.fov_y.clamp(1e-3, 3.1) * 0.5).tan();
-        let clusters = self.grid.build(
-            &self.spheres,
-            &ClusterCamera {
-                tan_x: tan_y * aspect,
-                tan_y,
-            },
-            &slicing,
-            self.settings.cluster_cap(),
-        );
-        self.frame = FrameLights {
-            clusters: [
-                CLUSTERS_X as f32 / width.max(1) as f32,
-                CLUSTERS_Y as f32 / height.max(1) as f32,
-                slicing.scale,
-                slicing.bias,
-            ],
-            local: [
-                self.lights.len() as f32,
-                FIRST_SLICE,
-                self.settings.normal_offset.max(0.0),
-                self.settings.depth_bias.max(0.0),
-            ],
-            atlas: [
-                self.atlas.texel(),
-                self.settings.filter_radius.min(1) as f32,
-                if any_shadow { 1.0 } else { 0.0 },
-                0.0,
-            ],
-        };
-        self.upload();
+        // With no light drawn the frame uses the pipelines without local lights: nothing to cluster or upload.
+        let mut clusters = ClusterStats::default();
+        if !self.lights.is_empty()
+            && let Some(buffers) = self.buffers.as_mut()
+        {
+            let far = self
+                .spheres
+                .iter()
+                .map(|&(center, radius)| center.z + radius)
+                .fold(0.0f32, f32::max);
+            let slicing = Slicing::new(far);
+            let tan_y = (camera.fov_y.clamp(1e-3, 3.1) * 0.5).tan();
+            clusters = buffers.grid.build(
+                &self.spheres,
+                &ClusterCamera {
+                    tan_x: tan_y * aspect,
+                    tan_y,
+                },
+                &slicing,
+                self.settings.cluster_cap(),
+            );
+            self.frame = FrameLights {
+                clusters: [
+                    CLUSTERS_X as f32 / width.max(1) as f32,
+                    CLUSTERS_Y as f32 / height.max(1) as f32,
+                    slicing.scale,
+                    slicing.bias,
+                ],
+                local: [
+                    self.lights.len() as f32,
+                    FIRST_SLICE,
+                    self.settings.normal_offset.max(0.0),
+                    self.settings.depth_bias.max(0.0),
+                ],
+                atlas: [
+                    self.atlas.texel(),
+                    self.settings.filter_radius.min(1) as f32,
+                    if any_shadow { 1.0 } else { 0.0 },
+                    0.0,
+                ],
+            };
+            self.upload();
+        }
 
         let atlas = self.atlas.stats();
         self.stats = LightStats {
@@ -365,30 +442,35 @@ impl LocalLights {
             overflow: clusters.overflow,
             cpu_time: start.elapsed().saturating_sub(atlas.cull_time),
             shadow_cull_time: atlas.cull_time,
+            gpu_bytes: self.gpu_bytes(),
         };
     }
 
     /// Writes the lights and the clusters when they changed since the last frame.
     fn upload(&mut self) {
+        let Some(buffers) = self.buffers.as_mut() else {
+            return;
+        };
         if self.lights != self.uploaded && !self.lights.is_empty() {
             self.queue
-                .write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&self.lights));
+                .write_buffer(&buffers.light_buffer, 0, bytemuck::cast_slice(&self.lights));
             self.uploaded.clear();
             self.uploaded.extend_from_slice(&self.lights);
         }
-        let rows = (self.grid.used as u32).div_ceil(TEXTURE_WIDTH).max(1);
+        let grid = &buffers.grid;
+        let rows = (grid.used as u32).div_ceil(TEXTURE_WIDTH).max(1);
         let texels = (rows * TEXTURE_WIDTH) as usize;
-        if rows == self.uploaded_rows && self.grid.texels[..texels] == self.uploaded_texels[..texels] {
+        if rows == buffers.uploaded_rows && grid.texels[..texels] == buffers.uploaded_texels[..texels] {
             return;
         }
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.cluster_texture,
+                texture: &buffers.cluster_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(&self.grid.texels[..texels]),
+            bytemuck::cast_slice(&grid.texels[..texels]),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(TEXTURE_WIDTH * 4),
@@ -400,7 +482,7 @@ impl LocalLights {
                 depth_or_array_layers: 1,
             },
         );
-        self.uploaded_texels[..texels].copy_from_slice(&self.grid.texels[..texels]);
-        self.uploaded_rows = rows;
+        buffers.uploaded_texels[..texels].copy_from_slice(&grid.texels[..texels]);
+        buffers.uploaded_rows = rows;
     }
 }
