@@ -32,6 +32,9 @@ The decisions behind the layout are in [`docs/adr/`](docs/adr/), and the map is 
    ```
    CI also runs `cargo check --workspace --exclude metallic_studio --exclude xtask --target <t>` for
    `aarch64-linux-android` and `aarch64-apple-ios` (after `rustup target add <t>`), and macOS tests on `main`.
+   PRs that touch `crates/` also run the **perf gate** (`.github/workflows/perf.yml`): it fails when a
+   `metallic_core` hot path executes more than 5% more instructions than on the base. It needs Linux and Valgrind;
+   see [`docs/perf.md`](docs/perf.md) to run it locally or add a workload.
 5. **Open the PR:** one per issue, with `Closes #N` in the body, then set the issue to `status:review`. Never push to
    `main`. Never merge your own PR; the conductor reviews and merges.
 6. **If you have to stop:** leave the branch building and comment on the issue saying where you stopped.

@@ -19,6 +19,7 @@ thiserror.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 criterion.workspace = true
+gungraun.workspace = true
 
 [[bench]]
 name = "registry"
@@ -27,3 +28,10 @@ harness = false
 [[bench]]
 name = "data_model"
 harness = false
+
+# The perf gate's instruction counts (docs/perf.md). They need Valgrind and `gungraun-runner`, so a plain
+# `cargo bench` leaves this target out (`bench = false`); it runs by name: `cargo bench --bench perf_gate`.
+[[bench]]
+name = "perf_gate"
+harness = false
+bench = false

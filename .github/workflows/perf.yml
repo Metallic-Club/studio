@@ -1,0 +1,122 @@
+# The perf gate (docs/perf.md): Callgrind instruction counts of metallic_core's hot paths, PR base vs head on the
+# same runner, with the head's workloads for both. More than 5% growth in `Ir` on any workload fails the PR, and so
+# does a missing or zero count.
+#
+# Pushes to main only build, so the cargo cache is saved from main and restored by PRs, as in ci.yml.
+
+name: Perf
+
+on:
+  pull_request:
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/perf.yml']
+  push:
+    branches: [main]
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/perf.yml']
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Base and head must not share a target folder: cargo names a workspace crate's artifacts by its path relative to
+  # the workspace root, which is the same on both sides, so the second build would reuse the first one's binary and
+  # the gate would compare the base with itself. The base builds into base/target, the head into target.
+
+jobs:
+  gate:
+    name: Perf gate (instruction counts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # On a PR this is the merge of the head into the base branch, so only the PR's changes differ from the base.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      # The base is the merge commit's first parent: the base branch the merge was made on. The event's
+      # `pull_request.base.sha` is not used when a first parent exists, because it is not updated when the base
+      # branch moves on, and the merge would then also contain other PRs' changes.
+      - name: Check out the base
+        if: github.event_name == 'pull_request'
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if base=$(git rev-parse --verify --quiet HEAD^2 > /dev/null && git rev-parse HEAD^1); then
+            echo "base: $base (first parent of merge $(git rev-parse HEAD))"
+          else
+            base=$EVENT_BASE_SHA
+            git fetch --quiet --depth=1 origin "$base"
+            echo "base: $base (the event's base; HEAD $(git rev-parse HEAD) is not a merge)"
+          fi
+          git worktree add --quiet --detach base "$base"
+          echo "BASE_SHA=$base" >> "$GITHUB_ENV"
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # `bench = false` keeps the target out of ci.yml's `clippy --all-targets`, so it is linted here.
+      - name: Lint the workloads
+        run: cargo clippy -p metallic_core --bench perf_gate -- -D warnings
+      - name: Build (main only, to fill the cache)
+        if: github.event_name == 'push'
+        run: |
+          cargo bench -p metallic_core --bench perf_gate --no-run
+          cargo build -p xtask
+
+      - name: Install Valgrind and gungraun-runner
+        if: github.event_name == 'pull_request'
+        id: tools
+        run: |
+          # The runner must be the same version as the gungraun library in Cargo.lock.
+          id=$(cargo pkgid gungraun)
+          echo "version=${id##*@}" >> "$GITHUB_OUTPUT"
+          echo "GUNGRAUN_HOME=$RUNNER_TEMP/gungraun" >> "$GITHUB_ENV"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends valgrind
+          valgrind --version
+      - uses: taiki-e/install-action@v2
+        if: github.event_name == 'pull_request'
+        with:
+          tool: gungraun-runner@${{ steps.tools.outputs.version }}
+
+      - name: Measure the base with the head's workloads
+        if: github.event_name == 'pull_request'
+        id: base
+        env:
+          GUNGRAUN_VERSION: ${{ steps.tools.outputs.version }}
+        run: |
+          # The workload is the head's on both sides: bench source, its shared test classes and the toolchain.
+          mkdir -p base/crates/core/benches base/crates/core/tests/support
+          cp crates/core/benches/perf_gate.rs base/crates/core/benches/perf_gate.rs
+          cp crates/core/tests/support/classes.rs base/crates/core/tests/support/classes.rs
+          cp rust-toolchain.toml base/rust-toolchain.toml
+          cd base
+          # The PR that introduces the gate, or a base without the bench entry: add the head's entry and dev-dependency.
+          if ! grep -q '^name = "perf_gate"$' crates/core/Cargo.toml; then
+            cargo add --quiet --dev --package metallic_core "gungraun@=$GUNGRAUN_VERSION"
+            printf '\n[[bench]]\nname = "perf_gate"\nharness = false\nbench = false\n' >> crates/core/Cargo.toml
+          fi
+          if ! cargo bench -p metallic_core --bench perf_gate --no-run; then
+            msg="The PR base (${BASE_SHA::7}) cannot build the head's perf workloads, so there is nothing to compare against. An API the workloads use changed in this PR: land the new API first and switch the workloads in a follow-up PR (docs/perf.md, 'When the base cannot build the workloads')."
+            echo "::error title=Perf gate: base cannot build the workloads::$msg"
+            printf '## Perf gate: failed\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cargo bench -p metallic_core --bench perf_gate -- --save-baseline=base
+
+      # Exits with code 3 when a workload's `Ir` grows past the limit set in perf_gate.rs.
+      - name: Measure the head against the base
+        if: github.event_name == 'pull_request'
+        run: cargo bench -p metallic_core --bench perf_gate -- --baseline=base --save-summary=json
+
+      # gungraun passes a run whose baseline is missing; this fails on any missing or zero count, and writes the
+      # table to the job summary.
+      - name: Check and report
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.base.outcome == 'success' }}
+        run: cargo xtask perf-report --home "$GUNGRAUN_HOME" --baseline base --out "$GITHUB_STEP_SUMMARY"
