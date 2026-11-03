@@ -184,9 +184,21 @@ doing the operation a million times through the script host, so the time in ms i
 | `api/method_call_1m` (`part:IsA("BasePart")`) | 233 ns | 213 ns | |
 | `vm/hot_loop` / `vm/hot_loop_no_interrupt` | 721 / 634 ms (1.14×) | 162 / 74 ms (2.19×) | ≤ 1.5× |
 
-The interrupt costs a fixed few nanoseconds per safepoint, which is 14% of an interpreted loop iteration but doubles a
-native one. About 90 ns of every member access is Luau calling the metamethod, and about 40 ns of `part.Position` is
-the `Position` getter looking up `CFrame` by name.
+An installed interrupt costs a fixed few nanoseconds per safepoint, which is 14% of an interpreted loop iteration but
+doubles a native one. About 90 ns of every member access is Luau calling the metamethod, and about 40 ns of
+`part.Position` is the `Position` getter looking up `CFrame` by name.
+
+Since #64 no interrupt is installed while a call is within its budget: a watchdog thread installs it once the deadline
+has passed (`crates/luau/src/watchdog.rs`), so `vm/hot_loop` now measures the budget enforced and
+`vm/hot_loop_no_interrupt` the budget turned off. **2026-11-03**, same machine, shared with other builds, so each pair
+is the minimum of 21 (jit) or 15 (interpreter) interleaved runs of each, from a throwaway harness:
+
+| `vm/hot_loop` / `vm/hot_loop_no_interrupt` | Interpreter | `--features jit` | Target |
+| --- | ---: | ---: | ---: |
+| `main` `0f98e88` (interrupt always installed) | 578 / 524 ms (1.10×) | 160 / 73 ms (2.19×) | |
+| #64 (watchdog) | 520 / 522 ms (1.00×) | 73 / 73 ms (1.00×) | ≤ 1.14× / ≤ 1.2× |
+
+Criterion's own medians for #64 agree: 562 / 574 ms (interpreter) and 74.1 / 74.5 ms (jit).
 
 Perf-gate instruction counts of the Luau suite at introduction (#46; ubuntu-24.04 runner, Rust 1.99.1, gungraun
 0.20.0, release profile): `luau_reads` 13,859,424, `luau_writes` 15,281,853, `luau_method_calls` 21,521,695 (10,000
