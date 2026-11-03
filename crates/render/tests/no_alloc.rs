@@ -17,7 +17,8 @@
 //! by hand, and the heap does not grow over 100 such frames with 1% of the parts changing.
 //!
 //! The debug overlay (#78) too: a frame whose overlay is redrawn (so it is encoded and uploaded) allocates no more
-//! than the same write and draw by hand, and the heap does not grow over 100 such frames.
+//! than the same write and draw by hand, the same for 35 quads as for 1,300 (beyond the runner noise the parts
+//! frames also see), and the heap does not grow over 100 such frames.
 //!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
@@ -1016,19 +1017,39 @@ fn nothing_accumulates_over_parts_frames() {
     );
 }
 
-/// Redraws the overlay as the performance overlay does every frame: a panel, a line of formatted numbers that
-/// change every frame, and a bar per frame of a 240-frame graph.
-fn fill_overlay(overlay: &mut metallic_render::Overlay, frame: usize) {
+/// What an overlay frame draws: `lines` lines of formatted numbers that change every frame and a graph of `bars`
+/// bars, over a panel.
+#[derive(Clone, Copy, Debug)]
+struct OverlayWork {
+    lines: usize,
+    bars: usize,
+}
+
+/// The performance overlay's frame: a panel, a line of numbers and a 240-frame graph (about 260 quads).
+const PERF_OVERLAY: OverlayWork = OverlayWork { lines: 1, bars: 240 };
+/// A small overlay: one line, a short graph (about 30 quads).
+const SMALL_OVERLAY: OverlayWork = OverlayWork { lines: 1, bars: 8 };
+/// A large one: 40 lines of text and the full graph (about 1,300 quads).
+const LARGE_OVERLAY: OverlayWork = OverlayWork { lines: 40, bars: 240 };
+
+/// Redraws the overlay as the performance overlay does every frame.
+fn fill_overlay(overlay: &mut metallic_render::Overlay, frame: usize, work: OverlayWork) {
     overlay.clear();
     overlay.rect(4.0, 4.0, 248.0, 120.0, [8, 10, 14, 200]);
-    overlay.text_fmt(
-        8.0,
-        8.0,
-        1.0,
-        [235, 238, 242, 255],
-        format_args!("FRAME {frame} {:.2} MS  P99 {:.2}", frame as f32 * 0.01, 4.5),
-    );
-    for i in 0..240 {
+    for line in 0..work.lines {
+        overlay.text_fmt(
+            8.0,
+            8.0 + line as f32 * 6.0,
+            1.0,
+            [235, 238, 242, 255],
+            format_args!(
+                "FRAME {frame} {:.2} MS  P99 {:.2}  LINE {line}",
+                frame as f32 * 0.01,
+                4.5
+            ),
+        );
+    }
+    for i in 0..work.bars {
         let h = ((i + frame) % 50) as f32;
         overlay.rect(8.0 + i as f32, 120.0 - h, 1.0, h.max(1.0), [96, 214, 120, 255]);
     }
@@ -1130,22 +1151,23 @@ impl HandOverlay {
     }
 }
 
-#[test]
-fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
-    let Some(context) = support::gpu() else { return };
+/// The fewest allocations of a UI-only frame whose overlay is redrawn with `work` (so it is encoded and uploaded
+/// every frame) and of the same wgpu calls by hand, over [`FRAMES`] frames each in alternating order, with the
+/// overlay's quad count.
+fn overlay_frame_and_floor(context: &RenderContext, work: OverlayWork) -> (u64, u64, usize) {
     let (device, queue) = (context.device(), context.queue());
-    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(
-        &context,
+        context,
         RendererSettings {
             passes: PassSet::EMPTY.with(PassId::Ui),
             gpu_timing: false,
             ..RendererSettings::new(FORMAT, SIZE, SIZE)
         },
     )
-    .unwrap();
+    .expect("a renderer");
     renderer.set_overlay_enabled(true);
-    fill_overlay(renderer.overlay_mut(), 0);
+    fill_overlay(renderer.overlay_mut(), 0, work);
     let hand = HandOverlay::new(device, renderer.overlay().len());
     let mut pacer = Pacer::new();
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
@@ -1154,7 +1176,7 @@ fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
             let (count, submission) = if renderer_turn {
                 // The overlay's contents change every frame, so every frame encodes and uploads them.
                 allocations_in(|| {
-                    fill_overlay(renderer.overlay_mut(), frame);
+                    fill_overlay(renderer.overlay_mut(), frame, work);
                     renderer.render(target.view())
                 })
             } else {
@@ -1166,15 +1188,44 @@ fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
             }
         }
     }
-    let (ours, floor) = (*ours.iter().min().unwrap(), *floor.iter().min().unwrap());
-    eprintln!(
-        "overlay frame ({} quads): renderer {ours} allocations, the same wgpu calls by hand {floor}",
-        renderer.overlay().len()
+    let (ours, floor) = (
+        *ours.iter().min().expect("frames"),
+        *floor.iter().min().expect("frames"),
     );
+    let quads = renderer.overlay().len();
+    eprintln!("overlay frame ({quads} quads): renderer {ours} allocations, the same wgpu calls by hand {floor}");
+    (ours, floor, quads)
+}
+
+/// Like the parts frame above: CI's lavapipe showed a constant 3 allocations beyond the hand-written overlay frame
+/// (65 against 62 for about 260 quads) where every adapter on the dev PC shows 0, the same runner-only excess the
+/// parts frames show ([`MACHINE_NOISE`]). The renderer's overlay frame and the hand-written one make the same wgpu
+/// calls, so the check is that the excess does not change with the overlay's size: nothing per quad, per glyph or
+/// per line of text allocates.
+#[test]
+fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
+    let Some(context) = support::gpu() else { return };
+    let (ours_small, floor_small, small) = overlay_frame_and_floor(&context, SMALL_OVERLAY);
+    let (ours_large, floor_large, large) = overlay_frame_and_floor(&context, LARGE_OVERLAY);
     assert!(
-        ours <= floor + WGPU_POOL_NOISE,
-        "the overlay adds {} allocation(s) per frame",
-        ours - floor
+        large > 30 * small,
+        "the workloads differ enough: {small} and {large} quads"
+    );
+    let (extra_small, extra_large) = (
+        ours_small.saturating_sub(floor_small),
+        ours_large.saturating_sub(floor_large),
+    );
+    // Nothing the overlay does allocates per quad: whatever a frame allocates beyond wgpu's own is the same for
+    // both workloads...
+    assert_eq!(
+        extra_small, extra_large,
+        "the overlay's own allocations grow with its size: {extra_small} for {small} quads, {extra_large} for \
+         {large}"
+    );
+    // ...and no more than the machine's noise (0 on the dev PC).
+    assert!(
+        extra_small <= MACHINE_NOISE,
+        "the overlay adds {extra_small} allocation(s) per frame"
     );
 }
 
@@ -1190,7 +1241,7 @@ fn nothing_accumulates_over_overlay_frames() {
         if frame == WARM_UP {
             before = live_bytes();
         }
-        fill_overlay(renderer.overlay_mut(), frame);
+        fill_overlay(renderer.overlay_mut(), frame, PERF_OVERLAY);
         let submission = renderer.render(target.view());
         pacer.submitted(context.device(), submission);
     }
