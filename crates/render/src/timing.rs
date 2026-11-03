@@ -6,19 +6,25 @@
 //! collect whichever buffers have been mapped since, so results arrive one or more frames late. If every buffer of
 //! the ring is still in flight (the GPU is far behind), the frame is simply not timed. The archived renderer read
 //! its timestamps back with a blocking `poll(Wait)` every frame; this never does (ADR 0008 §9).
+//!
+//! Shadow cascades ([`crate::shadow`]) are timed one by one, in the passes that draw their maps; a cascade whose map
+//! was kept in a frame took no GPU time in it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::PassId;
+use crate::shadow::MAX_CASCADES;
 
 /// How many frames of timestamps can be in flight at once. Two frames are queued at most
 /// (`desired_maximum_frame_latency = 2`), and a readback is collected on a later frame's poll, so four buffers keep
 /// every frame timed in a steady state.
 pub const TIMING_RING_SIZE: usize = 4;
 
-/// Two timestamps (start and end) per pass.
-const QUERIES_PER_FRAME: u32 = 2 * PassId::COUNT as u32;
+/// The most timed passes in a frame: every pass of the frame and every shadow cascade.
+const MAX_TIMED: usize = PassId::COUNT + MAX_CASCADES;
+/// Two timestamps (start and end) per timed pass.
+const QUERIES_PER_FRAME: u32 = 2 * MAX_TIMED as u32;
 /// Bytes of resolved timestamps per frame.
 const BYTES_PER_FRAME: u64 = QUERIES_PER_FRAME as u64 * 8;
 /// Each frame's region of the resolve buffer; resolve offsets must be aligned to this.
@@ -35,12 +41,18 @@ pub struct PassTiming {
     pub gpu_ms: f32,
 }
 
-/// The GPU time of every pass of one frame.
+/// The GPU time of every pass of one frame, and of each shadow cascade drawn in it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameTimings {
     frame: u64,
     passes: [PassTiming; PassId::COUNT],
     len: usize,
+    /// Each cascade's time; 0 for a cascade kept that frame.
+    cascades: [f32; MAX_CASCADES],
+    /// Cascades in use that frame.
+    cascade_count: u8,
+    /// Bit `i` set when cascade `i` was drawn (and timed) that frame.
+    cascades_drawn: u8,
 }
 
 impl FrameTimings {
@@ -50,7 +62,7 @@ impl FrameTimings {
         self.frame
     }
 
-    /// The timed passes, in frame order.
+    /// The timed passes, in frame order (the shadow cascades are apart: [`FrameTimings::cascade`]).
     pub fn passes(&self) -> &[PassTiming] {
         &self.passes[..self.len]
     }
@@ -63,10 +75,38 @@ impl FrameTimings {
             .map(|timing| timing.gpu_ms)
     }
 
-    /// The sum of every pass's GPU time, in milliseconds.
-    pub fn total_ms(&self) -> f32 {
-        self.passes().iter().map(|timing| timing.gpu_ms).sum()
+    /// How many shadow cascades were in use that frame.
+    pub fn cascade_count(&self) -> usize {
+        usize::from(self.cascade_count)
     }
+
+    /// The GPU time of shadow cascade `cascade`'s pass: `Some(0.0)` when the cascade was in use but its map was
+    /// kept, `None` when it was not in use.
+    pub fn cascade(&self, cascade: usize) -> Option<f32> {
+        (cascade < self.cascade_count()).then(|| self.cascades[cascade])
+    }
+
+    /// Whether shadow cascade `cascade` was drawn that frame.
+    pub fn cascade_drawn(&self, cascade: usize) -> bool {
+        cascade < MAX_CASCADES && self.cascades_drawn & (1 << cascade) != 0
+    }
+
+    /// The GPU time of every shadow cascade drawn that frame.
+    pub fn shadow_ms(&self) -> f32 {
+        self.cascades.iter().sum()
+    }
+
+    /// The sum of every pass's GPU time, shadows included, in milliseconds.
+    pub fn total_ms(&self) -> f32 {
+        self.passes().iter().map(|timing| timing.gpu_ms).sum::<f32>() + self.shadow_ms()
+    }
+}
+
+/// A pass a frame timed: one of the frame's passes, or a shadow cascade's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Timed {
+    Pass(PassId),
+    Cascade(u8),
 }
 
 /// A readback slot's state, shared with its `map_async` callback.
@@ -79,8 +119,10 @@ struct Slot {
     readback: wgpu::Buffer,
     state: Arc<AtomicU8>,
     frame: u64,
-    passes: [PassId; PassId::COUNT],
+    /// The timed passes in query order.
+    timed: [Timed; MAX_TIMED],
     len: usize,
+    cascade_count: u8,
 }
 
 /// The query set, resolve buffer and readback ring. Only exists when the device has timestamp queries.
@@ -119,8 +161,9 @@ impl GpuTimer {
             }),
             state: Arc::new(AtomicU8::new(FREE)),
             frame: 0,
-            passes: [PassId::Opaque; PassId::COUNT],
+            timed: [Timed::Pass(PassId::Opaque); MAX_TIMED],
             len: 0,
+            cascade_count: 0,
         });
         Some(Self {
             query_set,
@@ -142,9 +185,10 @@ impl GpuTimer {
             .position(|slot| slot.state.load(Ordering::Acquire) == FREE)
     }
 
-    /// The timestamp writes for the `index`-th pass of the frame recorded in `slot`.
+    /// The timestamp writes for the `index`-th timed pass of the frame recorded in `slot` (in recording order:
+    /// the shadow cascades drawn, then the frame's passes).
     pub(crate) fn pass_writes(&self, slot: usize, index: usize) -> wgpu::RenderPassTimestampWrites<'_> {
-        let base = slot as u32 * QUERIES_PER_FRAME + 2 * index as u32;
+        let base = slot as u32 * QUERIES_PER_FRAME + 2 * index.min(MAX_TIMED - 1) as u32;
         wgpu::RenderPassTimestampWrites {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(base),
@@ -152,19 +196,22 @@ impl GpuTimer {
         }
     }
 
-    /// Records which passes frame `frame` timed and copies their timestamps towards `slot`'s readback buffer.
+    /// Records which passes frame `frame` timed (`timed`, in the order of their queries) with `cascade_count`
+    /// shadow cascades in use, and copies their timestamps towards `slot`'s readback buffer.
     pub(crate) fn end_frame(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         slot: usize,
         frame: u64,
-        passes: impl Iterator<Item = PassId>,
+        timed: impl Iterator<Item = Timed>,
+        cascade_count: u8,
     ) {
         let entry = &mut self.slots[slot];
         entry.frame = frame;
         entry.len = 0;
-        for pass in passes.take(PassId::COUNT) {
-            entry.passes[entry.len] = pass;
+        entry.cascade_count = cascade_count;
+        for pass in timed.take(MAX_TIMED) {
+            entry.timed[entry.len] = pass;
             entry.len += 1;
         }
         if entry.len == 0 {
@@ -228,10 +275,13 @@ fn read_slot(slot: &Slot, period_ns: f64) -> Option<FrameTimings> {
     let mut timings = FrameTimings {
         frame: slot.frame,
         passes: [PassTiming { pass: "", gpu_ms: 0.0 }; PassId::COUNT],
-        len: slot.len,
+        len: 0,
+        cascades: [0.0; MAX_CASCADES],
+        cascade_count: slot.cascade_count,
+        cascades_drawn: 0,
     };
     let (pairs, _) = view.as_chunks::<16>();
-    for (i, (pair, pass)) in pairs.iter().zip(&slot.passes[..slot.len]).enumerate() {
+    for (pair, timed) in pairs.iter().zip(&slot.timed[..slot.len]) {
         let (start, end) = pair.split_at(8);
         let (start, end) = (ticks(start), ticks(end));
         // Some drivers (AMD on Vulkan, measured) return zeros for a query set's very first frame, and no clock reads
@@ -239,12 +289,25 @@ fn read_slot(slot: &Slot, period_ns: f64) -> Option<FrameTimings> {
         if start == 0 || end < start {
             return None;
         }
-        let ticks = end - start;
-        timings.passes[i] = PassTiming {
-            pass: pass.name(),
-            // Precision is lost only past ~2^53 ticks, far beyond any frame.
-            gpu_ms: (ticks as f64 * period_ns / 1.0e6) as f32,
-        };
+        // Precision is lost only past ~2^53 ticks, far beyond any frame.
+        let gpu_ms = ((end - start) as f64 * period_ns / 1.0e6) as f32;
+        match *timed {
+            Timed::Pass(pass) => {
+                if timings.len < PassId::COUNT {
+                    timings.passes[timings.len] = PassTiming {
+                        pass: pass.name(),
+                        gpu_ms,
+                    };
+                    timings.len += 1;
+                }
+            }
+            Timed::Cascade(cascade) => {
+                if let Some(ms) = timings.cascades.get_mut(usize::from(cascade)) {
+                    *ms = gpu_ms;
+                    timings.cascades_drawn |= 1 << cascade;
+                }
+            }
+        }
     }
     Some(timings)
 }
@@ -265,6 +328,9 @@ mod tests {
             frame: 7,
             passes: [PassTiming { pass: "", gpu_ms: 0.0 }; PassId::COUNT],
             len: 2,
+            cascades: [0.5, 0.0, 0.0, 0.0],
+            cascade_count: 2,
+            cascades_drawn: 1,
         };
         timings.passes[0] = PassTiming {
             pass: PassId::Opaque.name(),
@@ -278,7 +344,13 @@ mod tests {
         assert_eq!(timings.passes().len(), 2);
         assert_eq!(timings.pass(PassId::Ui), Some(0.25));
         assert_eq!(timings.pass(PassId::Sky), None);
-        assert!((timings.total_ms() - 1.75).abs() < 1e-6);
+        assert_eq!(timings.cascade_count(), 2);
+        assert_eq!(
+            (timings.cascade(0), timings.cascade(1), timings.cascade(2)),
+            (Some(0.5), Some(0.0), None)
+        );
+        assert!(timings.cascade_drawn(0) && !timings.cascade_drawn(1));
+        assert!((timings.total_ms() - 2.25).abs() < 1e-6);
     }
 
     #[test]

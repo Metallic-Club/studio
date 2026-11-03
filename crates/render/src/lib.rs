@@ -27,6 +27,8 @@
 //!   per view by frustum, distance and screen size into the same draw lists, opaque instances front to back.
 //! - Lighting and the sky ([`lighting`], [`Renderer::set_lighting`]): the sun or moon, a hemisphere ambient and an
 //!   analytic sky drawn last at the far plane, from the `Lighting` service ([`LightingReader`]).
+//! - Sun shadows ([`shadow`], [`RendererSettings::shadows`]): texel-snapped cascaded shadow maps, each culling its
+//!   own casters, the far cascades cached while their static casters stay.
 //! - The debug overlay ([`overlay`], [`Renderer::set_overlay_enabled`]): rectangles and bitmap-font text in the UI
 //!   pass, which carries the performance overlay (ADR 0008 §10).
 
@@ -40,12 +42,13 @@ pub mod overlay;
 pub mod parts;
 mod renderer;
 pub mod scene;
+pub mod shadow;
 mod surface;
 mod target;
 mod timing;
 
 pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
-pub use cull::{CullSettings, CullStats, CullView, Frustum, VisibleSet};
+pub use cull::{Casters, CullSettings, CullStats, CullView, Frustum, VisibleSet};
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
 pub use lighting::{LightingReader, SceneLighting};
@@ -53,6 +56,7 @@ pub use overlay::Overlay;
 pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer};
 pub use renderer::{Renderer, RendererSettings};
 pub use scene::{GpuScene, InstanceScene};
+pub use shadow::{CascadeStats, MAX_CASCADES, ShadowSettings, ShadowStats};
 pub use surface::{RenderSurface, SurfaceFrame};
 pub use target::OffscreenTarget;
 pub use timing::{FrameTimings, PassTiming, TIMING_RING_SIZE};

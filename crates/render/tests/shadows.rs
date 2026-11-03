@@ -1,0 +1,441 @@
+//! Sun shadows on a real adapter (#82): a pillar's shadow on the floor against a committed reference image,
+//! `CastShadow` and `Lighting.GlobalShadows` turning shadows off, the same image from the vertex-buffer fallback,
+//! and the caching of the far cascade: a frame in which nothing static changed and the camera and sun stayed draws
+//! only the near cascades, which hold the moving parts. Skips when the machine has no adapter (see
+//! `support::gpu`).
+//!
+//! The reference is `tests/reference/shadows.png`, compared with the tolerance of `tests/parts.rs`. To make a new
+//! one (after a deliberate change to how shadows look), run with `METALLIC_UPDATE_REFERENCES=1` and look at it.
+
+mod support;
+
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use metallic_core::glam::{Vec3, Vec4};
+use metallic_core::{CFrame, Id, Value};
+use metallic_render::scene::{InstanceBinding, RenderComponents};
+use metallic_render::{
+    CameraReader, ContextOptions, GpuScene, LightingReader, OffscreenTarget, PassSet, RenderContext, Renderer,
+    RendererSettings, ShadowSettings, wgpu,
+};
+use support::scenes::{self, Game, Look};
+use support::{gpu, gpu_with, read_back_rgba8};
+
+const SIZE: u32 = 256;
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const THRESHOLD: u8 = 12;
+const MAX_OVER: f64 = 0.01;
+const MAX_MEAN: f64 = 1.0;
+
+/// The pillar's height; it stands on the floor at the origin.
+const PILLAR_HEIGHT: f32 = 8.0;
+
+/// What [`shadow_game`] built, to change later.
+struct ShadowGame {
+    game: Game,
+    pillar: Id,
+    /// A block 150 m from the camera, in the far (cached) cascade.
+    far_block: Id,
+    /// A ball near the camera that tests move.
+    mover: Id,
+}
+
+/// A floor, a pillar casting a long afternoon shadow, a ball resting beside it, a far block and a loose ball, seen
+/// from above at an angle. 16:00, so the sun is in the west-south-west and the pillar's shadow falls towards the
+/// north-east.
+fn shadow_game() -> ShadowGame {
+    let mut game = Game::new();
+    game.part(
+        Look::new("Block", "Concrete", [160, 158, 150]),
+        Vec3::new(600.0, 1.0, 600.0),
+        CFrame::new(Vec3::new(0.0, -0.5, 0.0)),
+    );
+    let pillar = game.part(
+        Look::new("Block", "Plastic", [196, 40, 28]),
+        Vec3::new(2.0, PILLAR_HEIGHT, 2.0),
+        CFrame::new(Vec3::new(0.0, PILLAR_HEIGHT / 2.0, 0.0)),
+    );
+    game.part(
+        Look::new("Ball", "SmoothPlastic", [13, 105, 172]),
+        Vec3::splat(3.0),
+        CFrame::new(Vec3::new(-8.0, 1.5, -5.0)),
+    );
+    let far_block = game.part(
+        Look::new("Block", "Plastic", [75, 151, 75]),
+        Vec3::new(10.0, 10.0, 10.0),
+        CFrame::new(Vec3::new(0.0, 5.0, -130.0)),
+    );
+    let mover = game.part(
+        Look::new("Ball", "Neon", [255, 200, 40]),
+        Vec3::splat(1.0),
+        CFrame::new(Vec3::new(6.0, 3.0, 6.0)),
+    );
+    game.set_camera(
+        CFrame::look_at(Vec3::new(4.0, 16.0, 24.0), Vec3::new(2.0, 0.0, -2.0), Vec3::Y),
+        60.0,
+    );
+    let lighting = lighting_service(&game);
+    game.dm
+        .set_by_name(lighting, "ClockTime", Value::Number(16.0))
+        .expect("ClockTime");
+    ShadowGame {
+        game,
+        pillar,
+        far_block,
+        mover,
+    }
+}
+
+fn lighting_service(game: &Game) -> Id {
+    let class = game.dm.registry().class_id("Lighting").expect("Lighting");
+    game.dm.service(class).expect("a Lighting")
+}
+
+/// The direction towards the sun.
+fn sun(game: &Game) -> Vec3 {
+    let Ok(Value::Vector3(sun)) = game.dm.get_by_name(lighting_service(game), "SunDirection") else {
+        panic!("no SunDirection");
+    };
+    sun
+}
+
+/// A renderer, a scene of `game` and a camera reader, ready to draw frames.
+struct Frames {
+    renderer: Renderer,
+    scene: GpuScene,
+    target: OffscreenTarget,
+    camera: CameraReader,
+    lighting: LightingReader,
+}
+
+impl Frames {
+    fn new(context: &RenderContext, game: &mut Game, shadows: ShadowSettings) -> Self {
+        let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
+        let renderer = Renderer::new(
+            context,
+            RendererSettings {
+                passes: PassSet::default(),
+                gpu_timing: true,
+                shadows,
+                ..RendererSettings::new(FORMAT, SIZE, SIZE)
+            },
+        )
+        .expect("a renderer");
+        let scene = GpuScene::new(
+            context,
+            &mut game.dm,
+            Some(game.workspace),
+            &RenderComponents::builtin(),
+        )
+        .expect("a scene");
+        Self {
+            renderer,
+            scene,
+            target,
+            camera: CameraReader::new(),
+            lighting: LightingReader::new(),
+        }
+    }
+
+    /// One frame of `game` as it is now, lit by its `Lighting`.
+    fn frame(&mut self, context: &RenderContext, game: &mut Game) {
+        let camera = self.camera.read(&game.dm, game.workspace);
+        if let Some(camera) = camera {
+            self.scene.set_camera_position(&game.dm, camera.position);
+        }
+        self.scene.sync(&mut game.dm);
+        let lighting = self.lighting.read(&game.dm, lighting_service(game));
+        self.renderer.set_lighting(lighting);
+        let submission = self
+            .renderer
+            .render_scene(self.target.view(), &mut self.scene, camera.as_ref());
+        // Keep at most one frame in flight, outside the frame (offscreen nothing else paces the CPU).
+        let _ = context.device().poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        });
+    }
+
+    fn pixels(&self, context: &RenderContext) -> Vec<[u8; 4]> {
+        read_back_rgba8(context, self.target.texture())
+    }
+}
+
+/// Renders `game` (two frames, so everything is uploaded) with `shadows` and reads the image back.
+fn render(context: &RenderContext, game: &mut Game, shadows: ShadowSettings) -> Vec<[u8; 4]> {
+    let mut frames = Frames::new(context, game, shadows);
+    for _ in 0..2 {
+        frames.frame(context, game);
+    }
+    frames.pixels(context)
+}
+
+/// Where world point `point` lands on the target, in pixels from the top left.
+fn project(game: &Game, point: Vec3) -> (u32, u32) {
+    let camera = CameraReader::new().read(&game.dm, game.workspace).expect("a camera");
+    let clip = camera.view_projection(1.0) * Vec4::from((point - camera.position, 1.0));
+    let (x, y) = (clip.x / clip.w, clip.y / clip.w);
+    (
+        ((x * 0.5 + 0.5) * SIZE as f32) as u32,
+        ((0.5 - y * 0.5) * SIZE as f32) as u32,
+    )
+}
+
+/// The mean of the three channels around pixel `(x, y)` (a 3 × 3 block, so an edge pixel does not decide).
+fn level(pixels: &[[u8; 4]], (x, y): (u32, u32)) -> f32 {
+    let mut sum = 0u32;
+    for dy in 0..3 {
+        for dx in 0..3 {
+            let p = pixels[((y + dy - 1) * SIZE + x + dx - 1) as usize];
+            sum += u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);
+        }
+    }
+    sum as f32 / 27.0
+}
+
+/// Two floor points 5 m from the pillar's foot: one in its shadow (down-sun) and one lit (up-sun), on the image.
+fn floor_points(game: &Game) -> ((u32, u32), (u32, u32)) {
+    let sun = sun(game);
+    let down_sun = Vec3::new(-sun.x, 0.0, -sun.z).normalize();
+    // The pillar's shadow is PILLAR_HEIGHT / tan(elevation) long; 5 m is well inside it.
+    assert!(
+        PILLAR_HEIGHT * (1.0 - sun.y * sun.y).sqrt() / sun.y > 8.0,
+        "the shadow is long"
+    );
+    (project(game, down_sun * 5.0), project(game, -down_sun * 5.0))
+}
+
+fn check_reference(name: &str, pixels: &[[u8; 4]]) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/reference/{name}.png"));
+    if std::env::var("METALLIC_UPDATE_REFERENCES").is_ok_and(|v| v == "1") {
+        scenes::write_png(&path, SIZE, SIZE, pixels);
+        eprintln!("wrote {}", path.display());
+        return;
+    }
+    let Some((width, height, reference)) = scenes::read_png(&path) else {
+        panic!(
+            "{} is missing; run with METALLIC_UPDATE_REFERENCES=1 to make it",
+            path.display()
+        );
+    };
+    assert_eq!((width, height), (SIZE, SIZE));
+    let diff = scenes::compare(pixels, &reference, THRESHOLD);
+    eprintln!(
+        "{name}: max difference {}, mean {:.3}, {:.3}% of pixels over {THRESHOLD}",
+        diff.max,
+        diff.mean,
+        diff.over * 100.0
+    );
+    if diff.over > MAX_OVER || diff.mean > MAX_MEAN {
+        let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
+        scenes::write_png(&out, SIZE, SIZE, pixels);
+        panic!(
+            "{name} differs from the reference beyond the tolerance ({diff:?}); the image is in {}",
+            out.display()
+        );
+    }
+}
+
+#[test]
+fn a_pillar_casts_its_shadow_on_the_floor() {
+    let Some(context) = gpu() else { return };
+    let mut built = shadow_game();
+    let pixels = render(&context, &mut built.game, ShadowSettings::default());
+    check_reference("shadows", &pixels);
+    let (shadowed, lit) = floor_points(&built.game);
+    let (dark, bright) = (level(&pixels, shadowed), level(&pixels, lit));
+    eprintln!("floor in the shadow at {shadowed:?}: {dark:.1}; lit at {lit:?}: {bright:.1}");
+    // The low sun lights the floor at a grazing angle, so the sky's light is most of it: about 3/4 in sRGB.
+    assert!(dark < bright * 0.85, "the floor is not darker in the shadow");
+    // Without shadows the same floor is lit on both sides.
+    let unshadowed = render(&context, &mut built.game, ShadowSettings::OFF);
+    let (dark, bright) = (level(&unshadowed, shadowed), level(&unshadowed, lit));
+    assert!((dark - bright).abs() < bright * 0.08, "{dark} against {bright}");
+}
+
+#[test]
+fn cast_shadow_and_global_shadows_turn_shadows_off() {
+    let Some(context) = gpu() else { return };
+    let mut built = shadow_game();
+    let off = render(&context, &mut built.game, ShadowSettings::OFF);
+    let (shadowed, _) = floor_points(&built.game);
+
+    // The pillar alone stops casting: its shadow is gone, the ball's stays.
+    built
+        .game
+        .dm
+        .set_by_name(built.pillar, "CastShadow", Value::Bool(false))
+        .expect("CastShadow");
+    let no_pillar = render(&context, &mut built.game, ShadowSettings::default());
+    let diff = (level(&no_pillar, shadowed) - level(&off, shadowed)).abs();
+    assert!(diff < 3.0, "the pillar still casts ({diff})");
+    assert!(
+        scenes::compare(&no_pillar, &off, THRESHOLD).over > 0.001,
+        "the ball's shadow went too"
+    );
+
+    // `Lighting.GlobalShadows` off: exactly the image without shadows.
+    built
+        .game
+        .dm
+        .set_by_name(built.pillar, "CastShadow", Value::Bool(true))
+        .expect("CastShadow");
+    let lighting = lighting_service(&built.game);
+    built
+        .game
+        .dm
+        .set_by_name(lighting, "GlobalShadows", Value::Bool(false))
+        .expect("GlobalShadows");
+    let global_off = render(&context, &mut built.game, ShadowSettings::default());
+    assert_eq!(scenes::compare(&global_off, &off, 0).max, 0);
+}
+
+#[test]
+fn the_vertex_buffer_fallback_draws_the_same_shadows() {
+    let Some(primary) = gpu() else { return };
+    let Some(fallback) = gpu_with(&ContextOptions {
+        force_vertex_instances: true,
+        ..ContextOptions::default()
+    }) else {
+        return;
+    };
+    assert_eq!(InstanceBinding::for_context(&fallback), InstanceBinding::Vertex);
+    let storage = render(&primary, &mut shadow_game().game, ShadowSettings::default());
+    let vertex = render(&fallback, &mut shadow_game().game, ShadowSettings::default());
+    let diff = scenes::compare(&vertex, &storage, 1);
+    eprintln!("fallback against storage: {diff:?}");
+    assert!(diff.max <= 2, "{diff:?}");
+}
+
+/// The cascades a frame drew, as a bit mask.
+fn redrawn(frames: &Frames) -> u8 {
+    frames.renderer.draw_stats().shadow_redrawn
+}
+
+fn move_to(game: &mut Game, id: Id, at: Vec3) {
+    game.dm
+        .set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at)))
+        .expect("moved");
+}
+
+/// The far cascade is cached: with the camera and the sun still, frames in which only a moving part moves draw the
+/// two near cascades (which hold it) and keep the far one; a static part moving inside the far cascade draws it
+/// once; the sun turning draws everything. The far cascade never holds the moving part.
+#[test]
+fn a_static_frame_does_not_redraw_the_far_cascade() {
+    let Some(context) = gpu() else { return };
+    let mut built = shadow_game();
+    let game = &mut built.game;
+    let mut frames = Frames::new(&context, game, ShadowSettings::default());
+    frames.frame(&context, game);
+    assert_eq!(redrawn(&frames), 0b111, "the first frame draws every cascade");
+    let first = frames.renderer.draw_stats();
+    assert_eq!(first.shadow_cascades, 3);
+    assert!(first.shadow_draws >= 3 && first.shadow_instances > 0, "{first:?}");
+    // The far cascade holds the far block (and everything else).
+    assert!(first.shadow_casters[2] >= 4, "{first:?}");
+
+    // Nothing changed at all: every map is kept.
+    frames.frame(&context, game);
+    assert_eq!(redrawn(&frames), 0, "an unchanged frame drew {:b}", redrawn(&frames));
+    assert_eq!(frames.renderer.draw_stats().shadow_draws, 0);
+
+    // The loose ball moves every frame. Its first moves change the static region (it is promoted to the dynamic
+    // one, which takes it out of the far cascade), then only the near cascades are drawn again.
+    let mut masks = Vec::new();
+    for frame in 0..40 {
+        move_to(game, built.mover, Vec3::new(6.0, 3.0 + frame as f32 * 0.05, 6.0));
+        frames.frame(&context, game);
+        masks.push(redrawn(&frames));
+    }
+    eprintln!("cascades drawn while the ball moves: {masks:?}");
+    assert!(masks[10..].iter().all(|&mask| mask == 0b011), "{masks:?}");
+    let steady = frames.renderer.draw_stats();
+    assert_eq!(
+        steady.shadow_casters[2],
+        first.shadow_casters[2] - 1,
+        "the far cascade holds the static casters only"
+    );
+    let stats = frames.renderer.shadow_stats();
+    assert!(stats.cascade[2].cached && !stats.cascade[1].cached);
+
+    // A static part moves inside the far cascade: it is drawn again, once.
+    move_to(game, built.far_block, Vec3::new(3.0, 5.0, -130.0));
+    move_to(game, built.mover, Vec3::new(6.0, 5.0, 6.0));
+    frames.frame(&context, game);
+    assert_eq!(redrawn(&frames), 0b111);
+    move_to(game, built.mover, Vec3::new(6.0, 5.1, 6.0));
+    frames.frame(&context, game);
+    assert_eq!(redrawn(&frames), 0b011);
+
+    // A recolour of a static part changes no shadow.
+    game.dm
+        .set_by_name(
+            built.far_block,
+            "Color",
+            Value::Color3(metallic_core::Color3::new(0.1, 0.2, 0.3)),
+        )
+        .expect("Color");
+    move_to(game, built.mover, Vec3::new(6.0, 5.2, 6.0));
+    frames.frame(&context, game);
+    assert_eq!(redrawn(&frames), 0b011);
+
+    // The sun moves: every cascade.
+    let lighting = lighting_service(game);
+    game.dm
+        .set_by_name(lighting, "ClockTime", Value::Number(16.1))
+        .expect("ClockTime");
+    frames.frame(&context, game);
+    assert_eq!(redrawn(&frames), 0b111);
+
+    // GPU time is reported per cascade: a kept cascade took none.
+    if !frames.renderer.gpu_timing_enabled() {
+        eprintln!("no timestamp queries: per-cascade GPU times not checked");
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut checked = false;
+    while Instant::now() < deadline && !checked {
+        move_to(game, built.mover, Vec3::new(6.0, 5.3, 6.0));
+        frames.frame(&context, game);
+        if let Some(timings) = frames.renderer.gpu_timings().copied()
+            && timings.cascade_count() == 3
+            && timings.cascade_drawn(0)
+            && !timings.cascade_drawn(2)
+        {
+            eprintln!(
+                "frame {}: cascades {:?} {:?} {:?} ms",
+                timings.frame(),
+                timings.cascade(0),
+                timings.cascade(1),
+                timings.cascade(2)
+            );
+            assert!(timings.cascade(0).is_some_and(|ms| ms > 0.0));
+            assert_eq!(timings.cascade(2), Some(0.0));
+            assert_eq!(timings.cascade(3), None);
+            checked = true;
+        }
+    }
+    assert!(checked, "no timings of a frame that kept the far cascade arrived");
+}
+
+/// With every cascade dynamic (the full-quality end of the setting) a moving part redraws them all, and the far
+/// one holds it too.
+#[test]
+fn all_dynamic_cascades_redraw_with_every_change() {
+    let Some(context) = gpu() else { return };
+    let mut built = shadow_game();
+    let game = &mut built.game;
+    let settings = ShadowSettings {
+        dynamic_cascades: 3,
+        ..ShadowSettings::default()
+    };
+    let mut frames = Frames::new(&context, game, settings);
+    for frame in 0..12 {
+        move_to(game, built.mover, Vec3::new(6.0, 3.0 + frame as f32 * 0.05, 6.0));
+        frames.frame(&context, game);
+    }
+    assert_eq!(redrawn(&frames), 0b111);
+    assert!(!frames.renderer.shadow_stats().cascade[2].cached);
+}

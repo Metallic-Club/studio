@@ -70,6 +70,17 @@ impl Default for CullSettings {
     }
 }
 
+/// Which shadow casters a shadow view keeps ([`crate::InstanceScene::cull_casters`]): opaque instances with
+/// `CastShadow` on, from both regions or from the static region only. See [`crate::shadow`] for why a cached
+/// cascade holds only the static ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Casters {
+    /// Every caster, moving or not.
+    All,
+    /// Casters in the static region ([`crate::scene::Region::Static`]): the ones that are not moving.
+    Static,
+}
+
 /// How a box lies against a frustum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Containment {

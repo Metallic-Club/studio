@@ -31,8 +31,8 @@ use metallic_core::glam::{IVec3, Vec3};
 
 use super::Region;
 use super::instance::GpuInstance;
-use super::lists::{NOT_LISTED, entry, entry_slot};
-use crate::cull::{Containment, CullStats, CullView, VisibleSet};
+use super::lists::{DYNAMIC_ENTRY, NOT_LISTED, TRANSPARENT_LIST, entry, entry_slot};
+use crate::cull::{Casters, Containment, CullStats, CullView, VisibleSet};
 
 /// The side of a grid cell, in metres. Parts are mostly a few metres across; a cell holds a few dozen of them in a
 /// dense scene, few enough to test one by one when the cell crosses the view's edge, and the cells of a 1.6 km city
@@ -67,13 +67,15 @@ impl Place {
     };
 }
 
-/// One drawn instance as culling sees it: its bounding sphere, its entry and its list.
+/// One drawn instance as culling sees it: its bounding sphere, its entry, its list, and whether it casts a sun
+/// shadow ([`super::is_shadow_caster`]), which shadow views ([`Casters`]) cull on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Item {
     pub(crate) center: Vec3,
     pub(crate) radius: f32,
     pub(crate) entry: u32,
     pub(crate) list: u16,
+    pub(crate) caster: bool,
 }
 
 /// A large item, with the half extents of its axis-aligned box (much tighter than the sphere for a wall or floor).
@@ -199,6 +201,7 @@ impl Grid {
             radius,
             entry: entry(region, slot),
             list,
+            caster: list != TRANSPARENT_LIST && super::is_shadow_caster(instance),
         };
         // The common case for a moving part: still in its cell. Its own box is tested without working out a key,
         // and a sphere that is not finite fails the test and takes the long way.
@@ -337,6 +340,33 @@ impl Grid {
         transparent: usize,
         out: &mut VisibleSet,
     ) -> CullStats {
+        self.cull_filtered::<VIEW>(view, capacities, transparent, out)
+    }
+
+    /// Like [`Grid::cull`], for a shadow view: only the opaque instances that cast shadows, of both regions or of
+    /// the static region alone (see [`Casters`]). The see-through list stays empty.
+    pub(crate) fn cull_casters(
+        &self,
+        view: &CullView,
+        casters: Casters,
+        capacities: impl ExactSizeIterator<Item = usize>,
+        out: &mut VisibleSet,
+    ) -> CullStats {
+        match casters {
+            Casters::All => self.cull_filtered::<ALL_CASTERS>(view, capacities, 0, out),
+            Casters::Static => self.cull_filtered::<STATIC_CASTERS>(view, capacities, 0, out),
+        }
+    }
+
+    /// The cull of [`Grid::cull`] and [`Grid::cull_casters`]: `MODE` is [`VIEW`] (every instance) or which casters
+    /// a shadow view keeps. A constant, so the camera's cull compiles to the same code as before shadows.
+    fn cull_filtered<const MODE: u8>(
+        &self,
+        view: &CullView,
+        capacities: impl ExactSizeIterator<Item = usize>,
+        transparent: usize,
+        out: &mut VisibleSet,
+    ) -> CullStats {
         let mut stats = CullStats::default();
         out.begin(capacities, transparent, self.cells.len() + self.large.len());
         let half_cell = Vec3::splat(CELL_SIZE * 0.5);
@@ -382,7 +412,7 @@ impl Grid {
                 stats.outside_frustum += 1;
             } else if !view.sphere_large_and_near(item.center, item.radius) {
                 stats.too_far_or_small += 1;
-            } else {
+            } else if keeps::<MODE>(item) {
                 // By the box's nearest point, so a wall is ordered by its near face.
                 out.order.push((view.box_key(item.center, large.half), index | LARGE));
             }
@@ -403,6 +433,9 @@ impl Grid {
             };
             let (test_planes, test_size) = (place & TEST_PLANES != 0, place & TEST_SIZE != 0);
             for item in &cell.items {
+                if !keeps::<MODE>(item) {
+                    continue;
+                }
                 if test_planes && !view.frustum.contains_sphere(item.center, item.radius) {
                     stats.outside_frustum += 1;
                 } else if test_size && !view.sphere_large_and_near(item.center, item.radius) {
@@ -414,6 +447,22 @@ impl Grid {
         }
         stats.visible = out.finish();
         stats
+    }
+}
+
+/// The cull modes of [`Grid::cull_filtered`]: a camera's view (every instance), or a shadow view keeping the
+/// casters of both regions or of the static region only.
+const VIEW: u8 = 0;
+const ALL_CASTERS: u8 = 1;
+const STATIC_CASTERS: u8 = 2;
+
+/// Whether a cull in `MODE` considers `item` at all.
+#[inline(always)]
+fn keeps<const MODE: u8>(item: &Item) -> bool {
+    match MODE {
+        VIEW => true,
+        ALL_CASTERS => item.caster,
+        _ => item.caster && item.entry & DYNAMIC_ENTRY == 0,
     }
 }
 

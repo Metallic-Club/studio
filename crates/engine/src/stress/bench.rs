@@ -18,7 +18,7 @@ use std::time::Instant;
 use metallic_platform::{
     AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
-use metallic_render::{ContextOptions, CullSettings, wgpu};
+use metallic_render::{ContextOptions, CullSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
@@ -56,11 +56,15 @@ pub struct BenchOptions {
     pub cull: CullSettings,
     /// The camera's vertical field of view in degrees; the scene's own when `None`.
     pub field_of_view: Option<f32>,
+    /// How the sun's shadows are drawn (the renderer's defaults unless changed; [`ShadowSettings::OFF`] draws none).
+    pub shadows: ShadowSettings,
+    /// Walk the camera through the scene ([`StressScene::move_camera`]) instead of keeping it still.
+    pub moving_camera: bool,
 }
 
 impl BenchOptions {
-    /// 1,000 measured frames after 120 of warm-up, seed 1, the scene's window size and camera, no vsync, no overlay,
-    /// the default culling.
+    /// 1,000 measured frames after 120 of warm-up, seed 1, the scene's window size and camera (still), no vsync, no
+    /// overlay, the default culling and shadows.
     pub fn new(scene: StressKind) -> Self {
         Self {
             scene,
@@ -73,6 +77,8 @@ impl BenchOptions {
             context: ContextOptions::default(),
             cull: CullSettings::default(),
             field_of_view: None,
+            shadows: ShadowSettings::default(),
+            moving_camera: false,
         }
     }
 }
@@ -118,6 +124,10 @@ pub struct BenchReport {
     pub field_of_view: f32,
     /// What the camera culled.
     pub cull: CullSettings,
+    /// How the sun's shadows were drawn.
+    pub shadows: ShadowSettings,
+    /// Whether the camera walked ([`BenchOptions::moving_camera`]).
+    pub moving_camera: bool,
     /// How long building the scene took, in milliseconds.
     pub build_ms: f32,
     /// The measured frames.
@@ -175,6 +185,18 @@ impl BenchReport {
             },
             cull.min_screen_size
         )?;
+        let shadows = &self.shadows;
+        write!(
+            out,
+            "\"shadows\":{{\"enabled\":{},\"cascades\":{},\"resolution\":{},\"distance\":{:.1},\"dynamic\":{}}},\
+             \"moving_camera\":{},",
+            shadows.enabled,
+            shadows.cascade_count(),
+            shadows.resolution,
+            shadows.distance,
+            shadows.dynamic_count(),
+            self.moving_camera
+        )?;
         self.summary.write_json_members(out);
         out.push('}');
         Ok(())
@@ -199,6 +221,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     renderer.set_perf_window(options.frames.max(1) as usize);
     renderer.set_overlay(options.overlay);
     renderer.set_cull(options.cull);
+    renderer.set_shadows(options.shadows);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo
     } else {
@@ -215,6 +238,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         inner: WindowedApp::new(engine, WindowedOptions::new(window))?,
         renderer: Rc::clone(&renderer),
         scene,
+        moving_camera: options.moving_camera,
         warm_up: u64::from(options.warm_up),
         end: u64::from(options.warm_up) + u64::from(options.frames.max(1)),
         summary: None,
@@ -252,6 +276,8 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         in_view: app.scene.in_view(),
         field_of_view: app.scene.field_of_view(),
         cull: options.cull,
+        shadows: options.shadows,
+        moving_camera: options.moving_camera,
         build_ms,
         summary,
     })
@@ -262,6 +288,7 @@ struct BenchApp {
     inner: WindowedApp<StdOutput>,
     renderer: Rc<RefCell<SceneRenderer>>,
     scene: StressScene,
+    moving_camera: bool,
     warm_up: u64,
     end: u64,
     summary: Option<PerfSummary>,
@@ -297,7 +324,14 @@ impl AppHandler for BenchApp {
         let engine = self.inner.engine_mut();
         // Where the moving parts are in the frame about to run.
         let time = (engine.frame_count() + 1) as f64 / MOTION_FPS;
-        if let Err(error) = self.scene.animate(engine.data_model_mut(), time) {
+        let moved = self.scene.animate(engine.data_model_mut(), time).and_then(|()| {
+            if self.moving_camera {
+                self.scene.move_camera(engine.data_model_mut(), time)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = moved {
             self.error = Some(crate::stress::StressError::from(error).into());
             cx.exit();
             return;
@@ -341,6 +375,10 @@ mod tests {
         };
         summary.frame_ms.p50 = 2.0;
         summary.draws.opaque_draws = 4;
+        summary.gpu_cascades = 3;
+        summary.shadow_redraws = [10, 10, 1, 0];
+        summary.draws.shadow_cascades = 3;
+        summary.draws.shadow_casters = [5, 6, 7, 0];
         let report = BenchReport {
             scene: StressKind::Parts10k,
             seed: 1,
@@ -361,6 +399,8 @@ mod tests {
             in_view: 2_000,
             field_of_view: 70.0,
             cull: CullSettings::default(),
+            shadows: ShadowSettings::default(),
+            moving_camera: false,
             build_ms: 12.5,
             summary,
         };
@@ -371,6 +411,17 @@ mod tests {
         assert!(json.contains("\"fps_p50\":500.0"), "{json}");
         assert!(json.contains("\"passes\":{\"opaque\":{"), "{json}");
         assert!(json.contains("\"opaque\":4"), "{json}");
+        assert!(
+            json.contains(
+                "\"shadows\":{\"enabled\":true,\"cascades\":3,\"resolution\":2048,\"distance\":256.0,\"dynamic\":2}"
+            ),
+            "{json}"
+        );
+        assert!(json.contains("\"shadow\":[{\"mean\":"), "{json}");
+        assert!(
+            json.contains("\"shadow\":{\"cascades\":3,\"redraws\":[10,10,1],\"casters\":[5,6,7]"),
+            "{json}"
+        );
         // Balanced braces.
         let open = json.matches('{').count();
         assert_eq!(open, json.matches('}').count(), "{json}");

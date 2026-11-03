@@ -7,8 +7,9 @@ use crate::lighting::SceneLighting;
 use crate::overlay::{Overlay, OverlayPass};
 use crate::parts::{Camera, DrawStats, PartRenderer};
 use crate::scene::{InstanceBinding, UploadStats};
+use crate::shadow::{MAX_CASCADES, ShadowSettings, ShadowStats};
 use crate::target::check_size;
-use crate::timing::GpuTimer;
+use crate::timing::{GpuTimer, Timed};
 use crate::{FrameTimings, GpuScene, MsaaSampleCounts, RenderContext, RenderError};
 
 /// What a [`Renderer`] draws into and how.
@@ -31,11 +32,13 @@ pub struct RendererSettings {
     pub clear_color: wgpu::Color,
     /// What the main view culls ([`crate::cull`]): frustum, view distance and screen size.
     pub cull: CullSettings,
+    /// How the sun's shadows are drawn ([`crate::shadow`]).
+    pub shadows: ShadowSettings,
 }
 
 impl RendererSettings {
     /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes, GPU timing on, a
-    /// black clear colour and the default culling.
+    /// black clear colour, the default culling and the default shadows.
     pub fn new(color_format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         Self {
             color_format,
@@ -46,6 +49,7 @@ impl RendererSettings {
             gpu_timing: true,
             clear_color: wgpu::Color::BLACK,
             cull: CullSettings::default(),
+            shadows: ShadowSettings::default(),
         }
     }
 }
@@ -78,6 +82,13 @@ pub struct Renderer {
     overlay: Overlay,
     /// The overlay's GPU side; `Some` while the overlay is on.
     overlay_pass: Option<OverlayPass>,
+    /// The fewest layers a shadow map array gets on this backend (2 on OpenGL).
+    shadow_min_layers: u32,
+    /// The shadow cascades drawn this frame, in the order their passes were recorded (their queries come first).
+    shadow_passes: [u8; MAX_CASCADES],
+    shadow_recorded: usize,
+    /// Shadow cascades in use this frame.
+    shadow_in_use: u8,
 }
 
 impl Renderer {
@@ -117,9 +128,19 @@ impl Renderer {
             frame: 0,
             overlay: Overlay::default(),
             overlay_pass: None,
+            // A one-layer texture cannot be sampled as an array there.
+            shadow_min_layers: if context.capabilities().backend == wgpu::Backend::Gl {
+                2
+            } else {
+                1
+            },
+            shadow_passes: [0; MAX_CASCADES],
+            shadow_recorded: 0,
+            shadow_in_use: 0,
         };
         renderer.check_msaa(settings.msaa_samples)?;
         renderer.rebuild();
+        renderer.parts.set_shadows(settings.shadows, renderer.shadow_min_layers);
         Ok(renderer)
     }
 
@@ -190,6 +211,21 @@ impl Renderer {
         self.settings.cull = cull;
     }
 
+    /// Changes how the sun's shadows are drawn ([`crate::shadow`]). A settings change, not for every frame: a new
+    /// size or cascade count makes the maps again, and every map is drawn again next frame.
+    pub fn set_shadows(&mut self, shadows: ShadowSettings) {
+        if shadows != self.settings.shadows {
+            self.settings.shadows = shadows;
+            self.parts.set_shadows(shadows, self.shadow_min_layers);
+        }
+    }
+
+    /// What the last [`Renderer::render_scene`] did for the sun's shadows: the cascades in use, which were drawn
+    /// and which kept, their casters, and the CPU time of their culls.
+    pub fn shadow_stats(&self) -> ShadowStats {
+        self.parts.shadow_stats()
+    }
+
     /// Renders one frame into `target`, which must have the settings' format and size, and submits it.
     ///
     /// Never blocks on the GPU. For a window, render into [`crate::SurfaceFrame::view`] and present afterwards; the
@@ -240,6 +276,10 @@ impl Renderer {
         });
         self.last_upload = scene.upload_view(&mut encoder, view.as_ref());
         self.last_cull = scene.cull_stats();
+        // After the upload: the casters are culled from what its coalesce left.
+        self.parts
+            .prepare_shadows(&mut encoder, scene, camera, self.settings.width, self.settings.height);
+        self.shadow_in_use = u8::try_from(self.parts.shadow_stats().cascades).unwrap_or(0);
         // After the upload, which may have replaced the buffers the bind groups use.
         self.parts.prepare(
             scene,
@@ -249,8 +289,41 @@ impl Renderer {
             self.settings.color_format.is_srgb(),
         );
         self.prepare_overlay();
+        self.record_shadow_passes(&mut encoder, slot);
         self.record_passes(&mut encoder, target, slot, Some(scene));
         self.end_frame(encoder, slot)
+    }
+
+    /// Records a depth pass for every shadow cascade drawn this frame, before the frame's passes that sample them.
+    fn record_shadow_passes(&mut self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>) {
+        for (cascade, &label) in SHADOW_PASS_NAMES.iter().enumerate() {
+            let Some(view) = self.parts.shadow_target(cascade) else {
+                continue;
+            };
+            let timestamp_writes = match (self.timer.as_ref(), slot) {
+                (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, self.shadow_recorded)),
+                _ => None,
+            };
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.parts.draw_shadow(cascade, &mut render_pass);
+            drop(render_pass);
+            self.shadow_passes[self.shadow_recorded] = cascade as u8;
+            self.shadow_recorded += 1;
+        }
     }
 
     /// What the last [`Renderer::render_scene`] drew: the draw count per pass, instances and triangles.
@@ -327,6 +400,8 @@ impl Renderer {
 
     /// Starts a frame: its GPU timing slot, if any, and its encoder.
     fn begin_frame(&mut self) -> (wgpu::CommandEncoder, Option<usize>) {
+        self.shadow_recorded = 0;
+        self.shadow_in_use = 0;
         let slot = match self.timer.as_mut() {
             Some(timer) => timer.begin_frame(&self.device),
             None => None,
@@ -389,7 +464,8 @@ impl Renderer {
                 continue;
             }
             let timestamp_writes = match (self.timer.as_ref(), slot) {
-                (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, index)),
+                // The shadow passes recorded before took the first queries.
+                (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, self.shadow_recorded + index)),
                 _ => None,
             };
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -416,11 +492,16 @@ impl Renderer {
     /// Ends the frame: resolves its timestamps, submits it and counts it.
     fn end_frame(&mut self, mut encoder: wgpu::CommandEncoder, slot: Option<usize>) -> wgpu::SubmissionIndex {
         if let (Some(timer), Some(slot)) = (self.timer.as_mut(), slot) {
+            let cascades = self.shadow_passes[..self.shadow_recorded]
+                .iter()
+                .map(|&cascade| Timed::Cascade(cascade));
+            let passes = self.plan.passes().iter().map(|pass| Timed::Pass(pass.id));
             timer.end_frame(
                 &mut encoder,
                 slot,
                 self.frame,
-                self.plan.passes().iter().map(|pass| pass.id),
+                cascades.chain(passes),
+                self.shadow_in_use,
             );
         }
         let submission = self.queue.submit(std::iter::once(encoder.finish()));
@@ -489,6 +570,9 @@ impl Renderer {
         }
     }
 }
+
+/// The shadow passes' names in GPU debuggers.
+const SHADOW_PASS_NAMES: [&str; MAX_CASCADES] = ["shadow_0", "shadow_1", "shadow_2", "shadow_3"];
 
 fn color_ops(ops: AttachmentOps, clear: wgpu::Color) -> wgpu::Operations<wgpu::Color> {
     wgpu::Operations {

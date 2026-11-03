@@ -8,7 +8,7 @@ use metallic_core::{DataModel, Id};
 use super::instance::{GpuInstance, MeshKind};
 use super::sync::InstanceScene;
 use super::{MAX_UPLOAD_GAP, Region, RenderComponents, SyncStats};
-use crate::cull::{CullStats, CullView, VisibleSet};
+use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 use crate::{RenderContext, RenderError};
 
 /// The fewest slots a region's buffer has, so small scenes do not grow it frame after frame.
@@ -376,6 +376,17 @@ impl GpuScene {
             }
         }
         stats
+    }
+
+    /// Culls the shadow casters a shadow view holds into `out` (see [`InstanceScene::cull_casters`]), as of the last
+    /// upload's coalesce.
+    pub fn cull_casters(&mut self, view: &CullView, casters: Casters, out: &mut VisibleSet) -> CullStats {
+        self.scene.cull_casters(view, casters, out)
+    }
+
+    /// Forgets the scene's noted shadow-caster changes (see [`InstanceScene::clear_shadow_changes`]).
+    pub fn clear_shadow_changes(&mut self) {
+        self.scene.clear_shadow_changes();
     }
 
     /// What the last [`GpuScene::upload_view`] culled: default when it drew every live instance.

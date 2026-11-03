@@ -42,6 +42,10 @@
 //! linear light in the shader; the output is linear, encoded by an sRGB target (or by the shader for other
 //! formats).
 //!
+//! The directional light is shadowed by the sun's cascaded shadow maps ([`crate::shadow`]): the parts sample them
+//! (bound in the frame group with a comparison sampler, their matrices in the frame uniform) only where the light
+//! reaches the surface at all. [`PartRenderer`] owns the maps and draws their casters before the frame's passes.
+//!
 //! # Sky
 //!
 //! The sky pass draws one full-screen triangle at the far plane (depth 0 under reverse-Z) after the opaque parts,
@@ -59,8 +63,8 @@
 //! frame uniform as `camera − scene origin`, so positions reach the projection relative to the camera (ADR 0008
 //! §11). Without a camera nothing is drawn.
 //!
-//! Every pipeline (depth prepass, opaque, opaque after a prepass, sky, transparent) is created up front, when the
-//! renderer is made or its colour format or MSAA count change, never during a frame (ADR 0008 §9).
+//! Every pipeline (shadow casters, depth prepass, opaque, opaque after a prepass, sky, transparent) is created up
+//! front, when the renderer is made or its colour format or MSAA count change, never during a frame (ADR 0008 §9).
 
 mod camera;
 mod material;
@@ -77,6 +81,7 @@ use metallic_core::glam::Vec3;
 use crate::depth::{DEPTH_COMPARE, DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, depth_stencil_state};
 use crate::lighting::{ResolvedLighting, SceneLighting};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
+use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, ShadowStats};
 use crate::{GpuScene, PassId};
 use material::MATERIAL_TABLE_SIZE;
 use transparent::TransparentList;
@@ -106,12 +111,29 @@ pub struct DrawStats {
     pub transparent_triangles: u64,
     /// Instances culled from the frame (outside the view, too far or too small; see [`crate::cull`]).
     pub culled_instances: u32,
+    /// Sun shadow cascades in use ([`crate::shadow`]; 0 without shadows).
+    pub shadow_cascades: u32,
+    /// Bit `i` set when cascade `i`'s map was drawn this frame (otherwise it was kept).
+    pub shadow_redrawn: u8,
+    /// Draws in the shadow passes this frame: one per mesh kind in each cascade drawn.
+    pub shadow_draws: u32,
+    /// Caster instances drawn into the cascades drawn this frame.
+    pub shadow_instances: u32,
+    /// Triangles drawn into the cascades drawn this frame.
+    pub shadow_triangles: u64,
+    /// The casters each cascade's map holds, as of its last drawing.
+    pub shadow_casters: [u32; MAX_CASCADES],
 }
 
 impl DrawStats {
     /// Every draw of the frame.
     pub fn total_draws(&self) -> u32 {
-        self.prepass_draws + self.opaque_draws + self.sky_draws + self.transparent_draws
+        self.prepass_draws + self.opaque_draws + self.sky_draws + self.transparent_draws + self.shadow_draws
+    }
+
+    /// How many cascades were drawn this frame.
+    pub fn shadow_redrawn_count(&self) -> u32 {
+        self.shadow_redrawn.count_ones()
     }
 }
 
@@ -137,7 +159,14 @@ struct FrameUniforms {
     sun_disc: [f32; 4],
     sun_halo: [f32; 4],
     moon_disc: [f32; 4],
+    shadow_matrices: [[[f32; 4]; 4]; MAX_CASCADES],
+    shadow_splits: [f32; 4],
+    shadow_offsets: [f32; 4],
+    shadow_biases: [f32; 4],
+    shadow_params: [f32; 4],
 }
+
+const _: () = assert!(MAX_CASCADES == 4, "frame.wgsl holds four cascades");
 
 fn vec4(v: Vec3) -> [f32; 4] {
     [v.x, v.y, v.z, 0.0]
@@ -149,8 +178,15 @@ fn vec4w(v: Vec3, w: f32) -> [f32; 4] {
 
 impl FrameUniforms {
     /// The uniform for `camera` on a target `aspect` (width / height) wide, `offset` (camera − scene origin) from
-    /// the scene origin, lit by `light`.
-    fn new(camera: &Camera, aspect: f32, offset: Vec3, light: &ResolvedLighting, srgb: bool) -> Self {
+    /// the scene origin, lit by `light` with `shadow`'s cascades.
+    fn new(
+        camera: &Camera,
+        aspect: f32,
+        offset: Vec3,
+        light: &ResolvedLighting,
+        shadow: &FrameShadow,
+        srgb: bool,
+    ) -> Self {
         let aspect = if aspect.is_finite() && aspect > 0.0 {
             aspect
         } else {
@@ -177,6 +213,11 @@ impl FrameUniforms {
             sun_disc: vec4(light.sun_disc),
             sun_halo: vec4(light.sun_halo),
             moon_disc: vec4w(light.moon_disc, light.moon_cos_radius),
+            shadow_matrices: shadow.matrices.map(|m| m.to_cols_array_2d()),
+            shadow_splits: shadow.splits,
+            shadow_offsets: shadow.offsets,
+            shadow_biases: shadow.biases,
+            shadow_params: shadow.params,
         }
     }
 }
@@ -236,8 +277,11 @@ pub struct PartRenderer {
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds, so an unchanged frame skips the write.
     frame_uniforms: Option<FrameUniforms>,
+    frame_layout: wgpu::BindGroupLayout,
     frame_group: wgpu::BindGroup,
     instance_layout: Option<wgpu::BindGroupLayout>,
+    /// The sun's shadow maps, which the frame group samples.
+    shadows: ShadowMaps,
     shaders: Shaders,
     pipelines: Pipelines,
     opaque_group: Option<InstanceGroup>,
@@ -299,6 +343,23 @@ impl PartRenderer {
                     size_of::<FrameUniforms>() as u64,
                 ),
                 uniform(1, wgpu::ShaderStages::FRAGMENT, MATERIAL_TABLE_SIZE),
+                // The sun's shadow maps and their comparison sampler (`crate::shadow`).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
             ],
         });
         let instance_layout = (binding == InstanceBinding::Storage).then(|| {
@@ -345,20 +406,8 @@ impl PartRenderer {
         });
         let materials = MaterialTable::new(device);
         debug_assert_eq!(materials.buffer().size(), MATERIAL_TABLE_SIZE);
-        let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("metallic parts frame"),
-            layout: &frame_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: frame_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: materials.buffer().as_entire_binding(),
-                },
-            ],
-        });
+        let shadows = ShadowMaps::new(device, queue, binding, instance_layout.as_ref());
+        let frame_group = frame_group(device, &frame_layout, &frame_buffer, &materials, &shadows);
         let pipelines = create_pipelines(device, &shaders, binding, format, samples);
         let lighting = SceneLighting::default();
         Self {
@@ -371,8 +420,10 @@ impl PartRenderer {
             resolved: lighting.resolve(),
             frame_buffer,
             frame_uniforms: None,
+            frame_layout,
             frame_group,
             instance_layout,
+            shadows,
             shaders,
             pipelines,
             opaque_group: None,
@@ -425,6 +476,65 @@ impl PartRenderer {
         &self.meshes
     }
 
+    /// How the sun's shadows are drawn (the resolution as clamped to the device).
+    pub fn shadow_settings(&self) -> &ShadowSettings {
+        self.shadows.settings()
+    }
+
+    /// What the last frame did for the sun's shadows.
+    pub fn shadow_stats(&self) -> ShadowStats {
+        self.shadows.stats()
+    }
+
+    /// Changes how the sun's shadows are drawn (a settings change: it may make the maps again; every map is drawn
+    /// again next frame). `min_layers` is 2 on OpenGL, where a one-layer texture cannot be sampled as an array.
+    pub(crate) fn set_shadows(&mut self, settings: ShadowSettings, min_layers: u32) {
+        if self.shadows.configure(settings, min_layers) {
+            self.frame_group = frame_group(
+                &self.device,
+                &self.frame_layout,
+                &self.frame_buffer,
+                &self.materials,
+                &self.shadows,
+            );
+        }
+    }
+
+    /// Fits and culls the shadow cascades for a frame of `scene` seen from `camera` on a `width` × `height` target,
+    /// and records the upload of the casters' lists into `encoder`. Call it after [`GpuScene::upload_view`] and
+    /// before [`PartRenderer::prepare`], every frame (see [`crate::shadow`]).
+    pub(crate) fn prepare_shadows(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &mut GpuScene,
+        camera: Option<&Camera>,
+        width: u32,
+        height: u32,
+    ) {
+        let lit = self.lighting.global_shadows && self.resolved.light_color.max_element() > 0.0;
+        let aspect = width as f32 / height.max(1) as f32;
+        self.shadows
+            .prepare(encoder, scene, camera, aspect, self.resolved.light_direction, lit);
+    }
+
+    /// The render target of shadow cascade `cascade`'s map when it is drawn this frame.
+    pub(crate) fn shadow_target(&self, cascade: usize) -> Option<&wgpu::TextureView> {
+        if self.shadows.redraws(cascade) {
+            self.shadows.layer_view(cascade)
+        } else {
+            None
+        }
+    }
+
+    /// Records shadow cascade `cascade`'s casters into `render_pass`, a depth pass into its
+    /// [`PartRenderer::shadow_target`].
+    pub(crate) fn draw_shadow(&mut self, cascade: usize, render_pass: &mut wgpu::RenderPass<'_>) {
+        let (draws, instances, triangles) = self.shadows.draw(cascade, &self.meshes, render_pass);
+        self.stats.shadow_draws += draws;
+        self.stats.shadow_instances += instances;
+        self.stats.shadow_triangles += triangles;
+    }
+
     /// What the last frame drew.
     pub fn stats(&self) -> DrawStats {
         self.stats
@@ -451,7 +561,11 @@ impl PartRenderer {
         self.materials.fill_from_names(instances.material_names());
         self.materials.upload(&self.queue);
         let aspect = width as f32 / height.max(1) as f32;
-        let uniforms = FrameUniforms::new(camera, aspect, offset, &self.resolved, srgb);
+        let uniforms = FrameUniforms::new(camera, aspect, offset, &self.resolved, self.shadows.frame(), srgb);
+        let shadow = self.shadows.stats();
+        self.stats.shadow_cascades = shadow.cascades;
+        self.stats.shadow_redrawn = shadow.redrawn_mask();
+        self.stats.shadow_casters = shadow.cascade.map(|c| c.casters);
         if self.frame_uniforms != Some(uniforms) {
             self.queue
                 .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -580,6 +694,38 @@ impl PartRenderer {
             InstanceBinding::Vertex => render_pass.set_vertex_buffer(1, copies.slice(..)),
         }
     }
+}
+
+/// The frame group: the frame uniform, the material table, and the shadow maps with their sampler.
+fn frame_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    frame: &wgpu::Buffer,
+    materials: &MaterialTable,
+    shadows: &ShadowMaps,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("metallic parts frame"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: materials.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(shadows.sample_view()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(shadows.sampler()),
+            },
+        ],
+    })
 }
 
 /// Makes `slot`'s bind group again when any of `buffers` is not the one it was made with.

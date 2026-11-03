@@ -33,6 +33,16 @@ struct Frame {
     sun_halo: vec4<f32>,
     // rgb: the moon disc's radiance (opposite the sun); w: cosine of its radius.
     moon_disc: vec4<f32>,
+    // The sun's shadow cascades (shadow/mod.rs): camera-relative positions to each cascade's map (x, y in −1..1,
+    // depth 0 at the light's end).
+    shadow_matrices: array<mat4x4<f32>, 4>,
+    // Per cascade: the view depth it ends at, the normal offset in metres, the depth bias in depth units.
+    shadow_splits: vec4<f32>,
+    shadow_offsets: vec4<f32>,
+    shadow_biases: vec4<f32>,
+    // x: cascades in use (0: no shadows), y: the filter's reach in texels, z: one texel in map coordinates,
+    // w: the view depth the shadows start fading out at.
+    shadow_params: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

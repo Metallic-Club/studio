@@ -21,6 +21,10 @@ const MATERIAL_ROWS: u32 = 256u;
 
 @group(0) @binding(1) var<uniform> materials: array<MaterialRow, 256>;
 
+// The sun's shadow cascades, one layer each, and a comparison sampler that filters four depth tests bilinearly.
+@group(0) @binding(2) var shadow_maps: texture_depth_2d_array;
+@group(0) @binding(3) var shadow_sampler: sampler_comparison;
+
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
     // Camera-relative world position.
@@ -83,6 +87,46 @@ fn hemisphere(direction_y: f32) -> vec3<f32> {
     return mix(frame.ground_ambient.rgb, frame.sky_ambient.rgb, clamp(direction_y * 0.5 + 0.5, 0.0, 1.0));
 }
 
+// How much of the sun (or moon) reaches a point: 1 lit, 0 in shadow. `position` is camera-relative and `n` the
+// unit normal. The cascade is the first whose slice of the view the point is in; the point moves along its normal
+// by the cascade's offset and is compared with its bias, through a tent of bilinear comparison taps
+// (`shadow_params.y` texels each way). Past the last cascade there is no shadow, faded in over the last tenth.
+fn sun_visibility(position: vec3<f32>, n: vec3<f32>) -> f32 {
+    let count = u32(frame.shadow_params.x);
+    if count == 0u {
+        return 1.0;
+    }
+    let depth = dot(position, frame.view_forward.xyz);
+    var cascade = 0u;
+    loop {
+        if cascade >= count || depth < frame.shadow_splits[cascade] {
+            break;
+        }
+        cascade += 1u;
+    }
+    if cascade >= count {
+        return 1.0;
+    }
+    let p = position + n * frame.shadow_offsets[cascade];
+    let clip = frame.shadow_matrices[cascade] * vec4<f32>(p, 1.0);
+    let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+    let reference = clip.z - frame.shadow_biases[cascade];
+    let texel = frame.shadow_params.z;
+    let reach = i32(frame.shadow_params.y);
+    var lit = 0.0;
+    var total = 0.0;
+    for (var y = -reach; y <= reach; y += 1) {
+        for (var x = -reach; x <= reach; x += 1) {
+            let weight = f32(reach + 1 - abs(x)) * f32(reach + 1 - abs(y));
+            let at = uv + vec2<f32>(f32(x), f32(y)) * texel;
+            lit += weight * textureSampleCompareLevel(shadow_maps, shadow_sampler, at, cascade, reference);
+            total += weight;
+        }
+    }
+    let fade = smoothstep(frame.shadow_params.w, frame.shadow_splits[count - 1u], depth);
+    return mix(lit / total, 1.0, fade);
+}
+
 struct Shaded {
     // Diffuse, ambient and emitted light: what transparency fades.
     body: vec3<f32>,
@@ -117,7 +161,11 @@ fn shade(in: VertexOut) -> Shaded {
         1e-5,
     );
     let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
-    let light = frame.light_color.rgb * n_dot_l;
+    var shadow = 1.0;
+    if n_dot_l > 0.0 {
+        shadow = sun_visibility(in.position, n);
+    }
+    let light = frame.light_color.rgb * n_dot_l * shadow;
 
     var out: Shaded;
     out.body = diffuse / PI * light + diffuse * hemisphere(n.y) + albedo * row.surface.z;
