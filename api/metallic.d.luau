@@ -580,16 +580,28 @@ declare extern type InputObject extends Instance with
     read NextInput: InputObject?
 end
 
---- Controls how the scene is lit: the time of day, the sun, the sky colour and the ambient light.
+--- Controls how the scene is lit: the time of day, the sun and moon, the colours of the sky and the ambient light.
 declare extern type Lighting extends Instance with
     --- The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset.
     ClockTime: number
-    --- How strong the sunlight is. 0 turns the sun off.
+    --- How strong the sunlight is (and the moonlight, at night). 0 turns the sun off.
     Brightness: number
-    --- The colour of the sky in the middle of the day.
+    --- Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it passes straight overhead at noon, further north it stays lower in the south.
+    GeographicLatitude: number
+    --- The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. It points below the horizon at night, when the moon, opposite it, lights the scene.
+    read SunDirection: Vector3
+    --- The colour of the sky overhead in the middle of the day. It also tints the light from the sky.
     SkyColor: Color3
-    --- The colour of the light that reaches places the sun does not, such as shadows.
+    --- The colour of the sky at the horizon in the middle of the day; the sky fades to it from SkyColor.
+    HorizonColor: Color3
+    --- The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night and is bluer then.
+    OutdoorAmbient: Color3
+    --- Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and nights brighter.
     Ambient: Color3
+    --- Returns the unit vector from the scene towards the sun, the same as SunDirection.
+    function GetSunDirection(self): Vector3
+    --- Returns the unit vector from the scene towards the moon, which is always opposite the sun.
+    function GetMoonDirection(self): Vector3
 end
 
 --- Storage for things both the server and players need, such as shared modules and assets. Nothing here is drawn or run.

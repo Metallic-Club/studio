@@ -733,7 +733,7 @@
     {
       "name": "Lighting",
       "parent": "Instance",
-      "description": "Controls how the scene is lit: the time of day, the sun, the sky colour and the ambient light.",
+      "description": "Controls how the scene is lit: the time of day, the sun and moon, the colours of the sky and the ambient light.",
       "category": "",
       "creatable": false,
       "service_order": 1,
@@ -777,9 +777,50 @@
             10.0
           ],
           "group": "Sun",
-          "description": "How strong the sunlight is. 0 turns the sun off.",
+          "description": "How strong the sunlight is (and the moonlight, at night). 0 turns the sun off.",
           "aliases": [],
           "derived_from": []
+        },
+        {
+          "name": "GeographicLatitude",
+          "type": "Number",
+          "default": 41.733,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            -90.0,
+            90.0
+          ],
+          "group": "Sun",
+          "description": "Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it passes straight overhead at noon, further north it stays lower in the south.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "SunDirection",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "flags": [
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": true,
+          "range": null,
+          "group": "Sun",
+          "description": "The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. It points below the horizon at night, when the moon, opposite it, lights the scene.",
+          "aliases": [],
+          "derived_from": [
+            "ClockTime",
+            "GeographicLatitude"
+          ]
         },
         {
           "name": "SkyColor",
@@ -796,12 +837,31 @@
           "computed": false,
           "range": null,
           "group": "Sky",
-          "description": "The colour of the sky in the middle of the day.",
+          "description": "The colour of the sky overhead in the middle of the day. It also tints the light from the sky.",
           "aliases": [],
           "derived_from": []
         },
         {
-          "name": "Ambient",
+          "name": "HorizonColor",
+          "type": "Color3",
+          "default": [
+            0.8,
+            0.88,
+            0.96
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Sky",
+          "description": "The colour of the sky at the horizon in the middle of the day; the sky fades to it from SkyColor.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "OutdoorAmbient",
           "type": "Color3",
           "default": [
             0.5,
@@ -814,13 +874,47 @@
           "read_only": false,
           "computed": false,
           "range": null,
-          "group": "Sky",
-          "description": "The colour of the light that reaches places the sun does not, such as shadows.",
+          "group": "Ambient",
+          "description": "The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night and is bluer then.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Ambient",
+          "type": "Color3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Ambient",
+          "description": "Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and nights brighter.",
           "aliases": [],
           "derived_from": []
         }
       ],
-      "methods": [],
+      "methods": [
+        {
+          "name": "GetSunDirection",
+          "params": [],
+          "returns": "Vector3",
+          "description": "Returns the unit vector from the scene towards the sun, the same as SunDirection.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetMoonDirection",
+          "params": [],
+          "returns": "Vector3",
+          "description": "Returns the unit vector from the scene towards the moon, which is always opposite the sun.",
+          "invokes_callback": null
+        }
+      ],
       "signals": [],
       "callbacks": []
     },

@@ -3,6 +3,7 @@
 use crate::cull::{CullSettings, CullStats, CullView};
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet};
+use crate::lighting::SceneLighting;
 use crate::overlay::{Overlay, OverlayPass};
 use crate::parts::{Camera, DrawStats, PartRenderer};
 use crate::scene::{InstanceBinding, UploadStats};
@@ -56,8 +57,8 @@ struct Attachment {
 
 /// Draws frames: the passes of a [`FramePlan`] into a target view, with per-pass GPU timing.
 ///
-/// A frame allocates nothing on the heap in this crate and never waits for the GPU (ADR 0008 §9). Parts are drawn
-/// by [`Renderer::render_scene`]; the sky, post and UI systems record into the passes as they arrive.
+/// A frame allocates nothing on the heap in this crate and never waits for the GPU (ADR 0008 §9). Parts and the
+/// sky are drawn by [`Renderer::render_scene`]; the post and UI systems record into the passes as they arrive.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -215,8 +216,9 @@ impl Renderer {
 
     /// Renders one frame of `scene`'s parts, seen from `camera`, into `target` (which must have the settings'
     /// format and size), and submits it: the scene's upload ([`GpuScene::upload`]), then the passes with their
-    /// draws (see [`crate::parts`]). With no camera the passes run without draws (the clear colour). Only what the
-    /// camera sees is drawn, as [`RendererSettings::cull`] says ([`Renderer::cull_stats`]).
+    /// draws (see [`crate::parts`]), lit by [`Renderer::lighting`] and with the sky behind them. With no camera the
+    /// passes run without draws (the clear colour). Only what the camera sees is drawn, as
+    /// [`RendererSettings::cull`] says ([`Renderer::cull_stats`]).
     ///
     /// Sync the scene ([`GpuScene::sync`]) first. Never blocks on the GPU; see [`Renderer::render`] about pacing.
     pub fn render_scene(
@@ -267,14 +269,25 @@ impl Renderer {
         self.last_cull
     }
 
-    /// The part renderer: the material table, the temporary light, the meshes.
+    /// The part renderer: the material table, the lighting, the meshes.
     pub fn parts(&self) -> &PartRenderer {
         &self.parts
     }
 
-    /// The part renderer, to change materials or the temporary light.
+    /// The part renderer, to change materials or the lighting.
     pub fn parts_mut(&mut self) -> &mut PartRenderer {
         &mut self.parts
+    }
+
+    /// What [`Renderer::render_scene`] lights the scene and draws the sky with.
+    pub fn lighting(&self) -> SceneLighting {
+        self.parts.lighting()
+    }
+
+    /// Changes the lighting and the sky from the next frame (see [`crate::lighting`]). The engine calls it when the
+    /// `Lighting` service changes; tests and tools can set any lighting without a data model.
+    pub fn set_lighting(&mut self, lighting: SceneLighting) {
+        self.parts.set_lighting(lighting);
     }
 
     /// Turns the debug overlay ([`crate::overlay`]) on or off. It is drawn in the UI pass, so only frames whose
@@ -387,7 +400,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // The sky, post and UI systems add their draws here as they arrive.
+            // The post system adds its draws here when it arrives.
             if let Some(scene) = scene {
                 self.parts.draw(pass.id, prepass, scene, &mut render_pass);
             }

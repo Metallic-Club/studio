@@ -71,6 +71,8 @@ pub struct InstanceScene {
     grid: Grid,
     /// Changes whenever a coalesce changed any slot, so a view's cull can be kept while nothing changed.
     revision: u64,
+    /// Instances that are not drawn but whose changes [`InstanceScene::sync`] reports (`Lighting`).
+    watched: Vec<Id>,
 }
 
 impl InstanceScene {
@@ -98,7 +100,20 @@ impl InstanceScene {
             lists: DrawLists::default(),
             grid: Grid::default(),
             revision: 0,
+            watched: Vec::new(),
         })
+    }
+
+    /// Reports `id`'s changes from now on: each [`InstanceScene::sync`] counts it in [`SyncStats::watched`] when
+    /// one of its visual properties, its place in the tree or its existence changed since the last. For instances
+    /// that are not drawn but say how to draw (the `Lighting` service), so they are read again only when they
+    /// change, through the change consumer the scene already drains. A sync right after attaching (or
+    /// [`InstanceScene::rebuild_all`]) reports every watched instance. Watching the same instance twice does
+    /// nothing.
+    pub fn watch(&mut self, id: Id) {
+        if !self.watched.contains(&id) {
+            self.watched.push(id);
+        }
     }
 
     /// Unregisters the change consumer from `dm` (the data model it was attached to; another is left alone).
@@ -429,6 +444,10 @@ impl InstanceScene {
 
     fn apply(&mut self, dm: &DataModel, id: Id, bits: DirtyBits, stats: &mut SyncStats) {
         let Some(binding) = self.binding(dm, id) else {
+            // Only instances that are not drawn get here, so drawn ones never pay for the watch list.
+            if self.watched.contains(&id) {
+                stats.watched += 1;
+            }
             return;
         };
         let current = self.lookup(id);

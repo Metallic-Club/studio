@@ -8,8 +8,8 @@ use metallic_core::{DataModel, Id};
 use metallic_platform::{Size, Window};
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::{
-    CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, RenderContext, RenderError,
-    RenderSurface, Renderer, RendererSettings, wgpu,
+    CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightingReader, RenderContext,
+    RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
@@ -27,9 +27,10 @@ struct Device {
 /// Draws the game into the engine's window: install it with [`Engine::set_render_hook`](crate::Engine::set_render_hook).
 ///
 /// Each frame it syncs the GPU-resident scene ([`GpuScene`]) with the data model's changes and draws the parts in
-/// `Workspace` from `Workspace.CurrentCamera` ([`Renderer::render_scene`]); without a current camera the frame is
-/// the clear colour. The device and the scene survive [`RenderHook::detach`], so a mobile app coming back to the
-/// foreground only makes a new surface.
+/// `Workspace` from `Workspace.CurrentCamera` ([`Renderer::render_scene`]), lit by the `Lighting` service with the
+/// sky behind them; without a current camera the frame is the clear colour. `Lighting` is read only in frames after
+/// it changed: the scene watches it on the change consumer it drains anyway ([`GpuScene::watch`]). The device and
+/// the scene survive [`RenderHook::detach`], so a mobile app coming back to the foreground only makes a new surface.
 ///
 /// It also keeps the frame statistics ([`SceneRenderer::perf`]): every drawn frame records its frame time, the
 /// script and physics time the engine measured ([`Engine::set_cpu_timing`](crate::Engine::set_cpu_timing)), its own
@@ -45,6 +46,11 @@ pub struct SceneRenderer {
     /// `Workspace`, the root of what is drawn and the owner of `CurrentCamera`.
     world: Option<Id>,
     camera: CameraReader,
+    /// The `Lighting` service, watched by the scene so it is read again only when it changes.
+    lighting_service: Option<Id>,
+    lighting_reader: LightingReader,
+    /// What `Lighting` said when last read, kept for a renderer made later (a new surface format).
+    lighting: SceneLighting,
     last_sync: SyncStats,
     last_upload: UploadStats,
     perf: PerfStats,
@@ -74,6 +80,9 @@ impl SceneRenderer {
             scene: None,
             world: None,
             camera: CameraReader::new(),
+            lighting_service: None,
+            lighting_reader: LightingReader::new(),
+            lighting: SceneLighting::default(),
             last_sync: SyncStats::default(),
             last_upload: UploadStats::default(),
             perf: PerfStats::default(),
@@ -194,14 +203,20 @@ impl SceneRenderer {
         };
         let registry = dm.registry().clone();
         self.world = registry.class_id("Workspace").and_then(|class| dm.service(class));
+        self.lighting_service = registry.class_id("Lighting").and_then(|class| dm.service(class));
         // A scene of another data model is dropped as it is: that game, and its consumer, are gone.
-        self.scene = Some(GpuScene::new(
-            &device.context,
-            dm,
-            self.world,
-            &RenderComponents::builtin(),
-        )?);
+        let mut scene = GpuScene::new(&device.context, dm, self.world, &RenderComponents::builtin())?;
+        // The first sync reports it (every instance is new to the scene), so it is read then.
+        if let Some(lighting) = self.lighting_service {
+            scene.watch(lighting);
+        }
+        self.scene = Some(scene);
         Ok(())
+    }
+
+    /// What the scene is lit with: `Lighting` as last read.
+    pub fn lighting(&self) -> SceneLighting {
+        self.lighting
     }
 }
 
@@ -231,7 +246,8 @@ impl RenderHook for SceneRenderer {
             Some(device) => device.context.create_surface(window, width, height)?,
             None => {
                 let (context, surface) = RenderContext::new_with_window(window, width, height, &self.options)?;
-                let renderer = Renderer::new(&context, self.settings(surface.format(), width, height))?;
+                let mut renderer = Renderer::new(&context, self.settings(surface.format(), width, height))?;
+                renderer.set_lighting(self.lighting);
                 self.device = Some(Device { context, renderer });
                 surface
             }
@@ -241,6 +257,7 @@ impl RenderHook for SceneRenderer {
             if device.renderer.settings().color_format != surface.format() {
                 // A new surface on another monitor or after a resume may prefer another format.
                 device.renderer = Renderer::new(&device.context, settings)?;
+                device.renderer.set_lighting(self.lighting);
             }
             device.renderer.set_overlay_enabled(self.overlay);
             if let Some(mode) = self.present_mode {
@@ -285,6 +302,12 @@ impl RenderHook for SceneRenderer {
             scene.set_camera_position(frame.dm, camera.position);
         }
         self.last_sync = scene.sync(frame.dm);
+        if self.last_sync.watched > 0
+            && let Some(lighting) = self.lighting_service
+        {
+            self.lighting = self.lighting_reader.read(frame.dm, lighting);
+            device.renderer.set_lighting(self.lighting);
+        }
         if self.overlay {
             if self.since_summary == 0 {
                 self.summary = self.perf.summary();

@@ -36,10 +36,21 @@
 //! # Shading
 //!
 //! PBR-lite: Lambert diffuse and GGX specular (height-correlated Smith visibility, Schlick Fresnel) under one
-//! directional light, plus a sky/ground hemisphere ambient with a split-sum environment term, and the material's
-//! emission. The light and ambient are temporary ([`SceneLight`]); `Lighting` replaces them (#81). Colours are
-//! sRGB-encoded in the instance and decoded to linear light in the shader; the output is linear, encoded by an
-//! sRGB target (or by the shader for other formats).
+//! directional light (the sun, or the moon at night), plus a sky/ground hemisphere ambient with a split-sum
+//! environment term, and the material's emission. The light, the ambient and the sky come from `Lighting`
+//! ([`crate::lighting`], [`PartRenderer::set_lighting`]). Colours are sRGB-encoded in the instance and decoded to
+//! linear light in the shader; the output is linear, encoded by an sRGB target (or by the shader for other
+//! formats).
+//!
+//! # Sky
+//!
+//! The sky pass draws one full-screen triangle at the far plane (depth 0 under reverse-Z) after the opaque parts,
+//! testing depth with `GreaterEqual` against the cleared value, so it shades only the pixels no part covered
+//! (ADR 0008 §7): one draw of three vertices, no textures. Its colour is an analytic function of the view
+//! direction (`sky.wgsl`): a gradient from `SkyColor` overhead to `HorizonColor`, a twilight glow, and the sun and
+//! moon discs. It reads the frame uniform the parts read, so it adds no upload. A textured sky (a cubemap looked up
+//! with the same direction) can replace the gradient later inside the same pass. With no camera there is no view
+//! and no sky: the frame keeps its clear colour.
 //!
 //! # Camera
 //!
@@ -48,7 +59,7 @@
 //! frame uniform as `camera − scene origin`, so positions reach the projection relative to the camera (ADR 0008
 //! §11). Without a camera nothing is drawn.
 //!
-//! Every pipeline (depth prepass, opaque, opaque after a prepass, transparent) is created up front, when the
+//! Every pipeline (depth prepass, opaque, opaque after a prepass, sky, transparent) is created up front, when the
 //! renderer is made or its colour format or MSAA count change, never during a frame (ADR 0008 §9).
 
 mod camera;
@@ -63,36 +74,12 @@ pub use mesh::{MeshData, MeshPool, MeshRange, MeshVertex};
 use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
 
-use crate::depth::{DEPTH_COMPARE, DEPTH_FORMAT, depth_stencil_state};
+use crate::depth::{DEPTH_COMPARE, DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, depth_stencil_state};
+use crate::lighting::{ResolvedLighting, SceneLighting};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
 use crate::{GpuScene, PassId};
 use material::MATERIAL_TABLE_SIZE;
 use transparent::TransparentList;
-
-/// The temporary scene light: one directional light and a sky/ground ambient. `Lighting` replaces it (#81).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SceneLight {
-    /// Direction towards the light (normalised when drawn).
-    pub direction: Vec3,
-    /// The light's radiance, linear RGB (a white surface facing it reflects about a third of this).
-    pub color: Vec3,
-    /// Ambient light from the sky (above), linear RGB.
-    pub sky_ambient: Vec3,
-    /// Ambient light from the ground (below), linear RGB.
-    pub ground_ambient: Vec3,
-}
-
-impl Default for SceneLight {
-    /// A sun high over the left shoulder of a camera looking down −Z, and a bluish sky.
-    fn default() -> Self {
-        Self {
-            direction: Vec3::new(-0.4, 0.8, 0.45),
-            color: Vec3::new(2.3, 2.2, 2.05),
-            sky_ambient: Vec3::new(0.3, 0.34, 0.4),
-            ground_ambient: Vec3::new(0.14, 0.12, 0.1),
-        }
-    }
-}
 
 /// What the last frame drew.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -103,6 +90,8 @@ pub struct DrawStats {
     pub opaque_draws: u32,
     /// Draws in the transparent pass: one per run of same-mesh instances in back-to-front order.
     pub transparent_draws: u32,
+    /// Draws in the sky pass: one full-screen triangle when there is a camera and the pass runs.
+    pub sky_draws: u32,
     /// Instances drawn in the opaque and transparent passes.
     pub instances: u32,
     /// Triangles drawn in the opaque and transparent passes.
@@ -122,11 +111,11 @@ pub struct DrawStats {
 impl DrawStats {
     /// Every draw of the frame.
     pub fn total_draws(&self) -> u32 {
-        self.prepass_draws + self.opaque_draws + self.transparent_draws
+        self.prepass_draws + self.opaque_draws + self.sky_draws + self.transparent_draws
     }
 }
 
-/// The frame uniform (`Frame` in `parts.wgsl`).
+/// The frame uniform (`Frame` in `frame.wgsl`), read by the parts and the sky.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 struct FrameUniforms {
@@ -137,10 +126,59 @@ struct FrameUniforms {
     sky_ambient: [f32; 4],
     ground_ambient: [f32; 4],
     output: [f32; 4],
+    view_right: [f32; 4],
+    view_up: [f32; 4],
+    view_forward: [f32; 4],
+    sky_zenith: [f32; 4],
+    sky_horizon: [f32; 4],
+    sky_ground: [f32; 4],
+    sky_glow: [f32; 4],
+    sun: [f32; 4],
+    sun_disc: [f32; 4],
+    sun_halo: [f32; 4],
+    moon_disc: [f32; 4],
 }
 
 fn vec4(v: Vec3) -> [f32; 4] {
     [v.x, v.y, v.z, 0.0]
+}
+
+fn vec4w(v: Vec3, w: f32) -> [f32; 4] {
+    [v.x, v.y, v.z, w]
+}
+
+impl FrameUniforms {
+    /// The uniform for `camera` on a target `aspect` (width / height) wide, `offset` (camera − scene origin) from
+    /// the scene origin, lit by `light`.
+    fn new(camera: &Camera, aspect: f32, offset: Vec3, light: &ResolvedLighting, srgb: bool) -> Self {
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            1.0
+        };
+        // The sky's view rays: through the screen's edges at NDC ±1.
+        let tan_half = (camera.fov_y * 0.5).tan();
+        Self {
+            view_proj: camera.view_projection(aspect).to_cols_array_2d(),
+            camera_offset: vec4(offset),
+            light_direction: vec4(light.light_direction),
+            light_color: vec4(light.light_color),
+            sky_ambient: vec4(light.sky_ambient),
+            ground_ambient: vec4(light.ground_ambient),
+            output: [if srgb { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0],
+            view_right: vec4(camera.rotation * Vec3::X * (tan_half * aspect)),
+            view_up: vec4(camera.rotation * Vec3::Y * tan_half),
+            view_forward: vec4(camera.rotation * Vec3::NEG_Z),
+            sky_zenith: vec4(light.sky_zenith),
+            sky_horizon: vec4(light.sky_horizon),
+            sky_ground: vec4(light.sky_ground),
+            sky_glow: vec4(light.sky_glow),
+            sun: vec4w(light.sun_direction, light.sun_cos_radius),
+            sun_disc: vec4(light.sun_disc),
+            sun_halo: vec4(light.sun_halo),
+            moon_disc: vec4w(light.moon_disc, light.moon_cos_radius),
+        }
+    }
 }
 
 /// One opaque draw: a mesh kind's index range over its list segment.
@@ -161,6 +199,19 @@ struct Pipelines {
     /// Opaque after a depth prepass: tests depth (`GreaterEqual`) without writing it.
     opaque_tested: wgpu::RenderPipeline,
     transparent: wgpu::RenderPipeline,
+    /// The full-screen sky triangle at the far plane.
+    sky: wgpu::RenderPipeline,
+}
+
+/// What the pipelines are made from.
+#[derive(Debug)]
+struct Shaders {
+    /// The parts' layout: the frame group, and on the storage path the instance group.
+    parts_layout: wgpu::PipelineLayout,
+    parts: wgpu::ShaderModule,
+    /// The sky's layout: the frame group only.
+    sky_layout: wgpu::PipelineLayout,
+    sky: wgpu::ShaderModule,
 }
 
 /// The storage path's instance bind group and the buffers it was made for.
@@ -170,8 +221,8 @@ struct InstanceGroup {
     group: wgpu::BindGroup,
 }
 
-/// Draws a [`GpuScene`]'s parts into the renderer's passes. [`crate::Renderer`] owns one; see the
-/// [module documentation](self) for the design.
+/// Draws a [`GpuScene`]'s parts, and the sky behind them, into the renderer's passes. [`crate::Renderer`] owns
+/// one; see the [module documentation](self) for the design.
 #[derive(Debug)]
 pub struct PartRenderer {
     device: wgpu::Device,
@@ -179,14 +230,15 @@ pub struct PartRenderer {
     binding: InstanceBinding,
     meshes: MeshPool,
     materials: MaterialTable,
-    light: SceneLight,
+    lighting: SceneLighting,
+    /// `lighting` worked out for the shaders, once per change.
+    resolved: ResolvedLighting,
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds, so an unchanged frame skips the write.
     frame_uniforms: Option<FrameUniforms>,
     frame_group: wgpu::BindGroup,
     instance_layout: Option<wgpu::BindGroupLayout>,
-    pipeline_layout: wgpu::PipelineLayout,
-    module: wgpu::ShaderModule,
+    shaders: Shaders,
     pipelines: Pipelines,
     opaque_group: Option<InstanceGroup>,
     transparent_group: Option<InstanceGroup>,
@@ -209,12 +261,24 @@ impl PartRenderer {
         samples: u32,
     ) -> Self {
         let source = match binding {
-            InstanceBinding::Storage => concat!(include_str!("parts.wgsl"), include_str!("instance_storage.wgsl")),
-            InstanceBinding::Vertex => concat!(include_str!("parts.wgsl"), include_str!("instance_vertex.wgsl")),
+            InstanceBinding::Storage => concat!(
+                include_str!("frame.wgsl"),
+                include_str!("parts.wgsl"),
+                include_str!("instance_storage.wgsl")
+            ),
+            InstanceBinding::Vertex => concat!(
+                include_str!("frame.wgsl"),
+                include_str!("parts.wgsl"),
+                include_str!("instance_vertex.wgsl")
+            ),
         };
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("metallic parts"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let sky = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("metallic sky"),
+            source: wgpu::ShaderSource::Wgsl(concat!(include_str!("frame.wgsl"), include_str!("sky.wgsl")).into()),
         });
         let uniform = |binding, visibility, size: u64| wgpu::BindGroupLayoutEntry {
             binding,
@@ -262,6 +326,17 @@ impl PartRenderer {
             bind_group_layouts: &[Some(&frame_layout), instance_layout.as_ref()],
             immediate_size: 0,
         });
+        let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("metallic sky"),
+            bind_group_layouts: &[Some(&frame_layout)],
+            immediate_size: 0,
+        });
+        let shaders = Shaders {
+            parts_layout: pipeline_layout,
+            parts: module,
+            sky_layout,
+            sky,
+        };
         let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic parts frame"),
             size: size_of::<FrameUniforms>() as u64,
@@ -284,20 +359,21 @@ impl PartRenderer {
                 },
             ],
         });
-        let pipelines = create_pipelines(device, &pipeline_layout, &module, binding, format, samples);
+        let pipelines = create_pipelines(device, &shaders, binding, format, samples);
+        let lighting = SceneLighting::default();
         Self {
             device: device.clone(),
             queue: queue.clone(),
             binding,
             meshes: MeshPool::new(device, queue),
             materials,
-            light: SceneLight::default(),
+            lighting,
+            resolved: lighting.resolve(),
             frame_buffer,
             frame_uniforms: None,
             frame_group,
             instance_layout,
-            pipeline_layout,
-            module,
+            shaders,
             pipelines,
             opaque_group: None,
             transparent_group: None,
@@ -316,14 +392,7 @@ impl PartRenderer {
     /// Recreates the pipelines for another colour format or sample count (a settings change, never per frame).
     pub(crate) fn set_target(&mut self, format: wgpu::TextureFormat, samples: u32) {
         if (format, samples) != (self.pipelines.format, self.pipelines.samples) {
-            self.pipelines = create_pipelines(
-                &self.device,
-                &self.pipeline_layout,
-                &self.module,
-                self.binding,
-                format,
-                samples,
-            );
+            self.pipelines = create_pipelines(&self.device, &self.shaders, self.binding, format, samples);
         }
     }
 
@@ -337,14 +406,18 @@ impl PartRenderer {
         &self.materials
     }
 
-    /// The temporary light.
-    pub fn light(&self) -> SceneLight {
-        self.light
+    /// What the scene is lit with: the sun or moon, the ambient and the sky.
+    pub fn lighting(&self) -> SceneLighting {
+        self.lighting
     }
 
-    /// Changes the temporary light.
-    pub fn set_light(&mut self, light: SceneLight) {
-        self.light = light;
+    /// Changes what the scene is lit with, from the next frame. Works the new lighting out for the shaders here,
+    /// so call it when the lighting changes (the engine does when `Lighting` does), not every frame.
+    pub fn set_lighting(&mut self, lighting: SceneLighting) {
+        if lighting != self.lighting {
+            self.lighting = lighting;
+            self.resolved = lighting.resolve();
+        }
     }
 
     /// The meshes.
@@ -377,18 +450,8 @@ impl PartRenderer {
 
         self.materials.fill_from_names(instances.material_names());
         self.materials.upload(&self.queue);
-        let light = &self.light;
-        let uniforms = FrameUniforms {
-            view_proj: camera
-                .view_projection(width as f32 / height.max(1) as f32)
-                .to_cols_array_2d(),
-            camera_offset: vec4(offset),
-            light_direction: vec4(light.direction.try_normalize().unwrap_or(Vec3::Y)),
-            light_color: vec4(light.color),
-            sky_ambient: vec4(light.sky_ambient),
-            ground_ambient: vec4(light.ground_ambient),
-            output: [if srgb { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0],
-        };
+        let aspect = width as f32 / height.max(1) as f32;
+        let uniforms = FrameUniforms::new(camera, aspect, offset, &self.resolved, srgb);
         if self.frame_uniforms != Some(uniforms) {
             self.queue
                 .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -442,8 +505,8 @@ impl PartRenderer {
         }
     }
 
-    /// Records the draws of `pass` (only the prepass, opaque and transparent passes draw parts). `prepass` says
-    /// whether the frame has a depth prepass, so the opaque pass only tests depth.
+    /// Records the draws of `pass`: the parts in the prepass, opaque and transparent passes, and the sky in the sky
+    /// pass. `prepass` says whether the frame has a depth prepass, so the opaque pass only tests depth.
     pub(crate) fn draw(
         &mut self,
         pass: PassId,
@@ -492,7 +555,13 @@ impl PartRenderer {
                     self.stats.transparent_draws += 1;
                 }
             }
-            PassId::Sky | PassId::Post | PassId::Ui => {}
+            PassId::Sky => {
+                render_pass.set_pipeline(&self.pipelines.sky);
+                render_pass.set_bind_group(0, &self.frame_group, &[]);
+                render_pass.draw(0..3, 0..1);
+                self.stats.sky_draws += 1;
+            }
+            PassId::Post | PassId::Ui => {}
         }
     }
 
@@ -545,12 +614,12 @@ fn refresh_group(
 
 fn create_pipelines(
     device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    module: &wgpu::ShaderModule,
+    shaders: &Shaders,
     binding: InstanceBinding,
     format: wgpu::TextureFormat,
     samples: u32,
 ) -> Pipelines {
+    let (layout, module) = (&shaders.parts_layout, &shaders.parts);
     let instance_attributes = GpuInstance::vertex_attributes(2);
     let all_buffers = [
         Some(MeshVertex::layout()),
@@ -627,5 +696,48 @@ fn create_pipelines(
             depth_stencil_state(false),
             Some(("fs_transparent", Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING))),
         ),
+        sky: sky_pipeline(device, shaders, format, samples),
     }
+}
+
+/// The sky: a full-screen triangle at the far plane, tested against the depth the opaque pass left (`GreaterEqual`
+/// passes only where it is still the clear value) and never writing it.
+fn sky_pipeline(
+    device: &wgpu::Device,
+    shaders: &Shaders,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("metallic sky"),
+        layout: Some(&shaders.sky_layout),
+        vertex: wgpu::VertexState {
+            module: &shaders.sky,
+            entry_point: Some("vs_sky"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            depth_write_enabled: Some(false),
+            depth_compare: Some(DEPTH_COMPARE_FAR_PLANE),
+            ..depth_stencil_state(false)
+        }),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..wgpu::MultisampleState::default()
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shaders.sky,
+            entry_point: Some("fs_sky"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
