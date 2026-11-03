@@ -13,7 +13,7 @@
 
 mod desc;
 mod error;
-mod hash;
+pub(crate) mod hash;
 mod prop;
 mod resolve;
 
