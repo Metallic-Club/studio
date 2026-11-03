@@ -187,6 +187,45 @@ fn drains_do_not_allocate_once_grown() {
     assert_eq!(removed, parts[..10].to_vec());
 }
 
+#[test]
+fn writes_and_drains_with_every_consumer_registered_do_not_allocate() {
+    let (mut dm, ids) = classes::game();
+    let consumers: Vec<_> = (0..metallic_core::MAX_CONSUMERS)
+        .map(|_| dm.register_consumer(DirtyBits::ALL).expect("consumer"))
+        .collect();
+    let parts: Vec<Id> = (0..100)
+        .map(|_| {
+            let p = dm.create(ids.part).expect("part");
+            dm.set_parent(p, Some(ids.workspace)).expect("parent");
+            p
+        })
+        .collect();
+    let mut changes = Vec::new();
+    let mut round = |dm: &mut DataModel, i: u32| {
+        for &p in &parts {
+            // Never the default, so every write stores into the entry the first one added.
+            let cf = CFrame::new(Vector3::new(i as f32, 1.0, 0.0));
+            dm.set(p, ids.cframe, Value::CFrame(cf)).expect("set");
+        }
+        for &c in &consumers {
+            dm.drain_changes(c, &mut changes);
+            assert_eq!(changes.len(), parts.len());
+            changes.clear();
+        }
+    };
+    // Warm up: the dirty lists and `changes` grow to their working size.
+    round(&mut dm, 0);
+    let allocations = allocations_in(|| {
+        for i in 1..100 {
+            round(&mut dm, i);
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "writes or drains allocated with every consumer registered"
+    );
+}
+
 /// Live bytes per part, inline and heap together, for `count` parts with four non-default properties under the
 /// workspace. With `reserve`, the slot table is sized up front as a scene loader does.
 fn bytes_per_part(count: usize, reserve: bool) -> f64 {

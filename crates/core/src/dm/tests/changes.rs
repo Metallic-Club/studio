@@ -18,7 +18,8 @@ fn removed(dm: &mut DataModel, consumer: ConsumerId) -> Vec<Id> {
 }
 
 #[test]
-fn at_most_four_consumers() {
+fn at_most_max_consumers() {
+    assert_eq!(MAX_CONSUMERS, 8);
     let (mut dm, _) = game();
     for i in 0..MAX_CONSUMERS {
         assert_eq!(dm.register_consumer(DirtyBits::ALL).map(ConsumerId::index), Ok(i));
@@ -63,6 +64,143 @@ fn an_unregistered_consumer_records_nothing_and_its_place_is_reused() {
         dm.register_consumer(DirtyBits::ALL),
         Err(DmError::TooManyConsumers { max: MAX_CONSUMERS })
     );
+}
+
+/// A registered consumer and what it should drain next: every bit recorded since its last drain, within its
+/// interest.
+struct Expected {
+    id: ConsumerId,
+    interest: DirtyBits,
+    pending: Vec<(Id, DirtyBits)>,
+}
+
+impl Expected {
+    fn register(dm: &mut DataModel, interest: DirtyBits) -> Self {
+        let id = dm.register_consumer(interest).expect("consumer");
+        Self {
+            id,
+            interest: interest | DirtyBits::CREATED,
+            pending: Vec::new(),
+        }
+    }
+
+    /// Records that `bits` happened to `id`, merging into its pending entry like the data model does.
+    fn record(&mut self, id: Id, bits: DirtyBits) {
+        let bits = bits & self.interest;
+        if bits.is_empty() {
+            return;
+        }
+        match self.pending.iter_mut().find(|(p, _)| *p == id) {
+            Some((_, b)) => *b |= bits,
+            None => self.pending.push((id, bits)),
+        }
+    }
+
+    /// Drains the consumer and checks it got exactly what was pending.
+    fn check(&mut self, dm: &mut DataModel, label: &str) {
+        assert_eq!(
+            drain(dm, self.id),
+            std::mem::take(&mut self.pending),
+            "{label}: {:?}",
+            self.id
+        );
+    }
+}
+
+#[test]
+fn a_full_game_and_three_more_drain_independently() {
+    let (mut dm, ids) = game();
+    let interests = [
+        // Render, physics, the script host, Studio, replication.
+        DirtyBits::TRANSFORM | DirtyBits::VISUAL | DirtyBits::STRUCTURE,
+        DirtyBits::TRANSFORM | DirtyBits::PHYSICS | DirtyBits::STRUCTURE,
+        DirtyBits::STRUCTURE,
+        DirtyBits::ALL,
+        DirtyBits::ALL,
+        // Three more, each caring about one kind of change.
+        DirtyBits::VISUAL,
+        DirtyBits::PHYSICS,
+        DirtyBits::PROPERTY,
+    ];
+    assert_eq!(interests.len(), MAX_CONSUMERS);
+    let mut consumers: Vec<Expected> = interests.iter().map(|&i| Expected::register(&mut dm, i)).collect();
+    let indices: Vec<usize> = consumers.iter().map(|c| c.id.index()).collect();
+    assert_eq!(indices, (0..MAX_CONSUMERS).collect::<Vec<_>>());
+    assert_eq!(
+        dm.register_consumer(DirtyBits::ALL),
+        Err(DmError::TooManyConsumers { max: MAX_CONSUMERS })
+    );
+    let record = |consumers: &mut [Expected], id: Id, bits: DirtyBits| {
+        for c in consumers {
+            c.record(id, bits);
+        }
+    };
+
+    let created = DirtyBits::CREATED | DirtyBits::STRUCTURE | DirtyBits::PROPERTY;
+    let p = part_in(&mut dm, &ids, ids.workspace, "P");
+    let q = part_in(&mut dm, &ids, ids.workspace, "Q");
+    record(&mut consumers, p, created);
+    record(&mut consumers, q, created);
+    for c in &mut consumers {
+        c.check(&mut dm, "created");
+    }
+
+    // Writes between drains, with only some consumers draining in between: each keeps its own bits.
+    dm.set(p, ids.color, Value::Color3(Color3::BLACK)).expect("set");
+    record(&mut consumers, p, DirtyBits::VISUAL | DirtyBits::PROPERTY);
+    for c in consumers.iter_mut().step_by(2) {
+        c.check(&mut dm, "after a colour");
+    }
+    dm.set(p, ids.anchored, Value::Bool(true)).expect("set");
+    dm.set(q, ids.cframe, Value::CFrame(CFrame::new(crate::Vector3::X)))
+        .expect("set");
+    record(&mut consumers, p, DirtyBits::PHYSICS | DirtyBits::PROPERTY);
+    record(
+        &mut consumers,
+        q,
+        DirtyBits::TRANSFORM | DirtyBits::PHYSICS | DirtyBits::PROPERTY,
+    );
+    for c in consumers.iter_mut().rev() {
+        c.check(&mut dm, "after more writes");
+    }
+    for c in &mut consumers {
+        c.check(&mut dm, "drained");
+    }
+
+    // Every consumer saw `q` created, so every one is told it is gone.
+    dm.destroy(q).expect("destroy");
+    for c in &mut consumers {
+        assert_eq!(removed(&mut dm, c.id), vec![q], "{:?}", c.id);
+        c.check(&mut dm, "after a destroy");
+    }
+
+    // Free the script host and one of the extras with changes still queued, then register two again: they get
+    // the freed places back, with nothing left over.
+    dm.set(p, ids.transparency, number(0.5)).expect("set");
+    record(&mut consumers, p, DirtyBits::VISUAL | DirtyBits::PROPERTY);
+    for index in [2, 6] {
+        dm.unregister_consumer(consumers[index].id);
+    }
+    let script = Expected::register(&mut dm, DirtyBits::STRUCTURE);
+    let extra = Expected::register(&mut dm, DirtyBits::PHYSICS);
+    assert_eq!((script.id.index(), extra.id.index()), (2, 6));
+    consumers[2] = script;
+    consumers[6] = extra;
+    assert_eq!(
+        dm.register_consumer(DirtyBits::ALL),
+        Err(DmError::TooManyConsumers { max: MAX_CONSUMERS })
+    );
+    for c in &mut consumers {
+        c.check(&mut dm, "re-registered");
+    }
+
+    dm.set_parent(p, None).expect("move");
+    dm.set(p, ids.anchored, Value::Bool(false)).expect("set");
+    record(&mut consumers, p, DirtyBits::STRUCTURE | DirtyBits::PROPERTY);
+    record(&mut consumers, p, DirtyBits::PHYSICS | DirtyBits::PROPERTY);
+    for c in &mut consumers {
+        c.check(&mut dm, "after re-registering");
+    }
 }
 
 #[test]

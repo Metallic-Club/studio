@@ -1,7 +1,7 @@
 //! Change tracking: subsystems drain what changed instead of re-reading every instance.
 //!
-//! Render, physics, replication and Studio each register a consumer. Every instance keeps one byte of
-//! [`DirtyBits`] per consumer; when that byte goes from zero to non-zero the instance's id is pushed onto the
+//! Render, physics, the script host, Studio and replication each register a consumer, up to [`MAX_CONSUMERS`]. Every
+//! instance keeps one byte of [`DirtyBits`] per consumer; when that byte goes from zero to non-zero the instance's id is pushed onto the
 //! consumer's dirty list, so a drain visits only changed instances, each once. Destroyed instances go onto a
 //! separate removed list. Draining moves entries into a caller-owned `Vec`, so once the vectors have grown nothing
 //! allocates.

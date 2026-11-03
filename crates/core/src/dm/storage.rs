@@ -3,9 +3,9 @@
 //! The layout is sized for 100,000-part scenes (issue #14 budget: at most 256 bytes per `Part` with four
 //! non-default properties, inline and heap together; `tests/alloc.rs` measures it):
 //!
-//! - a slot is 72 bytes: the generation, the parent's slot index, the previous and next siblings' slot indices, the
-//!   class, per-consumer dirty bits, the signal "watched" flag, the pin count (see `pins.rs`), and a [`Body`] whose
-//!   pointers are only paid for when used;
+//! - a slot is 80 bytes: the generation, the parent's slot index, the previous and next siblings' slot indices, the
+//!   class, one byte of dirty bits per change consumer ([`MAX_CONSUMERS`], eight), the signal "watched" flag, the
+//!   pin count (see `pins.rs`), and a [`Body`] whose pointers are only paid for when used;
 //! - an instance with its class's name stores no name (one null pointer); a renamed one boxes a shared string;
 //! - only non-default property values are stored, in a `Vec` sorted by [`PropId`] that grows one entry at a time
 //!   (four values are 160 bytes: `PropId` + `Value` is 40 bytes with alignment). Removing an entry keeps the
@@ -17,8 +17,8 @@
 //! Children are a doubly linked list threaded through the slots (`prev` and `next` above), and a parent keeps only
 //! a [`ChildList`]: the first and last child and the count. Appending, removing any child and stepping to a
 //! sibling are all O(1) and never allocate, so clearing a folder of 100,000 parts one by one is linear, and order
-//! is insertion order. The links fit in what a position-in-parent index and padding used to take, so the slot
-//! stays 72 bytes, and a parent no longer pays 8 bytes per child for an id vector. Iterating children chases links
+//! is insertion order. The links fit in what a position-in-parent index and padding used to take, so they cost
+//! the slot nothing, and a parent no longer pays 8 bytes per child for an id vector. Iterating children chases links
 //! instead of reading a contiguous array; parts created together sit in neighbouring slots, so that walk stays
 //! mostly sequential.
 
@@ -155,13 +155,14 @@ pub(super) struct Slot {
     prev: u32,
     next: u32,
     pub(super) class: ClassId,
-    /// Per change consumer: what changed since that consumer last drained.
+    /// Per change consumer: what changed since that consumer last drained. With eight consumers the fixed fields
+    /// take 28 bytes, padded to 32 before the 48-byte body: four consumers fitted in 72 bytes, eight take 80.
     pub(super) dirty: [u8; MAX_CONSUMERS],
     /// Whether any signal connection listens to this instance, so an unwatched change costs one check. It sits
-    /// in what was padding: the slot stays 72 bytes.
+    /// in what was padding.
     pub(super) watched: bool,
-    /// How many outside holders pinned the instance, up to `u8::MAX`; `pins.rs` counts the rest. It sits in the
-    /// last byte of padding, so the slot stays 72 bytes.
+    /// How many outside holders pinned the instance, up to `u8::MAX`; `pins.rs` counts the rest. It sits in what
+    /// was padding.
     pub(super) pins: u8,
     pub(super) body: Option<Body>,
 }
@@ -409,7 +410,7 @@ mod tests {
 
     #[test]
     fn slot_is_compact() {
-        assert!(size_of::<Slot>() <= 72, "Slot is {} bytes", size_of::<Slot>());
+        assert!(size_of::<Slot>() <= 80, "Slot is {} bytes", size_of::<Slot>());
         assert_eq!(size_of::<Body>(), 48);
         assert_eq!(size_of::<(PropId, Value)>(), 40);
     }
