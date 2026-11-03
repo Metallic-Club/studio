@@ -528,10 +528,9 @@ impl Renderer {
             }
             let timestamp_writes = match (self.timer.as_ref(), slot) {
                 // The shadow passes recorded before took the first queries.
-                (Some(timer), Some(slot)) => Some(timer.pass_writes(
-                    slot,
-                    self.shadow_recorded + usize::from(self.atlas_recorded) + index,
-                )),
+                (Some(timer), Some(slot)) => {
+                    Some(timer.pass_writes(slot, self.shadow_recorded + usize::from(self.atlas_recorded) + index))
+                }
                 _ => None,
             };
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

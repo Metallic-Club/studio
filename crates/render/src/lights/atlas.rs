@@ -67,14 +67,12 @@ pub(crate) fn tile_views(light: &SceneLight, origin: Vec3, resolution: u32, out:
     let eye = light.position - origin;
     let far = light.range.max(NEAR * 2.0);
     let depth_scale = NEAR * far / (far - NEAR);
-    let view = |forward: Vec3, up: Vec3, tan_half: f32| {
-        TileView {
-            clip: perspective(tan_half, NEAR, far) * look_to(eye, forward, up),
-            eye,
-            forward,
-            texel_angle: 2.0 * tan_half / resolution,
-            depth_scale,
-        }
+    let view = |forward: Vec3, up: Vec3, tan_half: f32| TileView {
+        clip: perspective(tan_half, NEAR, far) * look_to(eye, forward, up),
+        eye,
+        forward,
+        texel_angle: 2.0 * tan_half / resolution,
+        depth_scale,
     };
     match light.kind {
         LightKind::Point => {
@@ -665,7 +663,8 @@ impl ShadowAtlas {
                 }
                 let count = self.list.len() - first;
                 if count > 0 {
-                    self.ranges.push((index as u16, kind as u16, first as u32, count as u32));
+                    self.ranges
+                        .push((index as u16, kind as u16, first as u32, count as u32));
                 }
             }
             if let Some(cache) = self.caches.get_mut(usize::from(job.tile)) {
@@ -785,7 +784,11 @@ impl ShadowAtlas {
                 if mesh.index_count == 0 {
                     continue;
                 }
-                pass.draw_indexed(mesh.first_index..mesh.first_index + mesh.index_count, 0, first..first + count);
+                pass.draw_indexed(
+                    mesh.first_index..mesh.first_index + mesh.index_count,
+                    0,
+                    first..first + count,
+                );
                 draws += 1;
                 instances += count;
                 triangles += u64::from(count) * u64::from(mesh.index_count / 3);
@@ -986,7 +989,10 @@ mod tests {
             let turn = metallic_core::glam::Quat::from_axis_angle(spot.direction, k as f32 * 0.1);
             let edge = turn * (spot.direction * half.cos() + side * half.sin());
             let ndc = views[0].clip.project_point3(spot.position + edge * 8.0);
-            assert!(ndc.x.abs() < 1.0 && ndc.y.abs() < 1.0 && (0.0..=1.0).contains(&ndc.z), "{ndc}");
+            assert!(
+                ndc.x.abs() < 1.0 && ndc.y.abs() < 1.0 && (0.0..=1.0).contains(&ndc.z),
+                "{ndc}"
+            );
         }
         // The texel's size grows with the cone.
         let wide = SceneLight { angle: 120.0, ..spot };

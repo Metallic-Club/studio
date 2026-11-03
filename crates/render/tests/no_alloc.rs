@@ -1971,15 +1971,15 @@ fn lit_grid(game: &mut support::scenes::Game) -> Vec<Id> {
             );
             let is_spot = i % 9 == 8;
             let light = game.dm.create(if is_spot { spot } else { point }).expect("a light");
-            game.dm
-                .set_by_name(light, "Range", Value::Number(14.0))
-                .expect("Range");
+            game.dm.set_by_name(light, "Range", Value::Number(14.0)).expect("Range");
             if is_spot {
                 let down = CFrame::from_parts(
                     Vec3::ZERO,
                     metallic_core::glam::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
                 );
-                game.dm.set_by_name(light, "CFrame", Value::CFrame(down)).expect("CFrame");
+                game.dm
+                    .set_by_name(light, "CFrame", Value::CFrame(down))
+                    .expect("CFrame");
             } else if i % 8 == 0 {
                 game.dm
                     .set_by_name(light, "Shadows", Value::Bool(true))
@@ -2003,7 +2003,9 @@ fn a_sync_of_moving_lamps_allocates_nothing() {
     for frame in 0..WARM_UP + FRAMES {
         for (i, &lamp) in lamps.iter().enumerate().step_by(4) {
             let at = Vec3::new(i as f32, 2.0 + frame as f32 * 0.01, 0.0);
-            game.dm.set_by_name(lamp, "CFrame", Value::CFrame(CFrame::new(at))).expect("moved");
+            game.dm
+                .set_by_name(lamp, "CFrame", Value::CFrame(CFrame::new(at)))
+                .expect("moved");
         }
         let (count, stats) = allocations_in(|| scene.sync(&mut game.dm));
         if frame >= WARM_UP {
@@ -2026,7 +2028,11 @@ fn a_lit_frame_allocates_only_its_writes() {
     let mut game = support::scenes::Game::new();
     lit_grid(&mut game);
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
-    let mut renderers = [metallic_render::LightSettings::default(), metallic_render::LightSettings::OFF].map(|lights| {
+    let mut renderers = [
+        metallic_render::LightSettings::default(),
+        metallic_render::LightSettings::OFF,
+    ]
+    .map(|lights| {
         let renderer = Renderer::new(
             &context,
             RendererSettings {
@@ -2073,7 +2079,11 @@ fn a_lit_frame_allocates_only_its_writes() {
         let camera = Camera::from_cframe(
             CFrame::look_at(
                 // High above the lamps, so every one stays in view as the camera circles.
-                Vec3::new((frame as f32 * 0.03).cos() * 20.0, 150.0, (frame as f32 * 0.03).sin() * 20.0),
+                Vec3::new(
+                    (frame as f32 * 0.03).cos() * 20.0,
+                    150.0,
+                    (frame as f32 * 0.03).sin() * 20.0,
+                ),
                 Vec3::ZERO,
                 Vec3::Y,
             ),
@@ -2123,7 +2133,10 @@ fn a_lit_frame_allocates_only_its_writes() {
         *hand.iter().min().expect("frames"),
     );
     eprintln!("lit frame {lit} allocations, unlit {unlit}, the two writes by hand {hand} ({stats:?})");
-    assert!(stats.drawn > 8 && stats.shadowed > 0 && stats.cluster_entries > 0, "{stats:?}");
+    assert!(
+        stats.drawn > 8 && stats.shadowed > 0 && stats.cluster_entries > 0,
+        "{stats:?}"
+    );
     assert!(
         lit <= unlit + hand + WGPU_DATA_JITTER + machine_noise(&context),
         "a lit frame allocates {lit} against {unlit} unlit and {hand} for its writes"
@@ -2158,8 +2171,14 @@ fn nothing_accumulates_over_lit_frames() {
         for frame in 0..WARM_UP + FRAMES {
             // A quarter of the lamps move, shadowed ones among them.
             for (i, &lamp) in lamps.iter().enumerate().step_by(4) {
-                let at = Vec3::new((i % 8) as f32 * 22.0 - 77.0, 2.0 + (frame % 10) as f32 * 0.05, (i / 8) as f32 * 22.0 - 77.0);
-                game.dm.set_by_name(lamp, "CFrame", Value::CFrame(CFrame::new(at))).expect("moved");
+                let at = Vec3::new(
+                    (i % 8) as f32 * 22.0 - 77.0,
+                    2.0 + (frame % 10) as f32 * 0.05,
+                    (i / 8) as f32 * 22.0 - 77.0,
+                );
+                game.dm
+                    .set_by_name(lamp, "CFrame", Value::CFrame(CFrame::new(at)))
+                    .expect("moved");
             }
             if frame == WARM_UP {
                 before = live_bytes();

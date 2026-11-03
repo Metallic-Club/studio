@@ -317,16 +317,11 @@ fn placement(dm: &DataModel, id: Id, host: Option<Id>, link: Link) -> (Vec3, Vec
 /// The light `id` as its properties say now. Properties that cannot be read light with `Light`'s defaults.
 fn read(dm: &DataModel, id: Id, binding: &LightBinding, host: Option<Id>, link: Link) -> SceneLight {
     let props = &binding.props;
-    let number = |prop: Option<PropId>, default: f32| {
-        prop.and_then(|p| dm.number(id, p).ok())
-            .map_or(default, |v| v as f32)
-    };
+    let number =
+        |prop: Option<PropId>, default: f32| prop.and_then(|p| dm.number(id, p).ok()).map_or(default, |v| v as f32);
     let flag = |prop: Option<PropId>, default: bool| prop.and_then(|p| dm.bool(id, p).ok()).unwrap_or(default);
     let (position, direction) = placement(dm, id, host, link);
-    let color = props
-        .color
-        .and_then(|p| dm.color3(id, p).ok())
-        .unwrap_or(Color3::WHITE);
+    let color = props.color.and_then(|p| dm.color3(id, p).ok()).unwrap_or(Color3::WHITE);
     let brightness = number(props.brightness, 1.0).max(0.0);
     SceneLight {
         id,

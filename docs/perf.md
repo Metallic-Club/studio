@@ -396,7 +396,8 @@ are the baseline later work is measured against:
 - **`overdraw`** draws its 64 walls back to front, each covering the screen but for a window (up to 64 layers per
   pixel); built the other way round the same scene takes 0.21 ms of GPU instead of 0.55 ms. A depth prepass or a
   front-to-back sort (ADR 0008 §7) is measured here.
-- **`many_lights`** holds 1,024 `PointLight`s and 128 `SpotLight`s that draw nothing until #81 and #83.
+- **`many_lights`** holds 1,024 `PointLight`s and 128 `SpotLight`s, which drew nothing until #83 (see "Point and
+  spot lights" below).
 
 The overlay costs about 0.02 ms of render CPU and 0.02 ms of GPU (its UI pass): `parts_100k` with `--overlay`
 measured 1.052 / 1.189 / 1.207 ms per frame, 0.266 / 0.382 ms render CPU and 0.933 ms GPU.
@@ -531,3 +532,75 @@ draws and 0.38 M triangles a frame.
 - **The perf gate's workloads** (the camera's cull and the sync) change only by a byte in each grid item (the caster
   flag, in the item's padding) and, in the sync, a region test and two flag comparisons per written slot, plus two
   noted bounding spheres for each static caster that moves or changes how it casts.
+
+### Point and spot lights (#83)
+
+Clustered forward lighting ([`metallic_render::lights`](../crates/render/src/lights/mod.rs), ADR 0008 §6): every
+frame the CPU ranks the `PointLight`s and `SpotLight`s whose range reaches into the view by importance (brightness ×
+how large their sphere looks), keeps the first `budget` of them (lights entering or leaving the budget fade over
+0.3 s instead of popping), and bins them into a 16 × 9 × 24 froxel grid (depth slices exponential from 1 m to the
+farthest light), at most `per_cluster` lights in a cluster. The lights reach the fragment shader in a 16 KiB
+uniform array and the grid in an `R32Uint` texture, so both instance paths (and GLES) light the same way. Lights with
+`Shadows` get tiles of a shadow atlas (a spot one, a point light six), drawn in one pass over the whole atlas and
+**cached**: a tile is drawn again only when its light moves or changes, a static caster changes inside it, or a moving
+caster is (or was) inside it. The part that holds a light casts no shadow for it.
+
+The settings presets will use (#84), `LightSettings::{LOW, MEDIUM, HIGH}` (Medium is the default):
+
+| Preset | Lights a frame | Per cluster | Shadowed lights | Atlas | Tile |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Low | 32 | 32 | 2 | 1024² (4 MiB) | 256² |
+| Medium | 128 | 48 | 8 | 2048² (16 MiB) | 256² |
+| High | 192 | 64 | 8 | 4096² (64 MiB) | 512² |
+
+The stress example's `--lights low|medium|high|off`, `--light-budget`, `--lights-per-cluster`, `--shadowed-lights`
+and `--no-light-shadows` set them; the JSON reports the light counts (`lights`: in the scene, in view, in the budget,
+drawn, fading, shadowed, atlas tiles, cluster entries and the fullest cluster, the atlas's draws and how many frames
+drew tiles), the lights' CPU time (`cpu_ms.lights`, part of render CPU: selection, clustering, packing and the atlas
+tiles' caster culls) and the atlas pass's GPU time (`gpu_ms.light_shadows`, a frame that kept every tile counting 0).
+The overlay shows the same on its two `LIGHTS` lines.
+
+**2026-11-03**, same machine as the tables above (Ryzen 5 5500, RX 6650 XT, Windows 11, **DX12**, `AutoNoVsync`,
+1,000 frames after 120, seed 1), branch `83-local-lights` at `4da09f8`, `many_lights` at 1920 × 1080 (the camera
+still unless said otherwise; 1% of the lamps moving every frame). "Off" is the same branch with `--lights off`, which
+draws what `main` draws: with no light drawn the parts use pipelines made without the light loop (below), and its
+opaque pass measured the same as with the light code removed (0.398 ms). Times are p50 in ms; the atlas's GPU time
+is its mean over the measured frames.
+
+| Lights | Drawn (of 1,125 in view) | Shadowed | Frame | Render CPU (p99) | Lights CPU | GPU | Opaque pass | Atlas | Cluster entries (fullest) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| off | 0 | 0 | 0.679 | 0.300 (0.439) | | 0.579 | 0.397 | | |
+| Low | 32 | 2 | 1.297 | 0.465 (0.649) | 0.100 | 1.176 | 0.999 | 0.001 | 5,012 (16) |
+| **Medium** | 128 | 3 | 2.230 | 0.625 (0.814) | 0.219 | 2.078 | 1.901 | 0.001 | 13,548 (39) |
+| High | 192 | 5 | 2.777 | 0.719 (1.019) | 0.275 | 2.483 | 2.294 | 0.006 | 16,713 (47) |
+| Medium, `--no-light-shadows` | 128 | 0 | 1.810 | 0.566 (0.811) | 0.189 | 1.637 | 1.452 | | 13,548 (39) |
+| Medium, `--moving-camera` | 124 (of 124) | 1 | 2.087 | 0.652 (0.964) | 0.248 | 1.849 | 1.643 | 0.000 | 13,742 (48) |
+
+A second pair of runs (off, Medium) agreed within 3% (render CPU p99 within 0.2 ms).
+
+- **Against ADR 0008's Mid budget at Medium**: render CPU 0.63 ms p50 and 0.81 ms p99 against the Mid tier's
+  2.5 ms (and inside the High tier's 1.5 ms), on the High-tier dev PC. The GPU frame is 2.08 ms at 1080p on an
+  RX 6650 XT; a GTX 1650 (the Mid reference) has a third or less of its shading throughput, which puts it near 6 to
+  8 ms, inside the 16.7 ms of 60 fps with room for the post chain. There is no Mid-tier machine to measure on yet, as
+  for #79 and #82; `many_lights` at Medium is the scene to run on one.
+- **The lights' CPU time**: 0.22 ms at Medium for 1,152 lights in the scene: ranking all of them, clustering the 128
+  drawn (about 0.15 ms of it: 13,500 cluster entries) and packing them. The atlas's caster culls are part of it
+  (0.01 ms here: one tile a frame, below). It scales with the budget (0.10 ms at Low, 0.28 ms at High).
+- **The atlas is cached**: with a still camera the 18 tiles of the 3 shadowed lights in the budget were drawn once,
+  and after that one tile a frame on average (a moving lamp crosses one face of a shadowed light): 0.001 ms of GPU.
+  With a walking camera lights come into the budget and leave it, and 136 of the 1,000 frames drew tiles (156 tiles).
+  The render test `the_atlas_is_kept_until_a_caster_moves` checks a still frame draws none.
+- **Shading cost**: the opaque pass grows from 0.40 to 1.90 ms at Medium: every pixel loops over its cluster's
+  lights (13 on average in the lit clusters here, a dense town of lamps 8 to 24 m in range). Code that is in the
+  shader costs registers, and so occupancy, even when it does not run, so the part pipelines are made in three
+  variants (pipeline-overridable constants, all compiled when the renderer is made) and each frame uses the cheapest
+  that draws it: **no local lights** (an unlit frame costs exactly what it did before), **lights without shadows**
+  (1.45 ms here), or **lights with shadows** (1.90 ms; the shadow lookup in the loop costs 0.45 ms of occupancy even
+  though only 3 of the 128 lights have shadows). Measured on the way: a second loop for the shadowed lights cost
+  more (2.74 ms), not less, and a 3 × 3 loop of shadow taps instead of 4 fixed taps 0.06 ms more.
+- **The cluster cap**: at 32 per cluster (the first Medium setting) the town overflowed 194 entries a frame (lights
+  missing from a cluster, a hard edge); 48 never overflowed with a still camera and 15 entries in the walking
+  camera's last frame, for 0.05 ms more GPU than 32.
+- **The perf gate's workloads** do not draw lights. In the sync, a part's change now looks its class up once (as
+  before) and, only when the scene has lights, a part's transform change stamps it if lights follow it (an index
+  test); a non-part change checks the light table before the watch list.

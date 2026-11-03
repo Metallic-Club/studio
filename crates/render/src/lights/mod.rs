@@ -255,8 +255,6 @@ pub(crate) struct LightRuntime {
     pub(crate) fresh: bool,
     /// The light was in the budget last frame.
     pub(crate) in_budget: bool,
-    /// The light's position in this frame's drawn list, or `u16::MAX`.
-    pub(crate) drawn: u16,
     /// How much of its shadow is drawn, 0 to 1.
     pub(crate) shadow_fade: f32,
     /// The atlas tiles it holds, the first `tile_count` of them (one per cube face for a point light).

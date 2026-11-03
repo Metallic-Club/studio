@@ -57,9 +57,9 @@ impl Slicing {
         }
     }
 
-    /// The slice a view depth is in (the shader's `cluster_slice`).
+    /// The slice a view depth is in (the shader's `cluster_index`): 0 nearer than [`FIRST_SLICE`] (or not a number).
     pub(crate) fn slice(&self, depth: f32) -> u32 {
-        if !(depth >= FIRST_SLICE) {
+        if depth.is_nan() || depth < FIRST_SLICE {
             return 0;
         }
         let s = (depth.log2() * self.scale + self.bias).max(0.0);
@@ -133,7 +133,11 @@ fn tile_range(low: f32, high: f32, near: f32, far: f32, tan: f32, count: u32) ->
     // the far depth, and the other way round for the upper bound.
     let min = low / if low < 0.0 { near } else { far };
     let max = high / if high > 0.0 { near } else { far };
-    let to_tile = |slope: f32| ((slope / tan + 1.0) * 0.5 * count as f32).floor().clamp(0.0, (count - 1) as f32) as u32;
+    let to_tile = |slope: f32| {
+        ((slope / tan + 1.0) * 0.5 * count as f32)
+            .floor()
+            .clamp(0.0, (count - 1) as f32) as u32
+    };
     (to_tile(min), to_tile(max))
 }
 
@@ -158,10 +162,16 @@ impl ClusterGrid {
         let step_x = 2.0 / CLUSTERS_X as f32;
         let step_y = 2.0 / CLUSTERS_Y as f32;
         let columns: [(f32, f32); CLUSTERS_X as usize] = std::array::from_fn(|x| {
-            ((x as f32 * step_x - 1.0) * tan_x, ((x + 1) as f32 * step_x - 1.0) * tan_x)
+            (
+                (x as f32 * step_x - 1.0) * tan_x,
+                ((x + 1) as f32 * step_x - 1.0) * tan_x,
+            )
         });
         let rows: [(f32, f32); CLUSTERS_Y as usize] = std::array::from_fn(|y| {
-            ((1.0 - (y + 1) as f32 * step_y) * tan_y, (1.0 - y as f32 * step_y) * tan_y)
+            (
+                (1.0 - (y + 1) as f32 * step_y) * tan_y,
+                (1.0 - y as f32 * step_y) * tan_y,
+            )
         });
         // The extent of a cluster across, at depths d0 to d1, between slopes a and b.
         let across = |(a, b): (f32, f32), d0: f32, d1: f32| ((a * d0).min(a * d1), (b * d0).max(b * d1));
@@ -272,7 +282,10 @@ mod tests {
             let s = slicing.slice(depth);
             assert!(s >= last);
             let (lo, hi) = slicing.bounds(s);
-            assert!(lo <= depth * 1.0001 && depth <= hi * 1.0001, "{depth} in slice {s} [{lo}, {hi}]");
+            assert!(
+                lo <= depth * 1.0001 && depth <= hi * 1.0001,
+                "{depth} in slice {s} [{lo}, {hi}]"
+            );
             last = s;
         }
     }

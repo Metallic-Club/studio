@@ -219,9 +219,9 @@ impl LocalLights {
         cull: &CullSettings,
     ) {
         let start = Instant::now();
-        let dt = self
-            .last
-            .map_or(0.0, |last| start.saturating_duration_since(last).as_secs_f32().min(MAX_STEP));
+        let dt = self.last.map_or(0.0, |last| {
+            start.saturating_duration_since(last).as_secs_f32().min(MAX_STEP)
+        });
         self.last = Some(start);
         self.stats = LightStats {
             in_scene: scene.scene().light_count() as u32,
@@ -265,7 +265,8 @@ impl LocalLights {
             for (slot, &index) in self.drawn.iter().enumerate() {
                 let (light, state) = (&lights[index as usize], &runtime[index as usize]);
                 let shadow = if state.tile_count > 0 { state.shadow_fade } else { 0.0 };
-                self.lights.push(GpuLight::new(light, camera.position, state.fade, shadow));
+                self.lights
+                    .push(GpuLight::new(light, camera.position, state.fade, shadow));
                 if shadow > 0.0 {
                     self.shadowed.push(ShadowedLight {
                         light: *light,

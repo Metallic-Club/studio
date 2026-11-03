@@ -69,11 +69,11 @@ mod sync;
 mod tests;
 
 pub use components::{LightComponent, MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
-pub(crate) use grid::bounding_sphere;
-pub use lights::{LightKind, SceneLight};
 pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};
 pub use grid::CELL_SIZE;
+pub(crate) use grid::bounding_sphere;
 pub use instance::{GpuInstance, MeshKind, affine_rows, pack_color};
+pub use lights::{LightKind, SceneLight};
 pub(crate) use lists::TRANSPARENT_LIST;
 pub use lists::{DYNAMIC_ENTRY, entry, entry_slot};
 pub use sync::InstanceScene;

@@ -71,13 +71,11 @@ pub(crate) fn select(
     drawn.clear();
     let budget = settings.light_budget();
     for (index, (light, state)) in (0u32..).zip(lights.iter().zip(runtime.iter_mut())) {
-        state.drawn = u16::MAX;
         state.fresh = false;
         if budget == 0 || !light.shines() {
             *state = LightRuntime {
                 tiles: state.tiles,
                 tile_count: state.tile_count,
-                drawn: u16::MAX,
                 ..LightRuntime::default()
             };
             continue;
@@ -140,7 +138,6 @@ pub(crate) fn select(
         if state.fade < 1.0 {
             selection.fading += 1;
         }
-        state.drawn = drawn.len() as u16;
         drawn.push(index);
     }
     selection.drawn = drawn.len() as u32;
@@ -214,7 +211,10 @@ mod tests {
                 let tip = spot.position + Vec3::NEG_Y * spot.range * t;
                 assert!(tip.distance(center) <= radius + 1e-3, "{angle}°: tip at {t}");
             }
-            assert!(radius <= spot.range + 1e-3, "never larger than the point light's sphere");
+            assert!(
+                radius <= spot.range + 1e-3,
+                "never larger than the point light's sphere"
+            );
         }
     }
 

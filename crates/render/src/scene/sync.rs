@@ -9,13 +9,13 @@ use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
 use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
 use super::lights::{LightChange, LightSet, SceneLight};
-use crate::lights::LightRuntime;
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
 use super::{
     DEMOTE_REST, MAX_SHADOW_CHANGES, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED,
     PROMOTE_WINDOW, REST_CHECKS_PER_FRAME, Region, SHADOW_FLAGS, SlotRef, SyncStats, UploadRange, is_shadow_caster,
 };
+use crate::lights::LightRuntime;
 
 /// What the scene asks the data model to record for it (removals and `CREATED` are always recorded).
 fn interest() -> DirtyBits {

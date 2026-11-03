@@ -114,7 +114,8 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
                 };
             }
             "--light-budget" => {
-                options.lights.budget = u32::try_from(number(it.next(), "--light-budget")?).map_err(|e| e.to_string())?;
+                options.lights.budget =
+                    u32::try_from(number(it.next(), "--light-budget")?).map_err(|e| e.to_string())?;
             }
             "--shadowed-lights" => {
                 options.lights.shadowed_lights =

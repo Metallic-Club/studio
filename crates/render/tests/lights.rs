@@ -92,9 +92,7 @@ fn spot_game() -> (Game, Id) {
         Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
     );
     let id = light(&mut game, "SpotLight", ws, down, [170, 200, 255], 6.0, 20.0);
-    game.dm
-        .set_by_name(id, "Angle", Value::Number(50.0))
-        .expect("Angle");
+    game.dm.set_by_name(id, "Angle", Value::Number(50.0)).expect("Angle");
     (game, id)
 }
 
@@ -106,10 +104,16 @@ fn shadow_game() -> (Game, Id, Id) {
         Vec3::splat(0.4),
         CFrame::new(Vec3::new(-2.0, 2.0, 0.0)),
     );
-    let id = light(&mut game, "PointLight", lamp, CFrame::IDENTITY, [255, 230, 190], 3.0, 16.0);
-    game.dm
-        .set_by_name(id, "Shadows", Value::Bool(true))
-        .expect("Shadows");
+    let id = light(
+        &mut game,
+        "PointLight",
+        lamp,
+        CFrame::IDENTITY,
+        [255, 230, 190],
+        3.0,
+        16.0,
+    );
+    game.dm.set_by_name(id, "Shadows", Value::Bool(true)).expect("Shadows");
     let pillar = game.part(
         Look::new("Block", "Plastic", [196, 40, 28]),
         Vec3::new(1.0, 4.0, 1.0),
@@ -283,7 +287,10 @@ fn a_point_light_falls_off_to_nothing_at_its_range() {
     eprintln!("floor under the light {under:.1}, 3 m {near:.1}, 7 m {far:.1}, 12.5 m {outside:.1}");
     assert!(under > near + 10.0 && near > far + 10.0, "{under} {near} {far}");
     assert!(under > at(&dark, 0.0) + 60.0, "the light lights the floor");
-    assert!((outside - at(&dark, 12.5)).abs() < 1.5, "past the range nothing changes");
+    assert!(
+        (outside - at(&dark, 12.5)).abs() < 1.5,
+        "past the range nothing changes"
+    );
 }
 
 #[test]
@@ -299,7 +306,10 @@ fn a_spot_light_lights_its_cone() {
     let (centre, inside, outside) = (at(&pixels, 0.0), at(&pixels, 2.0), at(&pixels, 4.0));
     eprintln!("cone centre {centre:.1}, 2 m {inside:.1}, 4 m {outside:.1}");
     assert!(centre > at(&dark, 0.0) + 60.0 && inside > at(&dark, 2.0) + 30.0);
-    assert!((outside - at(&dark, 4.0)).abs() < 1.5, "outside the cone nothing changes");
+    assert!(
+        (outside - at(&dark, 4.0)).abs() < 1.5,
+        "outside the cone nothing changes"
+    );
 }
 
 #[test]
@@ -318,9 +328,7 @@ fn a_shadowed_light_casts_shadows_from_its_lamp() {
     assert!(open > behind + 20.0, "no shadow behind the pillar");
     assert!(under > open, "the lamp's ball shadows its own light");
     // `Shadows` off: lit behind the pillar too.
-    game.dm
-        .set_by_name(id, "Shadows", Value::Bool(false))
-        .expect("Shadows");
+    game.dm.set_by_name(id, "Shadows", Value::Bool(false)).expect("Shadows");
     let unshadowed = render(&context, &mut game, LightSettings::default());
     let behind_lit = floor_level(&game, &unshadowed, 4.0, 0.0);
     assert!(behind_lit > behind + 20.0, "{behind_lit} against {behind}");
@@ -336,7 +344,15 @@ fn a_light_in_a_part_follows_it() {
         Vec3::splat(0.4),
         CFrame::new(Vec3::new(-4.0, 2.0, 0.0)),
     );
-    let id = light(&mut game, "PointLight", lamp, CFrame::IDENTITY, [255, 255, 255], 2.0, 6.0);
+    let id = light(
+        &mut game,
+        "PointLight",
+        lamp,
+        CFrame::IDENTITY,
+        [255, 255, 255],
+        2.0,
+        6.0,
+    );
     let mut frames = Frames::new(&context, &mut game, LightSettings::default());
     frames.frame(&context, &mut game);
     let before = frames.pixels(&context);
@@ -354,8 +370,14 @@ fn a_light_in_a_part_follows_it() {
             .position
             .abs_diff_eq(Vec3::new(4.0, 2.0, 0.0), 1e-5)
     );
-    let left = (level(&before, project(&game, Vec3::new(-4.0, 0.0, 0.0))), level(&after, project(&game, Vec3::new(-4.0, 0.0, 0.0))));
-    let right = (level(&before, project(&game, Vec3::new(4.0, 0.0, 0.0))), level(&after, project(&game, Vec3::new(4.0, 0.0, 0.0))));
+    let left = (
+        level(&before, project(&game, Vec3::new(-4.0, 0.0, 0.0))),
+        level(&after, project(&game, Vec3::new(-4.0, 0.0, 0.0))),
+    );
+    let right = (
+        level(&before, project(&game, Vec3::new(4.0, 0.0, 0.0))),
+        level(&after, project(&game, Vec3::new(4.0, 0.0, 0.0))),
+    );
     assert!(left.0 > left.1 + 30.0 && right.1 > right.0 + 30.0, "{left:?} {right:?}");
     // Off: nothing drawn.
     game.dm.set_by_name(id, "Enabled", Value::Bool(false)).expect("Enabled");
@@ -382,7 +404,11 @@ fn the_atlas_is_kept_until_a_caster_moves() {
     let mut frames = Frames::new(&context, &mut game, LightSettings::default());
     frames.frame(&context, &mut game);
     let first = frames.renderer.light_stats();
-    assert_eq!((first.shadowed, first.shadow_tiles, first.tiles_redrawn), (1, 6, 6), "{first:?}");
+    assert_eq!(
+        (first.shadowed, first.shadow_tiles, first.tiles_redrawn),
+        (1, 6, 6),
+        "{first:?}"
+    );
     assert!(frames.renderer.draw_stats().light_shadow_draws > 0);
     frames.frame(&context, &mut game);
     let still = frames.renderer.light_stats();
@@ -408,7 +434,11 @@ fn the_atlas_is_kept_until_a_caster_moves() {
         let mut seen = false;
         for _ in 0..20 {
             frames.frame(&context, &mut game);
-            if frames.renderer.gpu_timings().is_some_and(|t| t.light_shadow_ms() >= 0.0) {
+            if frames
+                .renderer
+                .gpu_timings()
+                .is_some_and(|t| t.light_shadow_ms() >= 0.0)
+            {
                 seen = true;
             }
         }
@@ -422,8 +452,24 @@ fn the_budget_fades_lights_in_and_out() {
     let Some(context) = gpu() else { return };
     let mut game = night_floor();
     let ws = game.workspace;
-    let dim = light(&mut game, "PointLight", ws, CFrame::new(Vec3::new(-5.0, 2.0, 0.0)), [255, 255, 255], 1.0, 8.0);
-    light(&mut game, "PointLight", ws, CFrame::new(Vec3::new(5.0, 2.0, 0.0)), [255, 255, 255], 2.0, 8.0);
+    let dim = light(
+        &mut game,
+        "PointLight",
+        ws,
+        CFrame::new(Vec3::new(-5.0, 2.0, 0.0)),
+        [255, 255, 255],
+        1.0,
+        8.0,
+    );
+    light(
+        &mut game,
+        "PointLight",
+        ws,
+        CFrame::new(Vec3::new(5.0, 2.0, 0.0)),
+        [255, 255, 255],
+        2.0,
+        8.0,
+    );
     let settings = LightSettings {
         budget: 1,
         fade_time: 10.0,
@@ -432,7 +478,11 @@ fn the_budget_fades_lights_in_and_out() {
     let mut frames = Frames::new(&context, &mut game, settings);
     frames.frame(&context, &mut game);
     let stats = frames.renderer.light_stats();
-    assert_eq!((stats.in_view, stats.in_budget, stats.drawn, stats.fading), (2, 1, 1, 0), "{stats:?}");
+    assert_eq!(
+        (stats.in_view, stats.in_budget, stats.drawn, stats.fading),
+        (2, 1, 1, 0),
+        "{stats:?}"
+    );
     let before = frames.pixels(&context);
     // The dim one becomes the brightest: it fades in (slowly, with a 10 s fade) and the other fades out.
     game.dm
@@ -444,6 +494,11 @@ fn the_budget_fades_lights_in_and_out() {
     let after = frames.pixels(&context);
     let at = |pixels: &[[u8; 4]], x: f32| floor_level(&game, pixels, x, 0.0);
     // No pop: one frame later both sides look almost as before.
-    assert!((at(&after, -5.0) - at(&before, -5.0)).abs() < 12.0, "{} {}", at(&after, -5.0), at(&before, -5.0));
+    assert!(
+        (at(&after, -5.0) - at(&before, -5.0)).abs() < 12.0,
+        "{} {}",
+        at(&after, -5.0),
+        at(&before, -5.0)
+    );
     assert!((at(&after, 5.0) - at(&before, 5.0)).abs() < 12.0);
 }
