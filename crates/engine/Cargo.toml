@@ -54,3 +54,12 @@ name = "perf_gate"
 harness = false
 bench = false
 required-features = ["luau"]
+
+# The perf gate's client suite: the steps only a build with a window has (the input step), with the default
+# features but no window and no GPU. Same rules as above; it runs by name:
+# `cargo bench -p metallic_engine --bench perf_gate_client`.
+[[bench]]
+name = "perf_gate_client"
+harness = false
+bench = false
+required-features = ["render", "luau"]

@@ -10,7 +10,7 @@ hot paths of `metallic_core` and of the Luau bindings (`metallic_luau`).
 `.github/workflows/perf.yml` runs on every pull request that changes `crates/`, `Cargo.toml`, `Cargo.lock` or the
 workflow itself. It counts the instructions (Callgrind's `Ir`) each workload executes, once for the PR's base and
 once for its head, on the same runner. **The PR fails when any workload grows by more than 5%** (exactly 5%
-passes). There are four suites, each with its own table in the job summary:
+passes). There are five suites, each with its own table in the job summary:
 
 - [`crates/core/benches/perf_gate.rs`](../crates/core/benches/perf_gate.rs): the data model (below);
 - [`crates/luau/benches/perf_gate.rs`](../crates/luau/benches/perf_gate.rs): Luau scripts doing 10,000 `part.Position`
@@ -24,6 +24,16 @@ passes). There are four suites, each with its own table in the job summary:
   (`--no-default-features --features physics,luau`), so no renderer or window code is compiled in. At introduction
   (#73; ubuntu-24.04 runner, Rust 1.99.1, gungraun 0.20.0, release profile) it counted 173,536 `Ir`: about 1,700
   instructions per empty frame;
+- [`crates/engine/benches/perf_gate_client.rs`](../crates/engine/benches/perf_gate_client.rs): the frame loop's
+  client steps, which a dedicated server does not compile. It builds with the engine's default features (`render`,
+  so winit is compiled in), but opens no window and needs no GPU: the engine stays headless. The input queue and
+  `UserInputService` only exist in that build, so they cannot be a feature-gated workload of the server suite
+  without also changing what `engine_empty_frames` measures. `engine_input_mouse_unwatched` queues 1,000 mouse
+  events (cursor moves and raw motion, alternating) with `Engine::push_input` into a started standalone game with no
+  scripts, so nothing is connected to `UserInputService`, then runs one `tick()`; the `setup` warms it with four
+  frames of the same input. It measures the path #74 made allocation-free (`crates/engine/tests/input_alloc.rs`).
+  At introduction (#99; ubuntu-24.04 runner, Rust 1.99.1, Valgrind 3.22.0, gungraun 0.20.0, release profile) it
+  counted 75,759 `Ir`: about 76 instructions per event, queuing and the frame included;
 - [`crates/render/benches/perf_gate.rs`](../crates/render/benches/perf_gate.rs): the GPU scene's CPU side (#76), with
   no GPU. Each workload is one frame of `InstanceScene` over 10,000 parts with 1% changed in the `setup` (drain,
   repack, coalesce) plus the upload's CPU work written into a plain buffer: `render_sync_moving` (100 parts that
@@ -92,9 +102,13 @@ The Luau suite follows the same steps with `cargo bench -p metallic_luau --bench
 the base lacks it). Its workloads only use public APIs, so the bench source is the only file copied to the base.
 The engine suite does the same with
 `cargo bench -p metallic_engine --bench perf_gate --no-default-features --features physics,luau` and
-`--source crates/engine/benches/perf_gate.rs --suite metallic_engine`, and the render suite with
+`--source crates/engine/benches/perf_gate.rs --suite metallic_engine`, the render suite with
 `cargo bench -p metallic_render --bench perf_gate` and `--source crates/render/benches/perf_gate.rs --suite
-metallic_render`. Workload names are unique across the suites, because the report matches gungraun's summaries by
+metallic_render`, and the engine's client suite with `cargo bench -p metallic_engine --bench perf_gate_client` and
+`--source crates/engine/benches/perf_gate_client.rs --suite "metallic_engine (client)"`. The client suite runs after
+the render suite, so it reuses that build of `metallic_render` and wgpu and adds only winit and the engine's `render`
+build; winit's X11 and Wayland backends are loaded at run time, so the runner needs no system packages to compile it.
+Workload names are unique across the suites, because the report matches gungraun's summaries by
 function name.
 
 The job takes several minutes, most of it compiling (the Luau suite builds Luau's C++ sources for both sides). Pushes to `main` that touch the same paths only build,
@@ -148,6 +162,12 @@ perf workflow does this on every run. Running it by name fails at once with "Is 
 - Add the function to the `benchmarks = [...]` list; `perf-report` reads that list to know what must be present.
 - The base must be able to build the new workload with its own API (see above): add a workload in a PR after the API
   it calls has landed.
+- **Put it in the suite whose build has the code.** A workload added to an existing suite is measured on the base
+  too (the head's bench source is copied there) and gated in the PR that adds it, so the base must run it as the
+  code it measures. A workload that needs other features than every suite (as the input step needed `render`) gets
+  its own bench file and `[[bench]]` entry with those features, and the workflow gets that suite's steps, decided
+  from the base commit by the file's presence like the others: the PR that adds the file has no baseline, so its
+  workloads are reported `NEW (not gated)` and the next PR is gated against them.
 
 ### Changing the gate is reviewed like code
 
