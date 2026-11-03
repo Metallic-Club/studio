@@ -22,7 +22,9 @@ metallic_luau = { path = "crates/luau" }
 metallic_render = { path = "crates/render" }
 metallic_physics = { path = "crates/physics" }
 metallic_project = { path = "crates/project" }
-metallic_platform = { path = "crates/platform" }
+# Without its `window` feature (winit, gilrs): a dedicated server gets user paths only. `metallic_engine`'s `render`
+# feature turns it on (#92).
+metallic_platform = { path = "crates/platform", default-features = false }
 metallic_engine = { path = "crates/engine", default-features = false }
 metallic_player = { path = "apps/player" }
 
@@ -57,6 +59,9 @@ raw-window-handle = "0.6.2"
 gilrs = "0.11.2"
 # Logging facade; the app that ships picks the logger.
 log = "0.4"
+# Profiling scopes in `metallic_engine`'s frame loop. With no back end feature the macros expand to nothing; the
+# engine's `profile-with-puffin` and `profile-with-tracy` features pick one. No proc-macros (`procmacros` is off).
+profiling = { version = "1.0.18", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "warn"

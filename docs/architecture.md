@@ -64,6 +64,11 @@ class is one file; none of those systems change. ([ADR 0002](adr/0002-object-mod
 There is no Bevy. The engine runs its own loop on `winit` and renders with `wgpu`; consoles plug in private backends.
 Graphics quality presets and dynamic resolution are part of the engine.
 
+The loop is `metallic_engine`'s `Engine`: each frame runs input, then `RenderStepped` (clients only),
+`PreSimulation`, the fixed simulation steps (60 Hz accumulator, capped catch-up), `PostSimulation`, `Heartbeat`, and
+last the render hook. Its crate docs give the table and the time rules; a dedicated server runs the same loop with
+`Engine::tick` and no window (the `render` feature off, so no winit).
+
 How the renderer stays fast at 100k parts without giving up quality or customization (budgets, stable GPU slots,
 layered culling, LOD, clustered lights, cached shadows, no hitches) is fixed by
 [ADR 0008](adr/0008-rendering-performance.md).

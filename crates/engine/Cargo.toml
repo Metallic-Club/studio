@@ -13,9 +13,14 @@ workspace = true
 
 [features]
 default = ["render", "physics", "luau"]
-render = ["dep:metallic_render"]
+# A window, the platform event loop and the render hook. Off on a dedicated server, which then builds no winit (#92).
+render = ["dep:metallic_render", "metallic_platform/window"]
 physics = ["dep:metallic_physics"]
 luau = ["dep:metallic_luau"]
+# Profiling back ends for the frame loop's scopes (the `profiling` crate). Both off by default, and the scopes cost
+# nothing then. The app that turns one on also starts its profiler (crate docs, "Profiling").
+profile-with-puffin = ["profiling/profile-with-puffin"]
+profile-with-tracy = ["profiling/profile-with-tracy"]
 
 [dependencies]
 metallic_core.workspace = true
@@ -26,3 +31,26 @@ metallic_platform.workspace = true
 metallic_render = { workspace = true, optional = true }
 metallic_physics = { workspace = true, optional = true }
 metallic_luau = { workspace = true, optional = true }
+log.workspace = true
+profiling.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+gungraun.workspace = true
+
+[[example]]
+name = "headless"
+required-features = ["luau"]
+
+[[example]]
+name = "windowed"
+required-features = ["render", "luau"]
+
+# The perf gate's engine suite (docs/perf.md). It needs Valgrind and `gungraun-runner`, so a plain `cargo bench`
+# leaves it out (`bench = false`); it runs by name, with the dedicated server's features:
+# `cargo bench -p metallic_engine --bench perf_gate --no-default-features --features physics,luau`.
+[[bench]]
+name = "perf_gate"
+harness = false
+bench = false
+required-features = ["luau"]

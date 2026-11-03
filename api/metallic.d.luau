@@ -393,6 +393,34 @@ end
 declare extern type ReplicatedStorage extends Instance with
 end
 
+--- The engine's frame loop, seen from scripts: events that fire every frame, and whether the game runs in Studio, on a client or on the server. Get it with game:GetService("RunService").
+declare extern type RunService extends Instance with
+    --- Set by the engine when the game runs inside Studio. Read it with IsStudio().
+    read InStudio: boolean
+    --- Set by the engine while the game runs (paused included). Read it with IsRunning().
+    read Running: boolean
+    --- Set by the engine when this side is a player's client. Read it with IsClient().
+    read OnClient: boolean
+    --- Set by the engine when this side is the server. Read it with IsServer().
+    read OnServer: boolean
+    --- Fires every frame before the frame is drawn, before physics, with the frame's time step in seconds. Only on clients; a server never fires it. Use it for the camera and other things that must match what is drawn.
+    RenderStepped: ScriptSignal<number>
+    --- Fires every frame just before physics steps, with the frame's time step in seconds. Use it to move things physics should see this frame.
+    PreSimulation: ScriptSignal<number>
+    --- Fires every frame just after physics has stepped, with the frame's time step in seconds. Use it to read where physics put things.
+    PostSimulation: ScriptSignal<number>
+    --- Fires every frame at its end, after physics, with the frame's time step in seconds. Threads waiting in task.wait resume in the same step.
+    Heartbeat: ScriptSignal<number>
+    --- Returns true when the game runs inside Studio (in play mode or while editing).
+    function IsStudio(self): boolean
+    --- Returns true while the game runs: after it starts and until it stops. A paused game still runs.
+    function IsRunning(self): boolean
+    --- Returns true on a player's client. A standalone game, with no separate server, is both client and server.
+    function IsClient(self): boolean
+    --- Returns true on the server. A standalone game, with no separate server, is both client and server.
+    function IsServer(self): boolean
+end
+
 --- Holds the game's server scripts. Scripts placed here run on the server; players never see them.
 declare extern type ServerScriptService extends Instance with
 end

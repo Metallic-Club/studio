@@ -1,6 +1,7 @@
 # The perf gate (docs/perf.md): Callgrind instruction counts of the engine's hot paths, PR base vs head on the
 # same runner, with the head's workloads for both. More than 5% growth in `Ir` on any workload fails the PR, and so
-# does a missing or zero count. Two suites: metallic_core's data model, and metallic_luau's bindings. A suite the
+# does a missing or zero count. Three suites: metallic_core's data model, metallic_luau's bindings, and
+# metallic_engine's frame loop (built with the dedicated server's features, so no renderer or window). A suite the
 # base does not have yet (the PR that introduces it) is measured on the head and reported as new, not gated.
 #
 # Pushes to main only build, so the cargo cache is saved from main and restored by PRs, as in ci.yml.
@@ -23,6 +24,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The engine suite builds with the dedicated server's features: the frame loop without a renderer or a window.
+  ENGINE_FEATURES: --no-default-features --features physics,luau
   # Base and head must not share a target folder: cargo names a workspace crate's artifacts by its path relative to
   # the workspace root, which is the same on both sides, so the second build would reuse the first one's binary and
   # the gate would compare the base with itself. The base builds into base/target, the head into target.
@@ -31,8 +34,9 @@ jobs:
   gate:
     name: Perf gate (instruction counts)
     runs-on: ubuntu-latest
-    # Two suites, each built for the base and the head; the Luau suite also compiles Luau's C++ sources.
-    timeout-minutes: 20
+    # Three suites, each built for the base and the head; the Luau and engine suites also compile Luau's C++ sources
+    # (once per side: the engine suite reuses the Luau suite's build of it).
+    timeout-minutes: 25
     steps:
       # On a PR this is the merge of the head into the base branch, so only the PR's changes differ from the base.
       - uses: actions/checkout@v7
@@ -61,6 +65,11 @@ jobs:
           else
             echo "LUAU_SUITE_ON_BASE=false" >> "$GITHUB_ENV"
           fi
+          if [ -f base/crates/engine/benches/perf_gate.rs ]; then
+            echo "ENGINE_SUITE_ON_BASE=true" >> "$GITHUB_ENV"
+          else
+            echo "ENGINE_SUITE_ON_BASE=false" >> "$GITHUB_ENV"
+          fi
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: false
@@ -73,11 +82,13 @@ jobs:
         run: |
           cargo clippy -p metallic_core --bench perf_gate -- -D warnings
           cargo clippy -p metallic_luau --bench perf_gate -- -D warnings
+          cargo clippy -p metallic_engine --bench perf_gate $ENGINE_FEATURES -- -D warnings
       - name: Build (main only, to fill the cache)
         if: github.event_name == 'push'
         run: |
           cargo bench -p metallic_core --bench perf_gate --no-run
           cargo bench -p metallic_luau --bench perf_gate --no-run
+          cargo bench -p metallic_engine --bench perf_gate $ENGINE_FEATURES --no-run
           cargo build -p xtask
 
       - name: Install Valgrind and gungraun-runner
@@ -137,6 +148,22 @@ jobs:
           fi
           cargo bench -p metallic_luau --bench perf_gate -- --save-baseline=base
 
+      # The engine suite, when the base has it. Like the Luau suite, its workload uses only public APIs
+      # (metallic_engine, metallic_script), so the head's bench source is all that is copied.
+      - name: Measure the base with the head's workloads (metallic_engine)
+        if: github.event_name == 'pull_request' && env.ENGINE_SUITE_ON_BASE == 'true'
+        id: base_engine
+        run: |
+          cp crates/engine/benches/perf_gate.rs base/crates/engine/benches/perf_gate.rs
+          cd base
+          if ! cargo bench -p metallic_engine --bench perf_gate $ENGINE_FEATURES --no-run; then
+            msg="The PR base (${BASE_SHA::7}) cannot build the head's engine perf workloads, so there is nothing to compare against. An API the workloads use changed in this PR: land the new API first and switch the workloads in a follow-up PR (docs/perf.md, 'When the base cannot build the workloads')."
+            echo "::error title=Perf gate: base cannot build the engine workloads::$msg"
+            printf '## Perf gate: failed\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cargo bench -p metallic_engine --bench perf_gate $ENGINE_FEATURES -- --save-baseline=base
+
       # Exits with code 3 when a workload's `Ir` grows past the limit set in perf_gate.rs.
       - name: Measure the head against the base
         if: github.event_name == 'pull_request'
@@ -151,6 +178,14 @@ jobs:
           else
             cargo bench -p metallic_luau --bench perf_gate -- --save-summary=json
           fi
+      - name: Measure the head against the base (metallic_engine)
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "$ENGINE_SUITE_ON_BASE" = true ]; then
+            cargo bench -p metallic_engine --bench perf_gate $ENGINE_FEATURES -- --baseline=base --save-summary=json
+          else
+            cargo bench -p metallic_engine --bench perf_gate $ENGINE_FEATURES -- --save-summary=json
+          fi
 
       # gungraun passes a run whose baseline is missing; this fails on any missing or zero count, and writes the
       # table to the job summary.
@@ -164,3 +199,10 @@ jobs:
           if [ "$LUAU_SUITE_ON_BASE" != true ]; then new="--new-suite"; fi
           cargo xtask perf-report --home "$GUNGRAUN_HOME" --baseline base --source crates/luau/benches/perf_gate.rs \
             --suite metallic_luau $new --out "$GITHUB_STEP_SUMMARY"
+      - name: Check and report (metallic_engine)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.base_engine.outcome != 'failure' }}
+        run: |
+          new=""
+          if [ "$ENGINE_SUITE_ON_BASE" != true ]; then new="--new-suite"; fi
+          cargo xtask perf-report --home "$GUNGRAUN_HOME" --baseline base --source crates/engine/benches/perf_gate.rs \
+            --suite metallic_engine $new --out "$GITHUB_STEP_SUMMARY"
