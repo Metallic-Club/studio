@@ -26,3 +26,7 @@ criterion.workspace = true
 [[bench]]
 name = "scheduler"
 harness = false
+
+[[bench]]
+name = "lifecycle"
+harness = false

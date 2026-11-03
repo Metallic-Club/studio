@@ -96,8 +96,8 @@
 //! in tree order: the services in the order they sit under the root, and within each, depth-first (a parent before
 //! its children, children in order).
 //!
-//! From then on the host follows each script's lifecycle, through connections of its own (they never reach a
-//! backend):
+//! From then on the host follows each script's lifecycle, through a change consumer and connections of its own
+//! (neither reaches a backend):
 //!
 //! - **disabled** (`Enabled = false`), **destroyed**, or **moved out** of every service that runs scripts (parented
 //!   elsewhere or to nil): the script is reaped;
@@ -106,12 +106,16 @@
 //!
 //! A change takes effect at the next signal dispatch (step 3 of a frame step, or [`ScriptHost::dispatch_signals`]),
 //! after the change's own events: a script that disables another keeps running until then, and so does the other.
+//! Scripts that start at the same dispatch start in the order they were first created or moved since the previous
+//! one, then the re-enabled ones in the order they were enabled.
 //!
-//! **Cost.** The host connects `DescendantAdded` and `DescendantRemoving` on each service that runs scripts, and
-//! `GetPropertyChangedSignal("Enabled")` on each script inside one; it never connects to parts or other instances.
-//! Property writes to unwatched instances cost what they cost without a game. A move anywhere walks the moved
-//! instance's ancestors (the data model's cost for any `Descendant*` connection), and each instance moved into or
-//! out of such a service, with its descendants, queues one event that the host checks with one class test.
+//! **Cost.** A running game registers one change consumer with the data model (`STRUCTURE` interest, plus the
+//! `CREATED` and removals every consumer gets; [`ScriptHost::stop_game`] unregisters it) and connects
+//! `GetPropertyChangedSignal("Enabled")` on each script inside a service that runs scripts; it never connects to
+//! parts or other instances. Property writes cost what they cost without a game. Each instance created or moved
+//! (with its descendants, which a move marks too) costs one dirty-list entry, drained at the next dispatch with one
+//! class test; each destroyed one costs a removed-list entry. No signal event is queued for any of them. A
+//! destroyed script is reported by its `Enabled` watch, whose connection is dropped with it.
 //!
 //! # `require`
 //!

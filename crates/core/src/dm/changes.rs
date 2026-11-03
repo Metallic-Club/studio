@@ -138,7 +138,8 @@ impl ConsumerId {
 /// One consumer's queues.
 #[derive(Debug, Default)]
 struct Consumer {
-    /// Only these bits are recorded; `CREATED` always is.
+    /// Only these bits are recorded; `CREATED` always is. `NONE` marks a free entry
+    /// ([`DataModel::unregister_consumer`]), which records nothing.
     interest: DirtyBits,
     /// Ids whose dirty byte went from zero to non-zero since the last drain. May hold ids destroyed since.
     dirty: Vec<Id>,
@@ -170,7 +171,7 @@ impl Changes {
     /// creation is not told: for it, the instance never existed.
     pub(super) fn removed(&mut self, slot: &Slot, id: Id) {
         for (consumer, dirty) in self.consumers.iter_mut().zip(slot.dirty.iter()) {
-            if dirty & DirtyBits::CREATED.0 == 0 {
+            if dirty & DirtyBits::CREATED.0 == 0 && !consumer.interest.is_empty() {
                 consumer.removed.push(id);
             }
         }
@@ -179,20 +180,50 @@ impl Changes {
 
 impl DataModel {
     /// Registers a subsystem that drains changes, recording only the bits in `interest` for it (`CREATED` and
-    /// removals are always recorded). At most [`MAX_CONSUMERS`] can be registered.
+    /// removals are always recorded). At most [`MAX_CONSUMERS`] can be registered at once; the place of one
+    /// unregistered since is reused.
     ///
     /// Instances that already exist are not queued; call [`DataModel::mark_all`] to receive them once.
     pub fn register_consumer(&mut self, interest: DirtyBits) -> Result<ConsumerId, DmError> {
+        let consumer = Consumer {
+            interest: interest | DirtyBits::CREATED,
+            ..Consumer::default()
+        };
         let consumers = &mut self.changes.consumers;
+        if let Some((index, free)) = consumers.iter_mut().enumerate().find(|(_, c)| c.interest.is_empty())
+            && let Ok(index) = u8::try_from(index)
+        {
+            *free = consumer;
+            return Ok(ConsumerId(index));
+        }
         let index = u8::try_from(consumers.len())
             .ok()
             .filter(|&i| usize::from(i) < MAX_CONSUMERS)
             .ok_or(DmError::TooManyConsumers { max: MAX_CONSUMERS })?;
-        consumers.push(Consumer {
-            interest: interest | DirtyBits::CREATED,
-            ..Consumer::default()
-        });
+        consumers.push(consumer);
         Ok(ConsumerId(index))
+    }
+
+    /// Unregisters `consumer`, for a subsystem that stops (a script host whose game ends): nothing is recorded for
+    /// it any more, what it had not drained is dropped, and its place can be registered again. Its id must not be
+    /// used afterwards, since a later registration may get the same one. Does nothing for an id that is not
+    /// registered.
+    ///
+    /// Clears the consumer's byte in every live instance: one pass over them.
+    pub fn unregister_consumer(&mut self, consumer: ConsumerId) {
+        let index = consumer.index();
+        let Some(c) = self.changes.consumers.get_mut(index) else {
+            return;
+        };
+        if c.interest.is_empty() {
+            return;
+        }
+        *c = Consumer::default();
+        self.slots.for_each_live_mut(|_, slot| {
+            if let Some(dirty) = slot.dirty.get_mut(index) {
+                *dirty = 0;
+            }
+        });
     }
 
     /// Appends every instance that changed since `consumer` last drained, with what changed, to `out`, and clears
@@ -230,6 +261,9 @@ impl DataModel {
         let Some(c) = self.changes.consumers.get_mut(consumer.index()) else {
             return;
         };
+        if c.interest.is_empty() {
+            return;
+        }
         let bits = (DirtyBits::CREATED | DirtyBits::STRUCTURE) & c.interest;
         c.dirty.reserve(self.slots.live());
         let ids = &mut c.dirty;

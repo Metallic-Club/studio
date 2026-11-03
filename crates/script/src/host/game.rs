@@ -1,9 +1,9 @@
-//! Running script instances: `start_game`, and following each script's lifecycle (enabled, moved, destroyed,
-//! added) through host-internal connections.
+//! Running script instances: `start_game`, and following each script's lifecycle: added, moved and destroyed
+//! scripts through a change consumer, enabled and disabled ones through a watch on each script's `Enabled`.
 
 use std::collections::HashMap;
 
-use metallic_core::{ClassId, DataModel, Id, ListenerKey, PropId, ScriptValue};
+use metallic_core::{ClassId, ConsumerId, DataModel, DirtyBits, Id, ListenerKey, PropId};
 
 use super::{HostError, RecordKind, ScriptHost, Watch, WatchRecord};
 use crate::{OutputSink, OutputSource, RunContext, SourceLoader};
@@ -20,6 +20,10 @@ pub(crate) struct Game {
     source: PropId,
     /// The services that run scripts, in tree order.
     services: Vec<Id>,
+    /// The game's change consumer: instances created or moved since the last dispatch (`CREATED | STRUCTURE`; a
+    /// move sets `STRUCTURE` on the whole moved subtree, so scripts deep inside a moved model are reported too).
+    /// Parts cost a dirty-list entry and one class test each, instead of a signal event.
+    consumer: ConsumerId,
     /// Scripts inside those services, and the key of the watch on their `Enabled`.
     scripts: HashMap<Id, ListenerKey>,
 }
@@ -84,11 +88,10 @@ impl<O: OutputSink> ScriptHost<O> {
                 .collect(),
             None => Vec::new(),
         };
+        // Registered before any script runs, so what the first scripts create or move is seen. Only instances that
+        // change from now on are queued; the ones already there are found below.
+        let consumer = dm.register_consumer(DirtyBits::STRUCTURE)?;
         self.loader = Some(Box::new(loader));
-        for &service in &services {
-            self.watch_service(dm, service, "DescendantAdded", Watch::Added);
-            self.watch_service(dm, service, "DescendantRemoving", Watch::Removing);
-        }
         let mut scripts = Vec::new();
         for &service in &services {
             scripts.extend(dm.descendants(service)?.filter(|&d| dm.is_a(d, class).unwrap_or(false)));
@@ -99,6 +102,7 @@ impl<O: OutputSink> ScriptHost<O> {
             enabled,
             source,
             services,
+            consumer,
             scripts: HashMap::new(),
         });
         for script in scripts {
@@ -109,11 +113,15 @@ impl<O: OutputSink> ScriptHost<O> {
     }
 
     /// Stops the game: reaps every script and module, releases every callback function and module value, and drops
-    /// the host's watches. Returns `false` when no game was running.
+    /// the host's watches and its change consumer. Returns `false` when no game was running.
     pub fn stop_game(&mut self, dm: &mut DataModel) -> bool {
-        if self.game.take().is_none() {
+        let Some(game) = self.game.take() else {
             return false;
-        }
+        };
+        dm.unregister_consumer(game.consumer);
+        self.moved.clear();
+        self.changes.clear();
+        self.removed.clear();
         let scripts: Vec<Id> = self.scripts.keys().copied().collect();
         for script in scripts {
             self.reap_record(dm, script);
@@ -135,31 +143,51 @@ impl<O: OutputSink> ScriptHost<O> {
         self.game.as_ref().map(|game| game.context)
     }
 
-    /// How many host-internal connections exist: the watches on the services that run scripts, on each script's
-    /// `Enabled`, and on instances with a callback function.
+    /// How many host-internal connections exist: the watches on each script's `Enabled` and on instances with a
+    /// callback function.
     pub fn watch_count(&self) -> usize {
         self.watches.len()
     }
 
-    /// Connects a host-internal listener to `signal` of `service`.
-    fn watch_service(&mut self, dm: &mut DataModel, service: Id, signal: &str, watch: Watch) {
-        let Ok(signal) = dm.signal_id(service, signal) else {
+    /// Takes the scripts of the game's class that were created or moved since the last call, in the order they first
+    /// changed. They are reconciled once the events drained with them are delivered ([`ScriptHost::take_moved`]).
+    ///
+    /// Destroyed instances are drained only to empty the list: a destroyed script that runs (or is watched) is
+    /// reported by its `Enabled` watch's dropped connection in the same dispatch ([`ScriptHost::watch_dropped`]), so
+    /// looking every destroyed part up would cost a lookup each and tell nothing new.
+    pub(super) fn drain_scripts(&mut self, dm: &mut DataModel) {
+        let Some(game) = self.game.as_ref() else {
             return;
         };
-        let key = self.listeners.next_key();
-        if let Ok(connection) = dm.connect(service, signal, key) {
-            self.watches.insert(key, WatchRecord { watch, connection });
-        }
+        let mut changes = std::mem::take(&mut self.changes);
+        dm.drain_changes(game.consumer, &mut changes);
+        // Almost every entry is a part; one O(1) class test each drops them.
+        self.moved.extend(
+            changes
+                .drain(..)
+                .filter(|&(id, _)| dm.is_a(id, game.class).unwrap_or(false))
+                .map(|(id, _)| id),
+        );
+        self.changes = changes;
+        let mut removed = std::mem::take(&mut self.removed);
+        dm.drain_removed(game.consumer, &mut removed);
+        removed.clear();
+        self.removed = removed;
     }
 
-    /// A watch delivered an event: the instances it concerns are reconciled after the drain.
-    pub(super) fn on_watch(&mut self, watch: Watch, args: &[ScriptValue]) {
+    /// Queues the drained scripts for [`ScriptHost::reconcile_dirty`], ahead of the `Enabled` changes delivered in
+    /// the same dispatch.
+    pub(super) fn take_moved(&mut self) {
+        if self.moved.is_empty() {
+            return;
+        }
+        self.moved.append(&mut self.dirty);
+        std::mem::swap(&mut self.moved, &mut self.dirty);
+    }
+
+    /// A watch delivered an event: the instance it concerns is reconciled after the drain.
+    pub(super) fn on_watch(&mut self, watch: Watch) {
         match watch {
-            Watch::Added | Watch::Removing => {
-                if let Some(ScriptValue::Instance(id)) = args.first() {
-                    self.dirty.push(*id);
-                }
-            }
             Watch::Enabled(script) => self.dirty.push(script),
             // Only its dropped connection matters.
             Watch::Destroying(_) => {}
@@ -178,7 +206,6 @@ impl<O: OutputSink> ScriptHost<O> {
                 self.dirty.push(script);
             }
             Watch::Destroying(target) => self.callback_target_destroyed(target),
-            Watch::Added | Watch::Removing => {}
         }
     }
 

@@ -13,7 +13,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
-use metallic_core::{ConnectionId, DataModel, Delivery, DmError, Id, ListenerKey, ScriptValue};
+use metallic_core::{ConnectionId, DataModel, Delivery, DirtyBits, DmError, Id, ListenerKey, ScriptValue};
 use thiserror::Error;
 
 pub(crate) use callbacks::{CallbackRecord, CallbackSlot, Callbacks};
@@ -199,11 +199,7 @@ pub(crate) enum Work {
 /// What a host-internal connection watches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Watch {
-    /// `DescendantAdded` of a service that runs scripts.
-    Added,
-    /// `DescendantRemoving` of a service that runs scripts.
-    Removing,
-    /// The `Enabled` property of a script in such a service.
+    /// The `Enabled` property of a script in a service that runs scripts.
     Enabled(Id),
     /// `Destroying` of an instance with a callback function or a waiting `Invoke`, so the host learns (from the
     /// dropped connection) that it is gone.
@@ -316,6 +312,13 @@ pub struct ScriptHost<O: OutputSink = CollectOutput> {
     loader: Option<Box<dyn SourceLoader>>,
     /// Scripts whose `Enabled`, parent or life changed since the last reconcile.
     dirty: Vec<Id>,
+    /// Scripts the game's change drains reported created or moved, waiting for the events queued with those changes
+    /// to be delivered before they are reconciled.
+    moved: Vec<Id>,
+    /// Reused for [`DataModel::drain_changes`].
+    changes: Vec<(Id, DirtyBits)>,
+    /// Reused for [`DataModel::drain_removed`].
+    removed: Vec<Id>,
     /// Reused for [`DataModel::drain_dropped_connections`].
     dropped: Vec<(ConnectionId, ListenerKey)>,
 }
@@ -360,6 +363,9 @@ impl<O: OutputSink> ScriptHost<O> {
             game: None,
             loader: None,
             dirty: Vec::new(),
+            moved: Vec::new(),
+            changes: Vec::new(),
+            removed: Vec::new(),
             dropped: Vec::new(),
         }
     }
@@ -991,6 +997,9 @@ impl<O: OutputSink> ScriptHost<O> {
     fn dispatch(&mut self, dm: &mut DataModel, budget: &mut Budget) -> usize {
         let mut deliveries = std::mem::take(&mut self.deliveries);
         dm.drain_deliveries(&mut deliveries);
+        // Taken with the events, so a change takes effect after its own events, and changes the listeners below
+        // make wait for the next dispatch, as their events do.
+        self.drain_scripts(dm);
         let mut ran = 0;
         let mut done = 0;
         while let Some(delivery) = deliveries.get(done) {
@@ -1024,7 +1033,7 @@ impl<O: OutputSink> ScriptHost<O> {
             } else if let Some(watch) = self.watches.get(&key).copied()
                 && watch.connection == delivery.connection
             {
-                self.on_watch(watch.watch, &delivery.args);
+                self.on_watch(watch.watch);
             }
             done += 1;
         }
@@ -1035,6 +1044,7 @@ impl<O: OutputSink> ScriptHost<O> {
         // carried over to the next step may still be for them.
         if all_delivered {
             self.release_dropped(dm);
+            self.take_moved();
         }
         self.reconcile_dirty(dm);
         self.flush_work(dm);

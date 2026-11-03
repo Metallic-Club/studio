@@ -30,6 +30,42 @@ fn at_most_four_consumers() {
 }
 
 #[test]
+fn an_unregistered_consumer_records_nothing_and_its_place_is_reused() {
+    let (mut dm, ids) = game();
+    let render = dm.register_consumer(DirtyBits::ALL).expect("consumer");
+    let host = dm.register_consumer(DirtyBits::STRUCTURE).expect("consumer");
+    let kept = part_in(&mut dm, &ids, ids.workspace, "Kept");
+    let gone = part_in(&mut dm, &ids, ids.workspace, "Gone");
+    drain(&mut dm, host);
+    dm.set_parent(kept, None).expect("move");
+
+    dm.unregister_consumer(host);
+    dm.unregister_consumer(host);
+    assert!(drain(&mut dm, host).is_empty(), "what was not drained is dropped");
+    dm.destroy(gone).expect("destroy");
+    part(&mut dm, &ids);
+    assert!(drain(&mut dm, host).is_empty());
+    assert!(removed(&mut dm, host).is_empty(), "no removals either");
+    assert!(
+        removed(&mut dm, render).is_empty(),
+        "render never drained `gone`'s creation"
+    );
+
+    // The place is reused, with no bits left over from before.
+    let again = dm.register_consumer(DirtyBits::STRUCTURE).expect("consumer");
+    assert_eq!(again, host);
+    dm.set_parent(kept, Some(ids.workspace)).expect("move");
+    assert_eq!(drain(&mut dm, again), vec![(kept, DirtyBits::STRUCTURE)]);
+    for _ in 2..MAX_CONSUMERS {
+        dm.register_consumer(DirtyBits::ALL).expect("consumer");
+    }
+    assert_eq!(
+        dm.register_consumer(DirtyBits::ALL),
+        Err(DmError::TooManyConsumers { max: MAX_CONSUMERS })
+    );
+}
+
+#[test]
 fn creating_and_parenting_marks_created_and_structure_once() {
     let (mut dm, ids) = game();
     let c = dm.register_consumer(DirtyBits::ALL).expect("consumer");
