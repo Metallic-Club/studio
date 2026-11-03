@@ -405,6 +405,7 @@ dependencies = [
 name = "metallic_script"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "metallic_classes",
  "metallic_core",
  "thiserror",

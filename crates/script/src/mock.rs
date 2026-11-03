@@ -2,15 +2,26 @@
 //!
 //! A program is a list of statements, one per line (`#` starts a comment). Values are numbers, `true`, `false`,
 //! `nil`, `"quoted strings"`, bare words (strings), `$var` (a variable), and `%script`, `%game` or `%<Service>`
-//! (instances). `-> var` at the end of `new`, `call` and `get` stores the result.
+//! (instances). `-> var` at the end of `new`, `call`, `get` and the `task` statements stores the result.
+//!
+//! A `<body>` is one or more statements separated by ` ; `, run by a new thread (a listener or a task). A task's
+//! body starts with a copy of its creator's variables, and its `-> var` names the thread, not a statement of the
+//! body.
 //!
 //! ```text
 //! new <Class> [-> var]                     create an instance (`Instance.new`)
 //! call <target> <Method> [args...] [-> var] call a method through `MethodCall`
 //! set <target> <Prop> <value>              write a property
 //! get <target> <Prop> [-> var]             read a property
-//! connect <var> <target> <Signal> <stmt>   connect; the listener runs <stmt>; <var> holds the key (`_` ignores it)
+//! connect <var> <target> <Signal> <body>   connect; the listener runs <body>; <var> holds the key (`_` ignores it)
+//! once <var> <target> <Signal> <body>      like connect, for one event (`Once`)
 //! disconnect <var>                         disconnect the key in <var>
+//! waitsignal <target> <Signal>             yield until the signal fires (`signal:Wait()`)
+//! waitchanged <target> <Prop>              yield until the property changes (`GetPropertyChangedSignal():Wait()`)
+//! task.spawn [args... |] <body> [-> var]   run <body> in a new thread now, nested (`task.spawn`)
+//! task.defer [args... |] <body> [-> var]   run <body> at the end of the resumption point (`task.defer`)
+//! task.delay <s> [args... |] <body> [-> var] run <body> after <s> seconds (`task.delay`)
+//! task.cancel <var>                        cancel the thread in <var>
 //! print <words...> / warn <words...>       write to the output
 //! record [values...]                       log the values (or, without any, the thread's resume arguments)
 //! wait <seconds> / defer / yield           yield with `Wait`, `Defer` or `Other`
@@ -27,7 +38,8 @@ use std::rc::Rc;
 use metallic_core::{Args, Id, ListenerKey, ScriptError, ScriptValue};
 
 use crate::{
-    ChunkId, CompileError, HostContext, HostRequest, Resume, ScriptFailure, ScriptLanguage, ThreadId, YieldReason,
+    ChunkId, CompileError, HostContext, HostRequest, Resume, ScriptFailure, ScriptLanguage, SignalRef, ThreadId,
+    YieldReason,
 };
 
 /// The memory a mock thread "uses", so memory limits can be tested.
@@ -50,6 +62,20 @@ pub(crate) struct MockLog {
     pub(crate) memory_limit: Option<usize>,
 }
 
+impl MockLog {
+    /// The first value of every record, as text: the labels of `record <label>` in run order.
+    pub(crate) fn labels(&self) -> Vec<String> {
+        self.records
+            .iter()
+            .map(|(_, values)| match values.first() {
+                Some(ScriptValue::String(text)) => text.to_string(),
+                Some(other) => format!("{other:?}"),
+                None => String::new(),
+            })
+            .collect()
+    }
+}
+
 /// A token of a statement.
 #[derive(Clone, Debug, PartialEq)]
 enum Token {
@@ -62,6 +88,14 @@ enum Token {
 struct Stmt {
     line: u32,
     op: Op,
+}
+
+/// Which `task` function starts a body.
+#[derive(Clone, Copy, Debug)]
+enum TaskKind {
+    Spawn,
+    Defer,
+    Delay(f64),
 }
 
 #[derive(Clone, Debug)]
@@ -90,9 +124,24 @@ enum Op {
         var: String,
         target: Token,
         signal: String,
+        once: bool,
         body: Rc<[Stmt]>,
     },
     Disconnect {
+        var: String,
+    },
+    WaitSignal {
+        target: Token,
+        name: String,
+        property: bool,
+    },
+    Task {
+        kind: TaskKind,
+        args: Vec<Token>,
+        body: Rc<[Stmt]>,
+        store: Option<String>,
+    },
+    Cancel {
         var: String,
     },
     Print(String),
@@ -164,33 +213,174 @@ impl MockLanguage {
         Ok(id)
     }
 
-    /// Runs `thread` until it yields, returns or fails. Threads it forks are left in `forks`.
-    fn run_thread(
-        &mut self,
-        thread: ThreadId,
-        args: &[ScriptValue],
-        ctx: &mut HostContext<'_>,
-        forks: &mut Vec<Rc<[Stmt]>>,
-    ) -> Resume {
-        let Some(state) = self.threads.get_mut(&thread) else {
+    /// Runs `thread` until it yields, returns or fails. The thread is taken out of the table while it runs, so a
+    /// `task.spawn` can run another thread nested, as a real VM does.
+    fn run_thread(&mut self, thread: ThreadId, args: &[ScriptValue], ctx: &mut HostContext<'_>) -> Resume {
+        let Some(mut state) = self.threads.remove(&thread) else {
             return Resume::Errored(ScriptFailure::runtime("cannot resume a dead thread", None));
         };
         state.args = args.to_vec();
         let program = Rc::clone(&state.program);
+        let mut resume = Resume::Finished(Vec::new());
         while let Some(stmt) = program.get(state.pc) {
             state.pc += 1;
             // Every statement is a safepoint, like a VM's loop back-edges and calls.
             if ctx.deadline.poll() {
-                return Resume::Errored(ScriptFailure::Timeout { line: Some(stmt.line) });
+                resume = Resume::Errored(ScriptFailure::Timeout { line: Some(stmt.line) });
+                break;
             }
-            match run(stmt, state, ctx, &self.log, &mut self.listeners, forks) {
-                Flow::Next => {}
-                Flow::Yield(reason) => return Resume::Yielded(reason),
-                Flow::Return(values) => return Resume::Finished(values),
-                Flow::Fail(failure) => return Resume::Errored(failure),
+            let flow = match self.exec(stmt, &mut state, ctx) {
+                Ok(flow) => flow,
+                Err(error) => Flow::Fail(ScriptFailure::runtime(error.to_string(), Some(stmt.line))),
+            };
+            match flow {
+                Flow::Next => continue,
+                Flow::Yield(reason) => resume = Resume::Yielded(reason),
+                Flow::Return(values) => resume = Resume::Finished(values),
+                Flow::Fail(failure) => resume = Resume::Errored(failure),
+            }
+            break;
+        }
+        // Kept until the host releases it, as a VM keeps a dead coroutine object.
+        self.threads.insert(thread, state);
+        resume
+    }
+
+    /// Runs one statement.
+    fn exec(&mut self, stmt: &Stmt, state: &mut MockThread, ctx: &mut HostContext<'_>) -> Result<Flow, ScriptError> {
+        match &stmt.op {
+            Op::New { class, store } => {
+                let Some(class_id) = ctx.registry().class_id(class) else {
+                    return Err(ScriptError::runtime(format!("unable to create an instance of {class}")));
+                };
+                let id = ctx
+                    .dm
+                    .create(class_id)
+                    .map_err(|e| ScriptError::runtime(e.to_string()))?;
+                store_in(state, store, ScriptValue::Instance(id));
+            }
+            Op::Call {
+                target,
+                method,
+                args,
+                store,
+            } => {
+                let this = instance(state, ctx, target)?;
+                let args: Args = args
+                    .iter()
+                    .map(|a| value(state, ctx, a))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into();
+                let result = ctx.call_method(this, method, args)?;
+                store_in(state, store, result);
+            }
+            Op::Set { target, prop, value: v } => {
+                let id = instance(state, ctx, target)?;
+                let v = value(state, ctx, v)?;
+                ctx.set_property(id, prop, &v)?;
+            }
+            Op::Get { target, prop, store } => {
+                let id = instance(state, ctx, target)?;
+                let v = ctx.get_property(id, prop)?;
+                store_in(state, store, v);
+            }
+            Op::Connect {
+                var,
+                target,
+                signal,
+                once,
+                body,
+            } => {
+                let id = instance(state, ctx, target)?;
+                let connection = if *once {
+                    ctx.once(id, signal)?
+                } else {
+                    ctx.connect(id, signal)?
+                };
+                self.listeners.insert(connection.listener, Rc::clone(body));
+                state
+                    .vars
+                    .insert(var.clone(), ScriptValue::Number(connection.listener.0 as f64));
+            }
+            Op::Disconnect { var } => {
+                let key = ListenerKey(handle(state, var)?);
+                if ctx.disconnect(key) {
+                    self.listeners.remove(&key);
+                }
+            }
+            Op::WaitSignal { target, name, property } => {
+                let target = instance(state, ctx, target)?;
+                let signal = if *property {
+                    SignalRef::PropertyChanged(ctx.dm.prop_id(target, name).map_err(dm_error)?)
+                } else {
+                    SignalRef::Signal(ctx.dm.signal_id(target, name).map_err(dm_error)?)
+                };
+                return Ok(Flow::Yield(YieldReason::WaitSignal { target, signal }));
+            }
+            Op::Task {
+                kind,
+                args,
+                body,
+                store,
+            } => {
+                let args = args
+                    .iter()
+                    .map(|a| value(state, ctx, a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let child = self
+                    .new_thread(Rc::clone(body))
+                    .map_err(|failure| ScriptError::runtime(failure.to_string()))?;
+                // The body sees the creator's variables, as a closure sees its upvalues.
+                if let Some(child_state) = self.threads.get_mut(&child) {
+                    child_state.vars = state.vars.clone();
+                }
+                store_in(state, store, ScriptValue::Number(child.0 as f64));
+                match kind {
+                    TaskKind::Spawn => {
+                        let resume = self.run_thread(child, &args, ctx);
+                        ctx.spawned(child, resume);
+                    }
+                    TaskKind::Defer => {
+                        if let Err(error) = ctx.defer(child, args) {
+                            // The child never runs; the calling thread raises the error.
+                            self.threads.remove(&child);
+                            return Err(error);
+                        }
+                    }
+                    TaskKind::Delay(seconds) => ctx.delay(*seconds, child, args),
+                }
+            }
+            Op::Cancel { var } => ctx.cancel(ThreadId(handle(state, var)?)),
+            Op::Print(text) => ctx.print(text),
+            Op::Warn(text) => ctx.warn(text),
+            Op::Record(values) => {
+                let values = if values.is_empty() {
+                    state.args.clone()
+                } else {
+                    values.iter().map(|v| value(state, ctx, v)).collect::<Result<_, _>>()?
+                };
+                self.log.borrow_mut().records.push((ctx.script(), values));
+            }
+            Op::Yield(reason) => return Ok(Flow::Yield(reason.clone())),
+            Op::Fork => {
+                let child = self
+                    .new_thread(Rc::from(Vec::new()))
+                    .map_err(|failure| ScriptError::runtime(failure.to_string()))?;
+                ctx.request(HostRequest::AdoptThread(child));
+            }
+            Op::Error(message) => return Ok(Flow::Fail(ScriptFailure::runtime(message, Some(stmt.line)))),
+            Op::Spin => {
+                while !ctx.deadline.poll() {
+                    std::hint::spin_loop();
+                }
+                return Ok(Flow::Fail(ScriptFailure::Timeout { line: Some(stmt.line) }));
+            }
+            Op::Return(values) => {
+                let values = values.iter().map(|v| value(state, ctx, v)).collect::<Result<_, _>>()?;
+                return Ok(Flow::Return(values));
             }
         }
-        Resume::Finished(Vec::new())
+        Ok(Flow::Next)
     }
 }
 
@@ -252,15 +442,7 @@ impl ScriptLanguage for MockLanguage {
     }
 
     fn resume(&mut self, thread: ThreadId, args: &[ScriptValue], ctx: &mut HostContext<'_>) -> Resume {
-        let mut forks = Vec::new();
-        let resume = self.run_thread(thread, args, ctx, &mut forks);
-        for program in forks {
-            match self.new_thread(program) {
-                Ok(child) => ctx.request(HostRequest::AdoptThread(child)),
-                Err(failure) => return Resume::Errored(failure),
-            }
-        }
-        resume
+        self.run_thread(thread, args, ctx)
     }
 
     fn release_thread(&mut self, thread: ThreadId) {
@@ -283,118 +465,22 @@ impl ScriptLanguage for MockLanguage {
     }
 }
 
-/// Runs one statement. A `fork` leaves the child's program in `forks` for the caller to create.
-fn run(
-    stmt: &Stmt,
-    state: &mut MockThread,
-    ctx: &mut HostContext<'_>,
-    log: &Rc<RefCell<MockLog>>,
-    listeners: &mut HashMap<ListenerKey, Rc<[Stmt]>>,
-    forks: &mut Vec<Rc<[Stmt]>>,
-) -> Flow {
-    match exec(stmt, state, ctx, log, listeners, forks) {
-        Ok(flow) => flow,
-        Err(error) => Flow::Fail(ScriptFailure::runtime(error.to_string(), Some(stmt.line))),
-    }
-}
-
-fn exec(
-    stmt: &Stmt,
-    state: &mut MockThread,
-    ctx: &mut HostContext<'_>,
-    log: &Rc<RefCell<MockLog>>,
-    listeners: &mut HashMap<ListenerKey, Rc<[Stmt]>>,
-    forks: &mut Vec<Rc<[Stmt]>>,
-) -> Result<Flow, ScriptError> {
-    match &stmt.op {
-        Op::New { class, store } => {
-            let Some(class_id) = ctx.registry().class_id(class) else {
-                return Err(ScriptError::runtime(format!("unable to create an instance of {class}")));
-            };
-            let id = ctx
-                .dm
-                .create(class_id)
-                .map_err(|e| ScriptError::runtime(e.to_string()))?;
-            store_in(state, store, ScriptValue::Instance(id));
-        }
-        Op::Call {
-            target,
-            method,
-            args,
-            store,
-        } => {
-            let this = instance(state, ctx, target)?;
-            let args: Args = args
-                .iter()
-                .map(|a| value(state, ctx, a))
-                .collect::<Result<Vec<_>, _>>()?
-                .into();
-            let result = ctx.call_method(this, method, args)?;
-            store_in(state, store, result);
-        }
-        Op::Set { target, prop, value: v } => {
-            let id = instance(state, ctx, target)?;
-            let v = value(state, ctx, v)?;
-            ctx.set_property(id, prop, &v)?;
-        }
-        Op::Get { target, prop, store } => {
-            let id = instance(state, ctx, target)?;
-            let v = ctx.get_property(id, prop)?;
-            store_in(state, store, v);
-        }
-        Op::Connect {
-            var,
-            target,
-            signal,
-            body,
-        } => {
-            let id = instance(state, ctx, target)?;
-            let connection = ctx.connect(id, signal)?;
-            listeners.insert(connection.listener, Rc::clone(body));
-            state
-                .vars
-                .insert(var.clone(), ScriptValue::Number(connection.listener.0 as f64));
-        }
-        Op::Disconnect { var } => {
-            let Some(ScriptValue::Number(key)) = state.vars.get(var) else {
-                return Err(ScriptError::runtime(format!("${var} is not a connection")));
-            };
-            let key = ListenerKey(*key as u64);
-            if ctx.disconnect(key) {
-                listeners.remove(&key);
-            }
-        }
-        Op::Print(text) => ctx.print(text),
-        Op::Warn(text) => ctx.warn(text),
-        Op::Record(values) => {
-            let values = if values.is_empty() {
-                state.args.clone()
-            } else {
-                values.iter().map(|v| value(state, ctx, v)).collect::<Result<_, _>>()?
-            };
-            log.borrow_mut().records.push((ctx.script(), values));
-        }
-        Op::Yield(reason) => return Ok(Flow::Yield(reason.clone())),
-        Op::Fork => forks.push(Rc::from(Vec::new())),
-        Op::Error(message) => return Ok(Flow::Fail(ScriptFailure::runtime(message, Some(stmt.line)))),
-        Op::Spin => {
-            while !ctx.deadline.poll() {
-                std::hint::spin_loop();
-            }
-            return Ok(Flow::Fail(ScriptFailure::Timeout { line: Some(stmt.line) }));
-        }
-        Op::Return(values) => {
-            let values = values.iter().map(|v| value(state, ctx, v)).collect::<Result<_, _>>()?;
-            return Ok(Flow::Return(values));
-        }
-    }
-    Ok(Flow::Next)
-}
-
 fn store_in(state: &mut MockThread, store: &Option<String>, value: ScriptValue) {
     if let Some(var) = store {
         state.vars.insert(var.clone(), value);
     }
+}
+
+/// The number a variable holds, as a key or thread handle.
+fn handle(state: &MockThread, var: &str) -> Result<u64, ScriptError> {
+    match state.vars.get(var) {
+        Some(ScriptValue::Number(n)) => Ok(*n as u64),
+        _ => Err(ScriptError::runtime(format!("${var} is not a handle"))),
+    }
+}
+
+fn dm_error(error: metallic_core::DmError) -> ScriptError {
+    ScriptError::runtime(error.to_string())
 }
 
 /// Evaluates a value token.
@@ -473,6 +559,11 @@ fn text(token: &Token) -> &str {
     }
 }
 
+/// Whether a token is the bare word `word`.
+fn is_word(token: &Token, word: &str) -> bool {
+    matches!(token, Token::Word(w) if w == word)
+}
+
 /// Splits off a trailing `-> var`.
 fn split_store(tokens: &[Token]) -> (&[Token], Option<String>) {
     match tokens {
@@ -483,6 +574,38 @@ fn split_store(tokens: &[Token]) -> (&[Token], Option<String>) {
 
 fn words(tokens: &[Token]) -> String {
     tokens.iter().map(text).collect::<Vec<_>>().join(" ")
+}
+
+/// Parses a body: statements separated by `;`.
+fn parse_body(tokens: &[Token], line: u32) -> Result<Rc<[Stmt]>, String> {
+    let mut body = Vec::new();
+    for part in tokens.split(|t| is_word(t, ";")) {
+        if part.is_empty() {
+            return Err("empty statement in a body".to_owned());
+        }
+        body.push(Stmt {
+            line,
+            op: parse(part, line)?,
+        });
+    }
+    Ok(body.into())
+}
+
+/// Parses `[args... |] <body>` of a `task` statement.
+fn parse_task(kind: TaskKind, tokens: &[Token], store: Option<String>, line: u32) -> Result<Op, String> {
+    let (args, body) = match tokens.iter().position(|t| is_word(t, "|")) {
+        Some(bar) => (tokens[..bar].to_vec(), &tokens[bar + 1..]),
+        None => (Vec::new(), tokens),
+    };
+    if body.is_empty() {
+        return Err("a task needs a body".to_owned());
+    }
+    Ok(Op::Task {
+        kind,
+        args,
+        body: parse_body(body, line)?,
+        store,
+    })
 }
 
 /// Parses one statement, or says why it is not one.
@@ -512,19 +635,33 @@ fn parse(tokens: &[Token], line: u32) -> Result<Op, String> {
             prop: text(prop).to_owned(),
             store,
         },
-        ("connect", _) => match rest {
+        ("connect" | "once", _) => match rest {
             [var, target, signal, body @ ..] if !body.is_empty() => Op::Connect {
                 var: text(var).to_owned(),
                 target: target.clone(),
                 signal: text(signal).to_owned(),
-                body: Rc::from(vec![Stmt {
-                    line,
-                    op: parse(body, line)?,
-                }]),
+                once: keyword == "once",
+                body: parse_body(body, line)?,
             },
-            _ => return Err("connect needs a variable, a target, a signal and a statement".to_owned()),
+            _ => return Err(format!("{keyword} needs a variable, a target, a signal and a body")),
         },
         ("disconnect", [var]) => Op::Disconnect {
+            var: text(var).trim_start_matches('$').to_owned(),
+        },
+        ("waitsignal" | "waitchanged", [target, name]) => Op::WaitSignal {
+            target: target.clone(),
+            name: text(name).to_owned(),
+            property: keyword == "waitchanged",
+        },
+        ("task.spawn", body) => parse_task(TaskKind::Spawn, body, store, line)?,
+        ("task.defer", body) => parse_task(TaskKind::Defer, body, store, line)?,
+        ("task.delay", [seconds, body @ ..]) => {
+            let seconds = text(seconds)
+                .parse()
+                .map_err(|_| format!("task.delay needs a number of seconds, got {}", text(seconds)))?;
+            parse_task(TaskKind::Delay(seconds), body, store, line)?
+        }
+        ("task.cancel", [var]) => Op::Cancel {
             var: text(var).trim_start_matches('$').to_owned(),
         },
         ("print", _) => Op::Print(words(rest)),

@@ -1,6 +1,6 @@
 //! The `ScriptLanguage` trait every language backend implements, and the values that cross it.
 
-use metallic_core::{ConnectionId, ListenerKey, ScriptError, ScriptValue};
+use metallic_core::{Id, ListenerKey, PropId, ScriptError, ScriptValue, SignalId};
 use thiserror::Error;
 
 use crate::HostContext;
@@ -15,25 +15,40 @@ pub struct ChunkId(pub u64);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ThreadId(pub u64);
 
-/// Why a thread stopped without finishing. The scheduler (#45) decides when to resume it; the variants stay
-/// language-neutral, so `task.wait` in Luau and its equivalent in another language yield the same thing.
+/// Why a thread stopped without finishing. The host's scheduler decides when to resume it (the crate docs give the
+/// rules); the variants stay language-neutral, so `task.wait` in Luau and its equivalent in another language yield
+/// the same thing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum YieldReason {
-    /// Resume after `seconds` of game time (`task.wait(seconds)`).
+    /// Resume after `seconds` of game time (`task.wait(seconds)`), at the earliest at the next `Heartbeat`. The
+    /// thread is resumed with one number: the game time that actually passed, never less than `seconds`.
     Wait {
-        /// How long to sleep. Zero means "next resumption point".
+        /// How long to sleep. Zero, negative and NaN mean "at the next `Heartbeat`".
         seconds: f64,
     },
-    /// Resume with the arguments of the next event on `connection` (`signal:Wait()`).
+    /// Resume with the arguments of the next event of a signal (`signal:Wait()`). The host connects a listener of
+    /// its own and disconnects it after that one event.
     WaitSignal {
-        /// The connection whose next delivery wakes the thread.
-        connection: ConnectionId,
+        /// The instance whose signal is awaited.
+        target: Id,
+        /// Which of its signals.
+        signal: SignalRef,
     },
-    /// Resume at the end of the current resumption cycle (`task.defer`).
+    /// Resume, with no arguments, at the end of the current resumption point (`task.defer(coroutine.running())`).
     Defer,
     /// Suspended for a reason only the backend understands (a coroutine yield to its own caller, for example).
     /// The host keeps the thread alive and never resumes it on its own.
     Other,
+}
+
+/// A signal of an instance, as [`YieldReason::WaitSignal`] names it. The backend resolves the name while the script
+/// runs (`DataModel::signal_id`, `DataModel::prop_id`), so an unknown name raises its error at the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignalRef {
+    /// A declared signal (`part.Touched`).
+    Signal(SignalId),
+    /// The changed signal of one property (`part:GetPropertyChangedSignal("Name")`).
+    PropertyChanged(PropId),
 }
 
 /// What a call into a backend ended with.
@@ -141,6 +156,21 @@ pub struct CompileError {
 /// clock only once every few hundred polls, and returns [`ScriptFailure::Timeout`] once it has passed. Only the
 /// offending thread fails; the backend stays usable.
 ///
+/// # The `task` library and signals
+///
+/// The host owns scheduling, so a backend's `task` functions are thin:
+///
+/// - `task.spawn(f, ...)`: create a thread for `f`, resume it **at once, nested in the current call** (only the
+///   backend can run code while it is being called), then hand the outcome to [`HostContext::spawned`]. The host
+///   adopts the thread and schedules it by how it ended, as if it had resumed it.
+/// - `task.defer(f, ...)`, `task.delay(t, f, ...)`: create a thread (or pass an existing one) and call
+///   [`HostContext::defer`] or [`HostContext::delay`]. `defer` refuses past the re-entrancy limit; raise its error in
+///   the calling thread.
+/// - `task.wait(t)`: yield [`YieldReason::Wait`]. `signal:Wait()`: yield [`YieldReason::WaitSignal`].
+/// - `task.cancel(thread)`: mark the thread dead and call [`HostContext::cancel`]. Refuse to cancel the running
+///   thread (or one that is resuming another) yourself, with an error.
+/// - `Connect`, `Once`, `Disconnect`: [`HostContext::connect`], [`HostContext::once`], [`HostContext::disconnect`].
+///
 /// [`Id`]: metallic_core::Id
 pub trait ScriptLanguage {
     /// The language's name, such as `"luau"`, for messages.
@@ -172,6 +202,9 @@ pub trait ScriptLanguage {
 
     /// Drops the function stored under `listener`. The host has already disconnected it. Releasing an unknown key
     /// does nothing.
+    ///
+    /// For a `Once` connection ([`HostContext::once`]) the host calls this right after
+    /// [`spawn_listener`](Self::spawn_listener) for its one delivery, so that thread must hold the function itself.
     fn release_listener(&mut self, listener: ListenerKey);
 
     /// The bytes the backend's VM currently uses.
