@@ -1,6 +1,7 @@
-# The perf gate (docs/perf.md): Callgrind instruction counts of metallic_core's hot paths, PR base vs head on the
+# The perf gate (docs/perf.md): Callgrind instruction counts of the engine's hot paths, PR base vs head on the
 # same runner, with the head's workloads for both. More than 5% growth in `Ir` on any workload fails the PR, and so
-# does a missing or zero count.
+# does a missing or zero count. Two suites: metallic_core's data model, and metallic_luau's bindings. A suite the
+# base does not have yet (the PR that introduces it) is measured on the head and reported as new, not gated.
 #
 # Pushes to main only build, so the cargo cache is saved from main and restored by PRs, as in ci.yml.
 
@@ -30,7 +31,8 @@ jobs:
   gate:
     name: Perf gate (instruction counts)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Two suites, each built for the base and the head; the Luau suite also compiles Luau's C++ sources.
+    timeout-minutes: 20
     steps:
       # On a PR this is the merge of the head into the base branch, so only the PR's changes differ from the base.
       - uses: actions/checkout@v7
@@ -53,6 +55,12 @@ jobs:
           fi
           git worktree add --quiet --detach base "$base"
           echo "BASE_SHA=$base" >> "$GITHUB_ENV"
+          # Decided from the base commit itself, before the head's workloads are copied into it.
+          if [ -f base/crates/luau/benches/perf_gate.rs ]; then
+            echo "LUAU_SUITE_ON_BASE=true" >> "$GITHUB_ENV"
+          else
+            echo "LUAU_SUITE_ON_BASE=false" >> "$GITHUB_ENV"
+          fi
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: false
@@ -62,11 +70,14 @@ jobs:
 
       # `bench = false` keeps the target out of ci.yml's `clippy --all-targets`, so it is linted here.
       - name: Lint the workloads
-        run: cargo clippy -p metallic_core --bench perf_gate -- -D warnings
+        run: |
+          cargo clippy -p metallic_core --bench perf_gate -- -D warnings
+          cargo clippy -p metallic_luau --bench perf_gate -- -D warnings
       - name: Build (main only, to fill the cache)
         if: github.event_name == 'push'
         run: |
           cargo bench -p metallic_core --bench perf_gate --no-run
+          cargo bench -p metallic_luau --bench perf_gate --no-run
           cargo build -p xtask
 
       - name: Install Valgrind and gungraun-runner
@@ -110,13 +121,46 @@ jobs:
           fi
           cargo bench -p metallic_core --bench perf_gate -- --save-baseline=base
 
+      # The Luau suite, when the base has it (see "Check out the base"). Its workloads only use the public API of
+      # metallic_luau, metallic_script and metallic_classes, so the head's bench source is all that is copied.
+      - name: Measure the base with the head's workloads (metallic_luau)
+        if: github.event_name == 'pull_request' && env.LUAU_SUITE_ON_BASE == 'true'
+        id: base_luau
+        run: |
+          cp crates/luau/benches/perf_gate.rs base/crates/luau/benches/perf_gate.rs
+          cd base
+          if ! cargo bench -p metallic_luau --bench perf_gate --no-run; then
+            msg="The PR base (${BASE_SHA::7}) cannot build the head's Luau perf workloads, so there is nothing to compare against. An API the workloads use changed in this PR: land the new API first and switch the workloads in a follow-up PR (docs/perf.md, 'When the base cannot build the workloads')."
+            echo "::error title=Perf gate: base cannot build the Luau workloads::$msg"
+            printf '## Perf gate: failed\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cargo bench -p metallic_luau --bench perf_gate -- --save-baseline=base
+
       # Exits with code 3 when a workload's `Ir` grows past the limit set in perf_gate.rs.
       - name: Measure the head against the base
         if: github.event_name == 'pull_request'
         run: cargo bench -p metallic_core --bench perf_gate -- --baseline=base --save-summary=json
+
+      # A new suite has no baseline: the head is measured alone and the report marks its rows NEW (not gated).
+      - name: Measure the head against the base (metallic_luau)
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "$LUAU_SUITE_ON_BASE" = true ]; then
+            cargo bench -p metallic_luau --bench perf_gate -- --baseline=base --save-summary=json
+          else
+            cargo bench -p metallic_luau --bench perf_gate -- --save-summary=json
+          fi
 
       # gungraun passes a run whose baseline is missing; this fails on any missing or zero count, and writes the
       # table to the job summary.
       - name: Check and report
         if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.base.outcome == 'success' }}
         run: cargo xtask perf-report --home "$GUNGRAUN_HOME" --baseline base --out "$GITHUB_STEP_SUMMARY"
+      - name: Check and report (metallic_luau)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.base_luau.outcome != 'failure' }}
+        run: |
+          new=""
+          if [ "$LUAU_SUITE_ON_BASE" != true ]; then new="--new-suite"; fi
+          cargo xtask perf-report --home "$GUNGRAUN_HOME" --baseline base --source crates/luau/benches/perf_gate.rs \
+            --suite metallic_luau $new --out "$GITHUB_STEP_SUMMARY"

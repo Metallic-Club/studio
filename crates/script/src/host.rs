@@ -604,6 +604,7 @@ impl<O: OutputSink> ScriptHost<O> {
                 &mut self.output,
                 self.sched.depth,
                 &mut self.early_waits,
+                self.sched.now,
             );
             f(&mut **backend, &mut ctx)
         };

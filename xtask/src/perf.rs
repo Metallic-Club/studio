@@ -35,7 +35,15 @@ pub(crate) struct Options {
     pub(crate) baseline: String,
     /// A file the Markdown table is appended to (the job summary), besides stdout.
     pub(crate) out: Option<PathBuf>,
+    /// The suite's name, for the table's title.
+    pub(crate) suite: String,
+    /// The base has no such suite (the PR introduces it): only head counts are required, and every row is
+    /// reported as new, not gated.
+    pub(crate) new_suite: bool,
 }
+
+/// The suite name when none is given.
+const DEFAULT_SUITE: &str = "metallic_core";
 
 /// Parses `perf-report`'s arguments (everything after the command name).
 pub(crate) fn parse_args(args: &[String]) -> Result<Options, String> {
@@ -43,6 +51,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Options, String> {
     let mut source = PathBuf::from(DEFAULT_SOURCE);
     let mut baseline = DEFAULT_BASELINE.to_owned();
     let mut out = None;
+    let mut suite = DEFAULT_SUITE.to_owned();
+    let mut new_suite = false;
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
         let mut value = || iter.next().cloned().ok_or_else(|| format!("`{flag}` needs a value"));
@@ -51,6 +61,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Options, String> {
             "--source" => source = PathBuf::from(value()?),
             "--baseline" => baseline = value()?,
             "--out" => out = Some(PathBuf::from(value()?)),
+            "--suite" => suite = value()?,
+            "--new-suite" => new_suite = true,
             other => return Err(format!("unknown option `{other}`")),
         }
     }
@@ -60,6 +72,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<Options, String> {
         source,
         baseline,
         out,
+        suite,
+        new_suite,
     })
 }
 
@@ -89,6 +103,8 @@ pub(crate) enum Status {
     Missing(String),
     /// A count of zero: the measured function was not found or did nothing.
     Zero,
+    /// Measured on the head of a suite the base does not have yet: reported, not gated.
+    New,
 }
 
 /// One row of the comparison table.
@@ -107,7 +123,7 @@ pub(crate) struct Row {
 impl Row {
     /// Whether this row fails the gate.
     pub(crate) fn fails(&self) -> bool {
-        self.status != Status::Pass
+        !matches!(self.status, Status::Pass | Status::New)
     }
 }
 
@@ -132,8 +148,12 @@ pub(crate) fn run(args: &[String]) -> Result<bool, String> {
         measurements.push(parse_summary(&json).map_err(|e| format!("{}: {e}", file.display()))?);
     }
 
-    let rows = rows(&expected, &measurements, &options.baseline);
-    let table = markdown(&rows, &options.baseline);
+    let rows = if options.new_suite {
+        new_rows(&expected, &measurements)
+    } else {
+        rows(&expected, &measurements, &options.baseline)
+    };
+    let table = markdown(&rows, &options.baseline, &options.suite, options.new_suite);
     print!("{table}");
     if let Some(out) = &options.out {
         let mut file = fs::OpenOptions::new()
@@ -253,6 +273,32 @@ pub(crate) fn rows(expected: &[String], measurements: &[Measurement], baseline: 
         .collect()
 }
 
+/// The rows of a suite the base does not have: every expected workload needs one head count above zero, and is
+/// reported as new. Nothing is compared, so nothing can regress.
+pub(crate) fn new_rows(expected: &[String], measurements: &[Measurement]) -> Vec<Row> {
+    expected
+        .iter()
+        .map(|workload| {
+            let found: Vec<&Measurement> = measurements.iter().filter(|m| &m.workload == workload).collect();
+            let (head, status) = match found.as_slice() {
+                [] => (None, Status::Missing("no measurement".to_owned())),
+                [m] => match m.head {
+                    None => (None, Status::Missing("no head count".to_owned())),
+                    Some(0) => (Some(0), Status::Zero),
+                    Some(head) => (Some(head), Status::New),
+                },
+                _ => (None, Status::Missing(format!("{} measurements", found.len()))),
+            };
+            Row {
+                workload: workload.clone(),
+                base: None,
+                head,
+                status,
+            }
+        })
+        .collect()
+}
+
 fn verdict(m: &Measurement, baseline: &str) -> Status {
     if m.baseline.as_deref() != Some(baseline) {
         let against = m.baseline.as_deref().unwrap_or("nothing");
@@ -270,18 +316,26 @@ fn verdict(m: &Measurement, baseline: &str) -> Status {
 }
 
 /// The comparison as a Markdown section.
-pub(crate) fn markdown(rows: &[Row], baseline: &str) -> String {
+pub(crate) fn markdown(rows: &[Row], baseline: &str, suite: &str, new_suite: bool) -> String {
     let failed = rows.iter().filter(|r| r.fails()).count();
-    let mut out = String::from("## Perf gate: instruction counts (Callgrind `Ir`)\n\n");
-    let _ = writeln!(
-        out,
-        "Base and head measured on the same runner with the head's workloads (baseline `{baseline}`). {}\n",
-        if failed == 0 {
-            "**Pass.**".to_owned()
-        } else {
-            format!("**Fail: {failed} of {} workload(s).**", rows.len())
-        }
-    );
+    let mut out = format!("## Perf gate: `{suite}` instruction counts (Callgrind `Ir`)\n\n");
+    let verdict = if failed == 0 {
+        "**Pass.**".to_owned()
+    } else {
+        format!("**Fail: {failed} of {} workload(s).**", rows.len())
+    };
+    if new_suite {
+        let _ = writeln!(
+            out,
+            "The base has no `{suite}` suite yet, so the head's counts are recorded and not gated; the next PR \
+             compares against them. {verdict}\n"
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "Base and head measured on the same runner with the head's workloads (baseline `{baseline}`). {verdict}\n"
+        );
+    }
     out.push_str("| Workload | Base | Head | Change | Result |\n");
     out.push_str("| --- | ---: | ---: | ---: | --- |\n");
     for row in rows {
@@ -296,6 +350,7 @@ pub(crate) fn markdown(rows: &[Row], baseline: &str) -> String {
             Status::Regressed(limit) => format!("**regressed** (limit +{limit}%)"),
             Status::Missing(what) => format!("**missing**: {what}"),
             Status::Zero => "**zero count**: the measured function was not found".to_owned(),
+            Status::New => "NEW (not gated)".to_owned(),
         };
         let _ = writeln!(
             out,
@@ -372,13 +427,39 @@ mod tests {
     }
 
     #[test]
-    fn the_real_bench_parses() {
+    fn the_real_benches_parse() {
         let source = include_str!("../../crates/core/benches/perf_gate.rs");
         let found = workloads(source);
         assert!(
             found.as_ref().is_ok_and(|w| w.iter().any(|w| w == "writes")),
             "{found:?}"
         );
+        let luau = workloads(include_str!("../../crates/luau/benches/perf_gate.rs"));
+        assert_eq!(luau, Ok(names(&["luau_reads", "luau_writes", "luau_method_calls"])));
+    }
+
+    #[test]
+    fn a_new_suite_needs_head_counts_only() {
+        let expected = names(&["a", "b", "c", "d"]);
+        let mut unmeasured = measured("b", 0, 0);
+        unmeasured.head = None;
+        unmeasured.base = None;
+        let mut zero = measured("c", 0, 0);
+        zero.base = None;
+        let mut fine = measured("a", 0, 10);
+        fine.base = None;
+        fine.baseline = None;
+        let rows = new_rows(&expected, &[fine, unmeasured, zero]);
+        let statuses: Vec<&Status> = rows.iter().map(|r| &r.status).collect();
+        assert_eq!(statuses[0], &Status::New);
+        assert_eq!(statuses[1], &Status::Missing("no head count".to_owned()));
+        assert_eq!(statuses[2], &Status::Zero);
+        assert_eq!(statuses[3], &Status::Missing("no measurement".to_owned()));
+        assert!(!rows[0].fails());
+        assert_eq!(rows.iter().filter(|r| r.fails()).count(), 3);
+        let table = markdown(&rows[..1], "base", "metallic_luau", true);
+        assert!(table.contains("| `a` | n/a | 10 | n/a | NEW (not gated) |"), "{table}");
+        assert!(table.contains("`metallic_luau`"), "{table}");
     }
 
     #[test]
@@ -447,7 +528,7 @@ mod tests {
     #[test]
     fn table_shows_counts_and_change() {
         let rows = rows(&names(&["reads"]), &[measured("reads", 1_000_000, 1_050_000)], "base");
-        let table = markdown(&rows, "base");
+        let table = markdown(&rows, "base", "metallic_core", false);
         assert!(
             table.contains("| `reads` | 1,000,000 | 1,050,000 | +5.00% | pass |"),
             "{table}"
@@ -475,7 +556,14 @@ mod tests {
                 source: PathBuf::from(DEFAULT_SOURCE),
                 baseline: "b".to_owned(),
                 out: Some(PathBuf::from("o")),
+                suite: DEFAULT_SUITE.to_owned(),
+                new_suite: false,
             })
+        );
+        let new = parse_args(&names(&["--home", "h", "--suite", "metallic_luau", "--new-suite"]));
+        assert!(
+            new.as_ref().is_ok_and(|o| o.new_suite && o.suite == "metallic_luau"),
+            "{new:?}"
         );
         assert!(parse_args(&names(&["--baseline", "b"])).is_err());
         assert!(parse_args(&names(&["--home"])).is_err());

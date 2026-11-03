@@ -3,14 +3,24 @@
 Two kinds of numbers: **instruction counts**, which gate every pull request that touches the engine, and
 **wall-time measurements**, which are recorded by hand on a stated machine and are not a gate. Renderer frame budgets
 (GPU and render CPU per tier) are set in [ADR 0008](adr/0008-rendering-performance.md); this page covers the CPU
-hot paths of `metallic_core`.
+hot paths of `metallic_core` and of the Luau bindings (`metallic_luau`).
 
 ## The perf gate
 
 `.github/workflows/perf.yml` runs on every pull request that changes `crates/`, `Cargo.toml`, `Cargo.lock` or the
-workflow itself. It counts the instructions (Callgrind's `Ir`) each workload in
-[`crates/core/benches/perf_gate.rs`](../crates/core/benches/perf_gate.rs) executes, once for the PR's base and once
-for its head, on the same runner. **The PR fails when any workload grows by more than 5%** (exactly 5% passes).
+workflow itself. It counts the instructions (Callgrind's `Ir`) each workload executes, once for the PR's base and
+once for its head, on the same runner. **The PR fails when any workload grows by more than 5%** (exactly 5%
+passes). There are two suites, each with its own table in the job summary:
+
+- [`crates/core/benches/perf_gate.rs`](../crates/core/benches/perf_gate.rs): the data model (below);
+- [`crates/luau/benches/perf_gate.rs`](../crates/luau/benches/perf_gate.rs): Luau scripts doing 10,000 `part.Position`
+  reads (`luau_reads`), `part.Transparency` writes (`luau_writes`) and `part:IsA("BasePart")` calls
+  (`luau_method_calls`) through the script host, after a warm-up run that compiles the chunk and fills the member
+  cache. Each measured run includes one script start, which the 10,000 operations dominate.
+
+A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
+checked (each must be present and above zero) and reported as `NEW (not gated)`, and the next PR is gated against
+them. Whether the base has a suite is decided from the base commit before any file is copied into it.
 
 ### Why instruction counts
 
@@ -65,7 +75,11 @@ Base and head build into separate target folders. Cargo names a workspace crate'
 the workspace root, which is the same on both sides, so a shared folder would let the second build reuse the first
 one's binary and the gate would compare the base with itself.
 
-The job takes three to five minutes, most of it compiling. Pushes to `main` that touch the same paths only build,
+The Luau suite follows the same steps with `cargo bench -p metallic_luau --bench perf_gate` and reports with
+`cargo xtask perf-report --source crates/luau/benches/perf_gate.rs --suite metallic_luau` (plus `--new-suite` when
+the base lacks it). Its workloads only use public APIs, so the bench source is the only file copied to the base.
+
+The job takes several minutes, most of it compiling (the Luau suite builds Luau's C++ sources for both sides). Pushes to `main` that touch the same paths only build,
 so the cargo cache is saved from `main` and restored by PRs, as in `ci.yml`.
 
 ### When the base cannot build the workloads
@@ -154,3 +168,26 @@ removal, cheaper unwatched writes). Every 95% confidence interval is within 1.5%
 
 An earlier run (2026-11-02, same machine, sharing it with other builds) had `read_7_props_5000_parts` at 330 µs, over
 its target; on the quieter machine it is 249 µs on `main`, so that was load, not a regression.
+
+### Luau bindings
+
+`cargo bench -p metallic_luau --bench api`, **2026-11-03**, same machine, #46. Each `api/*_1m` bench is one script
+doing the operation a million times through the script host, so the time in ms is the cost of one operation in ns.
+`vm/hot_loop` is 20 million iterations of a small loop with the interrupt (the time budget) installed;
+`vm/hot_loop_no_interrupt` is the same without it.
+
+| Bench | Interpreter | `--features jit` | Target |
+| --- | ---: | ---: | ---: |
+| `api/part_property_get_1m` (`part.Position`) | 144 ns | 141 ns | ≤ 150 ns |
+| `api/part_property_get_stored_1m` (`part.Transparency`) | 107 ns | 96 ns | |
+| `api/part_property_set_1m` (`part.Transparency = x`) | 106 ns | 104 ns | ≤ 200 ns |
+| `api/method_call_1m` (`part:IsA("BasePart")`) | 233 ns | 213 ns | |
+| `vm/hot_loop` / `vm/hot_loop_no_interrupt` | 721 / 634 ms (1.14×) | 162 / 74 ms (2.19×) | ≤ 1.5× |
+
+The interrupt costs a fixed few nanoseconds per safepoint, which is 14% of an interpreted loop iteration but doubles a
+native one. About 90 ns of every member access is Luau calling the metamethod, and about 40 ns of `part.Position` is
+the `Position` getter looking up `CFrame` by name.
+
+Perf-gate instruction counts of the Luau suite at introduction (#46; ubuntu-24.04 runner, Rust 1.99.1, gungraun
+0.20.0, release profile): `luau_reads` 13,859,424, `luau_writes` 15,281,853, `luau_method_calls` 21,521,695 (10,000
+operations each, plus one script start).
