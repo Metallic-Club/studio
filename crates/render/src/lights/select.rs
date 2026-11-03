@@ -31,10 +31,9 @@ pub(crate) fn influence(light: &SceneLight) -> (Vec3, f32) {
 /// How much a light matters to the frame seen from `eye`: brightness × the colour's luminance × how large its
 /// sphere looks (radius over distance, 1 from inside).
 pub(crate) fn importance(light: &SceneLight, center: Vec3, radius: f32, eye: Vec3) -> f32 {
-    let color = light.color.to_linear();
-    let luminance = color.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    let luminance = light.intensity.dot(Vec3::new(0.2126, 0.7152, 0.0722));
     let distance = center.distance(eye);
-    luminance * light.brightness * radius / distance.max(radius).max(1e-3)
+    luminance * radius / distance.max(radius).max(1e-3)
 }
 
 /// What a selection did.
@@ -162,6 +161,7 @@ mod tests {
             direction: Vec3::NEG_Z,
             color: Color3::WHITE,
             brightness,
+            intensity: Vec3::splat(brightness),
             range: 8.0,
             angle: 0.0,
             enabled: true,
@@ -233,7 +233,7 @@ mod tests {
 
         // The dimmest becomes the brightest: it fades in, and the one it pushes out fades out, both drawn meanwhile.
         let mut lights = lights;
-        lights[0].brightness = 20.0;
+        lights[0].intensity = Vec3::splat(20.0);
         let (selection, drawn) = run(&lights, &mut runtime, 3, 0.1);
         assert_eq!(selection.in_budget, 3);
         assert_eq!(drawn.len(), 4, "{drawn:?}");
@@ -256,11 +256,11 @@ mod tests {
         let (_, drawn) = run(&lights, &mut runtime, 1, 0.1);
         assert_eq!(drawn, [0]);
         // The other one gets a little brighter, within the hysteresis: nothing changes.
-        lights[1].brightness = 2.2;
+        lights[1].intensity = Vec3::splat(2.2);
         let (_, drawn) = run(&lights, &mut runtime, 1, 0.1);
         assert_eq!(drawn, [0]);
         // Much brighter: it takes the place.
-        lights[1].brightness = 4.0;
+        lights[1].intensity = Vec3::splat(4.0);
         run(&lights, &mut runtime, 1, 0.1);
         assert!(runtime[1].in_budget && !runtime[0].in_budget);
     }
@@ -272,7 +272,7 @@ mod tests {
         let mut off = light(0.0, 1.0);
         off.enabled = false;
         let mut black = light(0.0, 1.0);
-        black.color = Color3::new(0.0, 0.0, 0.0);
+        black.intensity = Vec3::ZERO;
         // Behind the camera but reaching in front of it: a candidate.
         let mut reaching = light(0.0, 1.0);
         reaching.position = Vec3::new(0.0, 0.0, 4.0);

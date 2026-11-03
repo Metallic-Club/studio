@@ -13,7 +13,9 @@
 //! numbers before culling), `--view-distance <m>` and `--min-screen-size <px>` (the culling thresholds; infinite and
 //! 1 by default), `--fov <degrees>` (narrow or widen the scene's camera), `--moving-camera` (walk the camera through
 //! the scene instead of keeping it still), `--no-shadows`, `--shadow-cascades <n>`, `--shadow-resolution <texels>`,
-//! `--shadow-distance <m>` and `--dynamic-cascades <n>` (the sun's shadows; 3, 2048, 256 and 2 by default).
+//! `--shadow-distance <m>` and `--dynamic-cascades <n>` (the sun's shadows; 3, 2048, 256 and 2 by default),
+//! `--lights <low|medium|high|off>` (the point and spot lights' settings as the presets will set them; medium by
+//! default), `--light-budget <n>`, `--lights-per-cluster <n>`, `--shadowed-lights <n>` and `--no-light-shadows`.
 //! `WGPU_BACKEND=dx12` (or `vulkan`, `gl`) picks the backend.
 //!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
@@ -23,14 +25,15 @@ use std::error::Error;
 use std::process::{Command, ExitCode};
 
 use metallic_engine::stress::{BenchOptions, StressKind, run_bench};
-use metallic_render::CullSettings;
+use metallic_render::{CullSettings, LightSettings};
 
 fn usage() -> String {
     format!(
         "usage: stress --scene <name|all> [--frames N] [--warm-up N] [--seed N] [--size WxH] [--vsync] [--overlay]\n\
          \x20             [--no-cull] [--view-distance M] [--min-screen-size PX] [--fov DEGREES] [--moving-camera]\n\
          \x20             [--no-shadows] [--shadow-cascades N] [--shadow-resolution N] [--shadow-distance M]\n\
-         \x20             [--dynamic-cascades N]\n\
+         \x20             [--dynamic-cascades N] [--lights low|medium|high|off] [--light-budget N]\n\
+         \x20             [--lights-per-cluster N] [--shadowed-lights N] [--no-light-shadows]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -100,6 +103,27 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             "--dynamic-cascades" => {
                 options.shadows.dynamic_cascades =
                     u32::try_from(number(it.next(), "--dynamic-cascades")?).map_err(|e| e.to_string())?;
+            }
+            "--lights" => {
+                options.lights = match it.next().map(String::as_str) {
+                    Some("low") => LightSettings::LOW,
+                    Some("medium") => LightSettings::MEDIUM,
+                    Some("high") => LightSettings::HIGH,
+                    Some("off") => LightSettings::OFF,
+                    _ => return Err("--lights needs low, medium, high or off".into()),
+                };
+            }
+            "--light-budget" => {
+                options.lights.budget = u32::try_from(number(it.next(), "--light-budget")?).map_err(|e| e.to_string())?;
+            }
+            "--shadowed-lights" => {
+                options.lights.shadowed_lights =
+                    u32::try_from(number(it.next(), "--shadowed-lights")?).map_err(|e| e.to_string())?;
+            }
+            "--no-light-shadows" => options.lights.shadows = false,
+            "--lights-per-cluster" => {
+                options.lights.per_cluster =
+                    u32::try_from(number(it.next(), "--lights-per-cluster")?).map_err(|e| e.to_string())?;
             }
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}

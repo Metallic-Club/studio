@@ -8,8 +8,8 @@ use metallic_core::{DataModel, Id};
 use metallic_platform::{Size, Window};
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::{
-    CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightingReader, RenderContext,
-    RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, ShadowSettings, wgpu,
+    CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings, LightingReader,
+    RenderContext, RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, ShadowSettings, wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
@@ -27,8 +27,8 @@ struct Device {
 /// Draws the game into the engine's window: install it with [`Engine::set_render_hook`](crate::Engine::set_render_hook).
 ///
 /// Each frame it syncs the GPU-resident scene ([`GpuScene`]) with the data model's changes and draws the parts in
-/// `Workspace` from `Workspace.CurrentCamera` ([`Renderer::render_scene`]), lit by the `Lighting` service with the
-/// sky behind them; without a current camera the frame is the clear colour. `Lighting` is read only in frames after
+/// `Workspace` from `Workspace.CurrentCamera` ([`Renderer::render_scene`]), lit by the `Lighting` service and the
+/// point and spot lights in `Workspace`, with the sky behind them; without a current camera the frame is the clear colour. `Lighting` is read only in frames after
 /// it changed: the scene watches it on the change consumer it drains anyway ([`GpuScene::watch`]). The device and
 /// the scene survive [`RenderHook::detach`], so a mobile app coming back to the foreground only makes a new surface.
 ///
@@ -40,6 +40,7 @@ pub struct SceneRenderer {
     clear_color: wgpu::Color,
     cull: CullSettings,
     shadows: ShadowSettings,
+    lights: LightSettings,
     present_mode: Option<wgpu::PresentMode>,
     device: Option<Device>,
     surface: Option<RenderSurface>,
@@ -76,6 +77,7 @@ impl SceneRenderer {
             },
             cull: CullSettings::default(),
             shadows: ShadowSettings::default(),
+            lights: LightSettings::default(),
             present_mode: None,
             device: None,
             surface: None,
@@ -130,6 +132,21 @@ impl SceneRenderer {
     /// How the sun's shadows are drawn.
     pub fn shadows(&self) -> ShadowSettings {
         self.shadows
+    }
+
+    /// Changes how point and spot lights are drawn (the light budget, shadowed lights, the shadow atlas; see
+    /// [`metallic_render::lights`]). The defaults are the Medium preset's; graphics presets (#84) set them, and each
+    /// light's `Enabled` and `Shadows` are the game's. Applies now and to every later renderer.
+    pub fn set_lights(&mut self, lights: LightSettings) {
+        self.lights = lights;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_lights(lights);
+        }
+    }
+
+    /// How point and spot lights are drawn.
+    pub fn lights(&self) -> LightSettings {
+        self.lights
     }
 
     /// Asks for a present mode (for example `AutoNoVsync` for an uncapped frame rate in benchmarks); the surface
@@ -389,6 +406,7 @@ impl SceneRenderer {
             clear_color: self.clear_color,
             cull: self.cull,
             shadows: self.shadows,
+            lights: self.lights,
             ..RendererSettings::new(format, width, height)
         }
     }

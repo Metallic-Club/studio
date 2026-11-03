@@ -142,7 +142,7 @@ impl LightSettings {
     pub const LOW: Self = Self {
         enabled: true,
         budget: 32,
-        per_cluster: 16,
+        per_cluster: 32,
         fade_time: 0.3,
         shadows: true,
         shadowed_lights: 2,
@@ -153,21 +153,21 @@ impl LightSettings {
         normal_offset: 1.5,
     };
 
-    /// Medium (GTX 1650 / RX 6500 class at 60 fps, the Mid tier of ADR 0008): 128 lights a frame, at most 32 per
+    /// Medium (GTX 1650 / RX 6500 class at 60 fps, the Mid tier of ADR 0008): 128 lights a frame, at most 48 per
     /// cluster, 8 of them shadowed in a 2048² atlas of 256² tiles (16 MiB).
     pub const MEDIUM: Self = Self {
         budget: 128,
-        per_cluster: 32,
+        per_cluster: 48,
         shadowed_lights: 8,
         atlas_resolution: 2048,
         ..Self::LOW
     };
 
-    /// High (RTX 3060 Ti class): 192 lights a frame, at most 48 per cluster, 8 of them shadowed in a 4096² atlas of
+    /// High (RTX 3060 Ti class): 192 lights a frame, at most 64 per cluster, 8 of them shadowed in a 4096² atlas of
     /// 512² tiles (64 MiB).
     pub const HIGH: Self = Self {
         budget: 192,
-        per_cluster: 48,
+        per_cluster: 64,
         atlas_resolution: 4096,
         tile_resolution: 512,
         ..Self::MEDIUM

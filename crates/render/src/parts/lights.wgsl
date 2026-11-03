@@ -11,6 +11,13 @@ const CLUSTER_TEXTURE_WIDTH: u32 = 1024u;
 // MIN_DISTANCE² in lights/mod.rs.
 const MIN_DISTANCE_SQUARED: f32 = 0.01;
 
+// Constants per pipeline (parts/mod.rs makes the variants and picks one per frame): whether it shades local lights
+// at all, and their shadows. Code that is there costs every pixel registers, and so occupancy, even in frames that
+// never run it: measured on `many_lights`, the light loop costs an unlit frame's opaque pass 0.08 to 0.16 ms, and
+// the shadow lookup in it a quarter of the loop's time with no shadowed light drawn.
+override LOCAL_LIGHTS: bool = true;
+override LOCAL_SHADOWS: bool = true;
+
 // `GpuLight` in lights/gpu.rs.
 struct LocalLight {
     // xyz: camera-relative position; w: range.
@@ -81,22 +88,20 @@ fn local_visibility(light: LocalLight, p: vec3<f32>, n: vec3<f32>, from_light: v
     let low = tile.rect.xy + vec2<f32>(texel);
     let high = tile.rect.xy + vec2<f32>(tile.rect.z - texel);
     let uv = tile.rect.xy + vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * tile.rect.z;
-    let reach = i32(frame.lights_atlas.y);
-    var lit = 0.0;
-    var total = 0.0;
-    for (var y = -reach; y <= reach; y += 1) {
-        for (var x = -reach; x <= reach; x += 1) {
-            let weight = f32(reach + 1 - abs(x)) * f32(reach + 1 - abs(y));
-            let at = clamp(uv + vec2<f32>(f32(x), f32(y)) * texel, low, high);
-            lit += weight * textureSampleCompareLevel(shadow_atlas, shadow_sampler, at, reference);
-            total += weight;
-        }
-    }
-    return lit / total;
+    // Four bilinear comparison taps half a texel apart (a tent over 3 × 3 texels), or one with the filter off. Fixed
+    // taps rather than a loop over a reach read from the frame: a little cheaper inside the light loop.
+    let spread = frame.lights_atlas.y * 0.5 * texel;
+    var lit = textureSampleCompareLevel(shadow_atlas, shadow_sampler, clamp(uv + vec2<f32>(-spread, -spread), low, high), reference);
+    lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, clamp(uv + vec2<f32>(spread, -spread), low, high), reference);
+    lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, clamp(uv + vec2<f32>(-spread, spread), low, high), reference);
+    lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, clamp(uv + vec2<f32>(spread, spread), low, high), reference);
+    return lit * 0.25;
 }
 
 // The light the local lights reflect at a point: camera-relative `p`, unit normal `n`, towards the camera `v`, seen
-// at fragment `frag`. `diffuse`, `f0` and `a2` (roughness⁴) are the surface's, as in `shade`.
+// at fragment `frag`. `diffuse`, `f0` and `a2` (roughness⁴) are the surface's, as in `shade`. Each light adds
+// Lambert diffuse and GGX specular of its radiance, inverse-square windowed to reach 0 at its range, through its cone
+// for a spot, and through its shadow when it has one.
 fn local_lighting(
     frag: vec2<f32>,
     p: vec3<f32>,
@@ -118,8 +123,7 @@ fn local_lighting(
     let count = header & 255u;
     for (var k = 0u; k < count; k += 1u) {
         let at = first + k;
-        let index = (cluster_texel(CLUSTER_COUNT + at / 4u) >> ((at % 4u) * 8u)) & 255u;
-        let light = local_lights[index];
+        let light = local_lights[(cluster_texel(CLUSTER_COUNT + at / 4u) >> ((at % 4u) * 8u)) & 255u];
         let to_light = light.position.xyz - p;
         let d2 = dot(to_light, to_light);
         let range2 = light.position.w * light.position.w;
@@ -132,7 +136,6 @@ fn local_lighting(
         if n_dot_l <= 0.0 {
             continue;
         }
-        // Inverse-square, windowed to reach 0 at the range.
         let ratio = d2 / range2;
         let window = clamp(1.0 - ratio * ratio, 0.0, 1.0);
         var attenuation = window * window / max(d2, MIN_DISTANCE_SQUARED);
@@ -143,7 +146,7 @@ fn local_lighting(
         if attenuation <= 0.0 {
             continue;
         }
-        if light.params.z >= 0.0 && light.params.w > 0.0 {
+        if LOCAL_SHADOWS && light.params.w > 0.0 {
             attenuation *= mix(1.0, local_visibility(light, p, n, -to_light, d), light.params.w);
         }
         let radiance = light.color.rgb * (attenuation * n_dot_l);

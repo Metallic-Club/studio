@@ -74,6 +74,7 @@ fn sample(frame: usize) -> FrameSample {
         render_ms: ms * 0.3,
         cull_ms: ms * 0.05,
         shadow_redrawn: 0,
+        ..FrameSample::default()
     }
 }
 

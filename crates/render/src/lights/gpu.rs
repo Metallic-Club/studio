@@ -28,7 +28,7 @@ pub(crate) struct FrameLights {
     pub(crate) clusters: [f32; 4],
     /// Lights drawn (0: none), the first slice's depth, the normal offset and the depth bias in texels.
     pub(crate) local: [f32; 4],
-    /// One atlas texel in atlas coordinates, and the filter's reach in texels.
+    /// One atlas texel in atlas coordinates, the filter's reach in texels, and 1 when any drawn light has a shadow.
     pub(crate) atlas: [f32; 4],
 }
 
@@ -49,7 +49,7 @@ pub(crate) struct GpuLight {
 
 impl GpuLight {
     fn new(light: &SceneLight, camera: Vec3, fade: f32, shadow: f32) -> Self {
-        let intensity = light.color.to_linear() * (light.brightness * LIGHT_INTENSITY * fade);
+        let intensity = light.intensity * (LIGHT_INTENSITY * fade);
         let position = light.position - camera;
         let (cone, scale, offset) = match light.kind {
             LightKind::Point => (-2.0, 0.0, 0.0),
@@ -287,6 +287,7 @@ impl LocalLights {
         self.bases.resize(self.shadowed.len(), -1.0);
         self.atlas
             .prepare(scene, &self.shadowed, &mut self.bases, camera.position - origin);
+        let mut any_shadow = false;
         for (&slot, &base) in self.shadow_slots.iter().zip(&self.bases) {
             if let Some(light) = self.lights.get_mut(slot) {
                 light.params[2] = base;
@@ -294,6 +295,7 @@ impl LocalLights {
                     // No room in the tile table: drawn without its shadow.
                     light.params[3] = 0.0;
                 }
+                any_shadow |= light.params[3] > 0.0;
             }
         }
 
@@ -326,7 +328,12 @@ impl LocalLights {
                 self.settings.normal_offset.max(0.0),
                 self.settings.depth_bias.max(0.0),
             ],
-            atlas: [self.atlas.texel(), self.settings.filter_radius.min(1) as f32, 0.0, 0.0],
+            atlas: [
+                self.atlas.texel(),
+                self.settings.filter_radius.min(1) as f32,
+                if any_shadow { 1.0 } else { 0.0 },
+                0.0,
+            ],
         };
         self.upload();
 

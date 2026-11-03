@@ -39,9 +39,16 @@ pub struct FrameSample {
     /// The part of `render_ms` spent culling ([`metallic_render::cull`]): the camera's view and the shadow cascades
     /// drawn; 0 when nothing was culled again.
     pub cull_ms: f32,
+    /// The part of `render_ms` spent on point and spot lights ([`metallic_render::lights`]): selecting, clustering
+    /// and packing them, and culling the casters of the shadow-atlas tiles drawn. [`PerfStats::record`] fills it
+    /// from the frame's draws.
+    pub lights_ms: f32,
     /// Bit `i` set when shadow cascade `i` was drawn this frame (otherwise its map was kept; see
     /// [`metallic_render::shadow`]). [`PerfStats::record`] fills it from the frame's draws.
     pub shadow_redrawn: u8,
+    /// Shadow-atlas tiles drawn this frame ([`metallic_render::lights`]). [`PerfStats::record`] fills it from the
+    /// frame's draws.
+    pub light_tiles_redrawn: u32,
 }
 
 fn ms(d: Duration) -> f32 {
@@ -57,7 +64,9 @@ impl FrameSample {
             physics_ms: ms(physics),
             render_ms: ms(render),
             cull_ms: 0.0,
+            lights_ms: 0.0,
             shadow_redrawn: 0,
+            light_tiles_redrawn: 0,
         }
     }
 
@@ -78,7 +87,9 @@ pub struct GpuSample {
     pub passes_ms: [f32; PassId::COUNT],
     /// Each shadow cascade's time: 0 for a cascade whose map was kept that frame (or that is not in use).
     pub shadow_ms: [f32; MAX_CASCADES],
-    /// The sum over the passes and the cascades.
+    /// The local lights' shadow atlas pass: 0 in a frame that kept every tile.
+    pub light_shadow_ms: f32,
+    /// The sum over the passes, the cascades and the atlas.
     pub total_ms: f32,
 }
 
@@ -112,6 +123,8 @@ pub struct PerfSummary {
     pub render_ms: Distribution,
     /// Cull CPU time (part of the render CPU time).
     pub cull_ms: Distribution,
+    /// Local lights' CPU time (part of the render CPU time).
+    pub lights_ms: Distribution,
     /// Timed GPU frames summarised.
     pub gpu_frames: usize,
     /// GPU time of the whole frame.
@@ -127,6 +140,12 @@ pub struct PerfSummary {
     pub gpu_cascades: usize,
     /// In how many of the summarised frames each shadow cascade was drawn (the others kept their map).
     pub shadow_redraws: [u32; MAX_CASCADES],
+    /// GPU time of the local lights' shadow atlas pass, the frames that kept every tile counting 0.
+    pub gpu_light_shadow_ms: Distribution,
+    /// In how many of the summarised frames atlas tiles were drawn (the others kept every tile).
+    pub light_shadow_frames: u32,
+    /// Atlas tiles drawn over the summarised frames.
+    pub light_tiles_redrawn: u32,
     /// The last frame's draws, instances and triangles.
     pub draws: DrawStats,
 }
@@ -151,10 +170,11 @@ impl PerfSummary {
 impl PerfSummary {
     /// Writes the summary as the members of a JSON object, without the braces, so a report can put its own
     /// members around them (times in milliseconds): `frames`, `frame_ms`, `fps_p50`, `low_1pct_ms`,
-    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`), `gpu_ms` (`frames`, `total`, `passes` by
-    /// name, `shadow` per cascade), `draws` (with `culled`) and `shadow` (the last frame's `cascades`, `casters`
-    /// per cascade, `draws`, `instances` and `triangles`, and per cascade the summarised frames it was drawn in,
-    /// `redraws`). Each distribution is `{"mean", "p50", "p99", "max"}`.
+    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`, `lights`), `gpu_ms` (`frames`, `total`,
+    /// `passes` by name, `shadow` per cascade, `light_shadows`), `draws` (with `culled`), `shadow` (the last frame's
+    /// `cascades`, `casters` per cascade, `draws`, `instances` and `triangles`, and per cascade the summarised frames
+    /// it was drawn in, `redraws`) and `lights` (the last frame's light counts, clusters and atlas, and over the
+    /// summarised frames `atlas_frames` and `tiles_redrawn`). Each distribution is `{"mean", "p50", "p99", "max"}`.
     pub fn write_json_members(&self, out: &mut String) {
         // Writing to a `String` cannot fail.
         let _ = self.write_members(out);
@@ -178,11 +198,12 @@ impl PerfSummary {
         )?;
         write!(
             out,
-            "\"cpu_ms\":{{\"script\":{},\"physics\":{},\"render\":{},\"cull\":{}}},",
+            "\"cpu_ms\":{{\"script\":{},\"physics\":{},\"render\":{},\"cull\":{},\"lights\":{}}},",
             dist(&self.script_ms),
             dist(&self.physics_ms),
             dist(&self.render_ms),
-            dist(&self.cull_ms)
+            dist(&self.cull_ms),
+            dist(&self.lights_ms)
         )?;
         write!(
             out,
@@ -212,7 +233,7 @@ impl PerfSummary {
             }
             out.push_str(&dist(cascade));
         }
-        out.push_str("]},");
+        write!(out, "],\"light_shadows\":{}}},", dist(&self.gpu_light_shadow_ms))?;
         let d = &self.draws;
         write!(
             out,
@@ -232,13 +253,37 @@ impl PerfSummary {
         write!(
             out,
             "\"shadow\":{{\"cascades\":{},\"redraws\":[{}],\"casters\":[{}],\"draws\":{},\"instances\":{},\
-             \"triangles\":{}}}",
+             \"triangles\":{}}},",
             cascades,
             list(&self.shadow_redraws[..cascades.min(MAX_CASCADES)]),
             list(&d.shadow_casters[..cascades.min(MAX_CASCADES)]),
             d.shadow_draws,
             d.shadow_instances,
             d.shadow_triangles
+        )?;
+        let l = &d.lights;
+        write!(
+            out,
+            "\"lights\":{{\"in_scene\":{},\"in_view\":{},\"in_budget\":{},\"drawn\":{},\"fading\":{},\
+             \"shadowed\":{},\"shadow_tiles\":{},\"lit_clusters\":{},\"cluster_entries\":{},\"max_per_cluster\":{},\
+             \"overflow\":{},\"atlas_draws\":{},\"atlas_instances\":{},\"atlas_triangles\":{},\"atlas_frames\":{},\
+             \"tiles_redrawn\":{}}}",
+            l.in_scene,
+            l.in_view,
+            l.in_budget,
+            l.drawn,
+            l.fading,
+            l.shadowed,
+            l.shadow_tiles,
+            l.lit_clusters,
+            l.cluster_entries,
+            l.max_per_cluster,
+            l.overflow,
+            d.light_shadow_draws,
+            d.light_shadow_instances,
+            d.light_shadow_triangles,
+            self.light_shadow_frames,
+            self.light_tiles_redrawn
         )
     }
 }
@@ -365,6 +410,8 @@ impl PerfStats {
     pub fn record(&mut self, sample: FrameSample, gpu: Option<&FrameTimings>, draws: DrawStats) {
         self.frames.push(FrameSample {
             shadow_redrawn: draws.shadow_redrawn,
+            light_tiles_redrawn: draws.lights.tiles_redrawn,
+            lights_ms: ms(draws.lights.total_cpu_time()),
             ..sample
         });
         self.draws = draws;
@@ -389,6 +436,8 @@ impl PerfStats {
             gpu.shadow_ms[cascade] = ms;
             gpu.total_ms += ms;
         }
+        gpu.light_shadow_ms = timings.light_shadow_ms();
+        gpu.total_ms += gpu.light_shadow_ms;
         self.gpu_cascades = self.gpu_cascades.max(timings.cascade_count().min(MAX_CASCADES));
         self.gpu.push(gpu);
     }
@@ -449,6 +498,8 @@ impl PerfStats {
             for (cascade, redraws) in summary.shadow_redraws.iter_mut().enumerate() {
                 *redraws += u32::from(frame.shadow_redrawn >> cascade & 1);
             }
+            summary.light_shadow_frames += u32::from(frame.light_tiles_redrawn > 0);
+            summary.light_tiles_redrawn += frame.light_tiles_redrawn;
         }
         let (frames, gpu, scratch) = (&self.frames, &self.gpu, &mut self.scratch);
         summary.frame_ms = distribution(scratch, frames.iter().map(|f| f.frame_ms));
@@ -462,7 +513,9 @@ impl PerfStats {
         summary.physics_ms = distribution(scratch, frames.iter().map(|f| f.physics_ms));
         summary.render_ms = distribution(scratch, frames.iter().map(|f| f.render_ms));
         summary.cull_ms = distribution(scratch, frames.iter().map(|f| f.cull_ms));
+        summary.lights_ms = distribution(scratch, frames.iter().map(|f| f.lights_ms));
         summary.gpu_total_ms = distribution(scratch, gpu.iter().map(|g| g.total_ms));
+        summary.gpu_light_shadow_ms = distribution(scratch, gpu.iter().map(|g| g.light_shadow_ms));
         for pass in PassId::ALL {
             if summary.gpu_pass_ran(pass) {
                 let i = pass as usize;
@@ -522,8 +575,9 @@ fn bar_color(ms: f32) -> [u8; 4] {
 }
 
 /// Clears `overlay` and draws the performance overlay at its top-left corner: frame time with p50, p99 and the
-/// 1% low; script, physics, render and cull CPU time; GPU time per pass; draws, instances and triangles per pass and
-/// the instances culled; and a
+/// 1% low; script, physics, render and cull CPU time; GPU time per pass; the shadow cascades; the point and spot
+/// lights (in the scene, in view, drawn, fading, shadowed) and their CPU and atlas cost; draws, instances and
+/// triangles per pass and the instances culled; and a
 /// graph of the last [`GRAPH_FRAMES`] frame times (green within 60 fps, yellow within 30, red beyond; guides at
 /// 16.7 and 33.3 ms). `summary` is usually refreshed a few times a second; the graph and the "now" numbers come
 /// from `stats` every frame. Allocates nothing.
@@ -531,9 +585,9 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
     overlay.clear();
     let (x0, y0) = (12.0, 12.0);
     let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
-    // Wide enough for the graph and for the longest line of text (about 70 characters).
-    let width = (GRAPH_FRAMES as f32 * BAR).max(72.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
-    let lines = 10.0;
+    // Wide enough for the graph and for the longest line of text (about 74 characters).
+    let width = (GRAPH_FRAMES as f32 * BAR).max(76.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
+    let lines = 12.0;
     overlay.rect(x0 - 8.0, y0 - 8.0, width, lines * line + GRAPH_HEIGHT + 24.0, PANEL);
 
     let now = stats.last().copied().unwrap_or_default();
@@ -616,6 +670,35 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
     for &n in casters {
         (x, _) = overlay.text_fmt(x, y, SCALE, DIM, format_args!(" {n}"));
     }
+    y += line;
+    // Point and spot lights: how many there are, are drawn and shadowed, then what they cost.
+    let lights = &draws.lights;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!(
+            "LIGHTS {:5} IN SCENE {:4} IN VIEW {:4} DRAWN ({} FADING) {:3} SHADOWED",
+            lights.in_scene, lights.in_view, lights.drawn, lights.fading, lights.shadowed
+        ),
+    );
+    y += line;
+    let atlas_share = summary.light_shadow_frames as f32 / summary.frames.max(1) as f32;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        DIM,
+        format_args!(
+            "LIGHTS CPU {:.2} MS  ATLAS {:.2} MS {:3.0}%  {} TILES  {} PER CLUSTER MAX",
+            summary.lights_ms.p50,
+            summary.gpu_light_shadow_ms.mean,
+            atlas_share * 100.0,
+            lights.shadow_tiles,
+            lights.max_per_cluster
+        ),
+    );
     y += line;
     overlay.text_fmt(
         x0,
@@ -702,6 +785,7 @@ mod tests {
             render_ms: frame_ms / 2.0,
             cull_ms: frame_ms / 20.0,
             shadow_redrawn: 0,
+            ..FrameSample::default()
         }
     }
 

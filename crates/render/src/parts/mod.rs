@@ -278,6 +278,46 @@ struct Pipelines {
     transparent: wgpu::RenderPipeline,
     /// The full-screen sky triangle at the far plane.
     sky: wgpu::RenderPipeline,
+    /// `opaque`, `opaque_tested` and `transparent` made without local lights (`LOCAL_LIGHTS` off), for frames that
+    /// draw none: the light loop would cost every pixel even when it runs no iteration.
+    unlit: [wgpu::RenderPipeline; 3],
+    /// The same with local lights but without their shadows (`LOCAL_SHADOWS` off), for frames whose drawn lights
+    /// have none.
+    unshadowed: [wgpu::RenderPipeline; 3],
+}
+
+/// Which variant of the lit part pipelines a frame uses (see `LOCAL_LIGHTS` in lights.wgsl).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lights {
+    /// No local light is drawn.
+    None,
+    /// Local lights without shadows.
+    Unshadowed,
+    /// Local lights, some with shadows.
+    Shadowed,
+}
+
+impl Lights {
+    /// The pipeline constants of the variant.
+    fn constants(self) -> [(&'static str, f64); 2] {
+        let (lights, shadows) = match self {
+            Lights::None => (0.0, 0.0),
+            Lights::Unshadowed => (1.0, 0.0),
+            Lights::Shadowed => (1.0, 1.0),
+        };
+        [("LOCAL_LIGHTS", lights), ("LOCAL_SHADOWS", shadows)]
+    }
+}
+
+impl Pipelines {
+    /// `[opaque, opaque after a prepass, transparent]` for frames with `lights`.
+    fn lit(&self, lights: Lights) -> [&wgpu::RenderPipeline; 3] {
+        match lights {
+            Lights::Shadowed => [&self.opaque, &self.opaque_tested, &self.transparent],
+            Lights::Unshadowed => self.unshadowed.each_ref(),
+            Lights::None => self.unlit.each_ref(),
+        }
+    }
 }
 
 /// What the pipelines are made from.
@@ -768,10 +808,11 @@ impl PartRenderer {
                 if self.draws.is_empty() {
                     return;
                 }
+                let [opaque, opaque_tested, _] = self.pipelines.lit(self.light_variant());
                 let pipeline = match (pass, prepass) {
                     (PassId::DepthPrepass, _) => &self.pipelines.prepass,
-                    (_, true) => &self.pipelines.opaque_tested,
-                    (_, false) => &self.pipelines.opaque,
+                    (_, true) => opaque_tested,
+                    (_, false) => opaque,
                 };
                 render_pass.set_pipeline(pipeline);
                 self.bind(render_pass, self.opaque_group.as_ref(), scene.list_buffer());
@@ -789,7 +830,7 @@ impl PartRenderer {
                 if self.transparent.runs().is_empty() {
                     return;
                 }
-                render_pass.set_pipeline(&self.pipelines.transparent);
+                render_pass.set_pipeline(self.pipelines.lit(self.light_variant())[2]);
                 self.bind(render_pass, self.transparent_group.as_ref(), self.transparent.buffer());
                 for run in self.transparent.runs() {
                     let mesh = self.meshes.range(run.kind);
@@ -808,6 +849,19 @@ impl PartRenderer {
                 self.stats.sky_draws += 1;
             }
             PassId::Post | PassId::Ui => {}
+        }
+    }
+
+    /// Which variant of the lit pipelines this frame draws with: none when no local light is drawn, without shadows
+    /// when no drawn light has one.
+    fn light_variant(&self) -> Lights {
+        let frame = self.lights.frame();
+        if frame.local[0] <= 0.0 {
+            Lights::None
+        } else if frame.atlas[2] > 0.0 {
+            Lights::Shadowed
+        } else {
+            Lights::Unshadowed
         }
     }
 
@@ -930,7 +984,11 @@ fn create_pipelines(
         InstanceBinding::Storage => &all_buffers[..1],
         InstanceBinding::Vertex => &all_buffers[..],
     };
-    let pipeline = |label: &str, depth: wgpu::DepthStencilState, fragment: Option<(&str, Option<wgpu::BlendState>)>| {
+    let variant = |label: &str,
+                   depth: wgpu::DepthStencilState,
+                   fragment: Option<(&str, Option<wgpu::BlendState>)>,
+                   lights: Lights| {
+        let constants = lights.constants();
         let targets = [Some(wgpu::ColorTargetState {
             format,
             blend: fragment.and_then(|(_, blend)| blend),
@@ -959,13 +1017,17 @@ fn create_pipelines(
             fragment: fragment.map(|(entry_point, _)| wgpu::FragmentState {
                 module,
                 entry_point: Some(entry_point),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..wgpu::PipelineCompilationOptions::default()
+                },
                 targets: &targets,
             }),
             multiview_mask: None,
             cache: None,
         })
     };
+    let transparent_blend = Some(("fs_transparent", Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)));
     let tested = wgpu::DepthStencilState {
         depth_write_enabled: Some(false),
         depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
@@ -973,26 +1035,45 @@ fn create_pipelines(
     };
     debug_assert_eq!(depth_stencil_state(true).depth_compare, Some(DEPTH_COMPARE));
     debug_assert_eq!(depth_stencil_state(true).format, DEPTH_FORMAT);
+    // Opaque, opaque after a prepass, and transparent, for frames with `lights`.
+    let lit = |lights: Lights, name: &str| {
+        [
+            variant(
+                &format!("metallic parts opaque ({name})"),
+                depth_stencil_state(true),
+                Some(("fs_opaque", None)),
+                lights,
+            ),
+            variant(
+                &format!("metallic parts opaque after prepass ({name})"),
+                tested.clone(),
+                Some(("fs_opaque", None)),
+                lights,
+            ),
+            variant(
+                &format!("metallic parts transparent ({name})"),
+                depth_stencil_state(false),
+                transparent_blend,
+                lights,
+            ),
+        ]
+    };
+    let [opaque, opaque_tested, transparent] = lit(Lights::Shadowed, "local lights and shadows");
     Pipelines {
         format,
         samples,
-        prepass: pipeline("metallic parts depth prepass", depth_stencil_state(true), None),
-        opaque: pipeline(
-            "metallic parts opaque",
+        prepass: variant(
+            "metallic parts depth prepass",
             depth_stencil_state(true),
-            Some(("fs_opaque", None)),
+            None,
+            Lights::None,
         ),
-        opaque_tested: pipeline(
-            "metallic parts opaque (after prepass)",
-            tested,
-            Some(("fs_opaque", None)),
-        ),
-        transparent: pipeline(
-            "metallic parts transparent",
-            depth_stencil_state(false),
-            Some(("fs_transparent", Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING))),
-        ),
+        opaque,
+        opaque_tested,
+        transparent,
         sky: sky_pipeline(device, shaders, format, samples),
+        unlit: lit(Lights::None, "no local lights"),
+        unshadowed: lit(Lights::Unshadowed, "local lights"),
     }
 }
 

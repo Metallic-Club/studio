@@ -50,6 +50,9 @@ pub struct SceneLight {
     pub color: Color3,
     /// `Brightness`.
     pub brightness: f32,
+    /// `Color` decoded to linear light, times `Brightness`: what the light shines with (worked out when the light
+    /// changes, not per frame).
+    pub intensity: Vec3,
     /// `Range`, in metres: past it the light lights nothing.
     pub range: f32,
     /// `SpotLight.Angle`: the cone's full angle in degrees (0 for a point light).
@@ -66,10 +69,10 @@ impl SceneLight {
     /// Whether it lights anything: enabled, with some brightness, colour and range, and a finite place.
     pub fn shines(&self) -> bool {
         self.enabled
-            && self.brightness > 0.0
             && self.range > 0.0
             && self.range.is_finite()
-            && self.color.to_linear().max_element() > 0.0
+            && self.intensity.max_element() > 0.0
+            && self.intensity.is_finite()
             && self.position.is_finite()
             && self.direction.is_finite()
     }
@@ -320,16 +323,19 @@ fn read(dm: &DataModel, id: Id, binding: &LightBinding, host: Option<Id>, link: 
     };
     let flag = |prop: Option<PropId>, default: bool| prop.and_then(|p| dm.bool(id, p).ok()).unwrap_or(default);
     let (position, direction) = placement(dm, id, host, link);
+    let color = props
+        .color
+        .and_then(|p| dm.color3(id, p).ok())
+        .unwrap_or(Color3::WHITE);
+    let brightness = number(props.brightness, 1.0).max(0.0);
     SceneLight {
         id,
         kind: binding.kind,
         position,
         direction,
-        color: props
-            .color
-            .and_then(|p| dm.color3(id, p).ok())
-            .unwrap_or(Color3::WHITE),
-        brightness: number(props.brightness, 1.0).max(0.0),
+        color,
+        brightness,
+        intensity: color.to_linear().max(Vec3::ZERO) * brightness,
         range: number(props.range, 16.0).max(0.0),
         angle: match binding.kind {
             LightKind::Spot => number(props.angle, 90.0).clamp(1.0, 179.0),

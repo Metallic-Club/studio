@@ -911,6 +911,7 @@ mod tests {
             direction: Vec3::NEG_Z,
             color: Color3::WHITE,
             brightness: 1.0,
+            intensity: Vec3::ONE,
             range: 12.0,
             angle: 0.0,
             enabled: true,

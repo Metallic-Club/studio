@@ -49,7 +49,8 @@ struct Frame {
     // x: lights drawn (0: none), y: the depth the first slice ends at, z: the shadows' normal offset and w: their
     // depth bias, in texels.
     lights_local: vec4<f32>,
-    // x: one shadow-atlas texel in atlas coordinates, y: the filter's reach in texels.
+    // x: one shadow-atlas texel in atlas coordinates, y: the filter's reach in texels, z: 1 when any drawn light has
+    // a shadow.
     lights_atlas: vec4<f32>,
 }
 
