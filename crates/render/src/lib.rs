@@ -18,12 +18,15 @@
 //! - Reverse-Z depth ([`depth`]): `Depth32Float`, cleared to 0, tested with `Greater`.
 //! - GPU timing: timestamps around every pass, read back asynchronously a frame or more later
 //!   ([`FrameTimings`]). Nothing in a frame waits for the GPU.
+//! - The GPU-resident scene ([`scene`]): every renderable instance keeps a slot in an instance buffer, and only
+//!   what the data model's change tracking names is repacked and uploaded ([`GpuScene`], [`InstanceScene`]).
 
 mod context;
 pub mod depth;
 mod error;
 mod graph;
 mod renderer;
+pub mod scene;
 mod surface;
 mod target;
 mod timing;
@@ -32,6 +35,7 @@ pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext}
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
 pub use renderer::{Renderer, RendererSettings};
+pub use scene::{GpuScene, InstanceScene};
 pub use surface::{RenderSurface, SurfaceFrame};
 pub use target::OffscreenTarget;
 pub use timing::{FrameTimings, PassTiming, TIMING_RING_SIZE};

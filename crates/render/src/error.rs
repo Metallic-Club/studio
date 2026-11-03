@@ -30,6 +30,9 @@ pub enum RenderError {
         /// The requested height in pixels.
         height: u32,
     },
+    /// The scene could not attach to the data model (no free change consumer).
+    #[error("the scene could not attach to the data model: {0}")]
+    DataModel(#[from] metallic_core::DmError),
     /// The adapter cannot render to this format with the requested sample count.
     #[error("cannot render to {format:?} with {samples} sample(s)")]
     UnsupportedTarget {

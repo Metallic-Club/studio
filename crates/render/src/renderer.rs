@@ -165,6 +165,16 @@ impl Renderer {
     /// should pace itself with the returned submission (for example by waiting, outside the frame, for the one from
     /// two frames back), or wgpu's in-flight frames and command-buffer pools keep growing.
     pub fn render(&mut self, target: &wgpu::TextureView) -> wgpu::SubmissionIndex {
+        self.render_with(target, |_| {})
+    }
+
+    /// Like [`Renderer::render`], with `prepare` recording into the frame's encoder before the first pass: uploads
+    /// the passes read, such as [`crate::GpuScene::upload`]. One submission carries both.
+    pub fn render_with(
+        &mut self,
+        target: &wgpu::TextureView,
+        prepare: impl FnOnce(&mut wgpu::CommandEncoder),
+    ) -> wgpu::SubmissionIndex {
         let slot = match self.timer.as_mut() {
             Some(timer) => timer.begin_frame(&self.device),
             None => None,
@@ -172,6 +182,7 @@ impl Renderer {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
         });
+        prepare(&mut encoder);
         let clear_color = self.settings.clear_color;
         let msaa_view = self.msaa_color.as_ref().map(|attachment| &attachment.view);
         let depth_view = self.depth.as_ref().map(|attachment| &attachment.view);

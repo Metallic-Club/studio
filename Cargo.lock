@@ -1242,6 +1242,10 @@ dependencies = [
 name = "metallic_render"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "criterion",
+ "gungraun",
+ "metallic_classes",
  "metallic_core",
  "pollster",
  "raw-window-handle",

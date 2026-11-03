@@ -1,0 +1,407 @@
+//! The CPU side of the scene against real games (`metallic_classes`): slots, packing, regions, coalescing.
+
+use metallic_core::glam::{Quat, Vec3};
+use metallic_core::{CFrame, Color3, DataModel, EnumItem, Id, PropId, Value};
+
+use super::*;
+
+struct Game {
+    dm: DataModel,
+    workspace: Id,
+    part: metallic_core::ClassId,
+    folder: metallic_core::ClassId,
+    cframe: PropId,
+}
+
+impl Game {
+    fn new() -> Self {
+        let dm = metallic_classes::new_game().expect("a game");
+        let registry = dm.registry().clone();
+        let workspace = dm
+            .service(registry.class_id("Workspace").expect("Workspace"))
+            .expect("a Workspace");
+        let part = registry.class_id("Part").expect("Part");
+        let cframe = registry.prop_id(part, "CFrame").expect("CFrame");
+        Self {
+            dm,
+            workspace,
+            part,
+            folder: registry.class_id("Folder").expect("Folder"),
+            cframe,
+        }
+    }
+
+    fn scene(&mut self) -> InstanceScene {
+        InstanceScene::attach(&mut self.dm, Some(self.workspace), &RenderComponents::builtin()).expect("a consumer")
+    }
+
+    fn part_in(&mut self, parent: Option<Id>) -> Id {
+        let id = self.dm.create(self.part).expect("a part");
+        self.dm.set_parent(id, parent).expect("parented");
+        id
+    }
+
+    fn part(&mut self) -> Id {
+        self.part_in(Some(self.workspace))
+    }
+
+    fn move_to(&mut self, id: Id, x: f32) {
+        self.dm
+            .set(id, self.cframe, Value::CFrame(CFrame::new(Vec3::new(x, 0.0, 0.0))))
+            .expect("moved");
+    }
+}
+
+/// Runs a sync and a coalesce, as a frame does.
+fn frame(scene: &mut InstanceScene, dm: &mut DataModel) -> SyncStats {
+    let stats = scene.sync(dm);
+    scene.coalesce();
+    stats
+}
+
+fn instance(scene: &InstanceScene, id: Id) -> GpuInstance {
+    let slot = scene.slot_of(id).expect("a slot");
+    scene.instances(slot.region)[slot.slot as usize]
+}
+
+#[test]
+fn a_part_is_packed_from_its_properties() {
+    let mut game = Game::new();
+    let id = game.part();
+    let dm = &mut game.dm;
+    let turned = CFrame::from_parts(Vec3::new(1.0, 2.0, 3.0), Quat::from_rotation_z(0.5));
+    dm.set_by_name(id, "CFrame", Value::CFrame(turned)).unwrap();
+    dm.set_by_name(id, "Size", Value::Vector3(Vec3::new(2.0, 4.0, 6.0)))
+        .unwrap();
+    dm.set_by_name(id, "Color", Value::Color3(Color3::from_rgb_u8(10, 20, 30)))
+        .unwrap();
+    dm.set_by_name(id, "Transparency", Value::Number(0.25)).unwrap();
+    dm.set_by_name(id, "Material", Value::Enum(EnumItem::new("Material", "Metal")))
+        .unwrap();
+    dm.set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", "Cylinder")))
+        .unwrap();
+    dm.set_by_name(id, "CastShadow", Value::Bool(false)).unwrap();
+
+    let mut scene = game.scene();
+    let stats = frame(&mut scene, &mut game.dm);
+    assert_eq!(stats.added, 1);
+    let got = instance(&scene, id);
+    let expected = GpuInstance {
+        // A cylinder's diameter is the smaller of Y and Z.
+        rows: affine_rows(turned, Vec3::new(2.0, 4.0, 4.0), Vec3::ZERO),
+        color: u32::from_le_bytes([10, 20, 30, 0]),
+        transparency: 0.25,
+        // Metal is the third `Material` item.
+        mesh_material: (u32::from(MeshKind::CYLINDER.0) << 16) | 2,
+        flags: GpuInstance::LIVE | GpuInstance::TRANSLUCENT,
+    };
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn defaults_pack_a_grey_plastic_block_that_casts_shadows() {
+    let mut game = Game::new();
+    let id = game.part();
+    let mut scene = game.scene();
+    frame(&mut scene, &mut game.dm);
+    let got = instance(&scene, id);
+    assert_eq!(got.mesh(), MeshKind::BLOCK);
+    assert_eq!(got.material_row(), 0);
+    assert_eq!(got.flags, GpuInstance::LIVE | GpuInstance::CAST_SHADOW);
+    assert_eq!(got.color, pack_color(Color3::new(0.64, 0.64, 0.64)));
+    assert_eq!(
+        got.rows,
+        affine_rows(CFrame::IDENTITY, Vec3::new(4.0, 1.0, 2.0), Vec3::ZERO)
+    );
+}
+
+#[test]
+fn only_parts_in_the_world_are_drawn() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let loose = game.part_in(None);
+    let folder = game.dm.create(game.folder).unwrap();
+    let in_folder = game.part_in(Some(folder));
+    let drawn = game.part();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.slot_of(loose), None);
+    assert_eq!(scene.slot_of(in_folder), None);
+    assert!(scene.slot_of(drawn).is_some());
+    // The camera and services are not renderable.
+    assert_eq!(scene.live(Region::Static), 1);
+
+    // Moving the folder into the world brings its part; moving it out takes it away again.
+    game.dm.set_parent(folder, Some(game.workspace)).unwrap();
+    let stats = frame(&mut scene, &mut game.dm);
+    assert_eq!(stats.added, 1);
+    assert!(scene.slot_of(in_folder).is_some());
+    game.dm.set_parent(folder, None).unwrap();
+    let stats = frame(&mut scene, &mut game.dm);
+    assert_eq!(stats.removed, 1);
+    assert_eq!(scene.slot_of(in_folder), None);
+    assert_eq!(scene.live(Region::Static), 1);
+}
+
+#[test]
+fn destroyed_parts_free_their_slot_for_the_next_one() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let parts: Vec<Id> = (0..4).map(|_| game.part()).collect();
+    frame(&mut scene, &mut game.dm);
+    let freed = scene.slot_of(parts[1]).unwrap();
+
+    game.dm.destroy(parts[1]).unwrap();
+    let stats = frame(&mut scene, &mut game.dm);
+    assert_eq!(stats.removed, 1);
+    assert_eq!(scene.slot_of(parts[1]), None);
+    assert_eq!(scene.instances(Region::Static)[freed.slot as usize], GpuInstance::FREE);
+    // Only the freed slot is uploaded.
+    assert_eq!(
+        scene.uploads(),
+        [UploadRange {
+            region: Region::Static,
+            first: freed.slot,
+            count: 1
+        }]
+    );
+
+    let next = game.part();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.slot_of(next), Some(freed), "the hole is filled first");
+    assert_eq!(scene.instances(Region::Static).len(), 4, "nothing grew or compacted");
+    for (i, &id) in parts.iter().enumerate().filter(|&(i, _)| i != 1) {
+        assert_eq!(scene.slot_of(id).map(|s| s.slot), Some(i as u32));
+    }
+}
+
+/// A small deterministic generator for the stability test.
+struct XorShift(u64);
+
+impl XorShift {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+#[test]
+fn an_unchanged_part_keeps_its_slot_through_a_thousand_edits_elsewhere() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let mut others: Vec<Id> = (0..64).map(|_| game.part()).collect();
+    let watched = game.part();
+    others.extend((0..64).map(|_| game.part()));
+    frame(&mut scene, &mut game.dm);
+    let slot = scene.slot_of(watched).unwrap();
+    let packed = instance(&scene, watched);
+
+    let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
+    for edit in 0..1000 {
+        match rng.below(4) {
+            0 => others.push(game.part()),
+            1 if others.len() > 1 => {
+                let gone = others.swap_remove(rng.below(others.len()));
+                game.dm.destroy(gone).unwrap();
+            }
+            2 => {
+                let id = others[rng.below(others.len())];
+                game.move_to(id, edit as f32);
+            }
+            _ => {
+                let id = others[rng.below(others.len())];
+                let colour = Color3::from_rgb_u8(rng.below(256) as u8, 0, 0);
+                game.dm.set_by_name(id, "Color", Value::Color3(colour)).unwrap();
+            }
+        }
+        if edit % 7 == 0 {
+            frame(&mut scene, &mut game.dm);
+            assert_eq!(scene.slot_of(watched), Some(slot), "after edit {edit}");
+        }
+    }
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.slot_of(watched), Some(slot));
+    assert_eq!(instance(&scene, watched), packed);
+    // Every live part has exactly one slot, and every slot's owner points back at it.
+    for region in Region::ALL {
+        for (slot, owner) in scene.owners(region).enumerate() {
+            if let Some(owner) = owner {
+                assert_eq!(
+                    scene.slot_of(owner),
+                    Some(SlotRef {
+                        region,
+                        slot: slot as u32
+                    })
+                );
+            }
+        }
+    }
+    assert_eq!(
+        scene.live(Region::Static) + scene.live(Region::Dynamic),
+        others.len() as u32 + 1
+    );
+}
+
+#[test]
+fn adjacent_changes_upload_as_one_range_and_scattered_ones_stay_bounded() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let parts: Vec<Id> = (0..1000).map(|_| game.part()).collect();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.uploads().len(), 1, "the first sync uploads everything at once");
+
+    // 100 adjacent parts change colour: one range.
+    for &id in &parts[200..300] {
+        game.dm
+            .set_by_name(id, "Color", Value::Color3(Color3::new(1.0, 0.0, 0.0)))
+            .unwrap();
+    }
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(
+        scene.uploads(),
+        [UploadRange {
+            region: Region::Static,
+            first: 200,
+            count: 100
+        }]
+    );
+
+    // Every tenth part: too far apart to merge, one range each and no more.
+    for &id in parts.iter().step_by(10) {
+        game.dm
+            .set_by_name(id, "Color", Value::Color3(Color3::new(0.0, 1.0, 0.0)))
+            .unwrap();
+    }
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.uploads().len(), 100);
+    assert!(scene.uploads().iter().all(|r| r.count == 1));
+
+    // Every third part: the gaps are small enough to merge into one range.
+    for &id in parts.iter().step_by(3) {
+        game.dm
+            .set_by_name(id, "Color", Value::Color3(Color3::new(0.0, 0.0, 1.0)))
+            .unwrap();
+    }
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.uploads().len(), 1);
+
+    // Nothing changed: nothing to upload.
+    frame(&mut scene, &mut game.dm);
+    assert!(scene.uploads().is_empty());
+}
+
+#[test]
+fn moving_parts_are_promoted_to_the_dynamic_region_and_demoted_at_rest() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let still = game.part();
+    let falling = game.part();
+    let anchored = game.part();
+    game.dm.set_by_name(anchored, "Anchored", Value::Bool(true)).unwrap();
+    frame(&mut scene, &mut game.dm);
+    let still_slot = scene.slot_of(still).unwrap();
+
+    // An unanchored part moving two frames running is promoted; an anchored one needs four.
+    for step in 1..=PROMOTE_MOVES_ANCHORED {
+        game.move_to(falling, f32::from(step));
+        game.move_to(anchored, f32::from(step));
+        let stats = frame(&mut scene, &mut game.dm);
+        let expected = u32::from(step == PROMOTE_MOVES_UNANCHORED) + u32::from(step == PROMOTE_MOVES_ANCHORED);
+        assert_eq!(stats.promoted, expected, "step {step}");
+    }
+    assert_eq!(scene.slot_of(falling).unwrap().region, Region::Dynamic);
+    assert_eq!(scene.slot_of(anchored).unwrap().region, Region::Dynamic);
+    assert_eq!(scene.slot_of(still), Some(still_slot));
+    assert_eq!(instance(&scene, falling).translation(), Vec3::new(4.0, 0.0, 0.0));
+    assert_eq!(scene.live(Region::Dynamic), 2);
+
+    // After resting, both go back, with their packed data unchanged.
+    let packed = instance(&scene, falling);
+    let mut demoted = 0;
+    for _ in 0..DEMOTE_REST + 2 {
+        demoted += frame(&mut scene, &mut game.dm).demoted;
+    }
+    assert_eq!(demoted, 2);
+    assert_eq!(scene.slot_of(falling).unwrap().region, Region::Static);
+    assert_eq!(instance(&scene, falling), packed);
+    assert_eq!(scene.live(Region::Dynamic), 0);
+}
+
+#[test]
+fn moves_spread_wider_than_the_window_never_promote() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let slow = game.part();
+    frame(&mut scene, &mut game.dm);
+    for step in 0..4 {
+        game.move_to(slow, step as f32);
+        frame(&mut scene, &mut game.dm);
+        for _ in 0..PROMOTE_WINDOW {
+            frame(&mut scene, &mut game.dm);
+        }
+    }
+    assert_eq!(scene.slot_of(slow).unwrap().region, Region::Static);
+}
+
+#[test]
+fn the_origin_follows_the_camera_in_grid_steps() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let id = game.part();
+    game.move_to(id, 5000.0);
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(instance(&scene, id).translation(), Vec3::new(5000.0, 0.0, 0.0));
+
+    // Within a grid step of the origin: nothing moves.
+    assert!(!scene.set_camera_position(&game.dm, Vec3::new(ORIGIN_GRID, 0.0, -ORIGIN_GRID)));
+    // Further: the origin snaps near the camera and every translation is re-made relative to it.
+    assert!(scene.set_camera_position(&game.dm, Vec3::new(4900.0, 0.0, 0.0)));
+    assert_eq!(scene.origin(), Vec3::new(5120.0, 0.0, 0.0));
+    assert_eq!(instance(&scene, id).translation(), Vec3::new(-120.0, 0.0, 0.0));
+    scene.coalesce();
+    assert_eq!(scene.uploads().len(), 1);
+
+    // Later changes pack relative to the new origin.
+    game.move_to(id, 5100.0);
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(instance(&scene, id).translation(), Vec3::new(-20.0, 0.0, 0.0));
+}
+
+#[test]
+fn a_rebuild_places_everything_again() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let parts: Vec<Id> = (0..10).map(|_| game.part()).collect();
+    frame(&mut scene, &mut game.dm);
+    let before: Vec<GpuInstance> = parts.iter().map(|&id| instance(&scene, id)).collect();
+    game.dm.destroy(parts[0]).unwrap();
+    scene.rebuild_all(&mut game.dm);
+    let stats = frame(&mut scene, &mut game.dm);
+    assert_eq!(stats.added, 9);
+    assert_eq!(scene.instances(Region::Static).len(), 9, "the rebuild packs densely");
+    for (id, packed) in parts.iter().zip(&before).skip(1) {
+        assert_eq!(instance(&scene, *id), *packed);
+    }
+}
+
+#[test]
+fn a_scene_ignores_other_data_models_and_frees_its_consumer() {
+    let mut game = Game::new();
+    let scene = game.scene();
+    let mut other = Game::new();
+    let mut scene2 = other.scene();
+    other.part();
+    assert_eq!(scene2.sync(&mut game.dm), SyncStats::default());
+    assert_eq!(frame(&mut scene2, &mut other.dm).added, 1);
+    // Detaching gives the consumer back: as many scenes as there are consumers can attach again.
+    scene.detach(&mut game.dm);
+    for _ in 0..8 {
+        let again = game.scene();
+        again.detach(&mut game.dm);
+    }
+}

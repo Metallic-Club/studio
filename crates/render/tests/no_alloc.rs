@@ -8,6 +8,10 @@
 //! selection, the pass loop) is allocation-free. A second test checks nothing accumulates: the heap does not grow
 //! over 100 frames with timing, MSAA and every pass on.
 //!
+//! The GPU scene (#76) is held to the same rule over 100 frames of 10,000 parts with 1% changing: its CPU side
+//! (drain, repack, coalesce) allocates nothing at all, its upload no more than the same wgpu calls by hand, and the
+//! heap does not grow across whole frames that sync, upload and render.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
 // A `#[global_allocator]` needs `unsafe impl GlobalAlloc`. This test binary's allocator only counts, then forwards
@@ -19,8 +23,13 @@ mod support;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+use metallic_core::glam::Vec3;
+use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
-use metallic_render::{OffscreenTarget, PassId, PassSet, Renderer, RendererSettings, wgpu};
+use metallic_render::scene::{GpuInstance, RenderComponents};
+use metallic_render::{
+    GpuScene, InstanceScene, OffscreenTarget, PassId, PassSet, RenderContext, Renderer, RendererSettings, wgpu,
+};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -320,4 +329,317 @@ impl Pacer {
         }
         self.next = (self.next + 1) % self.in_flight.len();
     }
+}
+
+const SCENE_PARTS: usize = 10_000;
+/// 1% of the parts change every frame: half of them move (the same ones every frame, as moving parts do, so they
+/// are promoted to the dynamic region), half are recoloured (spread over the whole scene).
+const SCENE_CHANGES: usize = SCENE_PARTS / 100;
+
+/// A game with [`SCENE_PARTS`] parts in `Workspace`.
+struct SceneGame {
+    dm: DataModel,
+    workspace: Id,
+    parts: Vec<Id>,
+    cframe: PropId,
+    color: PropId,
+}
+
+impl SceneGame {
+    fn new() -> Self {
+        let mut dm = metallic_classes::new_game().expect("a game");
+        let registry = dm.registry().clone();
+        let workspace = dm
+            .service(registry.class_id("Workspace").expect("Workspace"))
+            .expect("a Workspace");
+        let class = registry.class_id("Part").expect("Part");
+        let cframe = registry.prop_id(class, "CFrame").expect("CFrame");
+        let color = registry.prop_id(class, "Color").expect("Color");
+        let parts = (0..SCENE_PARTS)
+            .map(|i| {
+                let id = dm.create(class).expect("a part");
+                // Every part gets its own CFrame and Color, so the edits below overwrite stored values and the data
+                // model does not grow while the heap is watched.
+                let place = CFrame::new(Vec3::new((i % 100) as f32 * 4.0, 1.0, (i / 100) as f32 * 4.0));
+                dm.set(id, cframe, Value::CFrame(place)).expect("placed");
+                dm.set(id, color, Value::Color3(Color3::new(0.1, 0.2, 0.3)))
+                    .expect("coloured");
+                dm.set_parent(id, Some(workspace)).expect("parented");
+                id
+            })
+            .collect();
+        Self {
+            dm,
+            workspace,
+            parts,
+            cframe,
+            color,
+        }
+    }
+
+    /// Frame `frame`'s changes, made outside any measurement.
+    fn edit(&mut self, frame: usize) {
+        let step = 1.0 + frame as f32 * 0.01;
+        for i in 0..SCENE_CHANGES / 2 {
+            let id = self.parts[i * 97];
+            let place = CFrame::new(Vec3::new(i as f32, step, 0.0));
+            self.dm.set(id, self.cframe, Value::CFrame(place)).expect("moved");
+        }
+        let shade = (frame % 200) as f32 / 255.0;
+        for i in 0..SCENE_CHANGES / 2 {
+            // A different spread of parts every frame.
+            let id = self.parts[(i * 7919 + frame * 31) % SCENE_PARTS];
+            let colour = Color3::new(shade, 0.5, i as f32 / SCENE_CHANGES as f32);
+            self.dm.set(id, self.color, Value::Color3(colour)).expect("recoloured");
+        }
+    }
+}
+
+#[test]
+fn a_scene_sync_allocates_nothing_once_warm() {
+    let mut game = SceneGame::new();
+    let mut scene = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).unwrap();
+    let mut allocations = 0;
+    let mut grown = 0;
+    for frame in 0..WARM_UP + FRAMES {
+        game.edit(frame);
+        let before = live_bytes();
+        let (count, ()) = allocations_in(|| {
+            scene.sync(&mut game.dm);
+            scene.coalesce();
+        });
+        if frame >= WARM_UP {
+            allocations += count;
+            grown += live_bytes() - before;
+        }
+    }
+    let dynamic = scene.live(metallic_render::scene::Region::Dynamic);
+    eprintln!(
+        "{FRAMES} scene syncs of {SCENE_PARTS} parts with {SCENE_CHANGES} changing: {allocations} allocations, heap grew \
+         {grown} bytes; {dynamic} dynamic, {} upload ranges in the last frame",
+        scene.uploads().len()
+    );
+    assert_eq!(dynamic, SCENE_CHANGES as u32 / 2);
+    assert_eq!(allocations, 0, "the scene sync allocated");
+    assert_eq!(grown, 0, "the heap grew");
+}
+
+/// The wgpu objects a hand-written upload uses: a staging buffer, two region buffers, and the scatter pipeline
+/// built from the scene's own shader.
+struct HandUpload {
+    staging: wgpu::Buffer,
+    targets: [wgpu::Buffer; 2],
+    pipeline: wgpu::ComputePipeline,
+    bind_group: wgpu::BindGroup,
+    data: Vec<u8>,
+}
+
+impl HandUpload {
+    fn new(device: &wgpu::Device) -> Self {
+        let size = 2 * SCENE_PARTS as u64 * GpuInstance::SIZE;
+        let buffer = |label| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        let staging = buffer("hand staging");
+        let targets = [buffer("hand static"), buffer("hand dynamic")];
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hand scatter"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../src/scene/scatter.wgsl").into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("hand scatter"),
+            layout: None,
+            module: &module,
+            entry_point: Some("scatter"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hand scatter"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: staging.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: targets[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: targets[1].as_entire_binding(),
+                },
+            ],
+        });
+        Self {
+            staging,
+            targets,
+            pipeline,
+            bind_group,
+            data: vec![0; size as usize],
+        }
+    }
+
+    /// One staging write of `bytes`, then either a copy per range (target index, offset, size) or one scatter
+    /// pass over `instances`: the calls [`GpuScene::upload`] makes.
+    fn upload(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bytes: u64,
+        ranges: &[(usize, u64, u64)],
+        scatter: Option<u32>,
+    ) {
+        let Some(size) = wgpu::BufferSize::new(bytes) else {
+            return;
+        };
+        let mut view = queue.write_buffer_with(&self.staging, 0, size).expect("a staging view");
+        view.slice(..).copy_from_slice(&self.data[..bytes as usize]);
+        drop(view);
+        if let Some(instances) = scatter {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("metallic instance scatter"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.dispatch_workgroups(instances.div_ceil(64), 1, 1);
+            return;
+        }
+        let mut source = 0;
+        for &(target, offset, size) in ranges {
+            encoder.copy_buffer_to_buffer(&self.staging, source, &self.targets[target], offset, size);
+            source += size;
+        }
+    }
+}
+
+fn scene_on_gpu(context: &RenderContext, game: &mut SceneGame) -> GpuScene {
+    let mut scene = GpuScene::new(
+        context,
+        &mut game.dm,
+        Some(game.workspace),
+        &RenderComponents::builtin(),
+    )
+    .expect("a scene");
+    // The first frame places all 10,000 parts (and grows the buffers): not a steady frame, done outside.
+    scene.sync(&mut game.dm);
+    let mut encoder = context
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    scene.upload(&mut encoder);
+    context.queue().submit(Some(encoder.finish()));
+    scene
+}
+
+/// The fewest and the median allocations of a scene frame (sync and upload) and of the same wgpu calls by hand,
+/// over [`FRAMES`] frames, with the scatter pass or with copies. `None` when the device cannot scatter.
+fn scene_upload_and_floor(context: &RenderContext, scatter: bool) -> Option<((u64, u64), (u64, u64))> {
+    let (device, queue) = (context.device(), context.queue());
+    let mut game = SceneGame::new();
+    let mut scene = scene_on_gpu(context, &mut game);
+    if scatter && !scene.can_scatter() {
+        return None;
+    }
+    scene.set_scatter_min_ranges(if scatter { 0 } else { u32::MAX });
+    let hand = HandUpload::new(device);
+    let mut ranges: Vec<(usize, u64, u64)> = Vec::with_capacity(SCENE_PARTS);
+    let mut pacer = Pacer::new();
+    let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
+    for frame in 0..WARM_UP + FRAMES {
+        game.edit(frame);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let mut by_hand = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        // The first staging write after a submission costs wgpu two more allocations (whoever makes it), so both
+        // measured uploads below come after one, made here outside the measurements.
+        let mut primer = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        hand.upload(queue, &mut primer, 64, &[(0, 0, 64)], None);
+        drop(primer);
+        let (count, stats) = allocations_in(|| {
+            scene.sync(&mut game.dm);
+            scene.upload(&mut encoder)
+        });
+        assert_eq!(stats.dispatches, u32::from(scatter));
+        ranges.clear();
+        ranges.extend(scene.scene().uploads().iter().map(|r| {
+            (
+                r.region.index(),
+                u64::from(r.first) * GpuInstance::SIZE,
+                u64::from(r.count) * GpuInstance::SIZE,
+            )
+        }));
+        let instances = scatter.then_some(stats.slots);
+        let (floor_count, ()) = allocations_in(|| hand.upload(queue, &mut by_hand, stats.bytes, &ranges, instances));
+        pacer.submitted(device, queue.submit([encoder.finish(), by_hand.finish()]));
+        if frame >= WARM_UP {
+            ours.push(count);
+            floor.push(floor_count);
+        }
+    }
+    let mins = (
+        *ours.iter().min().expect("frames"),
+        *floor.iter().min().expect("frames"),
+    );
+    let medians = (median(ours), median(floor));
+    eprintln!(
+        "scene sync + upload ({}): {} allocations at least (median {}); the same wgpu calls by hand: {} (median {})",
+        if scatter { "scatter" } else { "copies" },
+        mins.0,
+        medians.0,
+        mins.1,
+        medians.1
+    );
+    Some((mins, medians))
+}
+
+#[test]
+fn a_scene_upload_allocates_nothing_beyond_wgpus_own() {
+    let Some(context) = support::gpu() else { return };
+    for scatter in [false, true] {
+        let Some(((ours_min, floor_min), (ours_median, floor_median))) = scene_upload_and_floor(&context, scatter)
+        else {
+            eprintln!("no scatter pass on this device");
+            continue;
+        };
+        assert!(
+            ours_min <= floor_min + WGPU_POOL_NOISE,
+            "the scene adds {} allocation(s)",
+            ours_min - floor_min
+        );
+        assert!(ours_median <= floor_median + WGPU_POOL_NOISE);
+    }
+}
+
+#[test]
+fn nothing_accumulates_over_scene_frames() {
+    let Some(context) = support::gpu() else { return };
+    let mut game = SceneGame::new();
+    let mut scene = scene_on_gpu(&context, &mut game);
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    let mut pacer = Pacer::new();
+    let mut before = 0;
+    for frame in 0..WARM_UP + FRAMES {
+        game.edit(frame);
+        if frame == WARM_UP {
+            before = live_bytes();
+        }
+        scene.sync(&mut game.dm);
+        let submission = renderer.render_with(target.view(), |encoder| {
+            scene.upload(encoder);
+        });
+        pacer.submitted(context.device(), submission);
+    }
+    let grown = live_bytes() - before;
+    eprintln!("{FRAMES} frames of sync, upload and render: heap grew {grown} bytes");
+    assert!(
+        grown.abs() < 16 * 1024,
+        "the heap grew by {grown} bytes over {FRAMES} frames"
+    );
 }
