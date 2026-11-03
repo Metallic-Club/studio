@@ -4,8 +4,8 @@
 //! non-default properties, inline and heap together; `tests/alloc.rs` measures it):
 //!
 //! - a slot is 72 bytes: the generation, the parent's slot index, the previous and next siblings' slot indices, the
-//!   class, per-consumer dirty bits, the signal "watched" flag, and a [`Body`] whose pointers are only
-//!   paid for when used;
+//!   class, per-consumer dirty bits, the signal "watched" flag, the pin count (see `pins.rs`), and a [`Body`] whose
+//!   pointers are only paid for when used;
 //! - an instance with its class's name stores no name (one null pointer); a renamed one boxes a shared string;
 //! - only non-default property values are stored, in a `Vec` sorted by [`PropId`] that grows one entry at a time
 //!   (four values are 160 bytes: `PropId` + `Value` is 40 bytes with alignment). Removing an entry keeps the
@@ -160,6 +160,9 @@ pub(super) struct Slot {
     /// Whether any signal connection listens to this instance, so an unwatched change costs one check. It sits
     /// in what was padding: the slot stays 72 bytes.
     pub(super) watched: bool,
+    /// How many outside holders pinned the instance, up to `u8::MAX`; `pins.rs` counts the rest. It sits in the
+    /// last byte of padding, so the slot stays 72 bytes.
+    pub(super) pins: u8,
     pub(super) body: Option<Body>,
 }
 
@@ -336,6 +339,7 @@ impl Slots {
             slot.class = class;
             slot.dirty = [0; MAX_CONSUMERS];
             slot.watched = false;
+            slot.pins = 0;
             slot.body = Some(body);
             return Id::new(index, slot.generation);
         }
@@ -349,6 +353,7 @@ impl Slots {
             class,
             dirty: [0; MAX_CONSUMERS],
             watched: false,
+            pins: 0,
             body: Some(body),
         });
         Id::new(index, 0)
@@ -367,6 +372,7 @@ impl Slots {
         slot.next = NONE;
         slot.dirty = [0; MAX_CONSUMERS];
         slot.watched = false;
+        slot.pins = 0;
         let next = slot.generation.checked_add(1);
         if let Some(next) = next {
             slot.generation = next;

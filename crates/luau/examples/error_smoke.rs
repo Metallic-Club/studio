@@ -44,10 +44,21 @@ const CASES: &[(&str, &str, &str)] = &[
         "Unable to assign property Transparency",
     ),
     ("MethodError", "workspace:IsA('NoSuchClass')", "NoSuchClass"),
+    // Destroyed instances still read, but writes raise (from `__newindex`, and from a method through `__namecall`).
     (
-        "Stale",
-        "local p = Instance.new('Part')\np:Destroy()\nprint(p.Name)",
-        "destroyed",
+        "DestroyedWrite",
+        "local p = Instance.new('Part')\np:Destroy()\nprint(p.Name, p.Transparency)\np.Transparency = 1",
+        "cannot set Transparency: the instance was destroyed",
+    ),
+    (
+        "DestroyedMove",
+        "local p = Instance.new('Part')\np:Destroy()\np.Parent = workspace",
+        "cannot set Parent: the instance was destroyed",
+    ),
+    (
+        "DestroyedMethod",
+        "local p = Instance.new('Part')\np:Destroy()\np:Clone()",
+        "the instance was destroyed",
     ),
     // An mlua callback's error (raised by mlua).
     ("Callback", "task.cancel(coroutine.running())", "cannot cancel"),

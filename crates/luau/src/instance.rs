@@ -3,10 +3,25 @@
 //! An instance is a tagged userdata holding its [`Id`]. `part.Position` goes `__index` → the class's member cache
 //! (indexed by the string's atom) → `DataModel::get` → a native vector, with no hashing and no allocation.
 //! `part:IsA("BasePart")` goes through `__namecall` and the class's `MethodDesc`, as every language's calls do.
+//!
+//! # Destroyed instances
+//!
+//! A userdata pins its instance (see `ffi`'s module docs), so after `part:Destroy()` the data model still answers
+//! for it, and these bindings follow the data model's contract (`metallic_core`'s `dm/pins.rs`):
+//!
+//! | Member | After `Destroy()` |
+//! | --- | --- |
+//! | `Name`, `ClassName`, every other property | its last value |
+//! | `Parent` | `nil` |
+//! | `IsA`, `GetFullName` (the name alone), `GetAttribute(s)`, `IsDescendantOf` / `IsAncestorOf` (`false`) | work |
+//! | `GetChildren`, `GetDescendants` / `FindFirstChild...`, `FindFirstAncestor`, `part.Child` | empty / `nil` / not a member |
+//! | `Destroy`, `ClearAllChildren` | do nothing |
+//! | writing a property (`Parent` included), `SetAttribute`, `Clone`, `Connect` | error: `cannot set X: the instance was destroyed`, or `the instance was destroyed` |
+//! | `==`, `tostring` | work |
 
 use std::ffi::c_int;
 
-use metallic_core::{Args as MethodArgs, DataModel, Id, MethodCall};
+use metallic_core::{Args as MethodArgs, DataModel, DmError, Id, MethodCall};
 use metallic_script::{SignalRef, YieldReason};
 
 use crate::convert::{read_script, read_value};
@@ -95,9 +110,10 @@ fn new_index_body(call: &Call<'_>) -> Ret {
             Member::Prop(prop) => {
                 let value = read_value(args, 3, &prop.ty, shared)
                     .map_err(|e| Raise(format!("Unable to assign property {key}. {}", e.0)))?;
-                ctx.dm
-                    .set(id, prop.id, value)
-                    .map_err(|e| Raise(format!("Unable to assign property {key}. {e}")))?;
+                ctx.dm.set(id, prop.id, value).map_err(|e| match e {
+                    DmError::Destroyed(_) => Raise(format!("cannot set {key}: {e}")),
+                    e => Raise(format!("Unable to assign property {key}. {e}")),
+                })?;
                 Ok(Out::None)
             }
             Member::Callback(name) => match args.kind(3) {
