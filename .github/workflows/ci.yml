@@ -45,6 +45,14 @@ jobs:
         run: cargo xtask api-dump --check
       - name: Headless engine (dedicated server features)
         run: cargo check -p metallic_engine --no-default-features --features physics,luau
+      # A dedicated server needs user paths, not windows: metallic_platform's `window` feature stays off (#92).
+      - name: Headless engine builds no window stack
+        run: |
+          if cargo tree -p metallic_engine --no-default-features --features physics,luau -e normal --prefix none \
+              | grep -E '^(winit|gilrs|raw-window-handle) '; then
+            echo "::error::the headless engine build depends on a window crate (see the lines above)"
+            exit 1
+          fi
 
   # The generated Luau definitions (api/metallic.d.luau) must load in luau-lsp, the editor tooling they are for: the
   # sample script type-checks cleanly and the deliberately wrong one fails with its four errors. The lint job checks

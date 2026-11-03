@@ -10,13 +10,20 @@ hot paths of `metallic_core` and of the Luau bindings (`metallic_luau`).
 `.github/workflows/perf.yml` runs on every pull request that changes `crates/`, `Cargo.toml`, `Cargo.lock` or the
 workflow itself. It counts the instructions (Callgrind's `Ir`) each workload executes, once for the PR's base and
 once for its head, on the same runner. **The PR fails when any workload grows by more than 5%** (exactly 5%
-passes). There are two suites, each with its own table in the job summary:
+passes). There are three suites, each with its own table in the job summary:
 
 - [`crates/core/benches/perf_gate.rs`](../crates/core/benches/perf_gate.rs): the data model (below);
 - [`crates/luau/benches/perf_gate.rs`](../crates/luau/benches/perf_gate.rs): Luau scripts doing 10,000 `part.Position`
   reads (`luau_reads`), `part.Transparency` writes (`luau_writes`) and `part:IsA("BasePart")` calls
   (`luau_method_calls`) through the script host, after a warm-up run that compiles the chunk and fills the member
-  cache. Each measured run includes one script start, which the 10,000 operations dominate.
+  cache. Each measured run includes one script start, which the 10,000 operations dominate;
+- [`crates/engine/benches/perf_gate.rs`](../crates/engine/benches/perf_gate.rs): the frame loop's own overhead.
+  `engine_empty_frames` is 100 headless frames (`Engine::tick`) of a started server game with no scripts and the
+  Luau backend registered: the clock, the four script steps with nothing due, the `RunService` watch checks, and the
+  empty simulation and render steps. It builds with the dedicated server's features
+  (`--no-default-features --features physics,luau`), so no renderer or window code is compiled in. At introduction
+  (#73; ubuntu-24.04 runner, Rust 1.99.1, gungraun 0.20.0, release profile) it counted 173,536 `Ir`: about 1,700
+  instructions per empty frame.
 
 A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
 checked (each must be present and above zero) and reported as `NEW (not gated)`, and the next PR is gated against
@@ -78,6 +85,10 @@ one's binary and the gate would compare the base with itself.
 The Luau suite follows the same steps with `cargo bench -p metallic_luau --bench perf_gate` and reports with
 `cargo xtask perf-report --source crates/luau/benches/perf_gate.rs --suite metallic_luau` (plus `--new-suite` when
 the base lacks it). Its workloads only use public APIs, so the bench source is the only file copied to the base.
+The engine suite does the same with
+`cargo bench -p metallic_engine --bench perf_gate --no-default-features --features physics,luau` and
+`--source crates/engine/benches/perf_gate.rs --suite metallic_engine`. Workload names are unique across the suites,
+because the report matches gungraun's summaries by function name.
 
 The job takes several minutes, most of it compiling (the Luau suite builds Luau's C++ sources for both sides). Pushes to `main` that touch the same paths only build,
 so the cargo cache is saved from `main` and restored by PRs, as in `ci.yml`.

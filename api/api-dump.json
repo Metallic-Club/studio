@@ -703,6 +703,172 @@
       "callbacks": []
     },
     {
+      "name": "RunService",
+      "parent": "Instance",
+      "description": "The engine's frame loop, seen from scripts: events that fire every frame, and whether the game runs in Studio, on a client or on the server. Get it with game:GetService(\"RunService\").",
+      "category": "",
+      "creatable": false,
+      "service_order": 5,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": true,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "InStudio",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Run state",
+          "description": "Set by the engine when the game runs inside Studio. Read it with IsStudio().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Running",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Run state",
+          "description": "Set by the engine while the game runs (paused included). Read it with IsRunning().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "OnClient",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Run state",
+          "description": "Set by the engine when this side is a player's client. Read it with IsClient().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "OnServer",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Run state",
+          "description": "Set by the engine when this side is the server. Read it with IsServer().",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "IsStudio",
+          "params": [],
+          "returns": "Bool",
+          "description": "Returns true when the game runs inside Studio (in play mode or while editing).",
+          "invokes_callback": null
+        },
+        {
+          "name": "IsRunning",
+          "params": [],
+          "returns": "Bool",
+          "description": "Returns true while the game runs: after it starts and until it stops. A paused game still runs.",
+          "invokes_callback": null
+        },
+        {
+          "name": "IsClient",
+          "params": [],
+          "returns": "Bool",
+          "description": "Returns true on a player's client. A standalone game, with no separate server, is both client and server.",
+          "invokes_callback": null
+        },
+        {
+          "name": "IsServer",
+          "params": [],
+          "returns": "Bool",
+          "description": "Returns true on the server. A standalone game, with no separate server, is both client and server.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [
+        {
+          "name": "RenderStepped",
+          "params": [
+            {
+              "name": "deltaTime",
+              "type": "Number",
+              "optional": false
+            }
+          ],
+          "description": "Fires every frame before the frame is drawn, before physics, with the frame's time step in seconds. Only on clients; a server never fires it. Use it for the camera and other things that must match what is drawn."
+        },
+        {
+          "name": "PreSimulation",
+          "params": [
+            {
+              "name": "deltaTime",
+              "type": "Number",
+              "optional": false
+            }
+          ],
+          "description": "Fires every frame just before physics steps, with the frame's time step in seconds. Use it to move things physics should see this frame."
+        },
+        {
+          "name": "PostSimulation",
+          "params": [
+            {
+              "name": "deltaTime",
+              "type": "Number",
+              "optional": false
+            }
+          ],
+          "description": "Fires every frame just after physics has stepped, with the frame's time step in seconds. Use it to read where physics put things."
+        },
+        {
+          "name": "Heartbeat",
+          "params": [
+            {
+              "name": "deltaTime",
+              "type": "Number",
+              "optional": false
+            }
+          ],
+          "description": "Fires every frame at its end, after physics, with the frame's time step in seconds. Threads waiting in task.wait resume in the same step."
+        }
+      ],
+      "callbacks": []
+    },
+    {
       "name": "ServerScriptService",
       "parent": "Instance",
       "description": "Holds the game's server scripts. Scripts placed here run on the server; players never see them.",

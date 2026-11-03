@@ -196,7 +196,8 @@ mod tests {
                 "Lighting",
                 "ReplicatedStorage",
                 "ServerScriptService",
-                "ServerStorage"
+                "ServerStorage",
+                "RunService"
             ]
         );
     }
@@ -288,7 +289,7 @@ mod tests {
                 .iter()
                 .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 31);
+        assert_eq!(input().classes.len(), 32);
         let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
         components.sort_unstable();
         assert_eq!(
