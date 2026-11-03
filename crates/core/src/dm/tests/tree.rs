@@ -56,6 +56,19 @@ fn create_refuses_services_and_non_creatable_classes() {
 }
 
 #[test]
+fn create_internal_makes_classes_scripts_cannot() {
+    let (mut dm, ids) = game();
+    let made = dm.create_internal(ids.instance).expect("engine-made instance");
+    assert_eq!(dm.class_name(made), Ok("Instance"));
+    assert_eq!(dm.parent(made), Ok(None));
+    assert_eq!(
+        dm.create_internal(ids.workspace_class),
+        Err(DmError::IsService { class: "Workspace" })
+    );
+    assert_eq!(dm.create_internal(ClassId::new(999)), Err(DmError::UnknownClass(999)));
+}
+
+#[test]
 fn set_parent_refuses_cycles_root_services_and_stale_ids() {
     let (mut dm, ids) = game();
     let a = folder_in(&mut dm, &ids, ids.workspace);

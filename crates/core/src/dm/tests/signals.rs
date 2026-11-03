@@ -244,6 +244,24 @@ fn no_op_writes_fire_nothing() {
 }
 
 #[test]
+fn is_signal_watched_names_the_signal_listened_to() {
+    let (mut dm, ids) = game();
+    let b = dm.create(ids.bindable).expect("create");
+    assert!(!dm.is_signal_watched(b, ids.event));
+    let destroying_signal = dm.signal_id(b, "Destroying").expect("Destroying");
+    let destroying = connect(&mut dm, b, destroying_signal, 1);
+    assert!(dm.is_watched(b), "watched through another signal");
+    assert!(!dm.is_signal_watched(b, ids.event));
+    assert!(dm.is_signal_watched(b, destroying_signal));
+    let event = connect(&mut dm, b, ids.event, 2);
+    assert!(dm.is_signal_watched(b, ids.event));
+    assert!(dm.disconnect(event));
+    assert!(!dm.is_signal_watched(b, ids.event));
+    assert!(dm.disconnect(destroying));
+    assert!(!dm.is_signal_watched(b, destroying_signal));
+}
+
+#[test]
 fn disconnect_stops_delivery_even_before_the_drain() {
     let (mut dm, ids) = game();
     let b = dm.create(ids.bindable).expect("create");

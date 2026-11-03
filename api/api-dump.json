@@ -590,6 +590,147 @@
       "callbacks": []
     },
     {
+      "name": "InputObject",
+      "parent": "Instance",
+      "description": "One input: a key, a mouse button, the mouse, the wheel or a finger on the screen. UserInputService's InputBegan, InputChanged and InputEnded pass one. The engine keeps one object per input and updates it on every event (a key's object goes from Begin to End on each press), so copy the fields you want to keep.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "KeyCode",
+          "type": {
+            "Enum": "KeyCode"
+          },
+          "default": "Unknown",
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "The key, for keyboard input; Unknown for every other kind.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "UserInputType",
+          "type": {
+            "Enum": "UserInputType"
+          },
+          "default": "None",
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "What kind of input this is: a key, a mouse button, mouse movement, the wheel or a touch.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "UserInputState",
+          "type": {
+            "Enum": "UserInputState"
+          },
+          "default": "None",
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Where the input is: Begin, Change, End or Cancel.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Position",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Where the input is, in physical pixels from the window's top-left corner (X right, Y down): the cursor for keys, mouse buttons and movement, the finger for a touch. For the wheel, Z is how many notches it turned this frame (positive away from the user).",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Delta",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "How far the input moved since the last frame: raw mouse movement for MouseMovement (it keeps coming while the cursor is locked), pixels for a touch. Zero for keys and buttons.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "NextInput",
+          "type": {
+            "Optional": {
+              "Class": "InputObject"
+            }
+          },
+          "default": null,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: the next input object UserInputService keeps (see FirstInput).",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
       "name": "Lighting",
       "parent": "Instance",
       "description": "Controls how the scene is lit: the time of day, the sun, the sky colour and the ambient light.",
@@ -937,6 +1078,313 @@
       ],
       "methods": [],
       "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "UserInputService",
+      "parent": "Instance",
+      "description": "Keyboard, mouse and touch input: events for every key, button, movement and touch, what is held right now, and how the mouse cursor behaves. Input arrives at the start of each frame. Get it with game:GetService(\"UserInputService\").",
+      "category": "",
+      "creatable": false,
+      "service_order": 6,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": true,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "MouseBehavior",
+          "type": {
+            "Enum": "MouseBehavior"
+          },
+          "default": "Default",
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "How the cursor behaves. Default leaves it free; LockCenter and LockCurrentPosition hold it in the window so mouse movement can turn a camera (read GetMouseDelta). Where the system cannot lock the cursor (Windows), it is kept inside the window instead.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "MouseIconEnabled",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Whether the cursor is shown over the game's window.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "MouseEnabled",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Whether a mouse is in use. Set by the engine once mouse input arrives.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "KeyboardEnabled",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Whether a keyboard is in use. Set by the engine once keyboard input arrives.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "TouchEnabled",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Whether a touch screen is in use. Set by the engine once a touch arrives.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "GamepadEnabled",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Whether a gamepad is connected. Set by the engine as gamepads come and go.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "MouseLocation",
+          "type": "Vector2",
+          "default": [
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: where the cursor is. Read it with GetMouseLocation().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "MouseDelta",
+          "type": "Vector2",
+          "default": [
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: how far the mouse moved this frame. Read it with GetMouseDelta().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "FirstInput",
+          "type": {
+            "Optional": {
+              "Class": "InputObject"
+            }
+          },
+          "default": null,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: the first of the input objects the engine keeps, each pointing to the next. Read held keys with IsKeyDown() and GetKeysPressed().",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "IsKeyDown",
+          "params": [
+            {
+              "name": "keyCode",
+              "type": {
+                "Enum": "KeyCode"
+              },
+              "optional": false
+            }
+          ],
+          "returns": "Bool",
+          "description": "Returns true while the key is held down.",
+          "invokes_callback": null
+        },
+        {
+          "name": "IsMouseButtonPressed",
+          "params": [
+            {
+              "name": "mouseButton",
+              "type": {
+                "Enum": "UserInputType"
+              },
+              "optional": false
+            }
+          ],
+          "returns": "Bool",
+          "description": "Returns true while the mouse button (UserInputType.MouseButton1, 2 or 3) is held down; false for any other input type.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetMouseLocation",
+          "params": [],
+          "returns": "Vector2",
+          "description": "Returns where the cursor is, in physical pixels from the window's top-left corner.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetMouseDelta",
+          "params": [],
+          "returns": "Vector2",
+          "description": "Returns how far the mouse moved during this frame, in raw mouse units (X right, Y down). It keeps counting while the cursor is locked (MouseBehavior), which is what a camera reads; it is zero in a frame without movement.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetKeysPressed",
+          "params": [],
+          "returns": {
+            "Array": {
+              "Class": "InputObject"
+            }
+          },
+          "description": "Returns the input objects of every key held down right now.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [
+        {
+          "name": "InputBegan",
+          "params": [
+            {
+              "name": "input",
+              "type": {
+                "Class": "InputObject"
+              },
+              "optional": false
+            },
+            {
+              "name": "gameProcessedEvent",
+              "type": "Bool",
+              "optional": false
+            }
+          ],
+          "description": "Fires when an input begins: a key or mouse button goes down, a finger touches the screen. gameProcessedEvent is true when the game's UI used the input (always false until there is game UI)."
+        },
+        {
+          "name": "InputChanged",
+          "params": [
+            {
+              "name": "input",
+              "type": {
+                "Class": "InputObject"
+              },
+              "optional": false
+            },
+            {
+              "name": "gameProcessedEvent",
+              "type": "Bool",
+              "optional": false
+            }
+          ],
+          "description": "Fires when an input changes: the mouse moves (once per frame, with the frame's movement as Delta), the wheel turns, a finger moves."
+        },
+        {
+          "name": "InputEnded",
+          "params": [
+            {
+              "name": "input",
+              "type": {
+                "Class": "InputObject"
+              },
+              "optional": false
+            },
+            {
+              "name": "gameProcessedEvent",
+              "type": "Bool",
+              "optional": false
+            }
+          ],
+          "description": "Fires when an input ends: a key or mouse button is released, a finger leaves the screen, or the window loses focus while it is held."
+        },
+        {
+          "name": "WindowFocused",
+          "params": [],
+          "description": "Fires when the game's window gains keyboard focus."
+        },
+        {
+          "name": "WindowFocusReleased",
+          "params": [],
+          "description": "Fires when the game's window loses keyboard focus."
+        }
+      ],
       "callbacks": []
     },
     {
@@ -1881,6 +2329,638 @@
     }
   ],
   "enums": [
+    {
+      "name": "UserInputType",
+      "description": "What kind of input an InputObject is: a mouse button (1 is the left, 2 the right, 3 the middle), the wheel, mouse movement, a touch or a key.",
+      "items": [
+        {
+          "name": "MouseButton1",
+          "value": 0
+        },
+        {
+          "name": "MouseButton2",
+          "value": 1
+        },
+        {
+          "name": "MouseButton3",
+          "value": 2
+        },
+        {
+          "name": "MouseWheel",
+          "value": 3
+        },
+        {
+          "name": "MouseMovement",
+          "value": 4
+        },
+        {
+          "name": "Touch",
+          "value": 7
+        },
+        {
+          "name": "Keyboard",
+          "value": 8
+        },
+        {
+          "name": "Focus",
+          "value": 9
+        },
+        {
+          "name": "None",
+          "value": 22
+        }
+      ]
+    },
+    {
+      "name": "UserInputState",
+      "description": "Where an input is: it began (a key or button went down, a finger touched), changed (moved), ended (released) or was cancelled by the system.",
+      "items": [
+        {
+          "name": "Begin",
+          "value": 0
+        },
+        {
+          "name": "Change",
+          "value": 1
+        },
+        {
+          "name": "End",
+          "value": 2
+        },
+        {
+          "name": "Cancel",
+          "value": 3
+        },
+        {
+          "name": "None",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "name": "KeyCode",
+      "description": "A keyboard key, named by where it sits on a US keyboard: KeyCode.W is the key where W is on QWERTY, whatever the layout prints on it. InputObject.KeyCode and UserInputService:IsKeyDown use it. Unknown is a key the computer could not identify, and the KeyCode of every input that is not a key.",
+      "items": [
+        {
+          "name": "Unknown",
+          "value": 0
+        },
+        {
+          "name": "Backquote",
+          "value": 96
+        },
+        {
+          "name": "BackSlash",
+          "value": 92
+        },
+        {
+          "name": "LeftBracket",
+          "value": 91
+        },
+        {
+          "name": "RightBracket",
+          "value": 93
+        },
+        {
+          "name": "Comma",
+          "value": 44
+        },
+        {
+          "name": "Equals",
+          "value": 61
+        },
+        {
+          "name": "Minus",
+          "value": 45
+        },
+        {
+          "name": "Period",
+          "value": 46
+        },
+        {
+          "name": "Quote",
+          "value": 39
+        },
+        {
+          "name": "Semicolon",
+          "value": 59
+        },
+        {
+          "name": "Slash",
+          "value": 47
+        },
+        {
+          "name": "Zero",
+          "value": 48
+        },
+        {
+          "name": "One",
+          "value": 49
+        },
+        {
+          "name": "Two",
+          "value": 50
+        },
+        {
+          "name": "Three",
+          "value": 51
+        },
+        {
+          "name": "Four",
+          "value": 52
+        },
+        {
+          "name": "Five",
+          "value": 53
+        },
+        {
+          "name": "Six",
+          "value": 54
+        },
+        {
+          "name": "Seven",
+          "value": 55
+        },
+        {
+          "name": "Eight",
+          "value": 56
+        },
+        {
+          "name": "Nine",
+          "value": 57
+        },
+        {
+          "name": "A",
+          "value": 97
+        },
+        {
+          "name": "B",
+          "value": 98
+        },
+        {
+          "name": "C",
+          "value": 99
+        },
+        {
+          "name": "D",
+          "value": 100
+        },
+        {
+          "name": "E",
+          "value": 101
+        },
+        {
+          "name": "F",
+          "value": 102
+        },
+        {
+          "name": "G",
+          "value": 103
+        },
+        {
+          "name": "H",
+          "value": 104
+        },
+        {
+          "name": "I",
+          "value": 105
+        },
+        {
+          "name": "J",
+          "value": 106
+        },
+        {
+          "name": "K",
+          "value": 107
+        },
+        {
+          "name": "L",
+          "value": 108
+        },
+        {
+          "name": "M",
+          "value": 109
+        },
+        {
+          "name": "N",
+          "value": 110
+        },
+        {
+          "name": "O",
+          "value": 111
+        },
+        {
+          "name": "P",
+          "value": 112
+        },
+        {
+          "name": "Q",
+          "value": 113
+        },
+        {
+          "name": "R",
+          "value": 114
+        },
+        {
+          "name": "S",
+          "value": 115
+        },
+        {
+          "name": "T",
+          "value": 116
+        },
+        {
+          "name": "U",
+          "value": 117
+        },
+        {
+          "name": "V",
+          "value": 118
+        },
+        {
+          "name": "W",
+          "value": 119
+        },
+        {
+          "name": "X",
+          "value": 120
+        },
+        {
+          "name": "Y",
+          "value": 121
+        },
+        {
+          "name": "Z",
+          "value": 122
+        },
+        {
+          "name": "LeftAlt",
+          "value": 308
+        },
+        {
+          "name": "RightAlt",
+          "value": 307
+        },
+        {
+          "name": "Backspace",
+          "value": 8
+        },
+        {
+          "name": "CapsLock",
+          "value": 301
+        },
+        {
+          "name": "Menu",
+          "value": 319
+        },
+        {
+          "name": "LeftControl",
+          "value": 306
+        },
+        {
+          "name": "RightControl",
+          "value": 305
+        },
+        {
+          "name": "Return",
+          "value": 13
+        },
+        {
+          "name": "LeftSuper",
+          "value": 311
+        },
+        {
+          "name": "RightSuper",
+          "value": 312
+        },
+        {
+          "name": "LeftShift",
+          "value": 304
+        },
+        {
+          "name": "RightShift",
+          "value": 303
+        },
+        {
+          "name": "Space",
+          "value": 32
+        },
+        {
+          "name": "Tab",
+          "value": 9
+        },
+        {
+          "name": "Delete",
+          "value": 127
+        },
+        {
+          "name": "End",
+          "value": 279
+        },
+        {
+          "name": "Help",
+          "value": 315
+        },
+        {
+          "name": "Home",
+          "value": 278
+        },
+        {
+          "name": "Insert",
+          "value": 277
+        },
+        {
+          "name": "PageDown",
+          "value": 281
+        },
+        {
+          "name": "PageUp",
+          "value": 280
+        },
+        {
+          "name": "Down",
+          "value": 274
+        },
+        {
+          "name": "Left",
+          "value": 276
+        },
+        {
+          "name": "Right",
+          "value": 275
+        },
+        {
+          "name": "Up",
+          "value": 273
+        },
+        {
+          "name": "NumLock",
+          "value": 300
+        },
+        {
+          "name": "KeypadZero",
+          "value": 256
+        },
+        {
+          "name": "KeypadOne",
+          "value": 257
+        },
+        {
+          "name": "KeypadTwo",
+          "value": 258
+        },
+        {
+          "name": "KeypadThree",
+          "value": 259
+        },
+        {
+          "name": "KeypadFour",
+          "value": 260
+        },
+        {
+          "name": "KeypadFive",
+          "value": 261
+        },
+        {
+          "name": "KeypadSix",
+          "value": 262
+        },
+        {
+          "name": "KeypadSeven",
+          "value": 263
+        },
+        {
+          "name": "KeypadEight",
+          "value": 264
+        },
+        {
+          "name": "KeypadNine",
+          "value": 265
+        },
+        {
+          "name": "KeypadPeriod",
+          "value": 266
+        },
+        {
+          "name": "KeypadDivide",
+          "value": 267
+        },
+        {
+          "name": "KeypadMultiply",
+          "value": 268
+        },
+        {
+          "name": "KeypadMinus",
+          "value": 269
+        },
+        {
+          "name": "KeypadPlus",
+          "value": 270
+        },
+        {
+          "name": "KeypadEnter",
+          "value": 271
+        },
+        {
+          "name": "KeypadEquals",
+          "value": 272
+        },
+        {
+          "name": "Escape",
+          "value": 27
+        },
+        {
+          "name": "Print",
+          "value": 316
+        },
+        {
+          "name": "ScrollLock",
+          "value": 302
+        },
+        {
+          "name": "Pause",
+          "value": 19
+        },
+        {
+          "name": "F1",
+          "value": 282
+        },
+        {
+          "name": "F2",
+          "value": 283
+        },
+        {
+          "name": "F3",
+          "value": 284
+        },
+        {
+          "name": "F4",
+          "value": 285
+        },
+        {
+          "name": "F5",
+          "value": 286
+        },
+        {
+          "name": "F6",
+          "value": 287
+        },
+        {
+          "name": "F7",
+          "value": 288
+        },
+        {
+          "name": "F8",
+          "value": 289
+        },
+        {
+          "name": "F9",
+          "value": 290
+        },
+        {
+          "name": "F10",
+          "value": 291
+        },
+        {
+          "name": "F11",
+          "value": 292
+        },
+        {
+          "name": "F12",
+          "value": 293
+        },
+        {
+          "name": "F13",
+          "value": 294
+        },
+        {
+          "name": "F14",
+          "value": 295
+        },
+        {
+          "name": "F15",
+          "value": 296
+        },
+        {
+          "name": "IntlBackslash",
+          "value": 2000
+        },
+        {
+          "name": "IntlRo",
+          "value": 2001
+        },
+        {
+          "name": "IntlYen",
+          "value": 2002
+        },
+        {
+          "name": "Convert",
+          "value": 2003
+        },
+        {
+          "name": "KanaMode",
+          "value": 2004
+        },
+        {
+          "name": "NonConvert",
+          "value": 2005
+        },
+        {
+          "name": "KeypadComma",
+          "value": 2006
+        },
+        {
+          "name": "F16",
+          "value": 2016
+        },
+        {
+          "name": "F17",
+          "value": 2017
+        },
+        {
+          "name": "F18",
+          "value": 2018
+        },
+        {
+          "name": "F19",
+          "value": 2019
+        },
+        {
+          "name": "F20",
+          "value": 2020
+        },
+        {
+          "name": "F21",
+          "value": 2021
+        },
+        {
+          "name": "F22",
+          "value": 2022
+        },
+        {
+          "name": "F23",
+          "value": 2023
+        },
+        {
+          "name": "F24",
+          "value": 2024
+        },
+        {
+          "name": "BrowserBack",
+          "value": 2030
+        },
+        {
+          "name": "BrowserForward",
+          "value": 2031
+        },
+        {
+          "name": "MediaPlayPause",
+          "value": 2032
+        },
+        {
+          "name": "MediaStop",
+          "value": 2033
+        },
+        {
+          "name": "MediaNextTrack",
+          "value": 2034
+        },
+        {
+          "name": "MediaPreviousTrack",
+          "value": 2035
+        },
+        {
+          "name": "VolumeDown",
+          "value": 2036
+        },
+        {
+          "name": "VolumeMute",
+          "value": 2037
+        },
+        {
+          "name": "VolumeUp",
+          "value": 2038
+        }
+      ]
+    },
+    {
+      "name": "MouseBehavior",
+      "description": "How the mouse cursor behaves: free (Default), or held so the mouse turns the camera (LockCenter at the middle of the window, LockCurrentPosition where it is). Movement keeps arriving while it is held.",
+      "items": [
+        {
+          "name": "Default",
+          "value": 0
+        },
+        {
+          "name": "LockCenter",
+          "value": 1
+        },
+        {
+          "name": "LockCurrentPosition",
+          "value": 2
+        }
+      ]
+    },
     {
       "name": "Material",
       "description": "What a part's surface is made of, which sets how it looks: its texture, shine and glow.",

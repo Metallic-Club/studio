@@ -251,6 +251,182 @@ declare task: {
 -- Enums (generated)
 ---------------------------------------------------------------------------------------------------------------------
 
+--- What kind of input an InputObject is: a mouse button (1 is the left, 2 the right, 3 the middle), the wheel, mouse movement, a touch or a key.
+declare extern type EnumUserInputType extends EnumItem with end
+declare extern type EnumUserInputType_INTERNAL extends Enum with
+    read MouseButton1: EnumUserInputType
+    read MouseButton2: EnumUserInputType
+    read MouseButton3: EnumUserInputType
+    read MouseWheel: EnumUserInputType
+    read MouseMovement: EnumUserInputType
+    read Touch: EnumUserInputType
+    read Keyboard: EnumUserInputType
+    read Focus: EnumUserInputType
+    read None: EnumUserInputType
+    function GetEnumItems(self): { EnumUserInputType }
+end
+
+--- Where an input is: it began (a key or button went down, a finger touched), changed (moved), ended (released) or was cancelled by the system.
+declare extern type EnumUserInputState extends EnumItem with end
+declare extern type EnumUserInputState_INTERNAL extends Enum with
+    read Begin: EnumUserInputState
+    read Change: EnumUserInputState
+    read End: EnumUserInputState
+    read Cancel: EnumUserInputState
+    read None: EnumUserInputState
+    function GetEnumItems(self): { EnumUserInputState }
+end
+
+--- A keyboard key, named by where it sits on a US keyboard: KeyCode.W is the key where W is on QWERTY, whatever the layout prints on it. InputObject.KeyCode and UserInputService:IsKeyDown use it. Unknown is a key the computer could not identify, and the KeyCode of every input that is not a key.
+declare extern type EnumKeyCode extends EnumItem with end
+declare extern type EnumKeyCode_INTERNAL extends Enum with
+    read Unknown: EnumKeyCode
+    read Backquote: EnumKeyCode
+    read BackSlash: EnumKeyCode
+    read LeftBracket: EnumKeyCode
+    read RightBracket: EnumKeyCode
+    read Comma: EnumKeyCode
+    read Equals: EnumKeyCode
+    read Minus: EnumKeyCode
+    read Period: EnumKeyCode
+    read Quote: EnumKeyCode
+    read Semicolon: EnumKeyCode
+    read Slash: EnumKeyCode
+    read Zero: EnumKeyCode
+    read One: EnumKeyCode
+    read Two: EnumKeyCode
+    read Three: EnumKeyCode
+    read Four: EnumKeyCode
+    read Five: EnumKeyCode
+    read Six: EnumKeyCode
+    read Seven: EnumKeyCode
+    read Eight: EnumKeyCode
+    read Nine: EnumKeyCode
+    read A: EnumKeyCode
+    read B: EnumKeyCode
+    read C: EnumKeyCode
+    read D: EnumKeyCode
+    read E: EnumKeyCode
+    read F: EnumKeyCode
+    read G: EnumKeyCode
+    read H: EnumKeyCode
+    read I: EnumKeyCode
+    read J: EnumKeyCode
+    read K: EnumKeyCode
+    read L: EnumKeyCode
+    read M: EnumKeyCode
+    read N: EnumKeyCode
+    read O: EnumKeyCode
+    read P: EnumKeyCode
+    read Q: EnumKeyCode
+    read R: EnumKeyCode
+    read S: EnumKeyCode
+    read T: EnumKeyCode
+    read U: EnumKeyCode
+    read V: EnumKeyCode
+    read W: EnumKeyCode
+    read X: EnumKeyCode
+    read Y: EnumKeyCode
+    read Z: EnumKeyCode
+    read LeftAlt: EnumKeyCode
+    read RightAlt: EnumKeyCode
+    read Backspace: EnumKeyCode
+    read CapsLock: EnumKeyCode
+    read Menu: EnumKeyCode
+    read LeftControl: EnumKeyCode
+    read RightControl: EnumKeyCode
+    read Return: EnumKeyCode
+    read LeftSuper: EnumKeyCode
+    read RightSuper: EnumKeyCode
+    read LeftShift: EnumKeyCode
+    read RightShift: EnumKeyCode
+    read Space: EnumKeyCode
+    read Tab: EnumKeyCode
+    read Delete: EnumKeyCode
+    read End: EnumKeyCode
+    read Help: EnumKeyCode
+    read Home: EnumKeyCode
+    read Insert: EnumKeyCode
+    read PageDown: EnumKeyCode
+    read PageUp: EnumKeyCode
+    read Down: EnumKeyCode
+    read Left: EnumKeyCode
+    read Right: EnumKeyCode
+    read Up: EnumKeyCode
+    read NumLock: EnumKeyCode
+    read KeypadZero: EnumKeyCode
+    read KeypadOne: EnumKeyCode
+    read KeypadTwo: EnumKeyCode
+    read KeypadThree: EnumKeyCode
+    read KeypadFour: EnumKeyCode
+    read KeypadFive: EnumKeyCode
+    read KeypadSix: EnumKeyCode
+    read KeypadSeven: EnumKeyCode
+    read KeypadEight: EnumKeyCode
+    read KeypadNine: EnumKeyCode
+    read KeypadPeriod: EnumKeyCode
+    read KeypadDivide: EnumKeyCode
+    read KeypadMultiply: EnumKeyCode
+    read KeypadMinus: EnumKeyCode
+    read KeypadPlus: EnumKeyCode
+    read KeypadEnter: EnumKeyCode
+    read KeypadEquals: EnumKeyCode
+    read Escape: EnumKeyCode
+    read Print: EnumKeyCode
+    read ScrollLock: EnumKeyCode
+    read Pause: EnumKeyCode
+    read F1: EnumKeyCode
+    read F2: EnumKeyCode
+    read F3: EnumKeyCode
+    read F4: EnumKeyCode
+    read F5: EnumKeyCode
+    read F6: EnumKeyCode
+    read F7: EnumKeyCode
+    read F8: EnumKeyCode
+    read F9: EnumKeyCode
+    read F10: EnumKeyCode
+    read F11: EnumKeyCode
+    read F12: EnumKeyCode
+    read F13: EnumKeyCode
+    read F14: EnumKeyCode
+    read F15: EnumKeyCode
+    read IntlBackslash: EnumKeyCode
+    read IntlRo: EnumKeyCode
+    read IntlYen: EnumKeyCode
+    read Convert: EnumKeyCode
+    read KanaMode: EnumKeyCode
+    read NonConvert: EnumKeyCode
+    read KeypadComma: EnumKeyCode
+    read F16: EnumKeyCode
+    read F17: EnumKeyCode
+    read F18: EnumKeyCode
+    read F19: EnumKeyCode
+    read F20: EnumKeyCode
+    read F21: EnumKeyCode
+    read F22: EnumKeyCode
+    read F23: EnumKeyCode
+    read F24: EnumKeyCode
+    read BrowserBack: EnumKeyCode
+    read BrowserForward: EnumKeyCode
+    read MediaPlayPause: EnumKeyCode
+    read MediaStop: EnumKeyCode
+    read MediaNextTrack: EnumKeyCode
+    read MediaPreviousTrack: EnumKeyCode
+    read VolumeDown: EnumKeyCode
+    read VolumeMute: EnumKeyCode
+    read VolumeUp: EnumKeyCode
+    function GetEnumItems(self): { EnumKeyCode }
+end
+
+--- How the mouse cursor behaves: free (Default), or held so the mouse turns the camera (LockCenter at the middle of the window, LockCurrentPosition where it is). Movement keeps arriving while it is held.
+declare extern type EnumMouseBehavior extends EnumItem with end
+declare extern type EnumMouseBehavior_INTERNAL extends Enum with
+    read Default: EnumMouseBehavior
+    read LockCenter: EnumMouseBehavior
+    read LockCurrentPosition: EnumMouseBehavior
+    function GetEnumItems(self): { EnumMouseBehavior }
+end
+
 --- What a part's surface is made of, which sets how it looks: its texture, shine and glow.
 declare extern type EnumMaterial extends EnumItem with end
 declare extern type EnumMaterial_INTERNAL extends Enum with
@@ -277,6 +453,10 @@ end
 
 --- Every engine enum, such as `Enum.Material`.
 declare Enum: {
+    UserInputType: EnumUserInputType_INTERNAL,
+    UserInputState: EnumUserInputState_INTERNAL,
+    KeyCode: EnumKeyCode_INTERNAL,
+    MouseBehavior: EnumMouseBehavior_INTERNAL,
     Material: EnumMaterial_INTERNAL,
     PartShape: EnumPartShape_INTERNAL,
 }
@@ -377,6 +557,22 @@ end
 declare extern type Folder extends Instance with
 end
 
+--- One input: a key, a mouse button, the mouse, the wheel or a finger on the screen. UserInputService's InputBegan, InputChanged and InputEnded pass one. The engine keeps one object per input and updates it on every event (a key's object goes from Begin to End on each press), so copy the fields you want to keep.
+declare extern type InputObject extends Instance with
+    --- The key, for keyboard input; Unknown for every other kind.
+    read KeyCode: EnumKeyCode
+    --- What kind of input this is: a key, a mouse button, mouse movement, the wheel or a touch.
+    read UserInputType: EnumUserInputType
+    --- Where the input is: Begin, Change, End or Cancel.
+    read UserInputState: EnumUserInputState
+    --- Where the input is, in physical pixels from the window's top-left corner (X right, Y down): the cursor for keys, mouse buttons and movement, the finger for a touch. For the wheel, Z is how many notches it turned this frame (positive away from the user).
+    read Position: Vector3
+    --- How far the input moved since the last frame: raw mouse movement for MouseMovement (it keeps coming while the cursor is locked), pixels for a touch. Zero for keys and buttons.
+    read Delta: Vector3
+    --- Engine bookkeeping: the next input object UserInputService keeps (see FirstInput).
+    read NextInput: InputObject?
+end
+
 --- Controls how the scene is lit: the time of day, the sun, the sky colour and the ambient light.
 declare extern type Lighting extends Instance with
     --- The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset.
@@ -433,6 +629,48 @@ end
 declare extern type SourceContainer extends Instance with
     --- The project-relative path of the script's source file, such as "Scripts/Door.luau", chosen with a file picker. The file's extension selects the language. Empty means the script has no source and does nothing.
     Source: string
+end
+
+--- Keyboard, mouse and touch input: events for every key, button, movement and touch, what is held right now, and how the mouse cursor behaves. Input arrives at the start of each frame. Get it with game:GetService("UserInputService").
+declare extern type UserInputService extends Instance with
+    --- How the cursor behaves. Default leaves it free; LockCenter and LockCurrentPosition hold it in the window so mouse movement can turn a camera (read GetMouseDelta). Where the system cannot lock the cursor (Windows), it is kept inside the window instead.
+    MouseBehavior: EnumMouseBehavior
+    --- Whether the cursor is shown over the game's window.
+    MouseIconEnabled: boolean
+    --- Whether a mouse is in use. Set by the engine once mouse input arrives.
+    read MouseEnabled: boolean
+    --- Whether a keyboard is in use. Set by the engine once keyboard input arrives.
+    read KeyboardEnabled: boolean
+    --- Whether a touch screen is in use. Set by the engine once a touch arrives.
+    read TouchEnabled: boolean
+    --- Whether a gamepad is connected. Set by the engine as gamepads come and go.
+    read GamepadEnabled: boolean
+    --- Engine bookkeeping: where the cursor is. Read it with GetMouseLocation().
+    read MouseLocation: Vector2
+    --- Engine bookkeeping: how far the mouse moved this frame. Read it with GetMouseDelta().
+    read MouseDelta: Vector2
+    --- Engine bookkeeping: the first of the input objects the engine keeps, each pointing to the next. Read held keys with IsKeyDown() and GetKeysPressed().
+    read FirstInput: InputObject?
+    --- Fires when an input begins: a key or mouse button goes down, a finger touches the screen. gameProcessedEvent is true when the game's UI used the input (always false until there is game UI).
+    InputBegan: ScriptSignal<InputObject, boolean>
+    --- Fires when an input changes: the mouse moves (once per frame, with the frame's movement as Delta), the wheel turns, a finger moves.
+    InputChanged: ScriptSignal<InputObject, boolean>
+    --- Fires when an input ends: a key or mouse button is released, a finger leaves the screen, or the window loses focus while it is held.
+    InputEnded: ScriptSignal<InputObject, boolean>
+    --- Fires when the game's window gains keyboard focus.
+    WindowFocused: ScriptSignal<>
+    --- Fires when the game's window loses keyboard focus.
+    WindowFocusReleased: ScriptSignal<>
+    --- Returns true while the key is held down.
+    function IsKeyDown(self, keyCode: EnumKeyCode): boolean
+    --- Returns true while the mouse button (UserInputType.MouseButton1, 2 or 3) is held down; false for any other input type.
+    function IsMouseButtonPressed(self, mouseButton: EnumUserInputType): boolean
+    --- Returns where the cursor is, in physical pixels from the window's top-left corner.
+    function GetMouseLocation(self): Vector2
+    --- Returns how far the mouse moved during this frame, in raw mouse units (X right, Y down). It keeps counting while the cursor is locked (MouseBehavior), which is what a camera reads; it is zero in a frame without movement.
+    function GetMouseDelta(self): Vector2
+    --- Returns the input objects of every key held down right now.
+    function GetKeysPressed(self): {InputObject}
 end
 
 --- The base of the value objects: instances that store one value, such as a score or a door's target, where scripts can share it.
