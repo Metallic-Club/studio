@@ -1,0 +1,44 @@
+# cargo-deny: security advisories, licenses, banned crates and allowed sources.
+# Run locally with `cargo deny check` (install: `cargo install cargo-deny --locked`). CI runs it on every PR.
+
+[graph]
+# Check every optional dependency too, so a feature such as `metallic_engine/render` cannot hide one.
+all-features = true
+
+[advisories]
+# Every RustSec advisory (vulnerable, unmaintained, unsound, yanked) fails the check. To accept one, add its id
+# here with a comment saying why.
+ignore = []
+
+[licenses]
+# Permissive licenses only. Add one here only when a dependency needs it.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+# The list above is the policy, not an inventory: a license no dependency uses yet is not a problem.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# The workspace crates are `publish = false` under the proprietary LICENSE file.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# `metallic_core = { path = "crates/core" }` has no version; that is fine for private workspace crates.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The Box3D fork will be listed here when metallic_physics starts using it.
+allow-git = []

@@ -10,5 +10,6 @@ Closes #
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test --workspace`
+- [ ] `cargo xtask check-layout`
 - [ ] Crate boundaries from docs/adr/0001-project-layout.md respected
 - [ ] Public items documented
