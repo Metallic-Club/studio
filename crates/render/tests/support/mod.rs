@@ -5,6 +5,8 @@
 // Each test binary uses a different subset of these helpers.
 #![allow(dead_code)]
 
+pub(crate) mod scenes;
+
 use metallic_render::{ContextOptions, RenderContext, RenderError, wgpu};
 
 /// Set to `1` (CI does, on its Vulkan software rasteriser) to fail instead of skip when there is no adapter.

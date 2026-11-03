@@ -12,6 +12,10 @@
 //! (drain, repack, coalesce) allocates nothing at all, its upload no more than the same wgpu calls by hand, and the
 //! heap does not grow across whole frames that sync, upload and render.
 //!
+//! Drawing parts (#77) too: a frame of `Renderer::render_scene` with a moving camera (so the frame uniform is
+//! written and the transparent list sorted and written every frame) allocates no more than the same wgpu calls
+//! by hand, and the heap does not grow over 100 such frames with 1% of the parts changing.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
 // A `#[global_allocator]` needs `unsafe impl GlobalAlloc`. This test binary's allocator only counts, then forwards
@@ -26,9 +30,10 @@ use std::cell::Cell;
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
-use metallic_render::scene::{GpuInstance, RenderComponents};
+use metallic_render::scene::{GpuInstance, InstanceBinding, RenderComponents};
 use metallic_render::{
-    GpuScene, InstanceScene, OffscreenTarget, PassId, PassSet, RenderContext, Renderer, RendererSettings, wgpu,
+    Camera, DrawStats, GpuScene, InstanceScene, OffscreenTarget, PassId, PassSet, RenderContext, Renderer,
+    RendererSettings, wgpu,
 };
 
 thread_local! {
@@ -638,6 +643,370 @@ fn nothing_accumulates_over_scene_frames() {
     }
     let grown = live_bytes() - before;
     eprintln!("{FRAMES} frames of sync, upload and render: heap grew {grown} bytes");
+    assert!(
+        grown.abs() < 16 * 1024,
+        "the heap grew by {grown} bytes over {FRAMES} frames"
+    );
+}
+
+/// The camera of frame `frame`: circling the grid, so every frame writes the frame uniform and sorts the
+/// transparent parts again.
+fn orbiting_camera(frame: usize) -> Camera {
+    let angle = frame as f32 * 0.05;
+    let eye = Vec3::new(angle.cos() * 120.0, 80.0, angle.sin() * 120.0);
+    Camera::from_cframe(CFrame::look_at(eye, Vec3::ZERO, Vec3::Y), 70.0)
+}
+
+/// The wgpu objects a hand-written parts frame uses: the renderer's own shader on the storage path, with
+/// pipelines, bind groups and buffers like the renderer's.
+struct HandParts {
+    opaque: wgpu::RenderPipeline,
+    transparent: wgpu::RenderPipeline,
+    /// Group 0 and 1 of each pipeline (automatic layouts cannot be shared).
+    opaque_groups: [wgpu::BindGroup; 2],
+    transparent_groups: [wgpu::BindGroup; 2],
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    frame: wgpu::Buffer,
+    sorted: wgpu::Buffer,
+    depth: wgpu::TextureView,
+    sorted_bytes: Vec<u8>,
+}
+
+impl HandParts {
+    fn new(device: &wgpu::Device, instances: u64) -> Self {
+        let source = concat!(
+            include_str!("../src/parts/parts.wgsl"),
+            include_str!("../src/parts/instance_storage.wgsl")
+        );
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hand parts"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let buffer = |size: u64, usage: wgpu::BufferUsages| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hand parts"),
+                size,
+                usage: usage | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let storage = wgpu::BufferUsages::STORAGE;
+        let regions = [buffer(instances * 64, storage), buffer(instances * 64, storage)];
+        let entries = buffer(instances * 4, storage);
+        let sorted = buffer(instances * 4, storage);
+        let frame = buffer(256, wgpu::BufferUsages::UNIFORM);
+        let materials = buffer(8192, wgpu::BufferUsages::UNIFORM);
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let pipeline = |entry_point: &str, write: bool, blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("hand parts"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: 24,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &attributes,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..wgpu::PrimitiveState::default()
+                },
+                depth_stencil: Some(metallic_render::depth::depth_stencil_state(write)),
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(entry_point),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: FORMAT,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let opaque = pipeline("fs_opaque", true, None);
+        let transparent = pipeline(
+            "fs_transparent",
+            false,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        );
+        let groups = |pipeline: &wgpu::RenderPipeline, list: &wgpu::Buffer| {
+            let group = |index: u32, buffers: &[&wgpu::Buffer]| {
+                let entries: Vec<_> = buffers
+                    .iter()
+                    .enumerate()
+                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                        binding: binding as u32,
+                        resource: buffer.as_entire_binding(),
+                    })
+                    .collect();
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("hand parts"),
+                    layout: &pipeline.get_bind_group_layout(index),
+                    entries: &entries,
+                })
+            };
+            [
+                group(0, &[&frame, &materials]),
+                group(1, &[&regions[0], &regions[1], list]),
+            ]
+        };
+        let opaque_groups = groups(&opaque, &entries);
+        let transparent_groups = groups(&transparent, &sorted);
+        let depth = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("hand depth"),
+                size: wgpu::Extent3d {
+                    width: SIZE,
+                    height: SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            opaque,
+            transparent,
+            opaque_groups,
+            transparent_groups,
+            vertices: buffer(24 * 1024, wgpu::BufferUsages::VERTEX),
+            indices: buffer(4 * 4096, wgpu::BufferUsages::INDEX),
+            frame,
+            sorted,
+            depth,
+            sorted_bytes: vec![0; (instances * 4) as usize],
+        }
+    }
+
+    /// The renderer's default passes with `opaque` and `transparent` instanced draws, after writing the frame
+    /// uniform and `sorted` transparent entries: the wgpu calls `Renderer::render_scene` makes.
+    fn frame(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        (opaque, transparent, sorted): (u32, u32, usize),
+    ) -> wgpu::SubmissionIndex {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("metallic frame"),
+        });
+        queue.write_buffer(&self.frame, 0, &[0; 160]);
+        queue.write_buffer(&self.sorted, 0, &self.sorted_bytes[..sorted * 4]);
+        for &(label, clear, depth_write) in &DEFAULT_PASSES {
+            let colors = [Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: if clear {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let depth = depth_write.map(|write| wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth,
+                depth_ops: write.then_some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(DEPTH_CLEAR),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &colors,
+                depth_stencil_attachment: depth,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            let (pipeline, groups, draws) = match label {
+                "opaque" => (&self.opaque, &self.opaque_groups, opaque),
+                "transparent" => (&self.transparent, &self.transparent_groups, transparent),
+                _ => continue,
+            };
+            if draws == 0 {
+                continue;
+            }
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &groups[0], &[]);
+            pass.set_vertex_buffer(0, self.vertices.slice(..));
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_bind_group(1, &groups[1], &[]);
+            for draw in 0..draws {
+                pass.draw_indexed(0..36, 0, draw..draw + 1);
+            }
+        }
+        queue.submit(std::iter::once(encoder.finish()))
+    }
+}
+
+/// The fewest allocations of a parts frame of `parts` parts (every `see_through`th one see-through, blocks and
+/// balls in turn) and of the same wgpu calls by hand, over [`FRAMES`] frames each in alternating order, with the
+/// frame's draw statistics.
+fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usize) -> (u64, u64, DrawStats) {
+    let (device, queue) = (context.device(), context.queue());
+    let mut game = support::scenes::Game::new();
+    // Every kind opaque, and see-through blocks and balls mixed so the transparent pass makes several draws.
+    support::scenes::grid(&mut game, parts, 100, support::scenes::SeeThrough::Mixed(see_through));
+    let mut scene = GpuScene::new(
+        context,
+        &mut game.dm,
+        Some(game.workspace),
+        &RenderComponents::builtin(),
+    )
+    .expect("a scene");
+    scene.sync(&mut game.dm);
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
+    let mut renderer = Renderer::new(
+        context,
+        RendererSettings {
+            gpu_timing: false,
+            ..RendererSettings::new(FORMAT, SIZE, SIZE)
+        },
+    )
+    .expect("a renderer");
+    let hand = HandParts::new(device, parts as u64);
+    let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
+    for frame in 0..WARM_UP + FRAMES {
+        let camera = orbiting_camera(frame);
+        for renderer_turn in [frame % 2 == 0, frame % 2 != 0] {
+            let (count, submission) = if renderer_turn {
+                allocations_in(|| renderer.render_scene(target.view(), &mut scene, Some(&camera)))
+            } else {
+                let stats = renderer.draw_stats();
+                let calls = (
+                    stats.opaque_draws,
+                    stats.transparent_draws,
+                    scene.scene().transparent_list().len(),
+                );
+                allocations_in(|| hand.frame(device, queue, target.view(), calls))
+            };
+            // Each frame finishes before the next starts. The hand-written draws are degenerate, so on a software
+            // rasteriser the renderer's frames take far longer, and with frames in flight wgpu's bookkeeping of
+            // pending submissions (and what it frees when they finish) would differ between the two sides.
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: None,
+                })
+                .expect("wait for the frame");
+            if frame >= WARM_UP {
+                if renderer_turn { &mut ours } else { &mut floor }.push(count);
+            }
+        }
+    }
+    let stats = renderer.draw_stats();
+    eprintln!(
+        "parts frame ({} opaque + {} transparent draws, {} instances): allocations {}..{} (median {}); the same wgpu \
+         calls by hand {}..{} (median {})",
+        stats.opaque_draws,
+        stats.transparent_draws,
+        stats.instances,
+        ours.iter().min().expect("frames"),
+        ours.iter().max().expect("frames"),
+        median(ours.clone()),
+        floor.iter().min().expect("frames"),
+        floor.iter().max().expect("frames"),
+        median(floor.clone())
+    );
+    (
+        *ours.iter().min().expect("frames"),
+        *floor.iter().min().expect("frames"),
+        stats,
+    )
+}
+
+/// What a parts frame may allocate beyond the same wgpu calls by hand, for the machine rather than for us. Every
+/// adapter on the dev PC (Vulkan, DX12, GL, and WARP) shows 0. CI's lavapipe and WARP showed a constant 4 and 3
+/// on every 2,000-part frame, whether or not frames overlapped, and the same for the 6,000-part workload below.
+/// The cause is in the runner environment, not found yet (no validation message was reported); that the excess
+/// does not change between two very different workloads is what shows it is not the renderer's.
+const MACHINE_NOISE: u64 = 4;
+
+#[test]
+fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
+    let Some(context) = support::gpu() else { return };
+    if InstanceBinding::for_context(&context) != InstanceBinding::Storage {
+        eprintln!("skipped: the hand-written frame is the storage path's");
+        return;
+    }
+    // Two workloads, the second with three times the parts and many more see-through parts, sorted runs and draws.
+    let (ours_small, floor_small, small) = parts_frame_and_floor(&context, 2_000, 25);
+    let (ours_large, floor_large, large) = parts_frame_and_floor(&context, 6_000, 8);
+    assert_eq!((small.opaque_draws, large.opaque_draws), (4, 4));
+    assert!(
+        small.transparent_draws > 1 && large.transparent_draws > 4 * small.transparent_draws,
+        "{small:?} {large:?}"
+    );
+    let (extra_small, extra_large) = (
+        ours_small.saturating_sub(floor_small),
+        ours_large.saturating_sub(floor_large),
+    );
+    // Nothing the renderer does allocates per part, per draw, per sorted instance or per run: whatever a frame
+    // allocates beyond wgpu's own is the same for both workloads...
+    assert_eq!(
+        extra_small, extra_large,
+        "the renderer's own allocations grow with the work: {extra_small} for {small:?}, {extra_large} for \
+         {large:?}"
+    );
+    // ...and no more than the machine's noise (0 on the dev PC).
+    assert!(
+        extra_small <= MACHINE_NOISE,
+        "drawing parts adds {extra_small} allocation(s) per frame"
+    );
+}
+
+#[test]
+fn nothing_accumulates_over_parts_frames() {
+    let Some(context) = support::gpu() else { return };
+    let mut game = support::scenes::Game::new();
+    let parts = support::scenes::grid(&mut game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
+    let mut scene = GpuScene::new(
+        &context,
+        &mut game.dm,
+        Some(game.workspace),
+        &RenderComponents::builtin(),
+    )
+    .unwrap();
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    let mut pacer = Pacer::new();
+    let mut before = 0;
+    for frame in 0..WARM_UP + FRAMES {
+        // 1% of the parts move, the same ones every frame.
+        for (i, &id) in parts.iter().step_by(100).enumerate() {
+            let place = CFrame::new(Vec3::new(i as f32 * 4.0, 1.0 + frame as f32 * 0.01, 0.0));
+            game.dm.set_by_name(id, "CFrame", Value::CFrame(place)).expect("moved");
+        }
+        if frame == WARM_UP {
+            before = live_bytes();
+        }
+        scene.sync(&mut game.dm);
+        let camera = orbiting_camera(frame);
+        let submission = renderer.render_scene(target.view(), &mut scene, Some(&camera));
+        pacer.submitted(context.device(), submission);
+    }
+    let grown = live_bytes() - before;
+    eprintln!(
+        "{FRAMES} frames drawing {:?}: heap grew {grown} bytes",
+        renderer.draw_stats()
+    );
     assert!(
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"

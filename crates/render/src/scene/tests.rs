@@ -405,3 +405,104 @@ fn a_scene_ignores_other_data_models_and_frees_its_consumer() {
         again.detach(&mut game.dm);
     }
 }
+
+/// Checks every draw list against a scan of the slots: each drawn slot is listed exactly once, in the list its
+/// packed instance belongs in, and nothing else is listed.
+fn assert_lists_match_slots(scene: &InstanceScene) {
+    let mut expected: Vec<Vec<u32>> = vec![Vec::new(); usize::from(MeshKind::BUILTIN_COUNT)];
+    let mut transparent = Vec::new();
+    for region in Region::ALL {
+        for (slot, instance) in scene.instances(region).iter().enumerate() {
+            let e = entry(region, slot as u32);
+            match lists::list_of(instance) {
+                lists::NOT_LISTED => {}
+                lists::TRANSPARENT_LIST => transparent.push(e),
+                kind => expected[usize::from(kind)].push(e),
+            }
+        }
+    }
+    for (kind, want) in expected.iter_mut().enumerate() {
+        let mut have = scene.draw_list(MeshKind(kind as u16)).to_vec();
+        have.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(&have, want, "the opaque list of kind {kind}");
+    }
+    let mut have = scene.transparent_list().to_vec();
+    have.sort_unstable();
+    transparent.sort_unstable();
+    assert_eq!(have, transparent, "the transparent list");
+}
+
+#[test]
+fn the_draw_lists_follow_every_kind_of_change() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let mut parts: Vec<Id> = (0..48).map(|_| game.part()).collect();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.draw_list(MeshKind::BLOCK).len(), 48);
+    assert_lists_match_slots(&scene);
+
+    let shapes = ["Block", "Ball", "Cylinder", "Wedge"];
+    let mut rng = XorShift(0x2545_F491_4F6C_DD1D);
+    for edit in 0..3000 {
+        match rng.below(7) {
+            0 => parts.push(game.part()),
+            1 if parts.len() > 1 => {
+                let gone = parts.swap_remove(rng.below(parts.len()));
+                game.dm.destroy(gone).unwrap();
+            }
+            2 => {
+                let id = parts[rng.below(parts.len())];
+                let shape = EnumItem::new("PartShape", shapes[rng.below(4)]);
+                game.dm.set_by_name(id, "Shape", Value::Enum(shape)).unwrap();
+            }
+            3 => {
+                let id = parts[rng.below(parts.len())];
+                let transparency = [0.0, 0.5, 1.0][rng.below(3)];
+                game.dm
+                    .set_by_name(id, "Transparency", Value::Number(transparency))
+                    .unwrap();
+            }
+            4 => {
+                // Out of the world and back.
+                let id = parts[rng.below(parts.len())];
+                let parent = if rng.below(2) == 0 { None } else { Some(game.workspace) };
+                game.dm.set_parent(id, parent).unwrap();
+            }
+            _ => {
+                // The same few parts keep moving, so some are promoted and change region (and slot).
+                let id = parts[rng.below(parts.len().min(8))];
+                game.move_to(id, edit as f32);
+            }
+        }
+        if edit % 5 == 0 {
+            frame(&mut scene, &mut game.dm);
+            assert_lists_match_slots(&scene);
+        }
+    }
+    frame(&mut scene, &mut game.dm);
+    assert_lists_match_slots(&scene);
+    assert!(scene.live(Region::Dynamic) > 0, "nothing was promoted");
+
+    scene.rebuild_all(&mut game.dm);
+    frame(&mut scene, &mut game.dm);
+    assert_lists_match_slots(&scene);
+}
+
+#[test]
+fn only_transparent_changes_move_the_transparent_revision() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let solid = game.part();
+    let glass = game.part();
+    game.dm.set_by_name(glass, "Transparency", Value::Number(0.5)).unwrap();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.transparent_list().len(), 1);
+    let revision = scene.transparent_revision();
+    game.move_to(solid, 3.0);
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.transparent_revision(), revision, "a solid part moved");
+    game.move_to(glass, 3.0);
+    frame(&mut scene, &mut game.dm);
+    assert_ne!(scene.transparent_revision(), revision, "the see-through part moved");
+}

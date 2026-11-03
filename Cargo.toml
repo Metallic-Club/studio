@@ -69,6 +69,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "parki
 pollster = "1.0.1"
 # Plain-old-data casts for GPU buffer contents (`metallic_render`'s instance records). Already in the tree via wgpu.
 bytemuck = { version = "1.25", features = ["derive"] }
+# Reads and writes the renderer's reference images in its image tests (dev-dependency of `metallic_render` only).
+png = "0.18"
 
 [workspace.lints.rust]
 missing_docs = "warn"

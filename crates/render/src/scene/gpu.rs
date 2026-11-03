@@ -3,9 +3,9 @@
 use metallic_core::glam::Vec3;
 use metallic_core::{DataModel, Id};
 
-use super::instance::GpuInstance;
+use super::instance::{GpuInstance, MeshKind};
 use super::sync::InstanceScene;
-use super::{Region, RenderComponents, SyncStats};
+use super::{MAX_UPLOAD_GAP, Region, RenderComponents, SyncStats};
 use crate::{RenderContext, RenderError};
 
 /// The fewest slots a region's buffer has, so small scenes do not grow it frame after frame.
@@ -52,6 +52,45 @@ pub struct UploadStats {
     pub grown: u32,
     /// Slots beyond the largest buffer the device allows, not uploaded.
     pub dropped: u32,
+    /// Draw-list entries uploaded (see [`GpuScene::list_buffer`]): only those whose list changed, or every one
+    /// when the lists were laid out again.
+    pub list_entries: u32,
+    /// `copy_buffer_to_buffer` commands recorded for the draw lists (their staging write is one more
+    /// `write_buffer`, not counted in [`UploadStats::writes`]).
+    pub list_copies: u32,
+}
+
+/// Where one mesh kind's draw list sits in [`GpuScene::list_buffer`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ListSegment {
+    /// The position of the list's first entry: the first instance of the kind's draw.
+    pub first: u32,
+    /// How many entries the list has: the instance count of the kind's draw.
+    pub len: u32,
+    /// How many entries fit before the next segment.
+    pub capacity: u32,
+}
+
+/// The fewest entries a list segment holds, so small scenes do not lay the lists out again frame after frame.
+const MIN_LIST_CAPACITY: u32 = 256;
+
+/// What one more copy command is worth in uploaded bytes: a list's dirty ranges are merged into one span when the
+/// span is no larger than this times the number of ranges. A copy costs wgpu about 0.4 µs of CPU (#76).
+const COPY_WORTH_BYTES: u64 = 512;
+
+/// The draw lists' GPU buffer and its layout.
+#[derive(Debug)]
+struct ListBuffer {
+    buffer: wgpu::Buffer,
+    /// 4 (entries) or 64 (copies of the instances, on the vertex-buffer fallback).
+    entry_size: u64,
+    /// The lists hold copies of the instances.
+    gather: bool,
+    segments: Vec<ListSegment>,
+    staging: wgpu::Buffer,
+    revision: u64,
+    /// This upload's ranges: list index, first position, count. Reused.
+    ranges: Vec<(usize, u32, u32)>,
 }
 
 /// One region's buffer.
@@ -116,6 +155,20 @@ pub struct GpuScene {
     staging_revision: u64,
     scatter: Option<Scatter>,
     scatter_min_ranges: u32,
+    lists: ListBuffer,
+}
+
+impl InstanceBinding {
+    /// How instance data reaches the vertex shaders on `context`'s device: storage buffers where vertex shaders
+    /// can read at least three of them (the two regions and a draw list), otherwise vertex buffers.
+    pub fn for_context(context: &RenderContext) -> Self {
+        if context.capabilities().vertex_storage && context.device().limits().max_storage_buffers_per_shader_stage >= 3
+        {
+            InstanceBinding::Storage
+        } else {
+            InstanceBinding::Vertex
+        }
+    }
 }
 
 impl GpuScene {
@@ -128,14 +181,11 @@ impl GpuScene {
         world: Option<Id>,
         components: &RenderComponents,
     ) -> Result<Self, RenderError> {
-        let scene = InstanceScene::attach(dm, world, components)?;
+        let mut scene = InstanceScene::attach(dm, world, components)?;
         let device = context.device().clone();
         let capabilities = context.capabilities();
-        let binding = if capabilities.vertex_storage {
-            InstanceBinding::Storage
-        } else {
-            InstanceBinding::Vertex
-        };
+        let binding = InstanceBinding::for_context(context);
+        scene.set_gather_lists(binding == InstanceBinding::Vertex);
         let limits = device.limits();
         let mut max_bytes = limits.max_buffer_size;
         if binding == InstanceBinding::Storage {
@@ -159,6 +209,28 @@ impl GpuScene {
             capacity,
         });
         let staging = staging_buffer(&device, u64::from(capacity) * GpuInstance::SIZE, scatter.is_some());
+        let entry_size = match binding {
+            InstanceBinding::Storage => size_of::<u32>() as u64,
+            InstanceBinding::Vertex => GpuInstance::SIZE,
+        };
+        let lists = ListBuffer {
+            buffer: list_buffer(
+                &device,
+                binding,
+                u64::from(MIN_LIST_CAPACITY) * u64::from(MeshKind::BUILTIN_COUNT) * entry_size,
+            ),
+            entry_size,
+            gather: binding == InstanceBinding::Vertex,
+            segments: Vec::new(),
+            staging: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("metallic draw list uploads"),
+                size: u64::from(MIN_LIST_CAPACITY) * entry_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            revision: 0,
+            ranges: Vec::new(),
+        };
         Ok(Self {
             scene,
             device,
@@ -172,6 +244,7 @@ impl GpuScene {
             staging_revision: 0,
             scatter,
             scatter_min_ranges: SCATTER_MIN_RANGES,
+            lists,
         })
     }
 
@@ -214,6 +287,8 @@ impl GpuScene {
     /// Records the upload of every dirty slot into `encoder`, growing buffers first when the scene outgrew them.
     /// Submit `encoder` before the next upload: the staging buffer is reused, and every `write_buffer` lands at the
     /// start of the next submission. Growing submits its own copy at once (see `grow`).
+    ///
+    /// The draw lists' changed entries go out in the same encoder (see [`GpuScene::list_buffer`]).
     pub fn upload(&mut self, encoder: &mut wgpu::CommandEncoder) -> UploadStats {
         let mut stats = UploadStats::default();
         for region in Region::ALL {
@@ -222,6 +297,13 @@ impl GpuScene {
             }
         }
         self.scene.coalesce();
+        self.upload_instances(encoder, &mut stats);
+        self.upload_lists(encoder, &mut stats);
+        stats
+    }
+
+    /// The instance half of [`GpuScene::upload`], after the coalesce.
+    fn upload_instances(&mut self, encoder: &mut wgpu::CommandEncoder, stats: &mut UploadStats) {
         for range in self.scene.uploads() {
             let count = self.clipped(range.region, range.first, range.count);
             stats.dropped += range.count - count;
@@ -230,7 +312,7 @@ impl GpuScene {
         }
         let slots = u64::from(stats.slots);
         if slots == 0 {
-            return stats;
+            return;
         }
         let scatter_bytes = 16 + slots.div_ceil(4) * 16 + slots * GpuInstance::SIZE;
         let use_scatter = self.scatter.as_ref().is_some_and(|s| {
@@ -243,8 +325,8 @@ impl GpuScene {
         };
         if total > self.max_staging {
             // More than one buffer can stage (a rebuild of millions of instances): write each range in place.
-            self.write_ranges_in_place(&mut stats);
-            return stats;
+            self.write_ranges_in_place(stats);
+            return;
         }
         if self.staging.size() < total {
             self.staging = staging_buffer(
@@ -256,11 +338,157 @@ impl GpuScene {
         }
         stats.bytes = total;
         if use_scatter {
-            self.scatter_upload(encoder, &mut stats);
+            self.scatter_upload(encoder, stats);
         } else {
-            self.copy_upload(encoder, &mut stats);
+            self.copy_upload(encoder, stats);
         }
-        stats
+    }
+
+    /// The draw-list half of [`GpuScene::upload`]: lays the lists out again when one outgrew its segment (and then
+    /// uploads them whole), otherwise uploads the changed entries, through one staging write and a copy per range.
+    fn upload_lists(&mut self, encoder: &mut wgpu::CommandEncoder, stats: &mut UploadStats) {
+        let entry_size = self.lists.entry_size;
+        let count = self.scene.draw_list_count();
+        let lists = &mut self.lists;
+        let draw_lists = self.scene.lists_mut();
+        lists.ranges.clear();
+        let outgrown = lists.segments.len() < count
+            || draw_lists
+                .opaque
+                .iter()
+                .zip(&lists.segments)
+                .any(|(list, segment)| list.entries.len() > segment.capacity as usize);
+        if outgrown {
+            lists.segments.resize(count, ListSegment::default());
+            let mut first = 0u32;
+            for (segment, list) in lists.segments.iter_mut().zip(&mut draw_lists.opaque) {
+                let len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
+                segment.capacity = segment
+                    .capacity
+                    .max(len.checked_next_power_of_two().unwrap_or(u32::MAX))
+                    .max(MIN_LIST_CAPACITY);
+                segment.first = first;
+                first = first.saturating_add(segment.capacity);
+                list.dirty.clear();
+            }
+            let needed = u64::from(first) * entry_size;
+            if lists.buffer.size() < needed {
+                lists.buffer = list_buffer(&self.device, self.binding, needed);
+            }
+            lists.revision += 1;
+            for (index, list) in draw_lists.opaque.iter().enumerate() {
+                if !list.entries.is_empty() {
+                    let len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
+                    lists.ranges.push((index, 0, len));
+                }
+            }
+        } else {
+            for (index, list) in draw_lists.opaque.iter_mut().enumerate() {
+                let len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
+                list.dirty.sort_unstable();
+                list.dirty.dedup();
+                let start = lists.ranges.len();
+                let mut run: Option<(usize, u32, u32)> = None;
+                for &pos in list.dirty.iter().take_while(|&&pos| pos < len) {
+                    match run.as_mut() {
+                        Some((_, first, count)) if pos - (*first + *count) <= MAX_UPLOAD_GAP => {
+                            *count = pos - *first + 1;
+                        }
+                        _ => {
+                            lists.ranges.extend(run.take());
+                            run = Some((index, pos, 1));
+                        }
+                    }
+                }
+                lists.ranges.extend(run);
+                list.dirty.clear();
+                // Many small ranges of one list: one span costs less once a copy is dearer than the bytes between.
+                let ranges = &lists.ranges[start..];
+                if let (Some(&(_, lo, _)), Some(&(_, last, last_count))) = (ranges.first(), ranges.last()) {
+                    let span = u64::from(last + last_count - lo);
+                    if ranges.len() > 1 && span * entry_size <= ranges.len() as u64 * COPY_WORTH_BYTES {
+                        lists.ranges.truncate(start);
+                        lists.ranges.push((index, lo, last + last_count - lo));
+                    }
+                }
+            }
+        }
+        for (segment, list) in lists.segments.iter_mut().zip(&draw_lists.opaque) {
+            segment.len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
+        }
+
+        let entries: u64 = lists.ranges.iter().map(|&(_, _, count)| u64::from(count)).sum();
+        let Some(size) = wgpu::BufferSize::new(entries * entry_size) else {
+            return;
+        };
+        if lists.staging.size() < size.get() {
+            lists.staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("metallic draw list uploads"),
+                size: size.get().next_power_of_two(),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+        }
+        let Some(mut view) = self.queue.write_buffer_with(&lists.staging, 0, size) else {
+            return;
+        };
+        let mut offset = 0usize;
+        let scene = &self.scene;
+        for &(index, first, count) in &lists.ranges {
+            let entries = scene.draw_list(MeshKind(u16::try_from(index).unwrap_or(u16::MAX)));
+            let Some(entries) = entries.get(first as usize..(first + count) as usize) else {
+                continue;
+            };
+            if lists.gather {
+                for &entry in entries {
+                    let instance = scene.entry_instance(entry).unwrap_or(&GpuInstance::FREE);
+                    let bytes = bytemuck::bytes_of(instance);
+                    view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
+                    offset += bytes.len();
+                }
+            } else {
+                let bytes: &[u8] = bytemuck::cast_slice(entries);
+                view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
+                offset += bytes.len();
+            }
+        }
+        drop(view);
+        let mut source = 0u64;
+        for &(index, first, count) in &lists.ranges {
+            let Some(segment) = lists.segments.get(index) else {
+                continue;
+            };
+            let bytes = u64::from(count) * entry_size;
+            encoder.copy_buffer_to_buffer(
+                &lists.staging,
+                source,
+                &lists.buffer,
+                u64::from(segment.first + first) * entry_size,
+                bytes,
+            );
+            source += bytes;
+            stats.list_copies += 1;
+        }
+        stats.list_entries = u32::try_from(entries).unwrap_or(u32::MAX);
+    }
+
+    /// The draw lists on the GPU: every mesh kind's opaque list in its own segment ([`GpuScene::list_segments`]),
+    /// as entries (`u32`, see [`super::entry`]) where the instance buffers are storage buffers, or as copies of
+    /// the instances ([`GpuInstance`], a per-instance vertex buffer) on the vertex-buffer fallback. A draw of a
+    /// kind's list is instances `first .. first + len` of its segment. Replaced when it grows
+    /// ([`GpuScene::list_revision`]).
+    pub fn list_buffer(&self) -> &wgpu::Buffer {
+        &self.lists.buffer
+    }
+
+    /// Where each mesh kind's list sits in [`GpuScene::list_buffer`], indexed by kind, as of the last upload.
+    pub fn list_segments(&self) -> &[ListSegment] {
+        &self.lists.segments
+    }
+
+    /// Changes whenever the list buffer is laid out again (and possibly replaced).
+    pub fn list_revision(&self) -> u64 {
+        self.lists.revision
     }
 
     /// The copy path: the ranges' instances back to back in the staging buffer, then one copy per range.
@@ -527,6 +755,20 @@ fn instance_buffer(device: &wgpu::Device, binding: InstanceBinding, region: Regi
             Region::Dynamic => "metallic instances (dynamic)",
         }),
         size: u64::from(capacity) * GpuInstance::SIZE,
+        usage,
+        mapped_at_creation: false,
+    })
+}
+
+fn list_buffer(device: &wgpu::Device, binding: InstanceBinding, size: u64) -> wgpu::Buffer {
+    let usage = match binding {
+        InstanceBinding::Storage => wgpu::BufferUsages::STORAGE,
+        InstanceBinding::Vertex => wgpu::BufferUsages::VERTEX,
+    } | wgpu::BufferUsages::COPY_DST
+        | wgpu::BufferUsages::COPY_SRC;
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("metallic draw lists"),
+        size,
         usage,
         mapped_at_creation: false,
     })

@@ -259,3 +259,92 @@ fn renderer_frames_carry_the_upload() {
     assert_eq!(stats.slots, 10);
     assert_gpu_matches(&context, &scene);
 }
+
+/// Every mesh kind's draw list on the GPU equals the scene's: entries on the storage path, copies of the
+/// instances on the vertex-buffer path.
+fn assert_lists_match(context: &RenderContext, scene: &GpuScene) {
+    let bytes = read_back_buffer(context, scene.list_buffer(), scene.list_buffer().size());
+    for (kind, segment) in scene.list_segments().iter().enumerate() {
+        let entries = scene.scene().draw_list(MeshKind(kind as u16));
+        assert_eq!(segment.len as usize, entries.len(), "kind {kind}");
+        assert!(segment.len <= segment.capacity);
+        let range = |size: usize| segment.first as usize * size..(segment.first + segment.len) as usize * size;
+        match scene.binding() {
+            InstanceBinding::Storage => {
+                let gpu: Vec<u32> = bytemuck::pod_collect_to_vec(&bytes[range(4)]);
+                assert_eq!(gpu, entries, "kind {kind}");
+            }
+            InstanceBinding::Vertex => {
+                let gpu: Vec<GpuInstance> = bytemuck::pod_collect_to_vec(&bytes[range(64)]);
+                let expected: Vec<GpuInstance> = entries
+                    .iter()
+                    .map(|&e| *scene.scene().entry_instance(e).expect("a listed slot"))
+                    .collect();
+                assert_eq!(gpu, expected, "kind {kind}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_draw_lists_on_the_gpu_follow_the_scene() {
+    for force_vertex_instances in [false, true] {
+        let Some(context) = support::gpu_with(&metallic_render::ContextOptions {
+            force_vertex_instances,
+            ..metallic_render::ContextOptions::default()
+        }) else {
+            return;
+        };
+        let mut game = Game::new();
+        let shapes = ["Block", "Ball", "Cylinder", "Wedge"];
+        let parts: Vec<Id> = (0..600).map(|_| game.part()).collect();
+        for (i, &id) in parts.iter().enumerate() {
+            let shape = EnumItem::new("PartShape", shapes[i % 4]);
+            game.dm.set_by_name(id, "Shape", Value::Enum(shape)).unwrap();
+        }
+        let mut scene = GpuScene::new(
+            &context,
+            &mut game.dm,
+            Some(game.workspace),
+            &RenderComponents::builtin(),
+        )
+        .unwrap();
+        frame(&context, &mut scene, &mut game.dm);
+        assert_lists_match(&context, &scene);
+
+        // Every kind outgrows its segment: the lists are laid out again.
+        let revision = scene.list_revision();
+        for i in 0..1200 {
+            let id = game.part();
+            let shape = EnumItem::new("PartShape", shapes[i % 4]);
+            game.dm.set_by_name(id, "Shape", Value::Enum(shape)).unwrap();
+        }
+        frame(&context, &mut scene, &mut game.dm);
+        assert_ne!(scene.list_revision(), revision);
+        assert_lists_match(&context, &scene);
+
+        // Removals, shape changes and recolours, then a few frames of moves (promotions change slots).
+        for &id in parts.iter().step_by(7) {
+            game.dm.destroy(id).unwrap();
+        }
+        for &id in parts.iter().skip(1).step_by(14) {
+            game.dm
+                .set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
+                .unwrap();
+            game.dm
+                .set_by_name(id, "Color", Value::Color3(Color3::from_rgb_u8(1, 2, 3)))
+                .unwrap();
+        }
+        let stats = frame(&context, &mut scene, &mut game.dm);
+        assert!(stats.list_entries > 0);
+        assert_lists_match(&context, &scene);
+        for step in 0..PROMOTE_MOVES_UNANCHORED + 1 {
+            for &id in parts.iter().skip(2).step_by(14) {
+                game.move_to(id, Vec3::new(f32::from(step), 1.0, 0.0));
+            }
+            frame(&context, &mut scene, &mut game.dm);
+        }
+        assert!(scene.scene().live(Region::Dynamic) > 0);
+        assert_lists_match(&context, &scene);
+    }
+}

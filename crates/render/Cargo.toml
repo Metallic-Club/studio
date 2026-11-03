@@ -26,10 +26,20 @@ winit.workspace = true
 metallic_classes.workspace = true
 criterion.workspace = true
 gungraun.workspace = true
+# The image tests' reference PNGs (`tests/reference/`).
+png.workspace = true
+# The image tests catch wgpu's validation messages through a logger.
+log.workspace = true
 
 # CPU time of a scene sync on a real device (`cargo bench -p metallic_render --bench gpu_scene`).
 [[bench]]
 name = "gpu_scene"
+harness = false
+
+# CPU encode time and GPU time of drawing 10k and 100k parts at 1080p (`cargo bench -p metallic_render --bench
+# draw_parts`).
+[[bench]]
+name = "draw_parts"
 harness = false
 
 # The perf gate's render suite (docs/perf.md): the scene's CPU side with no GPU. It needs Valgrind and

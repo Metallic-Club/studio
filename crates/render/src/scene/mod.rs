@@ -6,6 +6,11 @@
 //!   their slots. Nothing scans the scene or diffs a copy of it; [`InstanceScene::rebuild_all`] is the one full
 //!   pass, for attaching and recovery. [`InstanceScene::coalesce`] turns the dirty slots into a few ranges.
 //! - [`GpuScene`] owns the instance buffers and uploads those ranges.
+//! - The **draw lists** say which slots each draw covers: one list of entries (slot ids, [`entry`]) per mesh kind,
+//!   plus one of partly see-through instances, updated in [`InstanceScene::coalesce`] from the same dirty slots
+//!   ([`InstanceScene::draw_list`]). [`GpuScene`] uploads their changed entries into one buffer with a segment
+//!   per kind ([`GpuScene::list_buffer`]), which the renderer draws one instanced draw per kind from
+//!   ([`crate::parts`]). Culling (#79) fills the same lists with visible entries only.
 //!
 //! # Slots and regions
 //!
@@ -34,14 +39,16 @@
 mod components;
 mod gpu;
 mod instance;
+mod lists;
 mod slots;
 mod sync;
 #[cfg(test)]
 mod tests;
 
 pub use components::{MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
-pub use gpu::{GpuScene, InstanceBinding, SCATTER_MIN_RANGES, UploadStats};
+pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};
 pub use instance::{GpuInstance, MeshKind, affine_rows, pack_color};
+pub use lists::{DYNAMIC_ENTRY, entry, entry_slot};
 pub use sync::InstanceScene;
 
 /// Frames in which a static instance's transform must change, within [`PROMOTE_WINDOW`], to move it to the

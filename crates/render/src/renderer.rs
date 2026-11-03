@@ -1,10 +1,12 @@
 //! The frame loop: runs the planned passes into a target and keeps the GPU timings coming.
 
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
-use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassSet};
+use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet};
+use crate::parts::{Camera, DrawStats, PartRenderer};
+use crate::scene::{InstanceBinding, UploadStats};
 use crate::target::check_size;
 use crate::timing::GpuTimer;
-use crate::{FrameTimings, MsaaSampleCounts, RenderContext, RenderError};
+use crate::{FrameTimings, GpuScene, MsaaSampleCounts, RenderContext, RenderError};
 
 /// What a [`Renderer`] draws into and how.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,8 +51,8 @@ struct Attachment {
 
 /// Draws frames: the passes of a [`FramePlan`] into a target view, with per-pass GPU timing.
 ///
-/// A frame allocates nothing on the heap in this crate and never waits for the GPU (ADR 0008 §9). The passes have
-/// no draws yet; the scene, sky, post and UI systems record into them as they arrive.
+/// A frame allocates nothing on the heap in this crate and never waits for the GPU (ADR 0008 §9). Parts are drawn
+/// by [`Renderer::render_scene`]; the sky, post and UI systems record into the passes as they arrive.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -63,6 +65,8 @@ pub struct Renderer {
     depth: Option<Attachment>,
     msaa_color: Option<Attachment>,
     timer: Option<GpuTimer>,
+    parts: PartRenderer,
+    last_upload: UploadStats,
     frame: u64,
 }
 
@@ -78,6 +82,14 @@ impl Renderer {
         } else {
             None
         };
+        // Single-sampled until `rebuild`, after the MSAA count is checked.
+        let parts = PartRenderer::new(
+            context.device(),
+            context.queue(),
+            InstanceBinding::for_context(context),
+            settings.color_format,
+            1,
+        );
         let mut renderer = Self {
             device: context.device().clone(),
             queue: context.queue().clone(),
@@ -89,6 +101,8 @@ impl Renderer {
             depth: None,
             msaa_color: None,
             timer,
+            parts,
+            last_upload: UploadStats::default(),
             frame: 0,
         };
         renderer.check_msaa(settings.msaa_samples)?;
@@ -175,15 +189,79 @@ impl Renderer {
         target: &wgpu::TextureView,
         prepare: impl FnOnce(&mut wgpu::CommandEncoder),
     ) -> wgpu::SubmissionIndex {
+        let (mut encoder, slot) = self.begin_frame();
+        prepare(&mut encoder);
+        self.record_passes(&mut encoder, target, slot, None);
+        self.end_frame(encoder, slot)
+    }
+
+    /// Renders one frame of `scene`'s parts, seen from `camera`, into `target` (which must have the settings'
+    /// format and size), and submits it: the scene's upload ([`GpuScene::upload`]), then the passes with their
+    /// draws (see [`crate::parts`]). With no camera the passes run without draws (the clear colour).
+    ///
+    /// Sync the scene ([`GpuScene::sync`]) first. Never blocks on the GPU; see [`Renderer::render`] about pacing.
+    pub fn render_scene(
+        &mut self,
+        target: &wgpu::TextureView,
+        scene: &mut GpuScene,
+        camera: Option<&Camera>,
+    ) -> wgpu::SubmissionIndex {
+        let (mut encoder, slot) = self.begin_frame();
+        self.last_upload = scene.upload(&mut encoder);
+        // After the upload, which may have replaced the buffers the bind groups use.
+        self.parts.prepare(
+            scene,
+            camera,
+            self.settings.width,
+            self.settings.height,
+            self.settings.color_format.is_srgb(),
+        );
+        self.record_passes(&mut encoder, target, slot, Some(scene));
+        self.end_frame(encoder, slot)
+    }
+
+    /// What the last [`Renderer::render_scene`] drew: the draw count per pass, instances and triangles.
+    pub fn draw_stats(&self) -> DrawStats {
+        self.parts.stats()
+    }
+
+    /// What the last [`Renderer::render_scene`] uploaded.
+    pub fn upload_stats(&self) -> UploadStats {
+        self.last_upload
+    }
+
+    /// The part renderer: the material table, the temporary light, the meshes.
+    pub fn parts(&self) -> &PartRenderer {
+        &self.parts
+    }
+
+    /// The part renderer, to change materials or the temporary light.
+    pub fn parts_mut(&mut self) -> &mut PartRenderer {
+        &mut self.parts
+    }
+
+    /// Starts a frame: its GPU timing slot, if any, and its encoder.
+    fn begin_frame(&mut self) -> (wgpu::CommandEncoder, Option<usize>) {
         let slot = match self.timer.as_mut() {
             Some(timer) => timer.begin_frame(&self.device),
             None => None,
         };
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
         });
-        prepare(&mut encoder);
+        (encoder, slot)
+    }
+
+    /// Records every planned pass into `encoder`, with `scene`'s draws when there is one.
+    fn record_passes(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        slot: Option<usize>,
+        scene: Option<&GpuScene>,
+    ) {
         let clear_color = self.settings.clear_color;
+        let prepass = self.settings.passes.contains(PassId::DepthPrepass);
         let msaa_view = self.msaa_color.as_ref().map(|attachment| &attachment.view);
         let depth_view = self.depth.as_ref().map(|attachment| &attachment.view);
 
@@ -229,7 +307,7 @@ impl Renderer {
                 (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, index)),
                 _ => None,
             };
-            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(pass.id.name()),
                 color_attachments: &colors[..has_color],
                 depth_stencil_attachment: depth,
@@ -237,10 +315,16 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // The pass's draws go here as the systems that make them arrive.
+            // The sky, post and UI systems add their draws here as they arrive.
+            if let Some(scene) = scene {
+                self.parts.draw(pass.id, prepass, scene, &mut render_pass);
+            }
             drop(render_pass);
         }
+    }
 
+    /// Ends the frame: resolves its timestamps, submits it and counts it.
+    fn end_frame(&mut self, mut encoder: wgpu::CommandEncoder, slot: Option<usize>) -> wgpu::SubmissionIndex {
         if let (Some(timer), Some(slot)) = (self.timer.as_mut(), slot) {
             timer.end_frame(
                 &mut encoder,
@@ -271,6 +355,8 @@ impl Renderer {
     /// Plans the frame again and recreates the attachments it needs. Runs on settings changes, never per frame.
     fn rebuild(&mut self) {
         self.plan = FramePlan::new(self.settings.passes, self.settings.msaa_samples);
+        self.parts
+            .set_target(self.settings.color_format, self.plan.msaa_samples());
         let transient = self.transient_attachments;
         self.depth = self
             .plan

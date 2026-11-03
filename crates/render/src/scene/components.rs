@@ -159,6 +159,11 @@ impl ClassTable {
         self.classes.get(class.index()).and_then(Option::as_ref)
     }
 
+    /// The `Material` enum's items, in row order.
+    pub(crate) fn materials(&self) -> &'static [&'static str] {
+        self.materials
+    }
+
     /// The material table row of the `Material` item named `name` (its position in the enum); 0 when unknown.
     #[inline]
     pub(crate) fn material_row(&self, name: &str) -> u16 {

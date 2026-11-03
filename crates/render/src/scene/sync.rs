@@ -4,7 +4,8 @@ use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, ConsumerId, DataModel, DirtyBits, DmError, Id};
 
 use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
-use super::instance::{GpuInstance, affine_rows, pack_color, transparency_flags};
+use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
+use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
 use super::{
     DEMOTE_REST, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED, PROMOTE_WINDOW,
@@ -61,6 +62,8 @@ pub struct InstanceScene {
     removed: Vec<Id>,
     /// The ranges [`InstanceScene::coalesce`] produced.
     uploads: Vec<UploadRange>,
+    /// Which slots each draw covers (see [`super::lists`]).
+    lists: DrawLists,
 }
 
 impl InstanceScene {
@@ -85,6 +88,7 @@ impl InstanceScene {
             changes: Vec::new(),
             removed: Vec::new(),
             uploads: Vec::new(),
+            lists: DrawLists::default(),
         })
     }
 
@@ -111,6 +115,7 @@ impl InstanceScene {
         }
         self.entries.fill(Entry::EMPTY);
         self.uploads.clear();
+        self.lists.clear();
         self.rest_cursor = 0;
         dm.mark_all(self.consumer);
     }
@@ -217,7 +222,10 @@ impl InstanceScene {
     /// Turns every dirty slot into upload ranges ([`InstanceScene::uploads`]) and clears the dirty lists. Within a
     /// region the ranges are sorted, adjacent slots share a range, and runs separated by at most
     /// [`MAX_UPLOAD_GAP`] clean slots are merged.
+    ///
+    /// The draw lists ([`InstanceScene::draw_list`]) are brought up to date first, from the same dirty slots.
     pub fn coalesce(&mut self) {
+        self.update_lists();
         self.uploads.clear();
         for region in Region::ALL {
             self.regions[region.index()].coalesce(region, MAX_UPLOAD_GAP, &mut self.uploads);
@@ -227,6 +235,97 @@ impl InstanceScene {
     /// The ranges the last [`InstanceScene::coalesce`] produced.
     pub fn uploads(&self) -> &[UploadRange] {
         &self.uploads
+    }
+
+    /// The entries drawn as opaque instances of mesh `kind`, in no particular order: one per live slot whose
+    /// instance is solid (see [`super::lists`] for the entry format). Current as of the last
+    /// [`InstanceScene::coalesce`].
+    pub fn draw_list(&self, kind: MeshKind) -> &[u32] {
+        self.lists
+            .opaque
+            .get(usize::from(kind.0))
+            .map_or(&[], |list| list.entries.as_slice())
+    }
+
+    /// How many opaque draw lists there are: one per mesh kind up to the highest kind drawn so far.
+    pub fn draw_list_count(&self) -> usize {
+        self.lists.opaque.len()
+    }
+
+    /// The entries of every partly see-through instance, unsorted (the renderer sorts them per view).
+    pub fn transparent_list(&self) -> &[u32] {
+        &self.lists.transparent.entries
+    }
+
+    /// Changes whenever [`InstanceScene::transparent_list`] or one of its instances changes, so a view knows when
+    /// to sort again.
+    pub fn transparent_revision(&self) -> u64 {
+        self.lists.transparent_revision
+    }
+
+    /// The packed instance an entry names.
+    pub fn entry_instance(&self, entry: u32) -> Option<&GpuInstance> {
+        let (region, slot) = entry_slot(entry);
+        self.regions[region.index()].instances.get(slot as usize)
+    }
+
+    /// The `Material` enum's items: the material table's rows, in order. Empty when the game has no such enum.
+    pub fn material_names(&self) -> &'static [&'static str] {
+        self.classes.materials()
+    }
+
+    /// Makes the draw lists also record changed instances (not only changed entries), for lists that hold copies
+    /// of the instances (the vertex-buffer fallback).
+    pub(crate) fn set_gather_lists(&mut self, gather: bool) {
+        self.lists.set_gather(gather);
+    }
+
+    /// The opaque lists, for their upload.
+    pub(crate) fn lists_mut(&mut self) -> &mut DrawLists {
+        &mut self.lists
+    }
+
+    /// Puts every dirty slot's entry in the list its packed instance belongs in (see [`super::lists`]).
+    fn update_lists(&mut self) {
+        for region in Region::ALL {
+            let dirty = self.regions[region.index()].take_dirty();
+            for &slot in &dirty {
+                self.relist_slot(region, slot);
+            }
+            self.regions[region.index()].return_dirty(dirty);
+        }
+    }
+
+    fn relist_slot(&mut self, region: Region, slot: u32) {
+        let slots = &self.regions[region.index()];
+        let (Some(instance), Some(meta)) = (slots.instances.get(slot as usize), slots.meta.get(slot as usize)) else {
+            return;
+        };
+        let want = list_of(instance);
+        let (have, pos) = (meta.list, meta.list_pos);
+        if want == have {
+            if have != NOT_LISTED {
+                self.lists.changed(have, pos);
+            }
+            return;
+        }
+        if have != NOT_LISTED
+            && let Some(moved) = self.lists.remove(have, pos)
+        {
+            let (moved_region, moved_slot) = entry_slot(moved);
+            if let Some(m) = self.regions[moved_region.index()].meta.get_mut(moved_slot as usize) {
+                m.list_pos = pos;
+            }
+        }
+        let pos = if want == NOT_LISTED {
+            0
+        } else {
+            self.lists.push(want, entry(region, slot))
+        };
+        if let Some(meta) = self.regions[region.index()].meta.get_mut(slot as usize) {
+            meta.list = want;
+            meta.list_pos = pos;
+        }
     }
 
     /// The live slot of `id`, dropping a slot left behind by an earlier instance with the same index.

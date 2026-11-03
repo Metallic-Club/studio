@@ -20,11 +20,15 @@
 //!   ([`FrameTimings`]). Nothing in a frame waits for the GPU.
 //! - The GPU-resident scene ([`scene`]): every renderable instance keeps a slot in an instance buffer, and only
 //!   what the data model's change tracking names is repacked and uploaded ([`GpuScene`], [`InstanceScene`]).
+//! - Drawing parts ([`parts`], [`Renderer::render_scene`]): one instanced draw per mesh kind over the scene's draw
+//!   lists, a material table, PBR-lite shading, a sorted transparent pass, and the camera from
+//!   `Workspace.CurrentCamera` ([`CameraReader`]).
 
 mod context;
 pub mod depth;
 mod error;
 mod graph;
+pub mod parts;
 mod renderer;
 pub mod scene;
 mod surface;
@@ -34,6 +38,7 @@ mod timing;
 pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
+pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer, SceneLight};
 pub use renderer::{Renderer, RendererSettings};
 pub use scene::{GpuScene, InstanceScene};
 pub use surface::{RenderSurface, SurfaceFrame};

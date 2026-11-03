@@ -264,3 +264,26 @@ submission that carries it.
 wgpu creates a staging buffer for every `write_buffer` call, which is why one staging write per frame beats a write
 per range by 6×, and records each `copy_buffer_to_buffer` for about 0.45 µs, which is why many ranges go through the
 scatter pass instead (from `SCATTER_MIN_RANGES`, 32).
+
+With #77 the coalesce also keeps the draw lists current (O(1) per dirty slot): `sync/100k_1pct_moving` measured
+75 µs and `sync/100k_1pct_scattered` 114 µs, the same as before within noise.
+
+### Drawing parts
+
+`cargo bench -p metallic_render --bench draw_parts`, **2026-11-03**, same machine (Ryzen 5 5500; AMD Radeon RX 6650
+XT), #77. A grid of parts, all in view and nothing culled (70% blocks, 10% each of balls, cylinders and wedges, 1%
+see-through blocks), drawn at 1920×1080 offscreen. CPU is the wall time of `Renderer::render_scene` (upload, frame
+uniform, transparent sort, recording the passes, submit) with no scene changes; GPU is the timestamps of the whole
+frame and of the opaque pass. "Moving" changes the camera every frame, so the frame uniform is written and the
+see-through parts are sorted again. Every frame makes 4 opaque draws and 1 transparent draw. This is the baseline
+culling (#79) is measured against; there is no target yet.
+
+| Parts (triangles) | Camera | Vulkan CPU p50 / p99 | Vulkan GPU frame / opaque | DX12 CPU p50 / p99 | DX12 GPU frame / opaque |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 10,000 (1.18 M) | still | 0.078 / 0.121 ms | 0.141 / 0.134 ms | 0.091 / 0.158 ms | 0.117 / 0.112 ms |
+| 10,000 (1.18 M) | moving | 0.087 / 0.105 ms | 0.140 / 0.133 ms | 0.117 / 0.200 ms | 0.118 / 0.114 ms |
+| 100,000 (11.8 M) | still | 0.091 / 0.124 ms | 1.069 / 1.060 ms | 0.109 / 0.128 ms | 0.778 / 0.775 ms |
+| 100,000 (11.8 M) | moving | 0.126 / 0.172 ms | 1.066 / 1.057 ms | 0.136 / 0.169 ms | 0.797 / 0.793 ms |
+
+The CPU cost hardly depends on the part count: the draws are per mesh kind, and nothing per part runs unless it
+changed (the moving rows add the sort of 1,000 see-through parts).
