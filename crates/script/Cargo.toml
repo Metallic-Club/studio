@@ -13,3 +13,8 @@ workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Host tests run scripts against the real class set. Dev-dependencies are exempt from the layout rules (ADR 0001).
+metallic_classes.workspace = true
