@@ -16,6 +16,10 @@
 //!   range through the copy path (the instances back to back).
 //! - `render_sync_scattered`: 100 parts spread over the scene are recoloured, so they upload as 100 ranges through
 //!   the scatter path (each instance's destination, then the instances).
+//! - `render_cull` (#114): [`InstanceScene::cull`] of the same 10,000 parts for a fixed camera that sees part of the
+//!   grid, with `CullSettings::default()`, into a warmed [`VisibleSet`]. 1% of the parts moved since the last cull
+//!   (half across grid cells, half within their cell), so the measured call pays for moving their grid items
+//!   (the sync only queues them) as well as for the walk of the view.
 #![allow(
     missing_docs,
     reason = "gungraun's macros generate public modules without doc comments"
@@ -26,8 +30,8 @@ use std::hint::black_box;
 use gungraun::{Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main};
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, DataModel, DmError, Id, Value};
-use metallic_render::InstanceScene;
 use metallic_render::scene::{GpuInstance, Region, RenderComponents};
+use metallic_render::{Camera, CullSettings, CullView, InstanceScene, VisibleSet};
 
 /// The growth in `Ir` over which a workload counts as regressed. Changing it is a gate change (`docs/perf.md`).
 const IR_LIMIT_PCT: f64 = 5.0;
@@ -170,6 +174,60 @@ fn write_ranges_appending(scene: &InstanceScene, staging: &mut Vec<u8>) {
     }
 }
 
+/// A scene for the cull workload: the fixture, the view to cull for and the set the culls write into.
+struct CullFixture {
+    fixture: Fixture,
+    view: CullView,
+    visible: VisibleSet,
+}
+
+/// Moves the [`CHANGES`] cull movers for move number `frame`. Even movers cross into another grid cell (cells are
+/// 32 m) and back, odd movers stay inside their cell and shift by half a metre in height. A mover's position only
+/// depends on `frame`'s parity, so every frame changes all of them.
+fn cull_movers(fixture: &mut Fixture, frame: usize) {
+    let shifted = frame % 2 == 1;
+    for i in 0..CHANGES {
+        let part = i * 97;
+        let (mut x, mut y, z) = ((part % 100) as f32 * 4.0, 1.0, (part / 100) as f32 * 4.0);
+        if shifted {
+            if i % 2 == 0 {
+                x += 40.0;
+            } else {
+                y += 0.5;
+            }
+        }
+        let id = fixture.parts[part];
+        ok(fixture
+            .dm
+            .set_by_name(id, "CFrame", Value::CFrame(CFrame::new(Vec3::new(x, y, z)))));
+    }
+}
+
+/// The parts (a 400 m square) seen from above the grid's south-west corner, looking across it: part of the cells
+/// are wholly in view, part cross the frustum's edges and the rest (about two fifths of the parts) are outside.
+fn cull_view(scene: &InstanceScene) -> CullView {
+    let place = CFrame::look_at(Vec3::new(60.0, 30.0, 330.0), Vec3::new(330.0, 0.0, 120.0), Vec3::Y);
+    let camera = Camera::from_cframe(place, 45.0);
+    CullView::for_camera(&camera, scene.origin(), 1920, 1080, &CullSettings::default())
+}
+
+/// The movers moved and culled for a few frames (so they sit in the dynamic region and the visible set has grown
+/// to its size), then moved once more, synced and coalesced: their grid items are left for the measured cull.
+fn culling(_: ()) -> CullFixture {
+    let mut fixture = Fixture::new();
+    let view = cull_view(&fixture.scene);
+    let mut visible = VisibleSet::new();
+    fixture.scene.cull(&view, &mut visible);
+    for frame in 1..=4 {
+        cull_movers(&mut fixture, frame);
+        fixture.settle();
+        fixture.scene.cull(&view, &mut visible);
+    }
+    cull_movers(&mut fixture, 5);
+    fixture.settle();
+    CullFixture { fixture, view, visible }
+}
+
 #[library_benchmark]
 #[bench::frame(args = (()), setup = moving)]
 fn render_sync_moving(mut fixture: Fixture) -> Fixture {
@@ -190,9 +248,17 @@ fn render_sync_scattered(mut fixture: Fixture) -> Fixture {
     fixture
 }
 
+#[library_benchmark]
+#[bench::frame(args = (()), setup = culling)]
+fn render_cull(mut state: CullFixture) -> CullFixture {
+    black_box(state.fixture.scene.cull(&state.view, &mut state.visible));
+    black_box(state.visible.len());
+    state
+}
+
 library_benchmark_group!(
     name = workloads,
-    benchmarks = [render_sync_moving, render_sync_scattered]
+    benchmarks = [render_sync_moving, render_sync_scattered, render_cull]
 );
 
 main!(
