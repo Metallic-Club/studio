@@ -509,7 +509,7 @@ fn only_transparent_changes_move_the_transparent_revision() {
 
 /// Checks a cull of `scene` against testing every listed instance's bounding sphere on its own: the same entries
 /// in every list, and each opaque list in front-to-back bucket order.
-fn assert_cull_matches_brute_force(scene: &InstanceScene, view: &crate::cull::CullView) -> crate::cull::CullStats {
+fn assert_cull_matches_brute_force(scene: &mut InstanceScene, view: &crate::cull::CullView) -> crate::cull::CullStats {
     let mut set = crate::cull::VisibleSet::new();
     let stats = scene.cull(view, &mut set);
     let visible = |e: &u32| {
@@ -630,7 +630,7 @@ fn a_cull_matches_testing_every_part_through_every_kind_of_change() {
         if edit % 7 == 0 {
             frame(&mut scene, &mut game.dm);
             for (view, totals) in views.iter().zip(&mut totals) {
-                let stats = assert_cull_matches_brute_force(&scene, view);
+                let stats = assert_cull_matches_brute_force(&mut scene, view);
                 totals.0 += stats.visible;
                 totals.1 += stats.outside_frustum;
                 totals.2 += stats.too_far_or_small;
@@ -644,6 +644,47 @@ fn a_cull_matches_testing_every_part_through_every_kind_of_change() {
     scene.rebuild_all(&mut game.dm);
     frame(&mut scene, &mut game.dm);
     for view in &views {
-        assert_cull_matches_brute_force(&scene, view);
+        assert_cull_matches_brute_force(&mut scene, view);
     }
+}
+
+#[test]
+fn moves_queue_each_slot_once_until_a_cull_and_recolours_none() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let mut parts: Vec<Id> = (0..32).map(|_| game.part()).collect();
+    frame(&mut scene, &mut game.dm);
+    let camera =
+        crate::parts::Camera::from_cframe(CFrame::look_at(Vec3::new(0.0, 5.0, 20.0), Vec3::ZERO, Vec3::Y), 70.0);
+    let view = crate::cull::CullView::for_camera(&camera, Vec3::ZERO, 640, 360, &crate::cull::CullSettings::default());
+    scene.cull(&view, &mut crate::cull::VisibleSet::new());
+    assert_eq!(scene.culling_queue(), 0);
+    // Recolouring moves nothing.
+    for &id in &parts {
+        game.dm
+            .set_by_name(id, "Color", Value::Color3(Color3::new(0.2, 0.4, 0.6)))
+            .unwrap();
+    }
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.culling_queue(), 0);
+    // A hundred frames of moving, destroying and creating with no cull: every slot is queued at most once.
+    for step in 0..100 {
+        for (i, &id) in parts.iter().enumerate().take(8) {
+            game.move_to(id, (step * 3 + i) as f32);
+        }
+        let gone = parts.swap_remove(step % parts.len());
+        game.dm.destroy(gone).unwrap();
+        let new = game.part();
+        game.move_to(new, step as f32);
+        parts.push(new);
+        frame(&mut scene, &mut game.dm);
+        let slots = scene.instances(Region::Static).len() + scene.instances(Region::Dynamic).len();
+        assert!(
+            scene.culling_queue() <= slots,
+            "{} queued for {slots} slots",
+            scene.culling_queue()
+        );
+    }
+    assert_cull_matches_brute_force(&mut scene, &view);
+    assert_eq!(scene.culling_queue(), 0);
 }

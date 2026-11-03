@@ -343,8 +343,8 @@ impl VisibleSet {
         }
         std::mem::swap(&mut self.transparent, &mut self.previous_transparent);
         self.transparent.clear();
+        // (The previous entries are only compared with, never pushed to.)
         self.transparent.reserve(transparent);
-        self.previous_transparent.reserve(transparent);
         self.order.clear();
         self.order.reserve(places);
     }

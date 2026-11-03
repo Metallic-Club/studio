@@ -189,7 +189,9 @@ impl InstanceScene {
                         row[3] = t;
                     }
                 }
-                slots.mark_moved(slot);
+                if slots.mark_moved(slot) {
+                    self.grid.queue(entry(region, slot));
+                }
                 slots.mark_dirty(slot);
             }
         }
@@ -235,8 +237,8 @@ impl InstanceScene {
     /// region the ranges are sorted, adjacent slots share a range, and runs separated by at most
     /// [`MAX_UPLOAD_GAP`] clean slots are merged.
     ///
-    /// The draw lists ([`InstanceScene::draw_list`]) and the culling grid are brought up to date first, from the
-    /// same dirty slots.
+    /// The draw lists ([`InstanceScene::draw_list`]) are brought up to date first, from the same dirty slots, and
+    /// slots that changed list are placed in the culling grid (moved ones wait for the next cull).
     pub fn coalesce(&mut self) {
         if Region::ALL.iter().any(|r| self.regions[r.index()].dirty_len() > 0) {
             self.revision = self.revision.wrapping_add(1);
@@ -262,8 +264,12 @@ impl InstanceScene {
     /// Writes the instances `view` sees into `out`, as of the last [`InstanceScene::coalesce`]: per mesh kind the
     /// visible opaque entries, roughly front to back, and the visible see-through entries (see [`crate::cull`]).
     /// Allocates nothing once `out` has grown to the scene's lists.
-    pub fn cull(&self, view: &CullView, out: &mut VisibleSet) -> CullStats {
+    ///
+    /// Instances that moved since the last cull are moved in the culling grid first (see [`super::grid`]), so
+    /// that upkeep is part of the cull's time; further views of the same frame find nothing left to move.
+    pub fn cull(&mut self, view: &CullView, out: &mut VisibleSet) -> CullStats {
         let start = std::time::Instant::now();
+        self.apply_moves();
         let capacities = self.lists.opaque.iter().map(|list| list.entries.len());
         let mut stats = self
             .grid
@@ -276,6 +282,31 @@ impl InstanceScene {
     /// Instances in the culling grid: every one on a draw list.
     pub fn culling_items(&self) -> usize {
         self.grid.len()
+    }
+
+    /// Instances queued to move in the culling grid at the next cull.
+    #[cfg(test)]
+    pub(super) fn culling_queue(&self) -> usize {
+        self.grid.queued()
+    }
+
+    /// Moves the queued instances' items in the culling grid to their current bounding spheres.
+    fn apply_moves(&mut self) {
+        let queued = self.grid.take_queue();
+        for &moved in &queued {
+            let (region, slot) = entry_slot(moved);
+            let slots = &mut self.regions[region.index()];
+            let (Some(instance), Some(meta)) = (slots.instances.get(slot as usize), slots.meta.get_mut(slot as usize))
+            else {
+                continue;
+            };
+            if !meta.moved {
+                continue;
+            }
+            meta.moved = false;
+            self.grid.update(region, slot, instance, meta.list);
+        }
+        self.grid.return_queue(queued);
     }
 
     /// The entries drawn as opaque instances of mesh `kind`, in no particular order: one per live slot whose
@@ -344,12 +375,11 @@ impl InstanceScene {
         };
         let want = list_of(instance);
         let (have, pos) = (meta.list, meta.list_pos);
-        // The grid holds the bounding sphere and the list: unless one of them changed, its item is still right.
-        if meta.moved || want != have {
+        // A slot that changes list enters, leaves or changes list in the culling grid now; one that only moved
+        // waits on the grid's queue for the next cull.
+        // (A queued slot stays queued: it is on the queue once, and the update there finds nothing left to do.)
+        if want != have {
             self.grid.update(region, slot, instance, want);
-            if let Some(meta) = self.regions[region.index()].meta.get_mut(slot as usize) {
-                meta.moved = false;
-            }
         }
         if want == have {
             if have != NOT_LISTED {
@@ -566,11 +596,13 @@ impl InstanceScene {
         let mut moved = false;
         if let Some(target) = region.instances.get_mut(slot.slot as usize) {
             // A recolour leaves the culling grid alone; only a new transform (or size) moves the bounding sphere.
-            moved = target.rows != instance.rows;
+            // Compared as bits: a few integer compares, and -0.0 or NaN at worst queue an unneeded update.
+            let bits = |rows: [[f32; 4]; 3]| bytemuck::cast::<_, [u64; 6]>(rows);
+            moved = bits(target.rows) != bits(instance.rows);
             *target = instance;
         }
-        if moved {
-            region.mark_moved(slot.slot);
+        if moved && region.mark_moved(slot.slot) {
+            self.grid.queue(entry(slot.region, slot.slot));
         }
         region.mark_dirty(slot.slot);
     }

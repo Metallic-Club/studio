@@ -17,7 +17,8 @@ pub(super) struct SlotMeta {
     pub(super) since: u32,
     /// Queued on the dirty list.
     pub(super) dirty: bool,
-    /// The packed transform changed since the last coalesce, or the slot is new: the culling grid must look again.
+    /// The packed transform changed and the slot is queued for the culling grid, which moves its item at the next
+    /// cull ([`super::grid`]). Cleared when the grid has the item's current sphere.
     pub(super) moved: bool,
     /// The draw list the slot's entry is in ([`NOT_LISTED`] when none). Kept when the slot is freed or reused,
     /// until the next coalesce takes the entry out of the list.
@@ -69,7 +70,6 @@ impl RegionSlots {
         let meta = SlotMeta {
             owner: Some(owner),
             since: frame,
-            moved: true,
             ..SlotMeta::FREE
         };
         if let Some(slot) = self.free.pop()
@@ -79,6 +79,7 @@ impl RegionSlots {
             // next coalesce moves the entry).
             *m = SlotMeta {
                 dirty: m.dirty,
+                moved: m.moved,
                 list: m.list,
                 list_pos: m.list_pos,
                 ..meta
@@ -103,6 +104,7 @@ impl RegionSlots {
         *instance = GpuInstance::FREE;
         *meta = SlotMeta {
             dirty: meta.dirty,
+            moved: meta.moved,
             list: meta.list,
             list_pos: meta.list_pos,
             ..SlotMeta::FREE
@@ -112,11 +114,17 @@ impl RegionSlots {
         self.mark_dirty(slot);
     }
 
-    /// Notes that `slot`'s packed transform changed, so the next coalesce updates its place in the culling grid.
+    /// Notes that `slot`'s packed transform changed, so the next cull moves its item in the culling grid. Returns
+    /// whether it was not noted yet (the caller then queues it on the grid, once). A slot on no draw list has no
+    /// item yet: the coalesce that lists it places it where it is then.
     #[inline]
-    pub(super) fn mark_moved(&mut self, slot: u32) {
-        if let Some(meta) = self.meta.get_mut(slot as usize) {
-            meta.moved = true;
+    pub(super) fn mark_moved(&mut self, slot: u32) -> bool {
+        match self.meta.get_mut(slot as usize) {
+            Some(meta) if !meta.moved && meta.list != NOT_LISTED => {
+                meta.moved = true;
+                true
+            }
+            _ => false,
         }
     }
 

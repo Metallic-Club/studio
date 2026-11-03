@@ -6,10 +6,18 @@
 //! its items by its box grown by the largest radius it holds, so an item never has to be split or placed twice.
 //! Large items (floors, walls) are tested one by one, against their own box.
 //!
-//! The grid is kept current from the dirty slots alone, in [`super::InstanceScene::coalesce`], exactly like the
-//! draw lists: an item that moves within its cell is rewritten in place, one that crosses into another cell is
-//! swap-removed and appended (O(1) each, the moved item's position fixed through its slot). So static and moving
-//! instances live in the same structure, and the 1% of parts that move each frame cost a few writes, not a refit.
+//! The grid is kept current from the scene's own changes, never by a scan:
+//!
+//! - a slot that enters, leaves or changes draw list is placed, removed or relabelled in
+//!   [`super::InstanceScene::coalesce`], with the draw lists;
+//! - a slot whose packed transform changed is **queued** once (a flag on the slot and an entry here,
+//!   [`Grid::queue`]), and the next cull moves its item before it walks the grid. A recolour queues nothing. The
+//!   upkeep of moving parts is therefore part of the cull's time and costs nothing in frames that do not cull.
+//!
+//! Moving an item is O(1): one still inside its cell's box is rewritten in place without working out a cell key,
+//! one that crosses into another cell is swap-removed and appended (the item moved into its place is told through
+//! its slot). So static and moving instances live in the same structure, and the 1% of parts that move each frame
+//! cost a few writes, not a refit.
 //!
 //! A cull ([`super::InstanceScene::cull`]) tests every non-empty cell's loose box against the view and skips cells
 //! outside it (or beyond the view distance). It then takes the cells left and the large items in view nearest
@@ -94,6 +102,8 @@ pub(crate) struct Grid {
     large: Vec<Large>,
     /// Per region, by slot: where the slot's item is.
     places: [Vec<Place>; 2],
+    /// Entries whose transform changed since the last cull ([`Grid::queue`]), moved at the next one.
+    queued: Vec<u32>,
 }
 
 /// The bounding sphere of a packed instance: the centre of its unit mesh (the translation) and half the diagonal
@@ -137,6 +147,32 @@ impl Grid {
         for places in &mut self.places {
             places.fill(Place::EMPTY);
         }
+        self.queued.clear();
+    }
+
+    /// Queues `entry`, whose packed transform changed, to be moved at the next cull. The caller queues an entry
+    /// once until then ([`super::slots::SlotMeta::moved`]).
+    #[inline]
+    pub(crate) fn queue(&mut self, entry: u32) {
+        self.queued.push(entry);
+    }
+
+    /// Lends out the queued entries, to move them while changing the grid. Give them back with
+    /// [`Grid::return_queue`], which empties them and keeps the memory.
+    pub(crate) fn take_queue(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.queued)
+    }
+
+    /// How many entries are queued.
+    #[cfg(test)]
+    pub(super) fn queued(&self) -> usize {
+        self.queued.len()
+    }
+
+    /// Puts back what [`Grid::take_queue`] lent out, emptied.
+    pub(crate) fn return_queue(&mut self, mut queued: Vec<u32>) {
+        queued.clear();
+        self.queued = queued;
     }
 
     /// Instances in the grid.
@@ -162,6 +198,26 @@ impl Grid {
             entry: entry(region, slot),
             list,
         };
+        // The common case for a moving part: still in its cell. Its own box is tested without working out a key,
+        // and a sphere that is not finite fails the test and takes the long way.
+        if place.cell < Place::LARGE
+            && radius <= LARGE_RADIUS
+            && let Some(cell) = self.cells.get_mut(place.cell as usize)
+        {
+            let inside = center - cell.key.as_vec3() * CELL_SIZE;
+            if inside.cmpge(Vec3::ZERO).all() && inside.cmplt(Vec3::splat(CELL_SIZE)).all() {
+                if radius > cell.reach {
+                    cell.reach = radius;
+                }
+                if radius < cell.smallest {
+                    cell.smallest = radius;
+                }
+                if let Some(target) = cell.items.get_mut(place.pos as usize) {
+                    *target = item;
+                }
+                return;
+            }
+        }
         let large = !(radius <= LARGE_RADIUS && center.is_finite());
         if large {
             let large_item = Large {

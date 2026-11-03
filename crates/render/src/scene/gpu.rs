@@ -333,6 +333,9 @@ impl GpuScene {
             }
         }
         self.scene.coalesce();
+        // The see-through list is sorted and uploaded per view (`parts::transparent`), never by position: its
+        // changed positions are not needed, and would otherwise pile up.
+        self.scene.lists_mut().transparent.dirty.clear();
         self.upload_instances(encoder, &mut stats);
         let relaid = self.layout_lists();
         match view {

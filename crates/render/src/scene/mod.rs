@@ -12,7 +12,8 @@
 //!   per kind ([`GpuScene::list_buffer`]), which the renderer draws one instanced draw per kind from
 //!   ([`crate::parts`]).
 //! - **Culling** ([`crate::cull`]): every listed instance's bounding sphere is also in a loose grid, kept current
-//!   from the same dirty slots in [`InstanceScene::coalesce`]. [`InstanceScene::cull`] walks it for a view and
+//!   from the scene's changes (list changes in [`InstanceScene::coalesce`], moves queued for the next cull).
+//!   [`InstanceScene::cull`] walks it for a view and
 //!   writes the visible entries in the lists' format; [`GpuScene::upload_view`] uploads those into the same
 //!   segments instead of every live entry.
 //!

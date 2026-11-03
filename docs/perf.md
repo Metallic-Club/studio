@@ -39,9 +39,9 @@ passes). There are five suites, each with its own table in the job summary:
   repack, coalesce) plus the upload's CPU work written into a plain buffer: `render_sync_moving` (100 parts that
   move every frame, so they sit together in the dynamic region: one range, the copy path) and
   `render_sync_scattered` (100 parts spread over the scene recoloured: 100 ranges, the scatter path's layout).
-  Since #79 the coalesce also keeps the culling grid current, so `render_sync_moving` counts the 100 movers'
-  grid updates. The cull itself gets its workload once #79 is on `main`, since the base has to build the head's
-  workloads (#114).
+  Since #79 a sync also notes which slots moved, for the culling grid (a compare of the packed transform per
+  written slot, and a queue entry per moved one); moving their grid items is the cull's work, which gets its own
+  workload once #79 is on `main`, since the base has to build the head's workloads (#114).
 
 A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
 checked (each must be present and above zero) and reported as `NEW (not gated)`, and the next PR is gated against
@@ -291,16 +291,20 @@ scatter pass instead (from `SCATTER_MIN_RANGES`, 32).
 With #77 the coalesce also keeps the draw lists current (O(1) per dirty slot): `sync/100k_1pct_moving` measured
 75 µs and `sync/100k_1pct_scattered` 114 µs, the same as before within noise.
 
-With #79 the coalesce also keeps the culling grid current: a slot whose packed transform changed (or that changed
-list) has its bounding sphere rewritten in its cell, or moved to another cell, O(1); a recolour leaves the grid
-alone. `sync/100k_1pct_moving` measured 86 µs (1,000 moving parts: about 11 ns more per moved part) and
-`sync/100k_1pct_scattered` 117 µs. The cull itself, `cull/*` (one `InstanceScene::cull` of the 100,000 parts from
-a 1920 × 1080 camera in the middle of the field at head height, looking along it):
+With #79 the sync also feeds the culling grid: a slot that changes draw list is placed in the grid in the
+coalesce, and one whose packed transform changed is queued once for the next cull, which moves its item (in place
+while it stays in its cell, O(1) otherwise); a recolour leaves the grid alone. A first version moved the items in
+the coalesce: `sync/100k_1pct_moving` 86 µs, and the perf gate's `render_sync_moving` 128,226 → 155,313 `Ir`
+(+21%, about 270 instructions per moved part). Queued, with the
+in-cell check, the same run measured `sync/100k_1pct_moving` 75 µs on `main` against 80 µs, and
+`sync/100k_1pct_scattered` 110–120 µs on `main` against 124–131 µs (that bench varies by about 10% between runs
+on this machine). The cull itself, `cull/*` (one `InstanceScene::cull` of the 100,000 parts from a 1920 × 1080
+camera in the middle of the field at head height, looking along it, nothing queued):
 
 | Bench | Visible | Time |
 | --- | ---: | ---: |
-| `cull/100k_30pct` (70°) | 27,758 | 85 µs |
-| `cull/100k_10pct` (26°) | 9,351 | 38 µs |
+| `cull/100k_30pct` (70°) | 27,758 | 82 µs |
+| `cull/100k_10pct` (26°) | 9,351 | 37 µs |
 
 ### Drawing parts
 
@@ -390,7 +394,7 @@ measured 1.052 / 1.189 / 1.207 ms per frame, 0.266 / 0.382 ms render CPU and 0.9
 ### Culling (#79)
 
 CPU culling (`metallic_render::cull`, ADR 0008 §3): a loose grid of every drawn instance's bounding sphere (32 m
-cells, kept current from the dirty slots in the coalesce), culled per view by frustum, view distance and screen
+cells, kept current from the scene's changes: moved parts are moved at the cull), culled per view by frustum, view distance and screen
 size into the same draw lists, the opaque ones roughly front to back (cells and large items nearest first). The
 renderer's defaults: the frustum, no view distance, nothing under a pixel (`CullSettings::default()`; the presets,
 #84, set the thresholds). The stress example's `--no-cull` draws everything, `--view-distance` and
@@ -400,16 +404,17 @@ line and the instances culled.
 **2026-11-03**, same machine and settings as the table above (DX12, `AutoNoVsync`, 1,000 frames after 120, seed 1).
 Before: `main` at `a947bfb`. After: branch `79-cpu-culling`. "Drawn" is the instances drawn (opaque and
 see-through) against the parts whose centre is in view: a part is drawn when its bounding sphere reaches into the
-view, so a few more. Cull CPU is part of render CPU. Times are p50 in ms.
+view, so a few more. Cull CPU is part of render CPU, and includes moving the parts that moved in the grid. Times
+are p50 in ms.
 
 | Scene | In view | Drawn before → after | Render CPU before → after | Cull CPU | GPU before → after | Frame before → after |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `parts_10k` | 3,010 | 10,000 → 3,077 | 0.154 → 0.178 | 0.016 | 0.200 → 0.123 | 0.283 → 0.255 |
-| `parts_50k` | 15,179 | 50,000 → 15,345 | 0.197 → 0.276 | 0.064 | 0.528 → 0.231 | 0.610 → 0.383 |
-| `parts_100k` | 30,206 | 100,000 → 30,448 | 0.259 → 0.406 | 0.129 | 0.913 → 0.364 | 1.042 → 0.552 |
-| `parts_100k --fov 26` | 10,494 (10.5%) | 100,000 → 10,712 | 0.266 → 0.328 | 0.058 | 0.902 → 0.232 | 1.019 → 0.473 |
-| `see_through_10k` | 10,001 | 10,001 → 10,001 | 0.922 → 0.899 | 0.014 | 0.639 → 0.644 | 1.000 → 0.976 |
-| `overdraw` | 1,453 | 3,266 → 1,716 | 0.151 → 0.180 | 0.013 | 0.547 → 0.216 | 0.621 → 0.295 |
+| `parts_10k` | 3,010 | 10,000 → 3,077 | 0.154 → 0.180 | 0.019 | 0.200 → 0.122 | 0.283 → 0.257 |
+| `parts_50k` | 15,179 | 50,000 → 15,345 | 0.197 → 0.282 | 0.076 | 0.528 → 0.228 | 0.610 → 0.388 |
+| `parts_100k` | 30,206 | 100,000 → 30,448 | 0.259 → 0.419 | 0.151 | 0.913 → 0.364 | 1.042 → 0.565 |
+| `parts_100k --fov 26` | 10,494 (10.5%) | 100,000 → 10,712 | 0.266 → 0.341 | 0.079 | 0.902 → 0.233 | 1.019 → 0.485 |
+| `see_through_10k` | 10,001 | 10,001 → 10,001 | 0.922 → 0.905 | 0.016 | 0.639 → 0.641 | 1.000 → 0.983 |
+| `overdraw` | 1,453 | 3,266 → 1,716 | 0.151 → 0.173 | 0.014 | 0.547 → 0.215 | 0.621 → 0.294 |
 
 The "before" of `parts_100k --fov 26` is the branch with `--no-cull` (`main` has no `--fov`); for the other scenes
 the branch with `--no-cull` measured the same as `main` within 3% (see_through_10k's render CPU: 8% lower, noise).
@@ -419,13 +424,14 @@ the branch with `--no-cull` measured the same as `main` within 3% (see_through_1
   from 0.90 to 0.23 ms. It does not fall in proportion: the parts near the camera, which cover most of the screen,
   are all still drawn.
 - **Render CPU** grows by the cull and by the upload of the visible lists, every frame here because 1% of the parts
-  move: 0.41 ms p50 and 0.55 ms p99 on `parts_100k`, far inside the Mid tier's 2.5 ms (measured on the High-tier
+  move: 0.42 ms p50 and 0.57 ms p99 on `parts_100k`, far inside the Mid tier's 2.5 ms (measured on the High-tier
   dev PC; there is no Mid-tier machine to run it on yet). A frame where nothing changed and the camera is still
   keeps the last cull and uploads no lists.
-- **`overdraw`**: 0.547 → 0.216 ms of GPU from the front-to-back order (the walls are built so that unsorted they
+- **`overdraw`**: 0.547 → 0.215 ms of GPU from the front-to-back order (the walls are built so that unsorted they
   draw back to front; built the other way round the scene measured 0.21 ms). Ordering every instance by its own
   depth instead of by cell (a counting sort into depth buckets) was measured too: 0.206 ms on `overdraw` and
-  0.379 ms on `parts_100k`, for a cull 2.1 times as long on `parts_100k` (0.274 ms) and 2.7 times as long in
+  0.379 ms on `parts_100k`, for a cull 2.1 times as long on `parts_100k` (0.274 ms against 0.129 ms, both with the
+  grid then updated in the coalesce) and 2.7 times as long in
   `cull/100k_30pct` (230 µs). The cell order was kept.
-- **`see_through_10k`** sees all of its parts, so there culling only costs its 0.014 ms; see-through parts are
+- **`see_through_10k`** sees all of its parts, so there culling only costs its 0.016 ms; see-through parts are
   culled before they are sorted.

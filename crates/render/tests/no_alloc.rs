@@ -890,6 +890,45 @@ impl HandParts {
 /// The fewest allocations of a parts frame of `parts` parts (every `see_through`th one see-through, blocks and
 /// balls in turn) and of the same wgpu calls by hand, over [`FRAMES`] frames each in alternating order, with the
 /// frame's draw statistics.
+/// What `Renderer::render_scene` draws of `scene` seen from `camera` on the [`SIZE`]-square target with the default
+/// culling: (opaque draws, transparent draws, see-through instances) and each kind's visible instances. Culls
+/// `scene` (a CPU-only copy of the drawn one) and sorts its see-through instances as the renderer does.
+fn expected_calls(
+    scene: &mut InstanceScene,
+    visible: &mut metallic_render::VisibleSet,
+    keys: &mut Vec<(u32, u32)>,
+    camera: &Camera,
+) -> ((u32, u32, usize), [u32; 4]) {
+    let settings = metallic_render::CullSettings::default();
+    let view = metallic_render::CullView::for_camera(camera, scene.origin(), SIZE, SIZE, &settings);
+    scene.cull(&view, visible);
+    let mut lists = [0u32; 4];
+    for (kind, n) in lists.iter_mut().enumerate() {
+        *n = visible.opaque(metallic_render::scene::MeshKind(kind as u16)).len() as u32;
+    }
+    let opaque_draws = lists.iter().filter(|&&n| n > 0).count() as u32;
+    // Back to front, then one draw per run of the same mesh (`parts/transparent.rs`).
+    let eye = camera.position - scene.origin();
+    keys.clear();
+    keys.extend(visible.transparent().iter().map(|&entry| {
+        let distance = scene
+            .entry_instance(entry)
+            .map_or(0.0, |instance| instance.translation().distance_squared(eye));
+        (!distance.max(0.0).to_bits(), entry)
+    }));
+    keys.sort_unstable();
+    let mut runs = 0;
+    let mut last = None;
+    for &(_, entry) in keys.iter() {
+        let kind = scene.entry_instance(entry).map(GpuInstance::mesh);
+        if kind != last {
+            runs += 1;
+            last = kind;
+        }
+    }
+    ((opaque_draws, runs, keys.len()), lists)
+}
+
 fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usize) -> (u64, u64, DrawStats) {
     let (device, queue) = (context.device(), context.queue());
     let mut game = support::scenes::Game::new();
@@ -913,24 +952,34 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
     )
     .expect("a renderer");
     let hand = HandParts::new(device, parts as u64);
+    // The same game culled on the CPU alone, so the hand-written frame makes exactly the calls the renderer makes
+    // in the same frame, whichever of the two goes first.
+    let mut mirror = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin())
+        .expect("a mirror scene");
+    mirror.sync(&mut game.dm);
+    mirror.coalesce();
+    let mut mirror_visible = metallic_render::VisibleSet::new();
+    let mut sort_keys = Vec::new();
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
     for frame in 0..WARM_UP + FRAMES {
         let camera = orbiting_camera(frame);
+        // The camera moves every frame, so every frame culls again and uploads each kind's visible list.
+        let (calls, visible) = expected_calls(&mut mirror, &mut mirror_visible, &mut sort_keys, &camera);
         for renderer_turn in [frame % 2 == 0, frame % 2 != 0] {
             let (count, submission) = if renderer_turn {
-                allocations_in(|| renderer.render_scene(target.view(), &mut scene, Some(&camera)))
-            } else {
+                let drawn = allocations_in(|| renderer.render_scene(target.view(), &mut scene, Some(&camera)));
                 let stats = renderer.draw_stats();
-                let calls = (
-                    stats.opaque_draws,
-                    stats.transparent_draws,
-                    stats.transparent_instances as usize,
+                assert_eq!(
+                    (
+                        stats.opaque_draws,
+                        stats.transparent_draws,
+                        stats.transparent_instances as usize
+                    ),
+                    calls,
+                    "the mirror predicted another frame"
                 );
-                // The camera moves every frame, so every frame culls again and uploads each kind's visible list.
-                let mut visible = [0u32; 4];
-                for (n, segment) in visible.iter_mut().zip(scene.list_segments()) {
-                    *n = segment.len;
-                }
+                drawn
+            } else {
                 allocations_in(|| hand.frame(device, queue, target.view(), calls, &visible))
             };
             // Each frame finishes before the next starts. The hand-written draws are degenerate, so on a software
@@ -1065,10 +1114,15 @@ fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
     );
 }
 
-#[test]
-fn a_cull_allocates_nothing_once_warm() {
-    let mut game = SceneGame::new();
-    let mut scene = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).unwrap();
+/// Allocations and heap growth of [`FRAMES`] frames of sync, coalesce and cull (the CPU side of a culled frame,
+/// `GpuScene::upload_view` without its wgpu calls) of a grid of `parts` parts, every 25th see-through, 1% moving
+/// (the same ones, which also cross grid cells) and 1% recoloured, seen from an orbiting camera. Returns them with
+/// the parts culled over the measured frames.
+fn culled_frames(parts: usize) -> (u64, i64, u64) {
+    let mut game = support::scenes::Game::new();
+    let ids = support::scenes::grid(&mut game, parts, 10, support::scenes::SeeThrough::Mixed(25));
+    let mut scene =
+        InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).expect("a scene");
     let mut visible = metallic_render::VisibleSet::new();
     let settings = metallic_render::CullSettings {
         min_screen_size: 2.0,
@@ -1076,27 +1130,49 @@ fn a_cull_allocates_nothing_once_warm() {
     };
     let (mut allocations, mut grown, mut culled) = (0, 0, 0);
     for frame in 0..WARM_UP + FRAMES {
-        game.edit(frame);
-        scene.sync(&mut game.dm);
-        scene.coalesce();
+        for (i, &id) in ids.iter().step_by(100).enumerate() {
+            // Up and down through a cell boundary at y = 0.
+            let y = (frame as f32 * 0.7 + i as f32).sin() * 3.0;
+            let place = CFrame::new(Vec3::new(i as f32 * 4.0 - 40.0, y, 0.0));
+            game.dm.set_by_name(id, "CFrame", Value::CFrame(place)).expect("moved");
+        }
+        let shade = (frame % 200) as f32 / 255.0;
+        for i in 0..parts / 100 {
+            let id = ids[(i * 7919 + frame * 31) % parts];
+            game.dm
+                .set_by_name(id, "Color", Value::Color3(Color3::new(shade, 0.5, 0.5)))
+                .expect("recoloured");
+        }
         let camera = orbiting_camera(frame);
-        let view = metallic_render::CullView::for_camera(&camera, scene.origin(), 1920, 1080, &settings);
         let before = live_bytes();
-        let (count, stats) = allocations_in(|| scene.cull(&view, &mut visible));
+        let (count, stats) = allocations_in(|| {
+            scene.sync(&mut game.dm);
+            scene.coalesce();
+            let view = metallic_render::CullView::for_camera(&camera, scene.origin(), 1920, 1080, &settings);
+            scene.cull(&view, &mut visible)
+        });
         if frame >= WARM_UP {
             allocations += count;
             grown += live_bytes() - before;
-            culled += stats.culled();
+            culled += u64::from(stats.culled());
         }
     }
     eprintln!(
-        "{FRAMES} culls of {SCENE_PARTS} parts from an orbiting camera: {allocations} allocations, heap grew {grown} \
-         bytes, {culled} parts culled; the last: {:?}",
+        "{FRAMES} culled frames of {parts} parts from an orbiting camera: {allocations} allocations, heap grew \
+         {grown} bytes, {culled} parts culled; the last: {:?}",
         visible.stats()
     );
-    assert!(culled > 0, "nothing was culled");
-    assert_eq!(allocations, 0, "the cull allocated");
-    assert_eq!(grown, 0, "the heap grew");
+    (allocations, grown, culled)
+}
+
+#[test]
+fn a_cull_allocates_nothing_once_warm() {
+    for parts in [2_000, 8_000] {
+        let (allocations, grown, culled) = culled_frames(parts);
+        assert!(culled > 0, "nothing was culled");
+        assert_eq!(allocations, 0, "the sync, coalesce and cull of {parts} parts allocated");
+        assert_eq!(grown, 0, "the heap grew");
+    }
 }
 
 /// What an overlay frame draws: `lines` lines of formatted numbers that change every frame and a graph of `bars`
