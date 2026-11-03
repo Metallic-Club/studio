@@ -7,9 +7,10 @@
 //!
 //! The script prints once a second on `Heartbeat`, with how many `RenderStepped` events it saw in that second, and
 //! prints every key and button `UserInputService.InputBegan` reports; Escape toggles a locked, hidden cursor
-//! (`MouseBehavior.LockCenter`). Nothing is drawn yet (the renderer is #75 to #77): a stand-in render hook counts the frames it is asked to draw
-//! and reports the window's size, to show where the renderer plugs in. The loop is capped at 60 frames per second,
-//! since no vsync paces it.
+//! (`MouseBehavior.LockCenter`), and while it is locked the once-a-second line adds how far the mouse moved
+//! (`GetMouseDelta`) and where the cursor is (`GetMouseLocation`, the window's centre). Nothing is drawn yet (the
+//! renderer is #75 to #77): a stand-in render hook counts the frames it is asked to draw and reports the window's
+//! size, to show where the renderer plugs in. The loop is capped at 60 frames per second, since no vsync paces it.
 
 use std::cell::Cell;
 use std::error::Error;
@@ -32,19 +33,26 @@ RunService.RenderStepped:Connect(function()
     rendered += 1
 end)
 
+local UserInputService = game:GetService("UserInputService")
+
 local seconds = 0
 local since = 0
+local moved = Vector2.zero
 RunService.Heartbeat:Connect(function(deltaTime)
+    moved += UserInputService:GetMouseDelta()
     since += deltaTime
     if since >= 1 then
         since -= 1
         seconds += 1
         print(`Heartbeat: {seconds} s, time() = {string.format("%.2f", time())}, {rendered} RenderStepped this second`)
         rendered = 0
+        if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+            print(`  mouse moved {moved} this second; GetMouseLocation() = {UserInputService:GetMouseLocation()}`)
+        end
+        moved = Vector2.zero
     end
 end)
 
-local UserInputService = game:GetService("UserInputService")
 UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
     if input.UserInputType == Enum.UserInputType.Keyboard then
         print(`InputBegan: {input.KeyCode}, gameProcessedEvent {gameProcessedEvent}`)
@@ -60,6 +68,12 @@ UserInputService.InputEnded:Connect(function(input)
         UserInputService.MouseIconEnabled = locked
         print(`MouseBehavior: {UserInputService.MouseBehavior}`)
     end
+end)
+UserInputService.WindowFocused:Connect(function()
+    print("WindowFocused")
+end)
+UserInputService.WindowFocusReleased:Connect(function()
+    print("WindowFocusReleased")
 end)
 "#;
 

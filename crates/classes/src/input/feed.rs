@@ -2,8 +2,9 @@
 //!
 //! The engine owns one feed per game and calls it in the first step of every frame: [`InputFeed::begin_frame`],
 //! then one call per event the frame took ([`InputFeed::key`], [`InputFeed::mouse_motion`], ...), then
-//! [`InputFeed::end_frame`]. Then it reads [`InputFeed::cursor`] and applies it to the window. The types here are
-//! plain values, so this crate does not depend on the platform crate; the engine translates the platform's events.
+//! [`InputFeed::end_frame`]. Before ending the frame it reads [`InputFeed::cursor`] and applies it to the window, and
+//! calls [`InputFeed::place_cursor`] when it moves the cursor itself. The types here are plain values, so this crate
+//! does not depend on the platform crate; the engine translates the platform's events.
 //!
 //! # Input objects
 //!
@@ -246,6 +247,8 @@ pub struct InputFeed {
     /// How far the cursor moved this frame.
     cursor_shift: (f64, f64),
     cursor_moved: bool,
+    /// The engine moved the cursor itself this frame ([`InputFeed::place_cursor`]).
+    placed: bool,
     /// Wheel notches this frame.
     wheel: f64,
     /// The data model's structure revision at the last check of the objects the feed keeps.
@@ -355,6 +358,7 @@ impl InputFeed {
             raw_motion: false,
             cursor_shift: (0.0, 0.0),
             cursor_moved: false,
+            placed: false,
             wheel: 0.0,
             revision: dm.structure_revision(),
         })
@@ -377,6 +381,7 @@ impl InputFeed {
         self.raw_motion = false;
         self.cursor_shift = (0.0, 0.0);
         self.cursor_moved = false;
+        self.placed = false;
         self.wheel = 0.0;
         for slot in &mut self.touches {
             slot.delta = (0.0, 0.0);
@@ -444,6 +449,20 @@ impl InputFeed {
         self.raw_motion = true;
     }
 
+    /// The engine moved the cursor to `(x, y)` physical pixels itself, to hold it where `MouseBehavior` asks.
+    /// `GetMouseLocation` reads the new place, but the move is not mouse movement: it adds nothing to the frame's
+    /// delta and fires no `InputChanged`.
+    pub fn place_cursor(&mut self, x: f64, y: f64) {
+        self.location = Some((x, y));
+        self.placed = true;
+    }
+
+    /// The cursor's last known place, in physical pixels from the window's top-left corner; `None` until the
+    /// cursor has been seen over the window.
+    pub fn cursor_location(&self) -> Option<(f64, f64)> {
+        self.location
+    }
+
     /// The wheel turned by `notches` (positive away from the user).
     pub fn wheel(&mut self, dm: &mut DataModel, notches: f64) -> Result<(), DmError> {
         self.enable(dm, Device::Mouse)?;
@@ -500,7 +519,7 @@ impl InputFeed {
         } else {
             self.cursor_shift
         };
-        if self.cursor_moved {
+        if self.cursor_moved || self.placed {
             dm.set(
                 service,
                 self.service.mouse_location,
@@ -1162,6 +1181,52 @@ mod tests {
         assert_eq!(
             call(&mut dm, uis, "GetMouseLocation", vec![]),
             Ok(ScriptValue::Vector2(Vector2::new(10.0, 20.0)))
+        );
+    }
+
+    #[test]
+    fn a_placed_cursor_moves_the_location_but_is_not_movement() {
+        let mut dm = game();
+        let mut feed = feed(&mut dm);
+        let uis = feed.service();
+        connect(&mut dm, uis, "InputChanged", 1);
+        assert_eq!(feed.cursor_location(), None);
+        frame(&mut dm, &mut feed, true, |dm, feed| {
+            feed.cursor_moved(dm, 10.0, 20.0).unwrap();
+        });
+        drain(&mut dm);
+        frame(&mut dm, &mut feed, true, |_, feed| feed.place_cursor(400.0, 300.0));
+        assert!(delivered(&mut dm).is_empty(), "no InputChanged for the engine's own move");
+        assert_eq!(feed.cursor_location(), Some((400.0, 300.0)));
+        assert_eq!(
+            call(&mut dm, uis, "GetMouseLocation", vec![]),
+            Ok(ScriptValue::Vector2(Vector2::new(400.0, 300.0)))
+        );
+        assert_eq!(
+            call(&mut dm, uis, "GetMouseDelta", vec![]),
+            Ok(ScriptValue::Vector2(Vector2::ZERO))
+        );
+        // Raw motion in the same frame as a placement is the frame's delta, and the location stays put.
+        frame(&mut dm, &mut feed, true, |_, feed| {
+            feed.mouse_motion(4.0, -2.0);
+            feed.place_cursor(400.0, 300.0);
+        });
+        assert_eq!(delivered(&mut dm).len(), 1);
+        assert_eq!(
+            call(&mut dm, uis, "GetMouseDelta", vec![]),
+            Ok(ScriptValue::Vector2(Vector2::new(4.0, -2.0)))
+        );
+        assert_eq!(
+            call(&mut dm, uis, "GetMouseLocation", vec![]),
+            Ok(ScriptValue::Vector2(Vector2::new(400.0, 300.0)))
+        );
+        // A later cursor move counts from the placed point.
+        frame(&mut dm, &mut feed, true, |dm, feed| {
+            feed.cursor_moved(dm, 410.0, 300.0).unwrap();
+        });
+        assert_eq!(
+            call(&mut dm, uis, "GetMouseDelta", vec![]),
+            Ok(ScriptValue::Vector2(Vector2::new(10.0, 0.0)))
         );
     }
 

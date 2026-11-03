@@ -7,7 +7,7 @@ use raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, HasWindowH
 
 use crate::error::PlatformError;
 use crate::event::WindowId;
-use crate::input::Size;
+use crate::input::{Position, Size};
 
 /// How a window covers the screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -100,6 +100,12 @@ pub trait WindowBackend: HasWindowHandle + HasDisplayHandle + Send + Sync {
     fn set_cursor_grab(&self, grab: CursorGrab) -> Result<CursorGrab, PlatformError>;
     /// Shows or hides the cursor over the window.
     fn set_cursor_visible(&self, visible: bool);
+    /// Moves the cursor to `position`, in physical pixels from the window's top-left corner. The default says the
+    /// platform cannot, so a backend without a cursor (a console) need not implement it.
+    fn set_cursor_position(&self, position: Position) -> Result<(), PlatformError> {
+        let _ = position;
+        Err(PlatformError::unsupported("moving the cursor"))
+    }
     /// Asks for a [`crate::WindowEvent::RedrawRequested`] for this window.
     fn request_redraw(&self);
 }
@@ -161,6 +167,16 @@ impl Window {
     /// Shows or hides the cursor over the window.
     pub fn set_cursor_visible(&self, visible: bool) {
         self.backend.set_cursor_visible(visible);
+    }
+
+    /// Moves the cursor to `position`, in physical pixels from the window's top-left corner. The engine uses it to
+    /// put the cursor where a [`CursorGrab::Lock`] should hold it (a lock holds it where it is), and to hold it
+    /// still where [`Self::set_cursor_grab`] could only confine it. Where the cursor is locked, the system may keep
+    /// it in place (Windows); move it before locking. The move comes back as a
+    /// [`crate::WindowEvent::CursorMoved`] but not as [`crate::DeviceEvent::MouseMotion`], which reports only the
+    /// mouse itself. Fails with [`PlatformError::Unsupported`] where the platform cannot move the cursor.
+    pub fn set_cursor_position(&self, position: Position) -> Result<(), PlatformError> {
+        self.backend.set_cursor_position(position)
     }
 
     /// Asks for a [`crate::WindowEvent::RedrawRequested`] for this window.

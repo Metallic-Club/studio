@@ -86,9 +86,8 @@ static PROPS: &[PropMeta] = &[
         .group(GROUP)
         .order(0)
         .desc(
-            "How the cursor behaves. Default leaves it free; LockCenter and LockCurrentPosition hold it in the \
-             window so mouse movement can turn a camera (read GetMouseDelta). Where the system cannot lock the \
-             cursor (Windows), it is kept inside the window instead.",
+            "How the cursor behaves. Default leaves it free; LockCenter holds it at the window's centre and \
+             LockCurrentPosition where it was when set, so mouse movement can turn a camera (read GetMouseDelta).",
         ),
     PropMeta::boolean(MOUSE_ICON_ENABLED, true)
         .flags(SETTING)

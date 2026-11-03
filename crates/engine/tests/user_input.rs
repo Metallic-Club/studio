@@ -97,6 +97,13 @@ fn cursor(x: f64, y: f64) -> InputEvent {
     }
 }
 
+fn focus(focused: bool) -> InputEvent {
+    InputEvent::Window {
+        window: WINDOW,
+        event: WindowEvent::Focused(focused),
+    }
+}
+
 const KEYS: &str = r#"
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -278,6 +285,152 @@ fn mouse_behavior_and_icon_reach_the_window() {
     assert_eq!(*window.grabs.lock().expect("grabs"), [CursorGrab::Lock]);
 }
 
+/// Records each frame's `GetMouseDelta`, every mouse `InputChanged` delta and the frame's `GetMouseLocation`, and
+/// lets the test set `MouseBehavior`.
+const CURSOR: &str = r#"
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+_G.deltas = {}
+_G.changed = {}
+_G.set = function(behavior)
+    UserInputService.MouseBehavior = behavior
+end
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        table.insert(_G.changed, `{input.Delta.X},{input.Delta.Y}`)
+    end
+end)
+RunService.Heartbeat:Connect(function()
+    local delta = UserInputService:GetMouseDelta()
+    table.insert(_G.deltas, `{delta.X},{delta.Y}`)
+    local location = UserInputService:GetMouseLocation()
+    _G.location = `{location.X},{location.Y}`
+end)
+"#;
+
+/// The `_G` list `name` as one string, then emptied.
+fn take(engine: &mut Engine<CollectOutput>, name: &str) -> String {
+    let got = probe(engine, &format!("table.concat(_G.{name}, ' ')"));
+    run(engine, &format!("table.clear(_G.{name})"));
+    got
+}
+
+#[test]
+fn lock_center_without_a_lock_holds_the_cursor_at_the_centre() {
+    let mut engine = started(CURSOR);
+    let window = attach_confining_window(&mut engine);
+    run(&mut engine, "_G.set(Enum.MouseBehavior.LockCenter)");
+    engine.push_input(cursor(100.0, 50.0));
+    engine.tick();
+    assert_eq!(*window.grabs.lock().expect("grabs"), [CursorGrab::Lock]);
+    assert!(window.moves().is_empty(), "no focus yet: the cursor is left alone");
+    assert_eq!(probe(&mut engine, "_G.location"), "100,50");
+
+    // Focus: the cursor goes to the centre at each input step.
+    engine.push_input(focus(true));
+    engine.tick();
+    assert_eq!(probe(&mut engine, "_G.location"), "400,300");
+    // The user pushes the mouse: the OS moves the cursor off the centre and reports raw motion.
+    engine.push_input(cursor(410.0, 295.0));
+    engine.push_input(motion(10.0, -5.0));
+    engine.tick();
+    assert_eq!(probe(&mut engine, "_G.location"), "400,300");
+    // The next frame has only the engine's move back to the centre in it, as a cursor event: had it counted, it
+    // would read as a push of -10,5.
+    engine.push_input(cursor(400.0, 300.0));
+    engine.tick();
+    assert_no_errors(&engine);
+    assert_eq!(window.moves(), [(400.0, 300.0); 3], "once per input step");
+    assert_eq!(
+        take(&mut engine, "deltas"),
+        "0,0 0,0 10,-5 0,0",
+        "raw motion only; neither the engine's moves nor the cursor's position count"
+    );
+    assert_eq!(
+        take(&mut engine, "changed"),
+        "0,0 10,-5",
+        "the first cursor event, then the push; the engine's moves fire nothing"
+    );
+
+    // Focus lost: the cursor is free (and its events count again) until focus comes back.
+    engine.push_input(focus(false));
+    engine.push_input(cursor(50.0, 60.0));
+    engine.tick();
+    assert_eq!(window.moves().len(), 3);
+    assert_eq!(probe(&mut engine, "_G.location"), "50,60");
+    engine.push_input(focus(true));
+    engine.tick();
+    assert_eq!(window.moves().len(), 4);
+    assert_eq!(probe(&mut engine, "_G.location"), "400,300");
+
+    // Back to `Default`: the engine lets go.
+    run(&mut engine, "_G.set(Enum.MouseBehavior.Default)");
+    engine.tick();
+    engine.push_input(cursor(10.0, 20.0));
+    engine.tick();
+    assert_eq!(window.moves().len(), 4);
+    assert_eq!(probe(&mut engine, "_G.location"), "10,20");
+    assert_eq!(
+        *window.grabs.lock().expect("grabs"),
+        [CursorGrab::Lock, CursorGrab::Lock, CursorGrab::Lock, CursorGrab::None],
+        "grabbed again each time focus came back"
+    );
+}
+
+#[test]
+fn lock_current_position_without_a_lock_holds_the_cursor_where_it_was() {
+    let mut engine = started(CURSOR);
+    let window = attach_confining_window(&mut engine);
+    engine.push_input(focus(true));
+    engine.push_input(cursor(120.0, 80.0));
+    engine.tick();
+    assert!(window.moves().is_empty(), "Default: the cursor is free");
+    run(&mut engine, "_G.set(Enum.MouseBehavior.LockCurrentPosition)");
+    engine.tick();
+    engine.push_input(cursor(130.0, 85.0));
+    engine.push_input(motion(10.0, 5.0));
+    engine.tick();
+    assert_no_errors(&engine);
+    assert_eq!(window.moves(), [(120.0, 80.0); 2]);
+    assert_eq!(probe(&mut engine, "_G.location"), "120,80");
+    assert_eq!(take(&mut engine, "deltas"), "0,0 0,0 10,5");
+}
+
+#[test]
+fn a_window_that_locks_gets_the_cursor_at_the_centre_before_each_grab() {
+    let mut engine = started(CURSOR);
+    let window = attach_fake_window(&mut engine);
+    run(&mut engine, "_G.set(Enum.MouseBehavior.LockCenter)");
+    engine.push_input(focus(true));
+    engine.push_input(cursor(100.0, 50.0));
+    engine.tick();
+    assert_eq!(window.moves(), [(400.0, 300.0)], "moved once, then locked there");
+    engine.push_input(cursor(400.0, 300.0));
+    engine.push_input(motion(3.0, 4.0));
+    engine.tick();
+    engine.tick();
+    assert_no_errors(&engine);
+    assert_eq!(window.moves().len(), 1, "the OS holds a locked cursor");
+    assert_eq!(*window.grabs.lock().expect("grabs"), [CursorGrab::Lock]);
+    assert_eq!(probe(&mut engine, "_G.location"), "400,300");
+    assert_eq!(take(&mut engine, "deltas"), "0,0 3,4 0,0");
+    assert_eq!(
+        take(&mut engine, "changed"),
+        "0,0 3,4",
+        "the first cursor event, then the push; the engine's move fires nothing"
+    );
+
+    // The system may let go of the cursor while another window has focus: back in, it is moved and locked again.
+    engine.push_input(focus(false));
+    engine.push_input(focus(true));
+    engine.tick();
+    assert_eq!(window.moves(), [(400.0, 300.0); 2]);
+    assert_eq!(
+        *window.grabs.lock().expect("grabs"),
+        [CursorGrab::Lock, CursorGrab::Lock]
+    );
+}
+
 #[test]
 fn a_stopped_game_tracks_keys_but_fires_nothing() {
     let sources = MemorySources::new();
@@ -295,12 +448,36 @@ fn a_stopped_game_tracks_keys_but_fires_nothing() {
 /// A window with no OS behind it that records what the engine asks of its cursor.
 #[derive(Clone, Default)]
 struct FakeWindow {
+    /// Whether the window cannot lock the cursor and confines it instead, as winit does on X11.
+    confine_only: bool,
     grabs: Arc<Mutex<Vec<CursorGrab>>>,
     visible: Arc<Mutex<Vec<bool>>>,
+    /// Where the engine moved the cursor.
+    moves: Arc<Mutex<Vec<(f64, f64)>>>,
+}
+
+impl FakeWindow {
+    fn moves(&self) -> Vec<(f64, f64)> {
+        self.moves.lock().expect("moves").clone()
+    }
 }
 
 fn attach_fake_window(engine: &mut Engine<CollectOutput>) -> FakeWindow {
-    let fake = FakeWindow::default();
+    attach(engine, FakeWindow::default())
+}
+
+/// A fake window that confines the cursor when asked to lock it.
+fn attach_confining_window(engine: &mut Engine<CollectOutput>) -> FakeWindow {
+    attach(
+        engine,
+        FakeWindow {
+            confine_only: true,
+            ..FakeWindow::default()
+        },
+    )
+}
+
+fn attach(engine: &mut Engine<CollectOutput>, fake: FakeWindow) -> FakeWindow {
     engine
         .attach_window(Window::from_backend(Arc::new(fake.clone())))
         .expect("attach");
@@ -323,8 +500,9 @@ impl WindowBackend for FakeWindow {
     fn id(&self) -> WindowId {
         WINDOW
     }
+    /// Odd, so the centre has to round to a whole pixel.
     fn inner_size(&self) -> Size {
-        Size::new(800, 600)
+        Size::new(801, 601)
     }
     fn scale_factor(&self) -> f64 {
         1.0
@@ -335,10 +513,17 @@ impl WindowBackend for FakeWindow {
     }
     fn set_cursor_grab(&self, grab: CursorGrab) -> Result<CursorGrab, PlatformError> {
         self.grabs.lock().expect("grabs").push(grab);
-        Ok(grab)
+        Ok(match grab {
+            CursorGrab::Lock if self.confine_only => CursorGrab::Confine,
+            grab => grab,
+        })
     }
     fn set_cursor_visible(&self, visible: bool) {
         self.visible.lock().expect("visible").push(visible);
+    }
+    fn set_cursor_position(&self, position: Position) -> Result<(), PlatformError> {
+        self.moves.lock().expect("moves").push((position.x, position.y));
+        Ok(())
     }
     fn request_redraw(&self) {}
 }

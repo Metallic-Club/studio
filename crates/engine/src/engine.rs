@@ -458,11 +458,11 @@ impl<O: OutputSink> Engine<O> {
 
     /// The frame's input step: the queued events become the frame's, `UserInputService` takes them (firing its
     /// events only when the game runs this frame, `firing`), and the cursor state scripts asked for reaches the
-    /// window.
+    /// window (the engine holds the cursor itself where the window cannot lock it).
     fn input_step(&mut self, firing: bool) {
         self.input.begin_frame();
-        self.user_input.process(&mut self.dm, self.input.frame_events(), firing);
-        self.user_input.apply_cursor(&self.dm, self.window.as_ref());
+        self.user_input
+            .process(&mut self.dm, self.input.frame_events(), firing, self.window.as_ref());
     }
 
     /// The frame's last step: the render hook draws, when the engine is windowed and has a window.
