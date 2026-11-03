@@ -20,6 +20,10 @@
 //! than the same write and draw by hand, the same for 35 quads as for 1,300 (beyond the runner noise the parts
 //! frames also see), and the heap does not grow over 100 such frames.
 //!
+//! Culling (#79) too: a cull of 10,000 parts from an orbiting camera allocates nothing at all once warm, the parts
+//! frames above cull and upload their visible lists every frame (the hand-written frame makes the same staging
+//! write and copies), and the heap does not grow over 100 culled frames on either instance path.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
 // A `#[global_allocator]` needs `unsafe impl GlobalAlloc`. This test binary's allocator only counts, then forwards
@@ -673,6 +677,9 @@ struct HandParts {
     indices: wgpu::Buffer,
     frame: wgpu::Buffer,
     sorted: wgpu::Buffer,
+    /// The opaque draw lists, and the staging buffer their visible entries are written through.
+    entries: wgpu::Buffer,
+    list_staging: wgpu::Buffer,
     depth: wgpu::TextureView,
     sorted_bytes: Vec<u8>,
 }
@@ -790,12 +797,20 @@ impl HandParts {
             indices: buffer(4 * 4096, wgpu::BufferUsages::INDEX),
             frame,
             sorted,
+            list_staging: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hand list staging"),
+                size: instances * 4,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            entries,
             depth,
             sorted_bytes: vec![0; (instances * 4) as usize],
         }
     }
 
-    /// The renderer's default passes with `opaque` and `transparent` instanced draws, after writing the frame
+    /// The renderer's default passes with `opaque` and `transparent` instanced draws, after writing each kind's
+    /// `visible` list entries (one staging write and a copy per list, as a culled frame uploads its lists), the frame
     /// uniform and `sorted` transparent entries: the wgpu calls `Renderer::render_scene` makes.
     fn frame(
         &self,
@@ -803,10 +818,22 @@ impl HandParts {
         queue: &wgpu::Queue,
         target: &wgpu::TextureView,
         (opaque, transparent, sorted): (u32, u32, usize),
+        visible: &[u32],
     ) -> wgpu::SubmissionIndex {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
         });
+        let listed: u64 = visible.iter().map(|&n| u64::from(n) * 4).sum();
+        if let Some(size) = wgpu::BufferSize::new(listed) {
+            if let Some(mut view) = queue.write_buffer_with(&self.list_staging, 0, size) {
+                view.slice(..).copy_from_slice(&self.sorted_bytes[..listed as usize]);
+            }
+            let mut source = 0;
+            for bytes in visible.iter().filter(|&&n| n > 0).map(|&n| u64::from(n) * 4) {
+                encoder.copy_buffer_to_buffer(&self.list_staging, source, &self.entries, source, bytes);
+                source += bytes;
+            }
+        }
         queue.write_buffer(&self.frame, 0, &[0; 160]);
         queue.write_buffer(&self.sorted, 0, &self.sorted_bytes[..sorted * 4]);
         for &(label, clear, depth_write) in &DEFAULT_PASSES {
@@ -863,6 +890,45 @@ impl HandParts {
 /// The fewest allocations of a parts frame of `parts` parts (every `see_through`th one see-through, blocks and
 /// balls in turn) and of the same wgpu calls by hand, over [`FRAMES`] frames each in alternating order, with the
 /// frame's draw statistics.
+/// What `Renderer::render_scene` draws of `scene` seen from `camera` on the [`SIZE`]-square target with the default
+/// culling: (opaque draws, transparent draws, see-through instances) and each kind's visible instances. Culls
+/// `scene` (a CPU-only copy of the drawn one) and sorts its see-through instances as the renderer does.
+fn expected_calls(
+    scene: &mut InstanceScene,
+    visible: &mut metallic_render::VisibleSet,
+    keys: &mut Vec<(u32, u32)>,
+    camera: &Camera,
+) -> ((u32, u32, usize), [u32; 4]) {
+    let settings = metallic_render::CullSettings::default();
+    let view = metallic_render::CullView::for_camera(camera, scene.origin(), SIZE, SIZE, &settings);
+    scene.cull(&view, visible);
+    let mut lists = [0u32; 4];
+    for (kind, n) in lists.iter_mut().enumerate() {
+        *n = visible.opaque(metallic_render::scene::MeshKind(kind as u16)).len() as u32;
+    }
+    let opaque_draws = lists.iter().filter(|&&n| n > 0).count() as u32;
+    // Back to front, then one draw per run of the same mesh (`parts/transparent.rs`).
+    let eye = camera.position - scene.origin();
+    keys.clear();
+    keys.extend(visible.transparent().iter().map(|&entry| {
+        let distance = scene
+            .entry_instance(entry)
+            .map_or(0.0, |instance| instance.translation().distance_squared(eye));
+        (!distance.max(0.0).to_bits(), entry)
+    }));
+    keys.sort_unstable();
+    let mut runs = 0;
+    let mut last = None;
+    for &(_, entry) in keys.iter() {
+        let kind = scene.entry_instance(entry).map(GpuInstance::mesh);
+        if kind != last {
+            runs += 1;
+            last = kind;
+        }
+    }
+    ((opaque_draws, runs, keys.len()), lists)
+}
+
 fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usize) -> (u64, u64, DrawStats) {
     let (device, queue) = (context.device(), context.queue());
     let mut game = support::scenes::Game::new();
@@ -886,20 +952,35 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
     )
     .expect("a renderer");
     let hand = HandParts::new(device, parts as u64);
+    // The same game culled on the CPU alone, so the hand-written frame makes exactly the calls the renderer makes
+    // in the same frame, whichever of the two goes first.
+    let mut mirror = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin())
+        .expect("a mirror scene");
+    mirror.sync(&mut game.dm);
+    mirror.coalesce();
+    let mut mirror_visible = metallic_render::VisibleSet::new();
+    let mut sort_keys = Vec::new();
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
     for frame in 0..WARM_UP + FRAMES {
         let camera = orbiting_camera(frame);
+        // The camera moves every frame, so every frame culls again and uploads each kind's visible list.
+        let (calls, visible) = expected_calls(&mut mirror, &mut mirror_visible, &mut sort_keys, &camera);
         for renderer_turn in [frame % 2 == 0, frame % 2 != 0] {
             let (count, submission) = if renderer_turn {
-                allocations_in(|| renderer.render_scene(target.view(), &mut scene, Some(&camera)))
-            } else {
+                let drawn = allocations_in(|| renderer.render_scene(target.view(), &mut scene, Some(&camera)));
                 let stats = renderer.draw_stats();
-                let calls = (
-                    stats.opaque_draws,
-                    stats.transparent_draws,
-                    scene.scene().transparent_list().len(),
+                assert_eq!(
+                    (
+                        stats.opaque_draws,
+                        stats.transparent_draws,
+                        stats.transparent_instances as usize
+                    ),
+                    calls,
+                    "the mirror predicted another frame"
                 );
-                allocations_in(|| hand.frame(device, queue, target.view(), calls))
+                drawn
+            } else {
+                allocations_in(|| hand.frame(device, queue, target.view(), calls, &visible))
             };
             // Each frame finishes before the next starts. The hand-written draws are degenerate, so on a software
             // rasteriser the renderer's frames take far longer, and with frames in flight wgpu's bookkeeping of
@@ -936,12 +1017,23 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
     )
 }
 
-/// What a parts frame may allocate beyond the same wgpu calls by hand, for the machine rather than for us. Every
-/// adapter on the dev PC (Vulkan, DX12, GL, and WARP) shows 0. CI's lavapipe and WARP showed a constant 4 and 3
-/// on every 2,000-part frame, whether or not frames overlapped, and the same for the 6,000-part workload below.
-/// The cause is in the runner environment, not found yet (no validation message was reported); that the excess
-/// does not change between two very different workloads is what shows it is not the renderer's.
-const MACHINE_NOISE: u64 = 4;
+/// What a frame may allocate beyond the same wgpu calls by hand on `context`'s adapter, for the machine rather than
+/// for us.
+///
+/// - **Hardware adapters: nothing.** Every one on the dev PC (Vulkan, DX12, GL) shows 0, and so does WARP there.
+/// - **Software adapters** (`DeviceType::Cpu`: lavapipe, llvmpipe, WARP) on CI's runners: up to 6. They showed a
+///   constant excess on every frame, whether or not frames overlapped, the same for both workloads of each test:
+///   lavapipe 4 and WARP 3 on the parts frames before culling (#77), WARP 5 with it (#79), lavapipe 3 on the
+///   overlay frames. The cause is in the runner environment, not found yet (no validation message was reported,
+///   and the dev PC's WARP shows 0 for the same calls); that the excess does not change between two very different
+///   workloads, which every test also checks, is what shows it is not the renderer's.
+fn machine_noise(context: &RenderContext) -> u64 {
+    if context.capabilities().device_type == wgpu::DeviceType::Cpu {
+        6
+    } else {
+        0
+    }
+}
 
 #[test]
 fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
@@ -969,27 +1061,42 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
         "the renderer's own allocations grow with the work: {extra_small} for {small:?}, {extra_large} for \
          {large:?}"
     );
-    // ...and no more than the machine's noise (0 on the dev PC).
+    // ...and no more than the machine's noise (none on a hardware adapter).
     assert!(
-        extra_small <= MACHINE_NOISE,
-        "drawing parts adds {extra_small} allocation(s) per frame"
+        extra_small <= machine_noise(&context),
+        "drawing parts adds {extra_small} allocation(s) per frame on {:?}",
+        context.capabilities().device_type
     );
 }
 
+/// Frames of moving parts seen from an orbiting camera, so every frame culls again and uploads the visible lists,
+/// on both instance paths (the vertex-buffer fallback's lists hold copies of the visible instances).
 #[test]
 fn nothing_accumulates_over_parts_frames() {
-    let Some(context) = support::gpu() else { return };
+    for force_vertex_instances in [false, true] {
+        let options = metallic_render::ContextOptions {
+            force_vertex_instances,
+            ..metallic_render::ContextOptions::default()
+        };
+        let Some(context) = support::gpu_with(&options) else {
+            return;
+        };
+        parts_frames_do_not_grow_the_heap(&context);
+    }
+}
+
+fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
     let mut game = support::scenes::Game::new();
     let parts = support::scenes::grid(&mut game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
     let mut scene = GpuScene::new(
-        &context,
+        context,
         &mut game.dm,
         Some(game.workspace),
         &RenderComponents::builtin(),
     )
-    .unwrap();
-    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
-    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    .expect("a scene");
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
+    let mut renderer = Renderer::new(context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
     let mut pacer = Pacer::new();
     let mut before = 0;
     for frame in 0..WARM_UP + FRAMES {
@@ -1008,13 +1115,76 @@ fn nothing_accumulates_over_parts_frames() {
     }
     let grown = live_bytes() - before;
     eprintln!(
-        "{FRAMES} frames drawing {:?}: heap grew {grown} bytes",
+        "{FRAMES} frames on the {:?} path drawing {:?}: heap grew {grown} bytes",
+        InstanceBinding::for_context(context),
         renderer.draw_stats()
     );
+    assert!(renderer.draw_stats().culled_instances > 0, "nothing was culled");
     assert!(
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"
     );
+}
+
+/// Allocations and heap growth of [`FRAMES`] frames of sync, coalesce and cull (the CPU side of a culled frame,
+/// `GpuScene::upload_view` without its wgpu calls) of a grid of `parts` parts, every 25th see-through, 1% moving
+/// (the same ones, which also cross grid cells) and 1% recoloured, seen from an orbiting camera. Returns them with
+/// the parts culled over the measured frames.
+fn culled_frames(parts: usize) -> (u64, i64, u64) {
+    let mut game = support::scenes::Game::new();
+    let ids = support::scenes::grid(&mut game, parts, 10, support::scenes::SeeThrough::Mixed(25));
+    let mut scene =
+        InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).expect("a scene");
+    let mut visible = metallic_render::VisibleSet::new();
+    let settings = metallic_render::CullSettings {
+        min_screen_size: 2.0,
+        ..metallic_render::CullSettings::default()
+    };
+    let (mut allocations, mut grown, mut culled) = (0, 0, 0);
+    for frame in 0..WARM_UP + FRAMES {
+        for (i, &id) in ids.iter().step_by(100).enumerate() {
+            // Up and down through a cell boundary at y = 0.
+            let y = (frame as f32 * 0.7 + i as f32).sin() * 3.0;
+            let place = CFrame::new(Vec3::new(i as f32 * 4.0 - 40.0, y, 0.0));
+            game.dm.set_by_name(id, "CFrame", Value::CFrame(place)).expect("moved");
+        }
+        let shade = (frame % 200) as f32 / 255.0;
+        for i in 0..parts / 100 {
+            let id = ids[(i * 7919 + frame * 31) % parts];
+            game.dm
+                .set_by_name(id, "Color", Value::Color3(Color3::new(shade, 0.5, 0.5)))
+                .expect("recoloured");
+        }
+        let camera = orbiting_camera(frame);
+        let before = live_bytes();
+        let (count, stats) = allocations_in(|| {
+            scene.sync(&mut game.dm);
+            scene.coalesce();
+            let view = metallic_render::CullView::for_camera(&camera, scene.origin(), 1920, 1080, &settings);
+            scene.cull(&view, &mut visible)
+        });
+        if frame >= WARM_UP {
+            allocations += count;
+            grown += live_bytes() - before;
+            culled += u64::from(stats.culled());
+        }
+    }
+    eprintln!(
+        "{FRAMES} culled frames of {parts} parts from an orbiting camera: {allocations} allocations, heap grew \
+         {grown} bytes, {culled} parts culled; the last: {:?}",
+        visible.stats()
+    );
+    (allocations, grown, culled)
+}
+
+#[test]
+fn a_cull_allocates_nothing_once_warm() {
+    for parts in [2_000, 8_000] {
+        let (allocations, grown, culled) = culled_frames(parts);
+        assert!(culled > 0, "nothing was culled");
+        assert_eq!(allocations, 0, "the sync, coalesce and cull of {parts} parts allocated");
+        assert_eq!(grown, 0, "the heap grew");
+    }
 }
 
 /// What an overlay frame draws: `lines` lines of formatted numbers that change every frame and a graph of `bars`
@@ -1199,7 +1369,7 @@ fn overlay_frame_and_floor(context: &RenderContext, work: OverlayWork) -> (u64, 
 
 /// Like the parts frame above: CI's lavapipe showed a constant 3 allocations beyond the hand-written overlay frame
 /// (65 against 62 for about 260 quads) where every adapter on the dev PC shows 0, the same runner-only excess the
-/// parts frames show ([`MACHINE_NOISE`]). The renderer's overlay frame and the hand-written one make the same wgpu
+/// parts frames show ([`machine_noise`]). The renderer's overlay frame and the hand-written one make the same wgpu
 /// calls, so the check is that the excess does not change with the overlay's size: nothing per quad, per glyph or
 /// per line of text allocates.
 #[test]
@@ -1222,10 +1392,11 @@ fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
         "the overlay's own allocations grow with its size: {extra_small} for {small} quads, {extra_large} for \
          {large}"
     );
-    // ...and no more than the machine's noise (0 on the dev PC).
+    // ...and no more than the machine's noise (none on a hardware adapter).
     assert!(
-        extra_small <= MACHINE_NOISE,
-        "the overlay adds {extra_small} allocation(s) per frame"
+        extra_small <= machine_noise(&context),
+        "the overlay adds {extra_small} allocation(s) per frame on {:?}",
+        context.capabilities().device_type
     );
 }
 

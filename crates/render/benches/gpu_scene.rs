@@ -1,5 +1,5 @@
 //! CPU time of the GPU scene (#76, ADR 0008 §2) on 100,000 parts: a frame's sync with 1% of the parts changing
-//! (target ≤ 0.5 ms on the dev PC), the same with its upload on a real device, and a full rebuild.
+//! (target ≤ 0.5 ms on the dev PC), the same with its upload on a real device, a full rebuild, and a cull (#79).
 //!
 //! ```text
 //! cargo bench -p metallic_render --bench gpu_scene
@@ -19,7 +19,9 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::scene::{GpuInstance, RenderComponents, SCATTER_MIN_RANGES};
-use metallic_render::{ContextOptions, GpuScene, InstanceScene, RenderContext, wgpu};
+use metallic_render::{
+    Camera, ContextOptions, CullSettings, CullView, GpuScene, InstanceScene, RenderContext, VisibleSet, wgpu,
+};
 
 const PARTS: usize = 100_000;
 const CHANGES: usize = PARTS / 100;
@@ -155,6 +157,27 @@ fn rebuild(c: &mut Criterion) {
     });
 }
 
+/// One cull of the 100,000 parts (#79) for a 1920 × 1080 camera in the middle of the grid at head height, looking
+/// along it: 70° sees about 30% of the parts, 26° about 10%.
+fn cull(c: &mut Criterion) {
+    let mut game = Game::new();
+    let mut scene =
+        InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).expect("a scene");
+    scene.sync(&mut game.dm);
+    scene.coalesce();
+    let mut visible = VisibleSet::new();
+    let mut group = c.benchmark_group("cull");
+    for (name, fov) in [("100k_30pct", 70.0), ("100k_10pct", 26.0)] {
+        let eye = Vec3::new(600.0, 6.0, 668.0);
+        let camera = Camera::from_cframe(CFrame::look_at(eye, eye + Vec3::X, Vec3::Y), fov);
+        let view = CullView::for_camera(&camera, scene.origin(), 1920, 1080, &CullSettings::default());
+        let stats = scene.cull(&view, &mut visible);
+        eprintln!("cull/{name}: {stats:?}");
+        group.bench_function(name, |b| b.iter(|| black_box(scene.cull(&view, &mut visible))));
+    }
+    group.finish();
+}
+
 fn device() -> Option<RenderContext> {
     match RenderContext::new_offscreen(&ContextOptions::default()) {
         Ok(context) => Some(context),
@@ -262,5 +285,5 @@ fn upload(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, sync, rebuild, upload);
+criterion_group!(benches, sync, rebuild, cull, upload);
 criterion_main!(benches);

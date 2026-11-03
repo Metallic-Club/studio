@@ -1,5 +1,6 @@
 //! The frame loop: runs the planned passes into a target and keeps the GPU timings coming.
 
+use crate::cull::{CullSettings, CullStats, CullView};
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet};
 use crate::overlay::{Overlay, OverlayPass};
@@ -27,11 +28,13 @@ pub struct RendererSettings {
     pub gpu_timing: bool,
     /// The colour the frame starts from (linear).
     pub clear_color: wgpu::Color,
+    /// What the main view culls ([`crate::cull`]): frustum, view distance and screen size.
+    pub cull: CullSettings,
 }
 
 impl RendererSettings {
-    /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes, GPU timing on and
-    /// a black clear colour.
+    /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes, GPU timing on, a
+    /// black clear colour and the default culling.
     pub fn new(color_format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         Self {
             color_format,
@@ -41,6 +44,7 @@ impl RendererSettings {
             passes: PassSet::default(),
             gpu_timing: true,
             clear_color: wgpu::Color::BLACK,
+            cull: CullSettings::default(),
         }
     }
 }
@@ -68,6 +72,7 @@ pub struct Renderer {
     timer: Option<GpuTimer>,
     parts: PartRenderer,
     last_upload: UploadStats,
+    last_cull: CullStats,
     frame: u64,
     overlay: Overlay,
     /// The overlay's GPU side; `Some` while the overlay is on.
@@ -107,6 +112,7 @@ impl Renderer {
             timer,
             parts,
             last_upload: UploadStats::default(),
+            last_cull: CullStats::default(),
             frame: 0,
             overlay: Overlay::default(),
             overlay_pass: None,
@@ -178,6 +184,11 @@ impl Renderer {
         self.settings.clear_color = color;
     }
 
+    /// Changes what the main view culls. Takes effect with the next frame.
+    pub fn set_cull(&mut self, cull: CullSettings) {
+        self.settings.cull = cull;
+    }
+
     /// Renders one frame into `target`, which must have the settings' format and size, and submits it.
     ///
     /// Never blocks on the GPU. For a window, render into [`crate::SurfaceFrame::view`] and present afterwards; the
@@ -204,7 +215,8 @@ impl Renderer {
 
     /// Renders one frame of `scene`'s parts, seen from `camera`, into `target` (which must have the settings'
     /// format and size), and submits it: the scene's upload ([`GpuScene::upload`]), then the passes with their
-    /// draws (see [`crate::parts`]). With no camera the passes run without draws (the clear colour).
+    /// draws (see [`crate::parts`]). With no camera the passes run without draws (the clear colour). Only what the
+    /// camera sees is drawn, as [`RendererSettings::cull`] says ([`Renderer::cull_stats`]).
     ///
     /// Sync the scene ([`GpuScene::sync`]) first. Never blocks on the GPU; see [`Renderer::render`] about pacing.
     pub fn render_scene(
@@ -214,7 +226,18 @@ impl Renderer {
         camera: Option<&Camera>,
     ) -> wgpu::SubmissionIndex {
         let (mut encoder, slot) = self.begin_frame();
-        self.last_upload = scene.upload(&mut encoder);
+        let cull = &self.settings.cull;
+        let view = camera.filter(|_| cull.enabled).map(|camera| {
+            CullView::for_camera(
+                camera,
+                scene.scene().origin(),
+                self.settings.width,
+                self.settings.height,
+                cull,
+            )
+        });
+        self.last_upload = scene.upload_view(&mut encoder, view.as_ref());
+        self.last_cull = scene.cull_stats();
         // After the upload, which may have replaced the buffers the bind groups use.
         self.parts.prepare(
             scene,
@@ -236,6 +259,12 @@ impl Renderer {
     /// What the last [`Renderer::render_scene`] uploaded.
     pub fn upload_stats(&self) -> UploadStats {
         self.last_upload
+    }
+
+    /// What the last [`Renderer::render_scene`] culled, and the CPU time it took (default when culling is off or
+    /// there was no camera).
+    pub fn cull_stats(&self) -> CullStats {
+        self.last_cull
     }
 
     /// The part renderer: the material table, the temporary light, the meshes.

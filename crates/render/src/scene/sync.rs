@@ -3,7 +3,10 @@
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, ConsumerId, DataModel, DirtyBits, DmError, Id};
 
+use crate::cull::{CullStats, CullView, VisibleSet};
+
 use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
+use super::grid::Grid;
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
@@ -64,6 +67,10 @@ pub struct InstanceScene {
     uploads: Vec<UploadRange>,
     /// Which slots each draw covers (see [`super::lists`]).
     lists: DrawLists,
+    /// Every listed instance's bounding sphere, for culling (see [`super::grid`]).
+    grid: Grid,
+    /// Changes whenever a coalesce changed any slot, so a view's cull can be kept while nothing changed.
+    revision: u64,
 }
 
 impl InstanceScene {
@@ -89,6 +96,8 @@ impl InstanceScene {
             removed: Vec::new(),
             uploads: Vec::new(),
             lists: DrawLists::default(),
+            grid: Grid::default(),
+            revision: 0,
         })
     }
 
@@ -116,6 +125,8 @@ impl InstanceScene {
         self.entries.fill(Entry::EMPTY);
         self.uploads.clear();
         self.lists.clear();
+        self.grid.clear();
+        self.revision = self.revision.wrapping_add(1);
         self.rest_cursor = 0;
         dm.mark_all(self.consumer);
     }
@@ -178,6 +189,9 @@ impl InstanceScene {
                         row[3] = t;
                     }
                 }
+                if slots.mark_moved(slot) {
+                    self.grid.queue(entry(region, slot));
+                }
                 slots.mark_dirty(slot);
             }
         }
@@ -223,8 +237,12 @@ impl InstanceScene {
     /// region the ranges are sorted, adjacent slots share a range, and runs separated by at most
     /// [`MAX_UPLOAD_GAP`] clean slots are merged.
     ///
-    /// The draw lists ([`InstanceScene::draw_list`]) are brought up to date first, from the same dirty slots.
+    /// The draw lists ([`InstanceScene::draw_list`]) are brought up to date first, from the same dirty slots, and
+    /// slots that changed list are placed in the culling grid (moved ones wait for the next cull).
     pub fn coalesce(&mut self) {
+        if Region::ALL.iter().any(|r| self.regions[r.index()].dirty_len() > 0) {
+            self.revision = self.revision.wrapping_add(1);
+        }
         self.update_lists();
         self.uploads.clear();
         for region in Region::ALL {
@@ -235,6 +253,60 @@ impl InstanceScene {
     /// The ranges the last [`InstanceScene::coalesce`] produced.
     pub fn uploads(&self) -> &[UploadRange] {
         &self.uploads
+    }
+
+    /// Changes whenever a [`InstanceScene::coalesce`] changed any slot (or the scene was rebuilt): while it stays
+    /// the same, a cull for the same view gives the same result.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Writes the instances `view` sees into `out`, as of the last [`InstanceScene::coalesce`]: per mesh kind the
+    /// visible opaque entries, roughly front to back, and the visible see-through entries (see [`crate::cull`]).
+    /// Allocates nothing once `out` has grown to the scene's lists.
+    ///
+    /// Instances that moved since the last cull are moved in the culling grid first (see [`super::grid`]), so
+    /// that upkeep is part of the cull's time; further views of the same frame find nothing left to move.
+    pub fn cull(&mut self, view: &CullView, out: &mut VisibleSet) -> CullStats {
+        let start = std::time::Instant::now();
+        self.apply_moves();
+        let capacities = self.lists.opaque.iter().map(|list| list.entries.len());
+        let mut stats = self
+            .grid
+            .cull(view, capacities, self.lists.transparent.entries.len(), out);
+        stats.cpu_time = start.elapsed();
+        out.stats = stats;
+        stats
+    }
+
+    /// Instances in the culling grid: every one on a draw list.
+    pub fn culling_items(&self) -> usize {
+        self.grid.len()
+    }
+
+    /// Instances queued to move in the culling grid at the next cull.
+    #[cfg(test)]
+    pub(super) fn culling_queue(&self) -> usize {
+        self.grid.queued()
+    }
+
+    /// Moves the queued instances' items in the culling grid to their current bounding spheres.
+    fn apply_moves(&mut self) {
+        let queued = self.grid.take_queue();
+        for &moved in &queued {
+            let (region, slot) = entry_slot(moved);
+            let slots = &mut self.regions[region.index()];
+            let (Some(instance), Some(meta)) = (slots.instances.get(slot as usize), slots.meta.get_mut(slot as usize))
+            else {
+                continue;
+            };
+            if !meta.moved {
+                continue;
+            }
+            meta.moved = false;
+            self.grid.update(region, slot, instance, meta.list);
+        }
+        self.grid.return_queue(queued);
     }
 
     /// The entries drawn as opaque instances of mesh `kind`, in no particular order: one per live slot whose
@@ -309,6 +381,10 @@ impl InstanceScene {
             }
             return;
         }
+        // A slot that changes list enters, leaves or changes list in the culling grid now; one that only moved
+        // waits on the grid's queue for the next cull. (A queued slot stays queued: it is on the queue once, and
+        // the update there finds nothing left to do.)
+        self.grid.update(region, slot, instance, want);
         if have != NOT_LISTED
             && let Some(moved) = self.lists.remove(have, pos)
         {
@@ -369,11 +445,11 @@ impl InstanceScene {
                 (false, None) => {}
                 (true, None) => {
                     let slot = self.place(id, Region::Static);
-                    self.write(dm, id, slot, &binding);
+                    self.write(dm, id, slot, &binding, true);
                     stats.added += 1;
                 }
                 (true, Some(slot)) => {
-                    self.write(dm, id, slot, &binding);
+                    self.write(dm, id, slot, &binding, true);
                     stats.updated += 1;
                 }
             }
@@ -382,10 +458,11 @@ impl InstanceScene {
         let Some(mut slot) = current else {
             return;
         };
-        if bits.contains(DirtyBits::TRANSFORM) {
+        let transform = bits.contains(DirtyBits::TRANSFORM);
+        if transform {
             slot = self.track_motion(dm, id, slot, &binding, stats);
         }
-        self.write(dm, id, slot, &binding);
+        self.write(dm, id, slot, &binding, transform);
         stats.updated += 1;
     }
 
@@ -511,12 +588,21 @@ impl InstanceScene {
         }
     }
 
-    /// Packs `id` into `slot` from its current properties and queues the slot for upload.
-    fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding) {
+    /// Packs `id` into `slot` from its current properties and queues the slot for upload. `transform` says whether
+    /// the change record names a transform property (`CFrame`, `Position`, `Orientation`, `Size`: the `TRANSFORM`
+    /// dirty bit), which moves the bounding sphere for the culling grid.
+    fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding, transform: bool) {
         let instance = pack(dm, id, binding, &self.classes, self.origin);
         let region = &mut self.regions[slot.region.index()];
+        let mut moved = transform;
         if let Some(target) = region.instances.get_mut(slot.slot as usize) {
+            // Besides the transform, only the mesh kind's own scale rule changes the box (a `Shape` change, which
+            // always changes the kind); a recolour or a new material leaves the culling grid alone.
+            moved |= target.mesh_material >> 16 != instance.mesh_material >> 16;
             *target = instance;
+        }
+        if moved && region.mark_moved(slot.slot) {
+            self.grid.queue(entry(slot.region, slot.slot));
         }
         region.mark_dirty(slot.slot);
     }

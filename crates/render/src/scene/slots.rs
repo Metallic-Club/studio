@@ -17,6 +17,9 @@ pub(super) struct SlotMeta {
     pub(super) since: u32,
     /// Queued on the dirty list.
     pub(super) dirty: bool,
+    /// The packed transform changed and the slot is queued for the culling grid, which moves its item at the next
+    /// cull ([`super::grid`]). Cleared when the grid has the item's current sphere.
+    pub(super) moved: bool,
     /// The draw list the slot's entry is in ([`NOT_LISTED`] when none). Kept when the slot is freed or reused,
     /// until the next coalesce takes the entry out of the list.
     pub(super) list: u16,
@@ -30,6 +33,7 @@ impl SlotMeta {
         moves: 0,
         since: 0,
         dirty: false,
+        moved: false,
         list: NOT_LISTED,
         list_pos: 0,
     };
@@ -75,6 +79,7 @@ impl RegionSlots {
             // next coalesce moves the entry).
             *m = SlotMeta {
                 dirty: m.dirty,
+                moved: m.moved,
                 list: m.list,
                 list_pos: m.list_pos,
                 ..meta
@@ -99,6 +104,7 @@ impl RegionSlots {
         *instance = GpuInstance::FREE;
         *meta = SlotMeta {
             dirty: meta.dirty,
+            moved: meta.moved,
             list: meta.list,
             list_pos: meta.list_pos,
             ..SlotMeta::FREE
@@ -106,6 +112,20 @@ impl RegionSlots {
         self.live -= 1;
         self.free.push(slot);
         self.mark_dirty(slot);
+    }
+
+    /// Notes that `slot`'s packed transform changed, so the next cull moves its item in the culling grid. Returns
+    /// whether it was not noted yet (the caller then queues it on the grid, once). A slot on no draw list has no
+    /// item yet: the coalesce that lists it places it where it is then.
+    #[inline]
+    pub(super) fn mark_moved(&mut self, slot: u32) -> bool {
+        match self.meta.get_mut(slot as usize) {
+            Some(meta) if !meta.moved && meta.list != NOT_LISTED => {
+                meta.moved = true;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Queues `slot` for upload (once, however often it changes before the upload).

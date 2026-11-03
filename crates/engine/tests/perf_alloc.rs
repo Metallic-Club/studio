@@ -72,6 +72,7 @@ fn sample(frame: usize) -> FrameSample {
         script_ms: ms * 0.05,
         physics_ms: ms * 0.02,
         render_ms: ms * 0.3,
+        cull_ms: ms * 0.05,
     }
 }
 

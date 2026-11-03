@@ -125,6 +125,10 @@ pub struct StressScene {
     see_through: usize,
     lights: usize,
     in_view: usize,
+    /// Every part's centre as built, to count what a changed view sees.
+    centres: Vec<Vec3>,
+    camera: Id,
+    view: (CFrame, f32),
     cframe: PropId,
     movers: Vec<Mover>,
 }
@@ -200,6 +204,20 @@ impl StressScene {
     /// Parts whose centre is inside the camera's view at a 16:9 aspect: what a culled frame would draw, roughly.
     pub fn in_view(&self) -> usize {
         self.in_view
+    }
+
+    /// The camera's vertical field of view in degrees.
+    pub fn field_of_view(&self) -> f32 {
+        self.view.1
+    }
+
+    /// Changes the camera's vertical field of view to `field_of_view` degrees (a narrower view sees fewer parts:
+    /// how culling scales is measured this way) and counts the parts in view again.
+    pub fn set_field_of_view(&mut self, dm: &mut DataModel, field_of_view: f32) -> Result<(), DmError> {
+        dm.set_by_name(self.camera, "FieldOfView", Value::Number(f64::from(field_of_view)))?;
+        self.view.1 = field_of_view;
+        self.in_view = count_in_view(&self.centres, self.view.0, field_of_view, 16.0 / 9.0);
+        Ok(())
     }
 }
 
@@ -737,6 +755,9 @@ impl<'a> Builder<'a> {
             see_through: self.see_through,
             lights: self.lights,
             in_view,
+            centres: self.centres,
+            camera: self.camera,
+            view: self.view,
             cframe: self.props.cframe,
             movers: self.movers,
         })
@@ -852,6 +873,44 @@ mod tests {
         assert_eq!(lattice.see_through(), 10_000);
         assert_eq!(lattice.moving(), 100);
         assert!(lattice.in_view() > 5_000, "{}", lattice.in_view());
+    }
+
+    /// ADR 0008's scale target, culled on the CPU (#79): a camera that sees about 10% of `parts_100k` draws about
+    /// 10% of its instances. A part is kept when its bounding sphere reaches into the view, so a few more than the
+    /// parts whose centre is in view.
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_camera_seeing_a_tenth_of_parts_100k_draws_about_a_tenth() {
+        use metallic_render::scene::RenderComponents;
+        use metallic_render::{CameraReader, CullSettings, CullView, InstanceScene, VisibleSet};
+
+        let (mut dm, mut scene) = build(StressKind::Parts100k, 1);
+        scene.set_field_of_view(&mut dm, 26.0).expect("FieldOfView");
+        let in_view = scene.in_view();
+        assert!((8_000..12_000).contains(&in_view), "{in_view} parts in view");
+
+        let registry = dm.registry().clone();
+        let workspace = dm
+            .service(registry.class_id("Workspace").expect("Workspace"))
+            .expect("a Workspace");
+        let mut instances =
+            InstanceScene::attach(&mut dm, Some(workspace), &RenderComponents::builtin()).expect("a scene");
+        instances.sync(&mut dm);
+        instances.coalesce();
+        let camera = CameraReader::new().read(&dm, workspace).expect("a camera");
+        let view = CullView::for_camera(&camera, instances.origin(), 1920, 1080, &CullSettings::default());
+        let mut visible = VisibleSet::new();
+        let stats = instances.cull(&view, &mut visible);
+        eprintln!("{in_view} parts in view: {stats:?}");
+        assert_eq!(stats.candidates, 100_000);
+        assert_eq!(visible.len(), stats.visible as usize);
+        let drawn = stats.visible as usize;
+        assert!(
+            drawn >= in_view && drawn <= in_view + in_view / 5,
+            "{drawn} drawn for {in_view} parts in view"
+        );
+        // Most of the grid is skipped a whole cell at a time.
+        assert!(stats.cells_outside * 2 > stats.cells, "{stats:?}");
     }
 
     #[test]

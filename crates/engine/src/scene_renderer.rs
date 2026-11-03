@@ -2,14 +2,14 @@
 //! depend on the engine (ADR 0001), so the hook lives here and only forwards.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use metallic_core::{DataModel, Id};
 use metallic_platform::{Size, Window};
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::{
-    CameraReader, Capabilities, ContextOptions, DrawStats, GpuScene, RenderContext, RenderError, RenderSurface,
-    Renderer, RendererSettings, wgpu,
+    CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, RenderContext, RenderError,
+    RenderSurface, Renderer, RendererSettings, wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
@@ -37,6 +37,7 @@ struct Device {
 pub struct SceneRenderer {
     options: ContextOptions,
     clear_color: wgpu::Color,
+    cull: CullSettings,
     present_mode: Option<wgpu::PresentMode>,
     device: Option<Device>,
     surface: Option<RenderSurface>,
@@ -66,6 +67,7 @@ impl SceneRenderer {
                 b: 0.82,
                 a: 1.0,
             },
+            cull: CullSettings::default(),
             present_mode: None,
             device: None,
             surface: None,
@@ -88,6 +90,20 @@ impl SceneRenderer {
         if let Some(device) = self.device.as_mut() {
             device.renderer.set_clear_color(color);
         }
+    }
+
+    /// Changes what the camera culls (frustum, view distance, screen size; see [`metallic_render::cull`]). On by
+    /// default; graphics presets (#84) set the thresholds. Applies now and to every later renderer.
+    pub fn set_cull(&mut self, cull: CullSettings) {
+        self.cull = cull;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_cull(cull);
+        }
+    }
+
+    /// What the camera culls.
+    pub fn cull(&self) -> CullSettings {
+        self.cull
     }
 
     /// Asks for a present mode (for example `AutoNoVsync` for an uncapped frame rate in benchmarks); the surface
@@ -289,6 +305,7 @@ impl RenderHook for SceneRenderer {
         let acquire = acquire_start.elapsed();
         let render_cpu;
         let draws;
+        let cull;
         match image {
             Some(image) => {
                 device.renderer.render_scene(image.view(), scene, camera.as_ref());
@@ -296,6 +313,7 @@ impl RenderHook for SceneRenderer {
                 image.present(&device.context);
                 self.last_upload = device.renderer.upload_stats();
                 draws = device.renderer.draw_stats();
+                cull = device.renderer.cull_stats().cpu_time;
             }
             None => {
                 // No image this frame (minimised, occluded): the upload still goes out, or it would be lost.
@@ -309,6 +327,7 @@ impl RenderHook for SceneRenderer {
                 device.context.queue().submit(std::iter::once(encoder.finish()));
                 render_cpu = start.elapsed().saturating_sub(acquire);
                 draws = DrawStats::default();
+                cull = Duration::ZERO;
             }
         }
         if let Some(frame_time) = frame_time {
@@ -317,7 +336,8 @@ impl RenderHook for SceneRenderer {
                 frame.stats.script_cpu,
                 frame.stats.simulation_cpu,
                 render_cpu,
-            );
+            )
+            .with_cull(cull);
             self.perf.record(sample, device.renderer.gpu_timings(), draws);
         }
     }
@@ -327,6 +347,7 @@ impl SceneRenderer {
     fn settings(&self, format: wgpu::TextureFormat, width: u32, height: u32) -> RendererSettings {
         RendererSettings {
             clear_color: self.clear_color,
+            cull: self.cull,
             ..RendererSettings::new(format, width, height)
         }
     }

@@ -23,10 +23,13 @@
 //! - Drawing parts ([`parts`], [`Renderer::render_scene`]): one instanced draw per mesh kind over the scene's draw
 //!   lists, a material table, PBR-lite shading, a sorted transparent pass, and the camera from
 //!   `Workspace.CurrentCamera` ([`CameraReader`]).
+//! - Culling ([`cull`], [`RendererSettings::cull`]): a loose grid of every drawn instance's bounding sphere, culled
+//!   per view by frustum, distance and screen size into the same draw lists, opaque instances front to back.
 //! - The debug overlay ([`overlay`], [`Renderer::set_overlay_enabled`]): rectangles and bitmap-font text in the UI
 //!   pass, which carries the performance overlay (ADR 0008 §10).
 
 mod context;
+pub mod cull;
 pub mod depth;
 mod error;
 mod graph;
@@ -39,6 +42,7 @@ mod target;
 mod timing;
 
 pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
+pub use cull::{CullSettings, CullStats, CullView, Frustum, VisibleSet};
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
 pub use overlay::Overlay;

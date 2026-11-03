@@ -36,17 +36,31 @@ pub struct FrameSample {
     /// The render hook's own work: scene sync, overlay, recording and submitting the frame. Waiting for a
     /// swapchain image and presenting are not counted (with vsync they are mostly waiting).
     pub render_ms: f32,
+    /// The part of `render_ms` spent culling ([`metallic_render::cull`]); 0 when the last cull was still valid.
+    pub cull_ms: f32,
+}
+
+fn ms(d: Duration) -> f32 {
+    (d.as_secs_f64() * 1000.0) as f32
 }
 
 impl FrameSample {
-    /// A sample from durations.
+    /// A sample from durations, with no cull time ([`FrameSample::with_cull`] adds it).
     pub fn new(frame: Duration, script: Duration, physics: Duration, render: Duration) -> Self {
-        let ms = |d: Duration| (d.as_secs_f64() * 1000.0) as f32;
         Self {
             frame_ms: ms(frame),
             script_ms: ms(script),
             physics_ms: ms(physics),
             render_ms: ms(render),
+            cull_ms: 0.0,
+        }
+    }
+
+    /// The sample with `cull` as its cull time.
+    pub fn with_cull(self, cull: Duration) -> Self {
+        Self {
+            cull_ms: ms(cull),
+            ..self
         }
     }
 }
@@ -89,6 +103,8 @@ pub struct PerfSummary {
     pub physics_ms: Distribution,
     /// Render CPU time.
     pub render_ms: Distribution,
+    /// Cull CPU time (part of the render CPU time).
+    pub cull_ms: Distribution,
     /// Timed GPU frames summarised.
     pub gpu_frames: usize,
     /// GPU time of the whole frame.
@@ -121,8 +137,8 @@ impl PerfSummary {
 impl PerfSummary {
     /// Writes the summary as the members of a JSON object, without the braces, so a report can put its own
     /// members around them (times in milliseconds): `frames`, `frame_ms`, `fps_p50`, `low_1pct_ms`,
-    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`), `gpu_ms` (`frames`, `total`, `passes` by name)
-    /// and `draws`. Each distribution is `{"mean", "p50", "p99", "max"}`.
+    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`), `gpu_ms` (`frames`, `total`, `passes` by
+    /// name) and `draws` (with `culled`). Each distribution is `{"mean", "p50", "p99", "max"}`.
     pub fn write_json_members(&self, out: &mut String) {
         // Writing to a `String` cannot fail.
         let _ = self.write_members(out);
@@ -146,10 +162,11 @@ impl PerfSummary {
         )?;
         write!(
             out,
-            "\"cpu_ms\":{{\"script\":{},\"physics\":{},\"render\":{}}},",
+            "\"cpu_ms\":{{\"script\":{},\"physics\":{},\"render\":{},\"cull\":{}}},",
             dist(&self.script_ms),
             dist(&self.physics_ms),
-            dist(&self.render_ms)
+            dist(&self.render_ms),
+            dist(&self.cull_ms)
         )?;
         write!(
             out,
@@ -177,14 +194,15 @@ impl PerfSummary {
         write!(
             out,
             "\"draws\":{{\"prepass\":{},\"opaque\":{},\"transparent\":{},\"opaque_instances\":{},\
-             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{}}}",
+             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{},\"culled\":{}}}",
             d.prepass_draws,
             d.opaque_draws,
             d.transparent_draws,
             d.opaque_instances,
             d.opaque_triangles,
             d.transparent_instances,
-            d.transparent_triangles
+            d.transparent_triangles,
+            d.culled_instances
         )
     }
 }
@@ -388,6 +406,7 @@ impl PerfStats {
         summary.script_ms = distribution(scratch, frames.iter().map(|f| f.script_ms));
         summary.physics_ms = distribution(scratch, frames.iter().map(|f| f.physics_ms));
         summary.render_ms = distribution(scratch, frames.iter().map(|f| f.render_ms));
+        summary.cull_ms = distribution(scratch, frames.iter().map(|f| f.cull_ms));
         summary.gpu_total_ms = distribution(scratch, gpu.iter().map(|g| g.total_ms));
         for pass in PassId::ALL {
             if summary.gpu_pass_ran(pass) {
@@ -445,7 +464,8 @@ fn bar_color(ms: f32) -> [u8; 4] {
 }
 
 /// Clears `overlay` and draws the performance overlay at its top-left corner: frame time with p50, p99 and the
-/// 1% low; script, physics and render CPU time; GPU time per pass; draws, instances and triangles per pass; and a
+/// 1% low; script, physics, render and cull CPU time; GPU time per pass; draws, instances and triangles per pass and
+/// the instances culled; and a
 /// graph of the last [`GRAPH_FRAMES`] frame times (green within 60 fps, yellow within 30, red beyond; guides at
 /// 16.7 and 33.3 ms). `summary` is usually refreshed a few times a second; the graph and the "now" numbers come
 /// from `stats` every frame. Allocates nothing.
@@ -453,9 +473,9 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
     overlay.clear();
     let (x0, y0) = (12.0, 12.0);
     let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
-    // Wide enough for the graph and for the longest line of text (about 60 characters).
-    let width = (GRAPH_FRAMES as f32 * BAR).max(64.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
-    let lines = 7.0;
+    // Wide enough for the graph and for the longest line of text (about 70 characters).
+    let width = (GRAPH_FRAMES as f32 * BAR).max(72.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
+    let lines = 8.0;
     overlay.rect(x0 - 8.0, y0 - 8.0, width, lines * line + GRAPH_HEIGHT + 24.0, PANEL);
 
     let now = stats.last().copied().unwrap_or_default();
@@ -481,8 +501,8 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
         SCALE,
         TEXT,
         format_args!(
-            "CPU   SCRIPT {:.2}  PHYSICS {:.2}  RENDER {:.2} MS (P50)",
-            summary.script_ms.p50, summary.physics_ms.p50, summary.render_ms.p50
+            "CPU   SCRIPT {:.2}  PHYSICS {:.2}  RENDER {:.2} (CULL {:.2}) MS (P50)",
+            summary.script_ms.p50, summary.physics_ms.p50, summary.render_ms.p50, summary.cull_ms.p50
         ),
     );
     y += line;
@@ -530,6 +550,14 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
             draws.transparent_instances,
             draws.transparent_triangles as f64 / 1e6
         ),
+    );
+    y += line;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        DIM,
+        format_args!("CULLED            {:7} INST", draws.culled_instances),
     );
     y += line;
     if draws.prepass_draws > 0 {
@@ -581,6 +609,7 @@ mod tests {
             script_ms: frame_ms / 10.0,
             physics_ms: 0.0,
             render_ms: frame_ms / 2.0,
+            cull_ms: frame_ms / 20.0,
         }
     }
 

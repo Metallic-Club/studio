@@ -506,3 +506,185 @@ fn only_transparent_changes_move_the_transparent_revision() {
     frame(&mut scene, &mut game.dm);
     assert_ne!(scene.transparent_revision(), revision, "the see-through part moved");
 }
+
+/// Checks a cull of `scene` against testing every listed instance's bounding sphere on its own: the same entries
+/// in every list, and each opaque list in front-to-back bucket order.
+fn assert_cull_matches_brute_force(scene: &mut InstanceScene, view: &crate::cull::CullView) -> crate::cull::CullStats {
+    let mut set = crate::cull::VisibleSet::new();
+    let stats = scene.cull(view, &mut set);
+    let visible = |e: &u32| {
+        let instance = scene.entry_instance(*e).expect("a listed slot");
+        let (center, radius) = grid::bounding_sphere(instance);
+        view.sphere_visible(center, radius)
+    };
+    let mut total = 0;
+    for kind in 0..scene.draw_list_count() {
+        let kind = MeshKind(kind as u16);
+        let mut want: Vec<u32> = scene.draw_list(kind).iter().copied().filter(visible).collect();
+        let have = set.opaque(kind);
+        // Front to back a grid cell (or large item) at a time: by the depth of the cell's box.
+        let keys: Vec<u32> = have
+            .iter()
+            .map(|e| {
+                let instance = scene.entry_instance(*e).expect("listed");
+                let (center, radius) = grid::bounding_sphere(instance);
+                if radius > grid::LARGE_RADIUS {
+                    view.box_key(center, grid::half_extents(instance))
+                } else {
+                    let cell = (grid::key_of(center).as_vec3() + 0.5) * grid::CELL_SIZE;
+                    view.box_key(cell, Vec3::splat(grid::CELL_SIZE / 2.0))
+                }
+            })
+            .collect();
+        assert!(keys.is_sorted(), "kind {kind:?} is not front to back: {keys:?}");
+        let mut have = have.to_vec();
+        have.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(have, want, "the visible entries of kind {kind:?}");
+        total += have.len();
+    }
+    let mut want: Vec<u32> = scene.transparent_list().iter().copied().filter(visible).collect();
+    let mut have = set.transparent().to_vec();
+    have.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(have, want, "the visible see-through entries");
+    total += have.len();
+    assert_eq!(stats.visible as usize, total);
+    let listed: usize = (0..scene.draw_list_count())
+        .map(|k| scene.draw_list(MeshKind(k as u16)).len())
+        .sum::<usize>()
+        + scene.transparent_list().len();
+    assert_eq!(stats.candidates as usize, listed);
+    assert_eq!(scene.culling_items(), listed);
+    stats
+}
+
+#[test]
+fn a_cull_matches_testing_every_part_through_every_kind_of_change() {
+    use crate::cull::{CullSettings, CullView};
+    use crate::parts::Camera;
+
+    let look = |eye: Vec3, target: Vec3, fov: f64| Camera::from_cframe(CFrame::look_at(eye, target, Vec3::Y), fov);
+    let views = [
+        // Along the row the parts are on, with a view distance and a screen size that both cut some off.
+        CullView::for_camera(
+            &look(Vec3::new(-20.0, 5.0, 0.0), Vec3::new(100.0, 0.0, 0.0), 70.0),
+            Vec3::ZERO,
+            640,
+            360,
+            &CullSettings {
+                max_distance: 900.0,
+                min_screen_size: 3.0,
+                ..CullSettings::default()
+            },
+        ),
+        // Across it, a narrow view.
+        CullView::for_camera(
+            &look(Vec3::new(500.0, 30.0, 80.0), Vec3::new(400.0, 0.0, 0.0), 30.0),
+            Vec3::ZERO,
+            1920,
+            1080,
+            &CullSettings::default(),
+        ),
+    ];
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let mut parts: Vec<Id> = (0..64).map(|_| game.part()).collect();
+    for (i, &id) in parts.iter().enumerate() {
+        game.move_to(id, i as f32 * 25.0);
+    }
+    let shapes = ["Block", "Ball", "Cylinder", "Wedge"];
+    let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
+    // Per view: visible, outside the frustum, too far or small, over every cull.
+    let mut totals = [(0u32, 0u32, 0u32); 2];
+    for edit in 0..2000 {
+        match rng.below(6) {
+            0 => parts.push(game.part()),
+            1 if parts.len() > 1 => {
+                let gone = parts.swap_remove(rng.below(parts.len()));
+                game.dm.destroy(gone).unwrap();
+            }
+            2 => {
+                let id = parts[rng.below(parts.len())];
+                let shape = EnumItem::new("PartShape", shapes[rng.below(4)]);
+                game.dm.set_by_name(id, "Shape", Value::Enum(shape)).unwrap();
+            }
+            3 => {
+                let id = parts[rng.below(parts.len())];
+                let transparency = [0.0, 0.5, 1.0][rng.below(3)];
+                game.dm
+                    .set_by_name(id, "Transparency", Value::Number(transparency))
+                    .unwrap();
+            }
+            4 => {
+                // The same few parts keep moving, so some are promoted and change region (and slot).
+                let id = parts[rng.below(parts.len().min(8))];
+                game.move_to(id, edit as f32 * 0.5);
+            }
+            _ => {
+                // Others jump anywhere along the row, across cells.
+                let id = parts[rng.below(parts.len())];
+                game.move_to(id, rng.below(1500) as f32 - 200.0);
+            }
+        }
+        if edit % 7 == 0 {
+            frame(&mut scene, &mut game.dm);
+            for (view, totals) in views.iter().zip(&mut totals) {
+                let stats = assert_cull_matches_brute_force(&mut scene, view);
+                totals.0 += stats.visible;
+                totals.1 += stats.outside_frustum;
+                totals.2 += stats.too_far_or_small;
+            }
+        }
+    }
+    // Each view kept some parts and culled others, the first one also for distance and size.
+    assert!(totals.iter().all(|t| t.0 > 0 && t.1 > 0), "{totals:?}");
+    assert!(totals[0].2 > 0, "{totals:?}");
+    assert!(scene.live(Region::Dynamic) > 0, "nothing was promoted");
+    scene.rebuild_all(&mut game.dm);
+    frame(&mut scene, &mut game.dm);
+    for view in &views {
+        assert_cull_matches_brute_force(&mut scene, view);
+    }
+}
+
+#[test]
+fn moves_queue_each_slot_once_until_a_cull_and_recolours_none() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let mut parts: Vec<Id> = (0..32).map(|_| game.part()).collect();
+    frame(&mut scene, &mut game.dm);
+    let camera =
+        crate::parts::Camera::from_cframe(CFrame::look_at(Vec3::new(0.0, 5.0, 20.0), Vec3::ZERO, Vec3::Y), 70.0);
+    let view = crate::cull::CullView::for_camera(&camera, Vec3::ZERO, 640, 360, &crate::cull::CullSettings::default());
+    scene.cull(&view, &mut crate::cull::VisibleSet::new());
+    assert_eq!(scene.culling_queue(), 0);
+    // Recolouring moves nothing.
+    for &id in &parts {
+        game.dm
+            .set_by_name(id, "Color", Value::Color3(Color3::new(0.2, 0.4, 0.6)))
+            .unwrap();
+    }
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.culling_queue(), 0);
+    // A hundred frames of moving, destroying and creating with no cull: every slot is queued at most once.
+    for step in 0..100 {
+        for (i, &id) in parts.iter().enumerate().take(8) {
+            game.move_to(id, (step * 3 + i) as f32);
+        }
+        let gone = parts.swap_remove(step % parts.len());
+        game.dm.destroy(gone).unwrap();
+        let new = game.part();
+        game.move_to(new, step as f32);
+        parts.push(new);
+        frame(&mut scene, &mut game.dm);
+        let slots = scene.instances(Region::Static).len() + scene.instances(Region::Dynamic).len();
+        assert!(
+            scene.culling_queue() <= slots,
+            "{} queued for {slots} slots",
+            scene.culling_queue()
+        );
+    }
+    assert_cull_matches_brute_force(&mut scene, &view);
+    assert_eq!(scene.culling_queue(), 0);
+}

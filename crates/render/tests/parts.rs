@@ -1,6 +1,7 @@
 //! Drawing parts on a real adapter (#77): the demo scene against a committed reference image, the same image from
 //! the vertex-buffer fallback and far from the world origin, a missing camera, and the draw count from 1,000 to
-//! 100,000 parts. Skips when the machine has no adapter (see `support::gpu`).
+//! 100,000 parts. Culling (#79) is on in every image, which therefore also shows it hides nothing in view; culled
+//! parts are not drawn on either instance path. Skips when the machine has no adapter (see `support::gpu`).
 //!
 //! The reference is `tests/reference/parts.png`. Software and hardware rasterisers differ slightly at triangle
 //! edges and in the last bits of the shading maths, so images are compared with a tolerance: almost every pixel
@@ -19,10 +20,10 @@ use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Value};
 use metallic_render::scene::{InstanceBinding, RenderComponents};
 use metallic_render::{
-    CameraReader, ContextOptions, DrawStats, GpuScene, OffscreenTarget, PassId, PassSet, RenderContext, Renderer,
-    RendererSettings, wgpu,
+    CameraReader, ContextOptions, CullSettings, DrawStats, GpuScene, OffscreenTarget, PassId, PassSet, RenderContext,
+    Renderer, RendererSettings, wgpu,
 };
-use support::scenes::{self, Game, ImageDiff, SeeThrough};
+use support::scenes::{self, Game, ImageDiff, Look, SeeThrough};
 use support::{gpu, gpu_with, read_back_rgba8};
 
 const SIZE: u32 = 256;
@@ -97,6 +98,16 @@ fn assert_no_wgpu_errors() {
 /// Renders `game` once (a few frames, so everything is uploaded and sorted) and reads the image back, with the
 /// last frame's draw statistics.
 fn render(context: &RenderContext, game: &mut Game, passes: PassSet) -> (Vec<[u8; 4]>, DrawStats) {
+    render_culled(context, game, passes, CullSettings::default())
+}
+
+/// Like [`render`], culling as `cull` says.
+fn render_culled(
+    context: &RenderContext,
+    game: &mut Game,
+    passes: PassSet,
+    cull: CullSettings,
+) -> (Vec<[u8; 4]>, DrawStats) {
     collect_wgpu_messages();
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(
@@ -105,6 +116,7 @@ fn render(context: &RenderContext, game: &mut Game, passes: PassSet) -> (Vec<[u8
             clear_color: SKY,
             passes,
             gpu_timing: false,
+            cull,
             ..RendererSettings::new(FORMAT, SIZE, SIZE)
         },
     )
@@ -242,6 +254,112 @@ fn a_depth_prepass_draws_the_same_image() {
     check_reference("parts-prepass", &pixels);
 }
 
+/// The sky colour, sRGB-encoded as the target stores it.
+fn sky_pixel() -> [u8; 4] {
+    let encode = |linear: f64| {
+        let srgb = if linear <= 0.003_130_8 {
+            linear * 12.92
+        } else {
+            1.055 * linear.powf(1.0 / 2.4) - 0.055
+        };
+        (srgb * 255.0).round() as u8
+    };
+    [encode(SKY.r), encode(SKY.g), encode(SKY.b), 255]
+}
+
+/// Whether the pixel at `(x, y)` shows the sky (nothing drawn there).
+fn is_sky(pixels: &[[u8; 4]], x: u32, y: u32) -> bool {
+    let pixel = pixels[(y * SIZE + x) as usize];
+    pixel.iter().zip(sky_pixel()).all(|(&a, b)| a.abs_diff(b) <= 2)
+}
+
+/// Three parts in front of a camera at the origin looking down −Z (60°, square target) and one behind it: a near
+/// block (pixel 61, 128 on the 256-pixel target), a large block 60 m away (183, 128), and a small ball 40 m away
+/// (128, 161).
+fn culling_game() -> Game {
+    let mut game = Game::new();
+    game.part(
+        Look::new("Block", "Plastic", [196, 40, 28]),
+        Vec3::splat(4.0),
+        CFrame::new(Vec3::new(-6.0, 0.0, -20.0)),
+    );
+    game.part(
+        Look::new("Block", "Plastic", [40, 160, 60]),
+        Vec3::splat(6.0),
+        CFrame::new(Vec3::new(15.0, 0.0, -60.0)),
+    );
+    game.part(
+        Look::new("Ball", "Plastic", [30, 60, 200]),
+        Vec3::splat(2.0),
+        CFrame::new(Vec3::new(0.0, -6.0, -40.0)),
+    );
+    game.part(
+        Look::new("Block", "Plastic", [250, 220, 40]),
+        Vec3::splat(4.0),
+        CFrame::new(Vec3::new(0.0, 0.0, 20.0)),
+    );
+    game.set_camera(CFrame::look_at(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y), 60.0);
+    game
+}
+
+/// Culled parts are not drawn (#79), on `context`'s instance path: the frustum culls without changing the image,
+/// the view distance removes the far block, and the screen-size threshold the small ball.
+fn culled_parts_are_not_drawn_on(context: &RenderContext) {
+    describe(context);
+    let (near, far, small) = ((61, 128), (183, 128), (128, 161));
+    let drawn = |pixels: &[[u8; 4]]| [near, far, small].map(|(x, y)| !is_sky(pixels, x, y));
+    let mut game = culling_game();
+    let (everything, all) = render_culled(context, &mut game, PassSet::default(), CullSettings::OFF);
+    assert_eq!((all.instances, all.culled_instances), (4, 0));
+    assert_eq!(
+        drawn(&everything),
+        [true; 3],
+        "every part in view is drawn without culling"
+    );
+
+    // The default culling: only the block behind the camera, and the image is the same.
+    let (pixels, stats) = render(context, &mut game, PassSet::default());
+    assert_eq!((stats.instances, stats.culled_instances), (3, 1), "{stats:?}");
+    let diff = scenes::compare(&pixels, &everything, 0);
+    assert_eq!(diff.max, 0, "frustum culling changed the image: {diff:?}");
+
+    // A 40 m view distance: the far block goes (its nearest point is 55 m away), the ball (37 m) stays.
+    let distance = CullSettings {
+        max_distance: 40.0,
+        ..CullSettings::default()
+    };
+    let (pixels, stats) = render_culled(context, &mut game, PassSet::default(), distance);
+    assert_eq!((stats.instances, stats.culled_instances), (2, 2), "{stats:?}");
+    assert_eq!(drawn(&pixels), [true, false, true]);
+
+    // At least 30 pixels across: the ball's bounding sphere covers 19, the far block's 38.
+    let size = CullSettings {
+        min_screen_size: 30.0,
+        ..CullSettings::default()
+    };
+    let (pixels, stats) = render_culled(context, &mut game, PassSet::default(), size);
+    assert_eq!((stats.instances, stats.culled_instances), (2, 2), "{stats:?}");
+    assert_eq!(drawn(&pixels), [true, true, false]);
+}
+
+#[test]
+fn culled_parts_are_not_drawn() {
+    let Some(context) = gpu() else { return };
+    culled_parts_are_not_drawn_on(&context);
+}
+
+#[test]
+fn culled_parts_are_not_drawn_on_the_vertex_buffer_fallback() {
+    let Some(fallback) = gpu_with(&ContextOptions {
+        force_vertex_instances: true,
+        ..ContextOptions::default()
+    }) else {
+        return;
+    };
+    assert_eq!(InstanceBinding::for_context(&fallback), InstanceBinding::Vertex);
+    culled_parts_are_not_drawn_on(&fallback);
+}
+
 #[test]
 fn without_a_camera_nothing_is_drawn() {
     let Some(context) = gpu() else { return };
@@ -287,13 +405,31 @@ fn the_draw_count_does_not_depend_on_the_part_count() {
         let mut game = Game::new();
         // One in 100 parts is a ball, a cylinder or a wedge, one in 50 a see-through block.
         scenes::grid(&mut game, parts, 100, SeeThrough::Blocks(50));
-        let (_, stats) = render(&context, &mut game, PassSet::default());
+        // Every part drawn, then frustum-culled (the grid's far corners are outside the view). Not by screen size:
+        // on this small target the 100,000-part grid is seen from so far that every part is under a pixel.
+        let (_, stats) = render_culled(&context, &mut game, PassSet::default(), CullSettings::OFF);
+        let frustum = CullSettings {
+            min_screen_size: 0.0,
+            ..CullSettings::default()
+        };
+        let (_, culled) = render_culled(&context, &mut game, PassSet::default(), frustum);
         eprintln!(
-            "{parts} parts: {} opaque draws, {} transparent draws, {} instances, {} triangles",
-            stats.opaque_draws, stats.transparent_draws, stats.instances, stats.triangles
+            "{parts} parts: {} opaque draws, {} transparent draws, {} instances, {} triangles; culled: {} instances, \
+             {} triangles",
+            stats.opaque_draws,
+            stats.transparent_draws,
+            stats.instances,
+            stats.triangles,
+            culled.instances,
+            culled.triangles
         );
         assert_eq!(stats.instances as usize, parts);
+        assert_eq!(
+            (stats.culled_instances, culled.instances + culled.culled_instances),
+            (0, parts as u32)
+        );
         counts.push((stats.opaque_draws, stats.transparent_draws));
+        counts.push((culled.opaque_draws, culled.transparent_draws));
     }
     assert!(counts.iter().all(|&c| c == (4, 1)), "{counts:?}");
 }

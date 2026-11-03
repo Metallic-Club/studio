@@ -23,8 +23,9 @@ pub(crate) struct TransparentList {
     /// The upload, reused.
     bytes: Vec<u8>,
     runs: Vec<Run>,
-    /// What the list was last sorted for: the scene's transparent revision and the camera offset.
-    sorted_for: Option<(u64, Vec3)>,
+    /// What the list was last sorted for: the scene's transparent revision, the revision of the entries drawn (a
+    /// view's visible ones, or every one) and the camera offset.
+    sorted_for: Option<(u64, u64, Vec3)>,
 }
 
 impl TransparentList {
@@ -55,21 +56,23 @@ impl TransparentList {
         &self.runs
     }
 
-    /// Sorts the scene's transparent instances back to front as seen from `camera` (relative to the scene origin)
-    /// and uploads them, when either changed since the last sort. Returns whether it uploaded.
+    /// Sorts `entries` (the scene's transparent entries to draw: every one, or a view's visible ones, whose
+    /// revision `drawn` changes with them) back to front as seen from `camera` (relative to the scene origin) and
+    /// uploads them, when anything changed since the last sort. Returns whether it uploaded.
     pub(crate) fn update(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         scene: &InstanceScene,
+        (entries, drawn): (&[u32], u64),
         camera: Vec3,
     ) -> bool {
-        let key = (scene.transparent_revision(), camera);
+        let key = (scene.transparent_revision(), drawn, camera);
         if self.sorted_for == Some(key) {
             return false;
         }
         self.sorted_for = Some(key);
-        sort_back_to_front(scene, camera, &mut self.keys);
+        sort_back_to_front(scene, entries, camera, &mut self.keys);
         self.runs.clear();
         self.bytes.clear();
 
@@ -101,10 +104,10 @@ impl TransparentList {
     }
 }
 
-/// The scene's transparent entries, farthest first from `camera`, ties broken by entry so the order is stable.
-pub(crate) fn sort_back_to_front(scene: &InstanceScene, camera: Vec3, keys: &mut Vec<(u32, u32)>) {
+/// `entries` of the scene, farthest first from `camera`, ties broken by entry so the order is stable.
+pub(crate) fn sort_back_to_front(scene: &InstanceScene, entries: &[u32], camera: Vec3, keys: &mut Vec<(u32, u32)>) {
     keys.clear();
-    keys.extend(scene.transparent_list().iter().map(|&entry| {
+    keys.extend(entries.iter().map(|&entry| {
         let distance = scene
             .entry_instance(entry)
             .map_or(0.0, |instance| instance.translation().distance_squared(camera));
