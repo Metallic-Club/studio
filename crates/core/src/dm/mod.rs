@@ -59,6 +59,8 @@ struct ClassCache {
     /// Its `Name` and `Parent` properties, whose changed signals a rename and a move fire.
     name_prop: Option<PropId>,
     parent_prop: Option<PropId>,
+    /// The property whose new value `Changed` passes instead of a name (`ClassInfo::changed_value`).
+    changed_value: Option<PropId>,
 }
 
 /// Something that happened in the tree, or a signal class code fired.
@@ -130,6 +132,7 @@ impl DataModel {
                 builtins: BuiltinSignal::ALL.map(|b| info.signal_id(b.name())),
                 name_prop: info.prop_id("Name"),
                 parent_prop: info.prop_id("Parent"),
+                changed_value: info.changed_value(),
             })
             .collect();
         let services = vec![None; classes.len()].into_boxed_slice();

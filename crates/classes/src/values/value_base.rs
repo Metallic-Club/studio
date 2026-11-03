@@ -5,8 +5,10 @@
 //! `obj:IsA("ValueBase")`.
 //!
 //! On value objects, `Changed` fires when `Value` changes and passes the new value instead of a property name, so
-//! `ValueBase` re-declares the signal with that parameter (replacing `Object`'s declaration). Firing signals is the
-//! data model's job (#15): it must pass `Value`'s new value for instances that are a `ValueBase`.
+//! `ValueBase` re-declares the signal with that parameter (replacing `Object`'s declaration) and declares
+//! `changed_passes_value("Value")`, which every subclass inherits. The data model then fires `Changed(newValue)`
+//! when `Value` changes, and no `Changed` for other changes (a rename or a move); `GetPropertyChangedSignal` still
+//! fires for every property.
 
 use metallic_core::{ClassDesc, SignalDesc};
 
@@ -21,11 +23,12 @@ pub static CLASS: ClassDesc = ClassDesc::new("ValueBase", Some("Instance"))
     )
     .signals(&[SignalDesc::new("Changed")
         .params(&[("value", "any")])
-        .describe("Fires after Value changes, with the new value.")]);
+        .describe("Fires after Value changes, with the new value.")])
+    .changed_passes_value("Value");
 
 #[cfg(test)]
 mod tests {
-    use metallic_core::{EnumItem, Value};
+    use metallic_core::{Delivery, EnumItem, ListenerKey, ScriptValue, Value};
 
     use crate::shared_registry;
     use crate::testing::{call, game, new_in, workspace};
@@ -74,6 +77,42 @@ mod tests {
         let registry = shared_registry().unwrap();
         let class = registry.class_id("ValueBase").unwrap();
         assert!(!registry.class(class).unwrap().creatable());
+    }
+
+    /// `(listener, args)` of every queued delivery.
+    fn drain(dm: &mut metallic_core::DataModel) -> Vec<(u64, Vec<ScriptValue>)> {
+        let mut out: Vec<Delivery> = Vec::new();
+        dm.drain_deliveries(&mut out);
+        out.into_iter().map(|d| (d.listener.0, d.args)).collect()
+    }
+
+    #[test]
+    fn changed_fires_with_the_new_value() {
+        let mut dm = game();
+        let ws = workspace(&dm);
+        let number = new_in(&mut dm, "NumberValue", ws, "N");
+        let changed = dm.signal_id(number, "Changed").unwrap();
+        let value = dm.prop_id(number, "Value").unwrap();
+        dm.connect(number, changed, ListenerKey(1)).unwrap();
+        dm.connect_property_changed(number, value, ListenerKey(2)).unwrap();
+        dm.set(number, value, Value::Number(5.0)).unwrap();
+        dm.set_name(number, "Score".into()).unwrap();
+        assert_eq!(
+            drain(&mut dm),
+            vec![(1, vec![ScriptValue::Number(5.0)]), (2, vec![])],
+            "Changed(5) and Value's own signal; a rename fires no Changed"
+        );
+
+        let object = new_in(&mut dm, "ObjectValue", ws, "O");
+        let folder = new_in(&mut dm, "Folder", ws, "Target");
+        dm.connect(object, changed, ListenerKey(3)).unwrap();
+        dm.set_by_name(object, "Value", Value::Ref(Some(folder))).unwrap();
+        assert_eq!(drain(&mut dm), vec![(3, vec![ScriptValue::Instance(folder)])]);
+
+        let part = new_in(&mut dm, "Part", ws, "P");
+        dm.connect(part, changed, ListenerKey(4)).unwrap();
+        dm.set_by_name(part, "Transparency", Value::Number(0.5)).unwrap();
+        assert_eq!(drain(&mut dm), vec![(4, vec![ScriptValue::String("Transparency".into())])]);
     }
 
     #[test]

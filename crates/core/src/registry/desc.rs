@@ -268,6 +268,9 @@ pub struct ClassDesc {
     pub defaults: &'static [(&'static str, super::DefaultValue)],
     /// Per-class hooks, or `None` when the class has none.
     pub behavior: Option<&'static dyn ClassBehavior>,
+    /// Set when the class's `Changed` signal passes the new value of this property instead of a property name (see
+    /// [`ClassDesc::changed_passes_value`]). Subclasses inherit it.
+    pub changed_passes_value: Option<&'static str>,
 }
 
 impl ClassDesc {
@@ -290,6 +293,7 @@ impl ClassDesc {
             hide: &[],
             defaults: &[],
             behavior: None,
+            changed_passes_value: None,
         }
     }
 
@@ -371,6 +375,19 @@ impl ClassDesc {
         self
     }
 
+    /// Makes the class's `Changed` signal pass the new value of the property `prop` instead of a property name,
+    /// as value objects do in Roblox (`IntValue.Changed(newValue)`). `Changed` then fires only when `prop` changes;
+    /// every other property, `Name` and `Parent` included, fires only its own property-changed signal.
+    ///
+    /// Subclasses inherit it, so a base class can declare it for a property each subclass declares with its own
+    /// type. The registry checks that the class has a `Changed` signal and that `prop` is a stored (not computed)
+    /// property of every class that can have instances (creatable classes and services); an abstract class may
+    /// lack it.
+    pub const fn changed_passes_value(mut self, prop: &'static str) -> Self {
+        self.changed_passes_value = Some(prop);
+        self
+    }
+
     /// Sets the class's hooks.
     pub const fn behavior(mut self, behavior: &'static dyn ClassBehavior) -> Self {
         self.behavior = Some(behavior);
@@ -393,6 +410,7 @@ impl fmt::Debug for ClassDesc {
             .field("signals", &self.signals.len())
             .field("hide", &self.hide)
             .field("behavior", &self.behavior.is_some())
+            .field("changed_passes_value", &self.changed_passes_value)
             .finish_non_exhaustive()
     }
 }
@@ -426,7 +444,8 @@ mod tests {
             .describe("Each step.")])
         .hide(&["Archivable"])
         .defaults(&[("Name", DefaultValue::Str("Workspace"))])
-        .behavior(&COUNTS);
+        .behavior(&COUNTS)
+        .changed_passes_value("Gravity");
 
     #[test]
     fn class_builders_set_every_field() {
@@ -443,6 +462,8 @@ mod tests {
         assert_eq!(CLASS.hide, &["Archivable"]);
         assert_eq!(CLASS.defaults[0].0, "Name");
         assert!(CLASS.behavior.is_some());
+        assert_eq!(CLASS.changed_passes_value, Some("Gravity"));
+        assert_eq!(ClassDesc::new("Part", None).changed_passes_value, None);
         assert!(format!("{CLASS:?}").contains("Workspace"));
     }
 
