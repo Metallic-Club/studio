@@ -13,3 +13,11 @@ workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+pollster.workspace = true
+raw-window-handle.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+# The windowed example (`examples/window.rs`) only; the engine gets its windows from `metallic_platform`.
+winit.workspace = true
