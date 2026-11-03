@@ -145,7 +145,7 @@ fn clones_run_on_created_parent_first() {
     dm.set_parent(b, Some(a)).expect("parent");
     take_log();
     let copy = dm.clone_tree(a).expect("clone").expect("archivable");
-    let copy_child = dm.children(copy).expect("children")[0];
+    let copy_child = kids(&dm, copy)[0];
     assert_eq!(
         take_log(),
         vec![

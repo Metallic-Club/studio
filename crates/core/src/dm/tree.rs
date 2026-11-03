@@ -1,13 +1,71 @@
 //! The tree: parents, children, names, searches and destruction.
 //!
-//! Each slot stores its position among its parent's children, so a depth-first walk moves to the next sibling in
-//! constant time and needs no stack: [`Descendants`] never allocates.
+//! Children are a sibling list threaded through the slots (see `storage.rs`), so adding or removing a child is O(1)
+//! wherever it sits, and a depth-first walk moves to the next sibling in constant time and needs no stack:
+//! [`Children`] and [`Descendants`] never allocate.
 
 use std::iter::FusedIterator;
 use std::sync::Arc;
 
+use super::storage::Slots;
 use super::{DataModel, DirtyBits, DmError, Notice};
 use crate::{ClassId, Id};
+
+/// The children of an instance, in order (the order they were parented in), from [`DataModel::children`]. Never
+/// allocates; knows its length and walks from either end.
+#[derive(Clone, Debug)]
+pub struct Children<'a> {
+    slots: &'a Slots,
+    /// The slot index of the next child from the front, and from the back.
+    front: u32,
+    back: u32,
+    /// How many children are left; the two ends meet when it reaches zero.
+    len: usize,
+}
+
+impl Children<'_> {
+    /// Whether no children are left.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Iterator for Children<'_> {
+    type Item = Id;
+
+    #[inline]
+    fn next(&mut self) -> Option<Id> {
+        if self.len == 0 {
+            return None;
+        }
+        let (id, _, next) = self.slots.siblings_at(self.front)?;
+        self.front = next;
+        self.len -= 1;
+        Some(id)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
+impl DoubleEndedIterator for Children<'_> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Id> {
+        if self.len == 0 {
+            return None;
+        }
+        let (id, prev, _) = self.slots.siblings_at(self.back)?;
+        self.back = prev;
+        self.len -= 1;
+        Some(id)
+    }
+}
+
+impl ExactSizeIterator for Children<'_> {}
+
+impl FusedIterator for Children<'_> {}
 
 /// The descendants of an instance, depth-first in child order (parents before their children). The instance
 /// itself is not included. Never allocates.
@@ -37,17 +95,29 @@ impl DataModel {
         Ok(self.slots.parent(id))
     }
 
-    /// The instance's children, in order.
-    pub fn children(&self, id: Id) -> Result<&[Id], DmError> {
-        Ok(self.body(id)?.children())
+    /// The instance's children, in order. See [`Children`].
+    pub fn children(&self, id: Id) -> Result<Children<'_>, DmError> {
+        let list = self.body(id)?.child_list();
+        Ok(Children {
+            slots: &self.slots,
+            front: list.first,
+            back: list.last,
+            len: list.len as usize,
+        })
+    }
+
+    /// How many children the instance has.
+    pub fn child_count(&self, id: Id) -> Result<usize, DmError> {
+        Ok(self.body(id)?.child_list().len as usize)
     }
 
     /// Every descendant of the instance, depth-first in child order. See [`Descendants`].
     pub fn descendants(&self, id: Id) -> Result<Descendants<'_>, DmError> {
+        self.slot(id)?;
         Ok(Descendants {
             dm: self,
             root: id,
-            next: self.body(id)?.children().first().copied(),
+            next: self.slots.first_child(id),
         })
     }
 
@@ -152,40 +222,12 @@ impl DataModel {
 
     /// Appends `id` (which has no parent) to `parent`'s children.
     pub(super) fn attach(&mut self, id: Id, parent: Id) {
-        if !self.slots.contains(id) {
-            return;
-        }
-        let Some(body) = self.slots.body_mut(parent) else {
-            return;
-        };
-        let children = body.children_mut();
-        let sibling = u32::try_from(children.len()).unwrap_or(u32::MAX);
-        children.push(id);
-        self.slots.link(id, parent, sibling);
+        self.slots.append(id, parent);
     }
 
-    /// Removes `id` from its parent's children, renumbering the later siblings.
+    /// Removes `id` from its parent's children, in constant time.
     fn detach(&mut self, id: Id) {
-        let Some((parent, at)) = self.slots.unlink(id) else {
-            return;
-        };
-        let at = at as usize;
-        let Some(body) = self.slots.body_mut(parent) else {
-            return;
-        };
-        let children = body.children_mut();
-        if at < children.len() {
-            children.remove(at);
-        }
-        let len = children.len();
-        for i in at..len {
-            let Some(&sibling) = self.slots.body(parent).and_then(|b| b.children().get(i)) else {
-                break;
-            };
-            if let Some(slot) = self.slots.get_mut(sibling) {
-                slot.sibling = u32::try_from(i).unwrap_or(u32::MAX);
-            }
-        }
+        self.slots.unlink(id);
     }
 
     /// Whether `ancestor` is above `id` in the tree.
@@ -210,8 +252,8 @@ impl DataModel {
 
     /// The instance after `current` in a depth-first walk of `root`'s subtree.
     pub(super) fn next_in_subtree(&self, root: Id, current: Id) -> Option<Id> {
-        match self.slots.body(current).and_then(|b| b.children().first()) {
-            Some(&child) => Some(child),
+        match self.slots.first_child(current) {
+            Some(child) => Some(child),
             None => self.next_after(root, current),
         }
     }
@@ -220,13 +262,10 @@ impl DataModel {
     pub(super) fn next_after(&self, root: Id, current: Id) -> Option<Id> {
         let mut x = current;
         while x != root {
-            let slot = self.slots.get(x)?;
-            let parent = self.slots.parent(x)?;
-            let siblings = self.slots.body(parent)?.children();
-            if let Some(&next) = siblings.get(slot.sibling as usize + 1) {
+            if let Some(next) = self.slots.next_sibling(x) {
                 return Some(next);
             }
-            x = parent;
+            x = self.slots.parent(x)?;
         }
         None
     }
@@ -261,7 +300,7 @@ impl DataModel {
         if recursive {
             Ok(self.descendants(id)?.find(|&x| matches(self, x)))
         } else {
-            Ok(self.children(id)?.iter().copied().find(|&x| matches(self, x)))
+            Ok(self.children(id)?.find(|&x| matches(self, x)))
         }
     }
 
@@ -333,21 +372,23 @@ impl DataModel {
         }
     }
 
-    /// Destroys every child of the instance (`ClearAllChildren`), last child first so each removal is cheap even
-    /// under a parent with many children. Services under the root are kept.
+    /// Destroys every child of the instance (`ClearAllChildren`), last child first. Services under the root are
+    /// kept.
     pub fn destroy_children(&mut self, id: Id) -> Result<(), DmError> {
-        let mut i = self.children(id)?.len();
-        while i > 0 {
-            i -= 1;
-            let Some(&child) = self.slots.body(id).and_then(|b| b.children().get(i)) else {
-                // A hook removed several children; continue from what is left.
-                i = self.slots.body(id).map_or(0, |b| b.children().len());
-                continue;
-            };
+        self.slot(id)?;
+        let mut current = self.slots.last_child(id);
+        while let Some(child) = current {
+            let prev = self.slots.prev_sibling(child);
             match self.destroy(child) {
                 Ok(()) | Err(DmError::IsService { .. }) => {}
                 Err(other) => return Err(other),
             }
+            current = match prev {
+                Some(p) if self.slots.parent(p) == Some(id) => Some(p),
+                // A hook moved or destroyed the previous child; continue from what is left.
+                Some(_) => self.slots.last_child(id),
+                None => None,
+            };
         }
         Ok(())
     }

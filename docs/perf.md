@@ -29,19 +29,21 @@ shared test class set (`crates/core/tests/support/classes.rs`), with a renderer 
 registered and drained, as in a running game. Only the workload function's own instructions count; building the
 fixture and dropping the data model afterwards do not.
 
-| Workload | Measured work | `Ir` at introduction |
-| --- | --- | ---: |
-| `reads` | Ten passes reading seven properties (`CFrame`, `Size`, `Color`, `Transparency`, `Anchored`, `CanCollide`, `Material`) of every part: 70,000 typed reads, three of the seven properties at their default | 8,188,839 |
-| `writes` | Ten passes setting every part's `CFrame`; every write changes the value: 10,000 writes | 5,266,817 |
-| `create` | 1,000 more parts, each created and parented into the folder | 689,364 |
-| `destroy` | The 1,000 parts destroyed one by one, in creation order | 11,725,942 |
-| `clone` | `clone_tree` of the folder with its 1,000 parts | 1,270,279 |
-| `drain_changes` | One consumer draining 50 changed parts of 5,000 | 2,028 |
+| Workload | Measured work | `Ir` at introduction | `Ir` after #49 |
+| --- | --- | ---: | ---: |
+| `reads` | Ten passes reading seven properties (`CFrame`, `Size`, `Color`, `Transparency`, `Anchored`, `CanCollide`, `Material`) of every part: 70,000 typed reads, three of the seven properties at their default | 8,188,839 | 8,188,489 |
+| `writes` | Ten passes setting every part's `CFrame`; every write changes the value: 10,000 writes | 5,266,817 | 4,496,817 |
+| `create` | 1,000 more parts, each created and parented into the folder | 689,364 | 627,505 |
+| `destroy` | The 1,000 parts destroyed one by one, in creation order | 11,725,942 | 709,200 |
+| `clone` | `clone_tree` of the folder with its 1,000 parts | 1,270,279 | 1,235,766 |
+| `drain_changes` | One consumer draining 50 changed parts of 5,000 | 2,028 | 2,028 |
 
-The counts are from the PR that added the gate (#29), measured on `main` at `8b2caff` (data model, signals and the
-first classes): ubuntu-24.04 runner, Rust 1.99.1, Valgrind 3.22.0, gungraun 0.20.0, release profile. They are a
-reference point, not a target; the gate always compares a PR with its own base. (`destroy` costing about 11,700
-instructions per part, against about 690 to create one, is worth a look when the tree's child lists are next tuned.)
+The first column is from the PR that added the gate (#29), measured on `main` at `8b2caff` (data model, signals and
+the first classes): ubuntu-24.04 runner, Rust 1.99.1, Valgrind 3.22.0, gungraun 0.20.0, release profile. The second
+is from #49, on the same runner image and versions. #49 made removing a child O(1): `destroy` had cost about 11,700
+instructions per part, against about 690 to create one, because removing a child shifted and renumbered every later
+sibling. It also brought an unwatched write back under its cost before signals (`writes` was 4,746,793 then). Both
+columns are reference points, not targets; the gate always compares a PR with its own base.
 
 ### How the workflow compares
 
@@ -130,20 +132,25 @@ Wall-time numbers from the criterion benches (`cargo bench -p metallic_core --be
 release profile), recorded by hand. They are for spotting trends against the targets set in the issues, on a stated
 machine; they are not a gate. Each milestone that adds a hot path adds rows here.
 
-| Date | Machine | Bench | Result (criterion median) | Target |
-| --- | --- | --- | ---: | ---: |
-| 2026-11-02 | Ryzen 5 5500, 16 GB, Windows 11, Rust 1.99.1 | `set_cframe` | 38.3 ns | ≤ 100 ns |
-| 2026-11-02 | same | `get_ref_stored` | 9.7 ns | ≤ 20 ns |
-| 2026-11-02 | same | `get_ref_default` | 11.0 ns | ≤ 20 ns |
-| 2026-11-02 | same | `cframe_typed` | 13.0 ns | |
-| 2026-11-02 | same | `create_1000_parts_4_props` | 500 µs | ≤ 1 ms |
-| 2026-11-02 | same | `large/create_100k_set_one` | 10.4 ms | < 50 ms |
-| 2026-11-02 | same | `read_7_props_5000_parts` | 330 µs | ≤ 0.3 ms |
-| 2026-11-02 | same | `drain_50_of_5000` | 236 ns | ≤ 20 µs |
-| 2026-11-02 | same | `build_100_classes` | 472 µs | |
-| 2026-11-02 | same | `prop_id_own` / `prop_id_inherited` / `prop_id_missing` | 25.3 / 21.6 / 17.5 ns | |
-| 2026-11-02 | same | `is_a_true` / `is_a_false` | 2.7 / 2.7 ns | |
+**2026-11-02**, Ryzen 5 5500, 16 GB, Windows 11, Rust 1.99.1. Two runs back to back on the same machine, kept as
+quiet as could be arranged: `main` at `b756236` (data model, signals, first classes, perf gate), then #49 at `f1c2abc` (O(1) child
+removal, cheaper unwatched writes). Every 95% confidence interval is within 1.5% of its median.
 
-The 2026-11-02 run shared the machine with other builds, so its spread is wide (`set_cframe` 35–42 ns,
-`read_7_props_5000_parts` 303–358 µs); `read_7_props_5000_parts` sits at its target and should be re-measured on an
-idle machine before anyone tunes it.
+| Bench | `main` `b756236` | #49 `f1c2abc` | Target |
+| --- | ---: | ---: | ---: |
+| `set_cframe` | 35.0 ns | 27.8 ns | ≤ 100 ns |
+| `set_cframe_watched` | 75.0 ns | 63.8 ns | |
+| `get_ref_stored` | 7.3 ns | 7.3 ns | ≤ 20 ns |
+| `get_ref_default` | 11.0 ns | 11.1 ns | ≤ 20 ns |
+| `cframe_typed` | 10.3 ns | 10.4 ns | |
+| `create_1000_parts_4_props` | 392 µs | 356 µs | ≤ 1 ms |
+| `large/create_100k_set_one` | 10.5 ms | 9.2 ms | < 50 ms |
+| `read_7_props_5000_parts` | 249 µs | 248 µs | ≤ 0.3 ms |
+| `drain_50_of_5000` | 147 ns | 146 ns | ≤ 20 µs |
+| `drain_1000_events` | 27.2 µs | 27.0 µs | |
+| `build_100_classes` | 365 µs | 366 µs | |
+| `prop_id_own` / `prop_id_inherited` / `prop_id_missing` | 20.1 / 19.2 / 14.5 ns | 20.2 / 19.1 / 14.5 ns | |
+| `is_a_true` / `is_a_false` | 1.9 / 1.9 ns | 1.9 / 1.9 ns | |
+
+An earlier run (2026-11-02, same machine, sharing it with other builds) had `read_7_props_5000_parts` at 330 µs, over
+its target; on the quieter machine it is 249 µs on `main`, so that was load, not a regression.

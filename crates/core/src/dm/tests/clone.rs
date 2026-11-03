@@ -25,9 +25,9 @@ fn clone_copies_the_subtree_and_remaps_internal_references() {
     assert_ne!(copy, model);
     assert_eq!(dm.parent(copy), Ok(None));
     assert_eq!(dm.name(copy), Ok("Model"));
-    let kids = dm.children(copy).expect("children").to_vec();
-    assert_eq!(kids.len(), 2);
-    let (a2, b2) = (kids[0], kids[1]);
+    let copies = kids(&dm, copy);
+    assert_eq!(copies.len(), 2);
+    let (a2, b2) = (copies[0], copies[1]);
     assert!(![a, b].contains(&a2) && ![a, b].contains(&b2));
     assert_eq!(dm.name(a2), Ok("A"));
     assert_eq!(dm.name(b2), Ok("B"));
@@ -46,7 +46,7 @@ fn clone_copies_the_subtree_and_remaps_internal_references() {
     assert_eq!(dm.attribute(a2, "Health"), Ok(Some(&Value::Number(100.0))));
     // The original is untouched.
     assert_eq!(dm.reference(a, ids.target), Ok(Some(b)));
-    assert_eq!(dm.children(model), Ok(&[a, b][..]));
+    assert_eq!(kids(&dm, model), [a, b]);
 }
 
 #[test]
@@ -67,8 +67,9 @@ fn clone_skips_non_archivable_instances() {
         .map(|x| dm.name(x).expect("name"))
         .collect();
     assert_eq!(names, vec!["Kept", "After"]);
-    let kept_copy = dm.children(copy).expect("children")[0];
-    let after_copy = dm.children(copy).expect("children")[1];
+    let [kept_copy, after_copy] = kids(&dm, copy)[..] else {
+        panic!("two copies expected");
+    };
     assert_eq!(dm.reference(kept_copy, ids.target), Ok(Some(after_copy)));
 
     dm.set(model, ids.archivable, Value::Bool(false)).expect("set");

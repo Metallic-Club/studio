@@ -116,7 +116,9 @@ fn hot_reads_and_writes_do_not_allocate() {
         black_box(dm.vector3(p, ids.position).expect("computed read"));
         black_box(dm.name(p).expect("read"));
         black_box(dm.parent(p).expect("read"));
-        black_box(dm.children(ids.workspace).expect("read"));
+        black_box(dm.children(ids.workspace).expect("read").count());
+        black_box(dm.child_count(ids.workspace).expect("read"));
+        black_box(dm.descendants(ids.workspace).expect("read").count());
 
         dm.drain_changes(render, &mut changes);
         changes.clear();

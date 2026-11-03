@@ -516,7 +516,12 @@ impl DataModel {
 
     /// Turns one notice into the events it causes. Called by `notify` for every notice; an unwatched instance costs
     /// one flag check (plus, for a move, the whole-model counters).
-    #[inline]
+    ///
+    /// Always inlined, so each caller keeps only the arm of the notice it builds, as a flag test in its own body,
+    /// and the notice itself is never built when nothing listens. The work behind each test stays out of line.
+    /// Called out of line, this function's prologue and dispatch cost an unwatched `set` about 50 instructions,
+    /// 10% of the write (issue #49).
+    #[inline(always)]
     pub(super) fn queue_events(&mut self, notice: Notice) {
         match notice {
             Notice::PropertyChanged { id, prop } => {
@@ -526,16 +531,12 @@ impl DataModel {
             }
             Notice::NameChanged { id } => {
                 if self.is_watched(id) {
-                    let prop = self
-                        .slots
-                        .get(id)
-                        .and_then(|s| self.classes.get(s.class.index())?.name_prop);
-                    self.queue_changed(id, Some("Name"), prop);
+                    self.queue_renamed(id);
                 }
             }
             Notice::AttributeChanged { id, name } => {
-                if let Some(signal) = self.listening(id, BuiltinSignal::AttributeChanged) {
-                    self.signals.push(id, Key::Signal(signal), [ScriptValue::String(name)]);
+                if self.is_watched(id) {
+                    self.queue_attribute_changed(id, name);
                 }
             }
             Notice::Destroying { id } => {
@@ -549,15 +550,42 @@ impl DataModel {
                 }
             }
             Notice::Fired { id, signal, args } => {
-                if self.is_watched(id) && self.signals.listens(id, Key::Signal(signal)) {
-                    self.signals.push(id, Key::Signal(signal), args);
+                if self.is_watched(id) {
+                    self.queue_fired(id, signal, args);
                 }
             }
         }
     }
 
+    /// `Changed("Name")` and the `Name` property's signal, on the watched instance `id`.
+    #[inline(never)]
+    fn queue_renamed(&mut self, id: Id) {
+        let prop = self
+            .slots
+            .get(id)
+            .and_then(|s| self.classes.get(s.class.index())?.name_prop);
+        self.queue_changed(id, Some("Name"), prop);
+    }
+
+    /// `AttributeChanged(name)` on the watched instance `id`.
+    #[inline(never)]
+    fn queue_attribute_changed(&mut self, id: Id, name: Arc<str>) {
+        if let Some(signal) = self.listening(id, BuiltinSignal::AttributeChanged) {
+            self.signals.push(id, Key::Signal(signal), [ScriptValue::String(name)]);
+        }
+    }
+
+    /// A signal class code fired on the watched instance `id`, when a connection listens to it.
+    #[inline(never)]
+    fn queue_fired(&mut self, id: Id, signal: SignalId, args: Vec<ScriptValue>) {
+        if self.signals.listens(id, Key::Signal(signal)) {
+            self.signals.push(id, Key::Signal(signal), args);
+        }
+    }
+
     /// `Changed(name)` and the property's own changed signal, on the watched instance `id`. `name` defaults to
     /// the property's declared name.
+    #[inline(never)]
     fn queue_changed(&mut self, id: Id, name: Option<&'static str>, prop: Option<PropId>) {
         let name = name.or_else(|| {
             let class = self.slots.get(id)?.class;
@@ -578,6 +606,7 @@ impl DataModel {
 
     /// Records the grave of `id` (something is connected somewhere, so a handler may ask for it), queues its
     /// `Destroying`, and marks its connections to be dropped by the next drain.
+    #[inline(never)]
     fn queue_destroying(&mut self, id: Id) {
         let Some(class) = self.slots.get(id).map(|s| s.class) else {
             return;
@@ -602,6 +631,7 @@ impl DataModel {
     /// order: `DescendantRemoving` on the old ancestors, `ChildRemoved`, `ChildAdded`, `DescendantAdded` on the new
     /// ancestors, `AncestryChanged` on the moved subtree, then `Changed("Parent")` and the `Parent` property's
     /// signal.
+    #[inline(never)]
     fn queue_moved(&mut self, id: Id, old: Option<Id>, new: Option<Id>) {
         let child = ScriptValue::Instance(id);
         if let Some(old) = old {

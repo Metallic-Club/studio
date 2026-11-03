@@ -50,7 +50,7 @@ fn clone(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
 }
 
 fn get_children(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
-    Ok(instance_list(call.dm.children(call.this)?.iter().copied()))
+    Ok(instance_list(call.dm.children(call.this)?))
 }
 
 fn get_descendants(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
@@ -318,7 +318,7 @@ mod tests {
         assert_ne!(copy, folder);
         assert_eq!(dm.parent(copy), Ok(None));
         assert_eq!(dm.name(copy), Ok("A"));
-        let children = dm.children(copy).unwrap();
+        let children: Vec<_> = dm.children(copy).unwrap().collect();
         assert_eq!(children.len(), 1);
         assert_eq!(dm.name(children[0]), Ok("B"));
 

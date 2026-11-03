@@ -37,7 +37,7 @@ mod tests {
         let mut dm = game();
         let root = dm.root().unwrap();
         let lighting = call(&mut dm, root, "GetService", vec!["Lighting".into()]).unwrap();
-        assert_eq!(dm.children(root).unwrap()[1], match lighting {
+        assert_eq!(dm.children(root).unwrap().nth(1).unwrap(), match lighting {
             ScriptValue::Instance(id) => id,
             other => panic!("expected an instance, got {other:?}"),
         });
@@ -65,7 +65,7 @@ mod tests {
         let root = dm.root().unwrap();
         let ws = workspace(&dm);
         let folder = new_in(&mut dm, "Folder", ws, "F");
-        let services: Vec<_> = dm.children(root).unwrap().to_vec();
+        let services: Vec<_> = dm.children(root).unwrap().collect();
         for service in services {
             assert!(call(&mut dm, service, "Destroy", vec![]).is_err());
             assert!(dm.set_by_name(service, "Parent", Value::Ref(Some(folder))).is_err());
