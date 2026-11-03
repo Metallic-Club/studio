@@ -15,6 +15,20 @@
 //! `DescendantRemoving`) or on every descendant (`AncestryChanged`) also keep a count of their connections in the
 //! whole data model, and skip the walk entirely while it is zero.
 //!
+//! # Derived properties
+//!
+//! A computed property declared with `PropMeta::derived_from` (such as `Position`, derived from `CFrame`) fires
+//! with its sources: when a stored property changes on a watched instance, its own `Changed` and property signal
+//! are queued first, then those of each computed property derived from it, in declaration order. A write to
+//! `CFrame` therefore fires `CFrame`, `Position`, `Orientation`, through both `Changed` and the property signals.
+//!
+//! **No double firing:** writing a computed property fires nothing by itself. Its setter writes the stored
+//! properties, and only those writes fire, each with its dependents. Writing `Position` writes `CFrame` once, so it
+//! fires exactly what a `CFrame` write fires, each property once; a write that leaves `CFrame` unchanged fires
+//! nothing. A setter that writes two sources of the same computed property fires it once per changed source.
+//! Dependents fire whenever a source changes, without comparing their own value: writing `Orientation` also fires
+//! `Position` even though the position stayed. Comparing would mean running every getter on every watched write.
+//!
 //! # Deferred delivery
 //!
 //! An event is queued only when a connection listens to that signal on that instance, with its arguments, in fire
@@ -526,7 +540,7 @@ impl DataModel {
         match notice {
             Notice::PropertyChanged { id, prop } => {
                 if self.is_watched(id) {
-                    self.queue_changed(id, None, Some(prop));
+                    self.queue_prop_changed(id, prop);
                 }
             }
             Notice::NameChanged { id } => {
@@ -554,6 +568,22 @@ impl DataModel {
                     self.queue_fired(id, signal, args);
                 }
             }
+        }
+    }
+
+    /// A stored property's `Changed` and property signal on the watched instance `id`, then the same for each
+    /// computed property derived from it, in declaration order (see the module docs on derived properties).
+    #[inline(never)]
+    fn queue_prop_changed(&mut self, id: Id, prop: PropId) {
+        self.queue_changed(id, None, Some(prop));
+        let Some(class) = self.slots.get(id).map(|s| s.class) else {
+            return;
+        };
+        // By index, because `queue_changed` needs `self` mutably while the list borrows the registry.
+        let mut i = 0;
+        while let Some(&dependent) = self.registry.dependents(class, prop).get(i) {
+            self.queue_changed(id, None, Some(dependent));
+            i += 1;
         }
     }
 

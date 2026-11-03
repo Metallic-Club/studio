@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::classes::{game, game_with, registry_with};
 use super::*;
 use crate::dm::{Delivery, DmError, ListenerKey};
-use crate::{ClassDesc, PropId, ScriptValue, SignalId};
+use crate::{CFrame, ClassDesc, PropId, PropMeta, ScriptError, ScriptValue, SignalId, Vector3};
 
 /// What a listener is handed: `(listener, source, args)`.
 type Got = (u64, Id, Vec<ScriptValue>);
@@ -442,4 +442,145 @@ fn services_report_joining_the_root() {
     dm.connect(root, child_added, key(1)).expect("connect");
     let ws = dm.create_service(workspace).expect("service");
     assert_eq!(drain(&mut dm), vec![(1, root, vec![inst(ws)])]);
+}
+
+// Derived properties: `Body` is a `Part` whose `Position` and `Spin` are derived from `CFrame`, and `Mass` from
+// `Size`. The shared `Part` declares no derivations: the perf gate builds the shared classes on the base branch too.
+
+fn body_cframe(dm: &DataModel, id: Id) -> CFrame {
+    dm.prop_id(id, "CFrame")
+        .and_then(|p| dm.cframe(id, p))
+        .unwrap_or_default()
+}
+
+fn set_body_cframe(dm: &mut DataModel, id: Id, cframe: CFrame) -> Result<(), ScriptError> {
+    let prop = dm.prop_id(id, "CFrame")?;
+    Ok(dm.set(id, prop, Value::CFrame(cframe))?)
+}
+
+fn vector_arg(value: Value) -> Result<Vector3, ScriptError> {
+    match value {
+        Value::Vector3(v) => Ok(v),
+        _ => Err(ScriptError::wrong_type("Vector3", "other")),
+    }
+}
+
+fn body_position_get(dm: &DataModel, id: Id) -> Value {
+    Value::Vector3(body_cframe(dm, id).position())
+}
+
+fn body_position_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError> {
+    let rotation = body_cframe(dm, id).rotation();
+    set_body_cframe(dm, id, CFrame::from_parts(vector_arg(value)?, rotation))
+}
+
+fn body_spin_get(dm: &DataModel, id: Id) -> Value {
+    Value::Vector3(body_cframe(dm, id).to_orientation_deg())
+}
+
+fn body_spin_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError> {
+    let angles = vector_arg(value)?;
+    let rotation = CFrame::from_orientation_deg(angles.x, angles.y, angles.z).rotation();
+    let position = body_cframe(dm, id).position();
+    set_body_cframe(dm, id, CFrame::from_parts(position, rotation))
+}
+
+fn body_mass_get(_: &DataModel, _: Id) -> Value {
+    Value::Number(1.0)
+}
+
+static BODY: ClassDesc = ClassDesc::new("Body", Some("Part")).creatable().props(&[
+    PropMeta::vector3("Position", 0.0, 0.0, 0.0)
+        .computed(body_position_get, Some(body_position_set))
+        .derived_from(&["CFrame"])
+        .override_inherited(),
+    PropMeta::vector3("Spin", 0.0, 0.0, 0.0)
+        .computed(body_spin_get, Some(body_spin_set))
+        .derived_from(&["CFrame"]),
+    PropMeta::number("Mass", 0.0)
+        .computed(body_mass_get, None)
+        .derived_from(&["Size"])
+        .override_inherited()
+        .read_only(),
+]);
+
+/// A data model with `Body`, one body, and the id of its `Spin`.
+fn body() -> (DataModel, classes::Ids, Id, PropId) {
+    let registry = registry_with(&[&BODY]);
+    let class = registry.class_id("Body").expect("class");
+    let (mut dm, ids) = game_with(registry);
+    let b = dm.create(class).expect("create");
+    let spin = dm.prop_id(b, "Spin").expect("prop");
+    (dm, ids, b, spin)
+}
+
+#[test]
+fn derived_properties_fire_after_their_source_in_declaration_order() {
+    let (mut dm, ids, b, spin) = body();
+    connect(&mut dm, b, ids.changed, 1);
+    for (prop, listener) in [(ids.cframe, 2), (ids.position, 3), (spin, 4)] {
+        dm.connect_property_changed(b, prop, key(listener)).expect("connect");
+    }
+    let moved = vec![
+        (1, b, vec![text("CFrame")]),
+        (2, b, vec![]),
+        (1, b, vec![text("Position")]),
+        (3, b, vec![]),
+        (1, b, vec![text("Spin")]),
+        (4, b, vec![]),
+    ];
+
+    dm.set(b, ids.cframe, Value::CFrame(CFrame::new(Vector3::new(1.0, 2.0, 3.0))))
+        .expect("set CFrame");
+    assert_eq!(drain(&mut dm), moved, "writing the source");
+
+    // A computed write fires nothing itself: its setter's one `CFrame` write fires each property once.
+    dm.set(b, ids.position, Value::Vector3(Vector3::new(4.0, 5.0, 6.0)))
+        .expect("set Position");
+    assert_eq!(drain(&mut dm), moved, "writing Position");
+    dm.set(b, spin, Value::Vector3(Vector3::new(0.0, 90.0, 0.0)))
+        .expect("set Spin");
+    assert_eq!(drain(&mut dm), moved, "writing Spin");
+
+    dm.set(b, ids.position, Value::Vector3(Vector3::new(4.0, 5.0, 6.0)))
+        .expect("set Position");
+    assert!(
+        drain(&mut dm).is_empty(),
+        "a write that leaves CFrame unchanged fires nothing"
+    );
+
+    dm.set(b, ids.size, Value::Vector3(Vector3::new(2.0, 2.0, 2.0)))
+        .expect("set Size");
+    assert_eq!(
+        drain(&mut dm),
+        vec![(1, b, vec![text("Size")]), (1, b, vec![text("Mass")])],
+        "each source fires only its own dependents"
+    );
+    dm.set(b, ids.transparency, number(0.5)).expect("set");
+    assert_eq!(drain(&mut dm), vec![(1, b, vec![text("Transparency")])]);
+}
+
+#[test]
+fn derived_properties_fire_only_where_something_listens() {
+    let (mut dm, ids, b, spin) = body();
+    let cframe = Value::CFrame(CFrame::new(Vector3::new(1.0, 2.0, 3.0)));
+
+    // Unwatched: nothing is queued.
+    dm.set(b, spin, Value::Vector3(Vector3::new(0.0, 45.0, 0.0)))
+        .expect("set Spin");
+    assert_eq!(dm.pending_events(), 0);
+
+    // Only Position's own signal: one event per write, whichever property is written.
+    dm.connect_property_changed(b, ids.position, key(1)).expect("connect");
+    dm.set(b, ids.cframe, cframe.clone()).expect("set CFrame");
+    dm.set(b, spin, Value::Vector3(Vector3::new(0.0, 90.0, 0.0)))
+        .expect("set Spin");
+    assert_eq!(drain(&mut dm), vec![(1, b, vec![]), (1, b, vec![])]);
+
+    // A plain `Part` declares no derivation: its `CFrame` fires alone.
+    let p = part(&mut dm, &ids);
+    connect(&mut dm, p, ids.changed, 2);
+    dm.connect_property_changed(p, ids.position, key(3)).expect("connect");
+    dm.set(p, ids.cframe, cframe).expect("set CFrame");
+    assert_eq!(drain(&mut dm), vec![(2, p, vec![text("CFrame")])]);
 }

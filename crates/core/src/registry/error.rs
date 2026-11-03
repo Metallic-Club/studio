@@ -188,6 +188,43 @@ pub enum RegistryError {
         /// The property that already uses the name.
         other: &'static str,
     },
+    /// A stored property declares sources with `derived_from(..)`; only a computed property is derived from others.
+    #[error(
+        "class `{class}` has stored property `{prop}` marked as derived from other properties; only a computed \
+         property can be, so remove derived_from or make it computed"
+    )]
+    DerivedStoredProp {
+        /// The class.
+        class: &'static str,
+        /// The stored property.
+        prop: &'static str,
+    },
+    /// `derived_from(..)` names a property the class does not have.
+    #[error(
+        "in class `{class}`, property `{prop}` is derived from `{from}`, but the class has no property by that \
+         name (its own or inherited); fix the name"
+    )]
+    UnknownDerivedSource {
+        /// The class.
+        class: &'static str,
+        /// The computed property.
+        prop: &'static str,
+        /// The name in `derived_from`.
+        from: &'static str,
+    },
+    /// `derived_from(..)` names a computed property, which never changes by itself.
+    #[error(
+        "in class `{class}`, property `{prop}` is derived from `{from}`, which is computed; name the stored \
+         properties `{from}` is derived from instead"
+    )]
+    DerivedFromComputed {
+        /// The class.
+        class: &'static str,
+        /// The computed property.
+        prop: &'static str,
+        /// The computed property named in `derived_from`.
+        from: &'static str,
+    },
     /// `hide(..)` names a member the class does not have.
     #[error("class `{class}` hides `{member}`, but it has no property, method or signal by that name; fix the name")]
     UnknownHidden {
