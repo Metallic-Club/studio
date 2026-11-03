@@ -375,18 +375,16 @@ impl InstanceScene {
         };
         let want = list_of(instance);
         let (have, pos) = (meta.list, meta.list_pos);
-        // A slot that changes list enters, leaves or changes list in the culling grid now; one that only moved
-        // waits on the grid's queue for the next cull.
-        // (A queued slot stays queued: it is on the queue once, and the update there finds nothing left to do.)
-        if want != have {
-            self.grid.update(region, slot, instance, want);
-        }
         if want == have {
             if have != NOT_LISTED {
                 self.lists.changed(have, pos);
             }
             return;
         }
+        // A slot that changes list enters, leaves or changes list in the culling grid now; one that only moved
+        // waits on the grid's queue for the next cull. (A queued slot stays queued: it is on the queue once, and
+        // the update there finds nothing left to do.)
+        self.grid.update(region, slot, instance, want);
         if have != NOT_LISTED
             && let Some(moved) = self.lists.remove(have, pos)
         {
@@ -447,11 +445,11 @@ impl InstanceScene {
                 (false, None) => {}
                 (true, None) => {
                     let slot = self.place(id, Region::Static);
-                    self.write(dm, id, slot, &binding);
+                    self.write(dm, id, slot, &binding, true);
                     stats.added += 1;
                 }
                 (true, Some(slot)) => {
-                    self.write(dm, id, slot, &binding);
+                    self.write(dm, id, slot, &binding, true);
                     stats.updated += 1;
                 }
             }
@@ -460,10 +458,11 @@ impl InstanceScene {
         let Some(mut slot) = current else {
             return;
         };
-        if bits.contains(DirtyBits::TRANSFORM) {
+        let transform = bits.contains(DirtyBits::TRANSFORM);
+        if transform {
             slot = self.track_motion(dm, id, slot, &binding, stats);
         }
-        self.write(dm, id, slot, &binding);
+        self.write(dm, id, slot, &binding, transform);
         stats.updated += 1;
     }
 
@@ -589,16 +588,17 @@ impl InstanceScene {
         }
     }
 
-    /// Packs `id` into `slot` from its current properties and queues the slot for upload.
-    fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding) {
+    /// Packs `id` into `slot` from its current properties and queues the slot for upload. `transform` says whether
+    /// the change record names a transform property (`CFrame`, `Position`, `Orientation`, `Size`: the `TRANSFORM`
+    /// dirty bit), which moves the bounding sphere for the culling grid.
+    fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding, transform: bool) {
         let instance = pack(dm, id, binding, &self.classes, self.origin);
         let region = &mut self.regions[slot.region.index()];
-        let mut moved = false;
+        let mut moved = transform;
         if let Some(target) = region.instances.get_mut(slot.slot as usize) {
-            // A recolour leaves the culling grid alone; only a new transform (or size) moves the bounding sphere.
-            // Compared as bits: a few integer compares, and -0.0 or NaN at worst queue an unneeded update.
-            let bits = |rows: [[f32; 4]; 3]| bytemuck::cast::<_, [u64; 6]>(rows);
-            moved = bits(target.rows) != bits(instance.rows);
+            // Besides the transform, only the mesh kind's own scale rule changes the box (a `Shape` change, which
+            // always changes the kind); a recolour or a new material leaves the culling grid alone.
+            moved |= target.mesh_material >> 16 != instance.mesh_material >> 16;
             *target = instance;
         }
         if moved && region.mark_moved(slot.slot) {

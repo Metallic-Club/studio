@@ -39,8 +39,8 @@ passes). There are five suites, each with its own table in the job summary:
   repack, coalesce) plus the upload's CPU work written into a plain buffer: `render_sync_moving` (100 parts that
   move every frame, so they sit together in the dynamic region: one range, the copy path) and
   `render_sync_scattered` (100 parts spread over the scene recoloured: 100 ranges, the scatter path's layout).
-  Since #79 a sync also notes which slots moved, for the culling grid (a compare of the packed transform per
-  written slot, and a queue entry per moved one); moving their grid items is the cull's work, which gets its own
+  Since #79 a sync also notes which slots moved, for the culling grid (from the change record's `TRANSFORM` bit:
+  a flag and, the first time, a queue entry per moved slot); moving their grid items is the cull's work, which gets its own
   workload once #79 is on `main`, since the base has to build the head's workloads (#114).
 
 A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
@@ -292,13 +292,15 @@ With #77 the coalesce also keeps the draw lists current (O(1) per dirty slot): `
 75 µs and `sync/100k_1pct_scattered` 114 µs, the same as before within noise.
 
 With #79 the sync also feeds the culling grid: a slot that changes draw list is placed in the grid in the
-coalesce, and one whose packed transform changed is queued once for the next cull, which moves its item (in place
-while it stays in its cell, O(1) otherwise); a recolour leaves the grid alone. A first version moved the items in
-the coalesce: `sync/100k_1pct_moving` 86 µs, and the perf gate's `render_sync_moving` 128,226 → 155,313 `Ir`
-(+21%, about 270 instructions per moved part). Queued, with the
-in-cell check, the same run measured `sync/100k_1pct_moving` 75 µs on `main` against 80 µs, and
-`sync/100k_1pct_scattered` 110–120 µs on `main` against 124–131 µs (that bench varies by about 10% between runs
-on this machine). The cull itself, `cull/*` (one `InstanceScene::cull` of the 100,000 parts from a 1920 × 1080
+coalesce, and one that moved is flagged and queued once for the next cull, which moves its item (in place while
+it stays in its cell, O(1) otherwise). Whether a part moved comes from its change record (the `TRANSFORM` dirty
+bit: `CFrame`, `Position`, `Orientation`, `Size`) or a new mesh kind (`Shape`); a recolour or a new material
+leaves the grid alone. Perf-gate history of this PR (`render_sync_moving` / `render_sync_scattered`, base
+128,226 / 139,941 `Ir`): items moved in the coalesce, 155,313 (+21%, about 270 instructions per moved part);
+queued, but found by comparing the packed transform, 136,356 / 147,668 (+6.3% / +5.5%, about 80 per written
+part); from the change record, the version kept. `sync/100k_1pct_moving` measured 75 µs on `main` and 80 µs with
+it, `sync/100k_1pct_scattered` 110–120 µs on `main` and 116 µs (that bench varies by about 10% between runs on
+this machine). The cull itself, `cull/*` (one `InstanceScene::cull` of the 100,000 parts from a 1920 × 1080
 camera in the middle of the field at head height, looking along it, nothing queued):
 
 | Bench | Visible | Time |

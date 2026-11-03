@@ -182,6 +182,8 @@ impl Grid {
 
     /// Brings `slot`'s item in line with its packed `instance` and the draw `list` it is on ([`NOT_LISTED`]
     /// takes it out).
+    // Kept out of line: the sync calls it only when a slot changes list, and inlined it would bloat that hot path.
+    #[inline(never)]
     pub(crate) fn update(&mut self, region: Region, slot: u32, instance: &GpuInstance, list: u16) {
         let place = self.place(region, slot);
         if list == NOT_LISTED {
