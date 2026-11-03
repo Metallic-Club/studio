@@ -364,7 +364,10 @@ impl DataModel {
                 body.store(prop, value);
             }
         }
-        self.changes.mark(slot, id, DirtyBits::from_prop_flags(meta.flags));
+        // Live: its slot was just looked up.
+        if let Some(dirty) = self.slots.dirty_at_mut(id.index()) {
+            self.changes.mark(dirty, id, DirtyBits::from_prop_flags(meta.flags));
+        }
 
         self.run_hooks(id, class, |b, dm| b.on_prop_changed(dm, id, prop));
         self.notify(Notice::PropertyChanged { id, prop });

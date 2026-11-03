@@ -162,7 +162,10 @@ impl DataModel {
             return Err(DmError::NoInstance(id));
         };
         body.name = (!is_class_name).then(|| Box::new(name));
-        self.changes.mark(slot, id, DirtyBits::PROPERTY);
+        // Live: its slot was just looked up.
+        if let Some(dirty) = self.slots.dirty_at_mut(id.index()) {
+            self.changes.mark(dirty, id, DirtyBits::PROPERTY);
+        }
         self.notify(Notice::NameChanged { id });
         Ok(())
     }
@@ -365,7 +368,9 @@ impl DataModel {
                 let Some(slot) = self.slots.get(x) else {
                     continue;
                 };
-                self.changes.removed(slot, x);
+                if let Some(dirty) = self.slots.dirty_at(x.index()) {
+                    self.changes.removed(dirty, x);
+                }
                 if slot.pins == 0 && !grave {
                     self.slots.remove(x);
                     continue;

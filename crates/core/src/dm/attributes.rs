@@ -72,7 +72,10 @@ impl DataModel {
                 key
             }
         };
-        self.changes.mark(slot, id, DirtyBits::PROPERTY);
+        // Live: its slot was just looked up.
+        if let Some(dirty) = self.slots.dirty_at_mut(id.index()) {
+            self.changes.mark(dirty, id, DirtyBits::PROPERTY);
+        }
         self.notify(Notice::AttributeChanged { id, name: key });
         Ok(())
     }

@@ -3,9 +3,11 @@
 //! The layout is sized for 100,000-part scenes (issue #14 budget: at most 256 bytes per `Part` with four
 //! non-default properties, inline and heap together; `tests/alloc.rs` measures it):
 //!
-//! - a slot is 80 bytes: the generation, the parent's slot index, the previous and next siblings' slot indices, the
-//!   class, one byte of dirty bits per change consumer ([`MAX_CONSUMERS`], eight), the signal "watched" flag, the
-//!   pin count (see `pins.rs`), and a [`Body`] whose pointers are only paid for when used;
+//! - a slot is 72 bytes: the generation, the parent's slot index, the previous and next siblings' slot indices, the
+//!   class, the signal "watched" flag, the pin count (see `pins.rs`), and a [`Body`] whose pointers are only paid
+//!   for when used;
+//! - beside each slot, in a parallel array, one byte of dirty bits per change consumer: 8 bytes for
+//!   [`MAX_CONSUMERS`] (see "Dirty bits beside the slots" below);
 //! - an instance with its class's name stores no name (one null pointer); a renamed one boxes a shared string;
 //! - only non-default property values are stored, in a `Vec` sorted by [`PropId`] that grows one entry at a time
 //!   (four values are 160 bytes: `PropId` + `Value` is 40 bytes with alignment). Removing an entry keeps the
@@ -17,10 +19,20 @@
 //! Children are a doubly linked list threaded through the slots (`prev` and `next` above), and a parent keeps only
 //! a [`ChildList`]: the first and last child and the count. Appending, removing any child and stepping to a
 //! sibling are all O(1) and never allocate, so clearing a folder of 100,000 parts one by one is linear, and order
-//! is insertion order. The links fit in what a position-in-parent index and padding used to take, so they cost
-//! the slot nothing, and a parent no longer pays 8 bytes per child for an id vector. Iterating children chases links
+//! is insertion order. The links fit in what a position-in-parent index and padding used to take, so the slot
+//! stays 72 bytes, and a parent no longer pays 8 bytes per child for an id vector. Iterating children chases links
 //! instead of reading a contiguous array; parts created together sit in neighbouring slots, so that walk stays
 //! mostly sequential.
+//!
+//! # Dirty bits beside the slots
+//!
+//! Each change consumer has one byte of `DirtyBits` per instance. Eight consumers do not fit in the slot's padding.
+//! Inside the slot they would make it 80 bytes, and the stride matters more than the size: indexing 72-byte slots
+//! (9 × 8) is one `lea` and an 8-scaled address, but 80 bytes (5 × 16) needs a shift as well, because x86 addresses
+//! scale by at most 8. Every slot access pays that, so every read, link step and destroy got slower (#90 measured
+//! about one instruction per access). The bytes therefore sit in a parallel `Vec` indexed by slot index, which
+//! costs the same memory per instance. Only marking, draining and the slot's reuse touch it. It is cleared when a
+//! slot is reused, not when it is freed: nothing reads a freed slot's bytes, because drains check liveness first.
 
 use std::sync::Arc;
 
@@ -155,22 +167,24 @@ pub(super) struct Slot {
     prev: u32,
     next: u32,
     pub(super) class: ClassId,
-    /// Per change consumer: what changed since that consumer last drained. With eight consumers the fixed fields
-    /// take 28 bytes, padded to 32 before the 48-byte body: four consumers fitted in 72 bytes, eight take 80.
-    pub(super) dirty: [u8; MAX_CONSUMERS],
     /// Whether any signal connection listens to this instance, so an unwatched change costs one check. It sits
-    /// in what was padding.
+    /// in what was padding: the slot stays 72 bytes.
     pub(super) watched: bool,
-    /// How many outside holders pinned the instance, up to `u8::MAX`; `pins.rs` counts the rest. It sits in what
-    /// was padding.
+    /// How many outside holders pinned the instance, up to `u8::MAX`; `pins.rs` counts the rest. It sits in the
+    /// last byte of padding, so the slot stays 72 bytes.
     pub(super) pins: u8,
     pub(super) body: Option<Body>,
 }
 
-/// The slot map: slots, the free list and the live count.
+/// One instance's dirty bits: per change consumer, what changed since that consumer last drained.
+pub(super) type Dirty = [u8; MAX_CONSUMERS];
+
+/// The slot map: slots, their dirty bits, the free list and the live count.
 #[derive(Debug, Default)]
 pub(super) struct Slots {
     slots: Vec<Slot>,
+    /// Indexed like `slots` and always as long. Kept apart so a slot stays 72 bytes (see the module docs).
+    dirty: Vec<Dirty>,
     /// Free slot indices, reused last-in first-out.
     free: Vec<u32>,
     live: usize,
@@ -182,9 +196,24 @@ impl Slots {
         self.live
     }
 
+    /// The dirty bits of the slot at `index`. Does not check that the slot is live: the caller has just looked
+    /// it up, or checks before trusting the bits (a freed slot's bits are stale until the slot is reused).
+    #[inline]
+    pub(super) fn dirty_at_mut(&mut self, index: u32) -> Option<&mut Dirty> {
+        self.dirty.get_mut(index as usize)
+    }
+
+    /// The dirty bits of the slot at `index`, under the same terms as [`Slots::dirty_at_mut`].
+    #[inline]
+    pub(super) fn dirty_at(&self, index: u32) -> Option<&Dirty> {
+        self.dirty.get(index as usize)
+    }
+
     /// Room for `additional` more instances without growing the slot table.
     pub(super) fn reserve(&mut self, additional: usize) {
-        self.slots.reserve(additional.saturating_sub(self.free.len()));
+        let additional = additional.saturating_sub(self.free.len());
+        self.slots.reserve(additional);
+        self.dirty.reserve(additional);
     }
 
     /// The live slot `id` names, or `None` when it is stale or unknown.
@@ -338,11 +367,14 @@ impl Slots {
             slot.prev = NONE;
             slot.next = NONE;
             slot.class = class;
-            slot.dirty = [0; MAX_CONSUMERS];
             slot.watched = false;
             slot.pins = 0;
             slot.body = Some(body);
-            return Id::new(index, slot.generation);
+            let id = Id::new(index, slot.generation);
+            if let Some(dirty) = self.dirty.get_mut(index as usize) {
+                *dirty = [0; MAX_CONSUMERS];
+            }
+            return id;
         }
         // Slot indices are u32; four billion live instances is far past any scene this engine targets.
         let index = u32::try_from(self.slots.len()).unwrap_or(NONE - 1);
@@ -352,11 +384,11 @@ impl Slots {
             prev: NONE,
             next: NONE,
             class,
-            dirty: [0; MAX_CONSUMERS],
             watched: false,
             pins: 0,
             body: Some(body),
         });
+        self.dirty.push([0; MAX_CONSUMERS]);
         Id::new(index, 0)
     }
 
@@ -371,7 +403,6 @@ impl Slots {
         slot.parent = NONE;
         slot.prev = NONE;
         slot.next = NONE;
-        slot.dirty = [0; MAX_CONSUMERS];
         slot.watched = false;
         slot.pins = 0;
         let next = slot.generation.checked_add(1);
@@ -392,13 +423,13 @@ impl Slots {
         })
     }
 
-    /// Calls `f` with every live instance's id and slot, in slot order.
-    pub(super) fn for_each_live_mut(&mut self, mut f: impl FnMut(Id, &mut Slot)) {
-        for (i, slot) in self.slots.iter_mut().enumerate() {
+    /// Calls `f` with every live instance's id and dirty bits, in slot order.
+    pub(super) fn for_each_live_dirty_mut(&mut self, mut f: impl FnMut(Id, &mut Dirty)) {
+        for (i, (slot, dirty)) in self.slots.iter().zip(self.dirty.iter_mut()).enumerate() {
             if slot.body.is_some()
                 && let Ok(index) = u32::try_from(i)
             {
-                f(Id::new(index, slot.generation), slot);
+                f(Id::new(index, slot.generation), dirty);
             }
         }
     }
@@ -410,7 +441,9 @@ mod tests {
 
     #[test]
     fn slot_is_compact() {
-        assert!(size_of::<Slot>() <= 80, "Slot is {} bytes", size_of::<Slot>());
+        // Exactly 72: 9 × 8 is the stride the module docs ("Dirty bits beside the slots") keep.
+        assert_eq!(size_of::<Slot>(), 72, "Slot is {} bytes", size_of::<Slot>());
+        assert_eq!(size_of::<Dirty>(), MAX_CONSUMERS);
         assert_eq!(size_of::<Body>(), 48);
         assert_eq!(size_of::<(PropId, Value)>(), 40);
     }
