@@ -1,0 +1,877 @@
+//! Registry tests: resolution, lookups, and one test per validation error.
+
+use std::sync::Arc;
+
+use super::*;
+use crate::{EnumItem, PropType, ScriptError, ScriptValue, Value};
+
+fn noop(_: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    Ok(ScriptValue::Nil)
+}
+
+fn other(_: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    Ok(ScriptValue::Bool(true))
+}
+
+fn build(classes: &[&'static ClassDesc]) -> Result<Registry, RegistryErrors> {
+    Registry::build(RegistryInput {
+        classes,
+        ..RegistryInput::default()
+    })
+}
+
+fn errors(input: RegistryInput<'_>) -> Vec<RegistryError> {
+    Registry::build(input).expect_err("should be rejected").0
+}
+
+fn class_errors(classes: &[&'static ClassDesc]) -> Vec<RegistryError> {
+    errors(RegistryInput {
+        classes,
+        ..RegistryInput::default()
+    })
+}
+
+static ROOT: ClassDesc = ClassDesc::new("Object", None);
+
+// A small hierarchy used by the resolution tests: Object -> Instance -> Light -> SpotLight / DirectionalLight.
+
+static SHAPES: &[EnumDesc] = &[EnumDesc::new("LightKind", &["Point", "Spot", "Sun"]).numbers(&[1, 2, 4])];
+
+static TRANSFORM: ComponentDesc = ComponentDesc::new("Transform").props(&[PropMeta::cframe("CFrame").transform()]);
+static EMITTER: ComponentDesc = ComponentDesc::new("LightEmitter")
+    .requires(&["Transform"])
+    .props(&[PropMeta::boolean("Shadows", false).visual()]);
+
+static OBJECT: ClassDesc = ClassDesc::new("Object", None)
+    .props(&[PropMeta::string("ClassName", "").read_only()])
+    .signals(&[SignalDesc::new("Changed").params(&[("property", "string")])]);
+
+static INSTANCE: ClassDesc = ClassDesc::new("Instance", Some("Object"))
+    .props(&[
+        PropMeta::string("Name", "Instance").aliases(&["name"]),
+        PropMeta::boolean("Archivable", true),
+    ])
+    .methods(&[MethodDesc::new("Destroy", noop), MethodDesc::new("Clone", noop)]);
+
+static LIGHT: ClassDesc = ClassDesc::new("Light", Some("Instance"))
+    .components(&["Transform", "LightEmitter"])
+    .props(&[
+        PropMeta::boolean("Enabled", true),
+        PropMeta::number("Brightness", 1.0).range(0.0, 100.0),
+        PropMeta::color3("Color", 1.0, 1.0, 1.0),
+        PropMeta::number("Range", 16.0),
+        PropMeta::enumeration("Kind", "LightKind", "Point"),
+    ]);
+
+static SPOT_LIGHT: ClassDesc = ClassDesc::new("SpotLight", Some("Light"))
+    .creatable()
+    .components(&["Transform"])
+    .props(&[PropMeta::number("Angle", 90.0).range(1.0, 179.0)])
+    .methods(&[MethodDesc::new("Clone", other)])
+    .defaults(&[
+        ("Brightness", DefaultValue::Number(2.0)),
+        ("Kind", DefaultValue::Enum("Spot")),
+    ]);
+
+static DIRECTIONAL: ClassDesc = ClassDesc::new("DirectionalLight", Some("Light"))
+    .creatable()
+    .hide(&["Range", "Destroy", "Changed"]);
+
+static WORKSPACE: ClassDesc = ClassDesc::new("Workspace", Some("Instance")).service(1).persisted();
+static LIGHTING: ClassDesc = ClassDesc::new("Lighting", Some("Instance")).service(1);
+static STORAGE: ClassDesc = ClassDesc::new("ServerStorage", Some("Instance")).service(0);
+
+fn lights() -> Registry {
+    Registry::build(RegistryInput {
+        // Deliberately not in inheritance order.
+        classes: &[
+            &SPOT_LIGHT,
+            &DIRECTIONAL,
+            &WORKSPACE,
+            &LIGHT,
+            &INSTANCE,
+            &OBJECT,
+            &LIGHTING,
+            &STORAGE,
+        ],
+        components: &[&EMITTER, &TRANSFORM],
+        enums: &[SHAPES],
+    })
+    .expect("valid hierarchy")
+}
+
+fn id(reg: &Registry, name: &str) -> ClassId {
+    reg.class_id(name).expect("known class")
+}
+
+fn names(reg: &Registry, class: &str) -> Vec<&'static str> {
+    reg.props(id(reg, class)).iter().map(|p| p.meta.name).collect()
+}
+
+#[test]
+fn three_level_chain_puts_inherited_properties_first() {
+    let reg = lights();
+    assert_eq!(names(&reg, "Object"), ["ClassName"]);
+    assert_eq!(names(&reg, "Instance"), ["ClassName", "Name", "Archivable"]);
+    // Parent's list, then the components this class adds, then its own properties.
+    assert_eq!(
+        names(&reg, "Light"),
+        [
+            "ClassName",
+            "Name",
+            "Archivable",
+            "CFrame",
+            "Shadows",
+            "Enabled",
+            "Brightness",
+            "Color",
+            "Range",
+            "Kind"
+        ]
+    );
+    let spot = names(&reg, "SpotLight");
+    assert_eq!(spot[..10], names(&reg, "Light")[..]);
+    assert_eq!(spot[10..], ["Angle"]);
+}
+
+#[test]
+fn a_property_keeps_its_id_in_every_descendant() {
+    let reg = lights();
+    for (prop, declared_on) in [
+        ("ClassName", "Object"),
+        ("Name", "Instance"),
+        ("CFrame", "Light"),
+        ("Range", "Light"),
+    ] {
+        let expected = reg.prop_id(id(&reg, declared_on), prop).expect("declared");
+        for class in [
+            "Object",
+            "Instance",
+            "Light",
+            "SpotLight",
+            "DirectionalLight",
+            "Workspace",
+        ] {
+            let class_id = id(&reg, class);
+            if !reg.is_a(class_id, id(&reg, declared_on)) {
+                continue;
+            }
+            // Hidden properties are not found by name, but keep their slot.
+            let found = reg.props(class_id).iter().position(|p| p.meta.name == prop);
+            assert_eq!(found, Some(expected.index()), "{prop} in {class}");
+        }
+    }
+}
+
+#[test]
+fn owners_point_at_the_declaring_class() {
+    let reg = lights();
+    let spot = id(&reg, "SpotLight");
+    let owner = |name| {
+        reg.class(
+            reg.prop(spot, reg.prop_id(spot, name).expect("prop"))
+                .expect("prop")
+                .owner,
+        )
+    };
+    assert_eq!(owner("Name").map(ClassInfo::name), Some("Instance"));
+    // Component properties belong to the class that added the component.
+    assert_eq!(owner("CFrame").map(ClassInfo::name), Some("Light"));
+    assert_eq!(owner("Angle").map(ClassInfo::name), Some("SpotLight"));
+}
+
+#[test]
+fn ids_put_parents_first_and_ignore_input_order() {
+    let reg = lights();
+    for class in reg.classes() {
+        assert_eq!(reg.class(class.id()).map(ClassInfo::name), Some(class.name()));
+        if let Some(parent) = class.parent() {
+            assert!(parent < class.id());
+        }
+    }
+    assert_eq!(id(&reg, "Object"), ClassId::new(0));
+    assert_eq!(id(&reg, "Instance").raw(), 1);
+}
+
+#[test]
+fn is_a_follows_the_chain() {
+    let reg = lights();
+    let [object, instance, light, spot, dir, workspace] = [
+        "Object",
+        "Instance",
+        "Light",
+        "SpotLight",
+        "DirectionalLight",
+        "Workspace",
+    ]
+    .map(|n| id(&reg, n));
+    assert!(reg.is_a(spot, spot));
+    assert!(reg.is_a(spot, light));
+    assert!(reg.is_a(spot, instance));
+    assert!(reg.is_a(spot, object));
+    assert!(!reg.is_a(light, spot));
+    assert!(!reg.is_a(spot, dir));
+    assert!(!reg.is_a(workspace, light));
+    assert!(!reg.is_a(ClassId::new(999), object));
+    assert!(!reg.is_a(spot, ClassId::new(999)));
+    let info = reg.class(spot).expect("class");
+    assert_eq!(info.depth(), 3);
+    assert_eq!(info.ancestors(), [object, instance, light, spot]);
+    assert_eq!(info.parent(), Some(light));
+}
+
+#[test]
+fn defaults_change_only_the_child() {
+    let reg = lights();
+    let (light, spot) = (id(&reg, "Light"), id(&reg, "SpotLight"));
+    let brightness = reg.prop_id(light, "Brightness").expect("prop");
+    assert_eq!(
+        reg.prop(light, brightness).map(|p| &p.default),
+        Some(&Value::Number(1.0))
+    );
+    assert_eq!(
+        reg.prop(spot, brightness).map(|p| &p.default),
+        Some(&Value::Number(2.0))
+    );
+    let kind = reg.prop_id(spot, "Kind").expect("prop");
+    let spot_kind = reg.enum_item("LightKind", "Spot").expect("item");
+    assert_eq!(reg.prop(spot, kind).map(|p| &p.default), Some(&Value::Enum(spot_kind)));
+}
+
+#[test]
+fn hide_removes_members_from_lookups_but_keeps_the_slot() {
+    let reg = lights();
+    let (light, dir) = (id(&reg, "Light"), id(&reg, "DirectionalLight"));
+    let range = reg.prop_id(light, "Range").expect("visible on Light");
+    assert_eq!(reg.prop_id(dir, "Range"), None);
+    let slot = reg.prop(dir, range).expect("slot kept");
+    assert!(slot.hidden);
+    assert_eq!(slot.meta.name, "Range");
+    assert_eq!(reg.props(dir).len(), reg.props(light).len());
+
+    assert!(reg.method(light, "Destroy").is_some());
+    assert!(reg.method(dir, "Destroy").is_none());
+    assert!(reg.method(dir, "Clone").is_some());
+    assert!(reg.signal(dir, "Changed").is_none());
+    let info = reg.class(dir).expect("class");
+    assert!(info.methods().iter().any(|m| m.desc.name == "Destroy" && m.hidden));
+    assert!(info.signals().iter().any(|s| s.desc.name == "Changed" && s.hidden));
+}
+
+#[test]
+fn a_child_method_replaces_the_parents_in_place() {
+    let reg = lights();
+    let (instance, spot) = (id(&reg, "Instance"), id(&reg, "SpotLight"));
+    let runs = |class, func: MethodFn| std::ptr::fn_addr_eq(reg.method(class, "Clone").expect("method").func, func);
+    assert!(runs(instance, noop));
+    assert!(runs(spot, other));
+    let methods: Vec<_> = reg
+        .class(spot)
+        .expect("class")
+        .methods()
+        .iter()
+        .map(|m| m.desc.name)
+        .collect();
+    assert_eq!(methods, ["Destroy", "Clone"]);
+    assert_eq!(reg.class(spot).expect("class").methods()[1].owner, spot);
+}
+
+#[test]
+fn signals_are_inherited() {
+    let reg = lights();
+    let signal = reg.signal(id(&reg, "SpotLight"), "Changed").expect("inherited");
+    assert_eq!(signal.params, &[("property", "string")]);
+}
+
+#[test]
+fn aliases_find_the_property() {
+    let reg = lights();
+    let spot = id(&reg, "SpotLight");
+    assert_eq!(reg.prop_id(spot, "name"), reg.prop_id(spot, "Name"));
+    assert_eq!(reg.prop_id(spot, "Nope"), None);
+    assert_eq!(reg.prop_id(ClassId::new(999), "Name"), None);
+    assert!(reg.props(ClassId::new(999)).is_empty());
+}
+
+#[test]
+fn components_are_inherited_once() {
+    let reg = lights();
+    let spot = reg.class(id(&reg, "SpotLight")).expect("class");
+    let components: Vec<_> = spot.components().iter().map(|c| c.name).collect();
+    assert_eq!(components, ["Transform", "LightEmitter"]);
+    assert!(spot.has_component("LightEmitter"));
+    assert!(!spot.has_component("Rigidbody"));
+    assert_eq!(reg.component("Transform").map(|c| c.name), Some("Transform"));
+    assert!(reg.component("Rigidbody").is_none());
+}
+
+#[test]
+fn enums_resolve_items_once() {
+    let reg = lights();
+    let desc = reg.enum_desc("LightKind").expect("enum");
+    assert_eq!(desc.number(2), Some(4));
+    assert_eq!(
+        reg.enum_item("LightKind", "Sun"),
+        Some(EnumItem::new("LightKind", "Sun"))
+    );
+    assert_eq!(reg.enum_item("LightKind", "Moon"), None);
+    assert_eq!(reg.enum_item("Material", "Sun"), None);
+    assert!(reg.enum_desc("Material").is_none());
+    assert_eq!(reg.enums().map(|e| e.name).collect::<Vec<_>>(), ["LightKind"]);
+}
+
+#[test]
+fn defaults_are_shared_not_copied() {
+    let reg = lights();
+    let instance = id(&reg, "Instance");
+    let name = reg
+        .prop(instance, reg.prop_id(instance, "Name").expect("prop"))
+        .expect("prop");
+    let (Value::String(a), Value::String(b)) = (&name.default, &name.default.clone()) else {
+        panic!("Name is a string");
+    };
+    assert!(Arc::ptr_eq(a, b));
+}
+
+#[test]
+fn services_come_in_order_then_by_name() {
+    let reg = lights();
+    let services: Vec<_> = reg
+        .services()
+        .iter()
+        .map(|&s| reg.class(s).map(ClassInfo::name).expect("class"))
+        .collect();
+    assert_eq!(services, ["ServerStorage", "Lighting", "Workspace"]);
+    let workspace = reg.class(id(&reg, "Workspace")).expect("class");
+    assert_eq!(workspace.service_order(), Some(1));
+    assert!(workspace.persisted());
+    assert!(!workspace.runs_scripts() && !workspace.hidden_in_explorer() && !workspace.creatable());
+    assert!(reg.class(id(&reg, "SpotLight")).expect("class").creatable());
+}
+
+#[test]
+fn override_replaces_in_place() {
+    static BASE: ClassDesc =
+        ClassDesc::new("Base", None).props(&[PropMeta::number("Size", 1.0), PropMeta::int("N", 0)]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base")).props(&[PropMeta::number("Size", 4.0)
+        .range(0.0, 10.0)
+        .override_inherited()
+        .desc("Bigger.")]);
+    let reg = build(&[&BASE, &CHILD]).expect("valid");
+    let (base, child) = (id(&reg, "Base"), id(&reg, "Child"));
+    let size = reg.prop_id(base, "Size").expect("prop");
+    assert_eq!(reg.prop_id(child, "Size"), Some(size));
+    let prop = reg.prop(child, size).expect("prop");
+    assert_eq!(prop.meta.description, "Bigger.");
+    assert_eq!(prop.default, Value::Number(4.0));
+    assert_eq!(prop.owner, child);
+    assert_eq!(names(&reg, "Child"), ["Size", "N"]);
+}
+
+#[test]
+fn every_default_kind_converts() {
+    static ENUMS: &[EnumDesc] = &[EnumDesc::new("Shape", &["Block", "Ball"])];
+    static ALL: ClassDesc = ClassDesc::new("All", None).props(&[
+        PropMeta::boolean("A", true),
+        PropMeta::int("B", -3),
+        PropMeta::number("C", 0.5),
+        PropMeta::string("D", "hi"),
+        PropMeta::vector2("E", 1.0, 2.0),
+        PropMeta::vector3("F", 1.0, 2.0, 3.0),
+        PropMeta::new("G", PropType::CFrame, DefaultValue::CFrame(1.0, 2.0, 3.0)),
+        PropMeta::color3("H", 0.0, 0.5, 1.0),
+        PropMeta::enumeration("I", "Shape", "Ball"),
+        PropMeta::reference("J", "All"),
+    ]);
+    let reg = Registry::build(RegistryInput {
+        classes: &[&ALL],
+        enums: &[ENUMS],
+        ..RegistryInput::default()
+    })
+    .expect("valid");
+    let defaults: Vec<Value> = reg.props(ClassId::new(0)).iter().map(|p| p.default.clone()).collect();
+    assert_eq!(
+        defaults,
+        [
+            Value::Bool(true),
+            Value::Int(-3),
+            Value::Number(0.5),
+            Value::String("hi".into()),
+            Value::Vector2(crate::Vector2::new(1.0, 2.0)),
+            Value::Vector3(crate::Vector3::new(1.0, 2.0, 3.0)),
+            Value::CFrame(crate::CFrame::new(crate::Vector3::new(1.0, 2.0, 3.0))),
+            Value::Color3(crate::Color3::new(0.0, 0.5, 1.0)),
+            Value::Enum(EnumItem::new("Shape", "Ball")),
+            Value::Ref(None),
+        ]
+    );
+    for prop in reg.props(ClassId::new(0)) {
+        assert!(prop.default.prop_type_matches(&prop.meta.ty), "{}", prop.meta.name);
+    }
+}
+
+#[test]
+fn an_empty_input_builds_an_empty_registry() {
+    let reg = Registry::build(RegistryInput::default()).expect("empty is valid");
+    assert!(reg.classes().is_empty());
+    assert!(reg.services().is_empty());
+    assert!(format!("{reg:?}").contains("classes: 0"));
+}
+
+// ---- validation: one test per error -------------------------------------------------------------------------------
+
+#[test]
+fn rejects_duplicate_class() {
+    static AGAIN: ClassDesc = ClassDesc::new("Object", None);
+    assert_eq!(
+        class_errors(&[&ROOT, &AGAIN]),
+        [RegistryError::DuplicateClass { class: "Object" }]
+    );
+}
+
+#[test]
+fn rejects_unknown_parent() {
+    static ORPHAN: ClassDesc = ClassDesc::new("Orphan", Some("Nowhere"));
+    static GRANDCHILD: ClassDesc = ClassDesc::new("Grandchild", Some("Orphan"));
+    // The child of the broken class is not reported again.
+    assert_eq!(
+        class_errors(&[&ROOT, &ORPHAN, &GRANDCHILD]),
+        [RegistryError::UnknownParent {
+            class: "Orphan",
+            parent: "Nowhere"
+        }]
+    );
+}
+
+#[test]
+fn rejects_inheritance_cycle() {
+    static A: ClassDesc = ClassDesc::new("A", Some("B"));
+    static B: ClassDesc = ClassDesc::new("B", Some("A"));
+    static UNDER: ClassDesc = ClassDesc::new("Under", Some("A"));
+    assert_eq!(
+        class_errors(&[&ROOT, &UNDER, &A, &B]),
+        [RegistryError::InheritanceCycle {
+            classes: vec!["A", "B", "A"]
+        }]
+    );
+    static SELF: ClassDesc = ClassDesc::new("Selfish", Some("Selfish"));
+    assert_eq!(
+        class_errors(&[&ROOT, &SELF]),
+        [RegistryError::InheritanceCycle {
+            classes: vec!["Selfish", "Selfish"]
+        }]
+    );
+}
+
+#[test]
+fn rejects_more_than_one_root() {
+    static OTHER: ClassDesc = ClassDesc::new("Other", None);
+    assert_eq!(
+        class_errors(&[&ROOT, &OTHER]),
+        [RegistryError::MultipleRoots {
+            roots: vec!["Object", "Other"]
+        }]
+    );
+}
+
+#[test]
+fn rejects_duplicate_property() {
+    static C: ClassDesc = ClassDesc::new("C", None).props(&[PropMeta::number("X", 0.0), PropMeta::boolean("X", false)]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::DuplicateProp {
+            owner: Owner::Class("C"),
+            prop: "X"
+        }]
+    );
+    static COMP: ComponentDesc =
+        ComponentDesc::new("Twice").props(&[PropMeta::number("Y", 0.0), PropMeta::number("Y", 1.0)]);
+    let errs = errors(RegistryInput {
+        components: &[&COMP],
+        ..RegistryInput::default()
+    });
+    assert_eq!(
+        errs,
+        [RegistryError::DuplicateProp {
+            owner: Owner::Component("Twice"),
+            prop: "Y"
+        }]
+    );
+}
+
+#[test]
+fn rejects_redeclared_property_without_override() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[PropMeta::number("Size", 1.0)]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base")).props(&[PropMeta::number("Size", 2.0)]);
+    assert_eq!(
+        class_errors(&[&BASE, &CHILD]),
+        [RegistryError::RedeclaredProp {
+            owner: Owner::Class("Child"),
+            class: "Child",
+            prop: "Size",
+            inherited_from: "Base"
+        }]
+    );
+    // A component property clashing with an inherited one.
+    static COMP: ComponentDesc = ComponentDesc::new("Sized").props(&[PropMeta::number("Size", 3.0)]);
+    static WITH: ClassDesc = ClassDesc::new("With", Some("Base")).components(&["Sized"]);
+    let errs = errors(RegistryInput {
+        classes: &[&BASE, &WITH],
+        components: &[&COMP],
+        ..RegistryInput::default()
+    });
+    assert_eq!(
+        errs,
+        [RegistryError::RedeclaredProp {
+            owner: Owner::Component("Sized"),
+            class: "With",
+            prop: "Size",
+            inherited_from: "Base"
+        }]
+    );
+}
+
+#[test]
+fn rejects_bad_overrides() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[PropMeta::number("Size", 1.0)]);
+    static NOTHING: ClassDesc =
+        ClassDesc::new("Nothing", Some("Base")).props(&[PropMeta::number("Other", 1.0).override_inherited()]);
+    static RETYPED: ClassDesc =
+        ClassDesc::new("Retyped", Some("Base")).props(&[PropMeta::int("Size", 1).override_inherited()]);
+    assert_eq!(
+        class_errors(&[&BASE, &NOTHING, &RETYPED]),
+        [
+            RegistryError::OverridesNothing {
+                owner: Owner::Class("Nothing"),
+                class: "Nothing",
+                prop: "Other"
+            },
+            RegistryError::OverrideChangesType {
+                owner: Owner::Class("Retyped"),
+                prop: "Size",
+                expected: PropType::Number,
+                found: PropType::Int
+            }
+        ]
+    );
+}
+
+#[test]
+fn rejects_hiding_or_defaulting_unknown_members() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[PropMeta::number("Size", 1.0)]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base"))
+        .hide(&["Colour"])
+        .defaults(&[("Mass", DefaultValue::Number(1.0))]);
+    assert_eq!(
+        class_errors(&[&BASE, &CHILD]),
+        [
+            RegistryError::UnknownDefault {
+                class: "Child",
+                prop: "Mass"
+            },
+            RegistryError::UnknownHidden {
+                class: "Child",
+                member: "Colour"
+            },
+        ]
+    );
+}
+
+#[test]
+fn rejects_default_of_the_wrong_type() {
+    static C: ClassDesc =
+        ClassDesc::new("C", None).props(&[PropMeta::new("X", PropType::Number, DefaultValue::Int(1))]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::DefaultTypeMismatch {
+            owner: Owner::Class("C"),
+            prop: "X",
+            expected: PropType::Number,
+            found: "integer"
+        }]
+    );
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[PropMeta::boolean("On", true)]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base")).defaults(&[("On", DefaultValue::Str("yes"))]);
+    assert_eq!(
+        class_errors(&[&BASE, &CHILD]),
+        [RegistryError::DefaultTypeMismatch {
+            owner: Owner::Class("Child"),
+            prop: "On",
+            expected: PropType::Bool,
+            found: "string"
+        }]
+    );
+}
+
+#[test]
+fn rejects_unknown_enum_and_enum_item() {
+    static ENUMS: &[EnumDesc] = &[EnumDesc::new("Shape", &["Block"])];
+    static C: ClassDesc = ClassDesc::new("C", None).props(&[
+        PropMeta::enumeration("A", "Material", "Plastic"),
+        PropMeta::enumeration("B", "Shape", "Ball"),
+    ]);
+    let errs = errors(RegistryInput {
+        classes: &[&C],
+        enums: &[ENUMS],
+        ..RegistryInput::default()
+    });
+    assert_eq!(
+        errs,
+        [
+            RegistryError::UnknownEnum {
+                owner: Owner::Class("C"),
+                prop: "A",
+                enum_type: "Material"
+            },
+            RegistryError::UnknownEnumItem {
+                owner: Owner::Class("C"),
+                prop: "B",
+                enum_type: "Shape",
+                item: "Ball"
+            }
+        ]
+    );
+}
+
+#[test]
+fn rejects_reference_to_unknown_class() {
+    static C: ClassDesc = ClassDesc::new("C", None).props(&[PropMeta::reference("Target", "BasePart")]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::UnknownRefClass {
+            owner: Owner::Class("C"),
+            prop: "Target",
+            class: "BasePart"
+        }]
+    );
+}
+
+#[test]
+fn rejects_bad_ranges() {
+    static C: ClassDesc = ClassDesc::new("C", None).props(&[
+        PropMeta::number("Upside", 5.0).range(10.0, 1.0),
+        PropMeta::number("NaN", 5.0).range(f64::NAN, 1.0),
+        PropMeta::int("Outside", 50).range(0.0, 10.0),
+    ]);
+    let errs = class_errors(&[&C]);
+    assert_eq!(errs.len(), 3);
+    assert_eq!(
+        errs[0],
+        RegistryError::InvalidRange {
+            owner: Owner::Class("C"),
+            prop: "Upside",
+            min: 10.0,
+            max: 1.0
+        }
+    );
+    assert!(matches!(errs[1], RegistryError::InvalidRange { prop: "NaN", .. }));
+    assert_eq!(
+        errs[2],
+        RegistryError::DefaultOutOfRange {
+            owner: Owner::Class("C"),
+            prop: "Outside",
+            default: 50.0,
+            min: 0.0,
+            max: 10.0
+        }
+    );
+    // `defaults(..)` is checked against the range too.
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[PropMeta::number("Angle", 90.0).range(1.0, 179.0)]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base")).defaults(&[("Angle", DefaultValue::Number(200.0))]);
+    assert!(matches!(
+        class_errors(&[&BASE, &CHILD])[..],
+        [RegistryError::DefaultOutOfRange { prop: "Angle", .. }]
+    ));
+}
+
+#[test]
+fn rejects_unknown_component() {
+    static C: ClassDesc = ClassDesc::new("C", None).components(&["Rigidbody"]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::UnknownComponent {
+            class: "C",
+            component: "Rigidbody"
+        }]
+    );
+}
+
+#[test]
+fn rejects_unsatisfied_component_requirement() {
+    static NEEDS: ComponentDesc = ComponentDesc::new("Needs").requires(&["Transform"]);
+    static C: ClassDesc = ClassDesc::new("C", None).components(&["Needs"]);
+    let errs = errors(RegistryInput {
+        classes: &[&C],
+        components: &[&NEEDS, &TRANSFORM],
+        ..RegistryInput::default()
+    });
+    assert_eq!(
+        errs,
+        [RegistryError::MissingRequiredComponent {
+            class: "C",
+            component: "Needs",
+            requires: "Transform"
+        }]
+    );
+    // Listing the required component later in the same class, or inheriting it, satisfies it.
+    static OK: ClassDesc = ClassDesc::new("Ok", None).components(&["Needs", "Transform"]);
+    assert!(
+        Registry::build(RegistryInput {
+            classes: &[&OK],
+            components: &[&NEEDS, &TRANSFORM],
+            ..RegistryInput::default()
+        })
+        .is_ok()
+    );
+    static MISSING: ComponentDesc = ComponentDesc::new("Missing").requires(&["Nowhere"]);
+    let errs = errors(RegistryInput {
+        components: &[&MISSING],
+        ..RegistryInput::default()
+    });
+    assert_eq!(
+        errs,
+        [RegistryError::UnknownRequiredComponent {
+            component: "Missing",
+            requires: "Nowhere"
+        }]
+    );
+}
+
+#[test]
+fn rejects_duplicate_component() {
+    static AGAIN: ComponentDesc = ComponentDesc::new("Transform");
+    let errs = errors(RegistryInput {
+        components: &[&TRANSFORM, &AGAIN],
+        ..RegistryInput::default()
+    });
+    assert_eq!(errs, [RegistryError::DuplicateComponent { component: "Transform" }]);
+}
+
+#[test]
+fn rejects_bad_enums() {
+    static A: &[EnumDesc] = &[
+        EnumDesc::new("Shape", &["Block", "Ball", "Block"]),
+        EnumDesc::new("Key", &["A", "B"]).numbers(&[1]),
+    ];
+    static B: &[EnumDesc] = &[EnumDesc::new("Shape", &["Wedge"])];
+    let errs = errors(RegistryInput {
+        enums: &[A, B],
+        ..RegistryInput::default()
+    });
+    assert_eq!(
+        errs,
+        [
+            RegistryError::DuplicateEnumItem {
+                name: "Shape",
+                item: "Block"
+            },
+            RegistryError::EnumNumbersMismatch {
+                name: "Key",
+                items: 2,
+                numbers: 1
+            },
+            RegistryError::DuplicateEnum { name: "Shape" },
+        ]
+    );
+}
+
+#[test]
+fn rejects_alias_collision() {
+    static C: ClassDesc = ClassDesc::new("C", None).props(&[
+        PropMeta::number("Size", 1.0),
+        PropMeta::number("Scale", 1.0).aliases(&["Size"]),
+    ]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::AliasCollision {
+            class: "C",
+            alias: "Size",
+            prop: "Scale",
+            other: "Size"
+        }]
+    );
+}
+
+#[test]
+fn rejects_duplicate_methods_and_signals() {
+    static C: ClassDesc = ClassDesc::new("C", None)
+        .methods(&[MethodDesc::new("Go", noop), MethodDesc::new("Go", other)])
+        .signals(&[SignalDesc::new("Went"), SignalDesc::new("Went")]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [
+            RegistryError::DuplicateMember {
+                class: "C",
+                kind: MemberKind::Method,
+                name: "Go"
+            },
+            RegistryError::DuplicateMember {
+                class: "C",
+                kind: MemberKind::Signal,
+                name: "Went"
+            },
+        ]
+    );
+}
+
+#[test]
+fn rejects_members_of_different_kinds_with_one_name() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[PropMeta::number("Size", 1.0)]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base"))
+        .methods(&[MethodDesc::new("Size", noop)])
+        .signals(&[SignalDesc::new("Size")]);
+    assert_eq!(
+        class_errors(&[&BASE, &CHILD]),
+        [
+            RegistryError::MemberNameClash {
+                class: "Child",
+                name: "Size",
+                first: MemberKind::Property,
+                second: MemberKind::Method
+            },
+            RegistryError::MemberNameClash {
+                class: "Child",
+                name: "Size",
+                first: MemberKind::Property,
+                second: MemberKind::Signal
+            },
+        ]
+    );
+    // Hiding the inherited property frees the name.
+    static HIDING: ClassDesc = ClassDesc::new("Hiding", Some("Base"))
+        .hide(&["Size"])
+        .methods(&[MethodDesc::new("Size", noop)]);
+    assert!(build(&[&BASE, &HIDING]).is_ok());
+}
+
+#[test]
+fn rejects_too_many_classes() {
+    let classes = vec![&ROOT; usize::from(u16::MAX) + 1];
+    assert_eq!(class_errors(&classes), [RegistryError::TooManyClasses { count: 65536 }]);
+}
+
+#[test]
+fn rejects_too_many_properties() {
+    let props: Vec<PropMeta> = (0..=usize::from(u16::MAX))
+        .map(|i| PropMeta::boolean(Box::leak(format!("P{i}").into_boxed_str()), false))
+        .collect();
+    let class: &'static ClassDesc = Box::leak(Box::new(
+        ClassDesc::new("Huge", None).props(Box::leak(props.into_boxed_slice())),
+    ));
+    assert_eq!(
+        class_errors(&[class]),
+        [RegistryError::TooManyProps {
+            class: "Huge",
+            count: 65536
+        }]
+    );
+}
+
+#[test]
+fn collects_every_problem_at_once() {
+    static ORPHAN: ClassDesc = ClassDesc::new("Orphan", Some("Nowhere"));
+    static BAD_PROP: ClassDesc = ClassDesc::new("BadProp", Some("Object")).props(&[PropMeta::reference("R", "Nope")]);
+    static BAD_COMPONENT: ClassDesc = ClassDesc::new("BadComponent", Some("Object")).components(&["Nope"]);
+    let errs = class_errors(&[&ROOT, &ORPHAN, &BAD_PROP, &BAD_COMPONENT]);
+    assert_eq!(errs.len(), 3, "{errs:#?}");
+}
