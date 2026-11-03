@@ -179,9 +179,9 @@ fireflyLight.Parent = firefly
 local paused = false
 local t = 0
 RunService.Heartbeat:Connect(function(deltaTime: number)
-    -- The clock runs on while the parts are paused. ClockTime stays within 0 to 24, so it wraps here.
+    -- The clock runs on while the parts are paused. ClockTime wraps past 24 by itself.
     local rate = if timelapse then TIMELAPSE_HOURS_PER_SECOND else HOURS_PER_SECOND
-    Lighting.ClockTime = (Lighting.ClockTime + deltaTime * rate) % 24
+    Lighting.ClockTime += deltaTime * rate
 
     if paused then
         return

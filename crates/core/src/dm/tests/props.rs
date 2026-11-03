@@ -253,3 +253,69 @@ fn typed_getters_check_the_declared_type() {
     assert_eq!(dm.color3(p, ids.color), Ok(Color3::new(0.64, 0.64, 0.64)));
     assert!(dm.vector2(p, ids.size).is_err());
 }
+
+/// A root with a wrapping number (`Hour`, 0 to 24), a wrapping int (`Step`, 1 to 5) and a clamped number.
+fn dial() -> (DataModel, Id) {
+    use crate::{ClassDesc, PropMeta, Registry, RegistryInput};
+    use std::sync::Arc;
+
+    static DIAL: ClassDesc = ClassDesc::new("Dial", None).props(&[
+        PropMeta::number("Hour", 14.0).wrap(0.0, 24.0),
+        PropMeta::int("Step", 2).wrap(1.0, 5.0),
+        PropMeta::number("Level", 1.0).range(0.0, 2.0),
+    ]);
+    let registry = Registry::build(RegistryInput {
+        classes: &[&DIAL],
+        ..RegistryInput::default()
+    })
+    .unwrap_or_else(|e| panic!("{e}"));
+    let class = registry.class_id("Dial").expect("class");
+    let mut dm = DataModel::new(Arc::new(registry));
+    let dial = dm.create_root(class).expect("root");
+    (dm, dial)
+}
+
+#[test]
+fn set_wraps_a_wrapping_number_into_its_range() {
+    let (mut dm, dial) = dial();
+    let hour = |dm: &DataModel| match dm.get_by_name(dial, "Hour") {
+        Ok(Value::Number(n)) => n,
+        other => panic!("{other:?}"),
+    };
+    for (written, read) in [
+        (6.5, 6.5),
+        (24.0, 0.0),
+        (25.0, 1.0),
+        (-1.0, 23.0),
+        (-24.0, 0.0),
+        (49.5, 1.5),
+        (-0.5, 23.5),
+    ] {
+        dm.set_by_name(dial, "Hour", number(written)).expect("set");
+        assert_eq!(hour(&dm), read, "{written}");
+    }
+    // A negative value so small that the sum rounds to the span itself must not escape the range.
+    dm.set_by_name(dial, "Hour", number(-1.0e-20)).expect("set");
+    assert!((0.0..24.0).contains(&hour(&dm)), "{}", hour(&dm));
+    // Plain ranges still clamp.
+    dm.set_by_name(dial, "Level", number(9.0)).expect("set");
+    assert_eq!(dm.get_by_name(dial, "Level"), Ok(number(2.0)));
+}
+
+#[test]
+fn set_wraps_a_wrapping_int_and_stores_nothing_for_the_default() {
+    let (mut dm, dial) = dial();
+    for (written, read) in [(5, 1), (6, 2), (0, 4), (-3, 1)] {
+        dm.set_by_name(dial, "Step", Value::Int(written)).expect("set");
+        assert_eq!(dm.get_by_name(dial, "Step"), Ok(Value::Int(read)), "{written}");
+    }
+    // The extremes wrap without overflowing and stay in range.
+    for written in [i64::MAX, i64::MIN] {
+        dm.set_by_name(dial, "Step", Value::Int(written)).expect("set");
+        assert!(matches!(dm.get_by_name(dial, "Step"), Ok(Value::Int(1..=4))));
+    }
+    // Wrapping to the default removes the stored entry, like any write of the default.
+    dm.set_by_name(dial, "Step", Value::Int(2)).expect("set");
+    dm.set_by_name(dial, "Hour", number(14.0 + 24.0)).expect("set");
+    assert_eq!(stored_count(&dm, dial), 0);
+}

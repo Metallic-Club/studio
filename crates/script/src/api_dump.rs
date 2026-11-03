@@ -122,8 +122,10 @@ pub struct ApiProperty {
     pub read_only: bool,
     /// Its value is computed from other state instead of being stored.
     pub computed: bool,
-    /// `[min, max]`: writes are clamped into this range.
+    /// `[min, max]`: writes are clamped into this range, or wrapped into `[min, max)` when `wraps` is set.
     pub range: Option<[f64; 2]>,
+    /// Writes outside `range` wrap around instead of being clamped.
+    pub wraps: bool,
     /// Studio's Properties panel group, or empty for the default group.
     pub group: String,
     /// What the property does.
@@ -402,6 +404,7 @@ fn property(meta: &PropMeta) -> ApiProperty {
         read_only: meta.flags.contains(PropFlags::READ_ONLY) || meta.computed.is_some_and(|c| c.set.is_none()),
         computed,
         range: meta.range.map(|(min, max)| [min, max]),
+        wraps: meta.wraps,
         group: meta.group.to_owned(),
         description: meta.description.to_owned(),
         aliases: strings(meta.aliases),
@@ -555,6 +558,7 @@ mod tests {
         let angle = &spot.properties[0];
         assert_eq!(angle.ty, ApiType::Number);
         assert_eq!(angle.range, Some([1.0, 179.0]));
+        assert!(!angle.wraps);
         assert_eq!(angle.flags, ["VISUAL"]);
         assert!(!angle.read_only && !angle.computed);
         let target = &spot.properties[1];

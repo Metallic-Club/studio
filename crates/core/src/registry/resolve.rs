@@ -332,6 +332,18 @@ fn check_prop(
         });
         ok = false;
     }
+    if meta.wraps
+        && let Some((min, max)) = meta.range
+        && !(matches!(meta.ty, PropType::Number | PropType::Int) && min.is_finite() && max.is_finite() && min < max)
+    {
+        errors.push(RegistryError::InvalidWrap {
+            owner,
+            prop: meta.name,
+            min,
+            max,
+        });
+        ok = false;
+    }
     let value = default_value(owner, meta, meta.default, names, errors);
     if ok { value } else { None }
 }
@@ -392,7 +404,8 @@ fn default_value(
     };
     if let (Some(n), Some((min, max))) = (number, meta.range)
         && valid_range(min, max)
-        && (n < min || n > max)
+        // A wrapping range excludes its upper bound: that value would read back as `min`.
+        && (n < min || n > max || (meta.wraps && n == max))
     {
         errors.push(RegistryError::DefaultOutOfRange {
             owner,

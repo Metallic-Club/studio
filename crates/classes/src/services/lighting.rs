@@ -14,8 +14,8 @@
 //! always opposite the sun.
 
 use metallic_core::{
-    ClassDesc, DataModel, Id, MethodCall, MethodDesc, PropFlags, PropMeta, ScriptError, ScriptValue, Ty, Value,
-    Vector3, Widget,
+    ClassDesc, DataModel, Id, MethodCall, MethodDesc, Param, PropFlags, PropMeta, ScriptError, ScriptValue, Ty,
+    Value, Vector3, Widget,
 };
 
 /// `GeographicLatitude`'s default, as in Roblox.
@@ -45,6 +45,75 @@ fn sun_of(dm: &DataModel, id: Id) -> Vector3 {
     )
 }
 
+const SECONDS_PER_DAY: i64 = 24 * 3600;
+
+/// `clock_time` hours as `HH:MM:SS`, rounded to the nearest second (so the end of the day shows `00:00:00`, as
+/// `ClockTime` wraps there).
+fn format_time_of_day(clock_time: f64) -> String {
+    // A float-to-int cast saturates, and `ClockTime` is finite and in [0, 24).
+    let seconds = ((clock_time * 3600.0).round() as i64).rem_euclid(SECONDS_PER_DAY);
+    format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60)
+}
+
+/// `text` (`H:M:S` or `H:M`, each part digits only) as hours, or why it is not a time.
+fn parse_time_of_day(text: &str) -> Result<f64, ScriptError> {
+    let bad = |reason: &str| {
+        ScriptError::Runtime(format!(
+            "TimeOfDay must look like \"14:30:00\" (hours 0-23, minutes and seconds 0-59): {reason}"
+        ))
+    };
+    let mut parts = text.trim().split(':');
+    let mut field = |name: &str, max: u32, required: bool| -> Result<u32, ScriptError> {
+        let Some(part) = parts.next() else {
+            return if required { Err(bad(&format!("the {name} is missing"))) } else { Ok(0) };
+        };
+        if part.is_empty() || part.len() > 2 || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(bad(&format!("the {name} \"{part}\" is not a number")));
+        }
+        let value: u32 = part.parse().map_err(|_| bad(&format!("the {name} \"{part}\" is not a number")))?;
+        if value > max {
+            return Err(bad(&format!("the {name} {value} is above {max}")));
+        }
+        Ok(value)
+    };
+    let hours = field("hours", 23, true)?;
+    let minutes = field("minutes", 59, true)?;
+    let seconds = field("seconds", 59, false)?;
+    if parts.next().is_some() {
+        return Err(bad("there are too many parts"));
+    }
+    Ok(f64::from(hours) + f64::from(minutes) / 60.0 + f64::from(seconds) / 3600.0)
+}
+
+fn time_of_day_get(dm: &DataModel, id: Id) -> Value {
+    Value::String(format_time_of_day(number(dm, id, "ClockTime", 14.0)).into())
+}
+
+fn time_of_day_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError> {
+    // The data model has checked the type before it runs a setter.
+    let Value::String(text) = value else {
+        return Err(ScriptError::WrongType {
+            expected: "string".into(),
+            got: "something else".into(),
+        });
+    };
+    let hours = parse_time_of_day(&text)?;
+    dm.set_by_name(id, "ClockTime", Value::Number(hours))?;
+    Ok(())
+}
+
+fn get_minutes_after_midnight(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    Ok((number(call.dm, call.this, "ClockTime", 14.0) * 60.0).into())
+}
+
+fn set_minutes_after_midnight(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    let minutes = call.args.number(0)?;
+    // `ClockTime` wraps, so 1500 minutes is 01:00 the next day.
+    call.dm
+        .set_by_name(call.this, "ClockTime", Value::Number(minutes / 60.0))?;
+    Ok(ScriptValue::Nil)
+}
+
 fn sun_direction_get(dm: &DataModel, id: Id) -> Value {
     Value::Vector3(sun_of(dm, id))
 }
@@ -59,23 +128,37 @@ fn get_moon_direction(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptEr
 
 static PROPS: &[PropMeta] = &[
     PropMeta::number("ClockTime", 14.0)
-        .range(0.0, 24.0)
+        .wrap(0.0, 24.0)
         .widget(Widget::Slider)
         .visual()
         .group("Sun")
         .order(0)
-        .desc("The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset."),
+        .desc(
+            "The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap \
+             around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can \
+             simply add to it to run the day.",
+        ),
+    PropMeta::string("TimeOfDay", "14:00:00")
+        .computed(time_of_day_get, Some(time_of_day_set))
+        .derived_from(&["ClockTime"])
+        .flags(PropFlags::NO_SAVE)
+        .group("Sun")
+        .order(1)
+        .desc(
+            "ClockTime written as hours, minutes and seconds, such as \"14:30:00\" (hours 0-23, seconds optional \
+             when writing). Setting it sets ClockTime; a text that is not a time is an error.",
+        ),
     PropMeta::number("Brightness", 2.0)
         .range(0.0, 10.0)
         .visual()
         .group("Sun")
-        .order(1)
+        .order(2)
         .desc("How strong the sunlight is (and the moonlight, at night). 0 turns the sun off."),
     PropMeta::number("GeographicLatitude", DEFAULT_LATITUDE)
         .range(-90.0, 90.0)
         .visual()
         .group("Sun")
-        .order(2)
+        .order(3)
         .desc(
             "Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it \
              passes straight overhead at noon, further north it stays lower in the south.",
@@ -86,7 +169,7 @@ static PROPS: &[PropMeta] = &[
         .read_only()
         .flags(PropFlags::NO_SAVE)
         .group("Sun")
-        .order(3)
+        .order(4)
         .desc(
             "The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. \
              It points below the horizon at night, when the moon, opposite it, lights the scene.",
@@ -123,6 +206,17 @@ static PROPS: &[PropMeta] = &[
 const VECTOR3: Ty = Ty::Vector3;
 
 static METHODS: &[MethodDesc] = &[
+    MethodDesc::new("GetMinutesAfterMidnight", get_minutes_after_midnight)
+        .params(&[])
+        .returns(Ty::Number)
+        .describe("Returns the time of day in minutes since midnight, which is ClockTime times 60."),
+    MethodDesc::new("SetMinutesAfterMidnight", set_minutes_after_midnight)
+        .params(&[Param::new("minutes", Ty::Number)])
+        .returns_nothing()
+        .describe(
+            "Sets the time of day to this many minutes after midnight. Like ClockTime it wraps around the day, so \
+             1500 is 01:00.",
+        ),
     MethodDesc::new("GetSunDirection", get_sun_direction)
         .params(&[])
         .returns(VECTOR3)
@@ -191,6 +285,91 @@ mod tests {
             dm.set_by_name(lighting, "SunDirection", Value::Vector3(Vector3::X)).is_err(),
             "SunDirection is read-only"
         );
+    }
+
+    fn lighting_of(dm: &DataModel) -> Id {
+        let class = dm.registry().class_id("Lighting").unwrap();
+        dm.service(class).unwrap()
+    }
+
+    fn clock(dm: &DataModel, lighting: Id) -> f64 {
+        number(dm, lighting, "ClockTime", f64::NAN)
+    }
+
+    fn time_of_day(dm: &DataModel, lighting: Id) -> String {
+        match dm.get_by_name(lighting, "TimeOfDay") {
+            Ok(Value::String(s)) => s.to_string(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn clock_time_wraps_around_the_day() {
+        let mut dm = crate::new_game().unwrap();
+        let lighting = lighting_of(&dm);
+        for (written, read) in [(25.0, 1.0), (-1.0, 23.0), (24.0, 0.0), (48.5, 0.5), (13.25, 13.25)] {
+            dm.set_by_name(lighting, "ClockTime", Value::Number(written)).unwrap();
+            assert_eq!(clock(&dm, lighting), read, "{written}");
+        }
+    }
+
+    #[test]
+    fn time_of_day_is_clock_time_as_text() {
+        let mut dm = crate::new_game().unwrap();
+        let lighting = lighting_of(&dm);
+        assert_eq!(time_of_day(&dm, lighting), "14:00:00");
+        for (hours, text) in [
+            (0.0, "00:00:00"),
+            (6.5, "06:30:00"),
+            (14.75, "14:45:00"),
+            (23.999_99, "00:00:00"),
+            (1.0 + 2.0 / 60.0 + 3.0 / 3600.0, "01:02:03"),
+        ] {
+            dm.set_by_name(lighting, "ClockTime", Value::Number(hours)).unwrap();
+            assert_eq!(time_of_day(&dm, lighting), text, "{hours}");
+        }
+        // Writing the text sets ClockTime, and what it reads back is the text again.
+        for text in ["00:00:00", "09:15:30", "14:30:00", "23:59:59"] {
+            dm.set_by_name(lighting, "TimeOfDay", Value::String(text.into())).unwrap();
+            assert_eq!(time_of_day(&dm, lighting), text);
+        }
+        dm.set_by_name(lighting, "TimeOfDay", Value::String("14:30".into())).unwrap();
+        assert_eq!(clock(&dm, lighting), 14.5);
+        dm.set_by_name(lighting, "TimeOfDay", Value::String("6:05:00".into())).unwrap();
+        assert!((clock(&dm, lighting) - (6.0 + 5.0 / 60.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_malformed_time_of_day_is_refused_and_changes_nothing() {
+        let mut dm = crate::new_game().unwrap();
+        let lighting = lighting_of(&dm);
+        for bad in ["", "noon", "14", "14:", ":30", "24:00:00", "14:60:00", "14:30:60", "1:2:3:4", "-1:00:00", "14:3x:00", "14.5:00"] {
+            let err = dm
+                .set_by_name(lighting, "TimeOfDay", Value::String(bad.into()))
+                .expect_err(bad);
+            assert!(err.to_string().contains("TimeOfDay must look like \"14:30:00\""), "{bad:?}: {err}");
+            assert_eq!(clock(&dm, lighting), 14.0, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn minutes_after_midnight_round_trip_with_clock_time() {
+        let mut dm = crate::new_game().unwrap();
+        let lighting = lighting_of(&dm);
+        let call = |dm: &mut DataModel, name: &str, args: Vec<ScriptValue>| {
+            crate::testing::call(dm, lighting, name, args).unwrap()
+        };
+        assert_eq!(call(&mut dm, "GetMinutesAfterMidnight", vec![]), ScriptValue::Number(840.0));
+        call(&mut dm, "SetMinutesAfterMidnight", vec![ScriptValue::Number(90.0)]);
+        assert_eq!(clock(&dm, lighting), 1.5);
+        assert_eq!(time_of_day(&dm, lighting), "01:30:00");
+        assert_eq!(call(&mut dm, "GetMinutesAfterMidnight", vec![]), ScriptValue::Number(90.0));
+        // It wraps like ClockTime.
+        call(&mut dm, "SetMinutesAfterMidnight", vec![ScriptValue::Number(1500.0)]);
+        assert_eq!(clock(&dm, lighting), 1.0);
+        call(&mut dm, "SetMinutesAfterMidnight", vec![ScriptValue::Number(-60.0)]);
+        assert_eq!(clock(&dm, lighting), 23.0);
+        assert!(crate::testing::call(&mut dm, lighting, "SetMinutesAfterMidnight", vec![]).is_err());
     }
 
     #[test]

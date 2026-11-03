@@ -337,6 +337,22 @@ pub enum RegistryError {
         /// The upper bound.
         max: f64,
     },
+    /// A wrapping property ([`PropMeta::wrap`](crate::PropMeta::wrap)) is not a number or int, or its bounds are
+    /// not finite with `min < max`.
+    #[error(
+        "{owner} makes property `{prop}` wrap in ({min}, {max}); only number and int properties can wrap, with finite \
+         bounds and min below max"
+    )]
+    InvalidWrap {
+        /// Where the property is declared.
+        owner: Owner,
+        /// The property.
+        prop: &'static str,
+        /// The lower bound.
+        min: f64,
+        /// The upper bound.
+        max: f64,
+    },
     /// A number default lies outside the property's range.
     #[error(
         "{owner} gives property `{prop}` the default {default}, outside its range ({min}, {max}); move one of them"

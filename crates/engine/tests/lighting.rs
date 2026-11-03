@@ -23,7 +23,7 @@ _G.running = true
 _G.sun = Lighting:GetSunDirection()
 RunService.Heartbeat:Connect(function(deltaTime)
     if _G.running then
-        Lighting.ClockTime = (Lighting.ClockTime + deltaTime) % 24
+        Lighting.ClockTime += deltaTime
         _G.sun = Lighting:GetSunDirection()
     end
 end)

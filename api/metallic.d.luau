@@ -582,8 +582,10 @@ end
 
 --- Controls how the scene is lit: the time of day, the sun and moon, the colours of the sky and the ambient light.
 declare extern type Lighting extends Instance with
-    --- The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset.
+    --- The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can simply add to it to run the day.
     ClockTime: number
+    --- ClockTime written as hours, minutes and seconds, such as "14:30:00" (hours 0-23, seconds optional when writing). Setting it sets ClockTime; a text that is not a time is an error.
+    TimeOfDay: string
     --- How strong the sunlight is (and the moonlight, at night). 0 turns the sun off.
     Brightness: number
     --- Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it passes straight overhead at noon, further north it stays lower in the south.
@@ -598,6 +600,10 @@ declare extern type Lighting extends Instance with
     OutdoorAmbient: Color3
     --- Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and nights brighter.
     Ambient: Color3
+    --- Returns the time of day in minutes since midnight, which is ClockTime times 60.
+    function GetMinutesAfterMidnight(self): number
+    --- Sets the time of day to this many minutes after midnight. Like ClockTime it wraps around the day, so 1500 is 01:00.
+    function SetMinutesAfterMidnight(self, minutes: number): ()
     --- Returns the unit vector from the scene towards the sun, the same as SunDirection.
     function GetSunDirection(self): Vector3
     --- Returns the unit vector from the scene towards the moon, which is always opposite the sun.
