@@ -34,6 +34,9 @@ serde_json = "1.0"
 thiserror = "2"
 # Benchmarks only (dev-dependency); default features off to skip plotting and rayon.
 criterion = { version = "0.8", default-features = false }
+# Instruction-count benchmarks for the perf gate (dev-dependency; docs/perf.md). Pinned exactly: the
+# `gungraun-runner` binary the perf workflow installs must be the same version.
+gungraun = "=0.20.0"
 
 [workspace.lints.rust]
 missing_docs = "warn"
