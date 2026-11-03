@@ -32,7 +32,8 @@ passes). There are five suites, each with its own table in the job summary:
   events (cursor moves and raw motion, alternating) with `Engine::push_input` into a started standalone game with no
   scripts, so nothing is connected to `UserInputService`, then runs one `tick()`; the `setup` warms it with four
   frames of the same input. It measures the path #74 made allocation-free (`crates/engine/tests/input_alloc.rs`).
-  At introduction (#99; ubuntu-24.04 runner, Rust 1.99.1, gungraun 0.20.0, release profile) it counted N `Ir`;
+  At introduction (#99; ubuntu-24.04 runner, Rust 1.99.1, Valgrind 3.22.0, gungraun 0.20.0, release profile) it
+  counted 75,759 `Ir`: about 76 instructions per event, queuing and the frame included;
 - [`crates/render/benches/perf_gate.rs`](../crates/render/benches/perf_gate.rs): the GPU scene's CPU side (#76), with
   no GPU. Each workload is one frame of `InstanceScene` over 10,000 parts with 1% changed in the `setup` (drain,
   repack, coalesce) plus the upload's CPU work written into a plain buffer: `render_sync_moving` (100 parts that
