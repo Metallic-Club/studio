@@ -39,10 +39,6 @@ criterion = { version = "0.8", default-features = false }
 gungraun = "=0.20.0"
 # The Luau VM of `metallic_luau` (ADR 0003), built from the vendored C++ sources so every target runs the same Luau.
 mlua = { version = "0.12.2", default-features = false, features = ["luau", "vendored"] }
-# The same crate with Luau's native code generator compiled in, for `metallic_luau`'s `jit` feature. Cargo unifies
-# the two into one build. Only ever used from a target-specific table: code generation is forbidden on iOS and
-# consoles (ADR 0003).
-mlua_codegen = { package = "mlua", version = "0.12.2", default-features = false, features = ["luau-jit", "vendored"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

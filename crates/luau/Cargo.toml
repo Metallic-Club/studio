@@ -12,19 +12,16 @@ publish.workspace = true
 workspace = true
 
 [features]
-# Luau native code generation (the "JIT"). It takes effect only on x86-64 and aarch64 Windows, Linux, macOS and
-# Android: the dependency that turns it on is declared for those targets alone (below), so `--features jit` does
-# nothing on iOS, consoles or any other target, where generating machine code at run time is forbidden (ADR 0003).
-jit = ["dep:mlua_codegen"]
+# Luau native code generation (the "JIT"). Allowed only on x86-64 and aarch64 Windows, Linux, macOS and Android:
+# `build.rs` fails the build when it is enabled for any other target, because iOS and consoles forbid generating
+# machine code at run time (ADR 0003).
+jit = ["mlua/luau-jit"]
 
 [dependencies]
 metallic_core.workspace = true
 metallic_script.workspace = true
 mlua.workspace = true
 thiserror.workspace = true
-
-[target.'cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), any(target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android")))'.dependencies]
-mlua_codegen = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Tests and benches run real scripts against the real class set. Dev-dependencies are exempt from the layout rules
