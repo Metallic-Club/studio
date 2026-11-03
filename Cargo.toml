@@ -59,6 +59,8 @@ raw-window-handle = "0.6.2"
 gilrs = "0.11.2"
 # Logging facade; the app that ships picks the logger.
 log = "0.4"
+# The Player binary's command line (`--bench`, `--scene`, `--preset`). No dependencies, no proc-macros.
+lexopt = "0.3"
 # Profiling scopes in `metallic_engine`'s frame loop. With no back end feature the macros expand to nothing; the
 # engine's `profile-with-puffin` and `profile-with-tracy` features pick one. No proc-macros (`procmacros` is off).
 profiling = { version = "1.0.18", default-features = false }
