@@ -67,6 +67,8 @@ studio/                         Metallic-Club/studio (the one repo)
 6. **A language backend depends only on `metallic_script` and `metallic_core`.** A new language is a new crate next to `luau/`; nothing else changes.
 7. **`metallic_engine` features:** `render`, `physics`, `luau` (all on by default). A dedicated server is `--no-default-features --features physics,luau`.
 8. **Studio builds for desktop targets only.** Player and Launcher build everywhere.
+   `xtask` is host tooling that never ships; it may read `metallic_core`, `metallic_classes` and `metallic_script`
+   (the API dump, #48).
 9. **Console code is under NDA.** It lives in private repos (`Metallic-Club/platform-<console>`) that plug into the `metallic_platform` and `metallic_render` seams. This repo holds only the seams, never console SDK code.
 
 ### Naming

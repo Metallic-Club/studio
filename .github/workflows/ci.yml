@@ -41,8 +41,46 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Layout rules (ADR 0001)
         run: cargo xtask check-layout
+      - name: API dump and Luau definitions are up to date (api/)
+        run: cargo xtask api-dump --check
       - name: Headless engine (dedicated server features)
         run: cargo check -p metallic_engine --no-default-features --features physics,luau
+
+  # The generated Luau definitions (api/metallic.d.luau) must load in luau-lsp, the editor tooling they are for: the
+  # sample script type-checks cleanly and the deliberately wrong one fails with its four errors. The lint job checks
+  # the committed file is fresh, so this checks the committed file. No Rust needed.
+  luau-types:
+    name: Luau type definitions (luau-lsp)
+    runs-on: ubuntu-latest
+    env:
+      LUAU_LSP_VERSION: "1.70.1"
+      LUAU_LSP_SHA256: 1a2ea1ae4f98f8946cefd970a4b54853e11ab4775e6932faa7f60cf920346567
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install luau-lsp ${{ env.LUAU_LSP_VERSION }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/luau-lsp.zip" \
+            "https://github.com/JohnnyMorganz/luau-lsp/releases/download/$LUAU_LSP_VERSION/luau-lsp-linux-x86_64.zip"
+          echo "$LUAU_LSP_SHA256  $RUNNER_TEMP/luau-lsp.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/luau-lsp.zip" -d "$RUNNER_TEMP/luau-lsp"
+          chmod +x "$RUNNER_TEMP/luau-lsp/luau-lsp"
+          echo "$RUNNER_TEMP/luau-lsp" >> "$GITHUB_PATH"
+      - name: The sample script type-checks
+        run: luau-lsp analyze --platform=standard --definitions=@metallic=api/metallic.d.luau api/samples/instance_api.luau
+      - name: Type errors are caught
+        run: |
+          if luau-lsp analyze --platform=standard --definitions=@metallic=api/metallic.d.luau \
+              api/samples/type_error.luau > "$RUNNER_TEMP/errors.txt" 2>&1; then
+            cat "$RUNNER_TEMP/errors.txt"
+            echo "::error::luau-lsp accepted api/samples/type_error.luau, which has four type errors"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/errors.txt"
+          found=$(grep -c 'type_error.luau([0-9]*,[0-9]*): TypeError' "$RUNNER_TEMP/errors.txt" || true)
+          if [ "$found" != 4 ]; then
+            echo "::error::expected 4 type errors in api/samples/type_error.luau, luau-lsp reported $found"
+            exit 1
+          fi
 
   test:
     name: Test (${{ matrix.os }})

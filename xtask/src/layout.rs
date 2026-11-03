@@ -40,7 +40,8 @@ const ALLOWED_WORKSPACE_DEPS: &[(&str, &[&str])] = &[
     ("metallic_player", &["metallic_engine"]),
     ("metallic_studio", &["metallic_engine", "metallic_player"]),
     ("metallic_launcher", &["metallic_player"]),
-    ("xtask", &[]),
+    // Host tooling that never ships: the API dump (#48) reads the class set through `metallic_script`'s dump builder.
+    ("xtask", &["metallic_core", "metallic_classes", "metallic_script"]),
 ];
 
 /// The only crates.io crates `metallic_core` may depend on (ADR 0001 rule 2: the object model stays pure).
