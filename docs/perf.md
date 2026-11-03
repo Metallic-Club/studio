@@ -31,17 +31,17 @@ fixture and dropping the data model afterwards do not.
 
 | Workload | Measured work | `Ir` at introduction |
 | --- | --- | ---: |
-| `reads` | Ten passes reading seven properties (`CFrame`, `Size`, `Color`, `Transparency`, `Anchored`, `CanCollide`, `Material`) of every part: 70,000 typed reads, three of the seven properties at their default | 8,185,762 |
-| `writes` | Ten passes setting every part's `CFrame`; every write changes the value: 10,000 writes | 4,746,793 |
-| `create` | 1,000 more parts, each created and parented into the folder | 629,340 |
-| `destroy` | The 1,000 parts destroyed one by one, in creation order | 11,619,855 |
-| `clone` | `clone_tree` of the folder with its 1,000 parts | 1,268,272 |
-| `drain_changes` | One consumer draining 50 changed parts of 5,000 | 1,934 |
+| `reads` | Ten passes reading seven properties (`CFrame`, `Size`, `Color`, `Transparency`, `Anchored`, `CanCollide`, `Material`) of every part: 70,000 typed reads, three of the seven properties at their default | 8,188,839 |
+| `writes` | Ten passes setting every part's `CFrame`; every write changes the value: 10,000 writes | 5,266,817 |
+| `create` | 1,000 more parts, each created and parented into the folder | 689,364 |
+| `destroy` | The 1,000 parts destroyed one by one, in creation order | 11,725,942 |
+| `clone` | `clone_tree` of the folder with its 1,000 parts | 1,270,279 |
+| `drain_changes` | One consumer draining 50 changed parts of 5,000 | 2,028 |
 
-The counts are from the PR that added the gate (#29): ubuntu-24.04 runner, Rust 1.99.1, Valgrind 3.22.0,
-gungraun 0.20.0, release profile. They are a reference point, not a target; the gate always compares a PR with its
-own base. (`destroy` costing about 11,600 instructions per part, against about 630 to create one, is worth a look
-when the tree's child lists are next tuned.)
+The counts are from the PR that added the gate (#29), measured on `main` at `8b2caff` (data model, signals and the
+first classes): ubuntu-24.04 runner, Rust 1.99.1, Valgrind 3.22.0, gungraun 0.20.0, release profile. They are a
+reference point, not a target; the gate always compares a PR with its own base. (`destroy` costing about 11,700
+instructions per part, against about 690 to create one, is worth a look when the tree's child lists are next tuned.)
 
 ### How the workflow compares
 
