@@ -1,7 +1,174 @@
 //! Metallic Player: runs a game, standalone or on the platform.
 //!
 //! It is a library so that Studio (Play in Studio) and the Launcher run games through exactly the code that ships.
-//! The `metallic_player` binary is a thin wrapper around it.
+//! The `metallic_player` binary is a thin wrapper around it: `cargo run -p metallic_player` plays the built-in demo
+//! (see the README for its flags).
+//!
+//! # Running a game
+//!
+//! A [`Player`] is a game in the engine ([`metallic_engine::Engine`]), made from a [`PlayerConfig`]: which game
+//! ([`Scene`]; built-in scenes until projects load from disk in M4), the window, the graphics [`Preset`] and when to
+//! stop. [`Player::new`] loads the scene, installs the renderer and starts the game. Then one of three things drives
+//! its frames, depending on who owns the event loop and the window:
+//!
+//! | Host | Owns | Drives the Player with |
+//! |---|---|---|
+//! | the `metallic_player` binary | nothing: the Player opens its window and runs the platform's event loop | [`Player::run`] |
+//! | the Launcher (M8), whose web view runs its own loop | the event loop; the Player still opens its own window | [`Player::into_app`]: forward the loop's callbacks to the [`PlayerApp`] (an [`AppHandler`](metallic_engine::metallic_platform::AppHandler)) |
+//! | Studio's game view (M6), a panel in Studio's dock | the event loop and the window | [`Player::engine_mut`]: [`attach_window`](metallic_engine::Engine::attach_window), [`resize`](metallic_engine::Engine::resize) and [`push_input`](metallic_engine::Engine::push_input), then [`Player::frame`] once per loop iteration |
+//!
+//! ```no_run
+//! use metallic_player::{Player, PlayerConfig, Scene};
+//!
+//! let report = Player::new(PlayerConfig::new(Scene::Demo))?.run()?;
+//! println!("{} frames", report.total_frames);
+//! # Ok::<(), metallic_player::PlayerError>(())
+//! ```
+//!
+//! Scripts print to the standard streams; [`Player::with_output`] sends their output anywhere else (Studio's
+//! Output panel).
+//!
+//! # Measuring
+//!
+//! Under [`Player::run`] and [`PlayerApp`] the Player times every frame and records what the renderer drew and how
+//! long the GPU took ([`stats`]). `--bench <frames>` runs that many frames after a short warm-up and prints the
+//! [`Report`] as JSON.
+
+mod config;
+mod player;
+mod scene;
+pub mod stats;
+
+pub use config::{DEFAULT_FRAME_CAP, DEFAULT_WARMUP_FRAMES, PlayerConfig, Preset, UnknownPreset};
+pub use player::{Player, PlayerApp, PlayerError};
+pub use scene::{Scene, UnknownScene};
+pub use stats::Report;
 
 /// The player's version, as shown in logs and in the platform UI.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use metallic_engine::metallic_core::Value;
+    use metallic_engine::metallic_platform::{ButtonState, Key, KeyCode, KeyEvent, WindowEvent, WindowId};
+    use metallic_engine::metallic_script::{CollectOutput, OutputLevel};
+    use metallic_engine::{InputEvent, RunState};
+
+    use super::*;
+
+    const FRAME: Duration = Duration::from_millis(16);
+
+    fn demo() -> Player<CollectOutput> {
+        Player::with_output(PlayerConfig::new(Scene::Demo), CollectOutput::new()).expect("the demo starts")
+    }
+
+    fn assert_no_errors(player: &Player<CollectOutput>) {
+        let output = player.engine().host().output();
+        let problems: Vec<&str> = output
+            .of_level(OutputLevel::Error)
+            .chain(output.of_level(OutputLevel::Warn))
+            .map(|line| line.message.as_str())
+            .collect();
+        assert!(problems.is_empty(), "script errors: {problems:#?}");
+    }
+
+    /// The value of `prop` on `Workspace`'s child called `name`.
+    fn read(player: &Player<CollectOutput>, name: &str, prop: &str) -> Value {
+        let dm = player.engine().data_model();
+        let registry = dm.registry();
+        let workspace = dm
+            .service(registry.class_id("Workspace").expect("Workspace class"))
+            .expect("Workspace");
+        let child = dm
+            .find_first_child(workspace, name, false)
+            .expect("Workspace")
+            .unwrap_or_else(|| panic!("no {name} in Workspace"));
+        dm.get_by_name(child, prop).expect("property")
+    }
+
+    fn key(code: KeyCode, state: ButtonState) -> InputEvent {
+        InputEvent::Window {
+            window: WindowId::from_raw(1),
+            event: WindowEvent::Key(KeyEvent {
+                key_code: code,
+                key: Key::Character("w".into()),
+                text: None,
+                state,
+                repeat: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_demo_builds_its_scene_and_runs_without_script_errors() {
+        let mut player = demo();
+        assert_eq!(player.engine().state(), RunState::Running);
+        assert_no_errors(&player);
+        let printed: Vec<&str> = player
+            .engine()
+            .host()
+            .output()
+            .of_level(OutputLevel::Print)
+            .map(|line| line.message.as_str())
+            .collect();
+        assert!(
+            printed.iter().any(|line| line.starts_with("Metallic demo:")),
+            "{printed:?}"
+        );
+        for name in ["Baseplate", "NeonWedge", "GlassBall", "Sun", "Spot", "LampBulb"] {
+            read(&player, name, "Name");
+        }
+
+        let before = read(&player, "Car1", "CFrame");
+        for _ in 0..30 {
+            player.frame(FRAME);
+        }
+        assert_no_errors(&player);
+        assert_ne!(read(&player, "Car1", "CFrame"), before, "Heartbeat moves the carousel");
+    }
+
+    #[test]
+    fn the_camera_orbits_until_wasd_moves_it() {
+        let mut player = demo();
+        player.frame(FRAME);
+        let orbit = read(&player, "Camera", "CFrame");
+        player.frame(FRAME);
+        assert_ne!(read(&player, "Camera", "CFrame"), orbit, "the camera orbits on its own");
+
+        // W leaves the orbit and flies forward; letting go stops the camera.
+        player.engine_mut().push_input(key(KeyCode::KeyW, ButtonState::Pressed));
+        for _ in 0..10 {
+            player.frame(FRAME);
+        }
+        let flying = read(&player, "Camera", "CFrame");
+        player.frame(FRAME);
+        assert_ne!(
+            read(&player, "Camera", "CFrame"),
+            flying,
+            "held W keeps moving the camera"
+        );
+        player
+            .engine_mut()
+            .push_input(key(KeyCode::KeyW, ButtonState::Released));
+        player.frame(FRAME);
+        let stopped = read(&player, "Camera", "CFrame");
+        player.frame(FRAME);
+        assert_eq!(
+            read(&player, "Camera", "CFrame"),
+            stopped,
+            "no keys, no orbit: the camera holds still"
+        );
+        assert_no_errors(&player);
+    }
+
+    #[test]
+    fn a_player_records_nothing_until_it_draws() {
+        let mut player = demo();
+        player.frame(FRAME);
+        let samples = player.samples();
+        assert!(samples.cpu_ms.is_empty() && samples.gpu_ms.is_empty());
+        assert_eq!(samples.surface, None, "no window, no renderer");
+    }
+}

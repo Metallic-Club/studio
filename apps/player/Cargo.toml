@@ -17,4 +17,8 @@ default = ["full"]
 full = ["metallic_engine/render", "metallic_engine/physics", "metallic_engine/luau"]
 
 [dependencies]
-metallic_engine.workspace = true
+# A window and Luau scripts are what the Player is, so those two are on whatever the features say.
+metallic_engine = { workspace = true, features = ["render", "luau"] }
+lexopt.workspace = true
+log.workspace = true
+thiserror.workspace = true

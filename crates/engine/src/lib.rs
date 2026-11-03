@@ -140,3 +140,10 @@ pub use windowed::{WindowedApp, WindowedOptions, run_windowed};
 
 /// Re-exported so apps and tests name the same script host types as the engine.
 pub use metallic_script::{MemorySources, RunContext, SourceLoader};
+
+// The crates whose types the engine's API takes and returns (the data model and its values, output sinks, windows
+// and the event loop), re-exported because apps depend on the engine alone (ADR 0001): the Player builds its game's
+// instances and drives the platform's event loop through these.
+pub use metallic_core;
+pub use metallic_platform;
+pub use metallic_script;
