@@ -63,6 +63,10 @@ class is one file; none of those systems change. ([ADR 0002](adr/0002-object-mod
 
 There is no Bevy. The engine runs its own loop on `winit` and renders with `wgpu`; consoles plug in private backends.
 Graphics quality presets and dynamic resolution are part of the engine.
+
+How the renderer stays fast at 100k parts without giving up quality or customization (budgets, stable GPU slots,
+layered culling, LOD, clustered lights, cached shadows, no hitches) is fixed by
+[ADR 0008](adr/0008-rendering-performance.md).
 ([ADR 0004](adr/0004-runtime-rendering-platform.md))
 
 ## Physics

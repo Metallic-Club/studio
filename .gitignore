@@ -8,3 +8,5 @@
 *.swp
 .DS_Store
 Thumbs.db
+# Agent worktrees and local Claude state
+.claude/
