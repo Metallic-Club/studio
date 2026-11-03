@@ -12,3 +12,25 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+raw-window-handle.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+# Desktop: winit's Win32, AppKit, X11 and Wayland backends. User folders need no crate: `directories` and `dirs`
+# pull `option-ext`, which is MPL-2.0 (not on deny.toml's list), and the rules are a few lines (src/paths.rs).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+winit.workspace = true
+
+# Gamepads through gilrs on Windows (Windows.Gaming.Input) and macOS (IOKit), which need no system packages. Not on
+# Linux: gilrs links libudev there (libudev-sys, pkg-config, libudev-dev), which every Linux build, CI runner and
+# dedicated server would then need. Linux reports no gamepads until that is decided (see src/gamepad.rs).
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+gilrs.workspace = true
+
+# winit refuses to build on Android without an activity backend. NativeActivity is pure Rust (GameActivity compiles
+# C++); the real Android entry point is M9 work, until then the code only has to compile.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+winit.workspace = true

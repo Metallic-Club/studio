@@ -39,6 +39,24 @@ criterion = { version = "0.8", default-features = false }
 gungraun = "=0.20.0"
 # The Luau VM of `metallic_luau` (ADR 0003), built from the vendored C++ sources so every target runs the same Luau.
 mlua = { version = "0.12.2", default-features = false, features = ["luau", "vendored"] }
+# Window, event loop and input for `metallic_platform` (ADR 0004). X11 and Wayland on Linux, both loaded at run time
+# (no system packages to build). Wayland window decorations are drawn without a title: the titled variant pulls a
+# font stack whose `ttf-parser` is unmaintained (RUSTSEC-2026-0192). crates/platform/Cargo.toml adds the Android
+# activity backend.
+winit = { version = "0.30.13", default-features = false, features = [
+    "rwh_06",
+    "x11",
+    "wayland",
+    "wayland-dlopen",
+    "wayland-csd-adwaita-notitle",
+] }
+# The window and display handles `metallic_render` receives (ADR 0001 rule 4). Same major version as winit's
+# `rwh_06` and wgpu.
+raw-window-handle = "0.6.2"
+# Desktop gamepads for `metallic_platform` (Windows, Linux, macOS only).
+gilrs = "0.11.2"
+# Logging facade; the app that ships picks the logger.
+log = "0.4"
 
 [workspace.lints.rust]
 missing_docs = "warn"
