@@ -26,9 +26,12 @@ metallic_platform = { path = "crates/platform" }
 metallic_engine = { path = "crates/engine", default-features = false }
 metallic_player = { path = "apps/player" }
 
-# Host-only tooling (`xtask`); never shipped.
+# Third-party crates. `metallic_core` may only use small, portable ones (ADR 0002): glam, serde, thiserror.
+# `serde_json` is for `xtask` (host-only tooling, never shipped) and tests.
+glam = { version = "0.34", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+thiserror = "2"
 
 [workspace.lints.rust]
 missing_docs = "warn"
