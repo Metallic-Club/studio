@@ -592,6 +592,8 @@ declare extern type Lighting extends Instance with
     GeographicLatitude: number
     --- The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. It points below the horizon at night, when the moon, opposite it, lights the scene.
     read SunDirection: Vector3
+    --- Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own CastShadow. Turning it off saves the cost of drawing the shadows.
+    GlobalShadows: boolean
     --- The colour of the sky overhead in the middle of the day. It also tints the light from the sky.
     SkyColor: Color3
     --- The colour of the sky at the horizon in the middle of the day; the sky fades to it from SkyColor.

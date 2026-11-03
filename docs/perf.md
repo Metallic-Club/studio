@@ -484,3 +484,50 @@ within 1%). Times are p50 in ms; "Sky" is the sky pass's GPU time.
   measured 0.16 µs, and a sync in which only `Lighting` changed 0.24 µs with it (release build, a throwaway timing
   loop of 200,000 changes, not committed); the scene's sync for drawn parts is unchanged (the watch is checked only for instances that
   are not drawn), so the perf gate's render workloads see no difference.
+
+### Sun shadows (#82)
+
+Cascaded shadow maps for the sun ([`metallic_render::shadow`](../crates/render/src/shadow/mod.rs), ADR 0008 §6):
+by default 3 cascades of 2048² `Depth32Float` out to 256 m, texel-snapped, each culling its own casters with the
+culling grid. The nearest two hold every caster and are drawn again in any frame in which the scene changed; the
+far one holds only the static region's casters and is **cached**: drawn again only when the sun turns, its snapped
+placement moves (it moves in steps of 1/32 of its width, and is centred on the camera when the view is wide) or a
+static caster inside it changes. The parts sample them with a 3 × 3 tent of bilinear comparison taps. The stress
+example reports each cascade's GPU time (`gpu_ms.shadow`, a kept cascade counting 0), how many of the measured
+frames drew it (`shadow.redraws`) and its casters (`shadow.casters`); the overlay shows the same. `--no-shadows`,
+`--shadow-cascades`, `--shadow-resolution`, `--shadow-distance` and `--dynamic-cascades` change the settings, and
+`--moving-camera` walks the camera through the scene at 8 m/s, looking 20° left and right every 6 s.
+
+**2026-11-03**, same machine and settings as the tables above (DX12, `AutoNoVsync`, 1,000 frames after 120, seed
+1), branch `82-sun-shadows`, `parts_100k` (1% of the parts moving every frame). "Off" is the same branch with
+`--no-shadows`, which draws what `main` draws. Times are p50 in ms, except a cascade's GPU time: its mean over the
+measured frames (the frames that kept its map count 0), with how many of them drew it.
+
+| Camera | Shadows | Frame | Render CPU | Cull CPU | GPU | Opaque pass | Cascade 0 | Cascade 1 | Cascade 2 (cached) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| still | off | 0.618 | 0.460 | 0.167 | 0.375 | 0.352 | | | |
+| still | on | 0.790 | 0.630 | 0.259 | 0.574 | 0.436 | 0.033 (1,000) | 0.083 (1,000) | 0.000 (0) |
+| moving | off | 0.583 | 0.429 | 0.141 | 0.333 | 0.311 | | | |
+| moving | on | 0.758 | 0.591 | 0.227 | 0.555 | 0.417 | 0.036 (1,000) | 0.081 (1,000) | 0.005 (8) |
+
+Casters in the last frame (still camera): 385, 2,569 and 71,833 per cascade; the two near cascades' 2,954 make 8
+draws and 0.38 M triangles a frame.
+
+- **A still camera and sun redraw only the near cascades** (the done-when of #82): the cached far cascade, holding
+  72% of the scene's parts, was drawn in none of the 1,000 frames although 1,000 parts moved in every one of them.
+  Moving parts are promoted to the dynamic region in their first frames (which takes them out of the far cascade:
+  one redraw), and after that only the static region's changes reach it. The render test
+  `a_static_frame_does_not_redraw_the_far_cascade` (`crates/render/tests/shadows.rs`) checks it on every run.
+- **A walking camera** redrew the far cascade 8 times in 1,000 frames (about once every 2 s at 8 m/s). One redraw
+  costs 0.62 ms of GPU (about 70,000 casters, some 8.5 M triangles) and about half a millisecond of cull CPU (the
+  run's slowest cull took 0.73 ms against a p99 of 0.36), which averages to 0.005 ms of GPU a frame. Drawn every frame, as without the cache, it is the frame's
+  largest cost: with `--dynamic-cascades 3` (every cascade drawn again whenever anything moves), measured later on
+  the same machine while it was busy with other builds (so slower overall), render CPU p50 rose from 2.15 to
+  2.94 ms and from 2.24 to 3.06 ms in two interleaved pairs, and the far cascade alone took 1.35 and 1.48 ms of GPU.
+- **GPU**: 0.12 ms for the two near cascades and 0.08 ms more in the opaque pass for sampling the maps (nine taps per
+  lit pixel): the frame goes from 0.375 to 0.574 ms, about a third of a millisecond of the High tier's budget.
+- **Render CPU**: +0.17 ms: the near cascades' culls (+0.09 ms, in the cull column), their list uploads, the
+  fitting and the extra passes. Well within the Mid tier's 2.5 ms.
+- **The perf gate's workloads** (the camera's cull and the sync) change only by a byte in each grid item (the caster
+  flag, in the item's padding) and, in the sync, a region test and two flag comparisons per written slot, plus two
+  noted bounding spheres for each static caster that moves or changes how it casts.

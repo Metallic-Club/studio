@@ -85,11 +85,13 @@ pub struct SceneLighting {
     pub sky_color: Color3,
     /// `HorizonColor`: the sky at the horizon by day.
     pub horizon_color: Color3,
+    /// `GlobalShadows`: the sun (or moon) casts shadows ([`crate::shadow`]).
+    pub global_shadows: bool,
 }
 
 impl Default for SceneLighting {
     /// `Lighting`'s defaults: 14:00 at 41.733° north (the sun high in the south-west), `Brightness` 2, no
-    /// `Ambient`, a mid-grey `OutdoorAmbient` and a light blue sky.
+    /// `Ambient`, a mid-grey `OutdoorAmbient`, a light blue sky and shadows on.
     fn default() -> Self {
         Self {
             sun_direction: Vec3::new(-0.5, 0.646_276, 0.576_479),
@@ -98,6 +100,7 @@ impl Default for SceneLighting {
             outdoor_ambient: Color3::new(0.5, 0.5, 0.5),
             sky_color: Color3::new(0.53, 0.72, 0.95),
             horizon_color: Color3::new(0.8, 0.88, 0.96),
+            global_shadows: true,
         }
     }
 }
@@ -131,6 +134,12 @@ fn finite_or(v: f32, fallback: f32) -> f32 {
 }
 
 impl SceneLighting {
+    /// The unit direction towards the frame's one directional light: the sun by day, the moon (opposite it) by
+    /// night. Shadows are cast along it ([`crate::shadow`]).
+    pub fn light_direction(&self) -> Vec3 {
+        self.resolve().light_direction
+    }
+
     /// Works the lighting out for the shaders (see the module documentation). Runs when the lighting changes, not
     /// per frame.
     pub(crate) fn resolve(&self) -> ResolvedLighting {
@@ -192,6 +201,7 @@ struct LightingProps {
     outdoor_ambient: Option<PropId>,
     sky_color: Option<PropId>,
     horizon_color: Option<PropId>,
+    global_shadows: Option<PropId>,
 }
 
 /// Reads [`SceneLighting`] from a `Lighting` instance, looking its property ids up by name only when the instance
@@ -222,6 +232,7 @@ impl LightingReader {
                     outdoor_ambient: id("OutdoorAmbient"),
                     sky_color: id("SkyColor"),
                     horizon_color: id("HorizonColor"),
+                    global_shadows: id("GlobalShadows"),
                 };
                 self.props = Some(props);
                 props
@@ -245,6 +256,10 @@ impl LightingReader {
             outdoor_ambient: color(props.outdoor_ambient, defaults.outdoor_ambient),
             sky_color: color(props.sky_color, defaults.sky_color),
             horizon_color: color(props.horizon_color, defaults.horizon_color),
+            global_shadows: props
+                .global_shadows
+                .and_then(|p| dm.bool(lighting, p).ok())
+                .unwrap_or(defaults.global_shadows),
         }
     }
 }
@@ -292,7 +307,10 @@ mod tests {
         set(&mut dm, "OutdoorAmbient", Value::Color3(Color3::new(0.4, 0.4, 0.4)));
         set(&mut dm, "SkyColor", Value::Color3(Color3::new(0.2, 0.3, 0.9)));
         set(&mut dm, "HorizonColor", Value::Color3(Color3::new(0.9, 0.8, 0.7)));
+        assert!(reader.read(&dm, id).global_shadows);
+        set(&mut dm, "GlobalShadows", Value::Bool(false));
         let read = reader.read(&dm, id);
+        assert!(!read.global_shadows);
         assert!(read.sun_direction.abs_diff_eq(Vec3::X, 1e-5), "{read:?}");
         assert_eq!(read.brightness, 3.0);
         assert_eq!(read.ambient, Color3::new(0.1, 0.2, 0.3));

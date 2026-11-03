@@ -73,6 +73,7 @@ fn sample(frame: usize) -> FrameSample {
         physics_ms: ms * 0.02,
         render_ms: ms * 0.3,
         cull_ms: ms * 0.05,
+        shadow_redrawn: 0,
     }
 }
 
@@ -89,6 +90,11 @@ fn recording_summarising_and_drawing_the_overlay_allocate_nothing() {
         opaque_triangles: 1_190_000,
         transparent_instances: 100,
         transparent_triangles: 10_000,
+        shadow_cascades: 3,
+        shadow_redrawn: 0b011,
+        shadow_draws: 8,
+        shadow_instances: 4_000,
+        shadow_casters: [1_000, 3_000, 20_000, 0],
         ..DrawStats::default()
     };
     // Twice the window: the rings fill, then wrap.

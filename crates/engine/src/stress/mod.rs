@@ -116,6 +116,13 @@ struct Mover {
     spin: f32,
 }
 
+/// How fast [`StressScene::move_camera`] walks, in metres a second.
+pub const CAMERA_WALK: f32 = 8.0;
+/// How far [`StressScene::move_camera`] looks to either side, in degrees.
+pub const CAMERA_SWAY_DEGREES: f32 = 20.0;
+/// How long one look left and right takes, in seconds.
+pub const CAMERA_SWAY_SECONDS: f32 = 6.0;
+
 /// A built stress scene: what it holds and which parts move. See the [module documentation](self).
 #[derive(Clone, Debug)]
 pub struct StressScene {
@@ -169,6 +176,20 @@ impl StressScene {
             dm.set(mover.id, self.cframe, Value::CFrame(cframe))?;
         }
         Ok(())
+    }
+
+    /// Moves the camera to where a walking player's is at `time` seconds: from the scene's own view it walks ahead
+    /// at [`CAMERA_WALK`] metres a second and looks [`CAMERA_SWAY_DEGREES`] left and right every
+    /// [`CAMERA_SWAY_SECONDS`]. For measuring what a moving view costs (shadow maps that follow it, culls). The same
+    /// time always gives the same `CFrame`.
+    pub fn move_camera(&self, dm: &mut DataModel, time: f64) -> Result<(), DmError> {
+        let t = (time % 3600.0) as f32;
+        let (start, _) = self.view;
+        let ahead = start.rotation() * Vec3::NEG_Z;
+        let walk = Vec3::new(ahead.x, 0.0, ahead.z).normalize_or(Vec3::NEG_Z) * (CAMERA_WALK * t);
+        let sway = (t / CAMERA_SWAY_SECONDS * std::f32::consts::TAU).sin() * CAMERA_SWAY_DEGREES.to_radians();
+        let cframe = CFrame::from_parts(start.position() + walk, Quat::from_rotation_y(sway) * start.rotation());
+        dm.set_by_name(self.camera, "CFrame", Value::CFrame(cframe))
     }
 
     /// Which scene this is.

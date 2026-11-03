@@ -40,6 +40,16 @@
 //! per-frame offset `camera − origin` from a uniform, so a moving camera costs no instance uploads. When the
 //! origin does move, every live instance's translation is recomputed from its `CFrame` (exact, not accumulated) and
 //! uploaded once: a rare full upload instead of a per-frame one.
+//!
+//! # Shadow-caster changes
+//!
+//! Cached shadow cascades ([`crate::shadow`]) hold the static region's casters and are redrawn only when one of them
+//! changes inside the cascade. The sync therefore notes, for every static-region slot whose shadow could change (it
+//! moved, was resized or changed shape, started or stopped casting, entered or left the region), the bounding
+//! spheres it had and has ([`InstanceScene::shadow_changes`]). A recolour notes nothing, and neither does any change
+//! in the dynamic region, whose casters are redrawn every frame anyway. The notes are origin-relative like the
+//! instances; when the origin moves, or the scene is rebuilt, or more than [`MAX_SHADOW_CHANGES`] pile up, the scene
+//! bumps [`InstanceScene::shadow_epoch`] instead, which redraws every cascade.
 
 mod components;
 mod gpu;
@@ -74,6 +84,21 @@ pub const REST_CHECKS_PER_FRAME: u32 = 256;
 pub const ORIGIN_GRID: f32 = 1024.0;
 /// Clean slots between two dirty runs that are uploaded anyway to merge the runs into one range.
 pub const MAX_UPLOAD_GAP: u32 = 4;
+
+/// The most static shadow-caster changes [`InstanceScene::shadow_changes`] keeps between two takes; past it the
+/// scene notes that everything changed instead ([`InstanceScene::shadow_epoch`]), so a burst of edits (a level
+/// loading) costs one redraw of every cascade and no memory beyond this.
+pub const MAX_SHADOW_CHANGES: usize = 4096;
+
+/// The flags that decide whether an instance casts a sun shadow.
+const SHADOW_FLAGS: u32 = GpuInstance::LIVE | GpuInstance::CAST_SHADOW | GpuInstance::HIDDEN | GpuInstance::TRANSLUCENT;
+
+/// Whether a packed instance casts a sun shadow: live, `CastShadow` on, and solid. See-through parts cast none
+/// yet (their shadows would need the transparent list sorted per cascade).
+#[inline]
+pub fn is_shadow_caster(instance: &GpuInstance) -> bool {
+    instance.flags & SHADOW_FLAGS == GpuInstance::LIVE | GpuInstance::CAST_SHADOW
+}
 
 /// One of the scene's two instance regions, each with its own buffer. See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -9,7 +9,7 @@ use metallic_platform::{Size, Window};
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::{
     CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightingReader, RenderContext,
-    RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, wgpu,
+    RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, ShadowSettings, wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
@@ -39,6 +39,7 @@ pub struct SceneRenderer {
     options: ContextOptions,
     clear_color: wgpu::Color,
     cull: CullSettings,
+    shadows: ShadowSettings,
     present_mode: Option<wgpu::PresentMode>,
     device: Option<Device>,
     surface: Option<RenderSurface>,
@@ -74,6 +75,7 @@ impl SceneRenderer {
                 a: 1.0,
             },
             cull: CullSettings::default(),
+            shadows: ShadowSettings::default(),
             present_mode: None,
             device: None,
             surface: None,
@@ -113,6 +115,21 @@ impl SceneRenderer {
     /// What the camera culls.
     pub fn cull(&self) -> CullSettings {
         self.cull
+    }
+
+    /// Changes how the sun's shadows are drawn (cascades, map size, distance; see [`metallic_render::shadow`]). On
+    /// by default; graphics presets (#84) set them, and `Lighting.GlobalShadows` turns a game's shadows off. Applies
+    /// now and to every later renderer.
+    pub fn set_shadows(&mut self, shadows: ShadowSettings) {
+        self.shadows = shadows;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_shadows(shadows);
+        }
+    }
+
+    /// How the sun's shadows are drawn.
+    pub fn shadows(&self) -> ShadowSettings {
+        self.shadows
     }
 
     /// Asks for a present mode (for example `AutoNoVsync` for an uncapped frame rate in benchmarks); the surface
@@ -336,7 +353,7 @@ impl RenderHook for SceneRenderer {
                 image.present(&device.context);
                 self.last_upload = device.renderer.upload_stats();
                 draws = device.renderer.draw_stats();
-                cull = device.renderer.cull_stats().cpu_time;
+                cull = device.renderer.cull_stats().cpu_time + device.renderer.shadow_stats().cull_time;
             }
             None => {
                 // No image this frame (minimised, occluded): the upload still goes out, or it would be lost.
@@ -371,6 +388,7 @@ impl SceneRenderer {
         RendererSettings {
             clear_color: self.clear_color,
             cull: self.cull,
+            shadows: self.shadows,
             ..RendererSettings::new(format, width, height)
         }
     }

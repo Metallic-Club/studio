@@ -855,6 +855,22 @@
           ]
         },
         {
+          "name": "GlobalShadows",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sun",
+          "description": "Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own CastShadow. Turning it off saves the cost of drawing the shadows.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
           "name": "SkyColor",
           "type": "Color3",
           "default": [

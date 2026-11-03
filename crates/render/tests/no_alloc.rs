@@ -28,6 +28,12 @@
 //! sky (the hand-written frame draws the same full-screen triangle), and re-reading a `Lighting` service that
 //! changes every frame, through the scene's watch on its change consumer, allocates nothing at all.
 //!
+//! Sun shadows (#82) too: a frame that fits, culls, uploads and draws three cascades allocates no more than the same
+//! wgpu calls by hand (the casters of each cascade predicted by a CPU mirror of the scene, as the camera's are), for
+//! two workloads of very different size; the cascades' culls (with the camera's, from an orbiting camera) allocate
+//! nothing at all once warm; and the heap does not grow over 100 frames with the default shadows on either instance
+//! path. The other parts frames above draw no shadows, so they still compare with their hand-written frames.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
 // A `#[global_allocator]` needs `unsafe impl GlobalAlloc`. This test binary's allocator only counts, then forwards
@@ -45,7 +51,7 @@ use metallic_render::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use metallic_render::scene::{GpuInstance, InstanceBinding, RenderComponents};
 use metallic_render::{
     Camera, DrawStats, GpuScene, InstanceScene, LightingReader, OffscreenTarget, PassId, PassSet, RenderContext,
-    Renderer, RendererSettings, SceneLighting, wgpu,
+    Renderer, RendererSettings, SceneLighting, ShadowSettings, VisibleSet, wgpu,
 };
 
 thread_local! {
@@ -112,7 +118,17 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const WARM_UP: usize = 30;
 const FRAMES: usize = 100;
 /// The size of the frame uniform the parts and the sky read (`Frame` in `src/parts/frame.wgsl`).
-const FRAME_UNIFORM_SIZE: u64 = 336;
+const FRAME_UNIFORM_SIZE: u64 = 656;
+/// The shadow cascades the shadowed parts frames draw, all of them every frame.
+const CASCADES: usize = 3;
+/// What the shadowed parts frames draw: three cascades, each holding every caster, so a sun that moves every
+/// frame draws all three every frame.
+const EVERY_CASCADE: ShadowSettings = ShadowSettings {
+    enabled: true,
+    cascades: CASCADES as u32,
+    dynamic_cascades: CASCADES as u32,
+    ..ShadowSettings::OFF
+};
 
 /// One pass of a hand-written frame: its label, whether it clears the colour, and its depth use (`Some(true)` writes
 /// and clears depth, `Some(false)` tests it read-only, `None` has no depth).
@@ -744,10 +760,235 @@ struct HandParts {
     list_staging: wgpu::Buffer,
     depth: wgpu::TextureView,
     sorted_bytes: Vec<u8>,
+    shadows: HandShadows,
+}
+
+/// The shadow side of a hand-written parts frame: the maps (sampled by the parts, and drawn by the caster pass
+/// from the renderer's own caster shader when a frame has shadows), their lists and uniforms.
+struct HandShadows {
+    pipeline: wgpu::RenderPipeline,
+    /// Group 0 of each cascade (its uniform) and group 1 (the instances and the cascades' lists).
+    cascade_groups: Vec<wgpu::BindGroup>,
+    instance_group: wgpu::BindGroup,
+    uniform: wgpu::Buffer,
+    lists: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    layers: Vec<wgpu::TextureView>,
+    sample_view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    /// Entries in one cascade's block of `lists`, and where each kind's segment starts in it: the renderer's layout
+    /// (`shadow/maps.rs`), so the draws cover the same instances.
+    stride: u64,
+    offsets: [u64; 4],
+    zeros: Vec<u8>,
+}
+
+impl HandShadows {
+    /// `live` is each mesh kind's live opaque instances, which size its segments as the renderer's do.
+    fn new(device: &wgpu::Device, regions: &[wgpu::Buffer; 2], instances: u64, live: [u32; 4]) -> Self {
+        let mut offsets = [0u64; 4];
+        let mut stride = 0u64;
+        for (offset, &len) in offsets.iter_mut().zip(&live) {
+            *offset = stride;
+            stride += u64::from(len.next_power_of_two().max(256));
+        }
+        let source = concat!(
+            include_str!("../src/shadow/shadow.wgsl"),
+            include_str!("../src/shadow/shadow_storage.wgsl")
+        );
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hand shadows"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hand shadows"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_shadow"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: 24,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Front),
+                ..wgpu::PrimitiveState::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hand shadow cascades"),
+            size: 1024,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cascade_groups = (0..CASCADES as u64)
+            .map(|i| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("hand shadow cascade"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &uniform,
+                            offset: i * 256,
+                            size: wgpu::BufferSize::new(64),
+                        }),
+                    }],
+                })
+            })
+            .collect();
+        let lists = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hand shadow lists"),
+            size: stride * CASCADES as u64 * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hand shadow staging"),
+            size: instances * 4 * CASCADES as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let instance_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hand shadow instances"),
+            layout: &pipeline.get_bind_group_layout(1),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: regions[0].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: regions[1].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: lists.as_entire_binding(),
+                },
+            ],
+        });
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hand shadow maps"),
+            size: wgpu::Extent3d {
+                width: 2048,
+                height: 2048,
+                depth_or_array_layers: CASCADES as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let sample_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..wgpu::TextureViewDescriptor::default()
+        });
+        let layers = (0..CASCADES as u32)
+            .map(|layer| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..wgpu::TextureViewDescriptor::default()
+                })
+            })
+            .collect();
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..wgpu::SamplerDescriptor::default()
+        });
+        Self {
+            pipeline,
+            cascade_groups,
+            instance_group,
+            uniform,
+            lists,
+            staging,
+            layers,
+            sample_view,
+            sampler,
+            stride,
+            offsets,
+            zeros: vec![0; (instances * 4) as usize * CASCADES],
+        }
+    }
+
+    /// The renderer's shadow work for a frame that draws every cascade, whose lists hold `counts[cascade][kind]`
+    /// casters: one staging write and a copy per non-empty list, the cascades' uniform, then a depth pass per
+    /// cascade with one draw per non-empty list.
+    fn record(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        (vertices, indices): (&wgpu::Buffer, &wgpu::Buffer),
+        counts: &[[u32; 4]; CASCADES],
+    ) {
+        let listed: u64 = counts.iter().flatten().map(|&n| u64::from(n) * 4).sum();
+        if let Some(size) = wgpu::BufferSize::new(listed) {
+            if let Some(mut view) = queue.write_buffer_with(&self.staging, 0, size) {
+                view.slice(..).copy_from_slice(&self.zeros[..listed as usize]);
+            }
+            let mut source = 0;
+            for (cascade, kinds) in counts.iter().enumerate() {
+                for (kind, &n) in kinds.iter().enumerate().filter(|(_, n)| **n > 0) {
+                    let bytes = u64::from(n) * 4;
+                    let target = (cascade as u64 * self.stride + self.offsets[kind]) * 4;
+                    encoder.copy_buffer_to_buffer(&self.staging, source, &self.lists, target, bytes);
+                    source += bytes;
+                }
+            }
+        }
+        queue.write_buffer(&self.uniform, 0, &[0; 1024]);
+        for (cascade, kinds) in counts.iter().enumerate() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.layers[cascade],
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.cascade_groups[cascade], &[]);
+            pass.set_vertex_buffer(0, vertices.slice(..));
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_bind_group(1, &self.instance_group, &[]);
+            for (kind, &n) in kinds.iter().enumerate().filter(|(_, n)| **n > 0) {
+                let first = (cascade as u64 * self.stride + self.offsets[kind]) as u32;
+                pass.draw_indexed(0..36, 0, first..first + n);
+            }
+        }
+    }
 }
 
 impl HandParts {
-    fn new(device: &wgpu::Device, instances: u64) -> Self {
+    fn new(device: &wgpu::Device, instances: u64, live: [u32; 4]) -> Self {
         let source = concat!(
             include_str!("../src/parts/frame.wgsl"),
             include_str!("../src/parts/parts.wgsl"),
@@ -812,9 +1053,10 @@ impl HandParts {
             false,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
+        let shadows = HandShadows::new(device, &regions, instances, live);
         let groups = |pipeline: &wgpu::RenderPipeline, list: &wgpu::Buffer| {
             let group = |index: u32, buffers: &[&wgpu::Buffer]| {
-                let entries: Vec<_> = buffers
+                let mut entries: Vec<_> = buffers
                     .iter()
                     .enumerate()
                     .map(|(binding, buffer)| wgpu::BindGroupEntry {
@@ -822,6 +1064,17 @@ impl HandParts {
                         resource: buffer.as_entire_binding(),
                     })
                     .collect();
+                if index == 0 {
+                    // The shadow maps and their sampler.
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&shadows.sample_view),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&shadows.sampler),
+                    });
+                }
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("hand parts"),
                     layout: &pipeline.get_bind_group_layout(index),
@@ -913,12 +1166,14 @@ impl HandParts {
             entries,
             depth,
             sorted_bytes: vec![0; (instances * 4) as usize],
+            shadows,
         }
     }
 
     /// The renderer's default passes with `opaque` and `transparent` instanced draws, after writing each kind's
     /// `visible` list entries (one staging write and a copy per list, as a culled frame uploads its lists), the frame
-    /// uniform and `sorted` transparent entries: the wgpu calls `Renderer::render_scene` makes.
+    /// uniform and `sorted` transparent entries: the wgpu calls `Renderer::render_scene` makes. With `shadows`, every
+    /// cascade is drawn first, its lists holding that many casters of each kind ([`HandShadows::record`]).
     fn frame(
         &self,
         device: &wgpu::Device,
@@ -926,6 +1181,7 @@ impl HandParts {
         target: &wgpu::TextureView,
         (opaque, transparent, sorted): (u32, u32, usize),
         visible: &[u32],
+        shadows: Option<&[[u32; 4]; CASCADES]>,
     ) -> wgpu::SubmissionIndex {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
@@ -940,6 +1196,10 @@ impl HandParts {
                 encoder.copy_buffer_to_buffer(&self.list_staging, source, &self.entries, source, bytes);
                 source += bytes;
             }
+        }
+        if let Some(counts) = shadows {
+            self.shadows
+                .record(queue, &mut encoder, (&self.vertices, &self.indices), counts);
         }
         queue.write_buffer(&self.frame, 0, &[0; FRAME_UNIFORM_SIZE as usize]);
         queue.write_buffer(&self.sorted, 0, &self.sorted_bytes[..sorted * 4]);
@@ -1042,7 +1302,39 @@ fn expected_calls(
     ((opaque_draws, runs, keys.len()), lists)
 }
 
+/// The casters of each kind the renderer draws into each cascade of `scene` (a CPU-only copy of the drawn one)
+/// seen from `camera` and lit by `lighting`, with [`EVERY_CASCADE`]: the culls the renderer makes.
+fn expected_shadows(
+    scene: &mut InstanceScene,
+    sets: &mut [VisibleSet; CASCADES],
+    camera: &Camera,
+    lighting: &SceneLighting,
+) -> [[u32; 4]; CASCADES] {
+    let (views, count) =
+        metallic_render::shadow::cascade_views(&EVERY_CASCADE, camera, 1.0, scene.origin(), lighting.light_direction());
+    assert_eq!(count, CASCADES);
+    let mut counts = [[0u32; 4]; CASCADES];
+    for ((view, casters), (set, kinds)) in views.iter().zip(sets.iter_mut().zip(&mut counts)) {
+        scene.cull_casters(view, *casters, set);
+        for (kind, n) in kinds.iter_mut().enumerate() {
+            *n = set.opaque(metallic_render::scene::MeshKind(kind as u16)).len() as u32;
+        }
+    }
+    counts
+}
+
+/// [`parts_frame_and_floor`] without shadows.
 fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usize) -> (u64, u64, DrawStats) {
+    frame_and_floor(context, parts, see_through, false)
+}
+
+/// The fewest allocations of a parts frame (as [`parts_frame_and_floor`]) that also draws every shadow cascade of
+/// [`EVERY_CASCADE`], the sun moving every frame, and of the same wgpu calls by hand.
+fn shadowed_frame_and_floor(context: &RenderContext, parts: usize, see_through: usize) -> (u64, u64, DrawStats) {
+    frame_and_floor(context, parts, see_through, true)
+}
+
+fn frame_and_floor(context: &RenderContext, parts: usize, see_through: usize, shadows: bool) -> (u64, u64, DrawStats) {
     let (device, queue) = (context.device(), context.queue());
     let mut game = support::scenes::Game::new();
     // Every kind opaque, and see-through blocks and balls mixed so the transparent pass makes several draws.
@@ -1060,24 +1352,29 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
         context,
         RendererSettings {
             gpu_timing: false,
+            shadows: if shadows { EVERY_CASCADE } else { ShadowSettings::OFF },
             ..RendererSettings::new(FORMAT, SIZE, SIZE)
         },
     )
     .expect("a renderer");
-    let hand = HandParts::new(device, parts as u64);
     // The same game culled on the CPU alone, so the hand-written frame makes exactly the calls the renderer makes
     // in the same frame, whichever of the two goes first.
     let mut mirror = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin())
         .expect("a mirror scene");
     mirror.sync(&mut game.dm);
     mirror.coalesce();
+    let live = [0u16, 1, 2, 3].map(|kind| mirror.draw_list(metallic_render::scene::MeshKind(kind)).len() as u32);
+    let hand = HandParts::new(device, parts as u64, live);
     let mut mirror_visible = metallic_render::VisibleSet::new();
+    let mut mirror_cascades: [VisibleSet; CASCADES] = Default::default();
     let mut sort_keys = Vec::new();
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
     for frame in 0..WARM_UP + FRAMES {
         let camera = orbiting_camera(frame);
         // The camera moves every frame, so every frame culls again and uploads each kind's visible list.
         let (calls, visible) = expected_calls(&mut mirror, &mut mirror_visible, &mut sort_keys, &camera);
+        // The sun moves every frame too, so every cascade is drawn again.
+        let casters = shadows.then(|| expected_shadows(&mut mirror, &mut mirror_cascades, &camera, &moving_sun(frame)));
         for renderer_turn in [frame % 2 == 0, frame % 2 != 0] {
             let (count, submission) = if renderer_turn {
                 let drawn = allocations_in(|| {
@@ -1094,9 +1391,14 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
                     calls,
                     "the mirror predicted another frame"
                 );
+                if let Some(casters) = casters.as_ref() {
+                    assert_eq!(stats.shadow_redrawn, 0b111, "every cascade is drawn");
+                    let expected: Vec<u32> = casters.iter().map(|kinds| kinds.iter().sum()).collect();
+                    assert_eq!(&stats.shadow_casters[..CASCADES], expected, "the mirror's casters");
+                }
                 drawn
             } else {
-                allocations_in(|| hand.frame(device, queue, target.view(), calls, &visible))
+                allocations_in(|| hand.frame(device, queue, target.view(), calls, &visible, casters.as_ref()))
             };
             // Each frame finishes before the next starts. The hand-written draws are degenerate, so on a software
             // rasteriser the renderer's frames take far longer, and with frames in flight wgpu's bookkeeping of
@@ -1114,10 +1416,11 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
     }
     let stats = renderer.draw_stats();
     eprintln!(
-        "parts frame ({} opaque + {} transparent draws, {} instances): allocations {}..{} (median {}); the same wgpu \
-         calls by hand {}..{} (median {})",
+        "parts frame ({} opaque + {} transparent + {} shadow draws, {} instances): allocations {}..{} (median {}); \
+         the same wgpu calls by hand {}..{} (median {})",
         stats.opaque_draws,
         stats.transparent_draws,
+        stats.shadow_draws,
         stats.instances,
         ours.iter().min().expect("frames"),
         ours.iter().max().expect("frames"),
@@ -1186,6 +1489,44 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
     );
 }
 
+/// Sun shadows (#82): a frame that also fits, culls, uploads and draws three cascades (the sun moving, so all three
+/// every frame) allocates no more than the same wgpu calls by hand, whatever the casters.
+#[test]
+fn a_shadowed_frame_allocates_nothing_beyond_wgpus_own() {
+    let Some(context) = support::gpu() else { return };
+    if InstanceBinding::for_context(&context) != InstanceBinding::Storage {
+        eprintln!("skipped: the hand-written frame is the storage path's");
+        return;
+    }
+    let (ours_small, floor_small, small) = shadowed_frame_and_floor(&context, 2_000, 25);
+    let (ours_large, floor_large, large) = shadowed_frame_and_floor(&context, 6_000, 8);
+    assert_eq!((small.shadow_cascades, large.shadow_cascades), (3, 3));
+    assert!(
+        large.shadow_instances > 2 * small.shadow_instances,
+        "the workloads differ enough: {small:?} {large:?}"
+    );
+    // The renderer makes the same wgpu calls as the hand-written frame, so they allocate the same, give or take what
+    // wgpu itself does differently with different buffers, sizes and offsets ([`WGPU_DATA_JITTER`]) and the
+    // machine's noise. That the culls, the fitting and the lists allocate nothing at all is checked exactly by
+    // `a_cull_allocates_nothing_once_warm`.
+    let allowed = WGPU_DATA_JITTER + machine_noise(&context);
+    for (ours, floor, stats) in [(ours_small, floor_small, small), (ours_large, floor_large, large)] {
+        assert!(
+            ours.abs_diff(floor) <= allowed,
+            "a shadowed frame allocates {ours} against {floor} by hand ({stats:?}) on {:?}",
+            context.capabilities().device_type
+        );
+    }
+}
+
+/// How many allocations wgpu's own work in a frame can differ by between two frames that make the same calls with
+/// different resources and data, on a hardware adapter. Measured on the dev PC (#82): the plain parts frame of
+/// 6,000 parts, every 25th see-through, makes 122 allocations against 119 by hand, and 2,000 parts with every 8th
+/// see-through 120 against 121, while the two workloads `a_parts_frame_allocates_nothing_beyond_wgpus_own` uses
+/// match exactly; with three shadow cascades the five workloads tried were +3, 0, +3, −3 and 0 from their hand-
+/// written frames. A per-frame allocation of the renderer's own would show in every workload in the same direction.
+const WGPU_DATA_JITTER: u64 = 3;
+
 /// Frames of moving parts seen from an orbiting camera, so every frame culls again and uploads the visible lists,
 /// on both instance paths (the vertex-buffer fallback's lists hold copies of the visible instances).
 #[test]
@@ -1237,6 +1578,9 @@ fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
         renderer.draw_stats()
     );
     assert!(renderer.draw_stats().culled_instances > 0, "nothing was culled");
+    // With the default shadows: the near cascades follow the camera, so they are drawn every frame.
+    assert_eq!(renderer.draw_stats().shadow_cascades, 3);
+    assert!(renderer.draw_stats().shadow_draws > 0, "no shadows were drawn");
     assert!(
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"
@@ -1253,6 +1597,7 @@ fn culled_frames(parts: usize) -> (u64, i64, u64) {
     let mut scene =
         InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).expect("a scene");
     let mut visible = metallic_render::VisibleSet::new();
+    let mut cascades: [VisibleSet; 3] = Default::default();
     let settings = metallic_render::CullSettings {
         min_screen_size: 2.0,
         ..metallic_render::CullSettings::default()
@@ -1273,12 +1618,27 @@ fn culled_frames(parts: usize) -> (u64, i64, u64) {
                 .expect("recoloured");
         }
         let camera = orbiting_camera(frame);
+        let sun = moving_sun(frame).light_direction();
         let before = live_bytes();
         let (count, stats) = allocations_in(|| {
             scene.sync(&mut game.dm);
             scene.coalesce();
             let view = metallic_render::CullView::for_camera(&camera, scene.origin(), 1920, 1080, &settings);
-            scene.cull(&view, &mut visible)
+            let stats = scene.cull(&view, &mut visible);
+            // The default shadows' cascades: each culls its own casters (the far one the static region's only),
+            // and the scene's noted shadow-caster changes are taken, as a frame does.
+            let (views, count) = metallic_render::shadow::cascade_views(
+                &ShadowSettings::default(),
+                &camera,
+                16.0 / 9.0,
+                scene.origin(),
+                sun,
+            );
+            for ((view, casters), set) in views.iter().zip(&mut cascades).take(count) {
+                scene.cull_casters(view, *casters, set);
+            }
+            scene.clear_shadow_changes();
+            stats
         });
         if frame >= WARM_UP {
             allocations += count;

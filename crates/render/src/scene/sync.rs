@@ -3,16 +3,16 @@
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, ConsumerId, DataModel, DirtyBits, DmError, Id};
 
-use crate::cull::{CullStats, CullView, VisibleSet};
+use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 
 use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
-use super::grid::Grid;
+use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
 use super::{
-    DEMOTE_REST, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED, PROMOTE_WINDOW,
-    REST_CHECKS_PER_FRAME, Region, SlotRef, SyncStats, UploadRange,
+    DEMOTE_REST, MAX_SHADOW_CHANGES, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED,
+    PROMOTE_WINDOW, REST_CHECKS_PER_FRAME, Region, SHADOW_FLAGS, SlotRef, SyncStats, UploadRange, is_shadow_caster,
 };
 
 /// What the scene asks the data model to record for it (removals and `CREATED` are always recorded).
@@ -73,6 +73,36 @@ pub struct InstanceScene {
     revision: u64,
     /// Instances that are not drawn but whose changes [`InstanceScene::sync`] reports (`Lighting`).
     watched: Vec<Id>,
+    /// Static shadow casters that changed (see the module documentation).
+    shadow: ShadowChanges,
+}
+
+/// The static region's shadow-caster changes since they were last taken: bounding spheres, origin-relative.
+#[derive(Debug, Default)]
+struct ShadowChanges {
+    spheres: Vec<(Vec3, f32)>,
+    /// Bumped when everything must count as changed.
+    epoch: u64,
+}
+
+impl ShadowChanges {
+    #[inline]
+    fn note(&mut self, instance: &GpuInstance) {
+        if !is_shadow_caster(instance) {
+            return;
+        }
+        if self.spheres.len() >= MAX_SHADOW_CHANGES {
+            self.everything();
+        } else {
+            self.spheres.push(bounding_sphere(instance));
+        }
+    }
+
+    /// Everything changed: the epoch moves and the notes so far say nothing more.
+    fn everything(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.spheres.clear();
+    }
 }
 
 impl InstanceScene {
@@ -101,6 +131,7 @@ impl InstanceScene {
             grid: Grid::default(),
             revision: 0,
             watched: Vec::new(),
+            shadow: ShadowChanges::default(),
         })
     }
 
@@ -142,6 +173,7 @@ impl InstanceScene {
         self.lists.clear();
         self.grid.clear();
         self.revision = self.revision.wrapping_add(1);
+        self.shadow.everything();
         self.rest_cursor = 0;
         dm.mark_all(self.consumer);
     }
@@ -187,6 +219,8 @@ impl InstanceScene {
             return false;
         }
         self.origin = (camera / ORIGIN_GRID).round() * ORIGIN_GRID;
+        // Every cached shadow was drawn in the old coordinates.
+        self.shadow.everything();
         for region in Region::ALL {
             for slot in 0..self.regions[region.index()].len() {
                 let owner = self.regions[region.index()]
@@ -292,6 +326,38 @@ impl InstanceScene {
         stats.cpu_time = start.elapsed();
         out.stats = stats;
         stats
+    }
+
+    /// Like [`InstanceScene::cull`], for a shadow view (a cascade, [`crate::shadow`]): writes the opaque shadow
+    /// casters `view` holds ([`super::is_shadow_caster`]), of both regions or the static one only, into `out`'s
+    /// opaque lists, roughly nearest the light first when `view` looks along the light. The see-through list stays
+    /// empty. Allocates nothing once `out` has grown to the scene's lists.
+    pub fn cull_casters(&mut self, view: &CullView, casters: Casters, out: &mut VisibleSet) -> CullStats {
+        let start = std::time::Instant::now();
+        self.apply_moves();
+        let capacities = self.lists.opaque.iter().map(|list| list.entries.len());
+        let mut stats = self.grid.cull_casters(view, casters, capacities, out);
+        stats.cpu_time = start.elapsed();
+        out.stats = stats;
+        stats
+    }
+
+    /// The bounding spheres (origin-relative) of the static shadow casters that changed since
+    /// [`InstanceScene::clear_shadow_changes`]: where each one was and is, if it casts (see the module
+    /// documentation). Only meaningful together with [`InstanceScene::shadow_epoch`].
+    pub fn shadow_changes(&self) -> &[(Vec3, f32)] {
+        &self.shadow.spheres
+    }
+
+    /// Changes whenever every shadow must count as changed: the scene was rebuilt, its origin moved, or more than
+    /// [`MAX_SHADOW_CHANGES`] changes piled up.
+    pub fn shadow_epoch(&self) -> u64 {
+        self.shadow.epoch
+    }
+
+    /// Forgets the noted shadow-caster changes (they have been looked at). Keeps the memory.
+    pub fn clear_shadow_changes(&mut self) {
+        self.shadow.spheres.clear();
     }
 
     /// Instances in the culling grid: every one on a draw list.
@@ -568,12 +634,20 @@ impl InstanceScene {
                 *target = instance;
             }
             statics.mark_dirty(to.slot);
+            // A static caster now: cached shadows that hold the static region get it.
+            self.shadow.note(&instance);
             stats.demoted += 1;
         }
     }
 
     /// Moves `id` from `from` to a new slot in `to`; the caller writes the instance there.
     fn migrate(&mut self, id: Id, from: SlotRef, to: Region) -> SlotRef {
+        if from.region == Region::Static
+            && let Some(instance) = self.regions[from.region.index()].instances.get(from.slot as usize)
+        {
+            // Promoted: its shadow leaves the cached cascades, which hold the static region only.
+            self.shadow.note(instance);
+        }
         self.regions[from.region.index()].release(from.slot);
         self.place(id, to)
     }
@@ -601,6 +675,12 @@ impl InstanceScene {
     }
 
     fn release_slot(&mut self, index: u32, slot: SlotRef) {
+        if slot.region == Region::Static
+            && let Some(instance) = self.regions[slot.region.index()].instances.get(slot.slot as usize)
+        {
+            // Its shadow leaves the cached cascades (removed, or promoted to the dynamic region).
+            self.shadow.note(instance);
+        }
         self.regions[slot.region.index()].release(slot.slot);
         if let Some(entry) = self.entries.get_mut(index as usize) {
             *entry = Entry::EMPTY;
@@ -616,8 +696,16 @@ impl InstanceScene {
         let mut moved = transform;
         if let Some(target) = region.instances.get_mut(slot.slot as usize) {
             // Besides the transform, only the mesh kind's own scale rule changes the box (a `Shape` change, which
-            // always changes the kind); a recolour or a new material leaves the culling grid alone.
+            // always changes the kind); a recolour or a new material leaves the culling grid alone. Its item also
+            // says whether it casts a shadow, so `CastShadow` updates it too.
             moved |= target.mesh_material >> 16 != instance.mesh_material >> 16;
+            let shadow_flags = (target.flags ^ instance.flags) & SHADOW_FLAGS;
+            moved |= shadow_flags & GpuInstance::CAST_SHADOW != 0;
+            if slot.region == Region::Static && (moved || shadow_flags != 0) {
+                // Its shadow may have changed: where it was and where it is now (see the module documentation).
+                self.shadow.note(target);
+                self.shadow.note(&instance);
+            }
             *target = instance;
         }
         if moved && region.mark_moved(slot.slot) {

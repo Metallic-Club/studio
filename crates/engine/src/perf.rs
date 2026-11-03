@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use metallic_render::{DrawStats, FrameTimings, Overlay, PassId};
+use metallic_render::{DrawStats, FrameTimings, MAX_CASCADES, Overlay, PassId};
 
 /// Frames [`PerfStats`] keeps by default: ten seconds at 60 fps.
 pub const DEFAULT_WINDOW: usize = 600;
@@ -36,8 +36,12 @@ pub struct FrameSample {
     /// The render hook's own work: scene sync, overlay, recording and submitting the frame. Waiting for a
     /// swapchain image and presenting are not counted (with vsync they are mostly waiting).
     pub render_ms: f32,
-    /// The part of `render_ms` spent culling ([`metallic_render::cull`]); 0 when the last cull was still valid.
+    /// The part of `render_ms` spent culling ([`metallic_render::cull`]): the camera's view and the shadow cascades
+    /// drawn; 0 when nothing was culled again.
     pub cull_ms: f32,
+    /// Bit `i` set when shadow cascade `i` was drawn this frame (otherwise its map was kept; see
+    /// [`metallic_render::shadow`]). [`PerfStats::record`] fills it from the frame's draws.
+    pub shadow_redrawn: u8,
 }
 
 fn ms(d: Duration) -> f32 {
@@ -53,6 +57,7 @@ impl FrameSample {
             physics_ms: ms(physics),
             render_ms: ms(render),
             cull_ms: 0.0,
+            shadow_redrawn: 0,
         }
     }
 
@@ -71,7 +76,9 @@ impl FrameSample {
 pub struct GpuSample {
     /// Each pass's time.
     pub passes_ms: [f32; PassId::COUNT],
-    /// The sum over the passes.
+    /// Each shadow cascade's time: 0 for a cascade whose map was kept that frame (or that is not in use).
+    pub shadow_ms: [f32; MAX_CASCADES],
+    /// The sum over the passes and the cascades.
     pub total_ms: f32,
 }
 
@@ -113,6 +120,13 @@ pub struct PerfSummary {
     pub gpu_pass_ms: [Distribution; PassId::COUNT],
     /// Which passes ran in any timed frame (bit `PassId as u8`).
     pub gpu_passes: u8,
+    /// GPU time per shadow cascade, the frames that kept its map counting 0, so the mean is what it costs per frame
+    /// and the median shows whether it is drawn in most frames.
+    pub gpu_shadow_ms: [Distribution; MAX_CASCADES],
+    /// The most shadow cascades in use in any timed frame: how many of [`PerfSummary::gpu_shadow_ms`] count.
+    pub gpu_cascades: usize,
+    /// In how many of the summarised frames each shadow cascade was drawn (the others kept their map).
+    pub shadow_redraws: [u32; MAX_CASCADES],
     /// The last frame's draws, instances and triangles.
     pub draws: DrawStats,
 }
@@ -138,7 +152,9 @@ impl PerfSummary {
     /// Writes the summary as the members of a JSON object, without the braces, so a report can put its own
     /// members around them (times in milliseconds): `frames`, `frame_ms`, `fps_p50`, `low_1pct_ms`,
     /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`), `gpu_ms` (`frames`, `total`, `passes` by
-    /// name) and `draws` (with `culled`). Each distribution is `{"mean", "p50", "p99", "max"}`.
+    /// name, `shadow` per cascade), `draws` (with `culled`) and `shadow` (the last frame's `cascades`, `casters`
+    /// per cascade, `draws`, `instances` and `triangles`, and per cascade the summarised frames it was drawn in,
+    /// `redraws`). Each distribution is `{"mean", "p50", "p99", "max"}`.
     pub fn write_json_members(&self, out: &mut String) {
         // Writing to a `String` cannot fail.
         let _ = self.write_members(out);
@@ -189,12 +205,19 @@ impl PerfSummary {
                 )?;
             }
         }
-        out.push_str("}},");
+        out.push_str("},\"shadow\":[");
+        for (i, cascade) in self.gpu_shadow_ms.iter().take(self.gpu_cascades).enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&dist(cascade));
+        }
+        out.push_str("]},");
         let d = &self.draws;
         write!(
             out,
             "\"draws\":{{\"prepass\":{},\"opaque\":{},\"transparent\":{},\"opaque_instances\":{},\
-             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{},\"culled\":{}}}",
+             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{},\"culled\":{}}},",
             d.prepass_draws,
             d.opaque_draws,
             d.transparent_draws,
@@ -203,6 +226,19 @@ impl PerfSummary {
             d.transparent_instances,
             d.transparent_triangles,
             d.culled_instances
+        )?;
+        let cascades = d.shadow_cascades as usize;
+        let list = |values: &[u32]| values.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        write!(
+            out,
+            "\"shadow\":{{\"cascades\":{},\"redraws\":[{}],\"casters\":[{}],\"draws\":{},\"instances\":{},\
+             \"triangles\":{}}}",
+            cascades,
+            list(&self.shadow_redraws[..cascades.min(MAX_CASCADES)]),
+            list(&d.shadow_casters[..cascades.min(MAX_CASCADES)]),
+            d.shadow_draws,
+            d.shadow_instances,
+            d.shadow_triangles
         )
     }
 }
@@ -288,6 +324,8 @@ pub struct PerfStats {
     frames: Ring<FrameSample>,
     gpu: Ring<GpuSample>,
     gpu_passes: u8,
+    /// The most shadow cascades in use in any timed frame.
+    gpu_cascades: usize,
     /// The frame index of the newest GPU timings recorded, so each timed frame counts once.
     last_gpu_frame: Option<u64>,
     draws: DrawStats,
@@ -309,6 +347,7 @@ impl PerfStats {
             frames: Ring::new(window),
             gpu: Ring::new(window),
             gpu_passes: 0,
+            gpu_cascades: 0,
             last_gpu_frame: None,
             draws: DrawStats::default(),
             scratch: Vec::with_capacity(window),
@@ -324,7 +363,10 @@ impl PerfStats {
     /// Records a frame: its CPU sample, the newest GPU timings the renderer has (recorded only if they are for a
     /// frame not seen yet) and what it drew.
     pub fn record(&mut self, sample: FrameSample, gpu: Option<&FrameTimings>, draws: DrawStats) {
-        self.frames.push(sample);
+        self.frames.push(FrameSample {
+            shadow_redrawn: draws.shadow_redrawn,
+            ..sample
+        });
         self.draws = draws;
         self.recorded += 1;
         let Some(timings) = gpu else {
@@ -342,6 +384,12 @@ impl PerfStats {
                 self.gpu_passes |= 1 << pass as u8;
             }
         }
+        for cascade in 0..timings.cascade_count().min(MAX_CASCADES) {
+            let ms = timings.cascade(cascade).unwrap_or(0.0);
+            gpu.shadow_ms[cascade] = ms;
+            gpu.total_ms += ms;
+        }
+        self.gpu_cascades = self.gpu_cascades.max(timings.cascade_count().min(MAX_CASCADES));
         self.gpu.push(gpu);
     }
 
@@ -351,6 +399,7 @@ impl PerfStats {
         self.frames.clear();
         self.gpu.clear();
         self.gpu_passes = 0;
+        self.gpu_cascades = 0;
         self.draws = DrawStats::default();
         self.recorded = 0;
     }
@@ -392,9 +441,15 @@ impl PerfStats {
             frames: self.frames.len(),
             gpu_frames: self.gpu.len(),
             gpu_passes: self.gpu_passes,
+            gpu_cascades: self.gpu_cascades,
             draws: self.draws,
             ..PerfSummary::default()
         };
+        for frame in self.frames.iter() {
+            for (cascade, redraws) in summary.shadow_redraws.iter_mut().enumerate() {
+                *redraws += u32::from(frame.shadow_redrawn >> cascade & 1);
+            }
+        }
         let (frames, gpu, scratch) = (&self.frames, &self.gpu, &mut self.scratch);
         summary.frame_ms = distribution(scratch, frames.iter().map(|f| f.frame_ms));
         // The slowest 1% are the end of the sorted frame times left in the scratch buffer.
@@ -413,6 +468,9 @@ impl PerfStats {
                 let i = pass as usize;
                 summary.gpu_pass_ms[i] = distribution(scratch, gpu.iter().map(|g| g.passes_ms[i]));
             }
+        }
+        for cascade in 0..summary.gpu_cascades {
+            summary.gpu_shadow_ms[cascade] = distribution(scratch, gpu.iter().map(|g| g.shadow_ms[cascade]));
         }
         summary
     }
@@ -475,7 +533,7 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
     let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
     // Wide enough for the graph and for the longest line of text (about 70 characters).
     let width = (GRAPH_FRAMES as f32 * BAR).max(72.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
-    let lines = 8.0;
+    let lines = 10.0;
     overlay.rect(x0 - 8.0, y0 - 8.0, width, lines * line + GRAPH_HEIGHT + 24.0, PANEL);
 
     let now = stats.last().copied().unwrap_or_default();
@@ -525,7 +583,40 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
         }
     }
     y += line;
+    // Shadow cascades: GPU time per cascade (the mean, which counts the frames that kept a map as 0, and the
+    // share of frames that drew it), then what the last frame drew and each map's casters.
+    let (mut x, _) = overlay.text_fmt(x0, y, SCALE, TEXT, format_args!("SHADOW"));
+    for cascade in 0..summary.gpu_cascades.min(MAX_CASCADES) {
+        let drawn = summary.shadow_redraws[cascade] as f32 / summary.frames.max(1) as f32;
+        (x, _) = overlay.text_fmt(
+            x,
+            y,
+            SCALE,
+            DIM,
+            format_args!(
+                "  C{cascade} {:.2} MS {:3.0}%",
+                summary.gpu_shadow_ms[cascade].mean,
+                drawn * 100.0
+            ),
+        );
+    }
+    y += line;
     let draws = summary.draws;
+    let casters = &draws.shadow_casters[..(draws.shadow_cascades as usize).min(MAX_CASCADES)];
+    let (mut x, _) = overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!(
+            "SHADOW {:6} DRAWS {:7} INST  CASTERS",
+            draws.shadow_draws, draws.shadow_instances
+        ),
+    );
+    for &n in casters {
+        (x, _) = overlay.text_fmt(x, y, SCALE, DIM, format_args!(" {n}"));
+    }
+    y += line;
     overlay.text_fmt(
         x0,
         y,
@@ -610,6 +701,7 @@ mod tests {
             physics_ms: 0.0,
             render_ms: frame_ms / 2.0,
             cull_ms: frame_ms / 20.0,
+            shadow_redrawn: 0,
         }
     }
 

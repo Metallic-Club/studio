@@ -11,8 +11,10 @@
 //! `--size <width>x<height>` (logical pixels; the scene's own by default), `--vsync` (off by default, so frame
 //! times show the work), `--overlay` (show the performance overlay while running), `--no-cull` (draw every part, the
 //! numbers before culling), `--view-distance <m>` and `--min-screen-size <px>` (the culling thresholds; infinite and
-//! 1 by default), `--fov <degrees>` (narrow or widen the scene's camera). `WGPU_BACKEND=dx12` (or `vulkan`, `gl`)
-//! picks the backend.
+//! 1 by default), `--fov <degrees>` (narrow or widen the scene's camera), `--moving-camera` (walk the camera through
+//! the scene instead of keeping it still), `--no-shadows`, `--shadow-cascades <n>`, `--shadow-resolution <texels>`,
+//! `--shadow-distance <m>` and `--dynamic-cascades <n>` (the sun's shadows; 3, 2048, 256 and 2 by default).
+//! `WGPU_BACKEND=dx12` (or `vulkan`, `gl`) picks the backend.
 //!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
 //! prints a JSON array. The JSON's fields are `metallic_engine::stress::BenchReport`'s; times are in milliseconds.
@@ -26,7 +28,9 @@ use metallic_render::CullSettings;
 fn usage() -> String {
     format!(
         "usage: stress --scene <name|all> [--frames N] [--warm-up N] [--seed N] [--size WxH] [--vsync] [--overlay]\n\
-         \x20             [--no-cull] [--view-distance M] [--min-screen-size PX] [--fov DEGREES]\n\
+         \x20             [--no-cull] [--view-distance M] [--min-screen-size PX] [--fov DEGREES] [--moving-camera]\n\
+         \x20             [--no-shadows] [--shadow-cascades N] [--shadow-resolution N] [--shadow-distance M]\n\
+         \x20             [--dynamic-cascades N]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -82,6 +86,21 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             "--view-distance" => options.cull.max_distance = decimal(it.next(), "--view-distance")?,
             "--min-screen-size" => options.cull.min_screen_size = decimal(it.next(), "--min-screen-size")?,
             "--fov" => options.field_of_view = Some(decimal(it.next(), "--fov")?),
+            "--moving-camera" => options.moving_camera = true,
+            "--no-shadows" => options.shadows.enabled = false,
+            "--shadow-cascades" => {
+                options.shadows.cascades =
+                    u32::try_from(number(it.next(), "--shadow-cascades")?).map_err(|e| e.to_string())?;
+            }
+            "--shadow-resolution" => {
+                options.shadows.resolution =
+                    u32::try_from(number(it.next(), "--shadow-resolution")?).map_err(|e| e.to_string())?;
+            }
+            "--shadow-distance" => options.shadows.distance = decimal(it.next(), "--shadow-distance")?,
+            "--dynamic-cascades" => {
+                options.shadows.dynamic_cascades =
+                    u32::try_from(number(it.next(), "--dynamic-cascades")?).map_err(|e| e.to_string())?;
+            }
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}
             other => return Err(format!("unknown argument {other:?}")),

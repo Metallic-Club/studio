@@ -1,7 +1,7 @@
 //! `Lighting`: the sun, the sky and the light that fills the scene.
 //!
 //! Names and meanings follow Roblox where Roblox has the property (`ClockTime`, `Brightness`, `Ambient`,
-//! `OutdoorAmbient`, `GeographicLatitude`, `GetSunDirection`, `GetMoonDirection`). The sky is Metallic's own: Roblox
+//! `OutdoorAmbient`, `GeographicLatitude`, `GlobalShadows`, `GetSunDirection`, `GetMoonDirection`). The sky is Metallic's own: Roblox
 //! draws it from a `Sky` object's textures, Metallic from a gradient between `SkyColor` overhead and `HorizonColor`
 //! at the horizon, so a game gets a sky without any assets (a textured sky can come later, on top).
 //!
@@ -173,6 +173,14 @@ static PROPS: &[PropMeta] = &[
         .desc(
             "The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. \
              It points below the horizon at night, when the moon, opposite it, lights the scene.",
+        ),
+    PropMeta::boolean("GlobalShadows", true)
+        .visual()
+        .group("Sun")
+        .order(5)
+        .desc(
+            "Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own \
+             CastShadow. Turning it off saves the cost of drawing the shadows.",
         ),
     PropMeta::color3("SkyColor", 0.53, 0.72, 0.95)
         .visual()
