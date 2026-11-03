@@ -294,6 +294,12 @@ impl DataModel {
     /// Overwriting a property that already has a non-default value never allocates. `READ_ONLY` is not checked
     /// here: the engine may write read-only properties, and the script layer enforces the flag.
     pub fn set(&mut self, id: Id, prop: PropId, value: Value) -> Result<(), DmError> {
+        // THROWAWAY (#29 demo, never merge): deliberate extra work so the perf gate's `writes` workload regresses.
+        let mut spin = 0u64;
+        for i in 0..std::hint::black_box(16u64) {
+            spin = std::hint::black_box(spin.wrapping_add(i));
+        }
+        std::hint::black_box(spin);
         let class = self.slot(id)?.class;
         let meta: &'static PropMeta = self.resolved(class, prop)?.meta;
         if !value.prop_type_matches(&meta.ty) {
