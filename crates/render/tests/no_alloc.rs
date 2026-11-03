@@ -204,6 +204,91 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
         floor.iter().max().unwrap(),
         median(floor.clone())
     );
+    // DIAGNOSTIC (temporary): which input makes lavapipe differ.
+    let measure = |f: &mut dyn FnMut() -> wgpu::SubmissionIndex, pacer: &mut Pacer| {
+        let mut counts = Vec::with_capacity(40);
+        for i in 0..40 {
+            let (count, submission) = allocations_in(&mut *f);
+            pacer.submitted(device, submission);
+            if i >= 10 {
+                counts.push(count);
+            }
+        }
+        (*counts.iter().min().unwrap(), *counts.iter().max().unwrap())
+    };
+    let renderer_view = target.view();
+    eprintln!(
+        "DIAG renderer {:?}",
+        measure(&mut || renderer.render(renderer_view), &mut pacer)
+    );
+    eprintln!(
+        "DIAG hand {:?}",
+        measure(
+            &mut || hand_written_frame(device, queue, renderer_view, &depth),
+            &mut pacer
+        )
+    );
+    let mut no_timing_settings = *renderer.settings();
+    no_timing_settings.passes = PassSet::default();
+    let mut second = Renderer::new(&context, no_timing_settings).unwrap();
+    eprintln!(
+        "DIAG second renderer {:?}",
+        measure(&mut || second.render(renderer_view), &mut pacer)
+    );
+    let mut single = Renderer::new(
+        &context,
+        RendererSettings {
+            gpu_timing: false,
+            passes: PassSet::EMPTY.with(metallic_render::PassId::Ui),
+            ..RendererSettings::new(FORMAT, SIZE, SIZE)
+        },
+    )
+    .unwrap();
+    eprintln!(
+        "DIAG ui-only renderer {:?}",
+        measure(&mut || single.render(renderer_view), &mut pacer)
+    );
+    eprintln!(
+        "DIAG empty submit {:?}",
+        measure(
+            &mut || {
+                let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("metallic frame"),
+                });
+                queue.submit(std::iter::once(encoder.finish()))
+            },
+            &mut pacer
+        )
+    );
+    eprintln!(
+        "DIAG ui-only hand {:?}",
+        measure(
+            &mut || {
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("metallic frame"),
+                });
+                let colors = [Some(wgpu::RenderPassColorAttachment {
+                    view: renderer_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })];
+                drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("ui"),
+                    color_attachments: &colors,
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                }));
+                queue.submit(std::iter::once(encoder.finish()))
+            },
+            &mut pacer
+        )
+    );
     // The minimum is a frame with no maintenance by wgpu in it: exactly the recording cost.
     let (ours, floor) = (*ours.iter().min().unwrap(), *floor.iter().min().unwrap());
     assert!(
