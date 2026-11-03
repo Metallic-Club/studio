@@ -107,4 +107,24 @@ mod render {
         /// Draws the frame.
         fn render(&mut self, frame: &mut RenderFrame<'_>);
     }
+
+    /// A hook shared with its owner: the engine draws through it while the owner (a benchmark, the Player) keeps a
+    /// handle to read its statistics or change its settings between frames.
+    impl<H: RenderHook> RenderHook for std::rc::Rc<std::cell::RefCell<H>> {
+        fn attach(&mut self, window: &Window) -> Result<(), RenderHookError> {
+            self.borrow_mut().attach(window)
+        }
+
+        fn detach(&mut self) {
+            self.borrow_mut().detach();
+        }
+
+        fn resize(&mut self, size: Size, scale_factor: f64) {
+            self.borrow_mut().resize(size, scale_factor);
+        }
+
+        fn render(&mut self, frame: &mut RenderFrame<'_>) {
+            self.borrow_mut().render(frame);
+        }
+    }
 }

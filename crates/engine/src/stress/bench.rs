@@ -16,17 +16,15 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use metallic_platform::{
-    AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, Size, Window, WindowConfig, WindowEvent,
-    WindowId,
+    AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
-use metallic_render::{ContextOptions, PassId, wgpu};
+use metallic_render::{ContextOptions, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
 use crate::engine::Engine;
 use crate::error::EngineError;
-use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
-use crate::perf::{Distribution, PerfSummary};
+use crate::perf::{PerfSummary, json_string};
 use crate::scene_renderer::SceneRenderer;
 use crate::windowed::{WindowedApp, WindowedOptions};
 use crate::{RunContext, StdOutput};
@@ -125,12 +123,12 @@ impl BenchReport {
     }
 
     fn write_json(&self, out: &mut String) -> std::fmt::Result {
-        let s = &self.summary;
-        write!(out, "{{\"scene\":{},", json_string(self.scene.name()))?;
         write!(
             out,
-            "\"seed\":{},\"frames\":{},\"warm_up\":{},",
-            self.seed, self.frames, self.warm_up
+            "{{\"scene\":{},\"seed\":{},\"warm_up\":{},",
+            json_string(self.scene.name()),
+            self.seed,
+            self.warm_up
         )?;
         write!(
             out,
@@ -153,83 +151,10 @@ impl BenchReport {
             "\"parts\":{},\"see_through\":{},\"lights\":{},\"moving\":{},\"in_view\":{},\"build_ms\":{:.1},",
             self.parts, self.see_through, self.lights, self.moving, self.in_view, self.build_ms
         )?;
-        write!(out, "\"frame_ms\":{},", json_distribution(&s.frame_ms))?;
-        write!(
-            out,
-            "\"fps_p50\":{:.1},\"low_1pct_ms\":{:.4},\"low_1pct_fps\":{:.1},",
-            s.fps_p50(),
-            s.low_1pct_ms,
-            s.low_1pct_fps()
-        )?;
-        write!(
-            out,
-            "\"cpu_ms\":{{\"script\":{},\"physics\":{},\"render\":{}}},",
-            json_distribution(&s.script_ms),
-            json_distribution(&s.physics_ms),
-            json_distribution(&s.render_ms)
-        )?;
-        write!(
-            out,
-            "\"gpu_ms\":{{\"frames\":{},\"total\":{},\"passes\":{{",
-            s.gpu_frames,
-            json_distribution(&s.gpu_total_ms)
-        )?;
-        let mut first = true;
-        for pass in PassId::ALL {
-            if s.gpu_pass_ran(pass) {
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                write!(
-                    out,
-                    "{}:{}",
-                    json_string(pass.name()),
-                    json_distribution(&s.gpu_pass_ms[pass as usize])
-                )?;
-            }
-        }
-        out.push_str("}},");
-        let d = &s.draws;
-        write!(
-            out,
-            "\"draws\":{{\"prepass\":{},\"opaque\":{},\"transparent\":{},\"opaque_instances\":{},\
-             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{}}}}}",
-            d.prepass_draws,
-            d.opaque_draws,
-            d.transparent_draws,
-            d.opaque_instances,
-            d.opaque_triangles,
-            d.transparent_instances,
-            d.transparent_triangles
-        )
+        self.summary.write_json_members(out);
+        out.push('}');
+        Ok(())
     }
-}
-
-fn json_distribution(d: &Distribution) -> String {
-    format!(
-        "{{\"mean\":{:.4},\"p50\":{:.4},\"p99\":{:.4},\"max\":{:.4}}}",
-        d.mean, d.p50, d.p99, d.max
-    )
-}
-
-/// `s` as a JSON string literal.
-fn json_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            c if u32::from(c) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 /// Builds `options.scene`, runs it in a window for the warm-up and the measured frames, and reports. Call it on the
@@ -250,7 +175,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         wgpu::PresentMode::AutoNoVsync
     });
     let renderer = Rc::new(RefCell::new(renderer));
-    engine.set_render_hook(Box::new(SharedHook(Rc::clone(&renderer))))?;
+    engine.set_render_hook(Box::new(Rc::clone(&renderer)))?;
     engine.start()?;
 
     let (width, height) = options.window.unwrap_or(options.scene.window_size());
@@ -298,27 +223,6 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         build_ms,
         summary,
     })
-}
-
-/// The renderer as the engine's hook, shared with the benchmark that reads its statistics.
-struct SharedHook(Rc<RefCell<SceneRenderer>>);
-
-impl RenderHook for SharedHook {
-    fn attach(&mut self, window: &Window) -> Result<(), RenderHookError> {
-        self.0.borrow_mut().attach(window)
-    }
-
-    fn detach(&mut self) {
-        self.0.borrow_mut().detach();
-    }
-
-    fn resize(&mut self, size: Size, scale_factor: f64) {
-        self.0.borrow_mut().resize(size, scale_factor);
-    }
-
-    fn render(&mut self, frame: &mut RenderFrame<'_>) {
-        self.0.borrow_mut().render(frame);
-    }
 }
 
 /// The windowed driver, plus the scene's motion and the frame count that ends the run.
@@ -391,12 +295,9 @@ impl AppHandler for BenchApp {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use metallic_render::PassId;
 
-    #[test]
-    fn json_strings_are_escaped() {
-        assert_eq!(json_string("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
-    }
+    use super::*;
 
     #[test]
     fn a_report_is_one_json_object() {

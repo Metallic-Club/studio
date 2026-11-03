@@ -4,19 +4,21 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use metallic_engine::metallic_core::DmError;
+use metallic_engine::metallic_core::{DataModel, DmError};
 use metallic_engine::metallic_platform::{
-    AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, PlatformError, Size, Window, WindowEvent,
-    WindowId,
+    AppHandler, ButtonState, DeviceEvent, EventLoopContext, GamepadEvent, KeyCode, Platform, PlatformError,
+    WindowEvent, WindowId,
 };
 use metallic_engine::metallic_script::OutputSink;
+use metallic_engine::perf::PerfSummary;
+use metallic_engine::stress::{StressError, StressScene};
 use metallic_engine::{
-    Engine, EngineConfig, EngineError, EngineMode, FrameStats, RenderFrame, RenderHook, RenderHookError, RunContext,
-    SceneRenderer, StdOutput, WindowedApp, WindowedOptions,
+    Engine, EngineConfig, EngineError, EngineMode, FrameStats, RunContext, SceneRenderer, StdOutput, WindowedApp,
+    WindowedOptions,
 };
 
 use crate::config::PlayerConfig;
-use crate::stats::{Draws, Recorder, Report};
+use crate::stats::Report;
 
 /// Why a [`Player`] could not be made or stopped early.
 #[derive(Debug, thiserror::Error)]
@@ -30,9 +32,25 @@ pub enum PlayerError {
     /// The scene's instances could not be made.
     #[error(transparent)]
     Game(#[from] DmError),
+    /// A stress scene could not be built.
+    #[error(transparent)]
+    Stress(#[from] StressError),
     /// The class registry lacks a class the scene needs.
     #[error("the game has no {0} class")]
     MissingClass(&'static str),
+}
+
+/// Seconds of a stress scene's motion per frame: its moving parts move by frame number, as in the engine's
+/// `stress` example, so every run moves them the same way whatever its frame rate.
+const STRESS_MOTION_FPS: f64 = 60.0;
+
+/// Moves a stress scene's moving parts to where they are in frame `frame` (from 1).
+fn animate(stress: Option<&StressScene>, dm: &mut DataModel, frame: u64) {
+    if let Some(stress) = stress
+        && let Err(error) = stress.animate(dm, frame as f64 / STRESS_MOTION_FPS)
+    {
+        log::warn!("could not move the stress scene's parts: {error}");
+    }
 }
 
 /// A game running in the engine: the embeddable Player.
@@ -43,7 +61,8 @@ pub enum PlayerError {
 pub struct Player<O: OutputSink = StdOutput> {
     engine: Engine<O>,
     config: PlayerConfig,
-    recorder: Rc<RefCell<Recorder>>,
+    renderer: Rc<RefCell<SceneRenderer>>,
+    stress: Option<StressScene>,
 }
 
 impl Player<StdOutput> {
@@ -60,12 +79,15 @@ impl<O: OutputSink> Player<O> {
             .with_mode(EngineMode::Windowed)
             .with_sources(config.scene.sources());
         let mut engine = Engine::with_output(engine_config, output)?;
-        config.scene.install(engine.data_model_mut())?;
-        let recorder = Rc::new(RefCell::new(Recorder::new(config.warmup_frames)));
-        engine.set_render_hook(Box::new(RecordingRenderer {
-            inner: SceneRenderer::default(),
-            recorder: Rc::clone(&recorder),
-        }))?;
+        let stress = config.scene.install(engine.data_model_mut())?;
+        let mut renderer = SceneRenderer::default();
+        if let Some(frames) = config.max_frames {
+            // The whole measured run, so the report summarises every measured frame.
+            renderer.set_perf_window(usize::try_from(frames).unwrap_or(usize::MAX).min(1 << 20));
+        }
+        renderer.set_overlay(config.overlay);
+        let renderer = Rc::new(RefCell::new(renderer));
+        engine.set_render_hook(Box::new(Rc::clone(&renderer)))?;
         if let Some(preset) = config.preset {
             log::info!("preset `{preset}` asked for; graphics settings are not applied until #84");
         }
@@ -73,7 +95,8 @@ impl<O: OutputSink> Player<O> {
         Ok(Self {
             engine,
             config,
-            recorder,
+            renderer,
+            stress,
         })
     }
 
@@ -92,15 +115,24 @@ impl<O: OutputSink> Player<O> {
         &mut self.engine
     }
 
+    /// The renderer the engine draws with: its frame statistics ([`SceneRenderer::perf`]), the performance
+    /// overlay ([`SceneRenderer::set_overlay`]) and its settings.
+    pub fn renderer(&self) -> &Rc<RefCell<SceneRenderer>> {
+        &self.renderer
+    }
+
     /// Runs one frame of `real_dt` of wall time, for a host that owns both the window and the loop (the engine's
-    /// window comes from [`Engine::attach_window`] then). Frame times are the host's to measure.
+    /// window comes from [`Engine::attach_window`] then). A stress scene's moving parts move first.
     pub fn frame(&mut self, real_dt: Duration) -> FrameStats {
+        let next = self.engine.frame_count() + 1;
+        animate(self.stress.as_ref(), self.engine.data_model_mut(), next);
         self.engine.frame(real_dt)
     }
 
-    /// What has been recorded so far: the draws of the last frame and, under [`PlayerApp`], the frame times.
-    pub fn samples(&self) -> Recorder {
-        self.recorder.borrow().clone()
+    /// The summary of the frames recorded so far (frame times, CPU and GPU times, draws): empty until the renderer
+    /// has drawn into a window.
+    pub fn summary(&self) -> PerfSummary {
+        self.renderer.borrow_mut().perf_mut().summary()
     }
 
     /// An event loop handler that opens [`PlayerConfig::window`] and runs this game in it, for a host that owns the
@@ -110,12 +142,12 @@ impl<O: OutputSink> Player<O> {
         if let Some(limit) = self.config.exit_after {
             options = options.with_exit_after(limit);
         }
-        // The cap is applied by `PlayerApp`, after it has timed the frame, so the sleep never counts as CPU time.
+        // The cap is applied by `PlayerApp`, after the frame, so `WindowedApp` runs uncapped.
         Ok(PlayerApp {
             app: WindowedApp::new(self.engine, options)?,
             config: self.config,
-            recorder: self.recorder,
-            previous_start: None,
+            renderer: self.renderer,
+            stress: self.stress,
             first_frame: None,
             last_frame_end: None,
         })
@@ -141,15 +173,15 @@ impl<O: OutputSink> std::fmt::Debug for Player<O> {
 
 /// Runs a [`Player`] in the platform's event loop: an [`AppHandler`].
 ///
-/// It is the engine's [`WindowedApp`] (window, input, frames) plus what the Player adds: frame timing for
-/// `--bench`, the frame cap, and stopping after [`PlayerConfig::max_frames`]. [`Player::run`] hands it to
+/// It is the engine's [`WindowedApp`] (window, input, frames) plus what the Player adds: a stress scene's motion,
+/// starting the measurement after [`PlayerConfig::warmup_frames`], the frame cap, stopping after
+/// [`PlayerConfig::max_frames`], and F3 to show or hide the performance overlay. [`Player::run`] hands it to
 /// [`Platform::run`]; a host with its own event loop forwards its callbacks here instead.
 pub struct PlayerApp<O: OutputSink = StdOutput> {
     app: WindowedApp<O>,
     config: PlayerConfig,
-    recorder: Rc<RefCell<Recorder>>,
-    /// When the previous frame started, to time the next one from.
-    previous_start: Option<Instant>,
+    renderer: Rc<RefCell<SceneRenderer>>,
+    stress: Option<StressScene>,
     first_frame: Option<Instant>,
     last_frame_end: Option<Instant>,
 }
@@ -172,6 +204,8 @@ impl<O: OutputSink> PlayerApp<O> {
             (Some(first), Some(last)) => last.duration_since(first),
             _ => Duration::ZERO,
         };
+        let mut renderer = self.renderer.borrow_mut();
+        let surface = renderer.renderer().map(|r| (r.settings().width, r.settings().height));
         Report {
             scene: self.config.scene,
             preset: self.config.preset,
@@ -179,7 +213,8 @@ impl<O: OutputSink> PlayerApp<O> {
             total_frames: engine.frame_count(),
             wall_time,
             game_time: engine.game_time(),
-            samples: self.recorder.borrow().clone(),
+            surface,
+            summary: renderer.perf_mut().summary(),
         }
     }
 
@@ -199,8 +234,6 @@ impl<O: OutputSink> PlayerApp<O> {
 
 impl<O: OutputSink> AppHandler for PlayerApp<O> {
     fn resumed(&mut self, cx: &mut dyn EventLoopContext) {
-        // Time spent in the background is not a frame.
-        self.previous_start = None;
         self.app.resumed(cx);
     }
 
@@ -209,6 +242,15 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
     }
 
     fn window_event(&mut self, cx: &mut dyn EventLoopContext, window: WindowId, event: WindowEvent) {
+        if let WindowEvent::Key(key) = &event
+            && key.key_code == KeyCode::F3
+            && key.state == ButtonState::Pressed
+            && !key.repeat
+        {
+            let mut renderer = self.renderer.borrow_mut();
+            let on = !renderer.overlay();
+            renderer.set_overlay(on);
+        }
         self.app.window_event(cx, window, event);
     }
 
@@ -230,25 +272,19 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
             return;
         }
         let start = Instant::now();
+        animate(self.stress.as_ref(), self.app.engine_mut().data_model_mut(), before + 1);
         self.app.about_to_wait(cx);
         let frame = self.app.engine().frame_count();
         if frame == before {
             // No frame ran: the first iteration only reads the clock, or the app is suspended or exiting.
             return;
         }
-        let end = Instant::now();
         self.first_frame.get_or_insert(start);
-        self.last_frame_end = Some(end);
-        {
-            let mut recorder = self.recorder.borrow_mut();
-            if recorder.measures(frame) {
-                recorder.cpu_ms.push(millis(end.duration_since(start)));
-                if let Some(previous) = self.previous_start {
-                    recorder.frame_ms.push(millis(start.duration_since(previous)));
-                }
-            }
+        self.last_frame_end = Some(Instant::now());
+        if frame == self.config.warmup_frames {
+            // The renderer has recorded every frame so far; the measurement starts after the warm-up.
+            self.renderer.borrow_mut().perf_mut().reset();
         }
-        self.previous_start = Some(start);
 
         if let Some(frames) = self.config.max_frames
             && frame >= self.config.warmup_frames.saturating_add(frames)
@@ -270,65 +306,6 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
     }
 }
 
-fn millis(duration: Duration) -> f64 {
-    duration.as_secs_f64() * 1000.0
-}
-
-/// The engine's [`SceneRenderer`], recording what each frame drew and how long the GPU took.
-struct RecordingRenderer {
-    inner: SceneRenderer,
-    recorder: Rc<RefCell<Recorder>>,
-}
-
-impl RenderHook for RecordingRenderer {
-    fn attach(&mut self, window: &Window) -> Result<(), RenderHookError> {
-        self.inner.attach(window)?;
-        if let Some(renderer) = self.inner.renderer() {
-            log::info!("renderer attached, {:?}", renderer.settings().color_format);
-        }
-        Ok(())
-    }
-
-    fn detach(&mut self) {
-        self.inner.detach();
-    }
-
-    fn resize(&mut self, size: Size, scale_factor: f64) {
-        self.inner.resize(size, scale_factor);
-        if size.width > 0 && size.height > 0 {
-            self.recorder.borrow_mut().surface = Some((size.width, size.height));
-        }
-    }
-
-    fn render(&mut self, frame: &mut RenderFrame<'_>) {
-        self.inner.render(frame);
-        let stats = self.inner.draw_stats();
-        let mut recorder = self.recorder.borrow_mut();
-        recorder.draws = Draws {
-            prepass: stats.prepass_draws,
-            opaque: stats.opaque_draws,
-            transparent: stats.transparent_draws,
-            instances: stats.instances,
-            triangles: stats.triangles,
-        };
-        if !recorder.measures(frame.stats.frame) {
-            return;
-        }
-        let Some(timings) = self.inner.renderer().and_then(|renderer| renderer.gpu_timings()) else {
-            return;
-        };
-        if recorder.last_gpu_frame == Some(timings.frame()) {
-            return;
-        }
-        recorder.last_gpu_frame = Some(timings.frame());
-        recorder.gpu_ms.push(f64::from(timings.total_ms()));
-        recorder.gpu_passes.clear();
-        recorder
-            .gpu_passes
-            .extend(timings.passes().iter().map(|pass| (pass.pass, f64::from(pass.gpu_ms))));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -336,8 +313,12 @@ mod tests {
     use metallic_engine::metallic_platform::raw_window_handle::{
         DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
     };
-    use metallic_engine::metallic_platform::{CursorGrab, LoopMode, WindowBackend, WindowConfig, WindowMode};
+    use metallic_engine::metallic_platform::{
+        CursorGrab, LoopMode, Size, Window, WindowBackend, WindowConfig, WindowMode,
+    };
     use metallic_engine::metallic_script::CollectOutput;
+    use metallic_engine::perf::FrameSample;
+    use metallic_engine::{RenderFrame, RenderHook};
 
     use super::*;
     use crate::scene::Scene;
@@ -394,18 +375,29 @@ mod tests {
         }
     }
 
-    /// A render hook that draws nothing: a fake window has no surface for the real renderer.
-    struct NoDrawing;
+    /// A render hook that draws nothing (a fake window has no surface for the real renderer) but records a frame
+    /// into the Player's statistics as the renderer would, with the frame number as its frame time.
+    struct NoDrawing(Rc<RefCell<SceneRenderer>>);
 
     impl RenderHook for NoDrawing {
-        fn render(&mut self, _frame: &mut RenderFrame<'_>) {}
+        fn render(&mut self, frame: &mut RenderFrame<'_>) {
+            let sample = FrameSample {
+                frame_ms: frame.stats.frame as f32,
+                ..FrameSample::default()
+            };
+            self.0.borrow_mut().perf_mut().record(sample, None, Default::default());
+        }
     }
 
     #[test]
     fn a_bench_run_measures_its_frames_after_the_warmup_then_exits() {
         let config = PlayerConfig::bench(Scene::Demo, 5).with_warmup_frames(3);
         let mut player = Player::with_output(config, CollectOutput::new()).expect("player");
-        player.engine_mut().set_render_hook(Box::new(NoDrawing)).expect("hook");
+        let renderer = Rc::clone(player.renderer());
+        player
+            .engine_mut()
+            .set_render_hook(Box::new(NoDrawing(renderer)))
+            .expect("hook");
         let mut app = player.into_app().expect("app");
         let mut cx = FakeLoop::default();
         app.resumed(&mut cx);
@@ -421,13 +413,38 @@ mod tests {
 
         let report = app.finish().expect("no error");
         assert_eq!(report.total_frames, 8, "3 warm-up frames and 5 measured ones");
-        assert_eq!(report.samples.cpu_ms.len(), 5);
-        assert_eq!(
-            report.samples.frame_ms.len(),
-            5,
-            "the first measured frame is timed from the last warm-up one"
-        );
+        assert_eq!(report.summary.frames, 5, "the warm-up frames are dropped");
+        assert_eq!(report.summary.frame_ms.max, 8.0, "the last frame recorded");
+        assert_eq!(report.summary.frame_ms.p50, 6.0);
+        assert_eq!(report.surface, None, "no device, no drawn size");
         assert!(report.wall_time > Duration::ZERO);
         assert!(report.game_time > 0.0);
+    }
+
+    #[test]
+    fn a_stress_scene_is_built_and_its_parts_move_every_frame() {
+        use metallic_engine::metallic_core::Value;
+        use metallic_engine::stress::StressKind;
+
+        let config = PlayerConfig::new(Scene::Stress(StressKind::Mobile));
+        assert_eq!(config.window.size, Size::new(1280, 720));
+        let mut player = Player::with_output(config, CollectOutput::new()).expect("player");
+        let dm = player.engine().data_model();
+        let workspace = dm
+            .service(dm.registry().class_id("Workspace").expect("Workspace"))
+            .expect("a Workspace");
+        let cframes = |dm: &DataModel| -> Vec<Value> {
+            dm.descendants(workspace)
+                .expect("descendants")
+                .filter_map(|id| dm.get_by_name(id, "CFrame").ok())
+                .collect()
+        };
+        let before = cframes(player.engine().data_model());
+        assert!(before.len() >= 5_000, "{}", before.len());
+        player.frame(Duration::from_millis(16));
+        let after = cframes(player.engine().data_model());
+        let moved = before.iter().zip(&after).filter(|(a, b)| a != b).count();
+        // The workspace's camera is a descendant too; only the 1% moving parts change.
+        assert_eq!(moved, 50);
     }
 }

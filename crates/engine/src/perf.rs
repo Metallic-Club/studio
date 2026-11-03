@@ -118,6 +118,97 @@ impl PerfSummary {
     }
 }
 
+impl PerfSummary {
+    /// Writes the summary as the members of a JSON object, without the braces, so a report can put its own
+    /// members around them (times in milliseconds): `frames`, `frame_ms`, `fps_p50`, `low_1pct_ms`,
+    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`), `gpu_ms` (`frames`, `total`, `passes` by name)
+    /// and `draws`. Each distribution is `{"mean", "p50", "p99", "max"}`.
+    pub fn write_json_members(&self, out: &mut String) {
+        // Writing to a `String` cannot fail.
+        let _ = self.write_members(out);
+    }
+
+    fn write_members(&self, out: &mut String) -> std::fmt::Result {
+        use std::fmt::Write as _;
+        let dist = |d: &Distribution| {
+            format!(
+                "{{\"mean\":{:.4},\"p50\":{:.4},\"p99\":{:.4},\"max\":{:.4}}}",
+                d.mean, d.p50, d.p99, d.max
+            )
+        };
+        write!(out, "\"frames\":{},\"frame_ms\":{},", self.frames, dist(&self.frame_ms))?;
+        write!(
+            out,
+            "\"fps_p50\":{:.1},\"low_1pct_ms\":{:.4},\"low_1pct_fps\":{:.1},",
+            self.fps_p50(),
+            self.low_1pct_ms,
+            self.low_1pct_fps()
+        )?;
+        write!(
+            out,
+            "\"cpu_ms\":{{\"script\":{},\"physics\":{},\"render\":{}}},",
+            dist(&self.script_ms),
+            dist(&self.physics_ms),
+            dist(&self.render_ms)
+        )?;
+        write!(
+            out,
+            "\"gpu_ms\":{{\"frames\":{},\"total\":{},\"passes\":{{",
+            self.gpu_frames,
+            dist(&self.gpu_total_ms)
+        )?;
+        let mut first = true;
+        for pass in PassId::ALL {
+            if self.gpu_pass_ran(pass) {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                write!(
+                    out,
+                    "{}:{}",
+                    json_string(pass.name()),
+                    dist(&self.gpu_pass_ms[pass as usize])
+                )?;
+            }
+        }
+        out.push_str("}},");
+        let d = &self.draws;
+        write!(
+            out,
+            "\"draws\":{{\"prepass\":{},\"opaque\":{},\"transparent\":{},\"opaque_instances\":{},\
+             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{}}}",
+            d.prepass_draws,
+            d.opaque_draws,
+            d.transparent_draws,
+            d.opaque_instances,
+            d.opaque_triangles,
+            d.transparent_instances,
+            d.transparent_triangles
+        )
+    }
+}
+
+/// `s` as a JSON string literal, for reports written by hand (the engine has no JSON dependency).
+pub fn json_string(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            c if u32::from(c) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn fps(ms: f32) -> f32 {
     if ms > 0.0 { 1000.0 / ms } else { 0.0 }
 }
@@ -528,6 +619,11 @@ mod tests {
         stats.record(sample(7.0), None, DrawStats::default());
         assert_eq!(stats.summary().low_1pct_ms, 7.0);
         assert_eq!(stats.recorded(), 1);
+    }
+
+    #[test]
+    fn json_strings_are_escaped() {
+        assert_eq!(json_string("a\"b\\c\nd\u{1}"), "\"a\\\"b\\\\c\\nd\\u0001\"");
     }
 
     #[test]

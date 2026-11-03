@@ -107,21 +107,31 @@ pub struct PlayerConfig {
     pub warmup_frames: u64,
     /// Stop after this much wall time, for smoke tests. `None` runs until the window is closed.
     pub exit_after: Option<Duration>,
+    /// Start with the performance overlay shown (F3 toggles it while running).
+    pub overlay: bool,
 }
 
 impl PlayerConfig {
-    /// `scene` in a 1280 by 720 window titled "Metallic Player", capped at [`DEFAULT_FRAME_CAP`], until the window
-    /// is closed.
+    /// `scene` in a window titled "Metallic Player" of the scene's size ([`Scene::window_size`]: 1280 by 720 for
+    /// the demo), capped at [`DEFAULT_FRAME_CAP`], until the window is closed.
     pub fn new(scene: Scene) -> Self {
+        let (width, height) = scene.window_size();
         Self {
             scene,
             preset: None,
-            window: WindowConfig::new("Metallic Player"),
+            window: WindowConfig::new("Metallic Player").with_size(width, height),
             frame_cap: Some(DEFAULT_FRAME_CAP),
             max_frames: None,
             warmup_frames: 0,
             exit_after: None,
+            overlay: false,
         }
+    }
+
+    /// Sets [`PlayerConfig::overlay`].
+    pub fn with_overlay(mut self, overlay: bool) -> Self {
+        self.overlay = overlay;
+        self
     }
 
     /// Sets [`PlayerConfig::preset`].

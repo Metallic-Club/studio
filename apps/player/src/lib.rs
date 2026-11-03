@@ -30,9 +30,11 @@
 //!
 //! # Measuring
 //!
-//! Under [`Player::run`] and [`PlayerApp`] the Player times every frame and records what the renderer drew and how
-//! long the GPU took ([`stats`]). `--bench <frames>` runs that many frames after a short warm-up and prints the
-//! [`Report`] as JSON.
+//! The renderer the Player installs keeps the engine's frame statistics ([`metallic_engine::perf`]): frame times
+//! with p50 / p99 / 1% low, script, physics and render CPU time, GPU time per pass and the draws per pass
+//! ([`Player::summary`]). F3 (or `--overlay`) shows them on screen. `--bench <frames>` runs that many frames after
+//! a short warm-up and prints the [`Report`] ([`stats`]) as JSON. `--scene` also runs the engine's stress scenes
+//! ([`metallic_engine::stress`]), whose moving parts the Player moves every frame.
 
 mod config;
 mod player;
@@ -41,7 +43,7 @@ pub mod stats;
 
 pub use config::{DEFAULT_FRAME_CAP, DEFAULT_WARMUP_FRAMES, PlayerConfig, Preset, UnknownPreset};
 pub use player::{Player, PlayerApp, PlayerError};
-pub use scene::{Scene, UnknownScene};
+pub use scene::{STRESS_SEED, Scene, UnknownScene};
 pub use stats::Report;
 
 /// The player's version, as shown in logs and in the platform UI.
@@ -167,8 +169,8 @@ mod tests {
     fn a_player_records_nothing_until_it_draws() {
         let mut player = demo();
         player.frame(FRAME);
-        let samples = player.samples();
-        assert!(samples.cpu_ms.is_empty() && samples.gpu_ms.is_empty());
-        assert_eq!(samples.surface, None, "no window, no renderer");
+        let summary = player.summary();
+        assert_eq!((summary.frames, summary.gpu_frames), (0, 0), "no window, no renderer");
+        assert!(player.renderer().borrow().renderer().is_none());
     }
 }
