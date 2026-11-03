@@ -44,11 +44,35 @@ pub(super) fn is_finite(value: &Value) -> bool {
     }
 }
 
-/// `value` clamped into `range` (per component for vectors). The registry has checked `min <= max`.
-fn clamp(value: Value, range: Option<(f64, f64)>) -> Value {
+/// `value` wrapped into `[min, max)`. The registry has checked that wrapping properties are numbers or ints and
+/// that `min < max`.
+fn wrap(value: Value, min: f64, max: f64) -> Value {
+    match value {
+        Value::Number(n) => {
+            let span = max - min;
+            let offset = (n - min).rem_euclid(span);
+            // `rem_euclid` can round a tiny negative offset up to `span` itself.
+            Value::Number(if offset < span { min + offset } else { min })
+        }
+        Value::Int(i) => {
+            // Float-to-int casts saturate, so huge bounds are safe; the maths is in i128 so nothing overflows.
+            let (lo, hi) = (min.ceil() as i128, max.ceil() as i128);
+            let span = (hi - lo).max(1);
+            Value::Int(((i128::from(i) - lo).rem_euclid(span) + lo) as i64)
+        }
+        other => other,
+    }
+}
+
+/// `value` clamped into `range` (per component for vectors), or wrapped into it when `wraps`. The registry has
+/// checked `min <= max`.
+fn clamp(value: Value, range: Option<(f64, f64)>, wraps: bool) -> Value {
     let Some((min, max)) = range else {
         return value;
     };
+    if wraps {
+        return wrap(value, min, max);
+    }
     match value {
         Value::Number(n) => Value::Number(n.max(min).min(max)),
         Value::Int(i) => {
@@ -310,7 +334,7 @@ impl DataModel {
     ///
     /// In order: checks the id (a destroyed instance is refused with [`DmError::Destroyed`], even when it can still
     /// be read) and the property; checks the type and that numbers are finite; runs a computed
-    /// property's setter (or refuses one without a setter); clamps numbers to the declared range; checks enum
+    /// property's setter (or refuses one without a setter); clamps numbers to the declared range (or wraps them into it, for a [`PropMeta::wrap`] property); checks enum
     /// items exist (and stores the registry's shared copy); checks a reference's target is alive and of the
     /// declared class. A value equal to the current one does nothing at all. Otherwise the value is stored (or the
     /// entry removed, when it equals the default), the dirty bits for the property's flags are set, each class
@@ -348,7 +372,7 @@ impl DataModel {
             setter(self, id, value)?;
             return Ok(());
         }
-        let value = self.checked(meta, clamp(value, meta.range))?;
+        let value = self.checked(meta, clamp(value, meta.range, meta.wraps))?;
 
         if *self.stored(id, prop, resolved) == value {
             return Ok(());

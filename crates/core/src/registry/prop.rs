@@ -208,8 +208,11 @@ pub struct PropMeta {
     pub widget: Widget,
     /// What the property does, for tooltips and the API docs.
     pub description: &'static str,
-    /// `(min, max)`: writes are clamped into this range (per component for vectors).
+    /// `(min, max)`: writes are clamped into this range (per component for vectors), or wrapped into
+    /// `[min, max)` when [`PropMeta::wraps`] is set.
     pub range: Option<(f64, f64)>,
+    /// Whether writes outside [`PropMeta::range`] wrap around instead of being clamped (see [`PropMeta::wrap`]).
+    pub wraps: bool,
     /// Older names that still work in scripts and scene files.
     pub aliases: &'static [&'static str],
     /// Set for a computed property, whose value comes from functions instead of storage.
@@ -233,6 +236,7 @@ impl PropMeta {
             widget: Widget::Default,
             description: "",
             range: None,
+            wraps: false,
             aliases: &[],
             computed: None,
             derived_from: &[],
@@ -322,6 +326,15 @@ impl PropMeta {
     /// Clamps writes into `min..=max`. The registry rejects `min > max` and a default outside the range.
     pub const fn range(mut self, min: f64, max: f64) -> Self {
         self.range = Some((min, max));
+        self
+    }
+
+    /// Wraps writes into `[min, max)` instead of clamping them, so `max` itself reads back as `min`: a clock that
+    /// runs from 0 up to (but not including) 24, or an angle in degrees. It replaces [`PropMeta::range`], and is for
+    /// number and int properties only: the registry rejects it elsewhere, and a `min` that is not below `max`.
+    pub const fn wrap(mut self, min: f64, max: f64) -> Self {
+        self.range = Some((min, max));
+        self.wraps = true;
         self
     }
 

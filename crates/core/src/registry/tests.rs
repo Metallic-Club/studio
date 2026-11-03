@@ -919,6 +919,32 @@ fn rejects_bad_ranges() {
 }
 
 #[test]
+fn rejects_bad_wraps() {
+    static C: ClassDesc = ClassDesc::new("C", None).props(&[
+        PropMeta::number("Empty", 1.0).wrap(1.0, 1.0),
+        PropMeta::number("Infinite", 1.0).wrap(0.0, f64::INFINITY),
+        PropMeta::boolean("Flag", false).wrap(0.0, 2.0),
+        PropMeta::number("AtTheEnd", 24.0).wrap(0.0, 24.0),
+        PropMeta::number("Fine", 23.0).wrap(0.0, 24.0),
+        PropMeta::int("FineToo", 0).wrap(0.0, 4.0),
+    ]);
+    let errs = class_errors(&[&C]);
+    assert_eq!(errs.len(), 5, "{errs:?}");
+    assert!(matches!(errs[0], RegistryError::InvalidWrap { prop: "Empty", .. }));
+    assert!(
+        matches!(errs[1], RegistryError::DefaultOutOfRange { prop: "Empty", .. }),
+        "an empty range has no room for its default either"
+    );
+    assert!(matches!(errs[2], RegistryError::InvalidWrap { prop: "Infinite", .. }));
+    assert!(matches!(errs[3], RegistryError::InvalidWrap { prop: "Flag", .. }));
+    // The upper bound is outside a wrapping range, so it cannot be the default.
+    assert!(matches!(
+        errs[4],
+        RegistryError::DefaultOutOfRange { prop: "AtTheEnd", .. }
+    ));
+}
+
+#[test]
 fn rejects_unknown_component() {
     static C: ClassDesc = ClassDesc::new("C", None).components(&["Rigidbody"]);
     assert_eq!(
