@@ -115,11 +115,11 @@ impl<O: OutputSink> ScriptHost<O> {
             _ => return Err(crate::context::INVALID_REQUIRE.to_owned()),
         };
         if path.is_empty() {
-            return Err(self.fail_module(module, &format!("{name} has no Source")));
+            return Err(self.module_failed(module, &format!("{name} has no Source")));
         }
         let language = match self.language_for_path(&path) {
             Ok(language) => language,
-            Err(error) => return Err(self.fail_module(module, &format!("{name}: {error}"))),
+            Err(error) => return Err(self.module_failed(module, &format!("{name}: {error}"))),
         };
         if language != requester.language {
             return Err(cross_language_message(&name));
@@ -129,7 +129,7 @@ impl<O: OutputSink> ScriptHost<O> {
         };
         let source = match loader.load(&path) {
             Ok(source) => source,
-            Err(error) => return Err(self.fail_module(module, &format!("{name}: {error}"))),
+            Err(error) => return Err(self.module_failed(module, &format!("{name}: {error}"))),
         };
         let chunk = match self.chunk(language, &path, &source) {
             Ok(chunk) => chunk,
@@ -140,7 +140,7 @@ impl<O: OutputSink> ScriptHost<O> {
                     line: Some(error.line),
                 };
                 self.output.error(&from, &error.to_string());
-                return Err(self.fail_module(module, &error.to_string()));
+                return Err(self.module_failed(module, &error.to_string()));
             }
         };
         // A record left from an earlier run of the instance (by `run_script`) goes first.
@@ -152,9 +152,9 @@ impl<O: OutputSink> ScriptHost<O> {
             Some(Err(failure)) => {
                 self.report(module, &failure);
                 let at = self.failure_position(module, &failure);
-                return Err(self.fail_module(module, &at));
+                return Err(self.module_failed(module, &at));
             }
-            None => return Err(self.fail_module(module, "the module could not start")),
+            None => return Err(self.module_failed(module, "the module could not start")),
         };
         let loader = self.adopt(module, language, thread);
         self.loaders.insert(loader, module);
@@ -189,11 +189,6 @@ impl<O: OutputSink> ScriptHost<O> {
             }
         }
         message
-    }
-
-    /// [`ScriptHost::module_failed`] for a module that never started.
-    fn fail_module(&mut self, module: Id, error: &str) -> String {
-        self.module_failed(module, error)
     }
 
     /// The module's thread returned and its backend keeps the value: the threads waiting for it resume.

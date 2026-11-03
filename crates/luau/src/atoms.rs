@@ -22,7 +22,8 @@ struct Table {
 
 static TABLE: LazyLock<RwLock<Table>> = LazyLock::new(|| RwLock::new(Table::default()));
 
-/// Names every script-visible member of `registry` (properties and their aliases, methods, signals) plus `extra`,
+/// Names every script-visible member of `registry` (properties and their aliases, methods, signals, callbacks) plus
+/// `extra`,
 /// so their strings get atoms. Past `i16::MAX` names, the rest go without (and take the slow path).
 pub(crate) fn register(registry: &Registry, extra: &[&str]) {
     let Ok(mut table) = TABLE.write() else {
@@ -48,6 +49,9 @@ pub(crate) fn register(registry: &Registry, extra: &[&str]) {
         }
         for signal in class.signals() {
             add(signal.desc.name);
+        }
+        for callback in class.callbacks() {
+            add(callback.desc.name);
         }
     }
     for name in extra {

@@ -1,9 +1,9 @@
 //! A game with a script host running the Luau backend, for the integration tests.
 #![allow(dead_code, reason = "each test file uses part of the helpers")]
 
-use metallic_core::{DataModel, Id};
+use metallic_core::{DataModel, Id, Value};
 use metallic_luau::LuauLanguage;
-use metallic_script::{OutputLevel, Phase, ScriptHost, ScriptRun};
+use metallic_script::{MemorySources, OutputLevel, Phase, RunContext, ScriptHost, ScriptRun};
 
 /// A new game and a host with the Luau backend.
 pub(crate) struct Game {
@@ -11,6 +11,8 @@ pub(crate) struct Game {
     pub(crate) host: ScriptHost,
     /// Game time, advanced by [`Game::frame`].
     pub(crate) now: f64,
+    /// The sources of the instances made by [`Game::add`], handed to the host by [`Game::start`].
+    pub(crate) sources: MemorySources,
 }
 
 impl Game {
@@ -19,7 +21,39 @@ impl Game {
         let mut host = ScriptHost::new();
         let luau = LuauLanguage::new(dm.registry().clone()).expect("Luau VM");
         host.register_language(Box::new(luau)).expect("register");
-        Self { dm, host, now: 0.0 }
+        Self {
+            dm,
+            host,
+            now: 0.0,
+            sources: MemorySources::new(),
+        }
+    }
+
+    /// A new `class` instance named `name` under `parent` (none when `None`); with `source`, its `Source` is
+    /// `Scripts/<name>.luau` holding that text.
+    pub(crate) fn add(&mut self, class: &str, parent: Option<Id>, name: &str, source: Option<&str>) -> Id {
+        let class = self.dm.registry().class_id(class).expect("class");
+        let id = self.dm.create(class).expect("create");
+        self.dm.set_name(id, name.into()).expect("name");
+        if let Some(source) = source {
+            let path = format!("Scripts/{name}.luau");
+            self.sources.insert(&path, source);
+            self.dm
+                .set_by_name(id, "Source", Value::String(path.into()))
+                .expect("Source");
+        }
+        if parent.is_some() {
+            self.dm.set_parent(id, parent).expect("parent");
+        }
+        id
+    }
+
+    /// Starts the game in one local context, with the sources of every instance [`Game::add`] made.
+    pub(crate) fn start(&mut self) {
+        let sources = std::mem::take(&mut self.sources);
+        self.host
+            .start_game(&mut self.dm, RunContext::Local, sources)
+            .expect("the game starts");
     }
 
     pub(crate) fn service(&self, class: &str) -> Id {

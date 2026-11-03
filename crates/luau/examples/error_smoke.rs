@@ -63,6 +63,31 @@ const CASES: &[(&str, &str, &str)] = &[
         "local ok = pcall(function() return workspace.Nope end)\nassert(not ok)\nerror('after pcall')",
         "after pcall",
     ),
+    // A C function that yields to the host where Luau cannot yield (raised by `lua_yield` in `ffi::run`).
+    (
+        "YieldBoundary",
+        "local f = Instance.new('BindableFunction')\nlocal t = setmetatable({}, { __index = function() return \
+         f:Invoke() end })\nprint(t.x)",
+        "attempt to yield across",
+    ),
+    // Errors the host raises where a thread waits (`Thread::resume_error`): a failed callback, a destroyed instance.
+    (
+        "InvokeError",
+        "local f = Instance.new('BindableFunction')\nf.OnInvoke = function() error('in callback') end\nf:Invoke()",
+        "in callback",
+    ),
+    (
+        "WaitDestroyed",
+        "local e = Instance.new('BindableEvent')\ntask.defer(function() e:Destroy() end)\ne.Event:Wait()",
+        "was destroyed",
+    ),
+    // Assigning a callback member something else than a function (raised from `__newindex`).
+    (
+        "CallbackValue",
+        "Instance.new('BindableFunction').OnInvoke = 5",
+        "Expected a function or nil",
+    ),
+    ("RequireValue", "require('Scripts/Door.luau')", "invalid argument"),
     // The interrupt (raised from Luau's interrupt callback).
     ("Timeout", "while true do end", "time budget"),
     // Out of memory (raised by Luau's allocator under the limit).

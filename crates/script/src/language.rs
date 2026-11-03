@@ -199,6 +199,11 @@ pub struct CompileError {
 /// - `task.cancel(thread)`: mark the thread dead and call [`HostContext::cancel`]. Refuse to cancel the running
 ///   thread (or one that is resuming another) yourself, with an error.
 /// - `Connect`, `Once`, `Disconnect`: [`HostContext::connect`], [`HostContext::once`], [`HostContext::disconnect`].
+/// - `require(module)`: [`HostContext::require`]; a loaded module's value comes from the backend's own table, and
+///   a module not loaded yet yields [`YieldReason::Require`] and asks again when resumed.
+/// - A method marked `invokes_callback` (`Invoke`): yield [`YieldReason::InvokeCallback`] with its arguments
+///   instead of running its `func`; the values the thread is resumed with are the method's results. Assigning a
+///   callback member (`OnInvoke = f`): [`HostContext::set_callback`] or [`HostContext::clear_callback`].
 ///
 /// [`Id`]: metallic_core::Id
 pub trait ScriptLanguage {

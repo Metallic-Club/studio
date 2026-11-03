@@ -1,6 +1,6 @@
 //! The backend's state that C functions and mlua callbacks reach during a call (through `ffi::with_shared`): the
-//! per-class member cache, the enum index, the thread and listener tables, and the registry references of the
-//! tables C functions push from.
+//! per-class member cache, the enum index, the thread, listener, callback and module tables, and the registry
+//! references of the tables C functions push from.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use metallic_core::{
     ClassId, EnumDesc, EnumItem, ListenerKey, MethodDesc, PropFlags, PropId, PropType, Registry, SignalId,
 };
-use metallic_script::ThreadId;
+use metallic_script::{ModuleKey, ThreadId, YieldReason};
 use mlua::{Function, MultiValue, Thread};
 
 use crate::ffi::EnumRef;
@@ -45,6 +45,8 @@ pub(crate) enum Member {
     Signal(SignalId),
     /// `GetPropertyChangedSignal`, which the backend provides on every instance.
     GetPropertyChangedSignal,
+    /// A callback member (`OnInvoke`), by its registry name: assigned, never read.
+    Callback(&'static str),
     /// No member of that name (indexing then looks for a child).
     Missing,
 }
@@ -160,6 +162,8 @@ pub(crate) struct Threads {
     /// Arguments kept in the VM for the first resume of a `task.defer` or `task.delay` thread, so tables and
     /// functions pass through unchanged (the host would only carry engine values).
     pending: HashMap<ThreadId, MultiValue>,
+    /// Threads loading a module, and the key their value goes under.
+    modules: HashMap<ThreadId, ModuleKey>,
 }
 
 impl Threads {
@@ -192,6 +196,22 @@ impl Threads {
             self.by_address.remove(&(thread.to_pointer() as usize));
         }
         self.pending.remove(&id);
+        self.modules.remove(&id);
+    }
+
+    /// Marks `id` as the thread loading the module whose value goes under `key`.
+    pub(crate) fn set_module(&mut self, id: ThreadId, key: ModuleKey) {
+        self.modules.insert(id, key);
+    }
+
+    /// The module key of a thread loading a module.
+    pub(crate) fn module_of(&self, id: ThreadId) -> Option<ModuleKey> {
+        self.modules.get(&id).copied()
+    }
+
+    /// The thread no longer loads a module (it returned or failed).
+    pub(crate) fn clear_module(&mut self, id: ThreadId) {
+        self.modules.remove(&id);
     }
 
     /// Keeps the arguments of a thread's first resume.
@@ -214,6 +234,7 @@ impl Threads {
         self.by_id.clear();
         self.by_address.clear();
         self.pending.clear();
+        self.modules.clear();
     }
 }
 
@@ -231,6 +252,13 @@ pub(crate) struct Shared {
     pub(crate) threads: RefCell<Threads>,
     /// The function stored under each listener key.
     pub(crate) listeners: RefCell<HashMap<ListenerKey, Function>>,
+    /// Functions assigned to callback members, as registry references (`lua_ref`): the assignment is a C function
+    /// (`__newindex`), which can anchor a value but not make an mlua handle.
+    pub(crate) callbacks: RefCell<HashMap<ListenerKey, c_int>>,
+    /// Module values, by the key the host chose.
+    pub(crate) modules: RefCell<HashMap<ModuleKey, mlua::Value>>,
+    /// What a C function that yields to the host yields for (`Invoke`), read when the yield reaches the backend.
+    pub(crate) pending_yield: RefCell<Option<YieldReason>>,
     /// Set by the interrupt when it stops a thread: the line it stopped at, if known.
     pub(crate) timed_out: Cell<Option<Option<u32>>>,
     /// Whether the running call's context is lent out (`ffi::with_ctx`), so no second `&mut` is made.
@@ -248,6 +276,9 @@ impl Shared {
             members: RefCell::new(Vec::new()),
             threads: RefCell::new(Threads::default()),
             listeners: RefCell::new(HashMap::new()),
+            callbacks: RefCell::new(HashMap::new()),
+            modules: RefCell::new(HashMap::new()),
+            pending_yield: RefCell::new(None),
             timed_out: Cell::new(None),
             ctx_lent: Cell::new(false),
         }
@@ -302,6 +333,9 @@ impl Shared {
         }
         if let Some(signal) = info.signal_id(name) {
             return Member::Signal(signal);
+        }
+        if let Some(callback) = info.callback(name) {
+            return Member::Callback(callback.name);
         }
         if name == GET_PROPERTY_CHANGED_SIGNAL {
             return Member::GetPropertyChangedSignal;

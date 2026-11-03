@@ -7,10 +7,10 @@
 use std::ffi::c_int;
 
 use metallic_core::{Args as MethodArgs, DataModel, Id, MethodCall};
-use metallic_script::SignalRef;
+use metallic_script::{SignalRef, YieldReason};
 
 use crate::convert::{read_script, read_value};
-use crate::ffi::{Args, Call, Out, Push, Raise, Ret, SignalHandle, lua_fn, with_ctx};
+use crate::ffi::{Args, Call, Kind, Out, Push, Raise, Ret, SignalHandle, lua_fn, with_ctx};
 use crate::shared::{GET_PROPERTY_CHANGED_SIGNAL, Member, Shared};
 
 lua_fn!(pub(crate) index => index_body);
@@ -61,6 +61,12 @@ fn index_body(call: &Call<'_>) -> Ret {
                 target: id,
                 signal: SignalRef::Signal(signal),
             }),
+            Member::Callback(name) => {
+                let class = dm.class_name(id).unwrap_or("Instance");
+                return Err(Raise(format!(
+                    "{name} is a callback member of {class}; you can only set the callback value, get is not available"
+                )));
+            }
             Member::Missing | Member::Unresolved => match dm.find_first_child(id, key, false)? {
                 Some(child) => Push::Instance(child),
                 None => return Err(not_member(dm, id, key)),
@@ -94,6 +100,20 @@ fn new_index_body(call: &Call<'_>) -> Ret {
                     .map_err(|e| Raise(format!("Unable to assign property {key}. {e}")))?;
                 Ok(Out::None)
             }
+            Member::Callback(name) => match args.kind(3) {
+                Kind::Function => {
+                    let listener = ctx.set_callback(id, name)?;
+                    Ok(Out::KeepRef { idx: 3, listener })
+                }
+                Kind::Nil | Kind::None => {
+                    ctx.clear_callback(id, name)?;
+                    Ok(Out::None)
+                }
+                _ => Err(Raise(format!(
+                    "Unable to assign {key}. Expected a function or nil, got {}",
+                    args.type_name(3)
+                ))),
+            },
             Member::Missing | Member::Unresolved => Err(not_member(ctx.dm, id, key)),
             Member::Method(_) | Member::Signal(_) | Member::GetPropertyChangedSignal => {
                 Err(Raise(format!("Unable to assign property {key}. It is not a property")))
@@ -129,6 +149,20 @@ fn invoke(call: &Call<'_>, id: Id, atom: i32, name: &str) -> Ret {
         match shared.member(class, atom, name) {
             Member::Method(method) => {
                 let values = method_args(args, shared)?;
+                if let Some(callback) = method.invokes {
+                    // The host runs the script function; this thread waits for its results.
+                    let reason = YieldReason::InvokeCallback {
+                        target: id,
+                        callback,
+                        args: values,
+                    };
+                    let mut pending = shared
+                        .pending_yield
+                        .try_borrow_mut()
+                        .map_err(|_| Raise::from("the engine API was re-entered"))?;
+                    *pending = Some(reason);
+                    return Ok(Out::Yield);
+                }
                 let mut method_call = MethodCall {
                     this: id,
                     args: MethodArgs::new(values),
@@ -149,7 +183,7 @@ fn invoke(call: &Call<'_>, id: Id, atom: i32, name: &str) -> Ret {
                     signal: SignalRef::PropertyChanged(prop),
                 })))
             }
-            Member::Prop(_) | Member::Signal(_) => {
+            Member::Prop(_) | Member::Signal(_) | Member::Callback(_) => {
                 let class = ctx.dm.class_name(id).unwrap_or("Instance");
                 Err(Raise(format!("{name} of {class} is not a method")))
             }

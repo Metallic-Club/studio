@@ -10,6 +10,9 @@
 //! [`lua_fn!`](crate::lua_fn) wraps a safe body `fn(&Call) -> Result<Out, Raise>` into a C function. The body reads
 //! its arguments through [`Args`], which never allocates in the VM, and returns what to push as an [`Out`]. The
 //! trampoline then pushes the results, or raises the error with the caller's position (`chunk:line: message`).
+//! Two results need the VM after the body: [`Out::Yield`] yields the thread to the host (`Invoke`), and
+//! [`Out::KeepRef`] anchors an argument in the registry (a function assigned to a callback member). Both happen in
+//! the trampoline, after `catch_unwind`, like pushing.
 //!
 //! # How errors travel, and why the panic strategy must be `unwind`
 //!
@@ -32,7 +35,8 @@
 //!   because mlua raises through its own Rust frames. So `dist` uses `unwind`, and `lib.rs` refuses to compile under
 //!   `abort` (`compile_error!` on `cfg(panic = "abort")`). `examples/error_smoke.rs` runs every error path (bad
 //!   arguments, unknown members, read-only writes, engine errors, stale instances, mlua callbacks, listener errors,
-//!   `pcall`, the interrupt, out of memory in Luau and in an engine call) and CI runs it in the `dist` profile.
+//!   `pcall`, a yield where Luau cannot yield, errors the host raises where a thread waits, the interrupt, out of
+//!   memory in Luau and in an engine call) and CI runs it in the `dist` profile.
 //!
 //! # Reaching the engine
 //!
@@ -325,6 +329,18 @@ pub(crate) enum Out {
     One(Push),
     /// Several values.
     Many(Vec<Push>),
+    /// Yield the running thread to the host, for the reason the body put in [`Shared::pending_yield`]. The values
+    /// the host resumes the thread with become the C function's results (Luau's `lua_yield` without a
+    /// continuation).
+    Yield,
+    /// Anchor argument `idx` (a function) in the registry under `listener`, in [`Shared::callbacks`]; no results.
+    /// Anchoring allocates, so it cannot happen in the body.
+    KeepRef {
+        /// The argument's stack index.
+        idx: c_int,
+        /// The key the host chose for it.
+        listener: ListenerKey,
+    },
 }
 
 impl From<Push> for Out {
@@ -667,6 +683,12 @@ pub(crate) unsafe fn run(state: *mut lua_State, body: fn(&Call<'_>) -> Ret) -> c
     };
     // The body only reads the stack, so no Luau exception can cross this boundary.
     match catch_unwind(AssertUnwindSafe(|| body(&call))) {
+        // SAFETY: `state` is running this call, as a C function called from Luau code; `lua_yield` raises (an
+        // exception, like any raise here) when the call cannot yield, such as inside a metamethod.
+        Ok(Ok(Out::Yield)) => unsafe { yield_to_host(state) },
+        // SAFETY: `state` is running this call and `idx` is one of its arguments; anchoring may raise out of
+        // memory, which unwinds through this frame to Luau.
+        Ok(Ok(Out::KeepRef { idx, listener })) => unsafe { keep_ref(state, shared, idx, listener) },
         // SAFETY: `state` is running this call; pushing may raise (out of memory), which unwinds through this
         // frame to Luau, with nothing to clean up here but `out`, whose destructor runs.
         Ok(Ok(out)) => unsafe { push_out(state, shared, out) },
@@ -693,6 +715,69 @@ unsafe fn raise(state: *mut lua_State, message: String) -> ! {
     }
 }
 
+/// Yields the running thread to the host with the marker of a C-function yield; `outcome` reads the reason from
+/// [`Shared::pending_yield`].
+///
+/// # Safety
+///
+/// `state` must be running a C function, which returns this function's result to Luau.
+unsafe fn yield_to_host(state: *mut lua_State) -> c_int {
+    // SAFETY: the caller's guarantee; two slots are reserved before pushing the two yielded values.
+    unsafe {
+        reserve(state, 2);
+        ffi::lua_pushlightuserdata(state, yield_marker().0);
+        ffi::lua_pushnumber(state, crate::outcome::CALL_YIELD);
+        ffi::lua_yield(state, 2)
+    }
+}
+
+/// Anchors value `idx` in the registry under `listener` (replacing, and unanchoring, what was there).
+///
+/// # Safety
+///
+/// `state` must be running a C function and `idx` must be one of its arguments.
+unsafe fn keep_ref(state: *mut lua_State, shared: Option<&Shared>, idx: c_int, listener: ListenerKey) -> c_int {
+    // SAFETY: the caller's guarantee; `lua_ref` copies the value into the registry without touching the stack, and
+    // `lua_unref` frees a reference this module made.
+    unsafe {
+        let reference = ffi::lua_ref(state, idx);
+        let replaced = shared
+            .and_then(|s| s.callbacks.try_borrow_mut().ok())
+            .map(|mut callbacks| callbacks.insert(listener, reference));
+        match replaced {
+            Some(Some(old)) => {
+                ffi::lua_unref(state, old);
+            }
+            Some(None) => {}
+            // No backend state to keep it in: let it go rather than leak it.
+            None => {
+                ffi::lua_unref(state, reference);
+            }
+        }
+        0
+    }
+}
+
+/// The function anchored under registry reference `reference` (see [`Out::KeepRef`]).
+pub(crate) fn referenced_function(lua: &Lua, reference: c_int) -> mlua::Result<Function> {
+    // SAFETY: the reference was made by `keep_ref` and is still anchored; the one pushed value is returned.
+    unsafe {
+        lua.exec_raw::<Function>((), |state| {
+            ffi::lua_rawgeti_(state, ffi::LUA_REGISTRYINDEX, reference);
+        })
+    }
+}
+
+/// Frees registry reference `reference` (see [`Out::KeepRef`]).
+pub(crate) fn unreference(lua: &Lua, reference: c_int) {
+    // SAFETY: the reference was made by `keep_ref` and is freed once; `lua_unref` does not touch the stack.
+    let _ = unsafe {
+        lua.exec_raw::<()>((), |state| {
+            ffi::lua_unref(state, reference);
+        })
+    };
+}
+
 /// Pushes the results of a C function and returns how many.
 ///
 /// # Safety
@@ -702,7 +787,8 @@ unsafe fn push_out(state: *mut lua_State, shared: Option<&Shared>, out: Out) -> 
     // SAFETY: the caller's guarantee.
     unsafe {
         match out {
-            Out::None => 0,
+            // Handled by `run`; nothing to push.
+            Out::None | Out::Yield | Out::KeepRef { .. } => 0,
             Out::One(push) => push_value(state, shared, push),
             Out::Many(pushes) => {
                 let mut count = 0;
