@@ -1,0 +1,15 @@
+[package]
+name = "metallic_physics"
+description = "Metallic 3D physics: bridge to the Box3D fork"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+metallic_core.workspace = true

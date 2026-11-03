@@ -1,0 +1,16 @@
+[package]
+name = "metallic_luau"
+description = "Metallic Luau scripting backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+metallic_core.workspace = true
+metallic_script.workspace = true

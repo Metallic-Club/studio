@@ -1,0 +1,20 @@
+[package]
+name = "metallic_player"
+description = "Metallic Player: runs games (a library embedded by Studio and Launcher, plus a binary)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["full"]
+# Everything a client needs. A dedicated server will depend on `metallic_engine` with fewer features instead.
+full = ["metallic_engine/render", "metallic_engine/physics", "metallic_engine/luau"]
+
+[dependencies]
+metallic_engine.workspace = true

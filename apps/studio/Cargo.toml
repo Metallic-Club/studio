@@ -1,0 +1,16 @@
+[package]
+name = "metallic_studio"
+description = "Metallic Studio: the editor (Windows, Linux, macOS)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+metallic_engine = { workspace = true, features = ["render", "physics", "luau"] }
+metallic_player.workspace = true
