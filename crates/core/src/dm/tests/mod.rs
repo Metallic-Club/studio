@@ -34,6 +34,11 @@ fn part_in(dm: &mut DataModel, ids: &Ids, parent: Id, name: &str) -> Id {
     p
 }
 
+/// The instance's children, in order.
+fn kids(dm: &DataModel, id: Id) -> Vec<Id> {
+    dm.children(id).expect("children").collect()
+}
+
 /// The notices recorded since the last call.
 fn take_notices(dm: &mut DataModel) -> Vec<Notice> {
     std::mem::take(&mut dm.notices)

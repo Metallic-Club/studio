@@ -188,12 +188,7 @@ mod tests {
         let dm = game();
         let root = dm.root().unwrap();
         assert_eq!(dm.class_name(root), Ok("DataModel"));
-        let names: Vec<&str> = dm
-            .children(root)
-            .unwrap()
-            .iter()
-            .map(|&s| dm.class_name(s).unwrap())
-            .collect();
+        let names: Vec<&str> = dm.children(root).unwrap().map(|s| dm.class_name(s).unwrap()).collect();
         assert_eq!(
             names,
             [

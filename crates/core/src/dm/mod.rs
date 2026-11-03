@@ -33,7 +33,7 @@ use std::sync::Arc;
 pub use changes::{ConsumerId, DirtyBits};
 pub use error::DmError;
 pub use signals::{BuiltinSignal, ConnectionId, Delivery, ListenerKey};
-pub use tree::Descendants;
+pub use tree::{Children, Descendants};
 
 use crate::{ClassBehavior, ClassId, ClassInfo, Id, PropId, Registry, ScriptValue, SignalId};
 use changes::Changes;
@@ -318,11 +318,17 @@ impl DataModel {
     }
 
     /// Runs `hook` with the behaviour of every class in `class`'s chain that has one, root class first. Stops if a
-    /// hook destroyed the instance. Classes without behaviours cost one flag check.
+    /// hook destroyed the instance. Classes without behaviours cost one flag check, inlined into the caller.
+    #[inline(always)]
     fn run_hooks(&mut self, id: Id, class: ClassId, hook: impl Fn(&'static dyn ClassBehavior, &mut Self)) {
-        if !self.classes.get(class.index()).is_some_and(|c| c.hooked) {
-            return;
+        if self.classes.get(class.index()).is_some_and(|c| c.hooked) {
+            self.run_hooks_chain(id, class, hook);
         }
+    }
+
+    /// The part of [`DataModel::run_hooks`] for a class that has behaviours.
+    #[inline(never)]
+    fn run_hooks_chain(&mut self, id: Id, class: ClassId, hook: impl Fn(&'static dyn ClassBehavior, &mut Self)) {
         // A second handle, so the chain can be walked while hooks borrow the data model mutably.
         let registry = Arc::clone(&self.registry);
         let Some(info) = registry.class(class) else {
@@ -340,8 +346,8 @@ impl DataModel {
 
     /// The seam for signals: every script-visible change reports here once, after it is complete, and every
     /// signal fired from class code passes through here. It queues the events the change causes; for an
-    /// instance nothing listens to, that costs one flag check.
-    #[inline]
+    /// instance nothing listens to, that costs one flag check, inlined into the caller (see `queue_events`).
+    #[inline(always)]
     fn notify(&mut self, notice: Notice) {
         #[cfg(test)]
         self.notices.push(notice.clone());

@@ -295,7 +295,8 @@ impl DataModel {
     /// here: the engine may write read-only properties, and the script layer enforces the flag.
     pub fn set(&mut self, id: Id, prop: PropId, value: Value) -> Result<(), DmError> {
         let class = self.slot(id)?.class;
-        let meta: &'static PropMeta = self.resolved(class, prop)?.meta;
+        let resolved = self.resolved(class, prop)?;
+        let meta: &'static PropMeta = resolved.meta;
         if !value.prop_type_matches(&meta.ty) {
             return Err(DmError::TypeMismatch {
                 prop: meta.name,
@@ -320,7 +321,6 @@ impl DataModel {
         }
         let value = self.checked(meta, clamp(value, meta.range))?;
 
-        let resolved = self.resolved(class, prop)?;
         if *self.stored(id, prop, resolved) == value {
             return Ok(());
         }

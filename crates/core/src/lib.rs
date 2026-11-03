@@ -24,8 +24,8 @@ pub use glam;
 
 pub use args::Args;
 pub use dm::{
-    BuiltinSignal, ConnectionId, ConsumerId, DataModel, Delivery, Descendants, DirtyBits, DmError, ListenerKey,
-    MAX_CONSUMERS,
+    BuiltinSignal, Children, ConnectionId, ConsumerId, DataModel, Delivery, Descendants, DirtyBits, DmError,
+    ListenerKey, MAX_CONSUMERS,
 };
 pub use enum_item::EnumItem;
 pub use id::Id;
