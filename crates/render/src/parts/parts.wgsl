@@ -171,13 +171,11 @@ fn shade(in: VertexOut) -> Shaded {
     var out: Shaded;
     out.body = diffuse / PI * light + diffuse * hemisphere(n.y) + albedo * row.surface.z;
     out.specular = distribution * visibility * fresnel * light + env_brdf(f0, roughness, n_dot_v) * hemisphere(reflect(-v, n).y);
-    // A constant per pipeline: frames that draw no local light use pipelines made without the loop, which would
-    // otherwise cost every pixel registers (and so occupancy) even when it runs no iteration.
-    if LOCAL_LIGHTS {
-        let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);
-        out.body += local.body;
-        out.specular += local.specular;
-    }
+    // Frames that draw no local light use pipelines made with lights_off.wgsl, whose `local_lighting` adds nothing
+    // and binds nothing (parts/mod.rs).
+    let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);
+    out.body += local.body;
+    out.specular += local.specular;
     return out;
 }
 

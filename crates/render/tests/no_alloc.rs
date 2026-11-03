@@ -992,7 +992,8 @@ impl HandParts {
         let source = concat!(
             include_str!("../src/parts/frame.wgsl"),
             include_str!("../src/parts/parts.wgsl"),
-            include_str!("../src/parts/lights.wgsl"),
+            // A frame without local lights draws with lights_off.wgsl (`src/parts/mod.rs`), as the renderer does.
+            include_str!("../src/parts/lights_off.wgsl"),
             include_str!("../src/parts/instance_storage.wgsl")
         );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1037,12 +1038,7 @@ impl HandParts {
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(entry_point),
-                    // The variant the renderer draws a frame without local lights with (`LOCAL_LIGHTS` in
-                    // src/parts/lights.wgsl), so both frames run the same shader.
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[("LOCAL_LIGHTS", 0.0), ("LOCAL_SHADOWS", 0.0)],
-                        ..wgpu::PipelineCompilationOptions::default()
-                    },
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: FORMAT,
                         blend,
@@ -1060,39 +1056,6 @@ impl HandParts {
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
         let shadows = HandShadows::new(device, &regions, instances, live);
-        // The local lights' resources (`src/lights`), which a frame without lights binds and never writes.
-        let light_uniform = buffer(16384, wgpu::BufferUsages::UNIFORM);
-        let tile_uniform = buffer(6144, wgpu::BufferUsages::UNIFORM);
-        let texture = |format: wgpu::TextureFormat, width: u32, height: u32, usage: wgpu::TextureUsages| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("hand lights"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage,
-                    view_formats: &[],
-                })
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        };
-        let clusters = texture(
-            wgpu::TextureFormat::R32Uint,
-            1024,
-            58,
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        );
-        let atlas = texture(
-            wgpu::TextureFormat::Depth32Float,
-            2048,
-            2048,
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        );
         let groups = |pipeline: &wgpu::RenderPipeline, list: &wgpu::Buffer| {
             let group = |index: u32, buffers: &[&wgpu::Buffer]| {
                 let mut entries: Vec<_> = buffers
@@ -1112,23 +1075,6 @@ impl HandParts {
                     entries.push(wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::Sampler(&shadows.sampler),
-                    });
-                    // The local lights, their clusters, the shadow tiles and the atlas.
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: light_uniform.as_entire_binding(),
-                    });
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: wgpu::BindingResource::TextureView(&clusters),
-                    });
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: tile_uniform.as_entire_binding(),
-                    });
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: wgpu::BindingResource::TextureView(&atlas),
                     });
                 }
                 device.create_bind_group(&wgpu::BindGroupDescriptor {

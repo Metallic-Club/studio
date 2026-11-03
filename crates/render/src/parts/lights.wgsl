@@ -11,11 +11,11 @@ const CLUSTER_TEXTURE_WIDTH: u32 = 1024u;
 // MIN_DISTANCE² in lights/mod.rs.
 const MIN_DISTANCE_SQUARED: f32 = 0.01;
 
-// Constants per pipeline (parts/mod.rs makes the variants and picks one per frame): whether it shades local lights
-// at all, and their shadows. Code that is there costs every pixel registers, and so occupancy, even in frames that
-// never run it: measured on `many_lights`, the light loop costs an unlit frame's opaque pass 0.08 to 0.16 ms, and
-// the shadow lookup in it a quarter of the loop's time with no shadowed light drawn.
-override LOCAL_LIGHTS: bool = true;
+// A constant per pipeline (parts/mod.rs makes the variants and picks one per frame): whether it shades the local
+// lights' shadows. Code that is there costs every pixel registers, and so occupancy, even in frames that never run
+// it: measured on `many_lights`, the shadow lookup costs a quarter of the light loop's time with no shadowed light
+// drawn. (Frames without local lights use lights_off.wgsl instead of this file: the loop alone costs an unlit
+// frame's opaque pass 0.08 to 0.16 ms.)
 override LOCAL_SHADOWS: bool = true;
 
 // `GpuLight` in lights/gpu.rs.

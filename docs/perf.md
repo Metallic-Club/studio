@@ -593,9 +593,10 @@ A second pair of runs (off, Medium) agreed within 3% (render CPU p99 within 0.2 
 - **Shading cost**: the opaque pass grows from 0.40 to 1.90 ms at Medium: every pixel loops over its cluster's
   lights (13 on average in the lit clusters here, a dense town of lamps 8 to 24 m in range). Code that is in the
   shader costs registers, and so occupancy, even when it does not run, so the part pipelines are made in three
-  variants (pipeline-overridable constants, all compiled when the renderer is made) and each frame uses the cheapest
-  that draws it: **no local lights** (an unlit frame costs exactly what it did before), **lights without shadows**
-  (1.45 ms here), or **lights with shadows** (1.90 ms; the shadow lookup in the loop costs 0.45 ms of occupancy even
+  variants (all compiled when the renderer is made) and each frame uses the cheapest that draws it: **no local
+  lights** (a shader module without them, `lights_off.wgsl`, and a frame group without their resources, so an unlit
+  frame binds and draws exactly what it did before #83), **lights without shadows** (a pipeline-overridable
+  constant turns the shadow lookup off; 1.45 ms here), or **lights with shadows** (1.90 ms; the shadow lookup in the loop costs 0.45 ms of occupancy even
   though only 3 of the 128 lights have shadows). Measured on the way: a second loop for the shadowed lights cost
   more (2.74 ms), not less, and a 3 × 3 loop of shadow taps instead of 4 fixed taps 0.06 ms more.
 - **The cluster cap**: at 32 per cluster (the first Medium setting) the town overflowed 194 entries a frame (lights
