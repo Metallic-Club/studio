@@ -32,9 +32,9 @@ fixture and dropping the data model afterwards do not.
 | Workload | Measured work | `Ir` at introduction |
 | --- | --- | ---: |
 | `reads` | Ten passes reading seven properties (`CFrame`, `Size`, `Color`, `Transparency`, `Anchored`, `CanCollide`, `Material`) of every part: 70,000 typed reads, three of the seven properties at their default | 8,185,762 |
-| `writes` | Ten passes setting every part's `CFrame`; every write changes the value: 10,000 writes | 4,746,781 |
-| `create` | 1,000 more parts, each created and parented into the folder | 629,328 |
-| `destroy` | The 1,000 parts destroyed one by one, in creation order | 11,619,843 |
+| `writes` | Ten passes setting every part's `CFrame`; every write changes the value: 10,000 writes | 4,746,793 |
+| `create` | 1,000 more parts, each created and parented into the folder | 629,340 |
+| `destroy` | The 1,000 parts destroyed one by one, in creation order | 11,619,855 |
 | `clone` | `clone_tree` of the folder with its 1,000 parts | 1,268,272 |
 | `drain_changes` | One consumer draining 50 changed parts of 5,000 | 1,934 |
 
@@ -57,8 +57,12 @@ when the tree's child lists are next tuned.)
    count fails the job**: gungraun on its own treats a missing baseline as "nothing to compare" and passes, and a
    zero count means the measured function was not found. The comparison table goes to the job summary.
 
-The job takes about three minutes, most of it compiling. Pushes to `main` that touch the same paths only build, so
-the cargo cache is saved from `main` and restored by PRs, as in `ci.yml`.
+Base and head build into separate target folders. Cargo names a workspace crate's artifacts by its path relative to
+the workspace root, which is the same on both sides, so a shared folder would let the second build reuse the first
+one's binary and the gate would compare the base with itself.
+
+The job takes three to five minutes, most of it compiling. Pushes to `main` that touch the same paths only build,
+so the cargo cache is saved from `main` and restored by PRs, as in `ci.yml`.
 
 ### When the base cannot build the workloads
 
