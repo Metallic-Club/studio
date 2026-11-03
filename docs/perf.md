@@ -21,7 +21,9 @@ passes). There are three suites, each with its own table in the job summary:
   `engine_empty_frames` is 100 headless frames (`Engine::tick`) of a started server game with no scripts and the
   Luau backend registered: the clock, the four script steps with nothing due, the `RunService` watch checks, and the
   empty simulation and render steps. It builds with the dedicated server's features
-  (`--no-default-features --features physics,luau`), so no renderer or window code is compiled in.
+  (`--no-default-features --features physics,luau`), so no renderer or window code is compiled in. At introduction
+  (#73; ubuntu-24.04 runner, Rust 1.99.1, gungraun 0.20.0, release profile) it counted 173,536 `Ir`: about 1,700
+  instructions per empty frame.
 
 A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
 checked (each must be present and above zero) and reported as `NEW (not gated)`, and the next PR is gated against
