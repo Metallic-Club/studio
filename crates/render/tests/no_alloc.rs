@@ -118,7 +118,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const WARM_UP: usize = 30;
 const FRAMES: usize = 100;
 /// The size of the frame uniform the parts and the sky read (`Frame` in `src/parts/frame.wgsl`).
-const FRAME_UNIFORM_SIZE: u64 = 656;
+const FRAME_UNIFORM_SIZE: u64 = 704;
 /// The shadow cascades the shadowed parts frames draw, all of them every frame.
 const CASCADES: usize = 3;
 /// What the shadowed parts frames draw: three cascades, each holding every caster, so a sun that moves every
@@ -992,6 +992,7 @@ impl HandParts {
         let source = concat!(
             include_str!("../src/parts/frame.wgsl"),
             include_str!("../src/parts/parts.wgsl"),
+            include_str!("../src/parts/lights.wgsl"),
             include_str!("../src/parts/instance_storage.wgsl")
         );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1054,6 +1055,39 @@ impl HandParts {
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
         let shadows = HandShadows::new(device, &regions, instances, live);
+        // The local lights' resources (`src/lights`), which a frame without lights binds and never writes.
+        let light_uniform = buffer(16384, wgpu::BufferUsages::UNIFORM);
+        let tile_uniform = buffer(6144, wgpu::BufferUsages::UNIFORM);
+        let texture = |format: wgpu::TextureFormat, width: u32, height: u32, usage: wgpu::TextureUsages| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("hand lights"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let clusters = texture(
+            wgpu::TextureFormat::R32Uint,
+            1024,
+            58,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let atlas = texture(
+            wgpu::TextureFormat::Depth32Float,
+            2048,
+            2048,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
         let groups = |pipeline: &wgpu::RenderPipeline, list: &wgpu::Buffer| {
             let group = |index: u32, buffers: &[&wgpu::Buffer]| {
                 let mut entries: Vec<_> = buffers
@@ -1073,6 +1107,23 @@ impl HandParts {
                     entries.push(wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::Sampler(&shadows.sampler),
+                    });
+                    // The local lights, their clusters, the shadow tiles and the atlas.
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: light_uniform.as_entire_binding(),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&clusters),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: tile_uniform.as_entire_binding(),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::TextureView(&atlas),
                     });
                 }
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1899,4 +1950,238 @@ fn nothing_accumulates_over_overlay_frames() {
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"
     );
+}
+
+/// Lamps on a grid of parts: 64 neon balls 2 m up, each holding a `PointLight` (every ninth a `SpotLight` pointing
+/// down), every eighth point light with `Shadows`. Returns the lamps.
+fn lit_grid(game: &mut support::scenes::Game) -> Vec<Id> {
+    support::scenes::grid(game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
+    let registry = game.dm.registry().clone();
+    let (point, spot) = (
+        registry.class_id("PointLight").expect("PointLight"),
+        registry.class_id("SpotLight").expect("SpotLight"),
+    );
+    (0..64)
+        .map(|i| {
+            let at = Vec3::new((i % 8) as f32 * 22.0 - 77.0, 2.0, (i / 8) as f32 * 22.0 - 77.0);
+            let lamp = game.part(
+                support::scenes::Look::new("Ball", "Neon", [255, 220, 180]),
+                Vec3::splat(0.5),
+                CFrame::new(at),
+            );
+            let is_spot = i % 9 == 8;
+            let light = game.dm.create(if is_spot { spot } else { point }).expect("a light");
+            game.dm
+                .set_by_name(light, "Range", Value::Number(14.0))
+                .expect("Range");
+            if is_spot {
+                let down = CFrame::from_parts(
+                    Vec3::ZERO,
+                    metallic_core::glam::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                );
+                game.dm.set_by_name(light, "CFrame", Value::CFrame(down)).expect("CFrame");
+            } else if i % 8 == 0 {
+                game.dm
+                    .set_by_name(light, "Shadows", Value::Bool(true))
+                    .expect("Shadows");
+            }
+            game.dm.set_parent(light, Some(lamp)).expect("parented");
+            lamp
+        })
+        .collect()
+}
+
+/// Local lights (#83): the sync of lights in lamps that move every frame (each move places the lamp's light again)
+/// allocates nothing at all once warm.
+#[test]
+fn a_sync_of_moving_lamps_allocates_nothing() {
+    let mut game = support::scenes::Game::new();
+    let lamps = lit_grid(&mut game);
+    let mut scene =
+        InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).expect("a scene");
+    let mut total = 0;
+    for frame in 0..WARM_UP + FRAMES {
+        for (i, &lamp) in lamps.iter().enumerate().step_by(4) {
+            let at = Vec3::new(i as f32, 2.0 + frame as f32 * 0.01, 0.0);
+            game.dm.set_by_name(lamp, "CFrame", Value::CFrame(CFrame::new(at))).expect("moved");
+        }
+        let (count, stats) = allocations_in(|| scene.sync(&mut game.dm));
+        if frame >= WARM_UP {
+            assert!(stats.lights >= 16, "{stats:?}");
+            total += count;
+        }
+        scene.coalesce();
+    }
+    assert_eq!(scene.light_count(), 64);
+    assert_eq!(total, 0, "syncing moving lamps allocated");
+}
+
+/// Local lights (#83): a frame that selects, fades, clusters and packs 64 lights (a moving camera changes all of it
+/// every frame) allocates no more than the same frame without local lights plus the two writes it adds (the lights'
+/// uniform and the cluster texture) by hand. The shadowed lights' tiles are kept (nothing moves), so no atlas pass.
+#[test]
+fn a_lit_frame_allocates_only_its_writes() {
+    let Some(context) = support::gpu() else { return };
+    let (device, queue) = (context.device(), context.queue());
+    let mut game = support::scenes::Game::new();
+    lit_grid(&mut game);
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
+    let mut renderers = [metallic_render::LightSettings::default(), metallic_render::LightSettings::OFF].map(|lights| {
+        let renderer = Renderer::new(
+            &context,
+            RendererSettings {
+                gpu_timing: false,
+                lights,
+                ..RendererSettings::new(FORMAT, SIZE, SIZE)
+            },
+        )
+        .expect("a renderer");
+        let mut scene = GpuScene::new(
+            &context,
+            &mut game.dm,
+            Some(game.workspace),
+            &RenderComponents::builtin(),
+        )
+        .expect("a scene");
+        scene.sync(&mut game.dm);
+        (renderer, scene)
+    });
+    // The same writes by hand, into resources like the renderer's.
+    let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("hand lights"),
+        size: 16384,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let clusters = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("hand clusters"),
+        size: wgpu::Extent3d {
+            width: 1024,
+            height: 58,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R32Uint,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let data = vec![1u8; 1024 * 58 * 4];
+    let (mut lit, mut unlit, mut hand) = (Vec::new(), Vec::new(), Vec::new());
+    for frame in 0..WARM_UP + FRAMES {
+        let camera = Camera::from_cframe(
+            CFrame::look_at(
+                // High above the lamps, so every one stays in view as the camera circles.
+                Vec3::new((frame as f32 * 0.03).cos() * 20.0, 150.0, (frame as f32 * 0.03).sin() * 20.0),
+                Vec3::ZERO,
+                Vec3::Y,
+            ),
+            70.0,
+        );
+        for (index, (renderer, scene)) in renderers.iter_mut().enumerate() {
+            let (count, submission) = allocations_in(|| renderer.render_scene(target.view(), scene, Some(&camera)));
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: None,
+                })
+                .expect("wait for the frame");
+            if frame >= WARM_UP {
+                if index == 0 { &mut lit } else { &mut unlit }.push(count);
+            }
+        }
+        let stats = renderers[0].0.light_stats();
+        let rows = (3456 + stats.cluster_entries.div_ceil(4)).div_ceil(1024);
+        let (count, ()) = allocations_in(|| {
+            queue.write_buffer(&light_buffer, 0, &data[..stats.drawn as usize * 64]);
+            queue.write_texture(
+                clusters.as_image_copy(),
+                &data[..(rows * 4096) as usize],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4096),
+                    rows_per_image: Some(rows),
+                },
+                wgpu::Extent3d {
+                    width: 1024,
+                    height: rows,
+                    depth_or_array_layers: 1,
+                },
+            );
+        });
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        if frame >= WARM_UP {
+            hand.push(count);
+            assert_eq!(stats.tiles_redrawn, 0, "frame {frame} drew shadow tiles: {stats:?}");
+        }
+    }
+    let stats = renderers[0].0.light_stats();
+    let (lit, unlit, hand) = (
+        *lit.iter().min().expect("frames"),
+        *unlit.iter().min().expect("frames"),
+        *hand.iter().min().expect("frames"),
+    );
+    eprintln!("lit frame {lit} allocations, unlit {unlit}, the two writes by hand {hand} ({stats:?})");
+    assert!(stats.drawn > 8 && stats.shadowed > 0 && stats.cluster_entries > 0, "{stats:?}");
+    assert!(
+        lit <= unlit + hand + WGPU_DATA_JITTER + machine_noise(&context),
+        "a lit frame allocates {lit} against {unlit} unlit and {hand} for its writes"
+    );
+}
+
+/// Local lights (#83): the heap does not grow over frames whose lamps move (so their lights move, and the moving
+/// shadowed ones draw their atlas tiles again every frame) seen from an orbiting camera, on both instance paths.
+#[test]
+fn nothing_accumulates_over_lit_frames() {
+    for force_vertex_instances in [false, true] {
+        let options = metallic_render::ContextOptions {
+            force_vertex_instances,
+            ..metallic_render::ContextOptions::default()
+        };
+        let Some(context) = support::gpu_with(&options) else {
+            return;
+        };
+        let mut game = support::scenes::Game::new();
+        let lamps = lit_grid(&mut game);
+        let mut scene = GpuScene::new(
+            &context,
+            &mut game.dm,
+            Some(game.workspace),
+            &RenderComponents::builtin(),
+        )
+        .expect("a scene");
+        let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
+        let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
+        let mut pacer = Pacer::new();
+        let (mut before, mut redrawn) = (0, 0);
+        for frame in 0..WARM_UP + FRAMES {
+            // A quarter of the lamps move, shadowed ones among them.
+            for (i, &lamp) in lamps.iter().enumerate().step_by(4) {
+                let at = Vec3::new((i % 8) as f32 * 22.0 - 77.0, 2.0 + (frame % 10) as f32 * 0.05, (i / 8) as f32 * 22.0 - 77.0);
+                game.dm.set_by_name(lamp, "CFrame", Value::CFrame(CFrame::new(at))).expect("moved");
+            }
+            if frame == WARM_UP {
+                before = live_bytes();
+            }
+            scene.sync(&mut game.dm);
+            let camera = orbiting_camera(frame);
+            let submission = renderer.render_scene(target.view(), &mut scene, Some(&camera));
+            pacer.submitted(context.device(), submission);
+            if frame >= WARM_UP {
+                redrawn += renderer.light_stats().tiles_redrawn;
+            }
+        }
+        let grown = live_bytes() - before;
+        eprintln!(
+            "{FRAMES} lit frames on the {:?} path ({:?}, {redrawn} tiles drawn): heap grew {grown} bytes",
+            InstanceBinding::for_context(&context),
+            renderer.light_stats()
+        );
+        assert!(redrawn > 0, "no shadow tile was drawn");
+        assert!(
+            grown.abs() < 16 * 1024,
+            "the heap grew by {grown} bytes over {FRAMES} frames"
+        );
+    }
 }
