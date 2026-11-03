@@ -81,9 +81,12 @@ pub struct Engine<O: OutputSink = StdOutput> {
     frames: u64,
     last: FrameStats,
     run_service: RunService,
+    user_input_service: Id,
     simulation: Box<dyn Simulation>,
     #[cfg(feature = "render")]
     input: crate::input::InputQueue,
+    #[cfg(feature = "render")]
+    user_input: crate::user_input::UserInput,
     #[cfg(feature = "render")]
     window: Option<metallic_platform::Window>,
     #[cfg(feature = "render")]
@@ -123,6 +126,14 @@ impl<O: OutputSink> Engine<O> {
         ))?))?;
         set_run_flags(&mut dm, run_flags(config.context, config.studio, false))?;
         let run_service = RunService::find(&dm)?;
+        // Made whatever the build: it creates `UserInputService` in a game that lacks one. Only a build with a window
+        // has input to feed it.
+        #[cfg(feature = "render")]
+        let user_input = crate::user_input::UserInput::new(&mut dm)?;
+        #[cfg(feature = "render")]
+        let user_input_service = user_input.service();
+        #[cfg(not(feature = "render"))]
+        let user_input_service = metallic_classes::input::feed::InputFeed::new(&mut dm)?.service();
         Ok(Self {
             dm,
             host,
@@ -135,9 +146,12 @@ impl<O: OutputSink> Engine<O> {
             frames: 0,
             last: FrameStats::default(),
             run_service,
+            user_input_service,
             simulation: Box::new(NoSimulation),
             #[cfg(feature = "render")]
             input: crate::input::InputQueue::default(),
+            #[cfg(feature = "render")]
+            user_input,
             #[cfg(feature = "render")]
             window: None,
             #[cfg(feature = "render")]
@@ -235,7 +249,7 @@ impl<O: OutputSink> Engine<O> {
         {
             profiling::scope!("input");
             #[cfg(feature = "render")]
-            self.input.begin_frame();
+            self.input_step(advance.is_some());
         }
         let mut stats = FrameStats {
             frame: self.frames,
@@ -338,6 +352,11 @@ impl<O: OutputSink> Engine<O> {
         self.run_service.id
     }
 
+    /// The game's `UserInputService`.
+    pub fn user_input_service(&self) -> Id {
+        self.user_input_service
+    }
+
     /// The side this engine runs.
     pub fn context(&self) -> RunContext {
         self.context
@@ -397,6 +416,7 @@ impl<O: OutputSink> Engine<O> {
             hook.attach(&window).map_err(EngineError::Render)?;
         }
         self.window = Some(window);
+        self.user_input.forget_window();
         Ok(())
     }
 
@@ -404,6 +424,7 @@ impl<O: OutputSink> Engine<O> {
     /// is drawn until a window is attached again. Returns the window.
     pub fn detach_window(&mut self) -> Option<metallic_platform::Window> {
         let window = self.window.take();
+        self.user_input.forget_window();
         if window.is_some()
             && let Some(hook) = self.render_hook.as_mut()
         {
@@ -430,9 +451,18 @@ impl<O: OutputSink> Engine<O> {
     }
 
     /// The input the current frame took in its input step, in arrival order. Valid from the frame's input step
-    /// until the next frame starts; `UserInputService` (#74) reads it.
+    /// until the next frame starts; `UserInputService` has already taken it by then.
     pub fn input_events(&self) -> &[crate::input::InputEvent] {
         self.input.frame_events()
+    }
+
+    /// The frame's input step: the queued events become the frame's, `UserInputService` takes them (firing its
+    /// events only when the game runs this frame, `firing`), and the cursor state scripts asked for reaches the
+    /// window.
+    fn input_step(&mut self, firing: bool) {
+        self.input.begin_frame();
+        self.user_input.process(&mut self.dm, self.input.frame_events(), firing);
+        self.user_input.apply_cursor(&self.dm, self.window.as_ref());
     }
 
     /// The frame's last step: the render hook draws, when the engine is windowed and has a window.

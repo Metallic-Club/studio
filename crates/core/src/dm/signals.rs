@@ -425,6 +425,14 @@ impl DataModel {
         self.slots.get(id).is_some_and(|s| s.watched)
     }
 
+    /// Whether a connection listens to the signal `signal` of the live instance `id`. One flag check while nothing
+    /// is connected to the instance, then a scan of its connections. Lets class code that fires one of several
+    /// signals skip building arguments nobody would receive, where [`DataModel::is_watched`] would also say yes for
+    /// a connection to another signal.
+    pub fn is_signal_watched(&self, id: Id, signal: SignalId) -> bool {
+        self.is_watched(id) && self.signals.listens(id, Key::Signal(signal))
+    }
+
     /// How many connections exist in the whole data model, those of instances destroyed since the last drain
     /// included.
     pub fn connection_count(&self) -> usize {

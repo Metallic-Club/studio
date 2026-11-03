@@ -64,6 +64,14 @@ pub enum GameError {
     /// The registry lacks a class (or service) that every new game contains.
     #[error("there is no `{0}`, which every new game needs")]
     MissingClass(&'static str),
+    /// A class or enum lacks a member (a property, a signal, an item) the engine relies on.
+    #[error("`{owner}` has no `{member}`, which the engine needs")]
+    MissingMember {
+        /// The class or enum.
+        owner: &'static str,
+        /// The missing member.
+        member: &'static str,
+    },
 }
 
 /// A new, empty game: the root (`DataModel`, `game` in scripts) with every service under it, in service order, and
@@ -197,7 +205,8 @@ mod tests {
                 "ReplicatedStorage",
                 "ServerScriptService",
                 "ServerStorage",
-                "RunService"
+                "RunService",
+                "UserInputService"
             ]
         );
     }
@@ -289,7 +298,7 @@ mod tests {
                 .iter()
                 .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 32);
+        assert_eq!(input().classes.len(), 34);
         let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
         components.sort_unstable();
         assert_eq!(
@@ -302,6 +311,10 @@ mod tests {
                 "Transform"
             ]
         );
-        assert_eq!(input().enums.concat().len(), 2, "Material and PartShape");
+        assert_eq!(
+            input().enums.concat().len(),
+            6,
+            "Material, PartShape, KeyCode, UserInputType, UserInputState and MouseBehavior"
+        );
     }
 }

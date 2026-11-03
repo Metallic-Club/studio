@@ -40,7 +40,7 @@
 //!
 //! | # | Step | What runs | Profiling scope |
 //! |---|---|---|---|
-//! | 1 | input | the events queued since the last frame become this frame's ([`Engine::input_events`]) | `input` |
+//! | 1 | input | the events queued since the last frame become this frame's ([`Engine::input_events`]); `UserInputService` takes them and fires its events (only while the game runs); `MouseBehavior` reaches the window | `input` |
 //! | 2 | `RenderStepped` | clients and standalone games only (not [`RunContext::Server`]): fire, then step | `RenderStepped` |
 //! | 3 | `PreSimulation` | fire, then step | `PreSimulation` |
 //! | 4 | simulation | `N` fixed steps of the [`Simulation`] hook (physics is M7; [`NoSimulation`] until then) | `Simulation` |
@@ -74,7 +74,23 @@
 //! connected to `RunService` ([`DataModel::is_watched`](metallic_core::DataModel::is_watched)), so a game whose scripts
 //! do not use them pays one flag check per phase.
 //!
-//! # The render hook
+//! # `UserInputService`
+//!
+//! The class lives in `metallic_classes` (`services::user_input_service`, with `input::input_object` and
+//! `input::key_code`), and so does the code that turns input into its state and events (`input::feed`). The engine's
+//! part, under `render`, is the input step: it translates the platform's events (`metallic_platform::KeyCode` to
+//! `Enum.KeyCode` through the one table [`metallic_classes::with_key_codes`] keeps), and applies the cursor state
+//! scripts set to the window: `MouseBehavior` `LockCenter` and `LockCurrentPosition` ask for
+//! `CursorGrab::Lock` (the platform confines the cursor where it cannot lock it), `Default` for `None`, and
+//! `MouseIconEnabled` shows or hides the cursor. Each is applied once per change, and again to a new window.
+//!
+//! - **Mouse movement is free when unwatched:** it is summed per frame, `InputChanged` fires once per frame and
+//!   only while something listens to it ([`DataModel::is_signal_watched`](metallic_core::DataModel::is_signal_watched)),
+//!   so with nothing connected 1,000 motion events create no instance and allocate nothing (`tests/input_alloc.rs`).
+//! - **One input object per press**, made only while something listens and destroyed after `End`; a press shorter
+//!   than a frame ends in the next frame, so `InputBegan` sees `Begin`. Mouse movement and the wheel reuse one
+//!   object each (`metallic_classes::input::feed` has the rules).
+//! - **A headless build** (no `render`) has no input: the service exists and nothing feeds it.
 //!
 //! Drawing is not done here: the renderer (`metallic_render`, #75 to #77) implements [`RenderHook`] and is
 //! installed with [`Engine::set_render_hook`]. The engine calls [`RenderHook::render`] once per frame, last, with a
@@ -98,6 +114,8 @@ mod hooks;
 #[cfg(feature = "render")]
 mod input;
 mod output;
+#[cfg(feature = "render")]
+mod user_input;
 #[cfg(feature = "render")]
 mod windowed;
 

@@ -284,6 +284,23 @@ impl DataModel {
         if !info.creatable() {
             return Err(DmError::NotCreatable { class: info.name() });
         }
+        self.spawn_created(class)
+    }
+
+    /// Creates an instance of `class` like [`DataModel::create`], creatable or not: for engine code that makes
+    /// instances scripts may not create themselves, such as the `InputObject`s `UserInputService` passes. Only
+    /// services are refused. Never call it with a class that only exists to be inherited from.
+    pub fn create_internal(&mut self, class: ClassId) -> Result<Id, DmError> {
+        let info = self.class_info(class)?;
+        if info.service_order().is_some() {
+            return Err(DmError::IsService { class: info.name() });
+        }
+        self.spawn_created(class)
+    }
+
+    /// The part of [`DataModel::create`] after its checks: the new instance, then its class's `on_created` hooks.
+    #[inline]
+    fn spawn_created(&mut self, class: ClassId) -> Result<Id, DmError> {
         let id = self.spawn(class)?;
         self.run_hooks(id, class, |b, dm| b.on_created(dm, id));
         Ok(id)

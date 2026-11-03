@@ -5,8 +5,9 @@
 //! cargo run -p metallic_engine --example windowed -- 5       # or for 5 seconds
 //! ```
 //!
-//! The script prints once a second on `Heartbeat`, with how many `RenderStepped` events it saw in that second.
-//! Nothing is drawn yet (the renderer is #75 to #77): a stand-in render hook counts the frames it is asked to draw
+//! The script prints once a second on `Heartbeat`, with how many `RenderStepped` events it saw in that second, and
+//! prints every key and button `UserInputService.InputBegan` reports; Escape toggles a locked, hidden cursor
+//! (`MouseBehavior.LockCenter`). Nothing is drawn yet (the renderer is #75 to #77): a stand-in render hook counts the frames it is asked to draw
 //! and reports the window's size, to show where the renderer plugs in. The loop is capped at 60 frames per second,
 //! since no vsync paces it.
 
@@ -40,6 +41,24 @@ RunService.Heartbeat:Connect(function(deltaTime)
         seconds += 1
         print(`Heartbeat: {seconds} s, time() = {string.format("%.2f", time())}, {rendered} RenderStepped this second`)
         rendered = 0
+    end
+end)
+
+local UserInputService = game:GetService("UserInputService")
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        print(`InputBegan: {input.KeyCode}, gameProcessedEvent {gameProcessedEvent}`)
+    elseif input.UserInputType ~= Enum.UserInputType.MouseMovement then
+        print(`InputBegan: {input.UserInputType} at {input.Position}`)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.Escape then
+        -- Escape toggles a first-person style locked cursor.
+        local locked = UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default
+        UserInputService.MouseBehavior = if locked then Enum.MouseBehavior.Default else Enum.MouseBehavior.LockCenter
+        UserInputService.MouseIconEnabled = locked
+        print(`MouseBehavior: {UserInputService.MouseBehavior}`)
     end
 end)
 "#;

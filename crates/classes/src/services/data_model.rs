@@ -78,7 +78,7 @@ mod tests {
         assert!(call(&mut dm, root, "Destroy", vec![]).is_err());
         // Clearing the root's children keeps the services.
         assert_eq!(call(&mut dm, root, "ClearAllChildren", vec![]), Ok(ScriptValue::Nil));
-        assert_eq!(dm.children(root).unwrap().len(), 6);
+        assert_eq!(dm.children(root).unwrap().len(), 7);
         assert!(dm.contains(folder));
     }
 }
