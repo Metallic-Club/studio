@@ -550,6 +550,13 @@ end
 --- The whole game (`game` in scripts). Its children are the services, such as Workspace and Lighting.
 declare extern type DataModel extends Instance with
     --- Returns the service with the given class name, such as game:GetService("Lighting"). It always returns the same instance for a service.
+    function GetService(self, className: "Workspace"): Workspace
+    function GetService(self, className: "Lighting"): Lighting
+    function GetService(self, className: "ReplicatedStorage"): ReplicatedStorage
+    function GetService(self, className: "ServerScriptService"): ServerScriptService
+    function GetService(self, className: "ServerStorage"): ServerStorage
+    function GetService(self, className: "RunService"): RunService
+    function GetService(self, className: "UserInputService"): UserInputService
     function GetService(self, className: string): Instance
 end
 

@@ -34,7 +34,7 @@ The decisions behind the layout are in [`docs/adr/`](docs/adr/), and the map is 
    **Adding or changing a class, member, enum or component? Run `cargo xtask api-dump`** and commit the regenerated
    `api/api-dump.json` (the registry as JSON) and `api/metallic.d.luau` (Luau type definitions for luau-lsp, built
    from the dump plus the hand-written `xtask/src/api/luau_prelude.d.luau`, which follows `crates/luau`'s data types
-   and globals). CI fails when either is stale, and type-checks `api/samples/` against the definitions with luau-lsp.
+   and globals). CI fails when either is stale, and type-checks `api/samples/` and the Player's embedded scenes (`apps/player/src/scenes/`) against the definitions with luau-lsp.
    CI also runs `cargo check --workspace --exclude metallic_studio --exclude xtask --target <t>` for
    `aarch64-linux-android` on every PR, and macOS tests plus `aarch64-apple-ios` weekly and on manual dispatch
    (`gh workflow run ci.yml -R Metallic-Club/studio`): macOS minutes cost 10x. Docs-only changes skip CI.

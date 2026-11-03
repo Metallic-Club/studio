@@ -13,7 +13,7 @@
 //!   properties of the components it adds, its callbacks, signals and methods. Read-only properties are `read`, and
 //!   callbacks `write` (scripts may only assign them). A signal is a `ScriptSignal<params...>` property.
 //! - **`Instance.new`**: one overload per creatable class, keyed by the class name as a string literal type, so
-//!   `Instance.new("Part")` is a `Part`.
+//!   `Instance.new("Part")` is a `Part`. `game:GetService` has the same, one overload per service.
 //!
 //! The file targets luau-lsp's `standard` platform and its default type solver; CI checks it with luau-lsp 1.70.1.
 //! luau-lsp's opt-in new solver (`LuauSolverV2`) gives up on an overload set of more than about ten functions ("too
@@ -194,6 +194,8 @@ pub(crate) fn callback_type(params: Option<&[ApiParam]>, ret: Option<&ApiType>) 
 struct Classes<'a> {
     by_name: HashMap<&'a str, &'a ApiClass>,
     components: HashMap<&'a str, &'a ApiComponent>,
+    /// The services, in creation order: what `game:GetService` can return.
+    services: Vec<&'a str>,
 }
 
 impl<'a> Classes<'a> {
@@ -201,6 +203,11 @@ impl<'a> Classes<'a> {
         Self {
             by_name: dump.classes.iter().map(|c| (c.name.as_str(), c)).collect(),
             components: dump.components.iter().map(|c| (c.name.as_str(), c)).collect(),
+            services: {
+                let mut services: Vec<&ApiClass> = dump.classes.iter().filter(|c| c.service_order.is_some()).collect();
+                services.sort_by_key(|c| c.service_order);
+                services.iter().map(|c| c.name.as_str()).collect()
+            },
         }
     }
 
@@ -300,6 +307,16 @@ impl<'a> Classes<'a> {
         }
         for method in &class.methods {
             doc(out, "    ", &method.description);
+            // `game:GetService("Lighting")` is a `Lighting`: one overload per service, keyed by the class name as a
+            // string literal type (like `Instance.new`), before the general one below.
+            if class.name == "DataModel" && method.name == "GetService" {
+                for service in &self.services {
+                    let _ = writeln!(
+                        out,
+                        "    function GetService(self, className: \"{service}\"): {service}"
+                    );
+                }
+            }
             let params = match &method.params {
                 Some(params) => params.iter().map(param).fold(String::new(), |mut s, p| {
                     s.push_str(", ");
@@ -451,6 +468,8 @@ mod tests {
         assert!(text.contains("    read ClassName: string\n"));
         assert!(text.contains("    write OnInvoke: "));
         assert!(text.contains("((className: \"Part\", parent: Instance?) -> Part)"));
+        assert!(text.contains("function GetService(self, className: \"Lighting\"): Lighting\n"));
+        assert!(text.contains("function GetService(self, className: string): Instance\n"));
         assert!(text.contains("    read Plastic: EnumMaterial\n"));
         // `IntValue.Changed` passes the new number, not a property name.
         let int_value = text
