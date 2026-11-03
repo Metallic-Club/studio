@@ -2,16 +2,21 @@
 //! depend on the engine (ADR 0001), so the hook lives here and only forwards.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use metallic_core::{DataModel, Id};
 use metallic_platform::{Size, Window};
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::{
-    CameraReader, ContextOptions, DrawStats, GpuScene, RenderContext, RenderError, RenderSurface, Renderer,
-    RendererSettings, wgpu,
+    CameraReader, Capabilities, ContextOptions, DrawStats, GpuScene, RenderContext, RenderError, RenderSurface,
+    Renderer, RendererSettings, wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
+use crate::perf::{FrameSample, PerfStats, PerfSummary, draw_overlay};
+
+/// Frames between two refreshes of the overlay's percentiles: about four times a second at 60 fps.
+const SUMMARY_EVERY: u32 = 15;
 
 /// The device and the frame loop, kept while the window comes and goes.
 struct Device {
@@ -25,9 +30,14 @@ struct Device {
 /// `Workspace` from `Workspace.CurrentCamera` ([`Renderer::render_scene`]); without a current camera the frame is
 /// the clear colour. The device and the scene survive [`RenderHook::detach`], so a mobile app coming back to the
 /// foreground only makes a new surface.
+///
+/// It also keeps the frame statistics ([`SceneRenderer::perf`]): every drawn frame records its frame time, the
+/// script and physics time the engine measured ([`Engine::set_cpu_timing`](crate::Engine::set_cpu_timing)), its own
+/// render CPU time, the GPU timings and the draws. [`SceneRenderer::set_overlay`] shows them on screen.
 pub struct SceneRenderer {
     options: ContextOptions,
     clear_color: wgpu::Color,
+    present_mode: Option<wgpu::PresentMode>,
     device: Option<Device>,
     surface: Option<RenderSurface>,
     scene: Option<GpuScene>,
@@ -36,6 +46,13 @@ pub struct SceneRenderer {
     camera: CameraReader,
     last_sync: SyncStats,
     last_upload: UploadStats,
+    perf: PerfStats,
+    /// The overlay's percentiles, refreshed every [`SUMMARY_EVERY`] frames.
+    summary: PerfSummary,
+    since_summary: u32,
+    overlay: bool,
+    /// When the previous frame's render started: frame time is the time between two.
+    frame_start: Option<Instant>,
 }
 
 impl SceneRenderer {
@@ -49,6 +66,7 @@ impl SceneRenderer {
                 b: 0.82,
                 a: 1.0,
             },
+            present_mode: None,
             device: None,
             surface: None,
             scene: None,
@@ -56,6 +74,11 @@ impl SceneRenderer {
             camera: CameraReader::new(),
             last_sync: SyncStats::default(),
             last_upload: UploadStats::default(),
+            perf: PerfStats::default(),
+            summary: PerfSummary::default(),
+            since_summary: 0,
+            overlay: false,
+            frame_start: None,
         }
     }
 
@@ -65,6 +88,55 @@ impl SceneRenderer {
         if let Some(device) = self.device.as_mut() {
             device.renderer.set_clear_color(color);
         }
+    }
+
+    /// Asks for a present mode (for example `AutoNoVsync` for an uncapped frame rate in benchmarks); the surface
+    /// falls back to `Fifo` (vsync) when it cannot. Applies now and to every later surface.
+    pub fn set_present_mode(&mut self, mode: wgpu::PresentMode) {
+        self.present_mode = Some(mode);
+        if let (Some(device), Some(surface)) = (self.device.as_ref(), self.surface.as_mut()) {
+            surface.set_present_mode(&device.context, mode);
+        }
+    }
+
+    /// The present mode the surface uses, once attached.
+    pub fn present_mode(&self) -> Option<wgpu::PresentMode> {
+        self.surface.as_ref().map(RenderSurface::present_mode)
+    }
+
+    /// Shows or hides the performance overlay (frame-time graph, percentiles, CPU and GPU time, draws; see
+    /// [`crate::perf`]). Off by default. The statistics are kept either way.
+    pub fn set_overlay(&mut self, on: bool) {
+        self.overlay = on;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_overlay_enabled(on);
+        }
+    }
+
+    /// Whether the performance overlay is shown.
+    pub fn overlay(&self) -> bool {
+        self.overlay
+    }
+
+    /// The frame statistics.
+    pub fn perf(&self) -> &PerfStats {
+        &self.perf
+    }
+
+    /// The frame statistics, to reset them (after a warm-up) or summarise them ([`PerfStats::summary`]).
+    pub fn perf_mut(&mut self) -> &mut PerfStats {
+        &mut self.perf
+    }
+
+    /// Keeps the statistics of the last `frames` frames ([`crate::perf::DEFAULT_WINDOW`] by default), dropping
+    /// what was recorded. A benchmark sizes it to its whole run. Allocates; not for every frame.
+    pub fn set_perf_window(&mut self, frames: usize) {
+        self.perf = PerfStats::new(frames);
+    }
+
+    /// What the adapter and device can do (its name, backend, driver), once attached.
+    pub fn capabilities(&self) -> Option<&Capabilities> {
+        self.device.as_ref().map(|device| device.context.capabilities())
     }
 
     /// The scene, once the first frame has attached it to the game.
@@ -129,6 +201,7 @@ impl std::fmt::Debug for SceneRenderer {
             .field("attached", &self.surface.is_some())
             .field("last_sync", &self.last_sync)
             .field("last_upload", &self.last_upload)
+            .field("overlay", &self.overlay)
             .finish_non_exhaustive()
     }
 }
@@ -138,7 +211,7 @@ impl RenderHook for SceneRenderer {
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
         let window = Arc::new(window.clone());
-        let surface = match self.device.as_ref() {
+        let mut surface = match self.device.as_ref() {
             Some(device) => device.context.create_surface(window, width, height)?,
             None => {
                 let (context, surface) = RenderContext::new_with_window(window, width, height, &self.options)?;
@@ -148,13 +221,19 @@ impl RenderHook for SceneRenderer {
             }
         };
         let settings = self.settings(surface.format(), width, height);
-        if let Some(device) = self.device.as_mut()
-            && device.renderer.settings().color_format != surface.format()
-        {
-            // A new surface on another monitor or after a resume may prefer another format.
-            device.renderer = Renderer::new(&device.context, settings)?;
+        if let Some(device) = self.device.as_mut() {
+            if device.renderer.settings().color_format != surface.format() {
+                // A new surface on another monitor or after a resume may prefer another format.
+                device.renderer = Renderer::new(&device.context, settings)?;
+            }
+            device.renderer.set_overlay_enabled(self.overlay);
+            if let Some(mode) = self.present_mode {
+                surface.set_present_mode(&device.context, mode);
+            }
         }
         self.surface = Some(surface);
+        // Time spent away (suspended, opening the window) is not a frame.
+        self.frame_start = None;
         Ok(())
     }
 
@@ -176,6 +255,8 @@ impl RenderHook for SceneRenderer {
     }
 
     fn render(&mut self, frame: &mut RenderFrame<'_>) {
+        let start = Instant::now();
+        let frame_time = self.frame_start.replace(start).map(|previous| start - previous);
         if let Err(error) = self.ensure_scene(frame.dm) {
             log::error!("render: {error}");
             return;
@@ -188,6 +269,14 @@ impl RenderHook for SceneRenderer {
             scene.set_camera_position(frame.dm, camera.position);
         }
         self.last_sync = scene.sync(frame.dm);
+        if self.overlay {
+            if self.since_summary == 0 {
+                self.summary = self.perf.summary();
+            }
+            self.since_summary = (self.since_summary + 1) % SUMMARY_EVERY;
+            draw_overlay(device.renderer.overlay_mut(), &self.perf, &self.summary);
+        }
+        let acquire_start = Instant::now();
         let image = match self.surface.as_mut().map(|surface| surface.acquire(&device.context)) {
             Some(Ok(image)) => image,
             Some(Err(error)) => {
@@ -196,11 +285,17 @@ impl RenderHook for SceneRenderer {
             }
             None => None,
         };
+        // Waiting for an image is mostly vsync, not work: it is left out of the render time.
+        let acquire = acquire_start.elapsed();
+        let render_cpu;
+        let draws;
         match image {
             Some(image) => {
                 device.renderer.render_scene(image.view(), scene, camera.as_ref());
+                render_cpu = start.elapsed().saturating_sub(acquire);
                 image.present(&device.context);
                 self.last_upload = device.renderer.upload_stats();
+                draws = device.renderer.draw_stats();
             }
             None => {
                 // No image this frame (minimised, occluded): the upload still goes out, or it would be lost.
@@ -212,7 +307,18 @@ impl RenderHook for SceneRenderer {
                     });
                 self.last_upload = scene.upload(&mut encoder);
                 device.context.queue().submit(std::iter::once(encoder.finish()));
+                render_cpu = start.elapsed().saturating_sub(acquire);
+                draws = DrawStats::default();
             }
+        }
+        if let Some(frame_time) = frame_time {
+            let sample = FrameSample::new(
+                frame_time,
+                frame.stats.script_cpu,
+                frame.stats.simulation_cpu,
+                render_cpu,
+            );
+            self.perf.record(sample, device.renderer.gpu_timings(), draws);
         }
     }
 }

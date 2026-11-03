@@ -16,6 +16,9 @@
 //! written and the transparent list sorted and written every frame) allocates no more than the same wgpu calls
 //! by hand, and the heap does not grow over 100 such frames with 1% of the parts changing.
 //!
+//! The debug overlay (#78) too: a frame whose overlay is redrawn (so it is encoded and uploaded) allocates no more
+//! than the same write and draw by hand, and the heap does not grow over 100 such frames.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
 // A `#[global_allocator]` needs `unsafe impl GlobalAlloc`. This test binary's allocator only counts, then forwards
@@ -1007,6 +1010,192 @@ fn nothing_accumulates_over_parts_frames() {
         "{FRAMES} frames drawing {:?}: heap grew {grown} bytes",
         renderer.draw_stats()
     );
+    assert!(
+        grown.abs() < 16 * 1024,
+        "the heap grew by {grown} bytes over {FRAMES} frames"
+    );
+}
+
+/// Redraws the overlay as the performance overlay does every frame: a panel, a line of formatted numbers that
+/// change every frame, and a bar per frame of a 240-frame graph.
+fn fill_overlay(overlay: &mut metallic_render::Overlay, frame: usize) {
+    overlay.clear();
+    overlay.rect(4.0, 4.0, 248.0, 120.0, [8, 10, 14, 200]);
+    overlay.text_fmt(
+        8.0,
+        8.0,
+        1.0,
+        [235, 238, 242, 255],
+        format_args!("FRAME {frame} {:.2} MS  P99 {:.2}", frame as f32 * 0.01, 4.5),
+    );
+    for i in 0..240 {
+        let h = ((i + frame) % 50) as f32;
+        overlay.rect(8.0 + i as f32, 120.0 - h, 1.0, h.max(1.0), [96, 214, 120, 255]);
+    }
+}
+
+/// The overlay's pipeline and buffer by hand, from its own shader, for the hand-written floor.
+struct HandOverlay {
+    pipeline: wgpu::RenderPipeline,
+    buffer: wgpu::Buffer,
+    data: Vec<u8>,
+}
+
+impl HandOverlay {
+    /// One quad is 32 bytes: a clip-space rectangle, a colour, two words of glyph pixels and a kind.
+    const QUAD: u64 = 32;
+
+    fn new(device: &wgpu::Device, quads: usize) -> Self {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hand overlay"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../src/overlay/overlay.wgsl").into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+        let attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Uint32x2, 3 => Uint32];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: Self::QUAD,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_encoded"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: Self::QUAD * quads as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            pipeline,
+            buffer,
+            data: vec![0; quads * Self::QUAD as usize],
+        }
+    }
+
+    /// A UI-only frame that writes the quads and draws them: the same wgpu calls as the renderer's overlay frame.
+    fn frame(&self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::TextureView) -> wgpu::SubmissionIndex {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("metallic frame"),
+        });
+        queue.write_buffer(&self.buffer, 0, &self.data);
+        let colors = [Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("ui"),
+            color_attachments: &colors,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let quads = (self.data.len() as u64 / Self::QUAD) as u32;
+        pass.set_pipeline(&self.pipeline);
+        pass.set_vertex_buffer(0, self.buffer.slice(..u64::from(quads) * Self::QUAD));
+        pass.draw(0..6, 0..quads);
+        drop(pass);
+        queue.submit(std::iter::once(encoder.finish()))
+    }
+}
+
+#[test]
+fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
+    let Some(context) = support::gpu() else { return };
+    let (device, queue) = (context.device(), context.queue());
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let mut renderer = Renderer::new(
+        &context,
+        RendererSettings {
+            passes: PassSet::EMPTY.with(PassId::Ui),
+            gpu_timing: false,
+            ..RendererSettings::new(FORMAT, SIZE, SIZE)
+        },
+    )
+    .unwrap();
+    renderer.set_overlay_enabled(true);
+    fill_overlay(renderer.overlay_mut(), 0);
+    let hand = HandOverlay::new(device, renderer.overlay().len());
+    let mut pacer = Pacer::new();
+    let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
+    for frame in 0..WARM_UP + FRAMES {
+        for renderer_turn in [frame % 2 == 0, frame % 2 != 0] {
+            let (count, submission) = if renderer_turn {
+                // The overlay's contents change every frame, so every frame encodes and uploads them.
+                allocations_in(|| {
+                    fill_overlay(renderer.overlay_mut(), frame);
+                    renderer.render(target.view())
+                })
+            } else {
+                allocations_in(|| hand.frame(device, queue, target.view()))
+            };
+            pacer.submitted(device, submission);
+            if frame >= WARM_UP {
+                if renderer_turn { &mut ours } else { &mut floor }.push(count);
+            }
+        }
+    }
+    let (ours, floor) = (*ours.iter().min().unwrap(), *floor.iter().min().unwrap());
+    eprintln!(
+        "overlay frame ({} quads): renderer {ours} allocations, the same wgpu calls by hand {floor}",
+        renderer.overlay().len()
+    );
+    assert!(
+        ours <= floor + WGPU_POOL_NOISE,
+        "the overlay adds {} allocation(s) per frame",
+        ours - floor
+    );
+}
+
+#[test]
+fn nothing_accumulates_over_overlay_frames() {
+    let Some(context) = support::gpu() else { return };
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    renderer.set_overlay_enabled(true);
+    let mut pacer = Pacer::new();
+    let mut before = 0;
+    for frame in 0..WARM_UP + FRAMES {
+        if frame == WARM_UP {
+            before = live_bytes();
+        }
+        fill_overlay(renderer.overlay_mut(), frame);
+        let submission = renderer.render(target.view());
+        pacer.submitted(context.device(), submission);
+    }
+    let grown = live_bytes() - before;
+    eprintln!("{FRAMES} overlay frames: heap grew {grown} bytes");
     assert!(
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"

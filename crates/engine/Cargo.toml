@@ -46,6 +46,11 @@ required-features = ["luau"]
 name = "windowed"
 required-features = ["render", "luau"]
 
+# Runs a stress scene for N frames and prints the frame statistics as JSON (docs/perf.md, ADR 0008 §10).
+[[example]]
+name = "stress"
+required-features = ["render"]
+
 # The perf gate's engine suite (docs/perf.md). It needs Valgrind and `gungraun-runner`, so a plain `cargo bench`
 # leaves it out (`bench = false`); it runs by name, with the dedicated server's features:
 # `cargo bench -p metallic_engine --bench perf_gate --no-default-features --features physics,luau`.

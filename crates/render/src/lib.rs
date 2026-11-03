@@ -23,11 +23,14 @@
 //! - Drawing parts ([`parts`], [`Renderer::render_scene`]): one instanced draw per mesh kind over the scene's draw
 //!   lists, a material table, PBR-lite shading, a sorted transparent pass, and the camera from
 //!   `Workspace.CurrentCamera` ([`CameraReader`]).
+//! - The debug overlay ([`overlay`], [`Renderer::set_overlay_enabled`]): rectangles and bitmap-font text in the UI
+//!   pass, which carries the performance overlay (ADR 0008 §10).
 
 mod context;
 pub mod depth;
 mod error;
 mod graph;
+pub mod overlay;
 pub mod parts;
 mod renderer;
 pub mod scene;
@@ -38,6 +41,7 @@ mod timing;
 pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
+pub use overlay::Overlay;
 pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer, SceneLight};
 pub use renderer::{Renderer, RendererSettings};
 pub use scene::{GpuScene, InstanceScene};

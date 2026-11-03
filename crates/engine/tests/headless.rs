@@ -323,3 +323,45 @@ fn script_errors_reach_the_output_and_the_loop_goes_on() {
     let errors = engine.host().output().of_level(OutputLevel::Error).count();
     assert_eq!(errors, 3, "one error per Heartbeat, each ending only its own thread");
 }
+
+/// A simulation that takes at least a millisecond per step.
+struct SlowSteps;
+
+impl Simulation for SlowSteps {
+    fn step(&mut self, _dm: &mut DataModel, _dt: Duration) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn cpu_timing_is_off_headless_unless_asked_for() {
+    let busy = r#"
+        local RunService = game:GetService("RunService")
+        RunService.Heartbeat:Connect(function()
+            local t = os.clock()
+            while os.clock() - t < 0.001 do end
+        end)
+    "#;
+    let mut engine = started(RunContext::Server, &[("Busy", busy)]);
+    engine.set_simulation(Box::new(SlowSteps));
+    assert!(!engine.cpu_timing());
+    let stats = engine.tick();
+    assert_eq!(
+        (stats.script_cpu, stats.simulation_cpu),
+        (Duration::ZERO, Duration::ZERO)
+    );
+
+    engine.set_cpu_timing(true);
+    let stats = engine.tick();
+    assert_eq!(stats.sim_steps, 1);
+    assert!(stats.simulation_cpu >= Duration::from_millis(1), "{stats:?}");
+    assert!(stats.script_cpu >= Duration::from_millis(1), "{stats:?}");
+
+    // A paused frame runs nothing, so it measures nothing.
+    engine.pause();
+    let stats = engine.tick();
+    assert_eq!(
+        (stats.script_cpu, stats.simulation_cpu),
+        (Duration::ZERO, Duration::ZERO)
+    );
+}

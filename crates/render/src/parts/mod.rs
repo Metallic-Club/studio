@@ -105,6 +105,14 @@ pub struct DrawStats {
     pub instances: u32,
     /// Triangles drawn in the opaque and transparent passes.
     pub triangles: u64,
+    /// Instances drawn in the opaque pass (and again in the depth prepass when there is one).
+    pub opaque_instances: u32,
+    /// Triangles drawn in the opaque pass (and again in the depth prepass when there is one).
+    pub opaque_triangles: u64,
+    /// Instances drawn in the transparent pass.
+    pub transparent_instances: u32,
+    /// Triangles drawn in the transparent pass.
+    pub transparent_triangles: u64,
 }
 
 impl DrawStats {
@@ -393,15 +401,17 @@ impl PartRenderer {
                 first: segment.first,
                 count: segment.len,
             });
-            self.stats.instances += segment.len;
-            self.stats.triangles += u64::from(segment.len) * u64::from(mesh.index_count / 3);
+            self.stats.opaque_instances += segment.len;
+            self.stats.opaque_triangles += u64::from(segment.len) * u64::from(mesh.index_count / 3);
         }
         self.transparent.update(&self.device, &self.queue, instances, offset);
         for run in self.transparent.runs() {
             let mesh = self.meshes.range(run.kind);
-            self.stats.instances += run.count;
-            self.stats.triangles += u64::from(run.count) * u64::from(mesh.index_count / 3);
+            self.stats.transparent_instances += run.count;
+            self.stats.transparent_triangles += u64::from(run.count) * u64::from(mesh.index_count / 3);
         }
+        self.stats.instances = self.stats.opaque_instances + self.stats.transparent_instances;
+        self.stats.triangles = self.stats.opaque_triangles + self.stats.transparent_triangles;
 
         if let Some(layout) = self.instance_layout.as_ref() {
             let statics = scene.buffer(crate::scene::Region::Static);

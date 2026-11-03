@@ -108,6 +108,17 @@
 //! With no back end the macros expand to nothing, so they cost nothing. `--features profile-with-puffin` or
 //! `--features profile-with-tracy` picks a back end; the app that turns one on also starts the profiler (puffin:
 //! `puffin::set_scopes_on(true)` and a `puffin_http` server; Tracy: `tracy_client::Client::start()`).
+//!
+//! Independently of those, a frame can measure its own script and simulation wall time
+//! ([`FrameStats::script_cpu`], [`FrameStats::simulation_cpu`]; [`Engine::set_cpu_timing`], on by default for
+//! windowed engines). [`SceneRenderer`] adds its render time, the GPU timings and the draws, and keeps them in
+//! [`perf::PerfStats`]: the numbers of the performance overlay ([`SceneRenderer::set_overlay`]).
+//!
+//! # Stress scenes
+//!
+//! [`stress`] builds the scenes every renderer change is measured against (ADR 0008 §10), by name and seed, and,
+//! under `render`, runs one in a window for a number of frames and reports the frame statistics as JSON
+//! ([`stress::run_bench`]; `cargo run --release -p metallic_engine --example stress -- --scene parts_100k`).
 
 mod clock;
 mod config;
@@ -118,7 +129,10 @@ mod hooks;
 mod input;
 mod output;
 #[cfg(feature = "render")]
+pub mod perf;
+#[cfg(feature = "render")]
 mod scene_renderer;
+pub mod stress;
 #[cfg(feature = "render")]
 mod user_input;
 #[cfg(feature = "render")]

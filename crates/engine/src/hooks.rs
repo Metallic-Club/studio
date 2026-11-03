@@ -27,6 +27,11 @@ pub struct FrameStats {
     pub ran: bool,
     /// Script threads the frame's phases resumed.
     pub resumed: usize,
+    /// Wall time of the frame's four script phases (firing `RunService`'s events and running the script steps).
+    /// Zero when CPU timing is off ([`Engine::set_cpu_timing`](crate::Engine::set_cpu_timing)) or nothing ran.
+    pub script_cpu: Duration,
+    /// Wall time of the frame's simulation steps (physics). Zero when CPU timing is off or nothing ran.
+    pub simulation_cpu: Duration,
 }
 
 /// The fixed-step simulation: the engine calls [`Simulation::step`] zero or more times per frame, between

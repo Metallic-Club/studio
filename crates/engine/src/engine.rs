@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use metallic_classes::GameError;
 use metallic_classes::services::run_service::{RunFlags, set_run_flags};
@@ -83,6 +83,8 @@ pub struct Engine<O: OutputSink = StdOutput> {
     run_service: RunService,
     user_input_service: Id,
     simulation: Box<dyn Simulation>,
+    /// Whether frames measure their script and simulation wall time ([`FrameStats::script_cpu`]).
+    cpu_timing: bool,
     #[cfg(feature = "render")]
     input: crate::input::InputQueue,
     #[cfg(feature = "render")]
@@ -148,6 +150,7 @@ impl<O: OutputSink> Engine<O> {
             run_service,
             user_input_service,
             simulation: Box::new(NoSimulation),
+            cpu_timing: config.mode == EngineMode::Windowed,
             #[cfg(feature = "render")]
             input: crate::input::InputQueue::default(),
             #[cfg(feature = "render")]
@@ -260,6 +263,9 @@ impl<O: OutputSink> Engine<O> {
             let now = self.clock.game_time().as_secs_f64();
             let rs = self.run_service;
             let mut resumed = 0;
+            // Off for headless engines unless asked for: reading the clock would be most of an empty frame's cost.
+            let timing = self.cpu_timing;
+            let scripts_start = timing.then(Instant::now);
             if self.context != RunContext::Server {
                 profiling::scope!("RenderStepped");
                 resumed += self.phase(Phase::RenderStepped, rs.render_stepped, dt, now);
@@ -268,6 +274,7 @@ impl<O: OutputSink> Engine<O> {
                 profiling::scope!("PreSimulation");
                 resumed += self.phase(Phase::PreSimulation, rs.pre_simulation, dt, now);
             }
+            let simulation_start = timing.then(Instant::now);
             {
                 profiling::scope!("Simulation");
                 let fixed = self.clock.fixed_step();
@@ -275,6 +282,7 @@ impl<O: OutputSink> Engine<O> {
                     self.simulation.step(&mut self.dm, fixed);
                 }
             }
+            let simulation_end = timing.then(Instant::now);
             {
                 profiling::scope!("PostSimulation");
                 resumed += self.phase(Phase::PostSimulation, rs.post_simulation, dt, now);
@@ -282,6 +290,12 @@ impl<O: OutputSink> Engine<O> {
             {
                 profiling::scope!("Heartbeat");
                 resumed += self.phase(Phase::Heartbeat, rs.heartbeat, dt, now);
+            }
+            if let (Some(scripts_start), Some(simulation_start), Some(simulation_end)) =
+                (scripts_start, simulation_start, simulation_end)
+            {
+                stats.simulation_cpu = simulation_end - simulation_start;
+                stats.script_cpu = (simulation_start - scripts_start) + simulation_end.elapsed();
             }
             stats.dt = dt;
             stats.sim_steps = advance.steps;
@@ -320,6 +334,19 @@ impl<O: OutputSink> Engine<O> {
     /// Replaces the fixed-step simulation (physics, M7). The engine starts with [`NoSimulation`].
     pub fn set_simulation(&mut self, simulation: Box<dyn Simulation>) {
         self.simulation = simulation;
+    }
+
+    /// Whether frames measure the wall time of their script phases and simulation steps
+    /// ([`FrameStats::script_cpu`], [`FrameStats::simulation_cpu`]), for the performance overlay and benchmarks.
+    /// On by default for windowed engines, off for headless ones (a server's empty frame is cheap enough that
+    /// reading the clock would show in the perf gate).
+    pub fn set_cpu_timing(&mut self, on: bool) {
+        self.cpu_timing = on;
+    }
+
+    /// Whether frames measure their script and simulation time.
+    pub fn cpu_timing(&self) -> bool {
+        self.cpu_timing
     }
 
     /// The game.

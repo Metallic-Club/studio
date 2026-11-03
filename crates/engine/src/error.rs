@@ -21,6 +21,9 @@ pub enum EngineError {
     #[cfg(feature = "luau")]
     #[error(transparent)]
     Luau(#[from] metallic_luau::LuauError),
+    /// A stress scene could not be built ([`crate::stress`]).
+    #[error(transparent)]
+    Stress(#[from] crate::stress::StressError),
     /// [`Engine::start`](crate::Engine::start) was called while the game runs.
     #[error("the game is already running")]
     AlreadyRunning,
