@@ -52,7 +52,7 @@ use std::sync::Arc;
 
 use super::{DataModel, DmError, Notice};
 use crate::registry::hash::FxMap;
-use crate::{Id, PropId, ScriptValue, SignalId};
+use crate::{ClassId, Id, PropId, ScriptValue, SignalId};
 
 /// The signals the data model fires itself, from the changes it makes. Classes declare them (on `Object` and
 /// `Instance`) under exactly these names; a class that does not declare one simply never fires it.
@@ -540,7 +540,7 @@ impl DataModel {
         match notice {
             Notice::PropertyChanged { id, prop } => {
                 if self.is_watched(id) {
-                    self.queue_prop_changed(id, prop);
+                    self.queue_changed(id, None, Some(prop));
                 }
             }
             Notice::NameChanged { id } => {
@@ -571,22 +571,6 @@ impl DataModel {
         }
     }
 
-    /// A stored property's `Changed` and property signal on the watched instance `id`, then the same for each
-    /// computed property derived from it, in declaration order (see the module docs on derived properties).
-    #[inline(never)]
-    fn queue_prop_changed(&mut self, id: Id, prop: PropId) {
-        self.queue_changed(id, None, Some(prop));
-        let Some(class) = self.slots.get(id).map(|s| s.class) else {
-            return;
-        };
-        // By index, because `queue_changed` needs `self` mutably while the list borrows the registry.
-        let mut i = 0;
-        while let Some(&dependent) = self.registry.dependents(class, prop).get(i) {
-            self.queue_changed(id, None, Some(dependent));
-            i += 1;
-        }
-    }
-
     /// `Changed("Name")` and the `Name` property's signal, on the watched instance `id`.
     #[inline(never)]
     fn queue_renamed(&mut self, id: Id) {
@@ -613,16 +597,47 @@ impl DataModel {
         }
     }
 
-    /// `Changed(name)` and the property's own changed signal, on the watched instance `id`. `name` defaults to
-    /// the property's declared name.
+    /// `Changed(name)` and the property's own changed signal, on the watched instance `id`, then the same for each
+    /// computed property derived from it, in declaration order (see the module docs on derived properties).
+    /// `name` defaults to the property's declared name.
     #[inline(never)]
     fn queue_changed(&mut self, id: Id, name: Option<&'static str>, prop: Option<PropId>) {
-        let name = name.or_else(|| {
-            let class = self.slots.get(id)?.class;
-            Some(self.registry.prop(class, prop?)?.meta.name)
-        });
-        if let Some(name) = name
-            && let Some(signal) = self.listening(id, BuiltinSignal::Changed)
+        let class = self.slots.get(id).map(|s| s.class);
+        // Looked up once for the property and its dependents: nothing connects or disconnects meanwhile.
+        let changed = self.listening(id, BuiltinSignal::Changed);
+        let name = name.or_else(|| Some(self.registry.prop(class?, prop?)?.meta.name));
+        self.queue_one_changed(id, changed, name, prop);
+        if let (Some(class), Some(prop)) = (class, prop)
+            && !self.registry.dependents(class, prop).is_empty()
+        {
+            self.queue_dependents_changed(id, class, changed, prop);
+        }
+    }
+
+    /// `Changed` (when `changed` is connected) and the property signal of each computed property of `class`
+    /// derived from `prop`.
+    #[inline(never)]
+    fn queue_dependents_changed(&mut self, id: Id, class: ClassId, changed: Option<SignalId>, prop: PropId) {
+        // By index: queueing needs `self` mutably while the list borrows the registry.
+        let mut i = 0;
+        while let Some(&dependent) = self.registry.dependents(class, prop).get(i) {
+            let name = self.registry.prop(class, dependent).map(|p| p.meta.name);
+            self.queue_one_changed(id, changed, name, Some(dependent));
+            i += 1;
+        }
+    }
+
+    /// `Changed(name)` on the `changed` signal, if connected, and the property's own changed signal.
+    #[inline(always)]
+    fn queue_one_changed(
+        &mut self,
+        id: Id,
+        changed: Option<SignalId>,
+        name: Option<&'static str>,
+        prop: Option<PropId>,
+    ) {
+        if let Some(signal) = changed
+            && let Some(name) = name
         {
             let name = self.signals.intern(name);
             self.signals.push(id, Key::Signal(signal), [ScriptValue::String(name)]);
