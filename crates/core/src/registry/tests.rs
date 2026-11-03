@@ -44,14 +44,17 @@ static EMITTER: ComponentDesc = ComponentDesc::new("LightEmitter")
 
 static OBJECT: ClassDesc = ClassDesc::new("Object", None)
     .props(&[PropMeta::string("ClassName", "").read_only()])
-    .signals(&[SignalDesc::new("Changed").params(&[("property", "string")])]);
+    .signals(&[SignalDesc::new("Changed").params(&[Param::new("property", Ty::String)])]);
 
 static INSTANCE: ClassDesc = ClassDesc::new("Instance", Some("Object"))
     .props(&[
         PropMeta::string("Name", "Instance").aliases(&["name"]),
         PropMeta::boolean("Archivable", true),
     ])
-    .methods(&[MethodDesc::new("Destroy", noop), MethodDesc::new("Clone", noop)]);
+    .methods(&[
+        MethodDesc::new("Destroy", noop).returns_nothing(),
+        MethodDesc::new("Clone", noop).returns(Ty::Class("Instance")),
+    ]);
 
 static LIGHT: ClassDesc = ClassDesc::new("Light", Some("Instance"))
     .components(&["Transform", "LightEmitter"])
@@ -67,7 +70,7 @@ static SPOT_LIGHT: ClassDesc = ClassDesc::new("SpotLight", Some("Light"))
     .creatable()
     .components(&["Transform"])
     .props(&[PropMeta::number("Angle", 90.0).range(1.0, 179.0)])
-    .methods(&[MethodDesc::new("Clone", other)])
+    .methods(&[MethodDesc::new("Clone", other).returns(Ty::Class("Instance"))])
     .defaults(&[
         ("Brightness", DefaultValue::Number(2.0)),
         ("Kind", DefaultValue::Enum("Spot")),
@@ -280,7 +283,7 @@ fn a_child_method_replaces_the_parents_in_place() {
 fn signals_are_inherited() {
     let reg = lights();
     let signal = reg.signal(id(&reg, "SpotLight"), "Changed").expect("inherited");
-    assert_eq!(signal.params, &[("property", "string")]);
+    assert_eq!(signal.params, Some(&[Param::new("property", Ty::String)][..]));
 }
 
 #[test]
@@ -1023,7 +1026,10 @@ fn rejects_alias_collision() {
 #[test]
 fn rejects_duplicate_methods_and_signals() {
     static C: ClassDesc = ClassDesc::new("C", None)
-        .methods(&[MethodDesc::new("Go", noop), MethodDesc::new("Go", other)])
+        .methods(&[
+            MethodDesc::new("Go", noop).returns_nothing(),
+            MethodDesc::new("Go", other).returns_nothing(),
+        ])
         .signals(&[SignalDesc::new("Went"), SignalDesc::new("Went")]);
     assert_eq!(
         class_errors(&[&C]),
@@ -1046,7 +1052,7 @@ fn rejects_duplicate_methods_and_signals() {
 fn rejects_members_of_different_kinds_with_one_name() {
     static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[PropMeta::number("Size", 1.0)]);
     static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base"))
-        .methods(&[MethodDesc::new("Size", noop)])
+        .methods(&[MethodDesc::new("Size", noop).returns_nothing()])
         .signals(&[SignalDesc::new("Size")]);
     assert_eq!(
         class_errors(&[&BASE, &CHILD]),
@@ -1068,7 +1074,7 @@ fn rejects_members_of_different_kinds_with_one_name() {
     // Hiding the inherited property frees the name.
     static HIDING: ClassDesc = ClassDesc::new("Hiding", Some("Base"))
         .hide(&["Size"])
-        .methods(&[MethodDesc::new("Size", noop)]);
+        .methods(&[MethodDesc::new("Size", noop).returns_nothing()]);
     assert!(build(&[&BASE, &HIDING]).is_ok());
 }
 
@@ -1102,4 +1108,208 @@ fn collects_every_problem_at_once() {
     static BAD_COMPONENT: ClassDesc = ClassDesc::new("BadComponent", Some("Object")).components(&["Nope"]);
     let errs = class_errors(&[&ROOT, &ORPHAN, &BAD_PROP, &BAD_COMPONENT]);
     assert_eq!(errs.len(), 3, "{errs:#?}");
+}
+
+// Method and signal signatures.
+
+#[test]
+fn signatures_resolve_with_their_types() {
+    static SHAPE: &[EnumDesc] = &[EnumDesc::new("Shape", &["Block"])];
+    static C: ClassDesc = ClassDesc::new("C", None)
+        .methods(&[MethodDesc::new("Find", noop)
+            .params(&[
+                Param::new("name", Ty::String),
+                Param::new("recursive", Ty::Bool).optional(),
+                Param::new("rest", Ty::Variadic(&Ty::Any)),
+            ])
+            .returns(Ty::Tuple(&[
+                Ty::Optional(&Ty::Class("C")),
+                Ty::Map(&Ty::String, &Ty::Enum("Shape")),
+            ]))])
+        .signals(&[SignalDesc::new("Moved").params(&[
+            Param::new("child", Ty::Class("C")),
+            Param::new("parent", Ty::Optional(&Ty::Class("C"))),
+        ])]);
+    let reg = Registry::build(RegistryInput {
+        classes: &[&C],
+        enums: &[SHAPE],
+        ..RegistryInput::default()
+    })
+    .expect("valid");
+    let class = id(&reg, "C");
+    let find = reg.method(class, "Find").expect("method");
+    assert_eq!(
+        find.returns.map(|t| t.to_string()).as_deref(),
+        Some("(C?, {[string]: Enum.Shape})")
+    );
+    let params: Vec<String> = find
+        .params
+        .unwrap_or_default()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(params, ["name: string", "recursive: boolean?", "...: any"]);
+    assert_eq!(
+        reg.signal(class, "Moved").and_then(|s| s.params).map(<[Param]>::len),
+        Some(2)
+    );
+}
+
+#[test]
+fn rejects_a_method_without_returns() {
+    static C: ClassDesc = ClassDesc::new("C", None).methods(&[MethodDesc::new("Go", noop).params(&[])]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::MissingReturns {
+            class: "C",
+            method: "Go"
+        }]
+    );
+}
+
+#[test]
+fn rejects_an_unknown_class_in_a_type() {
+    static C: ClassDesc = ClassDesc::new("C", None)
+        .methods(&[MethodDesc::new("Get", noop).returns(Ty::Array(&Ty::Class("Nope")))])
+        .signals(&[SignalDesc::new("Hit").params(&[Param::new("part", Ty::Optional(&Ty::Class("Part")))])]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [
+            RegistryError::UnknownTypeClass {
+                class: "C",
+                kind: MemberKind::Method,
+                member: "Get",
+                name: "Nope"
+            },
+            RegistryError::UnknownTypeClass {
+                class: "C",
+                kind: MemberKind::Signal,
+                member: "Hit",
+                name: "Part"
+            },
+        ]
+    );
+}
+
+#[test]
+fn rejects_an_unknown_enum_in_a_type() {
+    static C: ClassDesc = ClassDesc::new("C", None).methods(&[MethodDesc::new("Set", noop)
+        .params(&[Param::new("material", Ty::Enum("Material"))])
+        .returns_nothing()]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::UnknownTypeEnum {
+            class: "C",
+            kind: MemberKind::Method,
+            member: "Set",
+            enum_type: "Material"
+        }]
+    );
+}
+
+#[test]
+fn rejects_a_required_param_after_an_optional_one() {
+    static C: ClassDesc =
+        ClassDesc::new("C", None)
+            .signals(&[SignalDesc::new("Went")
+                .params(&[Param::new("from", Ty::String).optional(), Param::new("to", Ty::String)])]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::RequiredParamAfterOptional {
+            class: "C",
+            kind: MemberKind::Signal,
+            member: "Went",
+            param: "to"
+        }]
+    );
+    // A variadic after an optional parameter is fine: it can be empty.
+    static OK: ClassDesc = ClassDesc::new("C", None).signals(&[SignalDesc::new("Went").params(&[
+        Param::new("from", Ty::String).optional(),
+        Param::new("rest", Ty::Variadic(&Ty::Any)),
+    ])]);
+    assert!(build(&[&OK]).is_ok());
+}
+
+#[test]
+fn rejects_a_variadic_that_is_not_last() {
+    static C: ClassDesc = ClassDesc::new("C", None).methods(&[MethodDesc::new("Fire", noop)
+        .params(&[Param::new("args", Ty::Variadic(&Ty::Any)), Param::new("last", Ty::Bool)])
+        .returns_nothing()]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [RegistryError::VariadicNotLast {
+            class: "C",
+            kind: MemberKind::Method,
+            member: "Fire",
+            param: "args"
+        }]
+    );
+}
+
+#[test]
+fn rejects_a_variadic_in_a_return_or_inside_a_type() {
+    static C: ClassDesc = ClassDesc::new("C", None)
+        .methods(&[MethodDesc::new("Get", noop).params(&[]).returns(Ty::Variadic(&Ty::Any))])
+        .signals(&[SignalDesc::new("Got").params(&[Param::new("values", Ty::Array(&Ty::Variadic(&Ty::Any)))])]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [
+            RegistryError::MisplacedVariadic {
+                class: "C",
+                kind: MemberKind::Method,
+                member: "Get",
+                ty: Ty::Variadic(&Ty::Any)
+            },
+            RegistryError::MisplacedVariadic {
+                class: "C",
+                kind: MemberKind::Signal,
+                member: "Got",
+                ty: Ty::Array(&Ty::Variadic(&Ty::Any))
+            },
+        ]
+    );
+}
+
+#[test]
+fn rejects_a_tuple_outside_a_return() {
+    static C: ClassDesc = ClassDesc::new("C", None).methods(&[MethodDesc::new("Get", noop)
+        .params(&[Param::new("pair", Ty::Tuple(&[Ty::Bool, Ty::Bool]))])
+        .returns(Ty::Optional(&Ty::NOTHING))]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [
+            RegistryError::MisplacedTuple {
+                class: "C",
+                kind: MemberKind::Method,
+                member: "Get",
+                ty: Ty::Tuple(&[Ty::Bool, Ty::Bool])
+            },
+            RegistryError::MisplacedTuple {
+                class: "C",
+                kind: MemberKind::Method,
+                member: "Get",
+                ty: Ty::Optional(&Ty::NOTHING)
+            },
+        ]
+    );
+}
+
+#[test]
+fn signature_messages_name_the_member_and_the_fix() {
+    let err = RegistryError::MisplacedVariadic {
+        class: "Part",
+        kind: MemberKind::Method,
+        member: "Get",
+        ty: Ty::Array(&Ty::Variadic(&Ty::Any)),
+    };
+    assert_eq!(
+        err.to_string(),
+        "class `Part` declares method `Get` with type `{...any}`; a variadic (`...T`) can only be the whole type of \
+         the last parameter"
+    );
+    let missing = RegistryError::MissingReturns {
+        class: "Part",
+        method: "Go",
+    };
+    assert!(missing.to_string().contains(".returns_nothing()"));
 }

@@ -1,6 +1,6 @@
 //! `DataModel`: the root of the game tree (`game` in scripts). Every service sits directly under it.
 
-use metallic_core::{ClassDesc, MethodCall, MethodDesc, ScriptError, ScriptValue};
+use metallic_core::{ClassDesc, MethodCall, MethodDesc, Param, ScriptError, ScriptValue, Ty};
 
 use crate::script_args::class_arg;
 
@@ -21,10 +21,13 @@ fn get_service(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
 /// The root of the game tree.
 pub static CLASS: ClassDesc = ClassDesc::new("DataModel", Some("Instance"))
     .describe("The whole game (`game` in scripts). Its children are the services, such as Workspace and Lighting.")
-    .methods(&[MethodDesc::new("GetService", get_service).describe(
-        "Returns the service with the given class name, such as game:GetService(\"Lighting\"). It always returns the \
-         same instance for a service.",
-    )]);
+    .methods(&[MethodDesc::new("GetService", get_service)
+        .params(&[Param::new("className", Ty::String)])
+        .returns(Ty::Class("Instance"))
+        .describe(
+            "Returns the service with the given class name, such as game:GetService(\"Lighting\"). It always returns \
+             the same instance for a service.",
+        )]);
 
 #[cfg(test)]
 mod tests {

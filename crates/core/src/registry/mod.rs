@@ -20,18 +20,27 @@
 //! A computed property can name the stored properties it is derived from ([`PropMeta::derived_from`]). Each class
 //! resolves these once into a table from a stored property to its dependents ([`ClassInfo::dependents`]), which the
 //! data model reads to fire the dependents' changed signals after their source's.
+//!
+//! # Signatures
+//!
+//! Methods and signals declare their parameters and returns with [`Param`] and [`Ty`], for the API dump, the
+//! generated type definitions and docs. The registry checks a class's own signatures when it resolves the class:
+//! class and enum names in types exist, required parameters come before optional ones, a variadic stands only as the
+//! last parameter, a tuple only as a method's return, and every method declares its returns.
 
 mod desc;
 mod error;
 pub(crate) mod hash;
 mod prop;
 mod resolve;
+mod ty;
 
 use std::fmt;
 
 pub use desc::{ClassBehavior, ClassDesc, ComponentDesc, EnumDesc, MethodCall, MethodDesc, MethodFn, SignalDesc};
 pub use error::{MemberKind, Owner, RegistryError, RegistryErrors};
 pub use prop::{Computed, DefaultValue, Getter, PropFlags, PropMeta, Setter, Widget};
+pub use ty::{Param, Ty};
 
 use crate::{EnumItem, Value};
 use hash::FxMap;

@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use super::{PropId, PropMeta};
+use super::{Param, PropId, PropMeta, Ty};
 use crate::{Args, DataModel, Id, ScriptError, ScriptValue};
 
 /// The arguments of one method call: the instance it was called on, the script's arguments and the data model.
@@ -25,6 +25,23 @@ pub struct MethodCall<'a> {
 pub type MethodFn = fn(&mut MethodCall<'_>) -> Result<ScriptValue, ScriptError>;
 
 /// A method scripts can call on instances of a class, such as `Destroy` or `GetChildren`.
+///
+/// Its signature is metadata for the API dump, type definitions and docs; the Rust function still checks its own
+/// arguments. Every method declares both halves, even when they are empty: `.params(&[])` for no parameters and
+/// [`returns_nothing`](Self::returns_nothing) (written `()`) for no return value. The registry rejects a method
+/// without declared returns.
+///
+/// ```
+/// use metallic_core::{MethodCall, MethodDesc, Param, ScriptError, ScriptValue, Ty};
+///
+/// fn find(_: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+///     Ok(ScriptValue::Nil)
+/// }
+///
+/// static FIND: MethodDesc = MethodDesc::new("FindFirstChild", find)
+///     .params(&[Param::new("name", Ty::String), Param::new("recursive", Ty::Bool).optional()])
+///     .returns(Ty::Optional(&Ty::Class("Instance")));
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct MethodDesc {
     /// The name scripts call.
@@ -33,15 +50,22 @@ pub struct MethodDesc {
     pub func: MethodFn,
     /// What the method does, for the API docs.
     pub description: &'static str,
+    /// The parameters after the receiver, or `None` until they are declared.
+    pub params: Option<&'static [Param]>,
+    /// What it returns ([`Ty::NOTHING`] for nothing, a [`Ty::Tuple`] for several values), or `None` until it is
+    /// declared.
+    pub returns: Option<Ty>,
 }
 
 impl MethodDesc {
-    /// A method `name` that runs `func`.
+    /// A method `name` that runs `func`, with its signature still to declare.
     pub const fn new(name: &'static str, func: MethodFn) -> Self {
         Self {
             name,
             func,
             description: "",
+            params: None,
+            returns: None,
         }
     }
 
@@ -50,26 +74,46 @@ impl MethodDesc {
         self.description = description;
         self
     }
+
+    /// Declares the parameters after the receiver, in order; `&[]` for none. Optional ones come last, and a
+    /// [`Ty::Variadic`] one only at the very end.
+    pub const fn params(mut self, params: &'static [Param]) -> Self {
+        self.params = Some(params);
+        self
+    }
+
+    /// Declares what the method returns: one type, or a [`Ty::Tuple`] for several values.
+    pub const fn returns(mut self, ty: Ty) -> Self {
+        self.returns = Some(ty);
+        self
+    }
+
+    /// Declares that the method returns nothing (`()`, [`Ty::NOTHING`]). Prefer this to `returns(Ty::Nil)`, which
+    /// says it returns one value that is always nil.
+    pub const fn returns_nothing(self) -> Self {
+        self.returns(Ty::NOTHING)
+    }
 }
 
-/// A signal scripts can connect to, such as `ChildAdded`. It is fired from Rust; the parameters here are for docs.
+/// A signal scripts can connect to, such as `ChildAdded`. It is fired from Rust; the parameters here describe what
+/// listeners receive, for the API dump, type definitions and docs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SignalDesc {
     /// The name scripts connect to.
     pub name: &'static str,
     /// When the signal fires, for the API docs.
     pub description: &'static str,
-    /// `(name, type)` of each value passed to listeners, such as `("child", "Instance")`.
-    pub params: &'static [(&'static str, &'static str)],
+    /// The values passed to listeners, in order (`.params(&[])` for none), or `None` until they are declared.
+    pub params: Option<&'static [Param]>,
 }
 
 impl SignalDesc {
-    /// A signal `name` with no parameters.
+    /// A signal `name`, with its parameters still to declare.
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
             description: "",
-            params: &[],
+            params: None,
         }
     }
 
@@ -79,9 +123,10 @@ impl SignalDesc {
         self
     }
 
-    /// Sets the parameters listeners receive.
-    pub const fn params(mut self, params: &'static [(&'static str, &'static str)]) -> Self {
-        self.params = params;
+    /// Declares the values listeners receive, in order; `&[]` for none. A [`Ty::Variadic`] parameter may only come
+    /// last.
+    pub const fn params(mut self, params: &'static [Param]) -> Self {
+        self.params = Some(params);
         self
     }
 }
@@ -438,9 +483,15 @@ mod tests {
         .hidden_in_explorer()
         .components(&["Transform"])
         .props(&[PropMeta::number("Gravity", 9.81)])
-        .methods(&[MethodDesc::new("Raycast", nothing).describe("Casts a ray.")])
+        .methods(&[MethodDesc::new("Raycast", nothing)
+            .params(&[
+                Param::new("origin", Ty::Vector3),
+                Param::new("range", Ty::Number).optional(),
+            ])
+            .returns(Ty::Optional(&Ty::Class("Instance")))
+            .describe("Casts a ray.")])
         .signals(&[SignalDesc::new("Stepped")
-            .params(&[("dt", "number")])
+            .params(&[Param::new("dt", Ty::Number)])
             .describe("Each step.")])
         .hide(&["Archivable"])
         .defaults(&[("Name", DefaultValue::Str("Workspace"))])
@@ -458,7 +509,17 @@ mod tests {
         assert_eq!(CLASS.components, &["Transform"]);
         assert_eq!(CLASS.props[0].name, "Gravity");
         assert_eq!(CLASS.methods[0].description, "Casts a ray.");
-        assert_eq!(CLASS.signals[0].params, &[("dt", "number")]);
+        assert_eq!(CLASS.signals[0].params, Some(&[Param::new("dt", Ty::Number)][..]));
+        let raycast = &CLASS.methods[0];
+        assert_eq!(raycast.params.map(<[Param]>::len), Some(2));
+        assert!(raycast.params.is_some_and(|p| p[1].optional));
+        assert_eq!(raycast.returns, Some(Ty::Optional(&Ty::Class("Instance"))));
+        assert_eq!(MethodDesc::new("Go", nothing).returns, None);
+        assert_eq!(
+            MethodDesc::new("Go", nothing).returns_nothing().returns,
+            Some(Ty::NOTHING)
+        );
+        assert_eq!(SignalDesc::new("Went").params, None);
         assert_eq!(CLASS.hide, &["Archivable"]);
         assert_eq!(CLASS.defaults[0].0, "Name");
         assert!(CLASS.behavior.is_some());

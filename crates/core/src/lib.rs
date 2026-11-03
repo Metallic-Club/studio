@@ -32,8 +32,9 @@ pub use id::Id;
 pub use math::{CFrame, Color3, Vector2, Vector3};
 pub use registry::{
     ClassBehavior, ClassDesc, ClassId, ClassInfo, ComponentDesc, Computed, DefaultValue, EnumDesc, Getter, MemberKind,
-    MethodCall, MethodDesc, MethodFn, Owner, PropFlags, PropId, PropMeta, Registry, RegistryError, RegistryErrors,
-    RegistryInput, ResolvedMember, ResolvedMethod, ResolvedProp, ResolvedSignal, Setter, SignalDesc, SignalId, Widget,
+    MethodCall, MethodDesc, MethodFn, Owner, Param, PropFlags, PropId, PropMeta, Registry, RegistryError,
+    RegistryErrors, RegistryInput, ResolvedMember, ResolvedMethod, ResolvedProp, ResolvedSignal, Setter, SignalDesc,
+    SignalId, Ty, Widget,
 };
 pub use script_value::{ScriptError, ScriptValue};
 pub use value::{PropType, Value};

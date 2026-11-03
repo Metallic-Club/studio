@@ -1,6 +1,9 @@
 //! `BindableEvent`: a signal scripts fire themselves, to talk to other scripts on the same side.
 
-use metallic_core::{ClassDesc, MethodCall, MethodDesc, ScriptError, ScriptValue, SignalDesc};
+use metallic_core::{ClassDesc, MethodCall, MethodDesc, Param, ScriptError, ScriptValue, SignalDesc, Ty};
+
+/// Any number of values of any type: what `Fire` takes and `Event` passes on unchanged.
+static ARGS: &[Param] = &[Param::new("args", Ty::Variadic(&Ty::Any))];
 
 /// Fires `Event` with every argument, through the data model, so nothing is queued while nothing listens.
 fn fire(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
@@ -16,12 +19,15 @@ pub static CLASS: ClassDesc = ClassDesc::new("BindableEvent", Some("Instance"))
          runs with the same arguments. It works between scripts on the same side (server or client).",
     )
     .creatable()
-    .methods(&[MethodDesc::new("Fire", fire).describe(
-        "Fires Event with all the arguments given. Listeners run later in the frame, not inside Fire; when \
-         nothing is connected, nothing happens.",
-    )])
+    .methods(&[MethodDesc::new("Fire", fire)
+        .params(ARGS)
+        .returns_nothing()
+        .describe(
+            "Fires Event with all the arguments given. Listeners run later in the frame, not inside Fire; when \
+             nothing is connected, nothing happens.",
+        )])
     .signals(&[SignalDesc::new("Event")
-        .params(&[("...", "any")])
+        .params(ARGS)
         .describe("Fires when Fire is called, with the arguments passed to Fire.")]);
 
 #[cfg(test)]
@@ -44,7 +50,10 @@ mod tests {
         assert_eq!(chain, ["Object", "Instance", "BindableEvent"]);
         assert!(info.creatable());
         assert!(registry.method(class, "Fire").is_some());
-        assert_eq!(registry.signal(class, "Event").unwrap().params, &[("...", "any")]);
+        assert_eq!(registry.signal(class, "Event").unwrap().params, Some(super::ARGS));
+        let fire = registry.method(class, "Fire").unwrap();
+        assert_eq!(fire.params, Some(super::ARGS));
+        assert_eq!(super::ARGS[0].to_string(), "...: any");
     }
 
     #[test]
