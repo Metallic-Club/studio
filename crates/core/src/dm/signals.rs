@@ -47,6 +47,22 @@
 //! A grave lasts until the drain after the one that delivered those events begins. The instance's connections
 //! receive the events queued up to and including its destruction (`Destroying`, `AncestryChanged`, ...), then the
 //! drain that delivers them drops the connections.
+//!
+//! # Dropped connections
+//!
+//! Every connection ends exactly once, in one of two ways, so a caller that keeps something per connection (the
+//! script host's listener records and the backend's function references) can release it exactly once:
+//!
+//! - The caller ends it: [`DataModel::disconnect`] returns `true`. Nothing else reports it.
+//! - The data model drops it on its own: today, when its instance is destroyed. The drain that delivers the
+//!   instance's last events drops the connection and records `(ConnectionId, ListenerKey)`;
+//!   [`DataModel::drain_dropped_connections`] hands the records out. A connection made and destroyed before any
+//!   drain is reported too, and so is every connection in a destroyed subtree.
+//!
+//! Disconnecting a connection whose instance is destroyed but not yet drained still returns `true`, and the drain
+//! then does not report it. The intended frame loop is: `drain_deliveries`, run the listeners (their last events
+//! included), then `drain_dropped_connections` and release what it lists. The records wait in the data model until
+//! they are drained, so nothing is lost if a frame skips the call; a host that never calls it keeps them all.
 
 use std::sync::Arc;
 
@@ -216,6 +232,8 @@ pub(super) struct Signals {
     graves: FxMap<Id, Grave>,
     /// Watched instances destroyed since the last drain, whose connections that drain drops.
     dead: Vec<Id>,
+    /// Connections dropped with their destroyed instances, until `drain_dropped_connections` hands them out.
+    dropped: Vec<(ConnectionId, ListenerKey)>,
     /// How many drains have run.
     epoch: u64,
 }
@@ -367,7 +385,8 @@ impl DataModel {
     }
 
     /// Ends a connection (`Disconnect` in scripts): it receives nothing more, not even events already queued.
-    /// Returns `false` when it was already disconnected (or dropped with its destroyed instance).
+    /// Returns `false` when it was already disconnected, or dropped with its destroyed instance (which
+    /// [`DataModel::drain_dropped_connections`] reports instead).
     pub fn disconnect(&mut self, connection: ConnectionId) -> bool {
         let s = &mut self.signals;
         let current = s
@@ -457,7 +476,9 @@ impl DataModel {
     /// connections in connection order, and empties the queue.
     ///
     /// The caller runs the listeners after this returns; whatever they change is delivered by the next drain (see
-    /// the module docs). Allocates nothing beyond growing `out` and copying each delivery's arguments.
+    /// the module docs). Then drops the connections of instances destroyed since the last drain, which
+    /// [`DataModel::drain_dropped_connections`] reports. Allocates nothing beyond growing `out`, copying each
+    /// delivery's arguments and growing the dropped-connection list.
     pub fn drain_deliveries(&mut self, out: &mut Vec<Delivery>) {
         let s = &mut self.signals;
         // Graves handed out by the previous drain have been seen by its listeners.
@@ -504,11 +525,27 @@ impl DataModel {
             }
             if let Some(list) = s.by_source.remove(&id) {
                 for index in list {
-                    s.free_connection(index);
+                    // The id as `connect` returned it: freeing moves the generation on.
+                    let generation = s.connections.get(index as usize).map_or(0, |slot| slot.generation);
+                    if let Some(connection) = s.free_connection(index) {
+                        s.dropped
+                            .push((ConnectionId { index, generation }, connection.listener));
+                    }
                 }
             }
         }
         s.dead = dead;
+    }
+
+    /// Appends to `out` every connection the data model dropped on its own since the last call, with the listener
+    /// it was made with, and forgets them. Today that is the connections of destroyed instances, dropped by the
+    /// [`DataModel::drain_deliveries`] that delivered their last events (see the module docs on dropped
+    /// connections).
+    ///
+    /// A connection ended by [`DataModel::disconnect`] is not reported: the caller already knows. Allocates nothing
+    /// beyond growing `out`.
+    pub fn drain_dropped_connections(&mut self, out: &mut Vec<(ConnectionId, ListenerKey)>) {
+        out.append(&mut self.signals.dropped);
     }
 
     /// The id of the built-in signal `which` on the live instance's class, if the class declares it.
