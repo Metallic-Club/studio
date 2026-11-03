@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{self as wevent, ElementState, MouseScrollDelta};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{self as wkey, PhysicalKey};
@@ -222,6 +222,12 @@ impl WindowBackend for WinitWindow {
 
     fn set_cursor_visible(&self, visible: bool) {
         self.window.set_cursor_visible(visible);
+    }
+
+    fn set_cursor_position(&self, position: Position) -> Result<(), PlatformError> {
+        self.window
+            .set_cursor_position(PhysicalPosition::new(position.x, position.y))
+            .map_err(|err| PlatformError::Window(format!("cannot move the cursor: {err}")))
     }
 
     fn request_redraw(&self) {

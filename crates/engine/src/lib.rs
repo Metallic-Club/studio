@@ -81,8 +81,9 @@
 //! part, under `render`, is the input step: it translates the platform's events (`metallic_platform::KeyCode` to
 //! `Enum.KeyCode` through the one table [`metallic_classes::with_key_codes`] keeps), and applies the cursor state
 //! scripts set to the window: `MouseBehavior` `LockCenter` and `LockCurrentPosition` ask for
-//! `CursorGrab::Lock` (the platform confines the cursor where it cannot lock it), `Default` for `None`, and
-//! `MouseIconEnabled` shows or hides the cursor. Each is applied once per change, and again to a new window.
+//! `CursorGrab::Lock`, after moving the cursor to the point to hold (where the platform can only confine the
+//! cursor, the engine moves it back at each input step), `Default` for `None`, and `MouseIconEnabled` shows or
+//! hides the cursor. Each is applied once per change, and again to a new window; a lock again when focus returns.
 //!
 //! - **Mouse movement is free when unwatched:** it is summed per frame, `InputChanged` fires once per frame and
 //!   only while something listens to it ([`DataModel::is_signal_watched`](metallic_core::DataModel::is_signal_watched)),

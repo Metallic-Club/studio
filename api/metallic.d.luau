@@ -633,7 +633,7 @@ end
 
 --- Keyboard, mouse and touch input: events for every key, button, movement and touch, what is held right now, and how the mouse cursor behaves. Input arrives at the start of each frame. Get it with game:GetService("UserInputService").
 declare extern type UserInputService extends Instance with
-    --- How the cursor behaves. Default leaves it free; LockCenter and LockCurrentPosition hold it in the window so mouse movement can turn a camera (read GetMouseDelta). Where the system cannot lock the cursor (Windows), it is kept inside the window instead.
+    --- How the cursor behaves. Default leaves it free; LockCenter holds it at the window's centre and LockCurrentPosition where it was when set, so mouse movement can turn a camera (read GetMouseDelta).
     MouseBehavior: EnumMouseBehavior
     --- Whether the cursor is shown over the game's window.
     MouseIconEnabled: boolean
