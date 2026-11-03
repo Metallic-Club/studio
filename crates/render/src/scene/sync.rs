@@ -3,7 +3,10 @@
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, ConsumerId, DataModel, DirtyBits, DmError, Id};
 
+use crate::cull::{CullStats, CullView, VisibleSet};
+
 use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
+use super::grid::Grid;
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
@@ -64,6 +67,10 @@ pub struct InstanceScene {
     uploads: Vec<UploadRange>,
     /// Which slots each draw covers (see [`super::lists`]).
     lists: DrawLists,
+    /// Every listed instance's bounding sphere, for culling (see [`super::grid`]).
+    grid: Grid,
+    /// Changes whenever a coalesce changed any slot, so a view's cull can be kept while nothing changed.
+    revision: u64,
 }
 
 impl InstanceScene {
@@ -89,6 +96,8 @@ impl InstanceScene {
             removed: Vec::new(),
             uploads: Vec::new(),
             lists: DrawLists::default(),
+            grid: Grid::default(),
+            revision: 0,
         })
     }
 
@@ -116,6 +125,8 @@ impl InstanceScene {
         self.entries.fill(Entry::EMPTY);
         self.uploads.clear();
         self.lists.clear();
+        self.grid.clear();
+        self.revision = self.revision.wrapping_add(1);
         self.rest_cursor = 0;
         dm.mark_all(self.consumer);
     }
@@ -178,6 +189,7 @@ impl InstanceScene {
                         row[3] = t;
                     }
                 }
+                slots.mark_moved(slot);
                 slots.mark_dirty(slot);
             }
         }
@@ -223,8 +235,12 @@ impl InstanceScene {
     /// region the ranges are sorted, adjacent slots share a range, and runs separated by at most
     /// [`MAX_UPLOAD_GAP`] clean slots are merged.
     ///
-    /// The draw lists ([`InstanceScene::draw_list`]) are brought up to date first, from the same dirty slots.
+    /// The draw lists ([`InstanceScene::draw_list`]) and the culling grid are brought up to date first, from the
+    /// same dirty slots.
     pub fn coalesce(&mut self) {
+        if Region::ALL.iter().any(|r| self.regions[r.index()].dirty_len() > 0) {
+            self.revision = self.revision.wrapping_add(1);
+        }
         self.update_lists();
         self.uploads.clear();
         for region in Region::ALL {
@@ -235,6 +251,31 @@ impl InstanceScene {
     /// The ranges the last [`InstanceScene::coalesce`] produced.
     pub fn uploads(&self) -> &[UploadRange] {
         &self.uploads
+    }
+
+    /// Changes whenever a [`InstanceScene::coalesce`] changed any slot (or the scene was rebuilt): while it stays
+    /// the same, a cull for the same view gives the same result.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Writes the instances `view` sees into `out`, as of the last [`InstanceScene::coalesce`]: per mesh kind the
+    /// visible opaque entries, roughly front to back, and the visible see-through entries (see [`crate::cull`]).
+    /// Allocates nothing once `out` has grown to the scene's lists.
+    pub fn cull(&self, view: &CullView, out: &mut VisibleSet) -> CullStats {
+        let start = std::time::Instant::now();
+        let capacities = self.lists.opaque.iter().map(|list| list.entries.len());
+        let mut stats = self
+            .grid
+            .cull(view, capacities, self.lists.transparent.entries.len(), out);
+        stats.cpu_time = start.elapsed();
+        out.stats = stats;
+        stats
+    }
+
+    /// Instances in the culling grid: every one on a draw list.
+    pub fn culling_items(&self) -> usize {
+        self.grid.len()
     }
 
     /// The entries drawn as opaque instances of mesh `kind`, in no particular order: one per live slot whose
@@ -303,6 +344,13 @@ impl InstanceScene {
         };
         let want = list_of(instance);
         let (have, pos) = (meta.list, meta.list_pos);
+        // The grid holds the bounding sphere and the list: unless one of them changed, its item is still right.
+        if meta.moved || want != have {
+            self.grid.update(region, slot, instance, want);
+            if let Some(meta) = self.regions[region.index()].meta.get_mut(slot as usize) {
+                meta.moved = false;
+            }
+        }
         if want == have {
             if have != NOT_LISTED {
                 self.lists.changed(have, pos);
@@ -515,8 +563,14 @@ impl InstanceScene {
     fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding) {
         let instance = pack(dm, id, binding, &self.classes, self.origin);
         let region = &mut self.regions[slot.region.index()];
+        let mut moved = false;
         if let Some(target) = region.instances.get_mut(slot.slot as usize) {
+            // A recolour leaves the culling grid alone; only a new transform (or size) moves the bounding sphere.
+            moved = target.rows != instance.rows;
             *target = instance;
+        }
+        if moved {
+            region.mark_moved(slot.slot);
         }
         region.mark_dirty(slot.slot);
     }

@@ -19,9 +19,11 @@
 //! - **Vertex-buffer path** (GLES): vertex buffers cannot be indexed through a list, so there the list holds
 //!   copies of the instances, read as per-instance attributes.
 //!
-//! Culling (#79) fills the same lists with the *visible* entries of each kind instead of all of them, and the GPU
-//! path can then write the counts into indirect draw arguments. Indirect draws are not used yet: with nothing on
-//! the GPU writing the counts they would only add wgpu's indirect-argument validation pass.
+//! Culling ([`crate::cull`], on by default: [`crate::RendererSettings::cull`]) fills the same lists with the
+//! *visible* entries of each kind instead of all of them, front to back, and the transparent pass sorts only the
+//! visible see-through instances. A GPU culling path can later write the counts into indirect draw arguments.
+//! Indirect draws are not used yet: with nothing on the GPU writing the counts they would only add wgpu's
+//! indirect-argument validation pass.
 //!
 //! # Transparency
 //!
@@ -113,6 +115,8 @@ pub struct DrawStats {
     pub transparent_instances: u32,
     /// Triangles drawn in the transparent pass.
     pub transparent_triangles: u64,
+    /// Instances culled from the frame (outside the view, too far or too small; see [`crate::cull`]).
+    pub culled_instances: u32,
 }
 
 impl DrawStats {
@@ -354,8 +358,8 @@ impl PartRenderer {
     }
 
     /// Prepares a frame of `scene` seen from `camera` on a `width` × `height` target: the uniforms, the material
-    /// table, the sorted transparent list and the bind groups. Call it after [`GpuScene::upload`] (which may
-    /// replace buffers) and before the passes. `None` draws nothing.
+    /// table, the sorted transparent list and the bind groups. Call it after [`GpuScene::upload_view`] (which may
+    /// replace buffers, and decides what is drawn) and before the passes. `None` draws nothing.
     pub(crate) fn prepare(&mut self, scene: &GpuScene, camera: Option<&Camera>, width: u32, height: u32, srgb: bool) {
         self.stats = DrawStats::default();
         self.draws.clear();
@@ -404,7 +408,14 @@ impl PartRenderer {
             self.stats.opaque_instances += segment.len;
             self.stats.opaque_triangles += u64::from(segment.len) * u64::from(mesh.index_count / 3);
         }
-        self.transparent.update(&self.device, &self.queue, instances, offset);
+        self.transparent.update(
+            &self.device,
+            &self.queue,
+            instances,
+            scene.transparent_entries(),
+            offset,
+        );
+        self.stats.culled_instances = scene.cull_stats().culled();
         for run in self.transparent.runs() {
             let mesh = self.meshes.range(run.kind);
             self.stats.transparent_instances += run.count;

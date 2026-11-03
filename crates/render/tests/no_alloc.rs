@@ -20,6 +20,10 @@
 //! than the same write and draw by hand, the same for 35 quads as for 1,300 (beyond the runner noise the parts
 //! frames also see), and the heap does not grow over 100 such frames.
 //!
+//! Culling (#79) too: a cull of 10,000 parts from an orbiting camera allocates nothing at all once warm, the parts
+//! frames above cull and upload their visible lists every frame (the hand-written frame makes the same staging
+//! write and copies), and the heap does not grow over 100 culled frames on either instance path.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
 // A `#[global_allocator]` needs `unsafe impl GlobalAlloc`. This test binary's allocator only counts, then forwards
@@ -673,6 +677,9 @@ struct HandParts {
     indices: wgpu::Buffer,
     frame: wgpu::Buffer,
     sorted: wgpu::Buffer,
+    /// The opaque draw lists, and the staging buffer their visible entries are written through.
+    entries: wgpu::Buffer,
+    list_staging: wgpu::Buffer,
     depth: wgpu::TextureView,
     sorted_bytes: Vec<u8>,
 }
@@ -790,12 +797,20 @@ impl HandParts {
             indices: buffer(4 * 4096, wgpu::BufferUsages::INDEX),
             frame,
             sorted,
+            list_staging: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hand list staging"),
+                size: instances * 4,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            entries,
             depth,
             sorted_bytes: vec![0; (instances * 4) as usize],
         }
     }
 
-    /// The renderer's default passes with `opaque` and `transparent` instanced draws, after writing the frame
+    /// The renderer's default passes with `opaque` and `transparent` instanced draws, after writing each kind's
+    /// `visible` list entries (one staging write and a copy per list, as a culled frame uploads its lists), the frame
     /// uniform and `sorted` transparent entries: the wgpu calls `Renderer::render_scene` makes.
     fn frame(
         &self,
@@ -803,10 +818,22 @@ impl HandParts {
         queue: &wgpu::Queue,
         target: &wgpu::TextureView,
         (opaque, transparent, sorted): (u32, u32, usize),
+        visible: &[u32],
     ) -> wgpu::SubmissionIndex {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
         });
+        let listed: u64 = visible.iter().map(|&n| u64::from(n) * 4).sum();
+        if let Some(size) = wgpu::BufferSize::new(listed) {
+            if let Some(mut view) = queue.write_buffer_with(&self.list_staging, 0, size) {
+                view.slice(..).copy_from_slice(&self.sorted_bytes[..listed as usize]);
+            }
+            let mut source = 0;
+            for bytes in visible.iter().filter(|&&n| n > 0).map(|&n| u64::from(n) * 4) {
+                encoder.copy_buffer_to_buffer(&self.list_staging, source, &self.entries, source, bytes);
+                source += bytes;
+            }
+        }
         queue.write_buffer(&self.frame, 0, &[0; 160]);
         queue.write_buffer(&self.sorted, 0, &self.sorted_bytes[..sorted * 4]);
         for &(label, clear, depth_write) in &DEFAULT_PASSES {
@@ -897,9 +924,14 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
                 let calls = (
                     stats.opaque_draws,
                     stats.transparent_draws,
-                    scene.scene().transparent_list().len(),
+                    stats.transparent_instances as usize,
                 );
-                allocations_in(|| hand.frame(device, queue, target.view(), calls))
+                // The camera moves every frame, so every frame culls again and uploads each kind's visible list.
+                let mut visible = [0u32; 4];
+                for (n, segment) in visible.iter_mut().zip(scene.list_segments()) {
+                    *n = segment.len;
+                }
+                allocations_in(|| hand.frame(device, queue, target.view(), calls, &visible))
             };
             // Each frame finishes before the next starts. The hand-written draws are degenerate, so on a software
             // rasteriser the renderer's frames take far longer, and with frames in flight wgpu's bookkeeping of
@@ -976,20 +1008,34 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
     );
 }
 
+/// Frames of moving parts seen from an orbiting camera, so every frame culls again and uploads the visible lists,
+/// on both instance paths (the vertex-buffer fallback's lists hold copies of the visible instances).
 #[test]
 fn nothing_accumulates_over_parts_frames() {
-    let Some(context) = support::gpu() else { return };
+    for force_vertex_instances in [false, true] {
+        let options = metallic_render::ContextOptions {
+            force_vertex_instances,
+            ..metallic_render::ContextOptions::default()
+        };
+        let Some(context) = support::gpu_with(&options) else {
+            return;
+        };
+        parts_frames_do_not_grow_the_heap(&context);
+    }
+}
+
+fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
     let mut game = support::scenes::Game::new();
     let parts = support::scenes::grid(&mut game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
     let mut scene = GpuScene::new(
-        &context,
+        context,
         &mut game.dm,
         Some(game.workspace),
         &RenderComponents::builtin(),
     )
-    .unwrap();
-    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
-    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    .expect("a scene");
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
+    let mut renderer = Renderer::new(context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
     let mut pacer = Pacer::new();
     let mut before = 0;
     for frame in 0..WARM_UP + FRAMES {
@@ -1008,13 +1054,49 @@ fn nothing_accumulates_over_parts_frames() {
     }
     let grown = live_bytes() - before;
     eprintln!(
-        "{FRAMES} frames drawing {:?}: heap grew {grown} bytes",
+        "{FRAMES} frames on the {:?} path drawing {:?}: heap grew {grown} bytes",
+        InstanceBinding::for_context(context),
         renderer.draw_stats()
     );
+    assert!(renderer.draw_stats().culled_instances > 0, "nothing was culled");
     assert!(
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"
     );
+}
+
+#[test]
+fn a_cull_allocates_nothing_once_warm() {
+    let mut game = SceneGame::new();
+    let mut scene = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin()).unwrap();
+    let mut visible = metallic_render::VisibleSet::new();
+    let settings = metallic_render::CullSettings {
+        min_screen_size: 2.0,
+        ..metallic_render::CullSettings::default()
+    };
+    let (mut allocations, mut grown, mut culled) = (0, 0, 0);
+    for frame in 0..WARM_UP + FRAMES {
+        game.edit(frame);
+        scene.sync(&mut game.dm);
+        scene.coalesce();
+        let camera = orbiting_camera(frame);
+        let view = metallic_render::CullView::for_camera(&camera, scene.origin(), 1920, 1080, &settings);
+        let before = live_bytes();
+        let (count, stats) = allocations_in(|| scene.cull(&view, &mut visible));
+        if frame >= WARM_UP {
+            allocations += count;
+            grown += live_bytes() - before;
+            culled += stats.culled();
+        }
+    }
+    eprintln!(
+        "{FRAMES} culls of {SCENE_PARTS} parts from an orbiting camera: {allocations} allocations, heap grew {grown} \
+         bytes, {culled} parts culled; the last: {:?}",
+        visible.stats()
+    );
+    assert!(culled > 0, "nothing was culled");
+    assert_eq!(allocations, 0, "the cull allocated");
+    assert_eq!(grown, 0, "the heap grew");
 }
 
 /// What an overlay frame draws: `lines` lines of formatted numbers that change every frame and a graph of `bars`

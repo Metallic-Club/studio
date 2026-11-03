@@ -10,7 +10,11 @@
 //!   plus one of partly see-through instances, updated in [`InstanceScene::coalesce`] from the same dirty slots
 //!   ([`InstanceScene::draw_list`]). [`GpuScene`] uploads their changed entries into one buffer with a segment
 //!   per kind ([`GpuScene::list_buffer`]), which the renderer draws one instanced draw per kind from
-//!   ([`crate::parts`]). Culling (#79) fills the same lists with visible entries only.
+//!   ([`crate::parts`]).
+//! - **Culling** ([`crate::cull`]): every listed instance's bounding sphere is also in a loose grid, kept current
+//!   from the same dirty slots in [`InstanceScene::coalesce`]. [`InstanceScene::cull`] walks it for a view and
+//!   writes the visible entries in the lists' format; [`GpuScene::upload_view`] uploads those into the same
+//!   segments instead of every live entry.
 //!
 //! # Slots and regions
 //!
@@ -38,6 +42,7 @@
 
 mod components;
 mod gpu;
+mod grid;
 mod instance;
 mod lists;
 mod slots;
@@ -47,7 +52,9 @@ mod tests;
 
 pub use components::{MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
 pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};
+pub use grid::CELL_SIZE;
 pub use instance::{GpuInstance, MeshKind, affine_rows, pack_color};
+pub(crate) use lists::TRANSPARENT_LIST;
 pub use lists::{DYNAMIC_ENTRY, entry, entry_slot};
 pub use sync::InstanceScene;
 

@@ -1,11 +1,14 @@
 //! [`GpuScene`]: the instance buffers on the GPU, and the uploads that keep them equal to [`InstanceScene`].
 
+use std::time::Duration;
+
 use metallic_core::glam::Vec3;
 use metallic_core::{DataModel, Id};
 
 use super::instance::{GpuInstance, MeshKind};
 use super::sync::InstanceScene;
 use super::{MAX_UPLOAD_GAP, Region, RenderComponents, SyncStats};
+use crate::cull::{CullStats, CullView, VisibleSet};
 use crate::{RenderContext, RenderError};
 
 /// The fewest slots a region's buffer has, so small scenes do not grow it frame after frame.
@@ -91,6 +94,19 @@ struct ListBuffer {
     revision: u64,
     /// This upload's ranges: list index, first position, count. Reused.
     ranges: Vec<(usize, u32, u32)>,
+    /// Which lists the ranges are positions in.
+    source: ListSource,
+    /// The segments hold a view's visible entries, not every live one.
+    holds_visible: bool,
+}
+
+/// The lists an upload's ranges come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ListSource {
+    /// The scene's lists of every live entry.
+    Live,
+    /// The visible entries of the last cull.
+    Visible,
 }
 
 /// One region's buffer.
@@ -156,6 +172,11 @@ pub struct GpuScene {
     scatter: Option<Scatter>,
     scatter_min_ranges: u32,
     lists: ListBuffer,
+    /// What the main view sees, when the lists hold a view's entries.
+    visible: VisibleSet,
+    /// The scene revision and view the visible set was culled for.
+    culled_for: Option<(u64, CullView)>,
+    cull_stats: CullStats,
 }
 
 impl InstanceBinding {
@@ -230,6 +251,8 @@ impl GpuScene {
             }),
             revision: 0,
             ranges: Vec::new(),
+            source: ListSource::Live,
+            holds_visible: false,
         };
         Ok(Self {
             scene,
@@ -245,6 +268,9 @@ impl GpuScene {
             scatter,
             scatter_min_ranges: SCATTER_MIN_RANGES,
             lists,
+            visible: VisibleSet::new(),
+            culled_for: None,
+            cull_stats: CullStats::default(),
         })
     }
 
@@ -288,8 +314,18 @@ impl GpuScene {
     /// Submit `encoder` before the next upload: the staging buffer is reused, and every `write_buffer` lands at the
     /// start of the next submission. Growing submits its own copy at once (see `grow`).
     ///
-    /// The draw lists' changed entries go out in the same encoder (see [`GpuScene::list_buffer`]).
+    /// The draw lists' changed entries go out in the same encoder (see [`GpuScene::list_buffer`]): every live
+    /// instance is drawn. [`GpuScene::upload_view`] draws only what a view sees.
     pub fn upload(&mut self, encoder: &mut wgpu::CommandEncoder) -> UploadStats {
+        self.upload_view(encoder, None)
+    }
+
+    /// Like [`GpuScene::upload`], but with a `view` the list segments hold only the entries it sees
+    /// ([`InstanceScene::cull`], in front-to-back order per kind) instead of every live one, and the see-through
+    /// entries to sort are only the visible ones ([`GpuScene::visible`]). The cull runs after the coalesce, and only
+    /// when the scene or the view changed since the last one; otherwise the lists on the GPU are still right and
+    /// nothing is uploaded for them. With `None` every live instance is drawn.
+    pub fn upload_view(&mut self, encoder: &mut wgpu::CommandEncoder, view: Option<&CullView>) -> UploadStats {
         let mut stats = UploadStats::default();
         for region in Region::ALL {
             if self.grow(region) {
@@ -298,8 +334,59 @@ impl GpuScene {
         }
         self.scene.coalesce();
         self.upload_instances(encoder, &mut stats);
-        self.upload_lists(encoder, &mut stats);
+        let relaid = self.layout_lists();
+        match view {
+            None => {
+                self.culled_for = None;
+                self.cull_stats = CullStats::default();
+                // Segments that held a view's entries are written whole again.
+                let whole = relaid || self.lists.holds_visible;
+                self.lists.holds_visible = false;
+                self.list_ranges_live(whole);
+                self.write_lists(encoder, &mut stats);
+            }
+            Some(view) => {
+                // The live lists' changes are not uploaded while a view is drawn: forget them.
+                for list in &mut self.scene.lists_mut().opaque {
+                    list.dirty.clear();
+                }
+                let key = (self.scene.revision(), *view);
+                if !relaid && self.lists.holds_visible && self.culled_for == Some(key) {
+                    self.cull_stats = CullStats {
+                        reused: true,
+                        cpu_time: Duration::ZERO,
+                        ..self.cull_stats
+                    };
+                    return stats;
+                }
+                self.cull_stats = self.scene.cull(view, &mut self.visible);
+                self.culled_for = Some(key);
+                self.lists.holds_visible = true;
+                self.list_ranges_visible();
+                self.write_lists(encoder, &mut stats);
+            }
+        }
         stats
+    }
+
+    /// What the last [`GpuScene::upload_view`] culled: default when it drew every live instance.
+    pub fn cull_stats(&self) -> CullStats {
+        self.cull_stats
+    }
+
+    /// The instances the last [`GpuScene::upload_view`]'s view sees, `None` when it drew every live instance.
+    pub fn visible(&self) -> Option<&VisibleSet> {
+        self.lists.holds_visible.then_some(&self.visible)
+    }
+
+    /// The see-through entries the last upload draws, unsorted, and a revision that changes whenever they could
+    /// have (with the scene's [`InstanceScene::transparent_revision`]).
+    pub(crate) fn transparent_entries(&self) -> (&[u32], u64) {
+        if self.lists.holds_visible {
+            (self.visible.transparent(), self.visible.transparent_revision())
+        } else {
+            (self.scene.transparent_list(), u64::MAX)
+        }
     }
 
     /// The instance half of [`GpuScene::upload`], after the coalesce.
@@ -344,39 +431,53 @@ impl GpuScene {
         }
     }
 
-    /// The draw-list half of [`GpuScene::upload`]: lays the lists out again when one outgrew its segment (and then
-    /// uploads them whole), otherwise uploads the changed entries, through one staging write and a copy per range.
-    fn upload_lists(&mut self, encoder: &mut wgpu::CommandEncoder, stats: &mut UploadStats) {
+    /// Lays the list segments out again when a list outgrew its segment (or a new kind appeared). Returns whether
+    /// it did: every segment's contents must then be uploaded again.
+    fn layout_lists(&mut self) -> bool {
         let entry_size = self.lists.entry_size;
         let count = self.scene.draw_list_count();
         let lists = &mut self.lists;
         let draw_lists = self.scene.lists_mut();
-        lists.ranges.clear();
         let outgrown = lists.segments.len() < count
             || draw_lists
                 .opaque
                 .iter()
                 .zip(&lists.segments)
                 .any(|(list, segment)| list.entries.len() > segment.capacity as usize);
-        if outgrown {
-            lists.segments.resize(count, ListSegment::default());
-            let mut first = 0u32;
-            for (segment, list) in lists.segments.iter_mut().zip(&mut draw_lists.opaque) {
-                let len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
-                segment.capacity = segment
-                    .capacity
-                    .max(len.checked_next_power_of_two().unwrap_or(u32::MAX))
-                    .max(MIN_LIST_CAPACITY);
-                segment.first = first;
-                first = first.saturating_add(segment.capacity);
+        if !outgrown {
+            return false;
+        }
+        lists.segments.resize(count, ListSegment::default());
+        let mut first = 0u32;
+        for (segment, list) in lists.segments.iter_mut().zip(&mut draw_lists.opaque) {
+            let len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
+            segment.capacity = segment
+                .capacity
+                .max(len.checked_next_power_of_two().unwrap_or(u32::MAX))
+                .max(MIN_LIST_CAPACITY);
+            segment.first = first;
+            first = first.saturating_add(segment.capacity);
+            list.dirty.clear();
+        }
+        let needed = u64::from(first) * entry_size;
+        if lists.buffer.size() < needed {
+            lists.buffer = list_buffer(&self.device, self.binding, needed);
+        }
+        lists.revision += 1;
+        true
+    }
+
+    /// This upload's list ranges when every live instance is drawn: each list whole (`whole`), otherwise only the
+    /// changed entries, runs of nearby positions merged.
+    fn list_ranges_live(&mut self, whole: bool) {
+        let entry_size = self.lists.entry_size;
+        let lists = &mut self.lists;
+        let draw_lists = self.scene.lists_mut();
+        lists.source = ListSource::Live;
+        lists.ranges.clear();
+        if whole {
+            for (index, list) in draw_lists.opaque.iter_mut().enumerate() {
                 list.dirty.clear();
-            }
-            let needed = u64::from(first) * entry_size;
-            if lists.buffer.size() < needed {
-                lists.buffer = list_buffer(&self.device, self.binding, needed);
-            }
-            lists.revision += 1;
-            for (index, list) in draw_lists.opaque.iter().enumerate() {
                 if !list.entries.is_empty() {
                     let len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
                     lists.ranges.push((index, 0, len));
@@ -416,7 +517,28 @@ impl GpuScene {
         for (segment, list) in lists.segments.iter_mut().zip(&draw_lists.opaque) {
             segment.len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
         }
+    }
 
+    /// This upload's list ranges for a view: every visible list whole.
+    fn list_ranges_visible(&mut self) {
+        let lists = &mut self.lists;
+        lists.source = ListSource::Visible;
+        lists.ranges.clear();
+        for (index, segment) in lists.segments.iter_mut().enumerate() {
+            let entries = self.visible.opaque.get(index).map_or(&[][..], Vec::as_slice);
+            // Never more than the kind's live entries, which the segment holds.
+            let len = u32::try_from(entries.len()).unwrap_or(u32::MAX).min(segment.capacity);
+            segment.len = len;
+            if len > 0 {
+                lists.ranges.push((index, 0, len));
+            }
+        }
+    }
+
+    /// Uploads this upload's list ranges, through one staging write and a copy per range.
+    fn write_lists(&mut self, encoder: &mut wgpu::CommandEncoder, stats: &mut UploadStats) {
+        let entry_size = self.lists.entry_size;
+        let lists = &mut self.lists;
         let entries: u64 = lists.ranges.iter().map(|&(_, _, count)| u64::from(count)).sum();
         let Some(size) = wgpu::BufferSize::new(entries * entry_size) else {
             return;
@@ -435,8 +557,11 @@ impl GpuScene {
         let mut offset = 0usize;
         let scene = &self.scene;
         for &(index, first, count) in &lists.ranges {
-            let entries = scene.draw_list(MeshKind(u16::try_from(index).unwrap_or(u16::MAX)));
-            let Some(entries) = entries.get(first as usize..(first + count) as usize) else {
+            let list = match lists.source {
+                ListSource::Live => scene.draw_list(MeshKind(u16::try_from(index).unwrap_or(u16::MAX))),
+                ListSource::Visible => self.visible.opaque.get(index).map_or(&[][..], Vec::as_slice),
+            };
+            let Some(entries) = list.get(first as usize..(first + count) as usize) else {
                 continue;
             };
             if lists.gather {
@@ -475,7 +600,8 @@ impl GpuScene {
     /// The draw lists on the GPU: every mesh kind's opaque list in its own segment ([`GpuScene::list_segments`]),
     /// as entries (`u32`, see [`super::entry`]) where the instance buffers are storage buffers, or as copies of
     /// the instances ([`GpuInstance`], a per-instance vertex buffer) on the vertex-buffer fallback. A draw of a
-    /// kind's list is instances `first .. first + len` of its segment. Replaced when it grows
+    /// kind's list is instances `first .. first + len` of its segment. After an upload with a view the segments hold
+    /// only the entries it sees ([`GpuScene::upload_view`]). Replaced when it grows
     /// ([`GpuScene::list_revision`]).
     pub fn list_buffer(&self) -> &wgpu::Buffer {
         &self.lists.buffer

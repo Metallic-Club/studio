@@ -9,8 +9,10 @@
 //!
 //! Options: `--scene <name|all>`, `--frames <n>` (measured, 1000), `--warm-up <n>` (120), `--seed <n>` (1),
 //! `--size <width>x<height>` (logical pixels; the scene's own by default), `--vsync` (off by default, so frame
-//! times show the work), `--overlay` (show the performance overlay while running). `WGPU_BACKEND=dx12` (or
-//! `vulkan`, `gl`) picks the backend.
+//! times show the work), `--overlay` (show the performance overlay while running), `--no-cull` (draw every part, the
+//! numbers before culling), `--view-distance <m>` and `--min-screen-size <px>` (the culling thresholds; infinite and
+//! 1 by default), `--fov <degrees>` (narrow or widen the scene's camera). `WGPU_BACKEND=dx12` (or `vulkan`, `gl`)
+//! picks the backend.
 //!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
 //! prints a JSON array. The JSON's fields are `metallic_engine::stress::BenchReport`'s; times are in milliseconds.
@@ -19,10 +21,12 @@ use std::error::Error;
 use std::process::{Command, ExitCode};
 
 use metallic_engine::stress::{BenchOptions, StressKind, run_bench};
+use metallic_render::CullSettings;
 
 fn usage() -> String {
     format!(
         "usage: stress --scene <name|all> [--frames N] [--warm-up N] [--seed N] [--size WxH] [--vsync] [--overlay]\n\
+         \x20             [--no-cull] [--view-distance M] [--min-screen-size PX] [--fov DEGREES]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -36,6 +40,12 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
     let number = |value: Option<&String>, flag: &str| -> Result<u64, String> {
         value
             .and_then(|v| v.parse().ok())
+            .ok_or_else(|| format!("{flag} needs a number"))
+    };
+    let decimal = |value: Option<&String>, flag: &str| -> Result<f32, String> {
+        value
+            .and_then(|v| v.parse().ok())
+            .filter(|v: &f32| v.is_finite() && *v >= 0.0)
             .ok_or_else(|| format!("{flag} needs a number"))
     };
     while let Some(arg) = it.next() {
@@ -68,6 +78,10 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             }
             "--vsync" => options.vsync = true,
             "--overlay" => options.overlay = true,
+            "--no-cull" => options.cull = CullSettings::OFF,
+            "--view-distance" => options.cull.max_distance = decimal(it.next(), "--view-distance")?,
+            "--min-screen-size" => options.cull.min_screen_size = decimal(it.next(), "--min-screen-size")?,
+            "--fov" => options.field_of_view = Some(decimal(it.next(), "--fov")?),
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}
             other => return Err(format!("unknown argument {other:?}")),

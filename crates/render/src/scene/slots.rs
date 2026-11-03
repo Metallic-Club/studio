@@ -17,6 +17,8 @@ pub(super) struct SlotMeta {
     pub(super) since: u32,
     /// Queued on the dirty list.
     pub(super) dirty: bool,
+    /// The packed transform changed since the last coalesce, or the slot is new: the culling grid must look again.
+    pub(super) moved: bool,
     /// The draw list the slot's entry is in ([`NOT_LISTED`] when none). Kept when the slot is freed or reused,
     /// until the next coalesce takes the entry out of the list.
     pub(super) list: u16,
@@ -30,6 +32,7 @@ impl SlotMeta {
         moves: 0,
         since: 0,
         dirty: false,
+        moved: false,
         list: NOT_LISTED,
         list_pos: 0,
     };
@@ -66,6 +69,7 @@ impl RegionSlots {
         let meta = SlotMeta {
             owner: Some(owner),
             since: frame,
+            moved: true,
             ..SlotMeta::FREE
         };
         if let Some(slot) = self.free.pop()
@@ -106,6 +110,14 @@ impl RegionSlots {
         self.live -= 1;
         self.free.push(slot);
         self.mark_dirty(slot);
+    }
+
+    /// Notes that `slot`'s packed transform changed, so the next coalesce updates its place in the culling grid.
+    #[inline]
+    pub(super) fn mark_moved(&mut self, slot: u32) {
+        if let Some(meta) = self.meta.get_mut(slot as usize) {
+            meta.moved = true;
+        }
     }
 
     /// Queues `slot` for upload (once, however often it changes before the upload).

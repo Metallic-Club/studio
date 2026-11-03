@@ -18,7 +18,7 @@ use std::time::Instant;
 use metallic_platform::{
     AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
-use metallic_render::{ContextOptions, wgpu};
+use metallic_render::{ContextOptions, CullSettings, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
@@ -52,10 +52,15 @@ pub struct BenchOptions {
     pub overlay: bool,
     /// How the adapter is chosen (`WGPU_BACKEND` picks the backend).
     pub context: ContextOptions,
+    /// What the camera culls (the renderer's defaults unless changed; [`CullSettings::OFF`] draws everything).
+    pub cull: CullSettings,
+    /// The camera's vertical field of view in degrees; the scene's own when `None`.
+    pub field_of_view: Option<f32>,
 }
 
 impl BenchOptions {
-    /// 1,000 measured frames after 120 of warm-up, seed 1, the scene's window size, no vsync, no overlay.
+    /// 1,000 measured frames after 120 of warm-up, seed 1, the scene's window size and camera, no vsync, no overlay,
+    /// the default culling.
     pub fn new(scene: StressKind) -> Self {
         Self {
             scene,
@@ -66,6 +71,8 @@ impl BenchOptions {
             vsync: false,
             overlay: false,
             context: ContextOptions::default(),
+            cull: CullSettings::default(),
+            field_of_view: None,
         }
     }
 }
@@ -107,6 +114,10 @@ pub struct BenchReport {
     pub moving: usize,
     /// Parts whose centre is in view ([`StressScene::in_view`]).
     pub in_view: usize,
+    /// The camera's vertical field of view in degrees.
+    pub field_of_view: f32,
+    /// What the camera culled.
+    pub cull: CullSettings,
     /// How long building the scene took, in milliseconds.
     pub build_ms: f32,
     /// The measured frames.
@@ -148,8 +159,21 @@ impl BenchReport {
         )?;
         write!(
             out,
-            "\"parts\":{},\"see_through\":{},\"lights\":{},\"moving\":{},\"in_view\":{},\"build_ms\":{:.1},",
-            self.parts, self.see_through, self.lights, self.moving, self.in_view, self.build_ms
+            "\"parts\":{},\"see_through\":{},\"lights\":{},\"moving\":{},\"in_view\":{},\"field_of_view\":{:.1},\
+             \"build_ms\":{:.1},",
+            self.parts, self.see_through, self.lights, self.moving, self.in_view, self.field_of_view, self.build_ms
+        )?;
+        let cull = &self.cull;
+        write!(
+            out,
+            "\"cull\":{{\"enabled\":{},\"max_distance\":{},\"min_screen_size\":{:.2}}},",
+            cull.enabled,
+            if cull.max_distance.is_finite() {
+                format!("{:.1}", cull.max_distance)
+            } else {
+                "null".to_owned()
+            },
+            cull.min_screen_size
         )?;
         self.summary.write_json_members(out);
         out.push('}');
@@ -163,12 +187,18 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     let config = EngineConfig::new(RunContext::Local).with_mode(EngineMode::Windowed);
     let mut engine = Engine::new(config)?;
     let build_start = Instant::now();
-    let scene = StressScene::build(engine.data_model_mut(), options.scene, options.seed)?;
+    let mut scene = StressScene::build(engine.data_model_mut(), options.scene, options.seed)?;
+    if let Some(field_of_view) = options.field_of_view {
+        scene
+            .set_field_of_view(engine.data_model_mut(), field_of_view)
+            .map_err(crate::stress::StressError::from)?;
+    }
     let build_ms = (build_start.elapsed().as_secs_f64() * 1000.0) as f32;
 
     let mut renderer = SceneRenderer::new(options.context.clone());
     renderer.set_perf_window(options.frames.max(1) as usize);
     renderer.set_overlay(options.overlay);
+    renderer.set_cull(options.cull);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo
     } else {
@@ -220,6 +250,8 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         lights: app.scene.lights(),
         moving: app.scene.moving(),
         in_view: app.scene.in_view(),
+        field_of_view: app.scene.field_of_view(),
+        cull: options.cull,
         build_ms,
         summary,
     })
@@ -327,6 +359,8 @@ mod tests {
             lights: 0,
             moving: 100,
             in_view: 2_000,
+            field_of_view: 70.0,
+            cull: CullSettings::default(),
             build_ms: 12.5,
             summary,
         };
