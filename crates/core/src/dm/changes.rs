@@ -9,7 +9,7 @@
 use std::fmt;
 use std::ops::{BitAnd, BitOr, BitOrAssign};
 
-use super::storage::Dirty;
+use super::storage::Slot;
 use super::{DataModel, DmError, MAX_CONSUMERS};
 use crate::{Id, PropFlags};
 
@@ -153,10 +153,10 @@ pub(super) struct Changes {
 }
 
 impl Changes {
-    /// Records `bits` in `dirty`, the bits of the live instance `id`, for every consumer interested in them.
+    /// Records `bits` on `slot` (whose id is `id`) for every consumer interested in them.
     #[inline]
-    pub(super) fn mark(&mut self, dirty: &mut Dirty, id: Id, bits: DirtyBits) {
-        for (consumer, dirty) in self.consumers.iter_mut().zip(dirty.iter_mut()) {
+    pub(super) fn mark(&mut self, slot: &mut Slot, id: Id, bits: DirtyBits) {
+        for (consumer, dirty) in self.consumers.iter_mut().zip(slot.dirty.iter_mut()) {
             let bits = (bits & consumer.interest).0;
             if bits != 0 {
                 if *dirty == 0 {
@@ -167,10 +167,10 @@ impl Changes {
         }
     }
 
-    /// Records that the live instance `id`, whose bits are `dirty`, is being destroyed. A consumer that never
-    /// drained the instance's creation is not told: for it, the instance never existed.
-    pub(super) fn removed(&mut self, dirty: &Dirty, id: Id) {
-        for (consumer, dirty) in self.consumers.iter_mut().zip(dirty.iter()) {
+    /// Records that `slot` (whose id is `id`) is being destroyed. A consumer that never drained the instance's
+    /// creation is not told: for it, the instance never existed.
+    pub(super) fn removed(&mut self, slot: &Slot, id: Id) {
+        for (consumer, dirty) in self.consumers.iter_mut().zip(slot.dirty.iter()) {
             if dirty & DirtyBits::CREATED.0 == 0 && !consumer.interest.is_empty() {
                 consumer.removed.push(id);
             }
@@ -209,7 +209,7 @@ impl DataModel {
     /// used afterwards, since a later registration may get the same one. Does nothing for an id that is not
     /// registered.
     ///
-    /// Clears the consumer's byte in every live instance: one pass over their dirty bits.
+    /// Clears the consumer's byte in every live instance: one pass over them.
     pub fn unregister_consumer(&mut self, consumer: ConsumerId) {
         let index = consumer.index();
         let Some(c) = self.changes.consumers.get_mut(index) else {
@@ -219,8 +219,8 @@ impl DataModel {
             return;
         }
         *c = Consumer::default();
-        self.slots.for_each_live_dirty_mut(|_, dirty| {
-            if let Some(dirty) = dirty.get_mut(index) {
+        self.slots.for_each_live_mut(|_, slot| {
+            if let Some(dirty) = slot.dirty.get_mut(index) {
                 *dirty = 0;
             }
         });
@@ -237,10 +237,8 @@ impl DataModel {
         };
         out.reserve(c.dirty.len());
         for id in c.dirty.drain(..) {
-            // A destroyed instance's bits are stale: check liveness before reading them.
-            if self.slots.contains(id)
-                && let Some(dirty) = self.slots.dirty_at_mut(id.index())
-                && let Some(dirty) = dirty.get_mut(consumer.index())
+            if let Some(slot) = self.slots.get_mut(id)
+                && let Some(dirty) = slot.dirty.get_mut(consumer.index())
                 && *dirty != 0
             {
                 out.push((id, DirtyBits(*dirty)));
@@ -269,8 +267,8 @@ impl DataModel {
         let bits = (DirtyBits::CREATED | DirtyBits::STRUCTURE) & c.interest;
         c.dirty.reserve(self.slots.live());
         let ids = &mut c.dirty;
-        self.slots.for_each_live_dirty_mut(|id, dirty| {
-            if let Some(dirty) = dirty.get_mut(consumer.index()) {
+        self.slots.for_each_live_mut(|id, slot| {
+            if let Some(dirty) = slot.dirty.get_mut(consumer.index()) {
                 if *dirty == 0 {
                     ids.push(id);
                 }

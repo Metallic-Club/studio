@@ -51,9 +51,10 @@ use storage::{Body, Slot, Slots};
 /// for tools and subsystems that come later; [`DataModel::unregister_consumer`] gives a place back. A configuration
 /// with several data models (Studio running a local server and clients) counts each model's consumers separately.
 ///
-/// Every instance keeps one byte of [`DirtyBits`] per consumer, so this sets part of each instance's size: eight
-/// bytes keep a `Part` with four non-default properties at 240 bytes, inside the 256-byte budget
-/// (`tests/alloc.rs`). Registering more fails with [`DmError::TooManyConsumers`].
+/// Every instance keeps one byte of [`DirtyBits`] per consumer in its slot, so this sets part of the slot's size.
+/// Eight fit in a 72-byte slot (`storage.rs` explains why it must stay 72), so a `Part` with four non-default
+/// properties stays at 232 bytes, inside the 256-byte budget (`tests/alloc.rs`). Registering more fails with
+/// [`DmError::TooManyConsumers`].
 pub const MAX_CONSUMERS: usize = 8;
 
 /// What the data model caches per class, so hot paths do not go back to the registry for it.
@@ -345,10 +346,8 @@ impl DataModel {
     /// Records `bits` on the live instance `id` for every interested consumer.
     #[inline]
     fn mark(&mut self, id: Id, bits: DirtyBits) {
-        if self.slots.contains(id)
-            && let Some(dirty) = self.slots.dirty_at_mut(id.index())
-        {
-            self.changes.mark(dirty, id, bits);
+        if let Some(slot) = self.slots.get_mut(id) {
+            self.changes.mark(slot, id, bits);
         }
     }
 
