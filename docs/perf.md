@@ -45,7 +45,9 @@ when the tree's child lists are next tuned.)
 
 ### How the workflow compares
 
-1. It checks out the PR's merge commit (the head) and, in `base/`, the base commit.
+1. It checks out the PR's merge commit (the head) and, in `base/`, that merge's first parent: the base branch as
+   the head was merged onto it. (The event's `pull_request.base.sha` can be older than that when the base branch
+   has moved on, and comparing against it would charge other PRs' changes to this one.)
 2. It copies the head's workload into the base: `perf_gate.rs`, the shared test classes it includes, and
    `rust-toolchain.toml`. If the base has no `perf_gate` bench entry yet (the PR that introduced the gate), it adds
    the head's entry and the `gungraun` dev-dependency. Both sides therefore run the same workload with the same
