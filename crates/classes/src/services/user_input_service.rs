@@ -10,9 +10,14 @@
 //!
 //! # Where the state lives
 //!
-//! Methods only see the data model, so the engine keeps what they read there: the hidden `MouseLocation` and
-//! `MouseDelta`, and the chain of input objects that starts at the hidden `FirstInput` (see `input_object`'s docs).
-//! A held key is a key whose object is in the `Begin` state.
+//! Methods only see the data model, so the engine keeps what they read there, in hidden properties:
+//!
+//! - `HeldKeys1` to `HeldKeys3` and `HeldButtons`: the held keys and mouse buttons as bits, by `Enum.KeyCode` item
+//!   index and button number. `IsKeyDown` and `IsMouseButtonPressed` test one bit.
+//! - `MouseLocation` and `MouseDelta`: what `GetMouseLocation` and `GetMouseDelta` return.
+//! - `FirstInput`: the first of the input objects of held keys, each pointing to the next (`InputObject.NextInput`).
+//!   A press has an object only when something listened for it, so `GetKeysPressed` makes the missing ones and
+//!   adds them to the chain; the engine takes them over from there and ends them with the press.
 //!
 //! # `gameProcessedEvent`
 //!
@@ -20,11 +25,12 @@
 //! When there is, the engine will pass `true` for input a UI element (a text box, a button) used.
 
 use metallic_core::{
-    ClassDesc, DataModel, EnumDesc, EnumItem, Id, MethodCall, MethodDesc, Param, PropFlags, PropId, PropMeta,
-    ScriptError, ScriptValue, SignalDesc, Ty, Value, Vector2,
+    ClassDesc, DataModel, EnumDesc, EnumItem, Id, MethodCall, MethodDesc, Param, PropFlags, PropMeta, ScriptError,
+    ScriptValue, SignalDesc, Ty, Value, Vector2,
 };
 
 use crate::input::input_object::{KEY_CODE, NEXT_INPUT, USER_INPUT_STATE, USER_INPUT_TYPE};
+use crate::input::key_code;
 
 /// `MouseBehavior`'s items, in order.
 pub static ENUMS: &[EnumDesc] = &[
@@ -64,8 +70,15 @@ pub const GAMEPAD_ENABLED: &str = "GamepadEnabled";
 pub const MOUSE_LOCATION: &str = "MouseLocation";
 /// The hidden frame movement `GetMouseDelta` returns.
 pub const MOUSE_DELTA: &str = "MouseDelta";
-/// The hidden first input object of the chain.
+/// The hidden first input object of the chain of held keys' objects.
 pub const FIRST_INPUT: &str = "FirstInput";
+/// The hidden held-key bits, 64 keys per property, by `Enum.KeyCode` item index.
+pub const HELD_KEYS: [&str; key_code::WORDS] = ["HeldKeys1", "HeldKeys2", "HeldKeys3"];
+/// The hidden held mouse-button bits: bit 0 is `MouseButton1`.
+pub const HELD_BUTTONS: &str = "HeldButtons";
+
+/// The mouse buttons scripts name, in bit order.
+pub const MOUSE_BUTTONS: [&str; 3] = ["MouseButton1", "MouseButton2", "MouseButton3"];
 
 static PROPS: &[PropMeta] = &[
     PropMeta::enumeration(MOUSE_BEHAVIOR, "MouseBehavior", "Default")
@@ -112,67 +125,43 @@ static PROPS: &[PropMeta] = &[
         .group(GROUP)
         .order(7)
         .desc("Engine bookkeeping: how far the mouse moved this frame. Read it with GetMouseDelta()."),
-    PropMeta::reference(FIRST_INPUT, "InputObject")
+    PropMeta::int(HELD_KEYS[0], 0)
         .flags(STATE)
         .group(GROUP)
         .order(8)
+        .desc("Engine bookkeeping: held keys 0 to 63, as bits by KeyCode item index. Read them with IsKeyDown()."),
+    PropMeta::int(HELD_KEYS[1], 0)
+        .flags(STATE)
+        .group(GROUP)
+        .order(9)
+        .desc("Engine bookkeeping: held keys 64 to 127, as bits by KeyCode item index. Read them with IsKeyDown()."),
+    PropMeta::int(HELD_KEYS[2], 0)
+        .flags(STATE)
+        .group(GROUP)
+        .order(10)
+        .desc("Engine bookkeeping: held keys 128 to 191, as bits by KeyCode item index. Read them with IsKeyDown()."),
+    PropMeta::int(HELD_BUTTONS, 0)
+        .flags(STATE)
+        .group(GROUP)
+        .order(11)
+        .desc("Engine bookkeeping: held mouse buttons as bits (1 is MouseButton1). Read them with IsMouseButtonPressed()."),
+    PropMeta::reference(FIRST_INPUT, "InputObject")
+        .flags(STATE)
+        .group(GROUP)
+        .order(12)
         .desc(
-            "Engine bookkeeping: the first of the input objects the engine keeps, each pointing to the next. Read \
-             held keys with IsKeyDown() and GetKeysPressed().",
+            "Engine bookkeeping: the first input object of the held keys, each pointing to the next. Read them with \
+             GetKeysPressed().",
         ),
 ];
 
-/// The ids of the input object fields the methods read, for one data model's registry.
-struct Fields {
-    key_code: PropId,
-    input_type: PropId,
-    state: PropId,
-    next: PropId,
-}
-
-impl Fields {
-    fn of(dm: &DataModel) -> Result<Self, ScriptError> {
-        let registry = dm.registry();
-        let class = registry
-            .class_id("InputObject")
-            .ok_or_else(|| ScriptError::runtime("there is no InputObject class"))?;
-        let prop = |name: &str| {
-            registry
-                .prop_id(class, name)
-                .ok_or_else(|| ScriptError::runtime(format!("InputObject has no {name}")))
-        };
-        Ok(Self {
-            key_code: prop(KEY_CODE)?,
-            input_type: prop(USER_INPUT_TYPE)?,
-            state: prop(USER_INPUT_STATE)?,
-            next: prop(NEXT_INPUT)?,
-        })
-    }
-}
-
-/// Every input object the engine keeps for the service `service`, first to last.
-///
-/// A script can destroy an input object it was handed. The engine repairs the chain at the next frame's input step;
-/// until then the walk stops at the destroyed object rather than failing the call.
-fn inputs(dm: &DataModel, service: Id, fields: &Fields) -> Result<Vec<Id>, ScriptError> {
-    let mut found = Vec::new();
-    let mut next = dm.reference(service, dm.prop_id(service, FIRST_INPUT)?)?;
-    while let Some(id) = next {
-        // Only the engine writes the chain and it never makes a loop; this only keeps a bug from hanging a script.
-        if found.contains(&id) || !dm.contains(id) {
-            break;
-        }
-        found.push(id);
-        next = dm.reference(id, fields.next).unwrap_or(None);
-    }
-    Ok(found)
-}
-
-/// Whether the input object `id` is held: of type `input_type`, in the `Begin` state and, when `key` is given,
-/// for that key.
-fn held(dm: &DataModel, id: Id, fields: &Fields, input_type: &str, key: Option<&str>) -> bool {
-    let is = |prop: PropId, name: &str| dm.enum_item(id, prop).is_ok_and(|item| item.name() == name);
-    is(fields.input_type, input_type) && is(fields.state, "Begin") && key.is_none_or(|key| is(fields.key_code, key))
+/// Whether bit `index` is set in the bits kept in the integer property `name` of `service`.
+fn bit(dm: &DataModel, service: Id, name: &str, index: usize) -> Result<bool, ScriptError> {
+    let bits = match dm.get_by_name(service, name)? {
+        Value::Int(bits) => bits as u64,
+        _ => 0,
+    };
+    Ok(index < 64 && bits & (1 << index) != 0)
 }
 
 /// Argument `index` as an item of the enum `enum_type`.
@@ -188,38 +177,78 @@ fn enum_arg(call: &MethodCall<'_>, index: usize, enum_type: &str) -> Result<Enum
 
 fn is_key_down(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
     let key = enum_arg(call, 0, "KeyCode")?;
-    let fields = Fields::of(call.dm)?;
-    for id in inputs(call.dm, call.this, &fields)? {
-        if held(call.dm, id, &fields, "Keyboard", Some(key.name())) {
-            return Ok(ScriptValue::Bool(true));
-        }
-    }
-    Ok(ScriptValue::Bool(false))
+    let Some(index) = key_code::index(key.name()) else {
+        return Ok(ScriptValue::Bool(false));
+    };
+    let Some(word) = HELD_KEYS.get(index / 64) else {
+        return Ok(ScriptValue::Bool(false));
+    };
+    Ok(ScriptValue::Bool(bit(call.dm, call.this, word, index % 64)?))
 }
 
 fn is_mouse_button_pressed(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
     let button = enum_arg(call, 0, "UserInputType")?;
-    if !matches!(button.name(), "MouseButton1" | "MouseButton2" | "MouseButton3") {
+    let Some(index) = MOUSE_BUTTONS.iter().position(|name| *name == button.name()) else {
         return Ok(ScriptValue::Bool(false));
-    }
-    let fields = Fields::of(call.dm)?;
-    for id in inputs(call.dm, call.this, &fields)? {
-        if held(call.dm, id, &fields, button.name(), None) {
-            return Ok(ScriptValue::Bool(true));
+    };
+    Ok(ScriptValue::Bool(bit(call.dm, call.this, HELD_BUTTONS, index)?))
+}
+
+/// The input object in the chain from `FirstInput` for the key `key`, if there is one. The walk stops at a
+/// destroyed object (the engine repairs the chain at the next frame) and after `limit` objects.
+fn chained_key(dm: &DataModel, service: Id, key: &str, limit: usize) -> Result<Option<Id>, ScriptError> {
+    let mut next = dm.reference(service, dm.prop_id(service, FIRST_INPUT)?)?;
+    for _ in 0..limit {
+        let Some(id) = next else {
+            break;
+        };
+        if !dm.contains(id) {
+            break;
         }
+        if matches!(dm.get_by_name(id, KEY_CODE), Ok(Value::Enum(item)) if item.name() == key) {
+            return Ok(Some(id));
+        }
+        next = dm.reference(id, dm.prop_id(id, NEXT_INPUT)?).unwrap_or(None);
     }
-    Ok(ScriptValue::Bool(false))
+    Ok(None)
 }
 
 fn get_keys_pressed(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
-    let fields = Fields::of(call.dm)?;
+    let service = call.this;
     let mut pressed = Vec::new();
-    for id in inputs(call.dm, call.this, &fields)? {
-        if held(call.dm, id, &fields, "Keyboard", None) {
+    for (word, name) in HELD_KEYS.iter().enumerate() {
+        for bit_index in 0..64 {
+            if !bit(call.dm, service, name, bit_index)? {
+                continue;
+            }
+            let Some(key) = key_code::name(word * 64 + bit_index) else {
+                continue;
+            };
+            let id = match chained_key(call.dm, service, key, key_code::COUNT)? {
+                Some(id) => id,
+                None => new_key_object(call.dm, service, key)?,
+            };
             pressed.push(ScriptValue::Instance(id));
         }
     }
     Ok(ScriptValue::List(pressed))
+}
+
+/// The input object of a held key nobody listened for when it went down, made for `GetKeysPressed` and put first in
+/// the chain, where the engine finds it to end it with the press.
+fn new_key_object(dm: &mut DataModel, service: Id, key: &str) -> Result<Id, ScriptError> {
+    let class = dm
+        .registry()
+        .class_id("InputObject")
+        .ok_or_else(|| ScriptError::runtime("there is no InputObject class"))?;
+    let id = dm.create_internal(class)?;
+    dm.set_by_name(id, USER_INPUT_TYPE, Value::Enum(EnumItem::new("UserInputType", "Keyboard")))?;
+    dm.set_by_name(id, KEY_CODE, Value::Enum(EnumItem::new("KeyCode", key)))?;
+    dm.set_by_name(id, USER_INPUT_STATE, Value::Enum(EnumItem::new("UserInputState", "Begin")))?;
+    let first = dm.get_by_name(service, FIRST_INPUT)?;
+    dm.set_by_name(id, NEXT_INPUT, first)?;
+    dm.set_by_name(service, FIRST_INPUT, Value::Ref(Some(id)))?;
+    Ok(id)
 }
 
 /// Reads the hidden `Vector2` `name` of the service the method was called on.
@@ -261,7 +290,10 @@ pub static CLASS: ClassDesc = ClassDesc::new("UserInputService", Some("Instance"
         MethodDesc::new("IsKeyDown", is_key_down)
             .params(&[Param::new("keyCode", Ty::Enum("KeyCode"))])
             .returns(Ty::Bool)
-            .describe("Returns true while the key is held down."),
+            .describe(
+                "Returns true while the key is held down. A key pressed and released within one frame is down for \
+                 that frame.",
+            ),
         MethodDesc::new("IsMouseButtonPressed", is_mouse_button_pressed)
             .params(&[Param::new("mouseButton", Ty::Enum("UserInputType"))])
             .returns(Ty::Bool)
@@ -284,20 +316,25 @@ pub static CLASS: ClassDesc = ClassDesc::new("UserInputService", Some("Instance"
         MethodDesc::new("GetKeysPressed", get_keys_pressed)
             .params(&[])
             .returns(INPUT_OBJECTS)
-            .describe("Returns the input objects of every key held down right now."),
+            .describe(
+                "Returns the input objects of every key held down right now: the same objects InputBegan passed for \
+                 those presses, and InputEnded will pass.",
+            ),
     ])
     .signals(&[
         SignalDesc::new("InputBegan").params(INPUT_EVENT).describe(
-            "Fires when an input begins: a key or mouse button goes down, a finger touches the screen. \
+            "Fires when an input begins: a key or mouse button goes down, a finger touches the screen. Each press \
+             gets a new InputObject, which InputChanged and InputEnded pass again for that press. \
              gameProcessedEvent is true when the game's UI used the input (always false until there is game UI).",
         ),
         SignalDesc::new("InputChanged").params(INPUT_EVENT).describe(
             "Fires when an input changes: the mouse moves (once per frame, with the frame's movement as Delta), \
-             the wheel turns, a finger moves.",
+             the wheel turns, a finger moves (once per frame per finger).",
         ),
         SignalDesc::new("InputEnded").params(INPUT_EVENT).describe(
             "Fires when an input ends: a key or mouse button is released, a finger leaves the screen, or the \
-             window loses focus while it is held.",
+             window loses focus while it is held. A press shorter than a frame ends in the next frame, so \
+             InputBegan always sees it begun.",
         ),
         SignalDesc::new("WindowFocused")
             .params(&[])

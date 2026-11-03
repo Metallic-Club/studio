@@ -1,6 +1,6 @@
 //! Allocation guard for `UserInputService`'s hot path, measured with a counting global allocator: once warm, a
 //! frame of 1,000 mouse-motion events with nothing connected to `InputChanged` allocates nothing and creates no
-//! instance, queuing the events included.
+//! instance, queuing the events included; unwatched key presses create no input object and allocate nothing either.
 //!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 #![cfg(all(feature = "luau", feature = "render"))]
@@ -13,7 +13,7 @@ use std::cell::Cell;
 
 use metallic_core::Value;
 use metallic_engine::{Engine, EngineConfig, InputEvent, MemorySources, RunContext};
-use metallic_platform::{DeviceEvent, Position, WindowEvent, WindowId};
+use metallic_platform::{ButtonState, DeviceEvent, Key, KeyCode, KeyEvent, Position, WindowEvent, WindowId};
 use metallic_script::CollectOutput;
 
 thread_local! {
@@ -139,4 +139,40 @@ fn mouse_motion_allocates_nothing_while_only_other_input_events_are_watched() {
         "#,
     ));
     assert_motion_is_free(engine);
+}
+
+fn key(state: ButtonState) -> InputEvent {
+    InputEvent::Window {
+        window: WindowId::from_raw(1),
+        event: WindowEvent::Key(KeyEvent {
+            key_code: KeyCode::KeyW,
+            key: Key::Unidentified,
+            text: None,
+            state,
+            repeat: false,
+        }),
+    }
+}
+
+/// A tap within one frame: the release waits for the next frame.
+fn tap(engine: &mut Engine<CollectOutput>) {
+    engine.push_input(key(ButtonState::Pressed));
+    engine.push_input(key(ButtonState::Released));
+    engine.tick();
+}
+
+#[test]
+fn unwatched_key_presses_create_nothing_and_allocate_nothing() {
+    let mut engine = started(None);
+    for _ in 0..4 {
+        tap(&mut engine);
+    }
+    let instances = engine.data_model().len();
+    let allocations = allocations_in(|| {
+        for _ in 0..100 {
+            tap(&mut engine);
+        }
+    });
+    assert_eq!(allocations, 0, "100 unwatched taps allocated");
+    assert_eq!(engine.data_model().len(), instances, "no input object was created");
 }

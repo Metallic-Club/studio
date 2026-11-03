@@ -5,33 +5,49 @@
 //! [`InputFeed::end_frame`]. Then it reads [`InputFeed::cursor`] and applies it to the window. The types here are
 //! plain values, so this crate does not depend on the platform crate; the engine translates the platform's events.
 //!
+//! # Input objects
+//!
+//! - **A press is one object.** A key or mouse button going down, or a finger touching, gets a new `InputObject`
+//!   in the `Begin` state; that object goes through `Change` (a moving finger) and `End`, then the engine destroys
+//!   it. Scripts that kept it still read it (a destroyed instance stays readable while a script holds it), so a
+//!   `held[input] = true` table works as in Roblox.
+//! - **Only when someone listens.** A press gets an object only while something is connected to the event it would
+//!   fire (`InputBegan` or `InputEnded`; for a finger, `InputChanged` too). The held state itself is bits in the
+//!   service (`IsKeyDown`), and `GetKeysPressed` makes objects for held keys that have none.
+//! - **Mouse movement and the wheel** reuse one object each, created the first time something listens: they fire
+//!   every frame and carry the frame's totals.
+//!
+//! # A press shorter than a frame
+//!
+//! Signals are delivered after the input step, and listeners read the object as it is then. A key pressed and
+//! released within one frame would show `InputBegan` an object already in `End`, so the release waits for the
+//! next frame: each press, button and finger begins at most once and ends at most once per frame, and events that
+//! would break that wait, in order, for the next one. `InputBegan` sees `Begin`, `InputEnded` sees `End`, and
+//! `IsKeyDown` is true for one frame, so scripts that poll see the tap too.
+//!
 //! # What an event costs
 //!
 //! - **Mouse movement** only adds to the frame's totals. At the end of the frame the hidden `MouseLocation` and
 //!   `MouseDelta` are written (a write of an unchanged value does nothing), and `InputChanged` fires once with the
-//!   frame's movement, only while something is connected to it (or to the movement object itself). With nothing
+//!   frame's movement, only while something listens to it (or to the movement object itself). With nothing
 //!   connected, mouse movement creates no instance and allocates nothing.
-//! - **Keys and mouse buttons** always update their input object, which is what `IsKeyDown` reads. Each key's
-//!   object is created the first time that key is pressed, then reused.
+//! - **Keys and buttons** flip a bit in the service. With nothing listening, a press creates no instance either.
 //! - **Signals** fire only while the game runs ([`InputFeed::begin_frame`]'s `firing`) and only when something
 //!   listens to that signal ([`DataModel::is_signal_watched`]); building their arguments is the one allocation.
-//!
-//! # One `InputChanged` per frame
-//!
-//! Signals are delivered after the input step, when listeners read the input objects as they are at that point.
-//! Mouse movement, the wheel and finger movement are therefore summed over the frame and fire `InputChanged` once,
-//! at its end, so each listener sees the movement it is told about. A key pressed and released within one frame
-//! fires both `InputBegan` and `InputEnded`, and both listeners see the object in its `End` state.
 
 use metallic_core::{ClassId, DataModel, DmError, EnumItem, Id, PropId, ScriptValue, SignalId, Value, Vector2, Vector3};
 
 use crate::GameError;
 use crate::input::input_object::{DELTA, KEY_CODE, NEXT_INPUT, POSITION, USER_INPUT_STATE, USER_INPUT_TYPE};
-use crate::input::key_code::UNKNOWN;
+use crate::input::key_code::{self, UNKNOWN};
 use crate::services::user_input_service::{
-    FIRST_INPUT, GAMEPAD_ENABLED, KEYBOARD_ENABLED, MOUSE_BEHAVIOR, MOUSE_DELTA, MOUSE_ENABLED, MOUSE_ICON_ENABLED,
-    MOUSE_LOCATION, TOUCH_ENABLED,
+    FIRST_INPUT, GAMEPAD_ENABLED, HELD_BUTTONS, HELD_KEYS, KEYBOARD_ENABLED, MOUSE_BEHAVIOR, MOUSE_DELTA,
+    MOUSE_ENABLED, MOUSE_ICON_ENABLED, MOUSE_LOCATION, TOUCH_ENABLED,
 };
+
+/// Events waiting for the next frame past this many are applied at once instead: only input far faster than any
+/// hand (many presses of one key per frame) gets there, and the queue must not grow without bound.
+const MAX_WAITING: usize = 256;
 
 /// `UserInputService.MouseBehavior`, as the engine applies it to the window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -104,6 +120,8 @@ struct Service {
     mouse_location: PropId,
     mouse_delta: PropId,
     first_input: PropId,
+    held_keys: [PropId; key_code::WORDS],
+    held_buttons: PropId,
     mouse_behavior: PropId,
     mouse_icon_enabled: PropId,
     devices: [PropId; 4],
@@ -149,18 +167,45 @@ enum Device {
     Gamepad = 3,
 }
 
-/// A key's or a button's input object, and whether it is held.
-#[derive(Clone, Copy, Debug)]
-struct Held {
-    id: Id,
-    down: bool,
+/// What can begin and end: a key (by `Enum.KeyCode` item index), a mouse button, a finger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Source {
+    Key(usize),
+    Button(usize),
+    Touch(u64),
 }
 
-/// A touch's input object, free when `touch` is `None`.
+/// A begin, change or end event, applied now or in the next frame.
+#[derive(Clone, Copy, Debug)]
+enum Press {
+    Key { index: usize, down: bool },
+    Button { index: usize, down: bool },
+    Touch { touch: u64, phase: TouchPhase, x: f64, y: f64 },
+}
+
+impl Press {
+    fn source(self) -> Source {
+        match self {
+            Self::Key { index, .. } => Source::Key(index),
+            Self::Button { index, .. } => Source::Button(index),
+            Self::Touch { touch, .. } => Source::Touch(touch),
+        }
+    }
+
+    fn ends(self) -> bool {
+        match self {
+            Self::Key { down, .. } | Self::Button { down, .. } => !down,
+            Self::Touch { phase, .. } => matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled),
+        }
+    }
+}
+
+/// A finger on the screen.
 #[derive(Clone, Copy, Debug)]
 struct TouchSlot {
-    id: Id,
-    touch: Option<u64>,
+    touch: u64,
+    /// Its input object, when something listened.
+    object: Option<Id>,
     position: (f64, f64),
     /// Movement since the frame began.
     delta: (f64, f64),
@@ -173,12 +218,23 @@ pub struct InputFeed {
     service: Service,
     object: Object,
     items: Items,
-    /// One object per key pressed so far, by `Enum.KeyCode` item name.
-    keys: Vec<(&'static str, Held)>,
-    buttons: [Option<Held>; 3],
+    /// Held keys as bits by `Enum.KeyCode` item index, as written to `HeldKeys1` to `HeldKeys3`.
+    held_keys: [u64; key_code::WORDS],
+    /// Held mouse buttons as bits, as written to `HeldButtons`.
+    held_buttons: u64,
+    /// The input objects of held keys, by item index, in the order of the `FirstInput` chain.
+    keys: Vec<(usize, Id)>,
+    /// The input objects of held mouse buttons.
+    buttons: [Option<Id>; 3],
+    touches: Vec<TouchSlot>,
     movement: Option<Id>,
     wheel_object: Option<Id>,
-    touches: Vec<TouchSlot>,
+    /// What began this frame: its end waits for the next one.
+    began: Vec<Source>,
+    /// Events waiting for the next frame, in arrival order.
+    waiting: Vec<Press>,
+    /// The previous frame's waiting events, while this frame applies them (kept to reuse its buffer).
+    carried: Vec<Press>,
     /// The `...Enabled` flags written so far.
     devices: [bool; 4],
     firing: bool,
@@ -192,7 +248,7 @@ pub struct InputFeed {
     cursor_moved: bool,
     /// Wheel notches this frame.
     wheel: f64,
-    /// The data model's structure revision at the last check for destroyed input objects.
+    /// The data model's structure revision at the last check of the objects the feed keeps.
     revision: u64,
 }
 
@@ -204,6 +260,11 @@ fn member<T>(found: Option<T>, owner: &'static str, member: &'static str) -> Res
 fn vector3(x: f64, y: f64, z: f64) -> Value {
     // Pixels and notches fit an f32 with room to spare; Vector3 is f32 like every vector in the data model.
     Value::Vector3(Vector3::new(x as f32, y as f32, z as f32))
+}
+
+/// The bits as the integer property stores them.
+fn bits_value(bits: u64) -> Value {
+    Value::Int(bits as i64)
 }
 
 impl InputFeed {
@@ -224,6 +285,8 @@ impl InputFeed {
             mouse_location: prop(MOUSE_LOCATION)?,
             mouse_delta: prop(MOUSE_DELTA)?,
             first_input: prop(FIRST_INPUT)?,
+            held_keys: [prop(HELD_KEYS[0])?, prop(HELD_KEYS[1])?, prop(HELD_KEYS[2])?],
+            held_buttons: prop(HELD_BUTTONS)?,
             mouse_behavior: prop(MOUSE_BEHAVIOR)?,
             mouse_icon_enabled: prop(MOUSE_ICON_ENABLED)?,
             devices: [
@@ -266,15 +329,25 @@ impl InputFeed {
         for (flag, &prop) in devices.iter_mut().zip(&service.devices) {
             *flag = dm.bool(id, prop)?;
         }
+        // A game handed over by another engine starts with nothing held: a press it saw never ends here.
+        for &prop in service.held_keys.iter().chain([&service.held_buttons]) {
+            dm.set(id, prop, Value::Int(0))?;
+        }
+        dm.set(id, service.first_input, Value::Ref(None))?;
         Ok(Self {
             service,
             object,
             items,
+            held_keys: [0; key_code::WORDS],
+            held_buttons: 0,
             keys: Vec::new(),
             buttons: [None; 3],
+            touches: Vec::new(),
             movement: None,
             wheel_object: None,
-            touches: Vec::new(),
+            began: Vec::new(),
+            waiting: Vec::new(),
+            carried: Vec::new(),
             devices,
             firing: false,
             location: None,
@@ -295,14 +368,10 @@ impl InputFeed {
     /// Starts the frame's input step. `firing` says whether the game runs: a stopped or paused game keeps its
     /// state current (held keys, the cursor) but fires nothing, so no stale input reaches scripts on resume.
     ///
-    /// When anything was destroyed since the last frame, the input objects scripts destroyed are dropped and the
-    /// chain the methods walk is repaired; the next input of that kind gets a new object.
+    /// The events the previous frame left waiting are applied first. When the data model's structure changed
+    /// since the last frame, the feed also takes over the key objects `GetKeysPressed` made and forgets the objects
+    /// scripts destroyed.
     pub fn begin_frame(&mut self, dm: &mut DataModel, firing: bool) -> Result<(), DmError> {
-        let revision = dm.structure_revision();
-        if revision != self.revision {
-            self.revision = revision;
-            self.drop_destroyed(dm)?;
-        }
         self.firing = firing;
         self.motion = (0.0, 0.0);
         self.raw_motion = false;
@@ -313,97 +382,47 @@ impl InputFeed {
             slot.delta = (0.0, 0.0);
             slot.moved = false;
         }
-        Ok(())
-    }
-
-    /// Forgets the input objects that no longer exist and relinks the chain if there were any.
-    fn drop_destroyed(&mut self, dm: &mut DataModel) -> Result<(), DmError> {
-        let before = self.object_count();
-        self.keys.retain(|(_, held)| dm.contains(held.id));
-        for slot in &mut self.buttons {
-            if slot.is_some_and(|held| !dm.contains(held.id)) {
-                *slot = None;
+        self.began.clear();
+        let revision = dm.structure_revision();
+        if revision != self.revision {
+            self.revision = revision;
+            self.sync_objects(dm)?;
+        }
+        std::mem::swap(&mut self.waiting, &mut self.carried);
+        let mut carried = std::mem::take(&mut self.carried);
+        let mut result = Ok(());
+        for press in carried.drain(..) {
+            if let Err(error) = self.submit(dm, press) {
+                result = Err(error);
             }
         }
-        self.movement = self.movement.filter(|&id| dm.contains(id));
-        self.wheel_object = self.wheel_object.filter(|&id| dm.contains(id));
-        self.touches.retain(|slot| dm.contains(slot.id));
-        if self.object_count() == before {
-            return Ok(());
-        }
-        self.relink(dm)
+        self.carried = carried;
+        result
     }
 
     /// A key went down (`pressed`) or up. `key` is its `Enum.KeyCode` item name; [`UNKNOWN`] keys are not tracked.
     /// A press of a key already down (an OS key repeat) and a release of a key not down do nothing.
-    pub fn key(&mut self, dm: &mut DataModel, key: &'static str, pressed: bool) -> Result<(), DmError> {
+    pub fn key(&mut self, dm: &mut DataModel, key: &str, pressed: bool) -> Result<(), DmError> {
         self.enable(dm, Device::Keyboard)?;
         if key == UNKNOWN {
             return Ok(());
         }
-        let index = match self.keys.iter().position(|(name, _)| *name == key) {
-            Some(index) => index,
-            None if pressed => {
-                let Some(item) = dm.registry().enum_item("KeyCode", key) else {
-                    return Ok(());
-                };
-                let id = self.make(dm, &self.items.keyboard, Some(&item))?;
-                self.keys.push((key, Held { id, down: false }));
-                self.relink(dm)?;
-                self.keys.len() - 1
-            }
-            None => return Ok(()),
-        };
-        let Some(&(_, held)) = self.keys.get(index) else {
+        let Some(index) = key_code::index(key) else {
             return Ok(());
         };
-        if held.down == pressed {
-            return Ok(());
-        }
-        let id = if dm.contains(held.id) {
-            held.id
-        } else {
-            let item = dm.registry().enum_item("KeyCode", key);
-            let id = self.make(dm, &self.items.keyboard, item.as_ref())?;
-            self.relink_after(dm, |feed| {
-                if let Some(entry) = feed.keys.get_mut(index) {
-                    entry.1.id = id;
-                }
-            })?;
-            id
-        };
-        if let Some(entry) = self.keys.get_mut(index) {
-            entry.1 = Held { id, down: pressed };
-        }
-        self.press(dm, id, pressed)
+        self.submit(dm, Press::Key { index, down: pressed })
     }
 
     /// A mouse button went down (`pressed`) or up.
     pub fn mouse_button(&mut self, dm: &mut DataModel, button: MouseButton, pressed: bool) -> Result<(), DmError> {
         self.enable(dm, Device::Mouse)?;
-        let index = button.index();
-        let current = self.buttons.get(index).copied().flatten();
-        let id = match current {
-            Some(held) if held.down == pressed => return Ok(()),
-            Some(held) if dm.contains(held.id) => held.id,
-            None if !pressed => return Ok(()),
-            _ => {
-                let Some(kind) = self.items.buttons.get(index) else {
-                    return Ok(());
-                };
-                let id = self.make(dm, kind, None)?;
-                self.relink_after(dm, |feed| {
-                    if let Some(slot) = feed.buttons.get_mut(index) {
-                        *slot = Some(Held { id, down: false });
-                    }
-                })?;
-                id
-            }
-        };
-        if let Some(slot) = self.buttons.get_mut(index) {
-            *slot = Some(Held { id, down: pressed });
-        }
-        self.press(dm, id, pressed)
+        self.submit(
+            dm,
+            Press::Button {
+                index: button.index(),
+                down: pressed,
+            },
+        )
     }
 
     /// The cursor moved over the window, to `(x, y)` physical pixels from its top-left corner.
@@ -436,72 +455,7 @@ impl InputFeed {
     /// from `Began` to `Ended` or `Cancelled`.
     pub fn touch(&mut self, dm: &mut DataModel, touch: u64, phase: TouchPhase, x: f64, y: f64) -> Result<(), DmError> {
         self.enable(dm, Device::Touch)?;
-        if phase == TouchPhase::Began {
-            return self.touch_began(dm, touch, x, y);
-        }
-        let Some(index) = self.touches.iter().position(|slot| slot.touch == Some(touch)) else {
-            return Ok(());
-        };
-        let Some(slot) = self.touches.get_mut(index) else {
-            return Ok(());
-        };
-        slot.delta.0 += x - slot.position.0;
-        slot.delta.1 += y - slot.position.1;
-        slot.position = (x, y);
-        if phase == TouchPhase::Moved {
-            slot.moved = true;
-            return Ok(());
-        }
-        let ended = *slot;
-        slot.touch = None;
-        slot.moved = false;
-        if !dm.contains(ended.id) {
-            return Ok(());
-        }
-        let state = if phase == TouchPhase::Cancelled {
-            &self.items.cancel
-        } else {
-            &self.items.end
-        };
-        dm.set(ended.id, self.object.state, Value::Enum(state.clone()))?;
-        dm.set(ended.id, self.object.position, vector3(x, y, 0.0))?;
-        dm.set(ended.id, self.object.delta, vector3(ended.delta.0, ended.delta.1, 0.0))?;
-        self.fire(dm, self.service.ended, ended.id)
-    }
-
-    fn touch_began(&mut self, dm: &mut DataModel, touch: u64, x: f64, y: f64) -> Result<(), DmError> {
-        let free = self
-            .touches
-            .iter()
-            .position(|slot| slot.touch.is_none() && dm.contains(slot.id));
-        let index = match free {
-            Some(index) => index,
-            None => {
-                let id = self.make(dm, &self.items.touch, None)?;
-                self.relink_after(dm, |feed| {
-                    feed.touches.push(TouchSlot {
-                        id,
-                        touch: None,
-                        position: (x, y),
-                        delta: (0.0, 0.0),
-                        moved: false,
-                    });
-                })?;
-                self.touches.len() - 1
-            }
-        };
-        let Some(slot) = self.touches.get_mut(index) else {
-            return Ok(());
-        };
-        slot.touch = Some(touch);
-        slot.position = (x, y);
-        slot.delta = (0.0, 0.0);
-        slot.moved = false;
-        let id = slot.id;
-        dm.set(id, self.object.state, Value::Enum(self.items.begin.clone()))?;
-        dm.set(id, self.object.position, vector3(x, y, 0.0))?;
-        dm.set(id, self.object.delta, vector3(0.0, 0.0, 0.0))?;
-        self.fire(dm, self.service.began, id)
+        self.submit(dm, Press::Touch { touch, phase, x, y })
     }
 
     /// The window gained (`true`) or lost keyboard focus. Losing it releases every held key and button (firing
@@ -510,26 +464,22 @@ impl InputFeed {
         if focused {
             return self.fire_bare(dm, self.service.focused);
         }
-        for index in 0..self.keys.len() {
-            if let Some(entry) = self.keys.get_mut(index)
-                && entry.1.down
-            {
-                entry.1.down = false;
-                let id = entry.1.id;
-                if dm.contains(id) {
-                    self.press(dm, id, false)?;
+        for word in 0..key_code::WORDS {
+            for bit in 0..64 {
+                if self.held_keys.get(word).is_some_and(|bits| bits & (1 << bit) != 0) {
+                    self.submit(
+                        dm,
+                        Press::Key {
+                            index: word * 64 + bit,
+                            down: false,
+                        },
+                    )?;
                 }
             }
         }
         for index in 0..self.buttons.len() {
-            if let Some(Some(held)) = self.buttons.get_mut(index)
-                && held.down
-            {
-                held.down = false;
-                let id = held.id;
-                if dm.contains(id) {
-                    self.press(dm, id, false)?;
-                }
+            if self.held_buttons & (1 << index) != 0 {
+                self.submit(dm, Press::Button { index, down: false })?;
             }
         }
         self.fire_bare(dm, self.service.focus_released)
@@ -567,34 +517,41 @@ impl InputFeed {
             return Ok(());
         }
         let changed_watched = dm.is_signal_watched(service, self.service.changed);
-        if self.raw_motion || self.cursor_moved {
-            let watched = changed_watched || self.movement.is_some_and(|id| dm.is_watched(id));
-            if watched {
-                let id = self.changing_object(dm, Changing::Movement)?;
-                dm.set(id, self.object.position, vector3(x, y, 0.0))?;
-                dm.set(id, self.object.delta, vector3(delta.0, delta.1, 0.0))?;
-                self.fire(dm, self.service.changed, id)?;
-            }
+        if (self.raw_motion || self.cursor_moved)
+            && (changed_watched || self.movement.is_some_and(|id| dm.is_watched(id)))
+        {
+            let id = self.changing_object(dm, Changing::Movement)?;
+            dm.set(id, self.object.position, vector3(x, y, 0.0))?;
+            dm.set(id, self.object.delta, vector3(delta.0, delta.1, 0.0))?;
+            self.fire(dm, self.service.changed, id)?;
         }
-        if self.wheel != 0.0 {
-            let watched = changed_watched || self.wheel_object.is_some_and(|id| dm.is_watched(id));
-            if watched {
-                let id = self.changing_object(dm, Changing::Wheel)?;
-                dm.set(id, self.object.position, vector3(x, y, self.wheel))?;
-                self.fire(dm, self.service.changed, id)?;
-            }
+        if self.wheel != 0.0 && (changed_watched || self.wheel_object.is_some_and(|id| dm.is_watched(id))) {
+            let id = self.changing_object(dm, Changing::Wheel)?;
+            dm.set(id, self.object.position, vector3(x, y, self.wheel))?;
+            self.fire(dm, self.service.changed, id)?;
         }
         for index in 0..self.touches.len() {
             let Some(&slot) = self.touches.get(index) else {
                 continue;
             };
-            if !slot.moved || slot.touch.is_none() || !dm.contains(slot.id) {
+            if !slot.moved {
                 continue;
             }
-            dm.set(slot.id, self.object.state, Value::Enum(self.items.change.clone()))?;
-            dm.set(slot.id, self.object.position, vector3(slot.position.0, slot.position.1, 0.0))?;
-            dm.set(slot.id, self.object.delta, vector3(slot.delta.0, slot.delta.1, 0.0))?;
-            self.fire(dm, self.service.changed, slot.id)?;
+            let object = match slot.object.filter(|&id| dm.contains(id)) {
+                Some(id) => Some(id),
+                None if changed_watched => Some(self.make(dm, &self.items.touch, None)?),
+                None => None,
+            };
+            let Some(id) = object else {
+                continue;
+            };
+            if let Some(slot) = self.touches.get_mut(index) {
+                slot.object = Some(id);
+            }
+            dm.set(id, self.object.state, Value::Enum(self.items.change.clone()))?;
+            dm.set(id, self.object.position, vector3(slot.position.0, slot.position.1, 0.0))?;
+            dm.set(id, self.object.delta, vector3(slot.delta.0, slot.delta.1, 0.0))?;
+            self.fire(dm, self.service.changed, id)?;
         }
         Ok(())
     }
@@ -610,22 +567,261 @@ impl InputFeed {
         CursorState { behavior, icon_visible }
     }
 
-    /// How many input objects the feed keeps.
+    /// How many input objects the feed holds now: those of held keys, buttons and fingers, plus the movement and
+    /// wheel objects once made.
     pub fn object_count(&self) -> usize {
-        self.objects().count()
+        self.keys.len()
+            + self.buttons.iter().flatten().count()
+            + self.touches.iter().filter(|slot| slot.object.is_some()).count()
+            + usize::from(self.movement.is_some())
+            + usize::from(self.wheel_object.is_some())
     }
 
-    /// A key's or a button's object goes to `Begin` (`pressed`) or `End`, at the cursor, and its event fires.
-    fn press(&self, dm: &mut DataModel, id: Id, pressed: bool) -> Result<(), DmError> {
-        let (state, signal) = if pressed {
-            (&self.items.begin, self.service.began)
-        } else {
-            (&self.items.end, self.service.ended)
+    /// How many events wait for the next frame.
+    pub fn waiting(&self) -> usize {
+        self.waiting.len()
+    }
+
+    /// Applies `press` now, or makes it wait for the next frame: an end of something that began this frame waits,
+    /// and so does anything behind an event of the same source that already waits, to keep their order.
+    fn submit(&mut self, dm: &mut DataModel, press: Press) -> Result<(), DmError> {
+        let source = press.source();
+        let waits = self.waiting.iter().any(|w| w.source() == source)
+            || (press.ends() && self.began.contains(&source));
+        if waits && self.waiting.len() < MAX_WAITING {
+            self.waiting.push(press);
+            return Ok(());
+        }
+        match press {
+            Press::Key { index, down } => self.apply_key(dm, index, down),
+            Press::Button { index, down } => self.apply_button(dm, index, down),
+            Press::Touch { touch, phase, x, y } => self.apply_touch(dm, touch, phase, x, y),
+        }
+    }
+
+    fn apply_key(&mut self, dm: &mut DataModel, index: usize, down: bool) -> Result<(), DmError> {
+        let (word, bit) = (index / 64, 1u64 << (index % 64));
+        let (Some(bits), Some(&prop)) = (self.held_keys.get_mut(word), self.service.held_keys.get(word)) else {
+            return Ok(());
         };
-        let (x, y) = self.location.unwrap_or_default();
+        if (*bits & bit != 0) == down {
+            return Ok(());
+        }
+        *bits ^= bit;
+        let value = bits_value(*bits);
+        dm.set(self.service.id, prop, value)?;
+        if down {
+            self.began.push(Source::Key(index));
+            if self.wants_object(dm, false) {
+                let key = key_code::name(index).and_then(|name| dm.registry().enum_item("KeyCode", name));
+                let id = self.make(dm, &self.items.keyboard, key.as_ref())?;
+                self.keys.push((index, id));
+                self.relink(dm)?;
+                self.begin(dm, id)?;
+            }
+            return Ok(());
+        }
+        let held = self.keys.iter().position(|&(key, _)| key == index);
+        let object = held.map(|at| self.keys.remove(at).1);
+        if object.is_some() {
+            self.relink(dm)?;
+        }
+        let object = match object.filter(|&id| dm.contains(id)) {
+            Some(id) => Some(id),
+            None if self.wants_end_object(dm) => {
+                let key = key_code::name(index).and_then(|name| dm.registry().enum_item("KeyCode", name));
+                Some(self.make(dm, &self.items.keyboard, key.as_ref())?)
+            }
+            None => None,
+        };
+        match object {
+            Some(id) => self.end(dm, id, &self.items.end, None),
+            None => Ok(()),
+        }
+    }
+
+    fn apply_button(&mut self, dm: &mut DataModel, index: usize, down: bool) -> Result<(), DmError> {
+        let bit = 1u64 << index;
+        if (self.held_buttons & bit != 0) == down {
+            return Ok(());
+        }
+        self.held_buttons ^= bit;
+        dm.set(self.service.id, self.service.held_buttons, bits_value(self.held_buttons))?;
+        let Some(kind) = self.items.buttons.get(index) else {
+            return Ok(());
+        };
+        if down {
+            self.began.push(Source::Button(index));
+            if self.wants_object(dm, false) {
+                let id = self.make(dm, kind, None)?;
+                if let Some(slot) = self.buttons.get_mut(index) {
+                    *slot = Some(id);
+                }
+                self.begin(dm, id)?;
+            }
+            return Ok(());
+        }
+        let object = self.buttons.get_mut(index).and_then(Option::take);
+        let object = match object.filter(|&id| dm.contains(id)) {
+            Some(id) => Some(id),
+            None if self.wants_end_object(dm) => Some(self.make(dm, kind, None)?),
+            None => None,
+        };
+        match object {
+            Some(id) => self.end(dm, id, &self.items.end, None),
+            None => Ok(()),
+        }
+    }
+
+    fn apply_touch(&mut self, dm: &mut DataModel, touch: u64, phase: TouchPhase, x: f64, y: f64) -> Result<(), DmError> {
+        let at = self.touches.iter().position(|slot| slot.touch == touch);
+        match (phase, at) {
+            (TouchPhase::Began, None) => {
+                self.began.push(Source::Touch(touch));
+                let object = if self.wants_object(dm, true) {
+                    Some(self.make(dm, &self.items.touch, None)?)
+                } else {
+                    None
+                };
+                self.touches.push(TouchSlot {
+                    touch,
+                    object,
+                    position: (x, y),
+                    delta: (0.0, 0.0),
+                    moved: false,
+                });
+                match object {
+                    Some(id) => {
+                        dm.set(id, self.object.position, vector3(x, y, 0.0))?;
+                        self.begin(dm, id)
+                    }
+                    None => Ok(()),
+                }
+            }
+            (TouchPhase::Moved, Some(at)) => {
+                if let Some(slot) = self.touches.get_mut(at) {
+                    slot.delta.0 += x - slot.position.0;
+                    slot.delta.1 += y - slot.position.1;
+                    slot.position = (x, y);
+                    slot.moved = true;
+                }
+                Ok(())
+            }
+            (TouchPhase::Ended | TouchPhase::Cancelled, Some(at)) => {
+                let slot = self.touches.remove(at);
+                let delta = (slot.delta.0 + x - slot.position.0, slot.delta.1 + y - slot.position.1);
+                let object = match slot.object.filter(|&id| dm.contains(id)) {
+                    Some(id) => Some(id),
+                    None if self.wants_end_object(dm) => Some(self.make(dm, &self.items.touch, None)?),
+                    None => None,
+                };
+                let Some(id) = object else {
+                    return Ok(());
+                };
+                let state = if phase == TouchPhase::Cancelled {
+                    &self.items.cancel
+                } else {
+                    &self.items.end
+                };
+                dm.set(id, self.object.position, vector3(x, y, 0.0))?;
+                self.end(dm, id, state, Some(delta))
+            }
+            // A finger the feed does not know (it began before the engine started), or a second start of one.
+            _ => Ok(()),
+        }
+    }
+
+    /// Whether a press beginning now needs an object: while the game runs and something listens for its
+    /// beginning or its end (or, for a finger, its movement).
+    fn wants_object(&self, dm: &DataModel, finger: bool) -> bool {
+        let service = self.service.id;
+        self.firing
+            && (dm.is_signal_watched(service, self.service.began)
+                || dm.is_signal_watched(service, self.service.ended)
+                || (finger && dm.is_signal_watched(service, self.service.changed)))
+    }
+
+    /// Whether a press ending without an object needs one made now: while the game runs and something listens
+    /// for its end (a listener connected after it began).
+    fn wants_end_object(&self, dm: &DataModel) -> bool {
+        self.firing && dm.is_signal_watched(self.service.id, self.service.ended)
+    }
+
+    /// A press's object begins: `Begin`, at the cursor (a finger's position is set by the caller), and
+    /// `InputBegan` fires.
+    fn begin(&self, dm: &mut DataModel, id: Id) -> Result<(), DmError> {
+        dm.set(id, self.object.state, Value::Enum(self.items.begin.clone()))?;
+        if dm.enum_item(id, self.object.input_type).is_ok_and(|kind| *kind != self.items.touch) {
+            let (x, y) = self.location.unwrap_or_default();
+            dm.set(id, self.object.position, vector3(x, y, 0.0))?;
+        }
+        self.fire(dm, self.service.began, id)
+    }
+
+    /// A press's object ends in `state` (`End` or `Cancel`), `InputEnded` fires, and the object is destroyed. A
+    /// script holding it still reads it; one that never did lets it go.
+    fn end(&self, dm: &mut DataModel, id: Id, state: &EnumItem, delta: Option<(f64, f64)>) -> Result<(), DmError> {
         dm.set(id, self.object.state, Value::Enum(state.clone()))?;
-        dm.set(id, self.object.position, vector3(x, y, 0.0))?;
-        self.fire(dm, signal, id)
+        match delta {
+            Some((dx, dy)) => dm.set(id, self.object.delta, vector3(dx, dy, 0.0))?,
+            None => {
+                let (x, y) = self.location.unwrap_or_default();
+                dm.set(id, self.object.position, vector3(x, y, 0.0))?;
+            }
+        }
+        self.fire(dm, self.service.ended, id)?;
+        dm.destroy(id)
+    }
+
+    /// Takes over the key objects `GetKeysPressed` made (they are first in the chain), destroys any that are not
+    /// held or duplicate one the feed has, forgets the objects scripts destroyed, and rewrites the chain if any of
+    /// that changed it.
+    fn sync_objects(&mut self, dm: &mut DataModel) -> Result<(), DmError> {
+        let mut changed = false;
+        let mut next = dm.reference(self.service.id, self.service.first_input).unwrap_or(None);
+        // The chain holds at most one object per key; the bound only stops a walk the engine did not write.
+        for _ in 0..key_code::COUNT * 2 {
+            let Some(id) = next else {
+                break;
+            };
+            if !dm.contains(id) {
+                changed = true;
+                break;
+            }
+            next = dm.reference(id, self.object.next).unwrap_or(None);
+            if self.keys.iter().any(|&(_, known)| known == id) {
+                continue;
+            }
+            changed = true;
+            let index = dm
+                .enum_item(id, self.object.key_code)
+                .ok()
+                .and_then(|item| key_code::index(item.name()));
+            let held = index.is_some_and(|index| {
+                self.held_keys
+                    .get(index / 64)
+                    .is_some_and(|bits| bits & (1 << (index % 64)) != 0)
+            });
+            match index {
+                Some(index) if held && !self.keys.iter().any(|&(key, _)| key == index) => self.keys.push((index, id)),
+                _ => dm.destroy(id)?,
+            }
+        }
+        let before = self.keys.len();
+        self.keys.retain(|&(_, id)| dm.contains(id));
+        changed |= self.keys.len() != before;
+        for slot in &mut self.buttons {
+            *slot = slot.filter(|&id| dm.contains(id));
+        }
+        for slot in &mut self.touches {
+            slot.object = slot.object.filter(|&id| dm.contains(id));
+        }
+        self.movement = self.movement.filter(|&id| dm.contains(id));
+        self.wheel_object = self.wheel_object.filter(|&id| dm.contains(id));
+        if changed {
+            self.relink(dm)?;
+        }
+        Ok(())
     }
 
     /// The movement or wheel object, created (or replaced, if a script destroyed it) on first use, in the
@@ -644,10 +840,10 @@ impl InputFeed {
         };
         let id = self.make(dm, kind, None)?;
         dm.set(id, self.object.state, Value::Enum(self.items.change.clone()))?;
-        self.relink_after(dm, |feed| match which {
-            Changing::Movement => feed.movement = Some(id),
-            Changing::Wheel => feed.wheel_object = Some(id),
-        })?;
+        match which {
+            Changing::Movement => self.movement = Some(id),
+            Changing::Wheel => self.wheel_object = Some(id),
+        }
         Ok(id)
     }
 
@@ -661,32 +857,15 @@ impl InputFeed {
         Ok(id)
     }
 
-    /// Changes the pool with `change`, then rewrites the chain the service's methods walk.
-    fn relink_after(&mut self, dm: &mut DataModel, change: impl FnOnce(&mut Self)) -> Result<(), DmError> {
-        change(self);
-        self.relink(dm)
-    }
-
-    /// Rewrites the chain from `FirstInput` through every live object the feed keeps. Runs only when an object is
-    /// created, so its list is no hot-path allocation.
+    /// Rewrites the chain from `FirstInput` through the objects of held keys, which `GetKeysPressed` walks. Runs
+    /// when a key with an object goes down or up, never for mouse movement.
     fn relink(&self, dm: &mut DataModel) -> Result<(), DmError> {
-        let ids: Vec<Id> = self.objects().filter(|&id| dm.contains(id)).collect();
         let mut next = None;
-        for &id in ids.iter().rev() {
+        for &(_, id) in self.keys.iter().rev() {
             dm.set(id, self.object.next, Value::Ref(next))?;
             next = Some(id);
         }
         dm.set(self.service.id, self.service.first_input, Value::Ref(next))
-    }
-
-    fn objects(&self) -> impl Iterator<Item = Id> + '_ {
-        self.keys
-            .iter()
-            .map(|(_, held)| held.id)
-            .chain(self.buttons.iter().flatten().map(|held| held.id))
-            .chain(self.movement)
-            .chain(self.wheel_object)
-            .chain(self.touches.iter().map(|slot| slot.id))
     }
 
     /// Fires one of the input events with `input`, while the game runs and something listens to it.
@@ -772,6 +951,11 @@ mod tests {
         out
     }
 
+    /// The listener and the input object of each delivery.
+    fn delivered(dm: &mut DataModel) -> Vec<(u64, Id)> {
+        drain(dm).iter().map(|d| (d.listener.0, instance(&d.args[0]))).collect()
+    }
+
     fn field(dm: &DataModel, id: Id, name: &str) -> Value {
         dm.get_by_name(id, name).unwrap()
     }
@@ -799,21 +983,31 @@ mod tests {
     }
 
     /// One frame with `events` in it.
-    fn frame(dm: &mut DataModel, feed: &mut InputFeed, firing: bool, events: impl FnOnce(&mut DataModel, &mut InputFeed)) {
+    fn frame(
+        dm: &mut DataModel,
+        feed: &mut InputFeed,
+        firing: bool,
+        events: impl FnOnce(&mut DataModel, &mut InputFeed),
+    ) {
         feed.begin_frame(dm, firing).unwrap();
         events(dm, feed);
         feed.end_frame(dm).unwrap();
     }
 
     #[test]
-    fn keys_are_held_between_their_begin_and_end() {
+    fn unwatched_keys_are_held_bits_and_make_no_object() {
         let mut dm = game();
         let mut feed = feed(&mut dm);
         let uis = feed.service();
+        let instances = dm.len();
         assert!(!is_key_down(&mut dm, uis, "W"));
         frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "W", true).unwrap());
         assert!(is_key_down(&mut dm, uis, "W"));
         assert!(!is_key_down(&mut dm, uis, "A"));
+        assert_eq!(dm.len(), instances, "nothing listens: no object");
+        assert_eq!(field(&dm, uis, "KeyboardEnabled"), Value::Bool(true));
+
+        // GetKeysPressed makes the object; the feed takes it over and ends it with the press.
         let pressed = keys_pressed(&mut dm, uis);
         assert_eq!(pressed.len(), 1);
         let w = pressed[0];
@@ -821,45 +1015,124 @@ mod tests {
         assert_eq!(field(&dm, w, "UserInputType"), item("UserInputType", "Keyboard"));
         assert_eq!(field(&dm, w, "UserInputState"), item("UserInputState", "Begin"));
         assert_eq!(dm.parent(w), Ok(None), "input objects have no parent");
-        assert_eq!(field(&dm, uis, "KeyboardEnabled"), Value::Bool(true));
+        assert_eq!(keys_pressed(&mut dm, uis), [w], "the same object while the key is held");
+        frame(&mut dm, &mut feed, true, |_, _| {});
+        assert_eq!(feed.object_count(), 1, "taken over");
 
         frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "W", false).unwrap());
         assert!(!is_key_down(&mut dm, uis, "W"));
-        assert_eq!(field(&dm, w, "UserInputState"), item("UserInputState", "End"));
+        assert!(!dm.contains(w), "ended with the press");
         assert!(keys_pressed(&mut dm, uis).is_empty());
-
-        // The next press reuses the key's object.
-        frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "W", true).unwrap());
-        assert_eq!(feed.object_count(), 1);
-        assert_eq!(field(&dm, w, "UserInputState"), item("UserInputState", "Begin"));
+        assert_eq!(dm.len(), instances);
     }
 
     #[test]
-    fn events_fire_only_while_running_and_listened_to() {
+    fn each_press_is_a_new_object_through_begin_and_end() {
         let mut dm = game();
         let mut feed = feed(&mut dm);
         let uis = feed.service();
-        frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "A", true).unwrap());
-        assert!(drain(&mut dm).is_empty());
-
         connect(&mut dm, uis, "InputBegan", 1);
         connect(&mut dm, uis, "InputEnded", 2);
+        frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "A", true).unwrap());
+        let began = delivered(&mut dm);
+        assert_eq!(began.len(), 1);
+        let first = began[0].1;
+        assert_eq!(field(&dm, first, "UserInputState"), item("UserInputState", "Begin"));
+        assert_eq!(keys_pressed(&mut dm, uis), [first], "GetKeysPressed passes the press's object");
+
         frame(&mut dm, &mut feed, true, |dm, feed| {
             feed.key(dm, "A", true).unwrap(); // already down: an OS repeat
             feed.key(dm, "A", false).unwrap();
-            feed.key(dm, "B", true).unwrap();
-            feed.key(dm, "Unknown", true).unwrap();
         });
-        let got: Vec<(u64, ScriptValue)> = drain(&mut dm)
-            .into_iter()
-            .map(|d| (d.listener.0, d.args[1].clone()))
-            .collect();
-        assert_eq!(got, [(2, ScriptValue::Bool(false)), (1, ScriptValue::Bool(false))]);
+        assert_eq!(delivered(&mut dm), [(2, first)], "InputEnded passes the same object");
+        assert_eq!(dm.grave(first).map(|(class, _)| class), Some("InputObject"));
+        assert_eq!(field(&dm, first, "UserInputState"), item("UserInputState", "End"));
 
-        // A stopped or paused game keeps the state but fires nothing.
-        frame(&mut dm, &mut feed, false, |dm, feed| feed.key(dm, "B", false).unwrap());
+        frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "A", true).unwrap());
+        let second = delivered(&mut dm)[0].1;
+        assert_ne!(second, first, "a new press, a new object");
+    }
+
+    #[test]
+    fn a_tap_within_one_frame_ends_in_the_next() {
+        let mut dm = game();
+        let mut feed = feed(&mut dm);
+        let uis = feed.service();
+        connect(&mut dm, uis, "InputBegan", 1);
+        connect(&mut dm, uis, "InputEnded", 2);
+        frame(&mut dm, &mut feed, true, |dm, feed| {
+            feed.key(dm, "Space", true).unwrap();
+            feed.key(dm, "Space", false).unwrap();
+            feed.mouse_button(dm, MouseButton::Left, true).unwrap();
+            feed.mouse_button(dm, MouseButton::Left, false).unwrap();
+        });
+        let began = delivered(&mut dm);
+        assert_eq!(began.iter().map(|d| d.0).collect::<Vec<_>>(), [1, 1]);
+        for &(_, id) in &began {
+            assert_eq!(field(&dm, id, "UserInputState"), item("UserInputState", "Begin"));
+        }
+        assert!(is_key_down(&mut dm, uis, "Space"), "down for the frame it began in");
+        assert_eq!(feed.waiting(), 2);
+
+        frame(&mut dm, &mut feed, true, |_, _| {});
+        let ended = delivered(&mut dm);
+        assert_eq!(ended, [(2, began[0].1), (2, began[1].1)], "the same objects end");
+        for &(_, id) in &ended {
+            assert_eq!(field(&dm, id, "UserInputState"), item("UserInputState", "End"));
+        }
+        assert!(!is_key_down(&mut dm, uis, "Space"));
+        assert_eq!(feed.waiting(), 0);
+
+        // A press and release every frame keeps one release waiting, not a growing queue.
+        for _ in 0..10 {
+            frame(&mut dm, &mut feed, true, |dm, feed| {
+                feed.key(dm, "Q", true).unwrap();
+                feed.key(dm, "Q", false).unwrap();
+            });
+            assert_eq!(feed.waiting(), 1);
+        }
+    }
+
+    #[test]
+    fn events_fire_only_while_running() {
+        let mut dm = game();
+        let mut feed = feed(&mut dm);
+        let uis = feed.service();
+        connect(&mut dm, uis, "InputBegan", 1);
+        let instances = dm.len();
+        frame(&mut dm, &mut feed, false, |dm, feed| feed.key(dm, "B", true).unwrap());
         assert!(drain(&mut dm).is_empty());
+        assert_eq!(dm.len(), instances, "no object for a stopped game");
+        assert!(is_key_down(&mut dm, uis, "B"), "the state is kept");
+        frame(&mut dm, &mut feed, false, |dm, feed| feed.key(dm, "B", false).unwrap());
         assert!(!is_key_down(&mut dm, uis, "B"));
+    }
+
+    #[test]
+    fn ten_thousand_presses_leave_no_object_behind() {
+        let mut dm = game();
+        let mut feed = feed(&mut dm);
+        let uis = feed.service();
+        connect(&mut dm, uis, "InputBegan", 1);
+        connect(&mut dm, uis, "InputEnded", 2);
+        frame(&mut dm, &mut feed, true, |_, _| {});
+        let instances = dm.len();
+        for _ in 0..10_000 {
+            frame(&mut dm, &mut feed, true, |dm, feed| {
+                feed.key(dm, "E", true).unwrap();
+                feed.key(dm, "E", false).unwrap();
+            });
+            drain(&mut dm);
+            assert_eq!(dm.len(), instances + 1, "only the press in progress");
+            assert!(dm.snapshot_count() <= 1, "an ended object stays readable for one drain");
+        }
+        // The last release, then one more drain for its grave to go.
+        for _ in 0..2 {
+            frame(&mut dm, &mut feed, true, |_, _| {});
+            drain(&mut dm);
+        }
+        assert_eq!(dm.len(), instances);
+        assert_eq!(dm.snapshot_count(), 0, "nothing holds the ended objects");
     }
 
     #[test]
@@ -904,15 +1177,17 @@ mod tests {
             feed.mouse_motion(1.0, 1.0);
             feed.wheel(dm, 1.0).unwrap();
         });
-        let got = drain(&mut dm);
+        let got = delivered(&mut dm);
         assert_eq!(got.len(), 2, "movement, then the wheel");
-        let movement = instance(&got[0].args[0]);
+        let movement = got[0].1;
         assert_eq!(field(&dm, movement, "UserInputType"), item("UserInputType", "MouseMovement"));
         assert_eq!(field(&dm, movement, "UserInputState"), item("UserInputState", "Change"));
         assert_eq!(field(&dm, movement, "Delta"), v3(2.0, 2.0, 0.0));
         assert_eq!(field(&dm, movement, "Position"), v3(1.0, 2.0, 0.0));
-        let wheel = instance(&got[1].args[0]);
+        let wheel = got[1].1;
         assert_eq!(field(&dm, wheel, "Position"), v3(1.0, 2.0, 1.0));
+        frame(&mut dm, &mut feed, true, |_, feed| feed.mouse_motion(1.0, 0.0));
+        assert_eq!(delivered(&mut dm), [(1, movement)], "the movement object is reused");
         frame(&mut dm, &mut feed, true, |_, _| {});
         assert!(drain(&mut dm).is_empty(), "no movement, no event");
     }
@@ -944,11 +1219,11 @@ mod tests {
         assert!(!pressed(&mut dm, &left));
         assert!(!is_key_down(&mut dm, uis, "Space"));
         let listeners: Vec<u64> = drain(&mut dm).iter().map(|d| d.listener.0).collect();
-        assert_eq!(listeners, [1, 1, 2], "two releases, then the focus event");
+        assert_eq!(listeners, [1, 1, 2], "two releases (objects made for the new listener), then focus");
     }
 
     #[test]
-    fn touches_begin_change_once_per_frame_and_end() {
+    fn a_finger_is_one_object_from_touch_to_release() {
         let mut dm = game();
         let mut feed = feed(&mut dm);
         let uis = feed.service();
@@ -962,45 +1237,59 @@ mod tests {
             feed.touch(dm, 9, TouchPhase::Moved, 6.0, 5.0).unwrap();
             feed.touch(dm, 9, TouchPhase::Moved, 8.0, 7.0).unwrap();
         });
-        let got = drain(&mut dm);
-        let listeners: Vec<u64> = got.iter().map(|d| d.listener.0).collect();
-        assert_eq!(listeners, [0, 1]);
-        let finger = instance(&got[0].args[0]);
+        let got = delivered(&mut dm);
+        assert_eq!(got.iter().map(|d| d.0).collect::<Vec<_>>(), [0, 1]);
+        let finger = got[0].1;
+        assert_eq!(got[1].1, finger);
         assert_eq!(field(&dm, finger, "Delta"), v3(3.0, 2.0, 0.0));
+        assert_eq!(field(&dm, finger, "Position"), v3(8.0, 7.0, 0.0));
         frame(&mut dm, &mut feed, true, |dm, feed| {
             feed.touch(dm, 9, TouchPhase::Ended, 8.0, 7.0).unwrap();
         });
-        let listeners: Vec<u64> = drain(&mut dm).iter().map(|d| d.listener.0).collect();
-        assert_eq!(listeners, [2]);
+        assert_eq!(delivered(&mut dm), [(2, finger)]);
         assert_eq!(field(&dm, finger, "UserInputState"), item("UserInputState", "End"));
+        assert!(!dm.contains(finger));
         assert_eq!(field(&dm, uis, "TouchEnabled"), Value::Bool(true));
-        // The next finger reuses the free object.
+
+        // A touch and release within one frame: InputBegan sees Begin, the end waits.
         frame(&mut dm, &mut feed, true, |dm, feed| {
             feed.touch(dm, 10, TouchPhase::Began, 1.0, 1.0).unwrap();
+            feed.touch(dm, 10, TouchPhase::Cancelled, 1.0, 1.0).unwrap();
         });
-        assert_eq!(feed.object_count(), 1);
+        let began = delivered(&mut dm);
+        assert_eq!(field(&dm, began[0].1, "UserInputState"), item("UserInputState", "Begin"));
+        frame(&mut dm, &mut feed, true, |_, _| {});
+        let ended = delivered(&mut dm);
+        assert_eq!(ended, [(2, began[0].1)]);
+        assert_eq!(field(&dm, ended[0].1, "UserInputState"), item("UserInputState", "Cancel"));
+        assert_eq!(feed.object_count(), 0);
     }
 
     #[test]
-    fn a_destroyed_input_object_is_replaced() {
+    fn a_destroyed_input_object_is_forgotten() {
         let mut dm = game();
         let mut feed = feed(&mut dm);
         let uis = feed.service();
+        connect(&mut dm, uis, "InputBegan", 1);
         frame(&mut dm, &mut feed, true, |dm, feed| {
             feed.key(dm, "Q", true).unwrap();
             feed.key(dm, "E", true).unwrap();
         });
-        let q = keys_pressed(&mut dm, uis)[0];
+        let q = keys_pressed(&mut dm, uis)
+            .into_iter()
+            .find(|&id| field(&dm, id, "KeyCode") == item("KeyCode", "Q"))
+            .unwrap();
         call(&mut dm, q, "Destroy", vec![]).unwrap();
-        assert!(!is_key_down(&mut dm, uis, "Q"), "a destroyed object fails no call");
-        // The next frame repairs the chain: the other keys are found again.
+        assert!(is_key_down(&mut dm, uis, "Q"), "held keys are bits, not objects");
         frame(&mut dm, &mut feed, true, |_, _| {});
-        assert!(is_key_down(&mut dm, uis, "E"));
         assert_eq!(feed.object_count(), 1);
-        frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "Q", false).unwrap());
-        frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "Q", true).unwrap());
-        assert!(is_key_down(&mut dm, uis, "Q"));
-        assert!(is_key_down(&mut dm, uis, "E"));
+        assert_eq!(keys_pressed(&mut dm, uis).len(), 2, "Q gets a new object");
+        frame(&mut dm, &mut feed, true, |dm, feed| {
+            feed.key(dm, "Q", false).unwrap();
+            feed.key(dm, "E", false).unwrap();
+        });
+        assert!(keys_pressed(&mut dm, uis).is_empty());
+        assert_eq!(feed.object_count(), 0);
     }
 
     #[test]

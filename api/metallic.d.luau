@@ -557,7 +557,7 @@ end
 declare extern type Folder extends Instance with
 end
 
---- One input: a key, a mouse button, the mouse, the wheel or a finger on the screen. UserInputService's InputBegan, InputChanged and InputEnded pass one. The engine keeps one object per input and updates it on every event (a key's object goes from Begin to End on each press), so copy the fields you want to keep.
+--- One input: a press of a key or mouse button, a finger on the screen, the mouse's movement or the wheel. UserInputService's InputBegan, InputChanged and InputEnded pass one. Each press is a new object that goes from Begin to End and is then destroyed (it stays readable while you hold it), so a table keyed by input objects tracks what is held. Mouse movement and the wheel reuse one object each, updated every frame.
 declare extern type InputObject extends Instance with
     --- The key, for keyboard input; Unknown for every other kind.
     read KeyCode: EnumKeyCode
@@ -569,7 +569,7 @@ declare extern type InputObject extends Instance with
     read Position: Vector3
     --- How far the input moved since the last frame: raw mouse movement for MouseMovement (it keeps coming while the cursor is locked), pixels for a touch. Zero for keys and buttons.
     read Delta: Vector3
-    --- Engine bookkeeping: the next input object UserInputService keeps (see FirstInput).
+    --- Engine bookkeeping: the next held key's input object (see UserInputService.FirstInput).
     read NextInput: InputObject?
 end
 
@@ -649,19 +649,27 @@ declare extern type UserInputService extends Instance with
     read MouseLocation: Vector2
     --- Engine bookkeeping: how far the mouse moved this frame. Read it with GetMouseDelta().
     read MouseDelta: Vector2
-    --- Engine bookkeeping: the first of the input objects the engine keeps, each pointing to the next. Read held keys with IsKeyDown() and GetKeysPressed().
+    --- Engine bookkeeping: held keys 0 to 63, as bits by KeyCode item index. Read them with IsKeyDown().
+    read HeldKeys1: number
+    --- Engine bookkeeping: held keys 64 to 127, as bits by KeyCode item index. Read them with IsKeyDown().
+    read HeldKeys2: number
+    --- Engine bookkeeping: held keys 128 to 191, as bits by KeyCode item index. Read them with IsKeyDown().
+    read HeldKeys3: number
+    --- Engine bookkeeping: held mouse buttons as bits (1 is MouseButton1). Read them with IsMouseButtonPressed().
+    read HeldButtons: number
+    --- Engine bookkeeping: the first input object of the held keys, each pointing to the next. Read them with GetKeysPressed().
     read FirstInput: InputObject?
-    --- Fires when an input begins: a key or mouse button goes down, a finger touches the screen. gameProcessedEvent is true when the game's UI used the input (always false until there is game UI).
+    --- Fires when an input begins: a key or mouse button goes down, a finger touches the screen. Each press gets a new InputObject, which InputChanged and InputEnded pass again for that press. gameProcessedEvent is true when the game's UI used the input (always false until there is game UI).
     InputBegan: ScriptSignal<InputObject, boolean>
-    --- Fires when an input changes: the mouse moves (once per frame, with the frame's movement as Delta), the wheel turns, a finger moves.
+    --- Fires when an input changes: the mouse moves (once per frame, with the frame's movement as Delta), the wheel turns, a finger moves (once per frame per finger).
     InputChanged: ScriptSignal<InputObject, boolean>
-    --- Fires when an input ends: a key or mouse button is released, a finger leaves the screen, or the window loses focus while it is held.
+    --- Fires when an input ends: a key or mouse button is released, a finger leaves the screen, or the window loses focus while it is held. A press shorter than a frame ends in the next frame, so InputBegan always sees it begun.
     InputEnded: ScriptSignal<InputObject, boolean>
     --- Fires when the game's window gains keyboard focus.
     WindowFocused: ScriptSignal<>
     --- Fires when the game's window loses keyboard focus.
     WindowFocusReleased: ScriptSignal<>
-    --- Returns true while the key is held down.
+    --- Returns true while the key is held down. A key pressed and released within one frame is down for that frame.
     function IsKeyDown(self, keyCode: EnumKeyCode): boolean
     --- Returns true while the mouse button (UserInputType.MouseButton1, 2 or 3) is held down; false for any other input type.
     function IsMouseButtonPressed(self, mouseButton: EnumUserInputType): boolean
@@ -669,7 +677,7 @@ declare extern type UserInputService extends Instance with
     function GetMouseLocation(self): Vector2
     --- Returns how far the mouse moved during this frame, in raw mouse units (X right, Y down). It keeps counting while the cursor is locked (MouseBehavior), which is what a camera reads; it is zero in a frame without movement.
     function GetMouseDelta(self): Vector2
-    --- Returns the input objects of every key held down right now.
+    --- Returns the input objects of every key held down right now: the same objects InputBegan passed for those presses, and InputEnded will pass.
     function GetKeysPressed(self): {InputObject}
 end
 

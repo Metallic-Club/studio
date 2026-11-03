@@ -147,6 +147,68 @@ fn a_key_press_reaches_scripts_as_input_began_is_key_down_and_input_ended() {
     );
 }
 
+/// Tracks held inputs the Roblox way: a table keyed by the input objects.
+const HELD: &str = r#"
+local UserInputService = game:GetService("UserInputService")
+local held = {}
+_G.log = {}
+UserInputService.InputBegan:Connect(function(input)
+    held[input] = true
+    table.insert(_G.log, `began {input.KeyCode.Name} {input.UserInputState.Name}`)
+end)
+UserInputService.InputEnded:Connect(function(input)
+    table.insert(_G.log, `ended {input.KeyCode.Name} {input.UserInputState.Name} held {held[input] == true}`)
+    held[input] = nil
+end)
+_G.heldCount = function()
+    local n = 0
+    for _ in held do
+        n += 1
+    end
+    return n
+end
+"#;
+
+#[test]
+fn a_tap_within_one_frame_begins_then_ends_with_one_object() {
+    let mut engine = started(HELD);
+    engine.push_input(key(KeyCode::KeyW, "w", ButtonState::Pressed));
+    engine.push_input(key(KeyCode::KeyW, "w", ButtonState::Released));
+    engine.tick();
+    assert_no_errors(&engine);
+    assert_eq!(probe(&mut engine, "table.concat(_G.log, '; ')"), "began W Begin");
+    assert_eq!(probe(&mut engine, "_G.heldCount()"), "1");
+    engine.tick();
+    assert_no_errors(&engine);
+    assert_eq!(
+        probe(&mut engine, "table.concat(_G.log, '; ')"),
+        "began W Begin; ended W End held true",
+        "InputEnded passes the object InputBegan passed, now in End"
+    );
+    assert_eq!(probe(&mut engine, "_G.heldCount()"), "0");
+}
+
+#[test]
+fn ten_thousand_presses_leave_the_instance_count_flat() {
+    let mut engine = started(HELD);
+    engine.tick();
+    let instances = engine.data_model().len();
+    for _ in 0..10_000 {
+        engine.push_input(key(KeyCode::KeyE, "e", ButtonState::Pressed));
+        engine.push_input(key(KeyCode::KeyE, "e", ButtonState::Released));
+        engine.tick();
+    }
+    engine.run_headless(2);
+    assert_no_errors(&engine);
+    assert_eq!(
+        engine.data_model().len(),
+        instances,
+        "every press's object was destroyed"
+    );
+    assert_eq!(probe(&mut engine, "_G.heldCount()"), "0");
+    assert_eq!(probe(&mut engine, "#_G.log"), "20000");
+}
+
 const MOUSE: &str = r#"
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")

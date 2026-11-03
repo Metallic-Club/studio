@@ -183,6 +183,25 @@ with_key_codes!(key_code_lists);
 /// The item of a key the platform could not identify, and of every input that is not a key.
 pub const UNKNOWN: &str = "Unknown";
 
+/// How many items `Enum.KeyCode` has, `Unknown` included.
+pub const COUNT: usize = ITEMS.len();
+
+/// How many words of 64 bits a set of keys takes: `UserInputService` keeps the held keys as bits (`HeldKeys1` to
+/// `HeldKeys3`), by item index.
+pub const WORDS: usize = 3;
+
+const _: () = assert!(COUNT <= WORDS * 64, "the held-key bits need another word");
+
+/// The index of the item `name` in `Enum.KeyCode` (the registry keeps the items in this order).
+pub fn index(name: &str) -> Option<usize> {
+    ITEMS.iter().position(|item| *item == name)
+}
+
+/// The name of the item at `index`.
+pub fn name(index: usize) -> Option<&'static str> {
+    ITEMS.get(index).copied()
+}
+
 /// The keyboard keys.
 pub static ENUMS: &[EnumDesc] = &[EnumDesc::new("KeyCode", ITEMS).numbers(NUMBERS).describe(
     "A keyboard key, named by where it sits on a US keyboard: KeyCode.W is the key where W is on QWERTY, whatever \

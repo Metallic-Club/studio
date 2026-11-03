@@ -592,7 +592,7 @@
     {
       "name": "InputObject",
       "parent": "Instance",
-      "description": "One input: a key, a mouse button, the mouse, the wheel or a finger on the screen. UserInputService's InputBegan, InputChanged and InputEnded pass one. The engine keeps one object per input and updates it on every event (a key's object goes from Begin to End on each press), so copy the fields you want to keep.",
+      "description": "One input: a press of a key or mouse button, a finger on the screen, the mouse's movement or the wheel. UserInputService's InputBegan, InputChanged and InputEnded pass one. Each press is a new object that goes from Begin to End and is then destroyed (it stays readable while you hold it), so a table keyed by input objects tracks what is held. Mouse movement and the wheel reuse one object each, updated every frame.",
       "category": "",
       "creatable": false,
       "service_order": null,
@@ -721,7 +721,7 @@
           "computed": false,
           "range": null,
           "group": "Input",
-          "description": "Engine bookkeeping: the next input object UserInputService keeps (see FirstInput).",
+          "description": "Engine bookkeeping: the next held key's input object (see UserInputService.FirstInput).",
           "aliases": [],
           "derived_from": []
         }
@@ -1240,6 +1240,78 @@
           "derived_from": []
         },
         {
+          "name": "HeldKeys1",
+          "type": "Int",
+          "default": 0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: held keys 0 to 63, as bits by KeyCode item index. Read them with IsKeyDown().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "HeldKeys2",
+          "type": "Int",
+          "default": 0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: held keys 64 to 127, as bits by KeyCode item index. Read them with IsKeyDown().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "HeldKeys3",
+          "type": "Int",
+          "default": 0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: held keys 128 to 191, as bits by KeyCode item index. Read them with IsKeyDown().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "HeldButtons",
+          "type": "Int",
+          "default": 0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "group": "Input",
+          "description": "Engine bookkeeping: held mouse buttons as bits (1 is MouseButton1). Read them with IsMouseButtonPressed().",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
           "name": "FirstInput",
           "type": {
             "Optional": {
@@ -1257,7 +1329,7 @@
           "computed": false,
           "range": null,
           "group": "Input",
-          "description": "Engine bookkeeping: the first of the input objects the engine keeps, each pointing to the next. Read held keys with IsKeyDown() and GetKeysPressed().",
+          "description": "Engine bookkeeping: the first input object of the held keys, each pointing to the next. Read them with GetKeysPressed().",
           "aliases": [],
           "derived_from": []
         }
@@ -1275,7 +1347,7 @@
             }
           ],
           "returns": "Bool",
-          "description": "Returns true while the key is held down.",
+          "description": "Returns true while the key is held down. A key pressed and released within one frame is down for that frame.",
           "invokes_callback": null
         },
         {
@@ -1315,7 +1387,7 @@
               "Class": "InputObject"
             }
           },
-          "description": "Returns the input objects of every key held down right now.",
+          "description": "Returns the input objects of every key held down right now: the same objects InputBegan passed for those presses, and InputEnded will pass.",
           "invokes_callback": null
         }
       ],
@@ -1336,7 +1408,7 @@
               "optional": false
             }
           ],
-          "description": "Fires when an input begins: a key or mouse button goes down, a finger touches the screen. gameProcessedEvent is true when the game's UI used the input (always false until there is game UI)."
+          "description": "Fires when an input begins: a key or mouse button goes down, a finger touches the screen. Each press gets a new InputObject, which InputChanged and InputEnded pass again for that press. gameProcessedEvent is true when the game's UI used the input (always false until there is game UI)."
         },
         {
           "name": "InputChanged",
@@ -1354,7 +1426,7 @@
               "optional": false
             }
           ],
-          "description": "Fires when an input changes: the mouse moves (once per frame, with the frame's movement as Delta), the wheel turns, a finger moves."
+          "description": "Fires when an input changes: the mouse moves (once per frame, with the frame's movement as Delta), the wheel turns, a finger moves (once per frame per finger)."
         },
         {
           "name": "InputEnded",
@@ -1372,7 +1444,7 @@
               "optional": false
             }
           ],
-          "description": "Fires when an input ends: a key or mouse button is released, a finger leaves the screen, or the window loses focus while it is held."
+          "description": "Fires when an input ends: a key or mouse button is released, a finger leaves the screen, or the window loses focus while it is held. A press shorter than a frame ends in the next frame, so InputBegan always sees it begun."
         },
         {
           "name": "WindowFocused",

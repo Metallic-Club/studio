@@ -87,8 +87,9 @@
 //! - **Mouse movement is free when unwatched:** it is summed per frame, `InputChanged` fires once per frame and
 //!   only while something listens to it ([`DataModel::is_signal_watched`](metallic_core::DataModel::is_signal_watched)),
 //!   so with nothing connected 1,000 motion events create no instance and allocate nothing (`tests/input_alloc.rs`).
-//! - **Input objects are reused:** one per key, mouse button, finger, and one each for mouse movement and the wheel
-//!   (`metallic_classes::input::input_object` explains why and what scripts see).
+//! - **One input object per press**, made only while something listens and destroyed after `End`; a press shorter
+//!   than a frame ends in the next frame, so `InputBegan` sees `Begin`. Mouse movement and the wheel reuse one
+//!   object each (`metallic_classes::input::feed` has the rules).
 //! - **A headless build** (no `render`) has no input: the service exists and nothing feeds it.
 //!
 //! Drawing is not done here: the renderer (`metallic_render`, #75 to #77) implements [`RenderHook`] and is

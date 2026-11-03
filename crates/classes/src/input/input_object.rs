@@ -1,16 +1,17 @@
 //! `InputObject`: one input (a key, a mouse button, the mouse, the wheel, a touch), as `UserInputService`'s events
 //! pass it. The engine creates and updates them; scripts cannot.
 //!
-//! # Reused objects
+//! # One object per press
 //!
-//! An input object stands for one input source, not one event: the engine keeps one per key, per mouse button, one
-//! for mouse movement, one for the wheel and one per finger on the screen, creates each the first time its input
-//! happens, and updates it from then on. A key's object goes from `Begin` to `End` and back on every press. That
-//! is what keeps input free of allocations once the game has seen each input (Roblox reuses the mouse movement
-//! object the same way). A script that wants to keep what an event said copies the fields it needs.
+//! As in Roblox, each press of a key or mouse button, and each finger on the screen, is a new object: `InputBegan`
+//! passes it in the `Begin` state, `InputChanged` (a moving finger) and `InputEnded` pass the same object, and after
+//! `End` the engine destroys it. A script that kept it (`held[input] = true`) still reads it. Objects are made only
+//! while something listens for them (`input::feed` has the rules). Mouse movement and the wheel are the exception:
+//! one object each, reused every frame, as Roblox does for movement.
 //!
-//! The objects have no parent. `UserInputService` chains them through the hidden `NextInput` reference (from its
-//! own hidden `FirstInput`), so its methods find them without a list type in the data model.
+//! The objects have no parent. `UserInputService` chains the objects of held keys through the hidden `NextInput`
+//! reference (from its own hidden `FirstInput`), so `GetKeysPressed` finds them without a list type in the data
+//! model.
 
 use metallic_core::{ClassDesc, EnumDesc, PropFlags, PropMeta};
 
@@ -99,14 +100,15 @@ static PROPS: &[PropMeta] = &[
         .flags(FIELD.union(PropFlags::HIDDEN))
         .group(GROUP)
         .order(5)
-        .desc("Engine bookkeeping: the next input object UserInputService keeps (see FirstInput)."),
+        .desc("Engine bookkeeping: the next held key's input object (see UserInputService.FirstInput)."),
 ];
 
 /// One input, as `UserInputService`'s events pass it.
 pub static CLASS: ClassDesc = ClassDesc::new("InputObject", Some("Instance"))
     .describe(
-        "One input: a key, a mouse button, the mouse, the wheel or a finger on the screen. UserInputService's \
-         InputBegan, InputChanged and InputEnded pass one. The engine keeps one object per input and updates it on \
-         every event (a key's object goes from Begin to End on each press), so copy the fields you want to keep.",
+        "One input: a press of a key or mouse button, a finger on the screen, the mouse's movement or the wheel. \
+         UserInputService's InputBegan, InputChanged and InputEnded pass one. Each press is a new object that goes \
+         from Begin to End and is then destroyed (it stays readable while you hold it), so a table keyed by input \
+         objects tracks what is held. Mouse movement and the wheel reuse one object each, updated every frame.",
     )
     .props(PROPS);
