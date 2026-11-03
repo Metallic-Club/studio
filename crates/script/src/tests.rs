@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// A new game, a host with the mock backend, and the mock's log.
-fn setup() -> (DataModel, ScriptHost, Rc<RefCell<MockLog>>) {
+pub(crate) fn setup() -> (DataModel, ScriptHost, Rc<RefCell<MockLog>>) {
     let dm = metallic_classes::new_game().unwrap_or_else(|e| panic!("{e}"));
     let mut host = ScriptHost::new();
     let (language, log) = MockLanguage::new();
@@ -20,13 +20,13 @@ fn setup() -> (DataModel, ScriptHost, Rc<RefCell<MockLog>>) {
     (dm, host, log)
 }
 
-fn service(dm: &DataModel, class: &str) -> Id {
+pub(crate) fn service(dm: &DataModel, class: &str) -> Id {
     let class = dm.registry().class_id(class).expect("class");
     dm.service(class).expect("service")
 }
 
 /// A stand-in script instance (the script classes come in #47): a `Folder` named `name` in `Workspace`.
-fn script(dm: &mut DataModel, name: &str) -> Id {
+pub(crate) fn script(dm: &mut DataModel, name: &str) -> Id {
     let class = dm.registry().class_id("Folder").expect("Folder");
     let id = dm.create(class).expect("create");
     dm.set_name(id, name.into()).expect("name");
@@ -35,7 +35,7 @@ fn script(dm: &mut DataModel, name: &str) -> Id {
     id
 }
 
-fn errors(host: &ScriptHost) -> Vec<&OutputLine> {
+pub(crate) fn errors(host: &ScriptHost) -> Vec<&OutputLine> {
     host.output().of_level(OutputLevel::Error).collect()
 }
 

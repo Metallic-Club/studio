@@ -18,3 +18,8 @@ thiserror.workspace = true
 [dev-dependencies]
 # Host tests run scripts against the real class set. Dev-dependencies are exempt from the layout rules (ADR 0001).
 metallic_classes.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "scheduler"
+harness = false
