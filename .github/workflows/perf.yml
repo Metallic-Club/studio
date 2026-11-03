@@ -22,9 +22,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Base and head build into one target folder, so the dependencies compile once. Their own crates do not clash:
-  # cargo hashes each path package's location into its artifact names.
-  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  # Base and head must not share a target folder: cargo names a workspace crate's artifacts by its path relative to
+  # the workspace root, which is the same on both sides, so the second build would reuse the first one's binary and
+  # the gate would compare the base with itself. The base builds into base/target, the head into target.
 
 jobs:
   gate:
