@@ -403,6 +403,140 @@ fn override_replaces_in_place() {
     assert_eq!(names(&reg, "Child"), ["Size", "N"]);
 }
 
+fn zero(_: &crate::DataModel, _: crate::Id) -> Value {
+    Value::Number(0.0)
+}
+
+fn ignore(_: &mut crate::DataModel, _: crate::Id, _: Value) -> Result<(), ScriptError> {
+    Ok(())
+}
+
+#[test]
+fn derived_properties_resolve_into_dependents_per_source() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).components(&["Transform"]).props(&[
+        PropMeta::number("Size", 1.0),
+        PropMeta::number("Volume", 0.0)
+            .computed(zero, None)
+            .derived_from(&["Size"]),
+        PropMeta::number("Height", 0.0)
+            .computed(zero, Some(ignore))
+            .derived_from(&["CFrame"]),
+        PropMeta::number("Tilt", 0.0)
+            .computed(zero, Some(ignore))
+            .derived_from(&["CFrame", "CFrame"]),
+        PropMeta::number("Plain", 0.0),
+    ]);
+    // Inherits the table, and adds a dependent of an inherited source (before its own, in property order).
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base")).props(&[PropMeta::number("Reach", 0.0)
+        .computed(zero, None)
+        .derived_from(&["Size", "CFrame"])]);
+    let reg = Registry::build(RegistryInput {
+        classes: &[&BASE, &CHILD],
+        components: &[&TRANSFORM],
+        ..RegistryInput::default()
+    })
+    .expect("valid");
+    let (base, child) = (id(&reg, "Base"), id(&reg, "Child"));
+    let prop = |name| reg.prop_id(child, name).expect("prop");
+    let (cframe, size, volume, height, tilt, plain, reach) = (
+        prop("CFrame"),
+        prop("Size"),
+        prop("Volume"),
+        prop("Height"),
+        prop("Tilt"),
+        prop("Plain"),
+        prop("Reach"),
+    );
+
+    assert_eq!(
+        reg.dependents(base, cframe),
+        [height, tilt],
+        "a repeated source counts once"
+    );
+    assert_eq!(reg.dependents(base, size), [volume]);
+    assert_eq!(reg.dependents(child, cframe), [height, tilt, reach]);
+    assert_eq!(reg.dependents(child, size), [volume, reach]);
+    for none in [volume, height, plain, PropId::new(999)] {
+        assert!(reg.dependents(child, none).is_empty());
+    }
+    assert!(reg.dependents(ClassId::new(99), size).is_empty());
+    // A class that derives nothing has empty tables.
+    let lights = lights();
+    let spot = id(&lights, "SpotLight");
+    for p in 0..lights.props(spot).len() {
+        let p = PropId::new(u16::try_from(p).expect("id"));
+        assert!(lights.dependents(spot, p).is_empty());
+    }
+}
+
+#[test]
+fn rejects_bad_derived_sources() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[
+        PropMeta::number("Size", 1.0),
+        PropMeta::number("Volume", 0.0).computed(zero, None),
+    ]);
+    static STORED: ClassDesc =
+        ClassDesc::new("Stored", Some("Base")).props(&[PropMeta::number("Copy", 0.0).derived_from(&["Size"])]);
+    static UNKNOWN: ClassDesc = ClassDesc::new("Unknown", Some("Base")).props(&[PropMeta::number("Area", 0.0)
+        .computed(zero, None)
+        .derived_from(&["Sise"])]);
+    static FROM_COMPUTED: ClassDesc =
+        ClassDesc::new("FromComputed", Some("Base")).props(&[PropMeta::number("Weight", 0.0)
+            .computed(zero, None)
+            .derived_from(&["Volume"])]);
+    // A property of a subclass is not a property of the class: `Base` cannot derive from `Grown`'s `Extra`.
+    static PARENT: ClassDesc = ClassDesc::new("Parent", Some("Base")).props(&[PropMeta::number("Spread", 0.0)
+        .computed(zero, None)
+        .derived_from(&["Extra"])]);
+    static GROWN: ClassDesc = ClassDesc::new("Grown", Some("Parent")).props(&[PropMeta::number("Extra", 0.0)]);
+    let found = class_errors(&[&BASE, &STORED, &UNKNOWN, &FROM_COMPUTED, &PARENT, &GROWN]);
+    for expected in [
+        RegistryError::DerivedStoredProp {
+            class: "Stored",
+            prop: "Copy",
+        },
+        RegistryError::UnknownDerivedSource {
+            class: "Unknown",
+            prop: "Area",
+            from: "Sise",
+        },
+        RegistryError::DerivedFromComputed {
+            class: "FromComputed",
+            prop: "Weight",
+            from: "Volume",
+        },
+        RegistryError::UnknownDerivedSource {
+            class: "Parent",
+            prop: "Spread",
+            from: "Extra",
+        },
+    ] {
+        assert!(found.contains(&expected), "{expected:?} missing from {found:?}");
+    }
+    assert_eq!(found.len(), 4, "{found:?}");
+}
+
+#[test]
+fn rejects_an_override_that_makes_an_inherited_source_computed() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).props(&[
+        PropMeta::number("Size", 1.0),
+        PropMeta::number("Volume", 0.0)
+            .computed(zero, None)
+            .derived_from(&["Size"]),
+    ]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Base")).props(&[PropMeta::number("Size", 1.0)
+        .computed(zero, Some(ignore))
+        .override_inherited()]);
+    assert_eq!(
+        class_errors(&[&BASE, &CHILD]),
+        [RegistryError::DerivedFromComputed {
+            class: "Child",
+            prop: "Volume",
+            from: "Size",
+        }]
+    );
+}
+
 #[test]
 fn every_default_kind_converts() {
     static ENUMS: &[EnumDesc] = &[EnumDesc::new("Shape", &["Block", "Ball"])];

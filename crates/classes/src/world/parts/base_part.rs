@@ -84,6 +84,7 @@ static PROPS: &[PropMeta] = &[
         .desc("Where the part is and how it is rotated, in world space. Position and Orientation are views of it."),
     PropMeta::vector3("Position", 0.0, 0.0, 0.0)
         .computed(position_get, Some(position_set))
+        .derived_from(&["CFrame"])
         .transform()
         .flags(PropFlags::NO_SAVE)
         .group("Transform")
@@ -91,6 +92,7 @@ static PROPS: &[PropMeta] = &[
         .desc("Where the part's centre is, in metres. Setting it moves the part without rotating it."),
     PropMeta::vector3("Orientation", 0.0, 0.0, 0.0)
         .computed(orientation_get, Some(orientation_set))
+        .derived_from(&["CFrame"])
         .transform()
         .flags(PropFlags::NO_SAVE)
         .group("Transform")
@@ -202,6 +204,37 @@ mod tests {
         assert_eq!(vector(&dm, part, "Position"), Vector3::new(4.0, 5.0, 6.0));
         let expected = CFrame::from_orientation_deg(30.0, -45.0, 10.0).rotation();
         assert!(cframe(&dm, part).rotation().abs_diff_eq(expected, 1e-6));
+    }
+
+    #[test]
+    fn every_transform_write_fires_cframe_position_and_orientation_once() {
+        use metallic_core::{Delivery, ListenerKey, ScriptValue};
+
+        let (mut dm, part) = part();
+        let changed = dm.signal_id(part, "Changed").unwrap();
+        dm.connect(part, changed, ListenerKey(0)).unwrap();
+        let names = ["CFrame", "Position", "Orientation"];
+        for (listener, name) in (1..).zip(names) {
+            let prop = dm.prop_id(part, name).unwrap();
+            dm.connect_property_changed(part, prop, ListenerKey(listener)).unwrap();
+        }
+        let expected: Vec<(u64, Vec<ScriptValue>)> = (1..)
+            .zip(names)
+            .flat_map(|(listener, name)| [(0, vec![ScriptValue::String(name.into())]), (listener, vec![])])
+            .collect();
+
+        let writes = [
+            ("CFrame", Value::CFrame(CFrame::new(Vector3::new(1.0, 2.0, 3.0)))),
+            ("Position", Value::Vector3(Vector3::new(4.0, 5.0, 6.0))),
+            ("Orientation", Value::Vector3(Vector3::new(0.0, 90.0, 0.0))),
+        ];
+        for (name, value) in writes {
+            dm.set_by_name(part, name, value).unwrap();
+            let mut out: Vec<Delivery> = Vec::new();
+            dm.drain_deliveries(&mut out);
+            let got: Vec<_> = out.into_iter().map(|d| (d.listener.0, d.args)).collect();
+            assert_eq!(got, expected, "writing {name}");
+        }
     }
 
     #[test]

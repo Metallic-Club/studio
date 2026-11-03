@@ -289,7 +289,9 @@ impl DataModel {
     /// items exist (and stores the registry's shared copy); checks a reference's target is alive and of the
     /// declared class. A value equal to the current one does nothing at all. Otherwise the value is stored (or the
     /// entry removed, when it equals the default), the dirty bits for the property's flags are set, each class
-    /// behaviour's `on_prop_changed` runs, and the change is reported for signals.
+    /// behaviour's `on_prop_changed` runs, and the change is reported for signals, with the computed properties
+    /// derived from it ([`PropMeta::derived_from`]). A computed property's write reports nothing itself; its
+    /// setter's writes do.
     ///
     /// Overwriting a property that already has a non-default value never allocates. `READ_ONLY` is not checked
     /// here: the engine may write read-only properties, and the script layer enforces the flag.
@@ -316,6 +318,8 @@ impl DataModel {
                     prop: meta.name,
                 });
             };
+            // Nothing is reported here: the setter's own writes to the stored properties report the change, with
+            // this property among their dependents, so it fires once (see `signals.rs`).
             setter(self, id, value)?;
             return Ok(());
         }

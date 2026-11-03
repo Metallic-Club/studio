@@ -406,6 +406,9 @@ fn default_value(
     Some(value)
 }
 
+/// A class's stored property → derived properties table: `ClassInfo::dependent_starts` and `dependents`.
+type DependentTables = (Box<[u32]>, Box<[PropId]>);
+
 /// Resolves one class from its parent's finished tables.
 struct ClassResolver<'a> {
     desc: &'static ClassDesc,
@@ -653,6 +656,10 @@ impl ClassResolver<'_> {
             }
         }
 
+        let dependents = self.dependents(&t.props, &prop_ids);
+        ok &= dependents.is_some();
+        let (dependent_starts, dependents) = dependents.unwrap_or_default();
+
         let method_ids = visible_ids(&t.methods, |m| m.name);
         let signal_ids = visible_ids(&t.signals, |s| s.name);
         let visible_prop = |name: &str| prop_ids.get(name).is_some_and(|id| !t.props[id.index()].hidden);
@@ -692,12 +699,82 @@ impl ClassResolver<'_> {
             ancestors,
             props: t.props.into_boxed_slice(),
             prop_ids,
+            dependent_starts,
+            dependents,
             components: t.components.into_boxed_slice(),
             methods: t.methods.into_boxed_slice(),
             method_ids,
             signals: t.signals.into_boxed_slice(),
             signal_ids,
         })
+    }
+
+    /// Checks every `derived_from` list of the class and turns them into the stored property → computed
+    /// properties table (see `ClassInfo::dependents`). Inherited properties are checked again because an override
+    /// in this class can make a source computed. `None` after reporting a problem.
+    fn dependents(
+        &mut self,
+        props: &[ResolvedProp],
+        prop_ids: &FxMap<&'static str, PropId>,
+    ) -> Option<DependentTables> {
+        let class = self.desc.name;
+        let before = self.errors.len();
+        // (stored source, computed dependent), dependents in property order.
+        let mut pairs: Vec<(PropId, PropId)> = Vec::new();
+        for (i, prop) in props.iter().enumerate() {
+            let meta = prop.meta;
+            if meta.derived_from.is_empty() {
+                continue;
+            }
+            if meta.computed.is_none() {
+                self.errors
+                    .push(RegistryError::DerivedStoredProp { class, prop: meta.name });
+                continue;
+            }
+            let dependent = PropId(u16::try_from(i).ok()?);
+            for &from in meta.derived_from {
+                let Some(&source) = prop_ids.get(from) else {
+                    self.errors.push(RegistryError::UnknownDerivedSource {
+                        class,
+                        prop: meta.name,
+                        from,
+                    });
+                    continue;
+                };
+                if props.get(source.index()).is_none_or(|p| p.meta.computed.is_some()) {
+                    self.errors.push(RegistryError::DerivedFromComputed {
+                        class,
+                        prop: meta.name,
+                        from,
+                    });
+                    continue;
+                }
+                // A source named twice (or by a name and an alias) would fire the dependent twice per change.
+                if !pairs.contains(&(source, dependent)) {
+                    pairs.push((source, dependent));
+                }
+            }
+        }
+        if self.errors.len() != before {
+            return None;
+        }
+        // Most classes derive nothing; their tables stay empty and cost no allocation.
+        if pairs.is_empty() {
+            return Some((Box::default(), Box::default()));
+        }
+        // Stable: each source's dependents keep property order.
+        pairs.sort_by_key(|&(source, _)| source);
+        let mut starts = Vec::with_capacity(props.len() + 1);
+        let mut next = 0;
+        for p in 0..props.len() {
+            starts.push(u32::try_from(next).ok()?);
+            while pairs.get(next).is_some_and(|&(source, _)| source.index() == p) {
+                next += 1;
+            }
+        }
+        starts.push(u32::try_from(next).ok()?);
+        let dependents = pairs.into_iter().map(|(_, dependent)| dependent).collect();
+        Some((starts.into_boxed_slice(), dependents))
     }
 }
 

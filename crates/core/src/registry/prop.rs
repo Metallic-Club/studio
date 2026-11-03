@@ -214,6 +214,8 @@ pub struct PropMeta {
     pub aliases: &'static [&'static str],
     /// Set for a computed property, whose value comes from functions instead of storage.
     pub computed: Option<Computed>,
+    /// For a computed property: the stored properties its value is derived from (see [`PropMeta::derived_from`]).
+    pub derived_from: &'static [&'static str],
 }
 
 impl PropMeta {
@@ -233,6 +235,7 @@ impl PropMeta {
             range: None,
             aliases: &[],
             computed: None,
+            derived_from: &[],
         }
     }
 
@@ -365,6 +368,18 @@ impl PropMeta {
         self
     }
 
+    /// Names the stored properties a computed property's value is derived from, such as `&["CFrame"]` for
+    /// `Position`. When one of them changes on an instance something listens to, this property's `Changed` and
+    /// property-changed signals fire too, right after the stored property's own, so
+    /// `GetPropertyChangedSignal("Position")` fires when the `CFrame` moves.
+    ///
+    /// The registry checks each name: only a computed property may derive from others, and each source must be a
+    /// stored (not computed) property of the same class or one it inherits.
+    pub const fn derived_from(mut self, sources: &'static [&'static str]) -> Self {
+        self.derived_from = sources;
+        self
+    }
+
     /// The name Studio shows: the label, or the name when no label is set.
     pub const fn display_name(&self) -> &'static str {
         if self.label.is_empty() { self.name } else { self.label }
@@ -471,6 +486,11 @@ mod tests {
         let meta = PropMeta::number("Mass", 0.0).computed(get, None);
         let computed = meta.computed.expect("computed");
         assert!(computed.set.is_none());
+        assert!(meta.derived_from.is_empty());
+        const DERIVED: PropMeta = PropMeta::number("Mass", 0.0)
+            .computed(get, None)
+            .derived_from(&["Size"]);
+        assert_eq!(DERIVED.derived_from, &["Size"]);
     }
 
     #[test]

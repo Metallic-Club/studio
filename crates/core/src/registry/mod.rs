@@ -14,6 +14,12 @@
 //! Signals follow the same rule: a class's resolved signal list is its parent's list first, then its own new
 //! signals, and a child that redeclares a signal replaces the entry in place. So a [`SignalId`] is stable down the
 //! hierarchy too: `Changed` declared on `Object` has one id in every class.
+//!
+//! # Derived properties
+//!
+//! A computed property can name the stored properties it is derived from ([`PropMeta::derived_from`]). Each class
+//! resolves these once into a table from a stored property to its dependents ([`ClassInfo::dependents`]), which the
+//! data model reads to fire the dependents' changed signals after their source's.
 
 mod desc;
 mod error;
@@ -162,6 +168,11 @@ pub struct ClassInfo {
     props: Box<[ResolvedProp]>,
     /// Names and aliases, hidden properties included (lookups filter them).
     prop_ids: FxMap<&'static str, PropId>,
+    /// The computed properties derived from each stored property `p` are
+    /// `dependents[dependent_starts[p]..dependent_starts[p + 1]]`, in [`PropId`] order. Both are empty when no
+    /// property of the class is derived from another.
+    dependent_starts: Box<[u32]>,
+    dependents: Box<[PropId]>,
     components: Box<[&'static ComponentDesc]>,
     methods: Box<[ResolvedMethod]>,
     /// Visible methods only.
@@ -242,6 +253,17 @@ impl ClassInfo {
         let id = *self.prop_ids.get(name)?;
         let hidden = self.props.get(id.index())?.hidden;
         (!hidden).then_some(id)
+    }
+
+    /// The computed properties derived from the stored property `prop` (declared with [`PropMeta::derived_from`]),
+    /// in [`PropId`] order, which is declaration order. Empty when there are none. Never allocates.
+    #[inline]
+    pub fn dependents(&self, prop: PropId) -> &[PropId] {
+        let i = prop.index();
+        match (self.dependent_starts.get(i), self.dependent_starts.get(i + 1)) {
+            (Some(&start), Some(&end)) => self.dependents.get(start as usize..end as usize).unwrap_or_default(),
+            _ => &[],
+        }
     }
 
     /// Every component, inherited ones first, without repeats.
@@ -358,6 +380,11 @@ impl Registry {
     /// Every property of `class`, indexed by [`PropId`] (empty for an unknown class).
     pub fn props(&self, class: ClassId) -> &[ResolvedProp] {
         self.class(class).map(ClassInfo::props).unwrap_or_default()
+    }
+
+    /// The computed properties of `class` derived from its stored property `prop` (see [`ClassInfo::dependents`]).
+    pub fn dependents(&self, class: ClassId, prop: PropId) -> &[PropId] {
+        self.class(class).map_or(&[], |c| c.dependents(prop))
     }
 
     /// `class`'s visible method with this name.
