@@ -6,10 +6,14 @@
 //! edges and in the last bits of the shading maths, so images are compared with a tolerance: almost every pixel
 //! within a few levels, and the few that are not (edges) limited in number. To make a new reference (after a
 //! deliberate change to how parts look), run with `METALLIC_UPDATE_REFERENCES=1` and look at the image.
+//!
+//! Every render also checks that wgpu reported no error through its log, which carries the graphics API's
+//! validation messages where validation layers are installed (debug builds turn validation on).
 
 mod support;
 
 use std::path::PathBuf;
+use std::sync::{Mutex, Once, PoisonError};
 
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Value};
@@ -41,9 +45,54 @@ fn reference_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/reference/parts.png")
 }
 
+/// wgpu's warnings and errors, which include the graphics API's validation messages in debug builds (Vulkan
+/// validation layers, the D3D12 debug layer) where the machine has them installed, as CI's images do.
+struct WgpuMessages(Mutex<Vec<(log::Level, String)>>);
+
+impl log::Log for WgpuMessages {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Warn && metadata.target().starts_with("wgpu")
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            let message = format!("{}: {}", record.target(), record.args());
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((record.level(), message));
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static MESSAGES: WgpuMessages = WgpuMessages(Mutex::new(Vec::new()));
+
+/// Starts collecting wgpu's messages (once per test binary).
+fn collect_wgpu_messages() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        if log::set_logger(&MESSAGES).is_ok() {
+            log::set_max_level(log::LevelFilter::Warn);
+        }
+    });
+}
+
+/// Fails on any validation error wgpu reported since the last check (by any test); prints the warnings.
+fn assert_no_wgpu_errors() {
+    let messages = std::mem::take(&mut *MESSAGES.0.lock().unwrap_or_else(PoisonError::into_inner));
+    for (level, message) in &messages {
+        eprintln!("wgpu {level}: {message}");
+    }
+    let errors = messages.iter().filter(|(level, _)| *level == log::Level::Error).count();
+    assert_eq!(errors, 0, "wgpu reported {errors} error(s), printed above");
+}
+
 /// Renders `game` once (a few frames, so everything is uploaded and sorted) and reads the image back, with the
 /// last frame's draw statistics.
 fn render(context: &RenderContext, game: &mut Game, passes: PassSet) -> (Vec<[u8; 4]>, DrawStats) {
+    collect_wgpu_messages();
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(
         context,
@@ -71,7 +120,9 @@ fn render(context: &RenderContext, game: &mut Game, passes: PassSet) -> (Vec<[u8
         scene.sync(&mut game.dm);
         renderer.render_scene(target.view(), &mut scene, camera.as_ref());
     }
-    (read_back_rgba8(context, target.texture()), renderer.draw_stats())
+    let pixels = read_back_rgba8(context, target.texture());
+    assert_no_wgpu_errors();
+    (pixels, renderer.draw_stats())
 }
 
 fn demo_game(offset: Vec3) -> Game {

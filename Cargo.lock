@@ -1280,6 +1280,7 @@ dependencies = [
  "bytemuck",
  "criterion",
  "gungraun",
+ "log",
  "metallic_classes",
  "metallic_core",
  "png",

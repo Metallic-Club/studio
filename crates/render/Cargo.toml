@@ -28,6 +28,8 @@ criterion.workspace = true
 gungraun.workspace = true
 # The image tests' reference PNGs (`tests/reference/`).
 png.workspace = true
+# The image tests catch wgpu's validation messages through a logger.
+log.workspace = true
 
 # CPU time of a scene sync on a real device (`cargo bench -p metallic_render --bench gpu_scene`).
 [[bench]]

@@ -32,7 +32,8 @@ use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use metallic_render::scene::{GpuInstance, InstanceBinding, RenderComponents};
 use metallic_render::{
-    Camera, GpuScene, InstanceScene, OffscreenTarget, PassId, PassSet, RenderContext, Renderer, RendererSettings, wgpu,
+    Camera, DrawStats, GpuScene, InstanceScene, OffscreenTarget, PassId, PassSet, RenderContext, Renderer,
+    RendererSettings, wgpu,
 };
 
 thread_local! {
@@ -855,35 +856,32 @@ impl HandParts {
     }
 }
 
-#[test]
-fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
-    let Some(context) = support::gpu() else { return };
-    if InstanceBinding::for_context(&context) != InstanceBinding::Storage {
-        eprintln!("skipped: the hand-written frame is the storage path's");
-        return;
-    }
+/// The fewest allocations of a parts frame of `parts` parts (every `see_through`th one see-through, blocks and
+/// balls in turn) and of the same wgpu calls by hand, over [`FRAMES`] frames each in alternating order, with the
+/// frame's draw statistics.
+fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usize) -> (u64, u64, DrawStats) {
     let (device, queue) = (context.device(), context.queue());
     let mut game = support::scenes::Game::new();
     // Every kind opaque, and see-through blocks and balls mixed so the transparent pass makes several draws.
-    support::scenes::grid(&mut game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
+    support::scenes::grid(&mut game, parts, 100, support::scenes::SeeThrough::Mixed(see_through));
     let mut scene = GpuScene::new(
-        &context,
+        context,
         &mut game.dm,
         Some(game.workspace),
         &RenderComponents::builtin(),
     )
-    .unwrap();
+    .expect("a scene");
     scene.sync(&mut game.dm);
-    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(
-        &context,
+        context,
         RendererSettings {
             gpu_timing: false,
             ..RendererSettings::new(FORMAT, SIZE, SIZE)
         },
     )
-    .unwrap();
-    let hand = HandParts::new(device, 4096);
+    .expect("a renderer");
+    let hand = HandParts::new(device, parts as u64);
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
     for frame in 0..WARM_UP + FRAMES {
         let camera = orbiting_camera(frame);
@@ -920,20 +918,58 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
         stats.opaque_draws,
         stats.transparent_draws,
         stats.instances,
-        ours.iter().min().unwrap(),
-        ours.iter().max().unwrap(),
+        ours.iter().min().expect("frames"),
+        ours.iter().max().expect("frames"),
         median(ours.clone()),
-        floor.iter().min().unwrap(),
-        floor.iter().max().unwrap(),
+        floor.iter().min().expect("frames"),
+        floor.iter().max().expect("frames"),
         median(floor.clone())
     );
-    assert_eq!(stats.opaque_draws, 4);
-    assert!(stats.transparent_draws > 1, "{stats:?}");
-    let (ours, floor) = (*ours.iter().min().unwrap(), *floor.iter().min().unwrap());
+    (
+        *ours.iter().min().expect("frames"),
+        *floor.iter().min().expect("frames"),
+        stats,
+    )
+}
+
+/// What a parts frame may allocate beyond the same wgpu calls by hand, for the machine rather than for us. The dev
+/// PC's adapters (Vulkan, DX12, GL, and WARP) show 0. CI's lavapipe and WARP showed a constant 4 and 3 on every
+/// frame of a 2,000-part frame, whether or not frames overlapped, while the dev PC's WARP shows 0: something in
+/// the runner images (they have the graphics APIs' validation layers, which wgpu turns on in debug builds and
+/// relays with allocations of its own) rather than in the renderer, which the comparison of two very different
+/// workloads below confirms.
+const MACHINE_NOISE: u64 = 4;
+
+#[test]
+fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
+    let Some(context) = support::gpu() else { return };
+    if InstanceBinding::for_context(&context) != InstanceBinding::Storage {
+        eprintln!("skipped: the hand-written frame is the storage path's");
+        return;
+    }
+    // Two workloads, the second with three times the parts and many more see-through parts, sorted runs and draws.
+    let (ours_small, floor_small, small) = parts_frame_and_floor(&context, 2_000, 25);
+    let (ours_large, floor_large, large) = parts_frame_and_floor(&context, 6_000, 8);
+    assert_eq!((small.opaque_draws, large.opaque_draws), (4, 4));
     assert!(
-        ours <= floor + WGPU_POOL_NOISE,
-        "drawing parts adds {} allocation(s) per frame",
-        ours - floor
+        small.transparent_draws > 1 && large.transparent_draws > 4 * small.transparent_draws,
+        "{small:?} {large:?}"
+    );
+    let (extra_small, extra_large) = (
+        ours_small.saturating_sub(floor_small),
+        ours_large.saturating_sub(floor_large),
+    );
+    // Nothing the renderer does allocates per part, per draw, per sorted instance or per run: whatever a frame
+    // allocates beyond wgpu's own is the same for both workloads...
+    assert_eq!(
+        extra_small, extra_large,
+        "the renderer's own allocations grow with the work: {extra_small} for {small:?}, {extra_large} for \
+         {large:?}"
+    );
+    // ...and no more than the machine's noise (0 on the dev PC).
+    assert!(
+        extra_small <= MACHINE_NOISE,
+        "drawing parts adds {extra_small} allocation(s) per frame"
     );
 }
 
