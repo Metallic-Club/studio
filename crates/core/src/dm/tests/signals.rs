@@ -704,3 +704,105 @@ fn unwatched_destroys_and_disconnects_report_nothing() {
         "a disconnected connection is not reported again"
     );
 }
+
+// Value objects: `Changed` passes the new `Value`. Declared here, not in the shared classes: the perf gate builds
+// those on the base branch too.
+
+static VALUE_BASE: ClassDesc = ClassDesc::new("ValueBase", Some("Instance"))
+    .changed_passes_value("Value")
+    .signals(&[crate::SignalDesc::new("Changed").params(&[("value", "any")])]);
+static NUMBER_VALUE: ClassDesc = ClassDesc::new("NumberValue", Some("ValueBase"))
+    .creatable()
+    .props(&[PropMeta::number("Value", 0.0), PropMeta::boolean("Extra", false)]);
+static INT_VALUE: ClassDesc = ClassDesc::new("IntValue", Some("ValueBase"))
+    .creatable()
+    .props(&[PropMeta::int("Value", 0)]);
+static OBJECT_VALUE: ClassDesc = ClassDesc::new("ObjectValue", Some("ValueBase"))
+    .creatable()
+    .props(&[PropMeta::reference("Value", "Instance")]);
+
+/// A data model with the value classes, and one instance of `class` under the workspace.
+fn value_object(class: &str) -> (DataModel, classes::Ids, Id) {
+    let registry = registry_with(&[&VALUE_BASE, &NUMBER_VALUE, &INT_VALUE, &OBJECT_VALUE]);
+    let class = registry.class_id(class).expect("class");
+    let (mut dm, ids) = game_with(registry);
+    let v = dm.create(class).expect("create");
+    dm.set_parent(v, Some(ids.workspace)).expect("parent");
+    (dm, ids, v)
+}
+
+#[test]
+fn value_objects_changed_passes_the_new_value() {
+    let (mut dm, ids, n) = value_object("NumberValue");
+    assert_eq!(
+        dm.signal_id(n, "Changed"),
+        Ok(ids.changed),
+        "the redeclared signal keeps its id"
+    );
+    let value = dm.prop_id(n, "Value").expect("prop");
+    connect(&mut dm, n, ids.changed, 1);
+    dm.connect_property_changed(n, value, key(2)).expect("connect");
+
+    dm.set(n, value, number(5.0)).expect("set");
+    assert_eq!(drain(&mut dm), vec![(1, n, vec![number_arg(5.0)]), (2, n, vec![])]);
+    dm.set(n, value, number(5.0)).expect("set");
+    assert!(drain(&mut dm).is_empty(), "an equal write fires nothing");
+    dm.set(n, value, number(0.0)).expect("set");
+    assert_eq!(
+        drain(&mut dm),
+        vec![(1, n, vec![number_arg(0.0)]), (2, n, vec![])],
+        "back to the default"
+    );
+
+    let (mut dm, ids, i) = value_object("IntValue");
+    connect(&mut dm, i, ids.changed, 1);
+    dm.set_by_name(i, "Value", Value::Int(-3)).expect("set");
+    assert_eq!(
+        drain(&mut dm),
+        vec![(1, i, vec![number_arg(-3.0)])],
+        "integers reach scripts as numbers"
+    );
+}
+
+#[test]
+fn object_values_pass_the_instance_or_nil() {
+    let (mut dm, ids, o) = value_object("ObjectValue");
+    let target = part_in(&mut dm, &ids, ids.workspace, "Target");
+    connect(&mut dm, o, ids.changed, 1);
+    dm.set_by_name(o, "Value", Value::Ref(Some(target))).expect("set");
+    dm.set_by_name(o, "Value", Value::Ref(None)).expect("set");
+    assert_eq!(
+        drain(&mut dm),
+        vec![(1, o, vec![inst(target)]), (1, o, vec![ScriptValue::Nil])]
+    );
+}
+
+#[test]
+fn value_objects_fire_changed_only_for_their_value() {
+    let (mut dm, ids, n) = value_object("NumberValue");
+    let extra = dm.prop_id(n, "Extra").expect("prop");
+    connect(&mut dm, n, ids.changed, 1);
+    dm.connect_property_changed(n, ids.name, key(2)).expect("connect");
+    dm.connect_property_changed(n, ids.parent, key(3)).expect("connect");
+    dm.connect_property_changed(n, extra, key(4)).expect("connect");
+
+    dm.set_name(n, "Score".into()).expect("rename");
+    let folder = folder_in(&mut dm, &ids, ids.workspace);
+    dm.set_parent(n, Some(folder)).expect("move");
+    dm.set(n, extra, Value::Bool(true)).expect("set");
+    assert_eq!(
+        drain(&mut dm),
+        vec![(2, n, vec![]), (3, n, vec![]), (4, n, vec![])],
+        "no Changed for Name, Parent or other properties; their own signals still fire"
+    );
+
+    // Other classes keep `Changed(propertyName)`, in the same data model.
+    let p = part_in(&mut dm, &ids, ids.workspace, "P");
+    connect(&mut dm, p, ids.changed, 5);
+    dm.set(p, ids.transparency, number(0.5)).expect("set");
+    dm.set_name(p, "Renamed".into()).expect("rename");
+    assert_eq!(
+        drain(&mut dm),
+        vec![(5, p, vec![text("Transparency")]), (5, p, vec![text("Name")])]
+    );
+}

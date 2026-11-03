@@ -688,6 +688,19 @@ impl ClassResolver<'_> {
             ok = false;
         }
 
+        let changed_value_name = self
+            .desc
+            .changed_passes_value
+            .or(parent.and_then(|p| p.changed_value_name));
+        let changed_value = match changed_value_name {
+            None => None,
+            Some(prop) => {
+                let changed_value = self.changed_value(prop, &t.props, &prop_ids, &signal_ids);
+                ok &= changed_value.is_ok();
+                changed_value.ok().flatten()
+            }
+        };
+
         let ancestors = match parent {
             Some(parent) => parent.ancestors.iter().copied().chain([self.id]).collect(),
             None => Box::from([self.id]),
@@ -701,12 +714,51 @@ impl ClassResolver<'_> {
             prop_ids,
             dependent_starts,
             dependents,
+            changed_value_name,
+            changed_value,
             components: t.components.into_boxed_slice(),
             methods: t.methods.into_boxed_slice(),
             method_ids,
             signals: t.signals.into_boxed_slice(),
             signal_ids,
         })
+    }
+
+    /// Resolves `changed_passes_value(prop)`, declared on the class or inherited: the class must have a visible
+    /// `Changed` signal, and `prop` must be stored. A class that cannot have instances (neither creatable, a
+    /// service nor the root) may lack `prop` and passes the option down (`Ok(None)`). `Err` after reporting.
+    fn changed_value(
+        &mut self,
+        prop: &'static str,
+        props: &[ResolvedProp],
+        prop_ids: &FxMap<&'static str, PropId>,
+        signal_ids: &FxMap<&'static str, usize>,
+    ) -> Result<Option<PropId>, ()> {
+        let class = self.desc.name;
+        let mut result = Ok(None);
+        if !signal_ids.contains_key("Changed") {
+            self.errors
+                .push(RegistryError::ChangedValueWithoutSignal { class, prop });
+            result = Err(());
+        }
+        match prop_ids.get(prop) {
+            Some(&id) if props.get(id.index()).is_some_and(|p| p.meta.computed.is_none()) => {
+                result = result.map(|_| Some(id));
+            }
+            Some(_) => {
+                self.errors.push(RegistryError::ChangedValueComputed { class, prop });
+                result = Err(());
+            }
+            None => {
+                let has_instances =
+                    self.desc.creatable || self.desc.service_order.is_some() || self.desc.parent.is_none();
+                if has_instances {
+                    self.errors.push(RegistryError::UnknownChangedValue { class, prop });
+                    result = Err(());
+                }
+            }
+        }
+        result
     }
 
     /// Checks every `derived_from` list of the class and turns them into the stored property → computed

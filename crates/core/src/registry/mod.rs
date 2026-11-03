@@ -173,6 +173,10 @@ pub struct ClassInfo {
     /// property of the class is derived from another.
     dependent_starts: Box<[u32]>,
     dependents: Box<[PropId]>,
+    /// The property named by `changed_passes_value`, this class's or the nearest ancestor's, so subclasses inherit
+    /// it; and its id, when this class has it.
+    changed_value_name: Option<&'static str>,
+    changed_value: Option<PropId>,
     components: Box<[&'static ComponentDesc]>,
     methods: Box<[ResolvedMethod]>,
     /// Visible methods only.
@@ -264,6 +268,13 @@ impl ClassInfo {
             (Some(&start), Some(&end)) => self.dependents.get(start as usize..end as usize).unwrap_or_default(),
             _ => &[],
         }
+    }
+
+    /// The property whose new value the class's `Changed` signal passes, instead of a property name (declared with
+    /// [`ClassDesc::changed_passes_value`] on the class or an ancestor). `None` for the usual
+    /// `Changed(propertyName)`, and for an abstract class that passes the option down without having the property.
+    pub fn changed_value(&self) -> Option<PropId> {
+        self.changed_value
     }
 
     /// Every component, inherited ones first, without repeats.

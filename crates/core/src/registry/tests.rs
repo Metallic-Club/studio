@@ -538,6 +538,65 @@ fn rejects_an_override_that_makes_an_inherited_source_computed() {
 }
 
 #[test]
+fn changed_passes_value_is_inherited_and_resolved_per_class() {
+    static OBJECT: ClassDesc = ClassDesc::new("Object", None).signals(&[SignalDesc::new("Changed")]);
+    // Abstract: it has no `Value` itself, and passes the option down.
+    static VALUE_BASE: ClassDesc = ClassDesc::new("ValueBase", Some("Object")).changed_passes_value("Value");
+    static NUMBER: ClassDesc = ClassDesc::new("NumberValue", Some("ValueBase"))
+        .creatable()
+        .props(&[PropMeta::number("Value", 0.0)]);
+    static FOLDER: ClassDesc = ClassDesc::new("Folder", Some("Object"))
+        .creatable()
+        .props(&[PropMeta::number("Value", 0.0)]);
+    let reg = build(&[&OBJECT, &VALUE_BASE, &NUMBER, &FOLDER]).expect("valid");
+    let class = |name| reg.class(id(&reg, name)).expect("class");
+    assert_eq!(class("ValueBase").changed_value(), None);
+    let number = class("NumberValue");
+    assert_eq!(number.changed_value(), number.prop_id("Value"));
+    assert!(number.changed_value().is_some());
+    assert_eq!(
+        class("Folder").changed_value(),
+        None,
+        "only classes that declare or inherit it"
+    );
+    assert_eq!(class("Object").changed_value(), None);
+}
+
+#[test]
+fn rejects_bad_changed_passes_value() {
+    static OBJECT: ClassDesc = ClassDesc::new("Object", None).signals(&[SignalDesc::new("Changed")]);
+    static VALUE_BASE: ClassDesc = ClassDesc::new("ValueBase", Some("Object")).changed_passes_value("Value");
+    // A creatable subclass that inherits the option without the property.
+    static EMPTY: ClassDesc = ClassDesc::new("EmptyValue", Some("ValueBase")).creatable();
+    static COMPUTED: ClassDesc = ClassDesc::new("ComputedValue", Some("ValueBase"))
+        .creatable()
+        .props(&[PropMeta::number("Value", 0.0).computed(zero, None)]);
+    static SILENT: ClassDesc = ClassDesc::new("Silent", Some("Object"))
+        .creatable()
+        .hide(&["Changed"])
+        .changed_passes_value("Level")
+        .props(&[PropMeta::number("Level", 0.0)]);
+    let found = class_errors(&[&OBJECT, &VALUE_BASE, &EMPTY, &COMPUTED, &SILENT]);
+    for expected in [
+        RegistryError::UnknownChangedValue {
+            class: "EmptyValue",
+            prop: "Value",
+        },
+        RegistryError::ChangedValueComputed {
+            class: "ComputedValue",
+            prop: "Value",
+        },
+        RegistryError::ChangedValueWithoutSignal {
+            class: "Silent",
+            prop: "Level",
+        },
+    ] {
+        assert!(found.contains(&expected), "{expected:?} missing from {found:?}");
+    }
+    assert_eq!(found.len(), 3, "{found:?}");
+}
+
+#[test]
 fn every_default_kind_converts() {
     static ENUMS: &[EnumDesc] = &[EnumDesc::new("Shape", &["Block", "Ball"])];
     static ALL: ClassDesc = ClassDesc::new("All", None).props(&[

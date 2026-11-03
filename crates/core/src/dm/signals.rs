@@ -29,6 +29,15 @@
 //! Dependents fire whenever a source changes, without comparing their own value: writing `Orientation` also fires
 //! `Position` even though the position stayed. Comparing would mean running every getter on every watched write.
 //!
+//! # Value objects
+//!
+//! A class declared with `ClassDesc::changed_passes_value("Value")` (in Roblox, `ValueBase`: `IntValue`,
+//! `NumberValue`, `ObjectValue`, ...) fires `Changed(newValue)` instead of `Changed(propertyName)`, and only when
+//! that property changes. The new value is passed as a script sees it: an integer as a number, a reference as the
+//! instance or nil. Every other change on such an instance, renames and moves included, fires no `Changed`, as in
+//! Roblox, where `ValueBase.Changed` replaces `Instance.Changed`; each property's own property-changed signal
+//! (`GetPropertyChangedSignal("Name")`) still fires as usual, `Value`'s included.
+//!
 //! # Deferred delivery
 //!
 //! An event is queued only when a connection listens to that signal on that instance, with its arguments, in fire
@@ -75,7 +84,8 @@ use crate::{ClassId, Id, PropId, ScriptValue, SignalId};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum BuiltinSignal {
     /// `Changed(propertyName: string)`: a property was written or the instance renamed. Attribute changes are not
-    /// included; they have [`BuiltinSignal::AttributeChanged`].
+    /// included; they have [`BuiltinSignal::AttributeChanged`]. Value objects pass the new value instead (see the
+    /// module docs).
     Changed,
     /// `ChildAdded(child: Instance)`, on the new parent.
     ChildAdded,
@@ -637,11 +647,25 @@ impl DataModel {
     /// `Changed(name)` and the property's own changed signal, on the watched instance `id`, then the same for each
     /// computed property derived from it, in declaration order (see the module docs on derived properties).
     /// `name` defaults to the property's declared name.
+    ///
+    /// On a class whose `Changed` passes a value (see the module docs on value objects), `Changed` carries the new
+    /// value instead, and fires only for that property.
     #[inline(never)]
     fn queue_changed(&mut self, id: Id, name: Option<&'static str>, prop: Option<PropId>) {
         let class = self.slots.get(id).map(|s| s.class);
         // Looked up once for the property and its dependents: nothing connects or disconnects meanwhile.
-        let changed = self.listening(id, BuiltinSignal::Changed);
+        let mut changed = self.listening(id, BuiltinSignal::Changed);
+        let value_prop = class.and_then(|c| self.classes.get(c.index())?.changed_value);
+        if let Some(value_prop) = value_prop {
+            if let Some(signal) = changed
+                && prop == Some(value_prop)
+                && let Ok(value) = self.get(id, value_prop)
+            {
+                self.signals.push(id, Key::Signal(signal), [ScriptValue::from(value)]);
+            }
+            // Nothing else on this instance fires `Changed`: not its other properties, nor their dependents.
+            changed = None;
+        }
         let name = name.or_else(|| Some(self.registry.prop(class?, prop?)?.meta.name));
         self.queue_one_changed(id, changed, name, prop);
         if let (Some(class), Some(prop)) = (class, prop)

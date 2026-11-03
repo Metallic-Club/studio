@@ -225,6 +225,36 @@ pub enum RegistryError {
         /// The computed property named in `derived_from`.
         from: &'static str,
     },
+    /// `changed_passes_value(..)` applies to a class without a visible `Changed` signal.
+    #[error(
+        "class `{class}` makes Changed pass the value of `{prop}`, but it has no Changed signal; declare one (or \
+         inherit it) or remove changed_passes_value"
+    )]
+    ChangedValueWithoutSignal {
+        /// The class.
+        class: &'static str,
+        /// The property named in `changed_passes_value`.
+        prop: &'static str,
+    },
+    /// `changed_passes_value(..)` names a property a class that can have instances does not have.
+    #[error(
+        "class `{class}` makes Changed pass the value of `{prop}`, but it has no property by that name; declare \
+         `{prop}` or fix the name"
+    )]
+    UnknownChangedValue {
+        /// The class (the one declaring the option, or a subclass that inherits it).
+        class: &'static str,
+        /// The property named in `changed_passes_value`.
+        prop: &'static str,
+    },
+    /// `changed_passes_value(..)` names a computed property, which never reports a change of its own.
+    #[error("class `{class}` makes Changed pass the value of `{prop}`, which is computed; name a stored property")]
+    ChangedValueComputed {
+        /// The class.
+        class: &'static str,
+        /// The computed property.
+        prop: &'static str,
+    },
     /// `hide(..)` names a member the class does not have.
     #[error("class `{class}` hides `{member}`, but it has no property, method or signal by that name; fix the name")]
     UnknownHidden {
