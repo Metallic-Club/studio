@@ -10,6 +10,7 @@
 --   arrow keys   look around without a mouse
 --   C            back to the automatic orbit
 --   Space        pause / resume the moving parts
+--   T            time-lapse: a whole day in a minute and a half (again for the slow clock)
 --
 -- It runs as a Script in a standalone (RunContext.Local) game. The Player embeds this file in its binary; games
 -- loaded from projects replace it in M4.
@@ -119,10 +120,17 @@ local tumbler = part("Tumbler", Wedge, M.Wood, Vector3.new(4, 4, 4), CFrame.new(
 local orb = part("GlassOrb", Ball, M.Glass, Vector3.new(6, 6, 6), CFrame.new(-20, 4, 26), Color3.fromRGB(150, 200, 255), 0.5)
 local core = part("OrbCore", Block, M.Neon, Vector3.new(1.5, 1.5, 1.5), CFrame.new(-20, 4, 26), Color3.fromRGB(255, 120, 40))
 
--- Lights. They render once the renderer has them (#81 for the sun, #83 for point and spot lights); until then the
--- renderer's temporary directional light shades everything.
-Lighting.ClockTime = 15
+-- The sun and the sky come from Lighting: a late afternoon, the sun low in the south-west, moving on slowly (a
+-- game hour every two minutes; T plays a whole day in a minute and a half). The lights below render once the
+-- renderer has them (#83 for point and spot lights).
+Lighting.ClockTime = 15.5
 Lighting.Brightness = 2
+Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+Lighting.SkyColor = Color3.fromRGB(120, 175, 240)
+Lighting.HorizonColor = Color3.fromRGB(205, 225, 245)
+local HOURS_PER_SECOND = 1 / 120
+local TIMELAPSE_HOURS_PER_SECOND = 24 / 90
+local timelapse = false
 
 local sun = Instance.new("DirectionalLight")
 sun.Name = "Sun"
@@ -171,6 +179,10 @@ fireflyLight.Parent = firefly
 local paused = false
 local t = 0
 RunService.Heartbeat:Connect(function(deltaTime: number)
+    -- The clock runs on while the parts are paused. ClockTime stays within 0 to 24, so it wraps here.
+    local rate = if timelapse then TIMELAPSE_HOURS_PER_SECOND else HOURS_PER_SECOND
+    Lighting.ClockTime = (Lighting.ClockTime + deltaTime * rate) % 24
+
     if paused then
         return
     end
@@ -276,6 +288,8 @@ UserInputService.InputBegan:Connect(function(input: InputObject)
         paused = not paused
     elseif input.KeyCode == Enum.KeyCode.C then
         orbiting = true
+    elseif input.KeyCode == Enum.KeyCode.T then
+        timelapse = not timelapse
     end
 end)
 

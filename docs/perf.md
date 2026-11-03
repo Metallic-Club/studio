@@ -437,3 +437,42 @@ the branch with `--no-cull` measured the same as `main` within 3% (see_through_1
   `cull/100k_30pct` (230 µs). The cell order was kept.
 - **`see_through_10k`** sees all of its parts, so there culling only costs its 0.016 ms; see-through parts are
   culled before they are sorted.
+
+### Sun, ambient and sky (#81)
+
+The `Lighting` service lights the scene (the sun or the moon, a hemisphere ambient) and the sky pass draws one
+full-screen triangle at the far plane after the opaque parts, with a `GreaterEqual` depth test against the cleared
+depth, so it shades only what no part covered (ADR 0008 §7). It reads the frame uniform the parts already upload
+(now 336 bytes instead of 160), so it adds one draw of three vertices and no upload. `Lighting` is read again only in
+a frame after it changed (the scene's change consumer reports it), and never allocates
+(`crates/render/tests/no_alloc.rs`).
+
+**2026-11-03**, same machine and settings as the culling table above (DX12, `AutoNoVsync`, 1,000 frames after 120,
+seed 1). Before: `main` at `ca2ee18`, whose sky pass ran empty. After: branch `81-sun-sky`. Two interleaved runs of
+each (main, branch, main, branch); the table has the first pair, and the second agreed within 3% (the sky pass
+within 1%). Times are p50 in ms; "Sky" is the sky pass's GPU time.
+
+| Scene | Size | Sky | GPU before → after | Render CPU before → after | Frame before → after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `parts_10k` | 1920 × 1080 | 0.022 | 0.123 → 0.143 | 0.182 → 0.186 | 0.259 → 0.263 |
+| `parts_50k` | 1920 × 1080 | 0.022 | 0.232 → 0.249 | 0.284 → 0.285 | 0.392 → 0.392 |
+| `parts_100k` | 1920 × 1080 | 0.023 | 0.365 → 0.371 | 0.432 → 0.421 | 0.581 → 0.570 |
+| `many_lights` | 1920 × 1080 | 0.022 | 0.226 → 0.248 | 0.176 → 0.180 | 0.311 → 0.329 |
+| `overdraw` | 1920 × 1080 | 0.000 | 0.218 → 0.218 | 0.181 → 0.181 | 0.293 → 0.296 |
+| `mobile` | 1280 × 720 | 0.011 | 0.092 → 0.093 | 0.169 → 0.173 | 0.241 → 0.246 |
+| `see_through_10k` | 1920 × 1080 | 0.045 | 0.635 → 0.687 | 0.958 → 0.903 | 1.037 → 0.982 |
+
+- **GPU:** the sky costs what it covers. With nothing opaque on screen (`see_through_10k`, whose parts are all
+  see-through and drawn after it) it is 0.045 ms at 1080p, the whole price of a full-screen sky on this GPU; with
+  about half the screen covered by parts it is 0.022 ms; inside `overdraw`'s closed room the depth test rejects
+  every pixel and it costs nothing measurable. `parts_100k`'s opaque pass measured lower in this run, so its total
+  grew by less than the sky's 0.023 ms.
+- **Render CPU** does not change beyond noise: one more draw to record, and a larger uniform written when the
+  camera or the lighting moves. `see_through_10k` measured lower on the branch in both runs (0.903 and 0.899
+  against 0.958 and 0.956); nothing in this change touches the transparent sort, so that is run-to-run variation of
+  this scene, which #79 also saw.
+- A frame in which a script changes `Lighting` (the Player's demo moves `ClockTime` every frame) adds a drain entry
+  for the service, six property reads (one of them the computed `SunDirection`) and the lighting maths: the read
+  measured 0.16 µs, and a sync in which only `Lighting` changed 0.24 µs with it (release build, a throwaway timing
+  loop of 200,000 changes, not committed); the scene's sync for drawn parts is unchanged (the watch is checked only for instances that
+  are not drawn), so the perf gate's render workloads see no difference.

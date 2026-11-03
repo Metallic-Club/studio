@@ -31,7 +31,7 @@ kinds of light, and a Luau script that moves parts on `Heartbeat` and flies the 
 cargo run -p metallic_player --release
 ```
 
-![The Player running the demo](docs/screenshots/87-player-demo.png)
+![The Player running the demo at sunset](docs/screenshots/81-sun-sky.png)
 
 | Control | Does |
 |---|---|
@@ -42,6 +42,7 @@ cargo run -p metallic_player --release
 | arrow keys | look around without a mouse |
 | C | back to the automatic orbit |
 | Space | pause or resume the moving parts |
+| T | time-lapse: a whole day in a minute and a half (again to slow the clock back down) |
 
 Flags (`cargo run -p metallic_player --release -- --help`):
 
