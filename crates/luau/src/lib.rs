@@ -47,9 +47,15 @@
 //!
 //! # Budgets
 //!
-//! Luau's interrupt (a plain C callback, not an mlua closure) polls the call's [`Deadline`] at every safepoint;
-//! `Deadline::poll` reads the clock once per 256 polls, so a hot loop pays a decrement and a branch. A thread past
-//! its deadline fails with [`ScriptFailure::Timeout`] and the VM stays usable. The memory limit is Luau's.
+//! A call within its [`Deadline`] runs with no interrupt installed, so a safepoint costs a load and a branch not
+//! taken, in the interpreter and in native code alike. A watchdog thread, one per process, sleeps until the
+//! earliest deadline of the calls running in any VM, and installs Luau's interrupt (a plain C callback) in a VM
+//! whose call has overrun it; the interrupt then stops the thread at its next safepoint. A thread past its deadline
+//! fails with [`ScriptFailure::Timeout`] at the line it was running, and the VM stays usable. An overrun is seen
+//! within the operating system's timer resolution (up to about 16 ms on Windows), plenty for a backstop of a second.
+//! Where no thread can be started, the interrupt stays installed and polls the deadline at every safepoint instead
+//! (`Deadline::poll` reads the clock once per 256 polls). The `watchdog` and `ffi` modules give the design and why
+//! setting the interrupt from another thread is sound. The memory limit is Luau's.
 //!
 //! # Native code (`jit` feature)
 //!
@@ -88,6 +94,7 @@ mod library;
 mod outcome;
 mod shared;
 mod types;
+mod watchdog;
 
 use std::sync::Arc;
 
@@ -100,6 +107,7 @@ use thiserror::Error;
 
 use crate::ffi::{FrameGuard, Push};
 use crate::shared::Shared;
+use crate::watchdog::Budget;
 
 /// The compiler settings every chunk uses.
 fn compiler() -> Compiler {
@@ -143,7 +151,8 @@ impl LuauLanguage {
         let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
         let compiler = compiler();
         lua.set_compiler(compiler.clone());
-        let mut shared = Shared::new(registry);
+        let budget = Budget::new(ffi::InterruptSlot::of(&lua)?);
+        let mut shared = Shared::new(registry, budget);
         let library = library::install(&lua, &mut shared)?;
         Ok(Self {
             lua,
@@ -157,7 +166,8 @@ impl LuauLanguage {
     /// Turns the time budget off (`false`) or back on. Off, Luau runs without an interrupt and a runaway loop is
     /// never stopped: only for measuring the interrupt's cost and for trusted tools.
     pub fn set_time_budget_enabled(&mut self, enabled: bool) -> Result<(), LuauError> {
-        Ok(ffi::set_interrupt(&self.lua, enabled)?)
+        self.shared.budget.set_enabled(enabled);
+        Ok(())
     }
 
     /// How many threads the backend holds (scripts, listeners and tasks not yet released).

@@ -14,6 +14,7 @@ use metallic_script::{ModuleKey, ThreadId, YieldReason};
 use mlua::{Function, MultiValue, Thread};
 
 use crate::ffi::EnumRef;
+use crate::watchdog::Budget;
 
 /// Registry references (`lua_ref`) of tables that C functions push values from.
 #[derive(Clone, Copy, Debug, Default)]
@@ -263,11 +264,13 @@ pub(crate) struct Shared {
     pub(crate) timed_out: Cell<Option<Option<u32>>>,
     /// Whether the running call's context is lent out (`ffi::with_ctx`), so no second `&mut` is made.
     pub(crate) ctx_lent: Cell<bool>,
+    /// The VM's time budget: each call arms it (`ffi::FrameGuard`).
+    pub(crate) budget: Budget,
 }
 
 impl Shared {
-    /// State for `registry`, with the table references filled in later by the backend.
-    pub(crate) fn new(registry: Arc<Registry>) -> Self {
+    /// State for `registry` and the VM's `budget`, with the table references filled in later by the backend.
+    pub(crate) fn new(registry: Arc<Registry>, budget: Budget) -> Self {
         let enums = EnumIndex::new(&registry);
         Self {
             registry,
@@ -281,6 +284,7 @@ impl Shared {
             pending_yield: RefCell::new(None),
             timed_out: Cell::new(None),
             ctx_lent: Cell::new(false),
+            budget,
         }
     }
 
