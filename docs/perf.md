@@ -35,13 +35,21 @@ passes). There are five suites, each with its own table in the job summary:
   At introduction (#99; ubuntu-24.04 runner, Rust 1.99.1, Valgrind 3.22.0, gungraun 0.20.0, release profile) it
   counted 75,759 `Ir`: about 76 instructions per event, queuing and the frame included;
 - [`crates/render/benches/perf_gate.rs`](../crates/render/benches/perf_gate.rs): the GPU scene's CPU side (#76), with
-  no GPU. Each workload is one frame of `InstanceScene` over 10,000 parts with 1% changed in the `setup` (drain,
-  repack, coalesce) plus the upload's CPU work written into a plain buffer: `render_sync_moving` (100 parts that
-  move every frame, so they sit together in the dynamic region: one range, the copy path) and
-  `render_sync_scattered` (100 parts spread over the scene recoloured: 100 ranges, the scatter path's layout).
-  Since #79 a sync also notes which slots moved, for the culling grid (from the change record's `TRANSFORM` bit:
-  a flag and, the first time, a queue entry per moved slot); moving their grid items is the cull's work, which gets its own
-  workload once #79 is on `main`, since the base has to build the head's workloads (#114).
+  no GPU, over 10,000 parts. `render_sync_moving` and `render_sync_scattered` are one frame of `InstanceScene` with
+  1% of the parts changed in the `setup` (drain, repack, coalesce) plus the upload's CPU work written into a plain
+  buffer: `render_sync_moving` (100 parts that move every frame, so they sit together in the dynamic region: one
+  range, the copy path) and `render_sync_scattered` (100 parts spread over the scene recoloured: 100 ranges, the
+  scatter path's layout). Since #79 a sync also notes which slots moved, for the culling grid (from the change
+  record's `TRANSFORM` bit: a flag and, the first time, a queue entry per moved slot); moving their grid items is the
+  cull's work, so it is gated by `render_cull` (#114): the CPU cull (`InstanceScene::cull`, #79) for a fixed camera
+  (above one corner of the 400 m square the parts fill, looking across it, 45° vertical field of view, 1920×1080)
+  with `CullSettings::default()`, into a `VisibleSet` warmed in the `setup`. About 60% of the parts are in view,
+  some of the 172 grid cells wholly and some crossing the frustum's edges. 1% of the parts (100) moved since the
+  last cull: half cross into another 32 m grid cell and half stay inside their cell, and by then they sit in the
+  dynamic region, as moving parts do in a game. The sync and coalesce that queue them run in the `setup`, so the
+  measured call pays for moving the 100 grid items and then walking the view, as a frame does. The camera, the
+  movers and the parts are the workload's definition: changing any of them is a gate change. At introduction (#114;
+  ubuntu-24.04 runner, release profile) it counted 345,288 `Ir`: the 100 moved items and the walk of the view.
 
 A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
 checked (each must be present and above zero) and reported as `NEW (not gated)`, and the next PR is gated against
