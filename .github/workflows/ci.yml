@@ -179,8 +179,8 @@ jobs:
           cargo check --workspace --exclude metallic_studio --exclude xtask --target aarch64-linux-android
 
   # iOS needs the SDK that ships with Xcode, which only macOS runners have, and a macOS minute costs ten Linux
-  # minutes, so it runs
-  # weekly and on dispatch only (like the macOS tests). Android (checked on every PR) catches most portability breaks.
+  # minutes, so it runs weekly and on dispatch only (like the macOS tests). Android, checked on every PR, catches
+  # most portability breaks.
   cross-check-ios:
     name: Cross-target check (iOS)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
