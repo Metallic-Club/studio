@@ -15,6 +15,14 @@ pub struct ChunkId(pub u64);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ThreadId(pub u64);
 
+/// A module's result, kept by the backend that ran the module ([`ScriptLanguage::spawn_module`]). The host picks
+/// the key, caches it per `ModuleScript` and hands it back through [`HostContext::require`]; only the backend knows
+/// the value, so a Luau module's table stays the same table for every requirer.
+///
+/// [`HostContext::require`]: crate::HostContext::require
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ModuleKey(pub u64);
+
 /// Why a thread stopped without finishing. The host's scheduler decides when to resume it (the crate docs give the
 /// rules); the variants stay language-neutral, so `task.wait` in Luau and its equivalent in another language yield
 /// the same thing.
@@ -36,6 +44,27 @@ pub enum YieldReason {
     },
     /// Resume, with no arguments, at the end of the current resumption point (`task.defer(coroutine.running())`).
     Defer,
+    /// `require(module)` of a module that is not loaded yet ([`HostContext::require`] said so). The host loads it
+    /// (or waits for the load already running), then resumes the thread with no arguments, and the backend asks
+    /// [`HostContext::require`] again; or resumes it with an error ([`ScriptLanguage::resume_error`]) when the
+    /// module failed, would be required in a cycle, or cannot be run.
+    ///
+    /// [`HostContext::require`]: crate::HostContext::require
+    Require {
+        /// The `ModuleScript`.
+        module: Id,
+    },
+    /// A method that invokes a callback (`BindableFunction:Invoke`, see `MethodDesc::invokes_callback`). The host
+    /// runs the function assigned to `callback` of `target` with `args` in a new thread (waiting until one is
+    /// assigned) and resumes this thread with what it returns, or with its error.
+    InvokeCallback {
+        /// The instance the method was called on.
+        target: Id,
+        /// The callback's name, from the method's descriptor.
+        callback: &'static str,
+        /// The method's arguments.
+        args: Vec<ScriptValue>,
+    },
     /// Suspended for a reason only the backend understands (a coroutine yield to its own caller, for example).
     /// The host keeps the thread alive and never resumes it on its own.
     Other,
@@ -170,6 +199,11 @@ pub struct CompileError {
 /// - `task.cancel(thread)`: mark the thread dead and call [`HostContext::cancel`]. Refuse to cancel the running
 ///   thread (or one that is resuming another) yourself, with an error.
 /// - `Connect`, `Once`, `Disconnect`: [`HostContext::connect`], [`HostContext::once`], [`HostContext::disconnect`].
+/// - `require(module)`: [`HostContext::require`]; a loaded module's value comes from the backend's own table, and
+///   a module not loaded yet yields [`YieldReason::Require`] and asks again when resumed.
+/// - A method marked `invokes_callback` (`Invoke`): yield [`YieldReason::InvokeCallback`] with its arguments
+///   instead of running its `func`; the values the thread is resumed with are the method's results. Assigning a
+///   callback member (`OnInvoke = f`): [`HostContext::set_callback`] or [`HostContext::clear_callback`].
 ///
 /// [`Id`]: metallic_core::Id
 pub trait ScriptLanguage {
@@ -189,19 +223,40 @@ pub trait ScriptLanguage {
     fn spawn(&mut self, chunk: ChunkId, ctx: &mut HostContext<'_>) -> Result<ThreadId, ScriptFailure>;
 
     /// Creates a thread that will call the function the backend stored under `listener` (when it connected through
-    /// [`HostContext::connect`]), without running it. The host resumes it with the event's arguments. Every
-    /// delivery runs in its own thread, so any handler may yield.
+    /// [`HostContext::connect`], or assigned a callback through [`HostContext::set_callback`]), without running it.
+    /// The host resumes it with the event's (or the invocation's) arguments. Every delivery runs in its own thread,
+    /// so any handler may yield.
     fn spawn_listener(&mut self, listener: ListenerKey, ctx: &mut HostContext<'_>) -> Result<ThreadId, ScriptFailure>;
+
+    /// Creates the thread that loads the `ModuleScript` [`HostContext::script`] from `chunk` (`require`), without
+    /// running it; otherwise like [`spawn`](Self::spawn). When the thread finishes, the backend keeps its one return
+    /// value under `key` for [`HostContext::require`] to hand out, and reports [`Resume::Finished`] with no values.
+    /// A module that returns any other number of values fails instead, with the message
+    /// `Module code did not return exactly one value`.
+    fn spawn_module(
+        &mut self,
+        chunk: ChunkId,
+        key: ModuleKey,
+        ctx: &mut HostContext<'_>,
+    ) -> Result<ThreadId, ScriptFailure>;
+
+    /// Drops the module result kept under `key`. Releasing an unknown key does nothing.
+    fn release_module(&mut self, key: ModuleKey);
 
     /// Runs `thread` until it finishes, yields or fails. `args` are the thread's arguments on its first resume and
     /// the values the yield returns afterwards.
     fn resume(&mut self, thread: ThreadId, args: &[ScriptValue], ctx: &mut HostContext<'_>) -> Resume;
 
+    /// Resumes the suspended `thread` by raising the error `message` where it yielded, as if the call it yielded in
+    /// had failed: the thread may catch it (`pcall` in Luau) and go on. The host uses it for a `require` that
+    /// cannot complete, an `Invoke` whose callback failed, and a `signal:Wait()` whose instance was destroyed.
+    fn resume_error(&mut self, thread: ThreadId, message: &str, ctx: &mut HostContext<'_>) -> Resume;
+
     /// Drops `thread`. It is never resumed again. Releasing an unknown or already released thread does nothing.
     fn release_thread(&mut self, thread: ThreadId);
 
-    /// Drops the function stored under `listener`. The host has already disconnected it. Releasing an unknown key
-    /// does nothing.
+    /// Drops the function stored under `listener`. The host has already disconnected it (or unassigned the
+    /// callback). Releasing an unknown key does nothing.
     ///
     /// For a `Once` connection ([`HostContext::once`]) the host calls this right after
     /// [`spawn_listener`](Self::spawn_listener) for its one delivery, so that thread must hold the function itself.

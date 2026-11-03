@@ -14,9 +14,11 @@ fn no_file_os_or_environment_escapes() {
     game.run(
         "Probe",
         r##"
-        print(io, os.execute, os.getenv, os.exit, os.remove, loadstring, getfenv, setfenv, require, dofile,
+        print(io, os.execute, os.getenv, os.exit, os.remove, loadstring, getfenv, setfenv, dofile,
             loadfile, package, collectgarbage, debug.getinfo, debug.sethook, string.dump)
-        print(typeof(os.clock()), typeof(debug.traceback), typeof(tick()), typeof(time()))
+        -- `require` is ours: it takes a ModuleScript, never a path.
+        print(typeof(os.clock()), typeof(debug.traceback), typeof(tick()), typeof(time()), typeof(require))
+        print(pcall(require, "Scripts/Door.luau"))
         print(pcall(function() math.pi = 3 end))
         print(pcall(function() string.foo = 1 end))
         print(pcall(function() getmetatable(Vector3.zero).__index = nil end))
@@ -28,12 +30,15 @@ fn no_file_os_or_environment_escapes() {
     );
     game.run("Second", "print(_G.shared_value, x_global)");
     game.assert_no_errors();
-    let prints = game.prints();
-    assert_eq!(
-        prints[0],
-        "nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil"
+    let mut prints = game.prints();
+    assert_eq!(prints[0], "nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil");
+    assert_eq!(prints[1], "number function number number function");
+    assert!(
+        prints
+            .remove(2)
+            .contains("Attempted to call require with invalid argument(s)."),
+        "require refuses a path"
     );
-    assert_eq!(prints[1], "number function number number");
     assert!(
         prints[2].starts_with("false") && prints[2].contains("readonly"),
         "{}",

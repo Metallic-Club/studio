@@ -258,6 +258,14 @@ mod tests {
                     missing.push(format!("parameters of signal {}.{}", desc.name, signal.name));
                 }
             }
+            for callback in desc.callbacks {
+                if callback.description.is_empty() {
+                    missing.push(format!("callback {}.{}", desc.name, callback.name));
+                }
+                if callback.params.is_none() || callback.returns.is_none() {
+                    missing.push(format!("signature of callback {}.{}", desc.name, callback.name));
+                }
+            }
         }
         for component in input().components {
             if component.description.is_empty() {
@@ -280,7 +288,7 @@ mod tests {
                 .iter()
                 .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 30);
+        assert_eq!(input().classes.len(), 31);
         let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
         components.sort_unstable();
         assert_eq!(

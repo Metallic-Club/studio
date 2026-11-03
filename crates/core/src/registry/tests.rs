@@ -1313,3 +1313,80 @@ fn signature_messages_name_the_member_and_the_fix() {
     };
     assert!(missing.to_string().contains(".returns_nothing()"));
 }
+
+#[test]
+fn callbacks_resolve_like_methods() {
+    static ARGS: &[Param] = &[Param::new("args", Ty::Variadic(&Ty::Any))];
+    static BINDABLE: ClassDesc = ClassDesc::new("Bindable", None)
+        .methods(&[MethodDesc::new("Invoke", noop)
+            .params(ARGS)
+            .returns(Ty::Any)
+            .invokes_callback("OnInvoke")])
+        .callbacks(&[CallbackDesc::new("OnInvoke")
+            .params(ARGS)
+            .returns(Ty::Any)
+            .describe("Runs on Invoke.")]);
+    static CHILD: ClassDesc = ClassDesc::new("Child", Some("Bindable"));
+    let registry = build(&[&BINDABLE, &CHILD]).expect("builds");
+    let child = registry.class_id("Child").expect("Child");
+    let on_invoke = registry.callback(child, "OnInvoke").expect("inherited");
+    assert_eq!(on_invoke.params, Some(ARGS));
+    assert_eq!(on_invoke.description, "Runs on Invoke.");
+    assert_eq!(registry.class(child).map(|c| c.callbacks().len()), Some(1));
+    assert_eq!(
+        registry.method(child, "Invoke").and_then(|m| m.invokes),
+        Some("OnInvoke")
+    );
+    assert!(registry.callback(child, "Invoke").is_none());
+    assert_eq!(MemberKind::Callback.to_string(), "callback");
+}
+
+#[test]
+fn rejects_bad_callbacks() {
+    static C: ClassDesc = ClassDesc::new("C", None)
+        .props(&[PropMeta::number("Size", 1.0)])
+        .methods(&[MethodDesc::new("Call", noop)
+            .returns_nothing()
+            .invokes_callback("OnCall")])
+        .callbacks(&[
+            CallbackDesc::new("Size"),
+            CallbackDesc::new("OnGo"),
+            CallbackDesc::new("OnGo"),
+        ]);
+    assert_eq!(
+        class_errors(&[&C]),
+        [
+            RegistryError::DuplicateMember {
+                class: "C",
+                kind: MemberKind::Callback,
+                name: "OnGo"
+            },
+            RegistryError::MemberNameClash {
+                class: "C",
+                name: "Size",
+                first: MemberKind::Property,
+                second: MemberKind::Callback
+            },
+            RegistryError::UnknownInvokedCallback {
+                class: "C",
+                method: "Call",
+                callback: "OnCall"
+            },
+        ]
+    );
+    // Hiding the callback a method invokes breaks the method.
+    static BASE: ClassDesc = ClassDesc::new("Base", None)
+        .methods(&[MethodDesc::new("Call", noop)
+            .returns_nothing()
+            .invokes_callback("OnCall")])
+        .callbacks(&[CallbackDesc::new("OnCall")]);
+    static HIDING: ClassDesc = ClassDesc::new("Hiding", Some("Base")).hide(&["OnCall"]);
+    assert_eq!(
+        class_errors(&[&BASE, &HIDING]),
+        [RegistryError::UnknownInvokedCallback {
+            class: "Hiding",
+            method: "Call",
+            callback: "OnCall"
+        }]
+    );
+}

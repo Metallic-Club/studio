@@ -18,7 +18,8 @@ use std::time::Duration;
 use criterion::{Criterion, criterion_group, criterion_main};
 use metallic_core::{DataModel, ListenerKey, ScriptValue};
 use metallic_script::{
-    ChunkId, CompileError, HostContext, Phase, Resume, ScriptFailure, ScriptHost, ScriptLanguage, ThreadId, YieldReason,
+    ChunkId, CompileError, HostContext, ModuleKey, Phase, Resume, ScriptFailure, ScriptHost, ScriptLanguage, ThreadId,
+    YieldReason,
 };
 
 /// What a bench thread does each time it is resumed.
@@ -114,6 +115,22 @@ impl ScriptLanguage for BenchLanguage {
         _ctx: &mut HostContext<'_>,
     ) -> Result<ThreadId, ScriptFailure> {
         Err(ScriptFailure::runtime("the bench backend has no listeners", None))
+    }
+
+    fn spawn_module(
+        &mut self,
+        _chunk: ChunkId,
+        _key: ModuleKey,
+        _ctx: &mut HostContext<'_>,
+    ) -> Result<ThreadId, ScriptFailure> {
+        Err(ScriptFailure::runtime("the bench backend has no modules", None))
+    }
+
+    fn release_module(&mut self, _key: ModuleKey) {}
+
+    fn resume_error(&mut self, thread: ThreadId, message: &str, _ctx: &mut HostContext<'_>) -> Resume {
+        self.threads.remove(&thread);
+        Resume::Errored(ScriptFailure::runtime(message, None))
     }
 
     fn resume(&mut self, thread: ThreadId, _args: &[ScriptValue], ctx: &mut HostContext<'_>) -> Resume {

@@ -5,9 +5,18 @@
 //!
 //! Luau's standard libraries are the safe set (no `io`, no `os.execute`/`getenv`/`exit`, no `package`). On top of
 //! that this removes `getfenv`/`setfenv` (they would reach other scripts' environments and turn off `safeenv`),
-//! `loadstring` and `require` (mlua's file-based one; `require` of ModuleScripts comes later), `collectgarbage`,
-//! and every `debug` function but `traceback` and `info`. Then `luaL_sandbox` makes the globals and every library
-//! table read-only. `_G` and `shared` are writable tables shared by the VM's scripts, as in Roblox.
+//! `loadstring` and `require` (mlua's file-based one), `collectgarbage`, and every `debug` function but
+//! `traceback` and `info`. Then `luaL_sandbox` makes the globals and every library table read-only. `_G` and
+//! `shared` are writable tables shared by the VM's scripts, as in Roblox.
+//!
+//! # `require`
+//!
+//! Our own `require(moduleScript)` takes a `ModuleScript` instance, never a path. It asks the host
+//! (`HostContext::require`): a loaded module's value is returned at once (the same value every time, kept in
+//! `Shared::modules`); otherwise the thread yields to the host, which loads the module (or waits for a load in
+//! progress) and resumes it, and it asks again. Errors (the module failed, a cycle, another language) are raised in
+//! the requiring thread. The module itself runs in its own thread (`LuauLanguage::spawn_module`), with `script` set
+//! to the `ModuleScript`, and must return exactly one value.
 //!
 //! # Time
 //!
@@ -20,18 +29,18 @@
 use std::ffi::c_int;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use metallic_core::{CFrame, Color3, Vector2, Vector3};
+use metallic_core::{CFrame, Color3, Id, Vector2, Vector3};
 use mlua::{Function, Lua, MultiValue, Table, Thread, Value, Variadic};
 
 use crate::ffi::{self, ConnectionHandle, EnumRef, Push, Raise, SignalHandle, tag, with_ctx, with_shared};
-use crate::outcome::{WAIT, WAIT_SIGNAL, outcome};
+use crate::outcome::{REQUIRE, WAIT, WAIT_SIGNAL, outcome};
 use crate::shared::{GET_PROPERTY_CHANGED_SIGNAL, Shared};
 use crate::{atoms, instance, types};
 
 /// The functions that yield the running thread to the host. They are Luau code because only Luau code can yield
 /// across a call; the host tells them apart from a script's own `coroutine.yield` by the marker.
 const PRELUDE: &str = r#"
-local marker, wait_kind, signal_kind = ...
+local marker, wait_kind, signal_kind, require_kind, requireNow = ...
 local yield = coroutine.yield
 local typeof = typeof
 local function wait(seconds)
@@ -43,8 +52,20 @@ local function signalWait(signal)
     end
     return yield(marker, signal_kind, signal)
 end
-return wait, signalWait
+local function require(module)
+    local value, loaded = requireNow(module)
+    while not loaded do
+        -- The host loads the module (or waits for its load) and resumes this thread, or raises its error here.
+        yield(marker, require_kind, module)
+        value, loaded = requireNow(module)
+    end
+    return value
+end
+return wait, signalWait, require
 "#;
+
+/// The error of `require` with something that is not a `ModuleScript`, as Roblox words it.
+const INVALID_REQUIRE: &str = "Attempted to call require with invalid argument(s).";
 
 /// What the backend keeps from building the library.
 pub(crate) struct Library {
@@ -413,15 +434,33 @@ fn install_functions(lua: &Lua, globals: &Table) -> mlua::Result<()> {
     task.raw_set("defer", lua.create_function(task_defer)?)?;
     task.raw_set("delay", lua.create_function(task_delay)?)?;
     task.raw_set("cancel", lua.create_function(task_cancel)?)?;
-    let (wait, signal_wait): (Function, Function) =
+    let require_now = lua.create_function(require_now)?;
+    let (wait, signal_wait, require): (Function, Function, Function) =
         lua.load(PRELUDE)
             .set_name("=task")
-            .call((ffi::yield_marker(), WAIT, WAIT_SIGNAL))?;
+            .call((ffi::yield_marker(), WAIT, WAIT_SIGNAL, REQUIRE, require_now))?;
     task.raw_set("wait", wait)?;
     globals.raw_set("task", task)?;
+    globals.raw_set("require", require)?;
     // Kept for `install_signals`, which runs next.
     lua.set_named_registry_value("metallic.signal_wait", signal_wait)?;
     Ok(())
+}
+
+/// `require`'s question to the host: `(value, true)` when the module is loaded, `(nil, false)` when the caller must
+/// yield for it; an error when it failed, is not a `ModuleScript`, or is in another language.
+fn require_now(lua: &Lua, module: Value) -> mlua::Result<(Value, bool)> {
+    let Some(module) = ffi::payload_of::<Id>(lua, &module) else {
+        return Err(mlua::Error::runtime(INVALID_REQUIRE));
+    };
+    let key = with_ctx(|ctx| ctx.require(module))
+        .map_err(lua_error)?
+        .map_err(|e| mlua::Error::runtime(e.to_string()))?;
+    let Some(key) = key else {
+        return Ok((Value::Nil, false));
+    };
+    let value = with_shared(|s| s.modules.borrow().get(&key).cloned()).map_err(lua_error)?;
+    Ok((value.unwrap_or(Value::Nil), true))
 }
 
 /// The thread for `task.spawn`/`defer`/`delay`'s first argument: a new one for a function, the same for a thread.

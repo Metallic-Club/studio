@@ -27,6 +27,13 @@
 //! generated type definitions and docs. The registry checks a class's own signatures when it resolves the class:
 //! class and enum names in types exist, required parameters come before optional ones, a variadic stands only as the
 //! last parameter, a tuple only as a method's return, and every method declares its returns.
+//!
+//! # Callbacks
+//!
+//! A class can declare callback members ([`CallbackDesc`], `BindableFunction.OnInvoke`): slots a script assigns a
+//! function to. They resolve like methods (inherited, replaced by name, hidden with `hide`) and declare their
+//! parameters and returns the same way. A method marked with [`MethodDesc::invokes_callback`] calls one; the
+//! registry checks that the class has it.
 
 mod desc;
 mod error;
@@ -37,7 +44,9 @@ mod ty;
 
 use std::fmt;
 
-pub use desc::{ClassBehavior, ClassDesc, ComponentDesc, EnumDesc, MethodCall, MethodDesc, MethodFn, SignalDesc};
+pub use desc::{
+    CallbackDesc, ClassBehavior, ClassDesc, ComponentDesc, EnumDesc, MethodCall, MethodDesc, MethodFn, SignalDesc,
+};
 pub use error::{MemberKind, Owner, RegistryError, RegistryErrors};
 pub use prop::{Computed, DefaultValue, Getter, PropFlags, PropMeta, Setter, Widget};
 pub use ty::{Param, Ty};
@@ -165,6 +174,9 @@ pub type ResolvedMethod = ResolvedMember<MethodDesc>;
 /// A resolved signal.
 pub type ResolvedSignal = ResolvedMember<SignalDesc>;
 
+/// A resolved callback member.
+pub type ResolvedCallback = ResolvedMember<CallbackDesc>;
+
 /// A class with its inheritance resolved: every property, component, method and signal it has, inherited ones
 /// first.
 #[derive(Debug)]
@@ -193,6 +205,9 @@ pub struct ClassInfo {
     signals: Box<[ResolvedSignal]>,
     /// Visible signals only.
     signal_ids: FxMap<&'static str, usize>,
+    callbacks: Box<[ResolvedCallback]>,
+    /// Visible callbacks only.
+    callback_ids: FxMap<&'static str, usize>,
 }
 
 impl ClassInfo {
@@ -333,6 +348,19 @@ impl ClassInfo {
             .and_then(|&i| self.signals.get(i))
             .map(|s| s.desc)
     }
+
+    /// Every callback member, inherited ones first; hidden ones included (check [`ResolvedMember::hidden`]).
+    pub fn callbacks(&self) -> &[ResolvedCallback] {
+        &self.callbacks
+    }
+
+    /// The visible callback member with this name.
+    pub fn callback(&self, name: &str) -> Option<&'static CallbackDesc> {
+        self.callback_ids
+            .get(name)
+            .and_then(|&i| self.callbacks.get(i))
+            .map(|c| c.desc)
+    }
 }
 
 /// An enum with its items built once, so looking one up only clones a pointer.
@@ -420,6 +448,11 @@ impl Registry {
     /// The id of `class`'s visible signal with this name.
     pub fn signal_id(&self, class: ClassId, name: &str) -> Option<SignalId> {
         self.class(class)?.signal_id(name)
+    }
+
+    /// `class`'s visible callback member with this name.
+    pub fn callback(&self, class: ClassId, name: &str) -> Option<&'static CallbackDesc> {
+        self.class(class)?.callback(name)
     }
 
     /// The component with this name.

@@ -1,6 +1,7 @@
 //! How a resume ended, as the host sees it: finished values, the reason of a yield, or a [`ScriptFailure`] with
 //! the script's line and traceback.
 
+use metallic_core::Id;
 use metallic_script::{Resume, ScriptFailure, YieldReason};
 use mlua::thread::ThreadStatus;
 use mlua::{Error, Lua, MultiValue, Thread, Value};
@@ -8,27 +9,33 @@ use mlua::{Error, Lua, MultiValue, Thread, Value};
 use crate::ffi::{self, SignalHandle};
 use crate::shared::Shared;
 
-/// The first value of a yield from `task.wait` (`[marker, WAIT, seconds]`) or `signal:Wait()`
-/// (`[marker, WAIT_SIGNAL, signal]`); see the prelude in `library.rs`.
+/// The second value of a yield to the host, after the marker: `task.wait` (`[marker, WAIT, seconds]`),
+/// `signal:Wait()` (`[marker, WAIT_SIGNAL, signal]`) and `require` (`[marker, REQUIRE, module]`) from the prelude in
+/// `library.rs`, and a C function yielding for the reason it left in `Shared::pending_yield` (`[marker,
+/// CALL_YIELD]`, `Invoke`).
 pub(crate) const WAIT: f64 = 1.0;
 /// See [`WAIT`].
 pub(crate) const WAIT_SIGNAL: f64 = 2.0;
+/// See [`WAIT`].
+pub(crate) const REQUIRE: f64 = 3.0;
+/// See [`WAIT`].
+pub(crate) const CALL_YIELD: f64 = 4.0;
 
 /// The [`Resume`] for a thread whose resume returned `result`. Call it while the call's frame is published: an
 /// error needs the chunk name.
 pub(crate) fn outcome(lua: &Lua, shared: &Shared, thread: &Thread, result: mlua::Result<MultiValue>) -> Resume {
     match result {
         Ok(values) => match thread.status() {
-            ThreadStatus::Resumable => Resume::Yielded(yield_reason(lua, &values)),
+            ThreadStatus::Resumable => Resume::Yielded(yield_reason(lua, shared, &values)),
             _ => Resume::Finished(ffi::from_lua(lua, shared, values).unwrap_or_default()),
         },
         Err(error) => Resume::Errored(failure(shared, &error)),
     }
 }
 
-/// Why a thread yielded: the marked yields of `task.wait` and `signal:Wait()`, or [`YieldReason::Other`] for a
-/// plain `coroutine.yield`.
-fn yield_reason(lua: &Lua, values: &MultiValue) -> YieldReason {
+/// Why a thread yielded: the marked yields of `task.wait`, `signal:Wait()`, `require` and `Invoke`, or
+/// [`YieldReason::Other`] for a plain `coroutine.yield`.
+fn yield_reason(lua: &Lua, shared: &Shared, values: &MultiValue) -> YieldReason {
     let mut values = values.iter();
     match values.next() {
         Some(Value::LightUserData(marker)) if *marker == ffi::yield_marker() => {}
@@ -45,6 +52,16 @@ fn yield_reason(lua: &Lua, values: &MultiValue) -> YieldReason {
             },
             None => YieldReason::Other,
         },
+        Some(REQUIRE) => match values.next().and_then(|v| ffi::payload_of::<Id>(lua, v)) {
+            Some(module) => YieldReason::Require { module },
+            None => YieldReason::Other,
+        },
+        Some(CALL_YIELD) => shared
+            .pending_yield
+            .try_borrow_mut()
+            .ok()
+            .and_then(|mut pending| pending.take())
+            .unwrap_or(YieldReason::Other),
         _ => YieldReason::Other,
     }
 }

@@ -28,6 +28,13 @@
 //! `defer`, `delay` and `cancel` go through [`HostContext`], so the host's scheduler decides when everything
 //! runs (`metallic_script`'s crate docs give the order).
 //!
+//! `require` (see the `library` module) yields the same way while its module loads; a module runs in a thread of
+//! its own and its one return value stays in the VM, so every requirer gets the same table. A method that invokes
+//! a callback (`BindableFunction:Invoke`) is a C function that yields to the host, and resumes with the callback's
+//! results; a function assigned to a callback member (`OnInvoke`) is kept as a registry reference under the key
+//! the host chose. Errors the host raises in a waiting thread (a failed module or callback, a destroyed
+//! instance) go through `Thread::resume_error`, so `pcall` catches them.
+//!
 //! # Budgets
 //!
 //! Luau's interrupt (a plain C callback, not an mlua closure) polls the call's [`Deadline`] at every safepoint;
@@ -75,8 +82,9 @@ mod types;
 use std::sync::Arc;
 
 use metallic_core::{ListenerKey, Registry, ScriptValue};
-use metallic_script::{ChunkId, CompileError, HostContext, Resume, ScriptFailure, ScriptLanguage, ThreadId};
+use metallic_script::{ChunkId, CompileError, HostContext, ModuleKey, Resume, ScriptFailure, ScriptLanguage, ThreadId};
 use mlua::chunk::{ChunkMode, Compiler};
+use mlua::thread::ThreadStatus;
 use mlua::{Lua, LuaOptions, MultiValue, StdLib, Table, Thread};
 use thiserror::Error;
 
@@ -172,6 +180,52 @@ impl LuauLanguage {
         let thread = self.lua.create_thread(function).map_err(|e| start_failure(&e))?;
         Ok(self.shared.threads.borrow_mut().add(thread))
     }
+
+    /// The function of `chunk`, loaded for the running script (or module) in a new environment.
+    fn chunk_function(&self, chunk: ChunkId, ctx: &HostContext<'_>) -> Result<mlua::Function, ScriptFailure> {
+        if !Arc::ptr_eq(ctx.registry(), &self.shared.registry) {
+            return Err(ScriptFailure::runtime(
+                "this Luau backend was built for another class registry",
+                None,
+            ));
+        }
+        let Some(bytecode) = usize::try_from(chunk.0).ok().and_then(|i| self.chunks.get(i)) else {
+            return Err(ScriptFailure::runtime("unknown chunk", None));
+        };
+        let env = self.environment(ctx).map_err(|e| start_failure(&e))?;
+        self.lua
+            .load(bytecode.as_slice())
+            .set_name(format!("={}", ctx.chunk_name()))
+            .set_mode(ChunkMode::Binary)
+            .set_environment(env)
+            .into_function()
+            .map_err(|e| start_failure(&e))
+    }
+
+    /// How a resume of `thread` ended. A module's thread that returned keeps its one value for `require` instead of
+    /// handing values to the host.
+    fn settle(&self, thread: ThreadId, lua_thread: &Thread, result: mlua::Result<MultiValue>) -> Resume {
+        let module = self.shared.threads.borrow().module_of(thread);
+        if let Some(key) = module
+            && lua_thread.status() != ThreadStatus::Resumable
+        {
+            self.shared.threads.borrow_mut().clear_module(thread);
+            if let Ok(values) = &result {
+                return match values.len() {
+                    1 => {
+                        let value = values.front().cloned().unwrap_or(mlua::Value::Nil);
+                        self.shared.modules.borrow_mut().insert(key, value);
+                        Resume::Finished(Vec::new())
+                    }
+                    _ => Resume::Errored(ScriptFailure::runtime(
+                        "Module code did not return exactly one value",
+                        None,
+                    )),
+                };
+            }
+        }
+        outcome::outcome(&self.lua, &self.shared, lua_thread, result)
+    }
 }
 
 /// A failure to create a thread.
@@ -184,9 +238,12 @@ fn start_failure(error: &mlua::Error) -> ScriptFailure {
 
 impl Drop for LuauLanguage {
     fn drop(&mut self) {
-        // Thread and function handles go before the VM they point into.
+        // Thread and function handles go before the VM they point into. Callback references live in the VM's
+        // registry and go with it.
         self.shared.threads.borrow_mut().clear();
         self.shared.listeners.borrow_mut().clear();
+        self.shared.modules.borrow_mut().clear();
+        self.shared.callbacks.borrow_mut().clear();
     }
 }
 
@@ -210,33 +267,39 @@ impl ScriptLanguage for LuauLanguage {
     }
 
     fn spawn(&mut self, chunk: ChunkId, ctx: &mut HostContext<'_>) -> Result<ThreadId, ScriptFailure> {
-        if !Arc::ptr_eq(ctx.registry(), &self.shared.registry) {
-            return Err(ScriptFailure::runtime(
-                "this Luau backend was built for another class registry",
-                None,
-            ));
-        }
-        let Some(bytecode) = usize::try_from(chunk.0).ok().and_then(|i| self.chunks.get(i)) else {
-            return Err(ScriptFailure::runtime("unknown chunk", None));
-        };
-        let env = self.environment(ctx).map_err(|e| start_failure(&e))?;
-        let function = self
-            .lua
-            .load(bytecode.as_slice())
-            .set_name(format!("={}", ctx.chunk_name()))
-            .set_mode(ChunkMode::Binary)
-            .set_environment(env)
-            .into_function()
-            .map_err(|e| start_failure(&e))?;
+        let function = self.chunk_function(chunk, ctx)?;
         self.new_thread(function)
     }
 
     fn spawn_listener(&mut self, listener: ListenerKey, _ctx: &mut HostContext<'_>) -> Result<ThreadId, ScriptFailure> {
         let function = self.shared.listeners.borrow().get(&listener).cloned();
-        match function {
-            Some(function) => self.new_thread(function),
-            None => Err(ScriptFailure::runtime("unknown listener", None)),
-        }
+        let function = match function {
+            Some(function) => function,
+            None => {
+                let reference = self.shared.callbacks.borrow().get(&listener).copied();
+                let Some(reference) = reference else {
+                    return Err(ScriptFailure::runtime("unknown listener", None));
+                };
+                ffi::referenced_function(&self.lua, reference).map_err(|e| start_failure(&e))?
+            }
+        };
+        self.new_thread(function)
+    }
+
+    fn spawn_module(
+        &mut self,
+        chunk: ChunkId,
+        key: ModuleKey,
+        ctx: &mut HostContext<'_>,
+    ) -> Result<ThreadId, ScriptFailure> {
+        let function = self.chunk_function(chunk, ctx)?;
+        let thread = self.new_thread(function)?;
+        self.shared.threads.borrow_mut().set_module(thread, key);
+        Ok(thread)
+    }
+
+    fn release_module(&mut self, key: ModuleKey) {
+        self.shared.modules.borrow_mut().remove(&key);
     }
 
     fn resume(&mut self, thread: ThreadId, args: &[ScriptValue], ctx: &mut HostContext<'_>) -> Resume {
@@ -254,7 +317,23 @@ impl ScriptLanguage for LuauLanguage {
             None => ffi::to_lua(&self.lua, &self.shared, args.to_vec()),
         };
         let result = args.and_then(|args| resume_thread(&lua_thread, args));
-        outcome::outcome(&self.lua, &self.shared, &lua_thread, result)
+        self.settle(thread, &lua_thread, result)
+    }
+
+    fn resume_error(&mut self, thread: ThreadId, message: &str, ctx: &mut HostContext<'_>) -> Resume {
+        let lua_thread = {
+            let mut threads = self.shared.threads.borrow_mut();
+            // Arguments kept for a first resume are not wanted any more.
+            threads.take_pending(thread);
+            threads.get(thread)
+        };
+        let Some(lua_thread) = lua_thread else {
+            return Resume::Errored(ScriptFailure::runtime("cannot resume a dead thread", None));
+        };
+        self.shared.timed_out.set(None);
+        let _frame = FrameGuard::enter(ctx, &self.shared);
+        let result = lua_thread.resume_error::<MultiValue>(message);
+        self.settle(thread, &lua_thread, result)
     }
 
     fn release_thread(&mut self, thread: ThreadId) {
@@ -263,6 +342,10 @@ impl ScriptLanguage for LuauLanguage {
 
     fn release_listener(&mut self, listener: ListenerKey) {
         self.shared.listeners.borrow_mut().remove(&listener);
+        let reference = self.shared.callbacks.borrow_mut().remove(&listener);
+        if let Some(reference) = reference {
+            ffi::unreference(&self.lua, reference);
+        }
     }
 
     fn memory_used(&self) -> usize {

@@ -87,15 +87,78 @@
 //! next step), and the output gets one warning per frame at most. A step always resumes at least one due thread, so
 //! even a zero budget makes progress.
 //!
+//! # Running a game
+//!
+//! [`ScriptHost::start_game`] runs the game's scripts: every enabled script of the [`RunContext`]'s class
+//! (`Script` on a server, `LocalScript` on a client, both in a standalone [`RunContext::Local`] game) inside a
+//! service flagged `runs_scripts`. A script's `Source` is a project-relative path, read through a
+//! [`SourceLoader`] ([`MemorySources`] until projects arrive in M4); an empty `Source` runs nothing. Scripts start
+//! in tree order: the services in the order they sit under the root, and within each, depth-first (a parent before
+//! its children, children in order).
+//!
+//! From then on the host follows each script's lifecycle, through connections of its own (they never reach a
+//! backend):
+//!
+//! - **disabled** (`Enabled = false`), **destroyed**, or **moved out** of every service that runs scripts (parented
+//!   elsewhere or to nil): the script is reaped;
+//! - **re-enabled**, or **moved back** into such a service: it starts again, from the top, as a new run;
+//! - **added** at runtime into such a service (created there, moved there, cloned there) while enabled: it starts.
+//!
+//! A change takes effect at the next signal dispatch (step 3 of a frame step, or [`ScriptHost::dispatch_signals`]),
+//! after the change's own events: a script that disables another keeps running until then, and so does the other.
+//!
+//! **Cost.** The host connects `DescendantAdded` and `DescendantRemoving` on each service that runs scripts, and
+//! `GetPropertyChangedSignal("Enabled")` on each script inside one; it never connects to parts or other instances.
+//! Property writes to unwatched instances cost what they cost without a game. A move anywhere walks the moved
+//! instance's ancestors (the data model's cost for any `Descendant*` connection), and each instance moved into or
+//! out of such a service, with its descendants, queues one event that the host checks with one class test.
+//!
+//! # `require`
+//!
+//! `require(moduleScript)` ([`HostContext::require`], [`YieldReason::Require`]) runs the module's chunk once per
+//! host (one host is one context), in a thread of its own whose script is the module; the module must return
+//! exactly one value, which its backend keeps under a [`ModuleKey`]. Every later `require` returns that same value
+//! (for Luau, the same table). Modules stay loaded until [`ScriptHost::stop_game`].
+//!
+//! - **A module that yields while loading** (`task.wait` at its top level) makes every requirer wait, as in Roblox:
+//!   the first `require` starts the load, later ones queue behind it, and all resume in the order they came once
+//!   the module returns.
+//! - **Errors** in the module are reported once, as the module's, and every requirer (now and later) raises
+//!   `Requested module experienced an error while loading: Module.Name:line: message`.
+//! - **Cycles** raise in the requirer that would close the cycle:
+//!   `Requested module was required recursively: Workspace.A requires Workspace.B requires Workspace.A`.
+//! - **Languages:** a module runs in the backend of its file's extension, and only scripts of that language may
+//!   require it; requiring across languages is a clear error (calls between languages come later, ADR 0003).
+//!
+//! # Callbacks and `BindableFunction`
+//!
+//! A callback member (`BindableFunction.OnInvoke`, declared with core's `CallbackDesc`) holds a script function:
+//! [`HostContext::set_callback`] records it per (instance, callback) under a [`ListenerKey`](metallic_core::ListenerKey)
+//! the backend stores the function under, owned by the script that assigned it. A method marked
+//! `invokes_callback` (`Invoke`) yields [`YieldReason::InvokeCallback`]; the host runs the function in a new thread of
+//! its owner with the arguments, and resumes the caller with its results, so the caller waits while the function
+//! yields. An error in the function is raised in the caller (`Script.Name:line: message`), not reported on its own.
+//!
+//! **`Invoke` with no function assigned waits** until a script assigns one (as in Roblox), so scripts may start in
+//! any order. It fails instead when the instance is destroyed while it waits. A function is released when it is
+//! replaced or cleared, when its script is reaped, or when its instance is destroyed.
+//!
 //! # Reaping
 //!
 //! [`ScriptHost::reap`] stops a script: its threads leave the sleeper heap, the deferred queue and the signal
-//! waiters (whose connections are disconnected), and are released with its listeners. The engine calls it when a
-//! script is destroyed, disabled, or moved out of a service that runs scripts.
+//! waiters (whose connections are disconnected), and are released with its listeners and its callback functions.
+//! The host calls it itself while a game runs (see above). A thread that was answering an `Invoke` makes that
+//! `Invoke` fail; one that was loading a module makes the module fail.
 //!
-//! **Known gap:** when the instance whose signal a thread `Wait`s on is destroyed, the data model drops the
-//! connection without telling the host, so the thread stays parked (and counted in
-//! [`ScriptHost::waiter_count`]) until its script is reaped. Core will report dropped connections (#52).
+//! # Connections dropped with their instances
+//!
+//! The data model drops the connections of a destroyed instance on its own, after delivering its last events
+//! (`Destroying`, ...). After every dispatch that delivered all queued events, the host drains those reports
+//! ([`DataModel::drain_dropped_connections`](metallic_core::DataModel::drain_dropped_connections)) and releases what
+//! it kept for each: the listener record and the backend's function, so destroying connected instances leaks
+//! nothing. **A thread in `signal:Wait()` on a destroyed instance** is resumed with the error
+//! `the instance whose signal this thread was waiting on was destroyed`, raised where it waits (it may catch it).
+//! Roblox leaves such a thread parked forever; that leaks, so the host does not.
 //!
 //! # Performance
 //!
@@ -114,16 +177,19 @@
 //!
 //! # Not here yet
 //!
-//! The script classes (#47) feed [`ScriptHost::run_script`] and call [`ScriptHost::reap`] automatically; the engine
-//! loop and RunService (M3) call [`ScriptHost::step`].
+//! The engine loop and RunService (M3) call [`ScriptHost::step`]; projects (M4) bring the real [`SourceLoader`];
+//! client and server contexts (M10) split [`RunContext::Local`].
 
 mod context;
 mod deadline;
+mod game;
 mod host;
 mod language;
 mod output;
 mod scheduler;
 
+#[cfg(test)]
+mod game_tests;
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -133,7 +199,10 @@ mod tests;
 
 pub use context::{Connection, HostContext, HostRequest};
 pub use deadline::Deadline;
+pub use game::{LoadError, MemorySources, RunContext, SourceLoader};
 pub use host::{DEFAULT_RESUME_BUDGET, HostError, LanguageId, ScriptHost, ScriptRun, ThreadRef, ThreadState};
-pub use language::{ChunkId, CompileError, Resume, ScriptFailure, ScriptLanguage, SignalRef, ThreadId, YieldReason};
+pub use language::{
+    ChunkId, CompileError, ModuleKey, Resume, ScriptFailure, ScriptLanguage, SignalRef, ThreadId, YieldReason,
+};
 pub use output::{CollectOutput, OutputLevel, OutputLine, OutputSink, OutputSource};
 pub use scheduler::{DEFAULT_PHASE_BUDGET, MAX_DEFER_DEPTH, Phase, StepStats};
