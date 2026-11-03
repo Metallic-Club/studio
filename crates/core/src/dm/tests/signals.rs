@@ -584,3 +584,123 @@ fn derived_properties_fire_only_where_something_listens() {
     dm.set(p, ids.cframe, cframe).expect("set CFrame");
     assert_eq!(drain(&mut dm), vec![(2, p, vec![text("CFrame")])]);
 }
+
+// Dropped connections: every connection the data model drops on its own is reported once.
+
+type Dropped = Vec<(crate::dm::ConnectionId, ListenerKey)>;
+
+fn dropped(dm: &mut DataModel) -> Dropped {
+    let mut out = Vec::new();
+    dm.drain_dropped_connections(&mut out);
+    out
+}
+
+#[test]
+fn destroying_an_instance_reports_each_of_its_connections_once() {
+    let (mut dm, ids) = game();
+    let p = part_in(&mut dm, &ids, ids.workspace, "P");
+    let other = part_in(&mut dm, &ids, ids.workspace, "Other");
+    // Five connections, two of them to one signal with one listener; and one on another instance.
+    let made: Dropped = vec![
+        (connect(&mut dm, p, ids.changed, 1), key(1)),
+        (connect(&mut dm, p, ids.destroying, 2), key(2)),
+        (connect(&mut dm, p, ids.destroying, 2), key(2)),
+        (
+            dm.connect_property_changed(p, ids.transparency, key(3))
+                .expect("connect"),
+            key(3),
+        ),
+        (connect(&mut dm, p, ids.ancestry_changed, 4), key(4)),
+    ];
+    connect(&mut dm, other, ids.changed, 9);
+    drain(&mut dm);
+    assert!(
+        dropped(&mut dm).is_empty(),
+        "nothing is dropped while the instance lives"
+    );
+
+    dm.destroy(p).expect("destroy");
+    assert!(
+        dropped(&mut dm).is_empty(),
+        "the connections live until the drain that delivers their last events"
+    );
+    assert_eq!(
+        drain(&mut dm).len(),
+        4,
+        "Destroying twice, AncestryChanged and Changed(Parent)"
+    );
+    assert_eq!(
+        dropped(&mut dm),
+        made,
+        "exactly the instance's connections, in connection order"
+    );
+    assert!(dropped(&mut dm).is_empty(), "each is reported once");
+    drain(&mut dm);
+    assert!(dropped(&mut dm).is_empty());
+    assert_eq!(dm.connection_count(), 1);
+    for (connection, _) in made {
+        assert!(!dm.disconnect(connection), "a reported connection is gone");
+    }
+}
+
+#[test]
+fn destroying_a_subtree_reports_every_connection_in_it() {
+    let (mut dm, ids) = game();
+    let folder = folder_in(&mut dm, &ids, ids.workspace);
+    let p = part_in(&mut dm, &ids, folder, "P");
+    let c = part_in(&mut dm, &ids, p, "C");
+    let made = [
+        (connect(&mut dm, folder, ids.child_removed, 1), key(1)),
+        (connect(&mut dm, p, ids.destroying, 2), key(2)),
+        (connect(&mut dm, c, ids.destroying, 3), key(3)),
+        (connect(&mut dm, c, ids.changed, 4), key(4)),
+    ];
+    let outside = connect(&mut dm, ids.workspace, ids.child_removed, 5);
+    drain(&mut dm);
+
+    dm.destroy(folder).expect("destroy");
+    drain(&mut dm);
+    let mut got = dropped(&mut dm);
+    got.sort_by_key(|(_, listener)| listener.0);
+    assert_eq!(got, made);
+    assert!(dm.disconnect(outside), "connections outside the subtree stay");
+}
+
+#[test]
+fn a_connection_made_and_destroyed_before_any_drain_is_reported() {
+    let (mut dm, ids) = game();
+    let p = part(&mut dm, &ids);
+    let conn = connect(&mut dm, p, ids.destroying, 1);
+    dm.destroy(p).expect("destroy");
+    assert_eq!(drain(&mut dm), vec![(1, p, vec![])]);
+    assert_eq!(dropped(&mut dm), vec![(conn, key(1))]);
+}
+
+#[test]
+fn unwatched_destroys_and_disconnects_report_nothing() {
+    let (mut dm, ids) = game();
+    let p = part_in(&mut dm, &ids, ids.workspace, "P");
+    dm.destroy(p).expect("destroy");
+    drain(&mut dm);
+    assert!(dropped(&mut dm).is_empty(), "nothing connected anywhere");
+
+    // Something listens elsewhere, but not to the destroyed instance.
+    let watched = part_in(&mut dm, &ids, ids.workspace, "Watched");
+    let conn = connect(&mut dm, watched, ids.changed, 1);
+    let q = part_in(&mut dm, &ids, ids.workspace, "Q");
+    dm.destroy(q).expect("destroy");
+    drain(&mut dm);
+    assert!(dropped(&mut dm).is_empty(), "the destroyed instance was not watched");
+
+    // The caller's own disconnect is not reported, even when the instance is destroyed before the drain.
+    assert!(dm.disconnect(conn));
+    let r = part(&mut dm, &ids);
+    let conn = connect(&mut dm, r, ids.destroying, 2);
+    dm.destroy(r).expect("destroy");
+    assert!(dm.disconnect(conn), "still connected until the drain");
+    assert!(drain(&mut dm).is_empty());
+    assert!(
+        dropped(&mut dm).is_empty(),
+        "a disconnected connection is not reported again"
+    );
+}

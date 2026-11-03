@@ -16,7 +16,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use metallic_core::{CFrame, Color3, DataModel, Delivery, DirtyBits, EnumItem, Id, ListenerKey, Value, Vector3};
+use metallic_core::{
+    CFrame, Color3, ConnectionId, DataModel, Delivery, DirtyBits, EnumItem, Id, ListenerKey, Value, Vector3,
+};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -287,4 +289,36 @@ fn watched_writes_queue_without_allocating_once_grown() {
     assert_eq!(out.len(), 2 * WRITES as usize);
     // Only each `Changed` delivery's own argument list; the property signal has none.
     assert_eq!(drained, u64::from(WRITES), "the drain allocated beyond the arguments");
+}
+
+#[test]
+fn reporting_dropped_connections_does_not_allocate_once_grown() {
+    const PARTS: usize = 50;
+    let (mut dm, ids) = classes::game();
+    let mut out: Vec<Delivery> = Vec::new();
+    let mut dropped: Vec<(ConnectionId, ListenerKey)> = Vec::new();
+    // The first round grows the queue, `out` and both dropped-connection lists; the later ones must not allocate.
+    for round in 0..4 {
+        for i in 0..PARTS {
+            let p = dm.create(ids.part).expect("part");
+            dm.connect(p, ids.destroying, ListenerKey(i as u64)).expect("connect");
+            dm.connect_property_changed(p, ids.cframe, ListenerKey(i as u64))
+                .expect("connect");
+            dm.destroy(p).expect("destroy");
+        }
+        out.clear();
+        dropped.clear();
+        let allocations = allocations_in(|| {
+            dm.drain_deliveries(&mut out);
+            dm.drain_dropped_connections(&mut dropped);
+        });
+        assert_eq!(out.len(), PARTS, "one Destroying each");
+        assert_eq!(dropped.len(), 2 * PARTS);
+        if round > 0 {
+            assert_eq!(
+                allocations, 0,
+                "round {round}: dropping and reporting connections allocated"
+            );
+        }
+    }
 }
