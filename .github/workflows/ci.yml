@@ -109,7 +109,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The renderer's GPU tests (crates/render/tests) need an adapter, and runners have no GPU. Linux gets Mesa's
+      # software rasterisers: lavapipe (Vulkan, the primary path) and llvmpipe through EGL (the GL fallback). Windows
+      # has WARP, Direct3D 12's built-in software adapter. METALLIC_REQUIRE_GPU makes a missing adapter fail the
+      # tests instead of skipping them, so the renderer is really tested here. (macOS, on main only, skips without
+      # one.)
+      - name: Software GPU (Mesa lavapipe and llvmpipe)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri
+      - name: Require a GPU adapter for the renderer tests
+        if: matrix.os != 'macos-latest'
+        shell: bash
+        run: echo "METALLIC_REQUIRE_GPU=1" >> "$GITHUB_ENV"
       - run: cargo test --workspace
+      # Prints the adapter, the CPU cost of a frame and per-pass GPU timings on the runner's software GPU, and checks
+      # the cleared frame read back. The numbers say nothing about real hardware; the run proves the path works.
+      - name: Renderer example (offscreen clear)
+        if: matrix.os != 'macos-latest'
+        run: cargo run -p metallic_render --example clear -- 120
       # Script errors are C++ exceptions unwinding through Rust frames, which only works with the panic strategy of
       # the profile that ships (`dist`); tests use the default and cannot see it. This runs every Luau error path in
       # `dist` and fails on an abort (crates/luau/src/ffi.rs). LTO is turned down to keep it cheap; the panic

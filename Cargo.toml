@@ -62,6 +62,11 @@ log = "0.4"
 # Profiling scopes in `metallic_engine`'s frame loop. With no back end feature the macros expand to nothing; the
 # engine's `profile-with-puffin` and `profile-with-tracy` features pick one. No proc-macros (`procmacros` is off).
 profiling = { version = "1.0.18", default-features = false }
+# The GPU layer of `metallic_render` (ADR 0004, ADR 0008): Vulkan, Metal, DX12, and GLES as the fallback. The web
+# backend is off; `wgsl` compiles our shaders with naga.
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "dx12", "gles", "wgsl"] }
+# Blocks on wgpu's adapter and device requests during setup (never inside a frame).
+pollster = "1.0.1"
 
 [workspace.lints.rust]
 missing_docs = "warn"
