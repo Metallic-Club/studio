@@ -102,6 +102,8 @@ pub struct HostContext<'a> {
     defer_depth: u32,
     /// Waiter connections made during this call.
     early_waits: &'a mut Vec<EarlyWait>,
+    /// The game time of the last step.
+    now: f64,
 }
 
 impl<'a> HostContext<'a> {
@@ -118,6 +120,7 @@ impl<'a> HostContext<'a> {
         output: &'a mut dyn OutputSink,
         defer_depth: u32,
         early_waits: &'a mut Vec<EarlyWait>,
+        now: f64,
     ) -> Self {
         Self {
             dm,
@@ -130,12 +133,19 @@ impl<'a> HostContext<'a> {
             output,
             defer_depth,
             early_waits,
+            now,
         }
     }
 
     /// The script instance the running code belongs to (`script` in Luau).
     pub fn script(&self) -> Id {
         self.script
+    }
+
+    /// The game time of the host's last step, in seconds ([`ScriptHost::now`](crate::ScriptHost::now)): what a
+    /// script's `time()` returns. It comes from the engine's clock, never the wall clock.
+    pub fn now(&self) -> f64 {
+        self.now
     }
 
     /// The script's full name when it started, such as `Workspace.Door.Script`.

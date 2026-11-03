@@ -65,22 +65,51 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --workspace
 
-  cross-check:
-    name: Cross-target check (Android, iOS)
+  # Everything that must build on mobile: the engine crates, Player and Launcher. Studio is desktop-only and xtask
+  # is a host tool. Since #46 the engine contains C++ (Luau, built by mlua's build script), so `cargo check` for a
+  # mobile target needs that target's C/C++ toolchain, not just the Rust target.
+  cross-check-android:
+    name: Cross-target check (Android)
     runs-on: ubuntu-latest
-    # Everything that must build on mobile: the engine crates, Player and Launcher. Studio is desktop-only and
-    # xtask is a host tool. One job for both targets: they share the host build scripts and the runner setup.
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: false
-      - run: rustup target add aarch64-linux-android aarch64-apple-ios
+      - run: rustup target add aarch64-linux-android
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+          add-to-path: false
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Android (aarch64-linux-android)
-        run: cargo check --workspace --exclude metallic_studio --exclude xtask --target aarch64-linux-android
+        env:
+          NDK_BIN: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        run: |
+          # cc-rs reads the target's compilers from these; API level 24 is the oldest the engine targets.
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          cargo check --workspace --exclude metallic_studio --exclude xtask --target aarch64-linux-android
+
+  # iOS needs Xcode's SDK, which only macOS runners have, and a macOS minute costs ten Linux minutes, so it runs on
+  # pushes to main only (like the macOS tests). A PR that breaks the iOS build is caught on main, one merge later.
+  cross-check-ios:
+    name: Cross-target check (iOS)
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          cache: false
+      - run: rustup target add aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: iOS (aarch64-apple-ios)
         run: cargo check --workspace --exclude metallic_studio --exclude xtask --target aarch64-apple-ios
 

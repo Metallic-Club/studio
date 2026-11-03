@@ -11,6 +11,35 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Luau native code generation (the "JIT"). It takes effect only on x86-64 and aarch64 Windows, Linux, macOS and
+# Android: the dependency that turns it on is declared for those targets alone (below), so `--features jit` does
+# nothing on iOS, consoles or any other target, where generating machine code at run time is forbidden (ADR 0003).
+jit = ["dep:mlua_codegen"]
+
 [dependencies]
 metallic_core.workspace = true
 metallic_script.workspace = true
+mlua.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), any(target_os = "windows", target_os = "linux", target_os = "macos", target_os = "android")))'.dependencies]
+mlua_codegen = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Tests and benches run real scripts against the real class set. Dev-dependencies are exempt from the layout rules
+# (ADR 0001).
+metallic_classes.workspace = true
+criterion.workspace = true
+gungraun.workspace = true
+
+[[bench]]
+name = "api"
+harness = false
+
+# The perf gate's Luau suite (docs/perf.md). It needs Valgrind and `gungraun-runner`, so a plain `cargo bench`
+# leaves it out (`bench = false`); it runs by name: `cargo bench -p metallic_luau --bench perf_gate`.
+[[bench]]
+name = "perf_gate"
+harness = false
+bench = false

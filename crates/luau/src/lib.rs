@@ -4,3 +4,285 @@
 //!
 //! Must not depend on: anything but `metallic_script` and `metallic_core`. A second language is a new crate next to
 //! this one. See `docs/adr/0003-scripting.md`.
+//!
+//! # The VM
+//!
+//! [`LuauLanguage`] owns one Luau VM (through mlua), so an engine makes one per context: one on the server, one on
+//! each client. The VM is sandboxed (see the `library` module) and every script runs in its own environment table,
+//! whose `__index` is the read-only globals and which holds `script`, `game` and `workspace` (Luau's sandbox
+//! model). Sources are compiled at optimisation level 2; the bytecode is compiled once per file by the host's
+//! chunk cache and loaded per script, named after the script's chunk name, so errors read
+//! `Scripts/Door.luau#12.1:4: message` inside the VM and `Workspace.Door:4: message` in the output.
+//!
+//! # Bindings come from the registry
+//!
+//! No class is written here. An instance is a tagged userdata holding its id; a member name resolves through the
+//! registry to a property, method or signal, once per (class, name), and is cached per class under the name's
+//! Luau atom. Methods run through their `MethodDesc`, signals through the host's connections, `Enum` is built
+//! from the registry's enums.
+//!
+//! # Threads and the host
+//!
+//! Each script thread, listener call and `task` thread is a Luau coroutine with a [`ThreadId`]. `task.wait` and
+//! `signal:Wait()` yield the coroutine with a marker the backend turns into a [`YieldReason`]; `task.spawn`,
+//! `defer`, `delay` and `cancel` go through [`HostContext`], so the host's scheduler decides when everything
+//! runs (`metallic_script`'s crate docs give the order).
+//!
+//! # Budgets
+//!
+//! Luau's interrupt (a plain C callback, not an mlua closure) polls the call's [`Deadline`] at every safepoint;
+//! `Deadline::poll` reads the clock once per 256 polls, so a hot loop pays a decrement and a branch. A thread past
+//! its deadline fails with [`ScriptFailure::Timeout`] and the VM stays usable. The memory limit is Luau's.
+//!
+//! # Native code (`jit` feature)
+//!
+//! `--features jit` compiles Luau's native code generator in, and every loaded chunk is compiled to machine code.
+//! The feature only takes effect on x86-64 and aarch64 Windows, Linux, macOS and Android: the dependency that turns
+//! it on is target-specific (`Cargo.toml`), so iOS and consoles, which forbid generating code at run time, always
+//! use the interpreter (ADR 0003).
+//!
+//! # `unsafe`
+//!
+//! The hot paths use the Luau C API directly, because mlua's safe callbacks cost more than the budget for a
+//! property read. All of it is in the `ffi` module (`#![allow(unsafe_code)]` there, a `// SAFETY:` comment on each
+//! block); the rest of the crate is safe code on top of it.
+//!
+//! [`Deadline`]: metallic_script::Deadline
+//! [`YieldReason`]: metallic_script::YieldReason
+
+mod atoms;
+mod convert;
+mod ffi;
+mod instance;
+mod library;
+mod outcome;
+mod shared;
+mod types;
+
+use std::sync::Arc;
+
+use metallic_core::{ListenerKey, Registry, ScriptValue};
+use metallic_script::{ChunkId, CompileError, HostContext, Resume, ScriptFailure, ScriptLanguage, ThreadId};
+use mlua::chunk::{ChunkMode, Compiler};
+use mlua::{Lua, LuaOptions, MultiValue, StdLib, Table, Thread};
+use thiserror::Error;
+
+use crate::ffi::{FrameGuard, Push};
+use crate::shared::Shared;
+
+/// The compiler settings every chunk uses.
+fn compiler() -> Compiler {
+    Compiler::new()
+        .set_optimization_level(2)
+        .set_debug_level(1)
+        // `Vector3.new(x, y, z)` compiles to the native vector constructor.
+        .set_vector_ctor("Vector3.new")
+        .set_vector_type("Vector3")
+        // Our `typeof` knows the engine's types; the builtin would answer "userdata" and "vector".
+        .set_disabled_builtins(["typeof"])
+}
+
+/// Why a Luau backend could not be created.
+#[derive(Debug, Error)]
+#[error("could not set up the Luau VM: {0}")]
+pub struct LuauError(String);
+
+impl From<mlua::Error> for LuauError {
+    fn from(error: mlua::Error) -> Self {
+        Self(error.to_string())
+    }
+}
+
+/// The Luau scripting backend: one sandboxed Luau VM, with the engine's API built from a class registry.
+///
+/// Register it with a `ScriptHost`; it runs `.luau` files.
+pub struct LuauLanguage {
+    lua: Lua,
+    shared: Shared,
+    compiler: Compiler,
+    env_meta: Table,
+    /// Compiled chunks, by [`ChunkId`].
+    chunks: Vec<Vec<u8>>,
+}
+
+impl LuauLanguage {
+    /// A VM whose bindings come from `registry`, which must be the registry of the data models it will run
+    /// scripts against.
+    pub fn new(registry: Arc<Registry>) -> Result<Self, LuauError> {
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
+        let compiler = compiler();
+        lua.set_compiler(compiler.clone());
+        let mut shared = Shared::new(registry);
+        let library = library::install(&lua, &mut shared)?;
+        Ok(Self {
+            lua,
+            shared,
+            compiler,
+            env_meta: library.env_meta,
+            chunks: Vec::new(),
+        })
+    }
+
+    /// Turns the time budget off (`false`) or back on. Off, Luau runs without an interrupt and a runaway loop is
+    /// never stopped: only for measuring the interrupt's cost and for trusted tools.
+    pub fn set_time_budget_enabled(&mut self, enabled: bool) -> Result<(), LuauError> {
+        Ok(ffi::set_interrupt(&self.lua, enabled)?)
+    }
+
+    /// How many threads the backend holds (scripts, listeners and tasks not yet released).
+    pub fn thread_count(&self) -> usize {
+        self.shared.threads.borrow().len()
+    }
+
+    /// A new environment for the running script: `script`, `game` and `workspace`, then the globals.
+    fn environment(&self, ctx: &HostContext<'_>) -> mlua::Result<Table> {
+        let env = self.lua.create_table()?;
+        env.set_metatable(Some(self.env_meta.clone()))?;
+        let dm = &*ctx.dm;
+        let workspace = dm.registry().class_id("Workspace").and_then(|class| dm.service(class));
+        let instance = |id: Option<metallic_core::Id>| id.map_or(Push::Nil, Push::Instance);
+        let mut values = ffi::pushes_to_lua(
+            &self.lua,
+            Some(&self.shared),
+            vec![instance(Some(ctx.script())), instance(dm.root()), instance(workspace)],
+        )?
+        .into_iter();
+        for name in ["script", "game", "workspace"] {
+            env.raw_set(name, values.next().unwrap_or(mlua::Value::Nil))?;
+        }
+        env.set_safeenv(true);
+        Ok(env)
+    }
+
+    /// Registers a new thread for `function`.
+    fn new_thread(&self, function: mlua::Function) -> Result<ThreadId, ScriptFailure> {
+        let thread = self.lua.create_thread(function).map_err(|e| start_failure(&e))?;
+        Ok(self.shared.threads.borrow_mut().add(thread))
+    }
+}
+
+/// A failure to create a thread.
+fn start_failure(error: &mlua::Error) -> ScriptFailure {
+    match error {
+        mlua::Error::MemoryError(_) => ScriptFailure::OutOfMemory,
+        other => ScriptFailure::runtime(other.to_string(), None),
+    }
+}
+
+impl Drop for LuauLanguage {
+    fn drop(&mut self) {
+        // Thread and function handles go before the VM they point into.
+        self.shared.threads.borrow_mut().clear();
+        self.shared.listeners.borrow_mut().clear();
+    }
+}
+
+impl ScriptLanguage for LuauLanguage {
+    fn name(&self) -> &str {
+        "luau"
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["luau"]
+    }
+
+    fn compile(&mut self, source: &str, chunk_name: &str) -> Result<ChunkId, CompileError> {
+        match self.compiler.compile(source) {
+            Ok(bytecode) => {
+                self.chunks.push(bytecode);
+                Ok(ChunkId(self.chunks.len() as u64 - 1))
+            }
+            Err(error) => Err(compile_error(&error, chunk_name)),
+        }
+    }
+
+    fn spawn(&mut self, chunk: ChunkId, ctx: &mut HostContext<'_>) -> Result<ThreadId, ScriptFailure> {
+        if !Arc::ptr_eq(ctx.registry(), &self.shared.registry) {
+            return Err(ScriptFailure::runtime(
+                "this Luau backend was built for another class registry",
+                None,
+            ));
+        }
+        let Some(bytecode) = usize::try_from(chunk.0).ok().and_then(|i| self.chunks.get(i)) else {
+            return Err(ScriptFailure::runtime("unknown chunk", None));
+        };
+        let env = self.environment(ctx).map_err(|e| start_failure(&e))?;
+        let function = self
+            .lua
+            .load(bytecode.as_slice())
+            .set_name(format!("={}", ctx.chunk_name()))
+            .set_mode(ChunkMode::Binary)
+            .set_environment(env)
+            .into_function()
+            .map_err(|e| start_failure(&e))?;
+        self.new_thread(function)
+    }
+
+    fn spawn_listener(&mut self, listener: ListenerKey, _ctx: &mut HostContext<'_>) -> Result<ThreadId, ScriptFailure> {
+        let function = self.shared.listeners.borrow().get(&listener).cloned();
+        match function {
+            Some(function) => self.new_thread(function),
+            None => Err(ScriptFailure::runtime("unknown listener", None)),
+        }
+    }
+
+    fn resume(&mut self, thread: ThreadId, args: &[ScriptValue], ctx: &mut HostContext<'_>) -> Resume {
+        let (lua_thread, pending) = {
+            let mut threads = self.shared.threads.borrow_mut();
+            (threads.get(thread), threads.take_pending(thread))
+        };
+        let Some(lua_thread) = lua_thread else {
+            return Resume::Errored(ScriptFailure::runtime("cannot resume a dead thread", None));
+        };
+        self.shared.timed_out.set(None);
+        let _frame = FrameGuard::enter(ctx, &self.shared);
+        let args = match pending {
+            Some(args) => Ok(args),
+            None => ffi::to_lua(&self.lua, &self.shared, args.to_vec()),
+        };
+        let result = args.and_then(|args| resume_thread(&lua_thread, args));
+        outcome::outcome(&self.lua, &self.shared, &lua_thread, result)
+    }
+
+    fn release_thread(&mut self, thread: ThreadId) {
+        self.shared.threads.borrow_mut().remove(thread);
+    }
+
+    fn release_listener(&mut self, listener: ListenerKey) {
+        self.shared.listeners.borrow_mut().remove(&listener);
+    }
+
+    fn memory_used(&self) -> usize {
+        self.lua.used_memory()
+    }
+
+    fn set_memory_limit(&mut self, bytes: Option<usize>) {
+        // Zero is mlua's "no limit". A limit below what is in use takes effect at the next allocation.
+        let _ = self.lua.set_memory_limit(bytes.unwrap_or(0));
+    }
+}
+
+fn resume_thread(thread: &Thread, args: MultiValue) -> mlua::Result<MultiValue> {
+    thread.resume::<MultiValue>(args)
+}
+
+/// A compiler error (`:12: message`) as a [`CompileError`].
+fn compile_error(error: &mlua::Error, chunk: &str) -> CompileError {
+    let text = match error {
+        mlua::Error::SyntaxError { message, .. } => message.clone(),
+        other => other.to_string(),
+    };
+    let rest = text.strip_prefix(':').unwrap_or(&text);
+    let (line, message) = match rest.split_once(':') {
+        Some((line, message)) if line.parse::<u32>().is_ok() => {
+            (line.parse().unwrap_or(1), message.trim_start().to_owned())
+        }
+        _ => (1, text.clone()),
+    };
+    CompileError {
+        chunk: chunk.to_owned(),
+        line,
+        column: None,
+        message,
+    }
+}

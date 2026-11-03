@@ -25,6 +25,8 @@ commands:
                   --home <dir>       gungraun output directory (required)
                   --source <file>    bench listing the workloads [crates/core/benches/perf_gate.rs]
                   --baseline <name>  baseline the head was compared against [base]
+                  --suite <name>     the suite's name in the table's title [metallic_core]
+                  --new-suite        the base has no such suite: require head counts only, report NEW
                   --out <file>       also append the Markdown table here (e.g. $GITHUB_STEP_SUMMARY)";
 
 fn main() -> ExitCode {
