@@ -1,0 +1,90 @@
+//! `ValueBase`: the base of the value objects, instances that hold one value under a name.
+//!
+//! Each subclass (`BoolValue`, `IntValue`, `NumberValue`, `StringValue`, `ObjectValue`) declares its own `Value`
+//! property with its own type, so `ValueBase` itself has no members: it exists so scripts can ask
+//! `obj:IsA("ValueBase")`.
+//!
+//! On value objects, `Changed` fires when `Value` changes and passes the new value instead of a property name, so
+//! `ValueBase` re-declares the signal with that parameter (replacing `Object`'s declaration). Firing signals is the
+//! data model's job (#15): it must pass `Value`'s new value for instances that are a `ValueBase`.
+
+use metallic_core::{ClassDesc, SignalDesc};
+
+/// The category value objects are listed under in Studio's Insert menu.
+pub const CATEGORY: &str = "Values";
+
+/// The base of the value objects.
+pub static CLASS: ClassDesc = ClassDesc::new("ValueBase", Some("Instance"))
+    .describe(
+        "The base of the value objects: instances that store one value, such as a score or a door's target, where \
+         scripts can share it.",
+    )
+    .signals(&[SignalDesc::new("Changed")
+        .params(&[("value", "any")])
+        .describe("Fires after Value changes, with the new value.")]);
+
+#[cfg(test)]
+mod tests {
+    use metallic_core::{EnumItem, Value};
+
+    use crate::shared_registry;
+    use crate::testing::{call, game, new_in, workspace};
+
+    #[test]
+    fn every_value_object_has_its_value() {
+        let mut dm = game();
+        let ws = workspace(&dm);
+        let folder = new_in(&mut dm, "Folder", ws, "Target");
+        let cases = [
+            ("BoolValue", Value::Bool(false), Value::Bool(true)),
+            ("IntValue", Value::Int(0), Value::Int(-42)),
+            ("NumberValue", Value::Number(0.0), Value::Number(2.5)),
+            ("StringValue", Value::String("".into()), Value::String("hello".into())),
+            ("ObjectValue", Value::Ref(None), Value::Ref(Some(folder))),
+        ];
+        for (class, default, written) in cases {
+            let value = new_in(&mut dm, class, ws, class);
+            assert_eq!(dm.get_by_name(value, "Value"), Ok(default), "{class}");
+            dm.set_by_name(value, "Value", written.clone()).unwrap();
+            assert_eq!(dm.get_by_name(value, "Value"), Ok(written), "{class}");
+            assert_eq!(
+                call(&mut dm, value, "IsA", vec!["ValueBase".into()]),
+                Ok(true.into()),
+                "{class}"
+            );
+        }
+    }
+
+    #[test]
+    fn value_objects_check_their_type() {
+        let mut dm = game();
+        let ws = workspace(&dm);
+        let number = new_in(&mut dm, "NumberValue", ws, "N");
+        assert!(dm.set_by_name(number, "Value", Value::Bool(true)).is_err());
+        assert!(dm.set_by_name(number, "Value", Value::Number(f64::NAN)).is_err());
+        let int = new_in(&mut dm, "IntValue", ws, "I");
+        assert!(dm.set_by_name(int, "Value", Value::Number(1.5)).is_err());
+        let string = new_in(&mut dm, "StringValue", ws, "S");
+        let item = Value::Enum(EnumItem::new("PartShape", "Ball"));
+        assert!(dm.set_by_name(string, "Value", item).is_err());
+    }
+
+    #[test]
+    fn value_base_is_abstract() {
+        let registry = shared_registry().unwrap();
+        let class = registry.class_id("ValueBase").unwrap();
+        assert!(!registry.class(class).unwrap().creatable());
+    }
+
+    #[test]
+    fn changed_passes_the_new_value() {
+        let registry = shared_registry().unwrap();
+        let int = registry.class_id("IntValue").unwrap();
+        assert_eq!(registry.signal(int, "Changed").unwrap().params, &[("value", "any")]);
+        let folder = registry.class_id("Folder").unwrap();
+        assert_eq!(
+            registry.signal(folder, "Changed").unwrap().params,
+            &[("propertyName", "string")]
+        );
+    }
+}

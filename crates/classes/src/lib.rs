@@ -61,9 +61,13 @@ pub enum GameError {
     /// The registry has no root class.
     #[error("there is no `{0}` class to be the root of the game")]
     NoRootClass(&'static str),
+    /// The registry lacks a class (or service) that every new game contains.
+    #[error("there is no `{0}`, which every new game needs")]
+    MissingClass(&'static str),
 }
 
-/// A new, empty game: the root (`DataModel`, `game` in scripts) with every service under it, in service order.
+/// A new, empty game: the root (`DataModel`, `game` in scripts) with every service under it, in service order, and
+/// a `Camera` in `Workspace` as its `CurrentCamera`.
 pub fn new_game() -> Result<DataModel, GameError> {
     let registry = shared_registry()?;
     let root_name = services::data_model::CLASS.name;
@@ -74,6 +78,7 @@ pub fn new_game() -> Result<DataModel, GameError> {
     for service in services {
         dm.create_service(service)?;
     }
+    services::workspace::add_start_camera(&mut dm)?;
     Ok(dm)
 }
 
@@ -249,6 +254,16 @@ mod tests {
                 }
             }
         }
+        for component in input().components {
+            if component.description.is_empty() {
+                missing.push(format!("component {}", component.name));
+            }
+        }
+        for desc in registry.enums() {
+            if desc.description.is_empty() {
+                missing.push(format!("enum {}", desc.name));
+            }
+        }
         assert!(missing.is_empty(), "undescribed: {missing:?}");
     }
 
@@ -258,8 +273,21 @@ mod tests {
             input()
                 .classes
                 .iter()
-                .any(|c| std::ptr::eq(*c, &crate::world::model::CLASS))
+                .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 11);
+        assert_eq!(input().classes.len(), 24);
+        let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
+        components.sort_unstable();
+        assert_eq!(
+            components,
+            [
+                "DirectionalLightEmitter",
+                "PointLightEmitter",
+                "PrimitiveMesh",
+                "SpotLightEmitter",
+                "Transform"
+            ]
+        );
+        assert_eq!(input().enums.concat().len(), 2, "Material and PartShape");
     }
 }
