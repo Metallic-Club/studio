@@ -710,7 +710,7 @@ fn unwatched_destroys_and_disconnects_report_nothing() {
 
 static VALUE_BASE: ClassDesc = ClassDesc::new("ValueBase", Some("Instance"))
     .changed_passes_value("Value")
-    .signals(&[crate::SignalDesc::new("Changed").params(&[("value", "any")])]);
+    .signals(&[crate::SignalDesc::new("Changed").params(&[crate::Param::new("value", crate::Ty::Any)])]);
 static NUMBER_VALUE: ClassDesc = ClassDesc::new("NumberValue", Some("ValueBase"))
     .creatable()
     .props(&[PropMeta::number("Value", 0.0), PropMeta::boolean("Extra", false)]);

@@ -4,6 +4,9 @@
 //! `Object` → `Instance` (computed `Name` and `Parent`, `Archivable`) → `Part` / `Folder`, plus the root `Game`
 //! and the services `Workspace` and `Lighting`. `Part` has the properties a renderer and physics read every frame.
 //! `Object` and `Instance` declare the built-in signals; `Bindable` has a signal class code fires (`Event`).
+//!
+//! The perf gate copies this file onto the base branch, so it only uses descriptor API both sides have: signals
+//! leave their parameter types undeclared, and there are no methods (a method must declare its signature).
 #![allow(dead_code, reason = "each including crate uses a different part of the set")]
 
 use std::sync::Arc;
@@ -62,8 +65,7 @@ fn mass_get(dm: &DataModel, id: Id) -> Value {
     Value::Number(f64::from(size.x * size.y * size.z))
 }
 
-pub(crate) static OBJECT: ClassDesc =
-    ClassDesc::new("Object", None).signals(&[SignalDesc::new("Changed").params(&[("propertyName", "string")])]);
+pub(crate) static OBJECT: ClassDesc = ClassDesc::new("Object", None).signals(&[SignalDesc::new("Changed")]);
 
 pub(crate) static INSTANCE: ClassDesc = ClassDesc::new("Instance", Some("Object"))
     .props(&[
@@ -72,12 +74,12 @@ pub(crate) static INSTANCE: ClassDesc = ClassDesc::new("Instance", Some("Object"
         PropMeta::boolean("Archivable", true),
     ])
     .signals(&[
-        SignalDesc::new("ChildAdded").params(&[("child", "Instance")]),
-        SignalDesc::new("ChildRemoved").params(&[("child", "Instance")]),
-        SignalDesc::new("DescendantAdded").params(&[("descendant", "Instance")]),
-        SignalDesc::new("DescendantRemoving").params(&[("descendant", "Instance")]),
-        SignalDesc::new("AncestryChanged").params(&[("child", "Instance"), ("parent", "Instance")]),
-        SignalDesc::new("AttributeChanged").params(&[("attributeName", "string")]),
+        SignalDesc::new("ChildAdded"),
+        SignalDesc::new("ChildRemoved"),
+        SignalDesc::new("DescendantAdded"),
+        SignalDesc::new("DescendantRemoving"),
+        SignalDesc::new("AncestryChanged"),
+        SignalDesc::new("AttributeChanged"),
         SignalDesc::new("Destroying"),
     ]);
 
@@ -107,7 +109,7 @@ pub(crate) static FOLDER: ClassDesc = ClassDesc::new("Folder", Some("Instance"))
 
 pub(crate) static BINDABLE: ClassDesc = ClassDesc::new("Bindable", Some("Instance"))
     .creatable()
-    .signals(&[SignalDesc::new("Event").params(&[("value", "any")])]);
+    .signals(&[SignalDesc::new("Event")]);
 
 pub(crate) static GAME: ClassDesc = ClassDesc::new("Game", Some("Instance"));
 

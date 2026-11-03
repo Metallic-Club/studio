@@ -242,10 +242,20 @@ mod tests {
                 if method.description.is_empty() {
                     missing.push(format!("method {}:{}", desc.name, method.name));
                 }
+                // `.params(&[])` declares "no parameters"; leaving it out is a gap in the API dump.
+                if method.params.is_none() {
+                    missing.push(format!("parameters of method {}:{}", desc.name, method.name));
+                }
+                if method.returns.is_none() {
+                    missing.push(format!("return type of method {}:{}", desc.name, method.name));
+                }
             }
             for signal in desc.signals {
                 if signal.description.is_empty() {
                     missing.push(format!("signal {}.{}", desc.name, signal.name));
+                }
+                if signal.params.is_none() {
+                    missing.push(format!("parameters of signal {}.{}", desc.name, signal.name));
                 }
             }
         }

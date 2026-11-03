@@ -10,7 +10,7 @@
 //! when `Value` changes, and no `Changed` for other changes (a rename or a move); `GetPropertyChangedSignal` still
 //! fires for every property.
 
-use metallic_core::{ClassDesc, SignalDesc};
+use metallic_core::{ClassDesc, Param, SignalDesc, Ty};
 
 /// The category value objects are listed under in Studio's Insert menu.
 pub const CATEGORY: &str = "Values";
@@ -22,13 +22,13 @@ pub static CLASS: ClassDesc = ClassDesc::new("ValueBase", Some("Instance"))
          scripts can share it.",
     )
     .signals(&[SignalDesc::new("Changed")
-        .params(&[("value", "any")])
+        .params(&[Param::new("value", Ty::Any)])
         .describe("Fires after Value changes, with the new value.")])
     .changed_passes_value("Value");
 
 #[cfg(test)]
 mod tests {
-    use metallic_core::{Delivery, EnumItem, ListenerKey, ScriptValue, Value};
+    use metallic_core::{Delivery, EnumItem, ListenerKey, Param, ScriptValue, Ty, Value};
 
     use crate::shared_registry;
     use crate::testing::{call, game, new_in, workspace};
@@ -119,11 +119,14 @@ mod tests {
     fn changed_passes_the_new_value() {
         let registry = shared_registry().unwrap();
         let int = registry.class_id("IntValue").unwrap();
-        assert_eq!(registry.signal(int, "Changed").unwrap().params, &[("value", "any")]);
+        assert_eq!(
+            registry.signal(int, "Changed").unwrap().params,
+            Some(&[Param::new("value", Ty::Any)][..])
+        );
         let folder = registry.class_id("Folder").unwrap();
         assert_eq!(
             registry.signal(folder, "Changed").unwrap().params,
-            &[("propertyName", "string")]
+            Some(&[Param::new("propertyName", Ty::String)][..])
         );
     }
 }

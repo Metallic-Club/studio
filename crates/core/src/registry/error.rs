@@ -4,6 +4,7 @@ use std::fmt;
 
 use thiserror::Error;
 
+use super::Ty;
 use crate::PropType;
 
 /// Where a property is declared: in a class or in a component.
@@ -380,6 +381,105 @@ pub enum RegistryError {
         component: &'static str,
         /// The component the class lacks.
         requires: &'static str,
+    },
+    /// A method declares no return type, so its signature is unknown to the API dump and type definitions.
+    #[error(
+        "class `{class}` declares method `{method}` without its return type; add .returns(..), or .returns_nothing() \
+         when it returns nothing"
+    )]
+    MissingReturns {
+        /// The class.
+        class: &'static str,
+        /// The method.
+        method: &'static str,
+    },
+    /// A method or signal type names a class that does not exist.
+    #[error("class `{class}` declares {kind} `{member}` with type `{name}`, which is not a class; fix the name")]
+    UnknownTypeClass {
+        /// The class declaring the member.
+        class: &'static str,
+        /// Method or signal.
+        kind: MemberKind,
+        /// The method or signal.
+        member: &'static str,
+        /// The missing class.
+        name: &'static str,
+    },
+    /// A method or signal type names an enum that does not exist.
+    #[error(
+        "class `{class}` declares {kind} `{member}` with type Enum.{enum_type}, which is not an enum; fix the name or \
+         add the enum"
+    )]
+    UnknownTypeEnum {
+        /// The class declaring the member.
+        class: &'static str,
+        /// Method or signal.
+        kind: MemberKind,
+        /// The method or signal.
+        member: &'static str,
+        /// The missing enum.
+        enum_type: &'static str,
+    },
+    /// A required parameter follows an optional one, so it could never be left out.
+    #[error(
+        "class `{class}` declares {kind} `{member}` with required parameter `{param}` after an optional one; move \
+         the optional parameters to the end"
+    )]
+    RequiredParamAfterOptional {
+        /// The class declaring the member.
+        class: &'static str,
+        /// Method or signal.
+        kind: MemberKind,
+        /// The method or signal.
+        member: &'static str,
+        /// The required parameter.
+        param: &'static str,
+    },
+    /// A variadic parameter is followed by another parameter, which could never receive a value.
+    #[error(
+        "class `{class}` declares {kind} `{member}` with variadic parameter `{param}` before other parameters; a \
+         variadic parameter must be the last"
+    )]
+    VariadicNotLast {
+        /// The class declaring the member.
+        class: &'static str,
+        /// Method or signal.
+        kind: MemberKind,
+        /// The method or signal.
+        member: &'static str,
+        /// The variadic parameter.
+        param: &'static str,
+    },
+    /// A variadic (`...T`) appears somewhere other than as the whole type of the last parameter: in a return type,
+    /// or inside another type.
+    #[error(
+        "class `{class}` declares {kind} `{member}` with type `{ty}`; a variadic (`...T`) can only be the whole type \
+         of the last parameter"
+    )]
+    MisplacedVariadic {
+        /// The class declaring the member.
+        class: &'static str,
+        /// Method or signal.
+        kind: MemberKind,
+        /// The method or signal.
+        member: &'static str,
+        /// The whole parameter or return type that contains the variadic.
+        ty: Ty,
+    },
+    /// A tuple appears somewhere other than as the whole return type of a method.
+    #[error(
+        "class `{class}` declares {kind} `{member}` with type `{ty}`; a tuple can only be the whole return type of a \
+         method"
+    )]
+    MisplacedTuple {
+        /// The class declaring the member.
+        class: &'static str,
+        /// Method or signal.
+        kind: MemberKind,
+        /// The method or signal.
+        member: &'static str,
+        /// The whole parameter or return type that contains the tuple.
+        ty: Ty,
     },
     /// Two enums have the same name.
     #[error("enum `{name}` is declared twice; rename one of them")]

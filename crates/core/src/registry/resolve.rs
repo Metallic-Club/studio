@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use super::hash::FxMap;
 use super::{
-    ClassDesc, ClassId, ClassInfo, ComponentDesc, DefaultValue, EnumDesc, MemberKind, Owner, PropFlags, PropId,
+    ClassDesc, ClassId, ClassInfo, ComponentDesc, DefaultValue, EnumDesc, MemberKind, Owner, Param, PropFlags, PropId,
     PropMeta, Registry, RegistryError, RegistryErrors, RegistryInput, ResolvedEnum, ResolvedMember, ResolvedMethod,
-    ResolvedProp, ResolvedSignal,
+    ResolvedProp, ResolvedSignal, Ty,
 };
 use crate::{CFrame, Color3, PropType, Value, Vector2, Vector3};
 
@@ -514,6 +514,7 @@ impl ClassResolver<'_> {
             self.desc.name,
             self.errors,
         );
+        check_signatures(self.desc, names, self.errors);
 
         for &name in self.desc.hide {
             let mut found = false;
@@ -856,6 +857,145 @@ fn add_members<T>(
             Some(inherited) => *inherited = fresh,
             None => members.push(fresh),
         }
+    }
+}
+
+/// The method or signal whose signature is being checked, for messages.
+#[derive(Clone, Copy)]
+struct Member {
+    class: &'static str,
+    kind: MemberKind,
+    name: &'static str,
+}
+
+/// Where a type appears in a signature, which decides whether a variadic or a tuple may stand there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The whole type of the parameter `name`.
+    Param { name: &'static str, last: bool },
+    /// The whole return type of a method.
+    Return,
+    /// Inside another type.
+    Inner,
+}
+
+/// Checks the signatures of a class's own methods and signals (inherited ones were checked with their class). Every
+/// method must declare its returns; parameters and signals left undeclared are the description-coverage test's
+/// concern, not a build error.
+fn check_signatures(desc: &'static ClassDesc, names: &Names<'_>, errors: &mut Vec<RegistryError>) {
+    let class = desc.name;
+    for method in desc.methods {
+        let member = Member {
+            class,
+            kind: MemberKind::Method,
+            name: method.name,
+        };
+        if let Some(params) = method.params {
+            check_params(member, params, names, errors);
+        }
+        match method.returns {
+            Some(ty) => check_ty(member, &ty, &ty, Place::Return, names, errors),
+            None => errors.push(RegistryError::MissingReturns {
+                class,
+                method: method.name,
+            }),
+        }
+    }
+    for signal in desc.signals {
+        let member = Member {
+            class,
+            kind: MemberKind::Signal,
+            name: signal.name,
+        };
+        if let Some(params) = signal.params {
+            check_params(member, params, names, errors);
+        }
+    }
+}
+
+/// Checks a parameter list: every type, required parameters before optional ones, and a variadic only last.
+fn check_params(member: Member, params: &[Param], names: &Names<'_>, errors: &mut Vec<RegistryError>) {
+    let mut optional_seen = false;
+    for (i, param) in params.iter().enumerate() {
+        let variadic = matches!(param.ty, Ty::Variadic(_));
+        if optional_seen && !param.optional && !variadic {
+            errors.push(RegistryError::RequiredParamAfterOptional {
+                class: member.class,
+                kind: member.kind,
+                member: member.name,
+                param: param.name,
+            });
+        }
+        optional_seen |= param.optional;
+        let place = Place::Param {
+            name: param.name,
+            last: i + 1 == params.len(),
+        };
+        check_ty(member, &param.ty, &param.ty, place, names, errors);
+    }
+}
+
+/// Checks `ty`, part of the parameter or return type `whole`, standing at `place`: class and enum names exist, and
+/// variadics and tuples stand only where they may.
+fn check_ty(member: Member, whole: &Ty, ty: &Ty, place: Place, names: &Names<'_>, errors: &mut Vec<RegistryError>) {
+    let Member { class, kind, name } = member;
+    match *ty {
+        Ty::Class(type_name) if !names.classes.contains_key(type_name) => {
+            errors.push(RegistryError::UnknownTypeClass {
+                class,
+                kind,
+                member: name,
+                name: type_name,
+            });
+        }
+        Ty::Enum(enum_type) if names.enum_by_name(enum_type).is_none() => {
+            errors.push(RegistryError::UnknownTypeEnum {
+                class,
+                kind,
+                member: name,
+                enum_type,
+            });
+        }
+        Ty::Optional(inner) | Ty::Array(inner) => check_ty(member, whole, inner, Place::Inner, names, errors),
+        Ty::Map(key, value) => {
+            check_ty(member, whole, key, Place::Inner, names, errors);
+            check_ty(member, whole, value, Place::Inner, names, errors);
+        }
+        Ty::Variadic(inner) => {
+            match place {
+                Place::Param { last: true, .. } => {}
+                Place::Param {
+                    name: param,
+                    last: false,
+                } => errors.push(RegistryError::VariadicNotLast {
+                    class,
+                    kind,
+                    member: name,
+                    param,
+                }),
+                Place::Return | Place::Inner => errors.push(RegistryError::MisplacedVariadic {
+                    class,
+                    kind,
+                    member: name,
+                    ty: *whole,
+                }),
+            }
+            check_ty(member, whole, inner, Place::Inner, names, errors);
+        }
+        Ty::Tuple(items) => {
+            if place != Place::Return {
+                errors.push(RegistryError::MisplacedTuple {
+                    class,
+                    kind,
+                    member: name,
+                    ty: *whole,
+                });
+            }
+            for item in items {
+                check_ty(member, whole, item, Place::Inner, names, errors);
+            }
+        }
+        _ => {}
     }
 }
 

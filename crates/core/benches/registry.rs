@@ -42,8 +42,8 @@ fn synthetic_classes() -> Vec<&'static ClassDesc> {
                 PropMeta::enumeration(leak(format!("C{i}Mode")), "Mode", "Low"),
             ];
             let methods = vec![
-                MethodDesc::new(leak(format!("C{i}Run")), noop),
-                MethodDesc::new(leak(format!("C{i}Stop")), noop),
+                MethodDesc::new(leak(format!("C{i}Run")), noop).returns_nothing(),
+                MethodDesc::new(leak(format!("C{i}Stop")), noop).returns_nothing(),
             ];
             let signals = vec![SignalDesc::new(leak(format!("C{i}Changed")))];
             let parent = (i > 0).then(|| leak(format!("Class{}", (i - 1) / FAN_OUT)));

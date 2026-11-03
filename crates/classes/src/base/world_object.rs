@@ -18,8 +18,8 @@
 //! turned parts is generally different. Set `PrimaryPart` when a model's pivot must be exact.
 
 use metallic_core::{
-    CFrame, ClassDesc, DataModel, DmError, Id, MethodCall, MethodDesc, PropMeta, ScriptError, ScriptValue, Value,
-    Vector3,
+    CFrame, ClassDesc, DataModel, DmError, Id, MethodCall, MethodDesc, Param, PropMeta, ScriptError, ScriptValue, Ty,
+    Value, Vector3,
 };
 
 use crate::world::lights::light;
@@ -184,14 +184,20 @@ pub static CLASS: ClassDesc = ClassDesc::new("WorldObject", Some("Instance"))
         "Where the object's pivot sits, relative to the object. Moving and rotating the object happens around its pivot.",
     )])
     .methods(&[
-        MethodDesc::new("GetPivot", get_pivot).describe(
-            "Returns the point the object moves and rotates around, as a CFrame in world space. For a model without \
-             a PrimaryPart it is the centre of its parts.",
-        ),
-        MethodDesc::new("PivotTo", pivot_to_method).describe(
-            "Moves the object so that its pivot is at the given CFrame. A model moves everything in it together, \
-             keeping their positions relative to each other.",
-        ),
+        MethodDesc::new("GetPivot", get_pivot)
+            .params(&[])
+            .returns(Ty::CFrame)
+            .describe(
+                "Returns the point the object moves and rotates around, as a CFrame in world space. For a model \
+                 without a PrimaryPart it is the centre of its parts.",
+            ),
+        MethodDesc::new("PivotTo", pivot_to_method)
+            .params(&[Param::new("targetCFrame", Ty::CFrame)])
+            .returns_nothing()
+            .describe(
+                "Moves the object so that its pivot is at the given CFrame. A model moves everything in it together, \
+                 keeping their positions relative to each other.",
+            ),
     ]);
 
 #[cfg(test)]

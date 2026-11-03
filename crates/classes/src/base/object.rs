@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use metallic_core::{
-    ClassDesc, DataModel, Id, MethodCall, MethodDesc, PropFlags, PropMeta, ScriptError, ScriptValue, SignalDesc, Value,
+    ClassDesc, DataModel, Id, MethodCall, MethodDesc, Param, PropFlags, PropMeta, ScriptError, ScriptValue, SignalDesc,
+    Ty, Value,
 };
 
 use crate::script_args::class_arg;
@@ -25,9 +26,13 @@ pub static CLASS: ClassDesc = ClassDesc::new("Object", None)
         .read_only()
         .flags(PropFlags::HIDDEN.union(PropFlags::NO_SAVE))
         .desc("The name of the object's class, such as \"Folder\". It cannot be changed.")])
-    .methods(&[MethodDesc::new("IsA", is_a).describe(
-        "Returns true if the object's class is the given class or inherits from it, such as part:IsA(\"WorldObject\").",
-    )])
+    .methods(&[MethodDesc::new("IsA", is_a)
+        .params(&[Param::new("className", Ty::String)])
+        .returns(Ty::Bool)
+        .describe(
+            "Returns true if the object's class is the given class or inherits from it, such as \
+             part:IsA(\"WorldObject\").",
+        )])
     .signals(&[SignalDesc::new("Changed")
-        .params(&[("propertyName", "string")])
+        .params(&[Param::new("propertyName", Ty::String)])
         .describe("Fires after one of the object's properties changes, with the property's name.")]);

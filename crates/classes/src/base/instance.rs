@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use metallic_core::{
-    ClassDesc, DataModel, Id, MethodCall, MethodDesc, PropFlags, PropMeta, ScriptError, ScriptValue, SignalDesc, Value,
+    ClassDesc, DataModel, Id, MethodCall, MethodDesc, Param, PropFlags, PropMeta, ScriptError, ScriptValue, SignalDesc,
+    Ty, Value,
 };
 
 use crate::script_args::class_arg;
@@ -176,76 +177,130 @@ static PROPS: &[PropMeta] = &[
         .desc("Whether the instance is copied by Clone and saved with the game. Turn it off for temporary objects."),
 ];
 
+/// An instance (never nil).
+const INSTANCE: Ty = Ty::Class("Instance");
+/// An instance, or nil when there is none.
+const MAYBE_INSTANCE: Ty = Ty::Optional(&INSTANCE);
+/// A list of instances.
+const INSTANCES: Ty = Ty::Array(&INSTANCE);
+
 static METHODS: &[MethodDesc] = &[
-    MethodDesc::new("Destroy", destroy).describe(
-        "Removes the instance and everything under it from the game for good. It cannot be used again afterwards.",
-    ),
-    MethodDesc::new("Clone", clone).describe(
-        "Returns a copy of the instance and everything under it, with no parent. Returns nil when Archivable is off; \
-         children with Archivable off are left out.",
-    ),
+    MethodDesc::new("Destroy", destroy)
+        .params(&[])
+        .returns_nothing()
+        .describe(
+            "Removes the instance and everything under it from the game for good. It cannot be used again \
+             afterwards.",
+        ),
+    MethodDesc::new("Clone", clone)
+        .params(&[])
+        .returns(MAYBE_INSTANCE)
+        .describe(
+            "Returns a copy of the instance and everything under it, with no parent. Returns nil when Archivable is \
+             off; children with Archivable off are left out.",
+        ),
     MethodDesc::new("GetChildren", get_children)
+        .params(&[])
+        .returns(INSTANCES)
         .describe("Returns a list of the instances directly under this one, in order."),
-    MethodDesc::new("GetDescendants", get_descendants).describe(
-        "Returns a list of every instance under this one, at any depth, parents before their children.",
-    ),
-    MethodDesc::new("FindFirstChild", find_first_child).describe(
-        "Returns the first child with the given name, or nil. Pass true as the second argument to search every \
-         descendant.",
-    ),
-    MethodDesc::new("FindFirstChildOfClass", find_first_child_of_class).describe(
-        "Returns the first child whose class is exactly the given class, or nil. Subclasses do not count; use \
-         FindFirstChildWhichIsA for that.",
-    ),
-    MethodDesc::new("FindFirstChildWhichIsA", find_first_child_which_is_a).describe(
-        "Returns the first child whose class is the given class or inherits from it, or nil. Pass true as the \
-         second argument to search every descendant.",
-    ),
+    MethodDesc::new("GetDescendants", get_descendants)
+        .params(&[])
+        .returns(INSTANCES)
+        .describe("Returns a list of every instance under this one, at any depth, parents before their children."),
+    MethodDesc::new("FindFirstChild", find_first_child)
+        .params(&[
+            Param::new("name", Ty::String),
+            Param::new("recursive", Ty::Bool).optional(),
+        ])
+        .returns(MAYBE_INSTANCE)
+        .describe(
+            "Returns the first child with the given name, or nil. Pass true as the second argument to search every \
+             descendant.",
+        ),
+    MethodDesc::new("FindFirstChildOfClass", find_first_child_of_class)
+        .params(&[Param::new("className", Ty::String)])
+        .returns(MAYBE_INSTANCE)
+        .describe(
+            "Returns the first child whose class is exactly the given class, or nil. Subclasses do not count; use \
+             FindFirstChildWhichIsA for that.",
+        ),
+    MethodDesc::new("FindFirstChildWhichIsA", find_first_child_which_is_a)
+        .params(&[
+            Param::new("className", Ty::String),
+            Param::new("recursive", Ty::Bool).optional(),
+        ])
+        .returns(MAYBE_INSTANCE)
+        .describe(
+            "Returns the first child whose class is the given class or inherits from it, or nil. Pass true as the \
+             second argument to search every descendant.",
+        ),
     MethodDesc::new("FindFirstAncestor", find_first_ancestor)
+        .params(&[Param::new("name", Ty::String)])
+        .returns(MAYBE_INSTANCE)
         .describe("Returns the nearest instance above this one with the given name, or nil."),
     MethodDesc::new("IsDescendantOf", is_descendant_of)
+        .params(&[Param::new("ancestor", INSTANCE)])
+        .returns(Ty::Bool)
         .describe("Returns true if this instance is somewhere under the given instance."),
     MethodDesc::new("IsAncestorOf", is_ancestor_of)
+        .params(&[Param::new("descendant", INSTANCE)])
+        .returns(Ty::Bool)
         .describe("Returns true if the given instance is somewhere under this one."),
-    MethodDesc::new("GetFullName", get_full_name).describe(
-        "Returns the instance's path of names from its service down, separated by dots, such as \
-         \"Workspace.Map.Door\".",
-    ),
+    MethodDesc::new("GetFullName", get_full_name)
+        .params(&[])
+        .returns(Ty::String)
+        .describe(
+            "Returns the instance's path of names from its service down, separated by dots, such as \
+             \"Workspace.Map.Door\".",
+        ),
     MethodDesc::new("ClearAllChildren", clear_all_children)
+        .params(&[])
+        .returns_nothing()
         .describe("Destroys every child of the instance (and everything under them). The instance itself stays."),
     MethodDesc::new("GetAttribute", get_attribute)
+        .params(&[Param::new("name", Ty::String)])
+        .returns(Ty::Any)
         .describe("Returns the value of the attribute with the given name, or nil when it is not set."),
-    MethodDesc::new("SetAttribute", set_attribute).describe(
-        "Sets an attribute: a custom named value stored on the instance and saved with it. Setting nil removes it. \
-         Attributes hold booleans, numbers, strings, vectors, CFrames, colours and enum items, not instances.",
-    ),
+    // `value` is `any` (so nil is accepted, and removes the attribute); the function rejects tables and lists.
+    MethodDesc::new("SetAttribute", set_attribute)
+        .params(&[Param::new("name", Ty::String), Param::new("value", Ty::Any)])
+        .returns_nothing()
+        .describe(
+            "Sets an attribute: a custom named value stored on the instance and saved with it. Setting nil removes \
+             it. Attributes hold booleans, numbers, strings, vectors, CFrames, colours and enum items, not \
+             instances.",
+        ),
     MethodDesc::new("GetAttributes", get_attributes)
+        .params(&[])
+        .returns(Ty::Map(&Ty::String, &Ty::Any))
         .describe("Returns every attribute of the instance as a table of names to values."),
 ];
 
 static SIGNALS: &[SignalDesc] = &[
     SignalDesc::new("ChildAdded")
-        .params(&[("child", "Instance")])
+        .params(&[Param::new("child", INSTANCE)])
         .describe("Fires after an instance is placed directly under this one."),
     SignalDesc::new("ChildRemoved")
-        .params(&[("child", "Instance")])
+        .params(&[Param::new("child", INSTANCE)])
         .describe("Fires after an instance directly under this one is moved away or destroyed."),
     SignalDesc::new("DescendantAdded")
-        .params(&[("descendant", "Instance")])
+        .params(&[Param::new("descendant", INSTANCE)])
         .describe("Fires after an instance is placed anywhere under this one, at any depth."),
     SignalDesc::new("DescendantRemoving")
-        .params(&[("descendant", "Instance")])
+        .params(&[Param::new("descendant", INSTANCE)])
         .describe("Fires just before an instance anywhere under this one is moved away or destroyed."),
     SignalDesc::new("AncestryChanged")
-        .params(&[("child", "Instance"), ("parent", "Instance")])
+        .params(&[Param::new("child", INSTANCE), Param::new("parent", MAYBE_INSTANCE)])
         .describe(
             "Fires when this instance or one of its ancestors gets a new parent, with the instance that moved and \
-             its new parent.",
+             its new parent (nil when it left the game).",
         ),
     SignalDesc::new("AttributeChanged")
-        .params(&[("attributeName", "string")])
+        .params(&[Param::new("attributeName", Ty::String)])
         .describe("Fires after an attribute is set, changed or removed, with the attribute's name."),
-    SignalDesc::new("Destroying").describe("Fires when the instance is about to be destroyed, while it is still intact."),
+    SignalDesc::new("Destroying")
+        .params(&[])
+        .describe("Fires when the instance is about to be destroyed, while it is still intact."),
 ];
 
 /// Anything that lives in the game tree.
