@@ -2,6 +2,7 @@
 
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet};
+use crate::overlay::{Overlay, OverlayPass};
 use crate::parts::{Camera, DrawStats, PartRenderer};
 use crate::scene::{InstanceBinding, UploadStats};
 use crate::target::check_size;
@@ -68,6 +69,9 @@ pub struct Renderer {
     parts: PartRenderer,
     last_upload: UploadStats,
     frame: u64,
+    overlay: Overlay,
+    /// The overlay's GPU side; `Some` while the overlay is on.
+    overlay_pass: Option<OverlayPass>,
 }
 
 impl Renderer {
@@ -104,6 +108,8 @@ impl Renderer {
             parts,
             last_upload: UploadStats::default(),
             frame: 0,
+            overlay: Overlay::default(),
+            overlay_pass: None,
         };
         renderer.check_msaa(settings.msaa_samples)?;
         renderer.rebuild();
@@ -191,6 +197,7 @@ impl Renderer {
     ) -> wgpu::SubmissionIndex {
         let (mut encoder, slot) = self.begin_frame();
         prepare(&mut encoder);
+        self.prepare_overlay();
         self.record_passes(&mut encoder, target, slot, None);
         self.end_frame(encoder, slot)
     }
@@ -216,6 +223,7 @@ impl Renderer {
             self.settings.height,
             self.settings.color_format.is_srgb(),
         );
+        self.prepare_overlay();
         self.record_passes(&mut encoder, target, slot, Some(scene));
         self.end_frame(encoder, slot)
     }
@@ -238,6 +246,41 @@ impl Renderer {
     /// The part renderer, to change materials or the temporary light.
     pub fn parts_mut(&mut self) -> &mut PartRenderer {
         &mut self.parts
+    }
+
+    /// Turns the debug overlay ([`crate::overlay`]) on or off. It is drawn in the UI pass, so only frames whose
+    /// pass set has [`PassId::Ui`] show it. Turning it on the first time makes its pipeline and buffer; this is a
+    /// settings change, not something to do every frame.
+    pub fn set_overlay_enabled(&mut self, enabled: bool) {
+        if enabled && self.overlay_pass.is_none() {
+            self.overlay.reserve();
+            self.overlay_pass = Some(OverlayPass::new(&self.device, self.settings.color_format));
+        } else if !enabled {
+            self.overlay_pass = None;
+        }
+    }
+
+    /// Whether the debug overlay is drawn.
+    pub fn overlay_enabled(&self) -> bool {
+        self.overlay_pass.is_some()
+    }
+
+    /// What the debug overlay draws.
+    pub fn overlay(&self) -> &Overlay {
+        &self.overlay
+    }
+
+    /// What the debug overlay draws, to change it. The contents stay from frame to frame until changed; they are
+    /// kept (but not drawn) while the overlay is off.
+    pub fn overlay_mut(&mut self) -> &mut Overlay {
+        &mut self.overlay
+    }
+
+    /// Uploads the overlay when it is on and changed.
+    fn prepare_overlay(&mut self) {
+        if let Some(pass) = self.overlay_pass.as_mut() {
+            pass.prepare(&self.queue, &self.overlay, self.settings.width, self.settings.height);
+        }
     }
 
     /// Starts a frame: its GPU timing slot, if any, and its encoder.
@@ -319,6 +362,11 @@ impl Renderer {
             if let Some(scene) = scene {
                 self.parts.draw(pass.id, prepass, scene, &mut render_pass);
             }
+            if pass.id == PassId::Ui
+                && let Some(overlay) = self.overlay_pass.as_ref()
+            {
+                overlay.draw(&mut render_pass);
+            }
             drop(render_pass);
         }
     }
@@ -357,6 +405,9 @@ impl Renderer {
         self.plan = FramePlan::new(self.settings.passes, self.settings.msaa_samples);
         self.parts
             .set_target(self.settings.color_format, self.plan.msaa_samples());
+        if let Some(overlay) = self.overlay_pass.as_mut() {
+            overlay.set_format(&self.device, self.settings.color_format);
+        }
         let transient = self.transient_attachments;
         self.depth = self
             .plan

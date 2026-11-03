@@ -27,6 +27,11 @@ pub struct FrameStats {
     pub ran: bool,
     /// Script threads the frame's phases resumed.
     pub resumed: usize,
+    /// Wall time of the frame's four script phases (firing `RunService`'s events and running the script steps).
+    /// Zero when CPU timing is off ([`Engine::set_cpu_timing`](crate::Engine::set_cpu_timing)) or nothing ran.
+    pub script_cpu: Duration,
+    /// Wall time of the frame's simulation steps (physics). Zero when CPU timing is off or nothing ran.
+    pub simulation_cpu: Duration,
 }
 
 /// The fixed-step simulation: the engine calls [`Simulation::step`] zero or more times per frame, between
@@ -101,5 +106,25 @@ mod render {
 
         /// Draws the frame.
         fn render(&mut self, frame: &mut RenderFrame<'_>);
+    }
+
+    /// A hook shared with its owner: the engine draws through it while the owner (a benchmark, the Player) keeps a
+    /// handle to read its statistics or change its settings between frames.
+    impl<H: RenderHook> RenderHook for std::rc::Rc<std::cell::RefCell<H>> {
+        fn attach(&mut self, window: &Window) -> Result<(), RenderHookError> {
+            self.borrow_mut().attach(window)
+        }
+
+        fn detach(&mut self) {
+            self.borrow_mut().detach();
+        }
+
+        fn resize(&mut self, size: Size, scale_factor: f64) {
+            self.borrow_mut().resize(size, scale_factor);
+        }
+
+        fn render(&mut self, frame: &mut RenderFrame<'_>) {
+            self.borrow_mut().render(frame);
+        }
     }
 }

@@ -23,6 +23,7 @@ Options:
   --scene <NAME>     The built-in game to run [default: demo] (scenes: {scenes})
   --preset <NAME>    The graphics preset (presets: {presets}); kept until graphics settings land (#84)
   --bench <FRAMES>   Run FRAMES frames after a warm-up, without a frame cap, print the stats as JSON and exit
+  --overlay          Start with the performance overlay shown (F3 toggles it)
   -h, --help         Print this help
   -V, --version      Print the version";
 
@@ -32,6 +33,7 @@ struct Args {
     scene: Scene,
     preset: Option<Preset>,
     bench: Option<u64>,
+    overlay: bool,
     help: bool,
     version: bool,
 }
@@ -47,6 +49,7 @@ impl Args {
             match arg {
                 Long("scene") => parsed.scene = parser.value()?.parse()?,
                 Long("preset") => parsed.preset = Some(parser.value()?.parse()?),
+                Long("overlay") => parsed.overlay = true,
                 Long("bench") => {
                     let frames: u64 = parser.value()?.parse()?;
                     if frames == 0 {
@@ -68,6 +71,7 @@ impl Args {
             None => PlayerConfig::new(self.scene),
         };
         config.preset = self.preset;
+        config.overlay = self.overlay;
         config
     }
 }
@@ -101,10 +105,14 @@ fn main() -> ExitCode {
     let config = args.config();
     if args.bench.is_none() {
         eprintln!(
-            "Metallic Player {}: scene `{}`. WASD and Q/E move, hold the right mouse button to look, C orbits, \
-             Space pauses.",
+            "Metallic Player {}: scene `{}`. {}F3 shows the performance overlay.",
             metallic_player::VERSION,
-            config.scene
+            config.scene,
+            if config.scene == Scene::Demo {
+                "WASD and Q/E move, hold the right mouse button to look, C orbits, Space pauses. "
+            } else {
+                ""
+            }
         );
     }
     let result = if args.bench.is_some() {
@@ -206,8 +214,13 @@ mod tests {
 
     #[test]
     fn every_flag_is_read() {
+        let stress = parse(&["--scene", "parts_100k", "--overlay"]).unwrap();
+        assert_eq!(stress.scene.name(), "parts_100k");
+        assert!(stress.config().overlay);
+        assert_eq!(stress.config().window.size.width, 1920);
         let args = parse(&["--scene", "demo", "--preset=ultra", "--bench", "120"]).unwrap();
         assert_eq!(args.scene, Scene::Demo);
+        assert!(!args.overlay);
         assert_eq!(args.preset, Some(Preset::Ultra));
         assert_eq!(args.bench, Some(120));
         let config = args.config();
@@ -234,7 +247,10 @@ mod tests {
     #[test]
     fn the_help_lists_scenes_and_presets() {
         let text = help();
-        assert!(text.contains("(scenes: demo)"));
+        assert!(text.contains(
+            "(scenes: demo, parts_10k, parts_50k, parts_100k, many_lights, overdraw, mobile, see_through_10k)"
+        ));
+        assert!(text.contains("--overlay"));
         assert!(text.contains("(presets: low, medium, high, ultra, auto)"));
     }
 }

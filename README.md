@@ -47,9 +47,10 @@ Flags (`cargo run -p metallic_player --release -- --help`):
 
 | Flag | Does |
 |---|---|
-| `--scene <name>` | the built-in game to run: `demo` (the stress scenes join it with #78) |
+| `--scene <name>` | the built-in game to run: `demo`, or a stress scene (`parts_10k`, `parts_50k`, `parts_100k`, `many_lights`, `overdraw`, `mobile`, `see_through_10k`; see [docs/perf.md](docs/perf.md#stress-scenes)) |
 | `--preset <name>` | `low`, `medium`, `high`, `ultra` or `auto`; kept until graphics settings land (#84) |
-| `--bench <frames>` | runs that many frames after a 30-frame warm-up, with no frame cap (vsync still paces it), then prints frame, CPU and GPU times and the renderer's draw counts as JSON on stdout and exits |
+| `--bench <frames>` | runs that many frames after a 30-frame warm-up, with no frame cap (vsync still paces it), then prints frame times (p50, p99, 1% low), script, physics and render CPU time, GPU time per pass and the draws per pass as JSON on stdout and exits |
+| `--overlay` | starts with the performance overlay shown; F3 shows or hides it |
 
 `METALLIC_LOG=info` (or `debug`, ...) shows the engine's logs on stderr.
 
