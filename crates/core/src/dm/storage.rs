@@ -4,7 +4,8 @@
 //! non-default properties, inline and heap together; `tests/alloc.rs` measures it):
 //!
 //! - a slot is 72 bytes: the generation, the parent's slot index, the position among the parent's children, the
-//!   class, per-consumer dirty bits, and a [`Body`] whose pointers are only paid for when used;
+//!   class, per-consumer dirty bits, the signal "watched" flag, and a [`Body`] whose pointers are only
+//!   paid for when used;
 //! - an instance with its class's name stores no name (one null pointer); a renamed one boxes a shared string;
 //! - only non-default property values are stored, in a `Vec` sorted by [`PropId`] that grows one entry at a time
 //!   (four values are 160 bytes: `PropId` + `Value` is 40 bytes with alignment). Removing an entry keeps the
@@ -127,6 +128,9 @@ pub(super) struct Slot {
     pub(super) class: ClassId,
     /// Per change consumer: what changed since that consumer last drained.
     pub(super) dirty: [u8; MAX_CONSUMERS],
+    /// Whether any signal connection listens to this instance, so an unwatched change costs one check. It sits
+    /// in what was padding: the slot stays 72 bytes.
+    pub(super) watched: bool,
     pub(super) body: Option<Body>,
 }
 
@@ -220,6 +224,7 @@ impl Slots {
             slot.sibling = 0;
             slot.class = class;
             slot.dirty = [0; MAX_CONSUMERS];
+            slot.watched = false;
             slot.body = Some(body);
             return Id::new(index, slot.generation);
         }
@@ -231,6 +236,7 @@ impl Slots {
             sibling: 0,
             class,
             dirty: [0; MAX_CONSUMERS],
+            watched: false,
             body: Some(body),
         });
         Id::new(index, 0)
@@ -243,6 +249,7 @@ impl Slots {
         let body = slot.body.take();
         slot.parent = NO_PARENT;
         slot.dirty = [0; MAX_CONSUMERS];
+        slot.watched = false;
         let next = slot.generation.checked_add(1);
         if let Some(next) = next {
             slot.generation = next;

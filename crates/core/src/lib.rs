@@ -23,14 +23,17 @@ mod value;
 pub use glam;
 
 pub use args::Args;
-pub use dm::{ConsumerId, DataModel, Descendants, DirtyBits, DmError, MAX_CONSUMERS};
+pub use dm::{
+    BuiltinSignal, ConnectionId, ConsumerId, DataModel, Delivery, Descendants, DirtyBits, DmError, ListenerKey,
+    MAX_CONSUMERS,
+};
 pub use enum_item::EnumItem;
 pub use id::Id;
 pub use math::{CFrame, Color3, Vector2, Vector3};
 pub use registry::{
     ClassBehavior, ClassDesc, ClassId, ClassInfo, ComponentDesc, Computed, DefaultValue, EnumDesc, Getter, MemberKind,
     MethodCall, MethodDesc, MethodFn, Owner, PropFlags, PropId, PropMeta, Registry, RegistryError, RegistryErrors,
-    RegistryInput, ResolvedMember, ResolvedMethod, ResolvedProp, ResolvedSignal, Setter, SignalDesc, Widget,
+    RegistryInput, ResolvedMember, ResolvedMethod, ResolvedProp, ResolvedSignal, Setter, SignalDesc, SignalId, Widget,
 };
 pub use script_value::{ScriptError, ScriptValue};
 pub use value::{PropType, Value};

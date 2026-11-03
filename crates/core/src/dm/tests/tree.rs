@@ -213,6 +213,11 @@ fn destroy_removes_the_subtree_and_stales_its_ids() {
             Notice::Destroying { id: model },
             Notice::Destroying { id: a },
             Notice::Destroying { id: b },
+            Notice::ParentChanged {
+                id: model,
+                old: Some(ws),
+                new: None
+            },
         ]
     );
     assert_eq!(dm.destroy(model), Err(DmError::NoInstance(model)));

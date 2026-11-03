@@ -284,6 +284,41 @@ fn signals_are_inherited() {
 }
 
 #[test]
+fn signal_ids_are_stable_down_the_hierarchy() {
+    static BASE: ClassDesc = ClassDesc::new("Base", None).signals(&[SignalDesc::new("A"), SignalDesc::new("B")]);
+    static MID: ClassDesc = ClassDesc::new("Mid", Some("Base")).signals(&[SignalDesc::new("C")]);
+    // Redeclares `A` (replaced in place) and adds `D`.
+    static LEAF: ClassDesc =
+        ClassDesc::new("Leaf", Some("Mid")).signals(&[SignalDesc::new("D"), SignalDesc::new("A").describe("again")]);
+    let reg = build(&[&LEAF, &MID, &BASE]).expect("valid");
+    let (base, mid, leaf) = (id(&reg, "Base"), id(&reg, "Mid"), id(&reg, "Leaf"));
+    for name in ["A", "B"] {
+        let declared = reg.signal_id(base, name).expect("declared");
+        assert_eq!(reg.signal_id(mid, name), Some(declared), "{name} on Mid");
+        assert_eq!(reg.signal_id(leaf, name), Some(declared), "{name} on Leaf");
+    }
+    assert_eq!(reg.signal_id(mid, "C"), reg.signal_id(leaf, "C"));
+    let names: Vec<_> = reg
+        .class(leaf)
+        .expect("class")
+        .signals()
+        .iter()
+        .map(|s| s.desc.name)
+        .collect();
+    assert_eq!(
+        names,
+        ["A", "B", "C", "D"],
+        "parent's signals first, then the class's new ones"
+    );
+    let a = reg.signal_id(leaf, "A").expect("A");
+    let info = reg.class(leaf).expect("class");
+    assert_eq!(info.signal_by_id(a).map(|s| s.desc.description), Some("again"));
+    assert_eq!(info.signal_by_id(a).map(|s| s.owner), Some(leaf));
+    assert_eq!(reg.signal_id(leaf, "Nope"), None);
+    assert_eq!(reg.signal_id(ClassId::new(999), "A"), None);
+}
+
+#[test]
 fn aliases_find_the_property() {
     let reg = lights();
     let spot = id(&reg, "SpotLight");

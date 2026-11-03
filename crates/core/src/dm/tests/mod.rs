@@ -4,6 +4,7 @@ mod changes;
 mod clone;
 mod hooks;
 mod props;
+mod signals;
 mod tree;
 
 #[path = "../../../tests/support/classes.rs"]

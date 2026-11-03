@@ -1,6 +1,7 @@
 //! Allocation guards for the data model (issue #14 performance requirements), measured with a counting global
 //! allocator: hot reads and writes allocate nothing, drains allocate nothing once their vectors have grown, and a
-//! `Part` with four non-default properties fits in 256 bytes.
+//! `Part` with four non-default properties fits in 256 bytes. Signals keep that: a write to an unwatched instance
+//! allocates nothing, and a watched one queues its events without allocating once the queue has grown.
 //!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 
@@ -15,7 +16,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use metallic_core::{CFrame, Color3, DataModel, DirtyBits, EnumItem, Id, Value, Vector3};
+use metallic_core::{CFrame, Color3, DataModel, Delivery, DirtyBits, EnumItem, Id, ListenerKey, Value, Vector3};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -215,4 +216,73 @@ fn a_part_fits_the_memory_budget() {
     let grown = bytes_per_part(COUNT, false);
     println!("bytes per Part with 4 non-default properties: {reserved:.1} (slot table reserved), {grown:.1} (grown)");
     assert!(reserved <= 256.0, "{reserved:.1} bytes per part, budget 256");
+}
+
+#[test]
+fn unwatched_writes_do_not_allocate_while_others_listen() {
+    let (mut dm, ids) = classes::game();
+    let watched = dm.create(ids.part).expect("part");
+    dm.set_parent(watched, Some(ids.workspace)).expect("parent");
+    // Connections of every kind elsewhere, so the whole-model counters are non-zero.
+    dm.connect(watched, ids.changed, ListenerKey(1)).expect("connect");
+    dm.connect(watched, ids.ancestry_changed, ListenerKey(2))
+        .expect("connect");
+    dm.connect(ids.workspace, ids.descendant_added, ListenerKey(3))
+        .expect("connect");
+    dm.connect_property_changed(watched, ids.cframe, ListenerKey(4))
+        .expect("connect");
+    let p = dm.create(ids.part).expect("part");
+    dm.set_parent(p, Some(ids.workspace)).expect("parent");
+    let mut out = Vec::new();
+    dm.drain_deliveries(&mut out);
+    assert!(!dm.is_watched(p));
+
+    let round = |dm: &mut DataModel, i: u32| {
+        let f = i as f32;
+        dm.set(p, ids.cframe, Value::CFrame(CFrame::new(Vector3::new(f, 1.0, 2.0))))
+            .expect("set");
+        dm.set(p, ids.anchored, Value::Bool(i.is_multiple_of(2))).expect("set");
+    };
+    round(&mut dm, 0);
+    round(&mut dm, 1);
+    let allocations = allocations_in(|| {
+        for i in 0..1_000 {
+            round(&mut dm, i);
+        }
+    });
+    assert_eq!(allocations, 0, "writes to an unwatched instance allocated");
+    assert_eq!(dm.pending_events(), 0);
+}
+
+#[test]
+fn watched_writes_queue_without_allocating_once_grown() {
+    const WRITES: u32 = 100;
+    let (mut dm, ids) = classes::game();
+    let p = dm.create(ids.part).expect("part");
+    dm.connect(p, ids.changed, ListenerKey(1)).expect("connect");
+    dm.connect_property_changed(p, ids.cframe, ListenerKey(2))
+        .expect("connect");
+    let write = |dm: &mut DataModel, i: u32| {
+        let cf = CFrame::new(Vector3::new(i as f32, 0.0, 0.0));
+        dm.set(p, ids.cframe, Value::CFrame(cf)).expect("set");
+    };
+    let mut out: Vec<Delivery> = Vec::new();
+    // Warm up: the queue, the argument list, the shared property name and `out` grow to their working size.
+    for i in 0..WRITES {
+        write(&mut dm, i + 1);
+    }
+    dm.drain_deliveries(&mut out);
+    out.clear();
+
+    let queued = allocations_in(|| {
+        for i in 0..WRITES {
+            write(&mut dm, i + 1_000);
+        }
+    });
+    assert_eq!(queued, 0, "queueing allocated");
+    assert_eq!(dm.pending_events(), 2 * WRITES as usize);
+    let drained = allocations_in(|| dm.drain_deliveries(&mut out));
+    assert_eq!(out.len(), 2 * WRITES as usize);
+    // Only each `Changed` delivery's own argument list; the property signal has none.
+    assert_eq!(drained, u64::from(WRITES), "the drain allocated beyond the arguments");
 }
