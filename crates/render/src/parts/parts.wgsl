@@ -1,7 +1,8 @@
 // Parts: instanced primitive meshes, shaded PBR-lite (Lambert diffuse, GGX specular) under one directional light
-// (the sun, or the moon at night) and a sky/ground hemisphere ambient, all from `Lighting`. One shading model; the
-// material row picks the parameters. frame.wgsl comes before this file, and the vertex entry point after it, from
-// instance_storage.wgsl or instance_vertex.wgsl (scene/gpu.rs explains the two paths).
+// (the sun, or the moon at night) and a sky/ground hemisphere ambient, all from `Lighting`, plus the local point and
+// spot lights (lights.wgsl). One shading model; the material row picks the parameters. frame.wgsl comes before this
+// file, lights.wgsl after it, and the vertex entry point last, from instance_storage.wgsl or instance_vertex.wgsl
+// (scene/gpu.rs explains the two paths).
 //
 // Positions are camera-relative: instance translations are relative to the scene origin, and `frame.camera_offset`
 // (camera − origin) is subtracted before the rotation-only view-projection, so f32 stays precise far from the world
@@ -167,9 +168,11 @@ fn shade(in: VertexOut) -> Shaded {
     }
     let light = frame.light_color.rgb * n_dot_l * shadow;
 
+    let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);
     var out: Shaded;
-    out.body = diffuse / PI * light + diffuse * hemisphere(n.y) + albedo * row.surface.z;
-    out.specular = distribution * visibility * fresnel * light + env_brdf(f0, roughness, n_dot_v) * hemisphere(reflect(-v, n).y);
+    out.body = diffuse / PI * light + diffuse * hemisphere(n.y) + albedo * row.surface.z + local.body;
+    out.specular = distribution * visibility * fresnel * light + env_brdf(f0, roughness, n_dot_v) * hemisphere(reflect(-v, n).y)
+        + local.specular;
     return out;
 }
 

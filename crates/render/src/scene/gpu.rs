@@ -389,6 +389,11 @@ impl GpuScene {
         self.scene.clear_shadow_changes();
     }
 
+    /// The local lights and the renderer's state of each (see [`crate::lights`]).
+    pub(crate) fn lights_mut(&mut self) -> (&[super::SceneLight], &mut [crate::lights::LightRuntime]) {
+        self.scene.lights_mut()
+    }
+
     /// What the last [`GpuScene::upload_view`] culled: default when it drew every live instance.
     pub fn cull_stats(&self) -> CullStats {
         self.cull_stats

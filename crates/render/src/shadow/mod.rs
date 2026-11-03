@@ -18,7 +18,7 @@
 //! of a shadow list buffer, like the camera's draws ([`crate::parts`]). A caster is an opaque part with `CastShadow`
 //! on ([`crate::scene::is_shadow_caster`]). See-through parts cast no shadow yet. Sun shadows as a whole follow
 //! `Lighting.GlobalShadows` ([`crate::SceneLighting::global_shadows`]); `Light.Shadows` is the switch of local
-//! lights' shadows, which come with point and spot lights (#83).
+//! lights' shadows, which are drawn into a shadow atlas ([`crate::lights`]).
 //!
 //! # Caching
 //!
@@ -62,7 +62,7 @@ use std::time::Duration;
 use metallic_core::glam::Vec3;
 
 pub use cascade::{CACHED_STEP_DIVISOR, CASTER_REACH};
-pub(crate) use maps::{FrameShadow, ShadowMaps};
+pub(crate) use maps::{FrameShadow, SHADOW_FORMAT, ShadowMaps, caster_pipeline};
 
 #[cfg(doc)]
 use crate::VisibleSet;

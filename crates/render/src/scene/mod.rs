@@ -50,18 +50,27 @@
 //! in the dynamic region, whose casters are redrawn every frame anyway. The notes are origin-relative like the
 //! instances; when the origin moves, or the scene is rebuilt, or more than [`MAX_SHADOW_CHANGES`] pile up, the scene
 //! bumps [`InstanceScene::shadow_epoch`] instead, which redraws every cascade.
+//!
+//! # Local lights
+//!
+//! `PointLight`s and `SpotLight`s in the world are kept as dense records ([`SceneLight`], [`InstanceScene::lights`])
+//! from the same change consumer, with their world placement resolved (a light in a part follows the part). They
+//! have no slot: the renderer selects, clusters and uploads the ones it draws every frame ([`crate::lights`]).
 
 mod components;
 mod gpu;
 mod grid;
 mod instance;
+mod lights;
 mod lists;
 mod slots;
 mod sync;
 #[cfg(test)]
 mod tests;
 
-pub use components::{MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
+pub use components::{LightComponent, MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
+pub(crate) use grid::bounding_sphere;
+pub use lights::{LightKind, SceneLight};
 pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};
 pub use grid::CELL_SIZE;
 pub use instance::{GpuInstance, MeshKind, affine_rows, pack_color};
@@ -157,4 +166,6 @@ pub struct SyncStats {
     pub demoted: u32,
     /// Watched instances ([`InstanceScene::watch`], such as `Lighting`) that changed: read them again.
     pub watched: u32,
+    /// Local lights that appeared, changed, left, or were placed again because the part they follow moved.
+    pub lights: u32,
 }

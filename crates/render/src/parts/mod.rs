@@ -46,6 +46,10 @@
 //! (bound in the frame group with a comparison sampler, their matrices in the frame uniform) only where the light
 //! reaches the surface at all. [`PartRenderer`] owns the maps and draws their casters before the frame's passes.
 //!
+//! Point and spot lights ([`crate::lights`]) add their light through the same BRDF: each fragment loops over the
+//! lights its cluster lists, read from a uniform array and a cluster texture in the frame group, with the shadow
+//! atlas beside the sun's maps. [`PartRenderer`] owns them too and draws the atlas's tiles after the cascades.
+//!
 //! # Sky
 //!
 //! The sky pass draws one full-screen triangle at the far plane (depth 0 under reverse-Z) after the opaque parts,
@@ -78,8 +82,10 @@ pub use mesh::{MeshData, MeshPool, MeshRange, MeshVertex};
 use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
 
+use crate::cull::CullSettings;
 use crate::depth::{DEPTH_COMPARE, DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, depth_stencil_state};
 use crate::lighting::{ResolvedLighting, SceneLighting};
+use crate::lights::{FrameLights, LightSettings, LightStats, LocalLights, MAX_GPU_LIGHTS, MAX_SHADOW_TILES};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
 use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, ShadowStats};
 use crate::{GpuScene, PassId};
@@ -123,12 +129,26 @@ pub struct DrawStats {
     pub shadow_triangles: u64,
     /// The casters each cascade's map holds, as of its last drawing.
     pub shadow_casters: [u32; MAX_CASCADES],
+    /// Draws in the local lights' shadow atlas this frame: a clear and one per mesh kind in each tile drawn
+    /// ([`crate::lights`]); the clears are not counted.
+    pub light_shadow_draws: u32,
+    /// Caster instances drawn into the atlas this frame.
+    pub light_shadow_instances: u32,
+    /// Triangles drawn into the atlas this frame.
+    pub light_shadow_triangles: u64,
+    /// What the frame did for local lights: how many there are, are drawn and have shadows.
+    pub lights: LightStats,
 }
 
 impl DrawStats {
     /// Every draw of the frame.
     pub fn total_draws(&self) -> u32 {
-        self.prepass_draws + self.opaque_draws + self.sky_draws + self.transparent_draws + self.shadow_draws
+        self.prepass_draws
+            + self.opaque_draws
+            + self.sky_draws
+            + self.transparent_draws
+            + self.shadow_draws
+            + self.light_shadow_draws
     }
 
     /// How many cascades were drawn this frame.
@@ -164,9 +184,21 @@ struct FrameUniforms {
     shadow_offsets: [f32; 4],
     shadow_biases: [f32; 4],
     shadow_params: [f32; 4],
+    lights_clusters: [f32; 4],
+    lights_local: [f32; 4],
+    lights_atlas: [f32; 4],
 }
 
+/// The local lights' uniform array (`local_lights` in lights.wgsl).
+const LIGHTS_SIZE: u64 = 64 * MAX_GPU_LIGHTS as u64;
+/// The shadow tiles' uniform array (`shadow_tiles` in lights.wgsl).
+const TILES_SIZE: u64 = 96 * MAX_SHADOW_TILES as u64;
+
 const _: () = assert!(MAX_CASCADES == 4, "frame.wgsl holds four cascades");
+const _: () = assert!(
+    MAX_GPU_LIGHTS == 256 && MAX_SHADOW_TILES == 64,
+    "lights.wgsl holds 256 lights and 64 tiles"
+);
 
 fn vec4(v: Vec3) -> [f32; 4] {
     [v.x, v.y, v.z, 0.0]
@@ -178,13 +210,14 @@ fn vec4w(v: Vec3, w: f32) -> [f32; 4] {
 
 impl FrameUniforms {
     /// The uniform for `camera` on a target `aspect` (width / height) wide, `offset` (camera − scene origin) from
-    /// the scene origin, lit by `light` with `shadow`'s cascades.
+    /// the scene origin, lit by `light` with `shadow`'s cascades and the local lights `local`.
     fn new(
         camera: &Camera,
         aspect: f32,
         offset: Vec3,
         light: &ResolvedLighting,
         shadow: &FrameShadow,
+        local: &FrameLights,
         srgb: bool,
     ) -> Self {
         let aspect = if aspect.is_finite() && aspect > 0.0 {
@@ -218,6 +251,9 @@ impl FrameUniforms {
             shadow_offsets: shadow.offsets,
             shadow_biases: shadow.biases,
             shadow_params: shadow.params,
+            lights_clusters: local.clusters,
+            lights_local: local.local,
+            lights_atlas: local.atlas,
         }
     }
 }
@@ -282,6 +318,8 @@ pub struct PartRenderer {
     instance_layout: Option<wgpu::BindGroupLayout>,
     /// The sun's shadow maps, which the frame group samples.
     shadows: ShadowMaps,
+    /// The point and spot lights, which the frame group reads.
+    lights: LocalLights,
     shaders: Shaders,
     pipelines: Pipelines,
     opaque_group: Option<InstanceGroup>,
@@ -308,11 +346,13 @@ impl PartRenderer {
             InstanceBinding::Storage => concat!(
                 include_str!("frame.wgsl"),
                 include_str!("parts.wgsl"),
+                include_str!("lights.wgsl"),
                 include_str!("instance_storage.wgsl")
             ),
             InstanceBinding::Vertex => concat!(
                 include_str!("frame.wgsl"),
                 include_str!("parts.wgsl"),
+                include_str!("lights.wgsl"),
                 include_str!("instance_vertex.wgsl")
             ),
         };
@@ -358,6 +398,30 @@ impl PartRenderer {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                // The local lights (`crate::lights`): their uniform array, the cluster texture, the shadow tiles and
+                // the shadow atlas.
+                uniform(4, wgpu::ShaderStages::FRAGMENT, LIGHTS_SIZE),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                uniform(6, wgpu::ShaderStages::FRAGMENT, TILES_SIZE),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -407,7 +471,14 @@ impl PartRenderer {
         let materials = MaterialTable::new(device);
         debug_assert_eq!(materials.buffer().size(), MATERIAL_TABLE_SIZE);
         let shadows = ShadowMaps::new(device, queue, binding, instance_layout.as_ref());
-        let frame_group = frame_group(device, &frame_layout, &frame_buffer, &materials, &shadows);
+        let lights = LocalLights::new(
+            device,
+            queue,
+            binding,
+            instance_layout.as_ref(),
+            LightSettings::default(),
+        );
+        let frame_group = frame_group(device, &frame_layout, &frame_buffer, &materials, &shadows, &lights);
         let pipelines = create_pipelines(device, &shaders, binding, format, samples);
         let lighting = SceneLighting::default();
         Self {
@@ -424,6 +495,7 @@ impl PartRenderer {
             frame_group,
             instance_layout,
             shadows,
+            lights,
             shaders,
             pipelines,
             opaque_group: None,
@@ -490,14 +562,65 @@ impl PartRenderer {
     /// again next frame). `min_layers` is 2 on OpenGL, where a one-layer texture cannot be sampled as an array.
     pub(crate) fn set_shadows(&mut self, settings: ShadowSettings, min_layers: u32) {
         if self.shadows.configure(settings, min_layers) {
-            self.frame_group = frame_group(
-                &self.device,
-                &self.frame_layout,
-                &self.frame_buffer,
-                &self.materials,
-                &self.shadows,
-            );
+            self.rebuild_frame_group();
         }
+    }
+
+    /// How local lights are drawn (the atlas resolution as clamped to the device is applied when drawn).
+    pub fn light_settings(&self) -> &LightSettings {
+        self.lights.settings()
+    }
+
+    /// What the last frame did for local lights.
+    pub fn light_stats(&self) -> LightStats {
+        self.lights.stats()
+    }
+
+    /// Changes how local lights are drawn (a settings change: a new atlas size makes the atlas again, and every
+    /// tile is drawn again).
+    pub(crate) fn set_lights(&mut self, settings: LightSettings) {
+        if self.lights.configure(settings) {
+            self.rebuild_frame_group();
+        }
+    }
+
+    fn rebuild_frame_group(&mut self) {
+        self.frame_group = frame_group(
+            &self.device,
+            &self.frame_layout,
+            &self.frame_buffer,
+            &self.materials,
+            &self.shadows,
+            &self.lights,
+        );
+    }
+
+    /// Selects, clusters and shadows the local lights for a frame of `scene` seen from `camera` (see
+    /// [`crate::lights`]). Call it after [`GpuScene::upload_view`] and before [`PartRenderer::prepare_shadows`], which
+    /// takes the scene's shadow-caster changes the atlas also reads.
+    pub(crate) fn prepare_lights(
+        &mut self,
+        scene: &mut GpuScene,
+        camera: Option<&Camera>,
+        width: u32,
+        height: u32,
+        cull: &CullSettings,
+    ) {
+        self.lights.prepare(scene, camera, width, height, cull);
+    }
+
+    /// The shadow atlas's render target when tiles are drawn this frame.
+    pub(crate) fn light_shadow_target(&self) -> Option<&wgpu::TextureView> {
+        self.lights.atlas_target()
+    }
+
+    /// Records the atlas's tiles into `render_pass`, a depth pass into [`PartRenderer::light_shadow_target`] that
+    /// loads it.
+    pub(crate) fn draw_light_shadows(&mut self, render_pass: &mut wgpu::RenderPass<'_>) {
+        let (draws, instances, triangles) = self.lights.draw_atlas(&self.meshes, render_pass);
+        self.stats.light_shadow_draws += draws;
+        self.stats.light_shadow_instances += instances;
+        self.stats.light_shadow_triangles += triangles;
     }
 
     /// Fits and culls the shadow cascades for a frame of `scene` seen from `camera` on a `width` × `height` target,
@@ -561,7 +684,16 @@ impl PartRenderer {
         self.materials.fill_from_names(instances.material_names());
         self.materials.upload(&self.queue);
         let aspect = width as f32 / height.max(1) as f32;
-        let uniforms = FrameUniforms::new(camera, aspect, offset, &self.resolved, self.shadows.frame(), srgb);
+        let uniforms = FrameUniforms::new(
+            camera,
+            aspect,
+            offset,
+            &self.resolved,
+            self.shadows.frame(),
+            self.lights.frame(),
+            srgb,
+        );
+        self.stats.lights = self.lights.stats();
         let shadow = self.shadows.stats();
         self.stats.shadow_cascades = shadow.cascades;
         self.stats.shadow_redrawn = shadow.redrawn_mask();
@@ -696,13 +828,15 @@ impl PartRenderer {
     }
 }
 
-/// The frame group: the frame uniform, the material table, and the shadow maps with their sampler.
+/// The frame group: the frame uniform, the material table, the shadow maps with their sampler, and the local
+/// lights with their clusters and shadow atlas.
 fn frame_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     frame: &wgpu::Buffer,
     materials: &MaterialTable,
     shadows: &ShadowMaps,
+    lights: &LocalLights,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic parts frame"),
@@ -723,6 +857,22 @@ fn frame_group(
             wgpu::BindGroupEntry {
                 binding: 3,
                 resource: wgpu::BindingResource::Sampler(shadows.sampler()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: lights.light_buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(lights.cluster_view()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: lights.tile_buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(lights.atlas_view()),
             },
         ],
     })

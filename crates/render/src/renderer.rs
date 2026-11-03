@@ -4,6 +4,7 @@ use crate::cull::{CullSettings, CullStats, CullView};
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet};
 use crate::lighting::SceneLighting;
+use crate::lights::{LightSettings, LightStats};
 use crate::overlay::{Overlay, OverlayPass};
 use crate::parts::{Camera, DrawStats, PartRenderer};
 use crate::scene::{InstanceBinding, UploadStats};
@@ -34,11 +35,13 @@ pub struct RendererSettings {
     pub cull: CullSettings,
     /// How the sun's shadows are drawn ([`crate::shadow`]).
     pub shadows: ShadowSettings,
+    /// How point and spot lights are drawn: their budget and their shadow atlas ([`crate::lights`]).
+    pub lights: LightSettings,
 }
 
 impl RendererSettings {
     /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes, GPU timing on, a
-    /// black clear colour, the default culling and the default shadows.
+    /// black clear colour, the default culling, shadows and local lights.
     pub fn new(color_format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         Self {
             color_format,
@@ -50,6 +53,7 @@ impl RendererSettings {
             clear_color: wgpu::Color::BLACK,
             cull: CullSettings::default(),
             shadows: ShadowSettings::default(),
+            lights: LightSettings::default(),
         }
     }
 }
@@ -89,6 +93,8 @@ pub struct Renderer {
     shadow_recorded: usize,
     /// Shadow cascades in use this frame.
     shadow_in_use: u8,
+    /// The local lights' shadow atlas was drawn this frame (its query follows the cascades').
+    atlas_recorded: bool,
 }
 
 impl Renderer {
@@ -137,10 +143,12 @@ impl Renderer {
             shadow_passes: [0; MAX_CASCADES],
             shadow_recorded: 0,
             shadow_in_use: 0,
+            atlas_recorded: false,
         };
         renderer.check_msaa(settings.msaa_samples)?;
         renderer.rebuild();
         renderer.parts.set_shadows(settings.shadows, renderer.shadow_min_layers);
+        renderer.parts.set_lights(settings.lights);
         Ok(renderer)
     }
 
@@ -226,6 +234,21 @@ impl Renderer {
         self.parts.shadow_stats()
     }
 
+    /// Changes how point and spot lights are drawn ([`crate::lights`]): the budget, the shadowed lights, the atlas.
+    /// A settings change, not for every frame: a new atlas size makes the atlas again.
+    pub fn set_lights(&mut self, lights: LightSettings) {
+        if lights != self.settings.lights {
+            self.settings.lights = lights;
+            self.parts.set_lights(lights);
+        }
+    }
+
+    /// What the last [`Renderer::render_scene`] did for point and spot lights: how many there are, are in view, in
+    /// the budget, drawn and shadowed, the atlas tiles drawn, the clusters, and the CPU time.
+    pub fn light_stats(&self) -> LightStats {
+        self.parts.light_stats()
+    }
+
     /// Renders one frame into `target`, which must have the settings' format and size, and submits it.
     ///
     /// Never blocks on the GPU. For a window, render into [`crate::SurfaceFrame::view`] and present afterwards; the
@@ -276,7 +299,15 @@ impl Renderer {
         });
         self.last_upload = scene.upload_view(&mut encoder, view.as_ref());
         self.last_cull = scene.cull_stats();
-        // After the upload: the casters are culled from what its coalesce left.
+        // After the upload (the casters are culled from what its coalesce left), before the sun's shadows take the
+        // scene's caster changes.
+        self.parts.prepare_lights(
+            scene,
+            camera,
+            self.settings.width,
+            self.settings.height,
+            &self.settings.cull,
+        );
         self.parts
             .prepare_shadows(&mut encoder, scene, camera, self.settings.width, self.settings.height);
         self.shadow_in_use = u8::try_from(self.parts.shadow_stats().cascades).unwrap_or(0);
@@ -290,8 +321,39 @@ impl Renderer {
         );
         self.prepare_overlay();
         self.record_shadow_passes(&mut encoder, slot);
+        self.record_light_shadow_pass(&mut encoder, slot);
         self.record_passes(&mut encoder, target, slot, Some(scene));
         self.end_frame(encoder, slot)
+    }
+
+    /// Records the local lights' atlas pass when tiles are drawn this frame: one depth pass over the whole atlas,
+    /// which keeps the tiles it does not draw.
+    fn record_light_shadow_pass(&mut self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>) {
+        let Some(view) = self.parts.light_shadow_target() else {
+            return;
+        };
+        let timestamp_writes = match (self.timer.as_ref(), slot) {
+            (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, self.shadow_recorded)),
+            _ => None,
+        };
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("light_shadows"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.parts.draw_light_shadows(&mut render_pass);
+        drop(render_pass);
+        self.atlas_recorded = true;
     }
 
     /// Records a depth pass for every shadow cascade drawn this frame, before the frame's passes that sample them.
@@ -402,6 +464,7 @@ impl Renderer {
     fn begin_frame(&mut self) -> (wgpu::CommandEncoder, Option<usize>) {
         self.shadow_recorded = 0;
         self.shadow_in_use = 0;
+        self.atlas_recorded = false;
         let slot = match self.timer.as_mut() {
             Some(timer) => timer.begin_frame(&self.device),
             None => None,
@@ -465,7 +528,10 @@ impl Renderer {
             }
             let timestamp_writes = match (self.timer.as_ref(), slot) {
                 // The shadow passes recorded before took the first queries.
-                (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, self.shadow_recorded + index)),
+                (Some(timer), Some(slot)) => Some(timer.pass_writes(
+                    slot,
+                    self.shadow_recorded + usize::from(self.atlas_recorded) + index,
+                )),
                 _ => None,
             };
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -495,12 +561,13 @@ impl Renderer {
             let cascades = self.shadow_passes[..self.shadow_recorded]
                 .iter()
                 .map(|&cascade| Timed::Cascade(cascade));
+            let atlas = self.atlas_recorded.then_some(Timed::LightShadows);
             let passes = self.plan.passes().iter().map(|pass| Timed::Pass(pass.id));
             timer.end_frame(
                 &mut encoder,
                 slot,
                 self.frame,
-                cascades.chain(passes),
+                cascades.chain(atlas).chain(passes),
                 self.shadow_in_use,
             );
         }

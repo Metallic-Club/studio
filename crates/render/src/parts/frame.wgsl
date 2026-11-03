@@ -43,6 +43,14 @@ struct Frame {
     // x: cascades in use (0: no shadows), y: the filter's reach in texels, z: one texel in map coordinates,
     // w: the view depth the shadows start fading out at.
     shadow_params: vec4<f32>,
+    // Local lights (lights/mod.rs, lights.wgsl). x, y: cluster columns and rows per pixel; z, w: the depth slices'
+    // scale and bias on log2(depth).
+    lights_clusters: vec4<f32>,
+    // x: lights drawn (0: none), y: the depth the first slice ends at, z: the shadows' normal offset and w: their
+    // depth bias, in texels.
+    lights_local: vec4<f32>,
+    // x: one shadow-atlas texel in atlas coordinates, y: the filter's reach in texels.
+    lights_atlas: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

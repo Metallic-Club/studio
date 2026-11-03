@@ -29,6 +29,8 @@
 //!   analytic sky drawn last at the far plane, from the `Lighting` service ([`LightingReader`]).
 //! - Sun shadows ([`shadow`], [`RendererSettings::shadows`]): texel-snapped cascaded shadow maps, each culling its
 //!   own casters, the far cascades cached while their static casters stay.
+//! - Point and spot lights ([`lights`], [`RendererSettings::lights`]): clustered forward lighting with a per-frame
+//!   budget that fades lights in and out by importance, and a cached shadow atlas for lights with `Shadows`.
 //! - The debug overlay ([`overlay`], [`Renderer::set_overlay_enabled`]): rectangles and bitmap-font text in the UI
 //!   pass, which carries the performance overlay (ADR 0008 §10).
 
@@ -38,6 +40,7 @@ pub mod depth;
 mod error;
 mod graph;
 pub mod lighting;
+pub mod lights;
 pub mod overlay;
 pub mod parts;
 mod renderer;
@@ -52,6 +55,7 @@ pub use cull::{Casters, CullSettings, CullStats, CullView, Frustum, VisibleSet};
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
 pub use lighting::{LightingReader, SceneLighting};
+pub use lights::{LightSettings, LightStats};
 pub use overlay::Overlay;
 pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer};
 pub use renderer::{Renderer, RendererSettings};
