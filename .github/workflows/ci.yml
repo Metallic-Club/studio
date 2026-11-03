@@ -1,0 +1,94 @@
+# Checks every PR and every push to main. The same commands run locally; see AGENTS.md ("Check").
+#
+# Actions minutes are limited (free plan; Windows counts 2x, macOS 10x), so PRs run Linux and Windows only and
+# macOS tests run on pushes to main. Caches are saved from main only and restored by PRs.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # RUSTFLAGS stays unset on purpose: changing it rebuilds every dependency and splits the cache. Clippy denies
+  # warnings itself, and setup-rust-toolchain sets CARGO_BUILD_WARNINGS=deny for our own crates.
+
+jobs:
+  lint:
+    name: Lint and layout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Installs the toolchain and components pinned in rust-toolchain.toml.
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: rustfmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Layout rules (ADR 0001)
+        run: cargo xtask check-layout
+      - name: Headless engine (dedicated server features)
+        run: cargo check -p metallic_engine --no-default-features --features physics,luau
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS only on pushes to main: a macOS minute costs ten Linux minutes.
+        os: >-
+          ${{ github.event_name == 'push'
+              && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]')
+              || fromJSON('["ubuntu-latest", "windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --workspace
+
+  cross-check:
+    name: Cross-target check (Android, iOS)
+    runs-on: ubuntu-latest
+    # Everything that must build on mobile: the engine crates, Player and Launcher. Studio is desktop-only and
+    # xtask is a host tool. One job for both targets: they share the host build scripts and the runner setup.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          cache: false
+      - run: rustup target add aarch64-linux-android aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Android (aarch64-linux-android)
+        run: cargo check --workspace --exclude metallic_studio --exclude xtask --target aarch64-linux-android
+      - name: iOS (aarch64-apple-ios)
+        run: cargo check --workspace --exclude metallic_studio --exclude xtask --target aarch64-apple-ios
+
+  deny:
+    name: cargo-deny (advisories, licenses, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          command: check

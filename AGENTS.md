@@ -21,12 +21,17 @@ The decisions behind the layout are in [`docs/adr/`](docs/adr/), and the map is 
 2. **Branch:** `<issue#>-<slug>`, in its own git worktree, with its own `target/` folder. Never share a
    `CARGO_TARGET_DIR` between worktrees, because their binaries have the same names.
 3. **Commit:** messages start with the area: `core: add CFrame inverse (#12)`.
-4. **Check** before opening the PR:
+4. **Check** before opening the PR. CI (`.github/workflows/ci.yml`) runs the same commands:
    ```bash
    cargo fmt --check
    cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
+   cargo xtask check-layout   # crate boundaries, metallic_core's allow-list, cfg(target_os) (ADR 0001)
+   cargo check -p metallic_engine --no-default-features --features physics,luau   # headless server build
+   cargo deny check           # advisories, licenses, sources (cargo install cargo-deny --locked)
    ```
+   CI also runs `cargo check --workspace --exclude metallic_studio --exclude xtask --target <t>` for
+   `aarch64-linux-android` and `aarch64-apple-ios` (after `rustup target add <t>`), and macOS tests on `main`.
 5. **Open the PR:** one per issue, with `Closes #N` in the body, then set the issue to `status:review`. Never push to
    `main`. Never merge your own PR; the conductor reviews and merges.
 6. **If you have to stop:** leave the branch building and comment on the issue saying where you stopped.
