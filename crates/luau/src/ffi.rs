@@ -34,7 +34,8 @@
 //!   Luau code, running out of memory in Luau code) survived. Restructuring this module alone would not fix that,
 //!   because mlua raises through its own Rust frames. So `dist` uses `unwind`, and `lib.rs` refuses to compile under
 //!   `abort` (`compile_error!` on `cfg(panic = "abort")`). `examples/error_smoke.rs` runs every error path (bad
-//!   arguments, unknown members, read-only writes, engine errors, stale instances, mlua callbacks, listener errors,
+//!   arguments, unknown members, read-only writes, engine errors, writes to destroyed instances, mlua callbacks,
+//!   listener errors,
 //!   `pcall`, a yield where Luau cannot yield, errors the host raises where a thread waits, the interrupt, out of
 //!   memory in Luau and in an engine call) and CI runs it in the `dist` profile.
 //!
@@ -43,15 +44,26 @@
 //! A C function has no captured state. While a backend call runs, [`FrameGuard`] publishes the call's
 //! [`HostContext`] and the backend's [`Shared`] state in a thread-local; [`with_ctx`] lends the context out one
 //! borrow at a time, so two `&mut` to it never exist together.
+//!
+//! # Instances pin what they refer to
+//!
+//! An `Instance` userdata pins its instance in the data model ([`DataModel::pin`]) for as long as it lives, so a
+//! script can still read an instance after destroying it. The pin is taken when the userdata is created during a
+//! backend call (or, for one made outside a call, the first time a call pushes it), and the userdata records the
+//! [`DataModel::uid`] it pinned in. Luau runs a per-tag destructor when it collects the userdata (or closes the VM);
+//! the destructor cannot reach the data model, and runs inside the garbage collector where it must not touch the VM,
+//! so it only queues `(uid, id)` in a thread-local. [`FrameGuard`] gives the queued pins of its data model back when
+//! a call starts and when it ends, and [`release_pins`] does it on demand. A pin queued for a data model that never
+//! sees another call stays queued; it is 16 bytes and harms nothing.
 #![allow(unsafe_code, reason = "the raw Luau C API; the module docs explain why it is needed")]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
-use metallic_core::{CFrame, Color3, Id, ListenerKey, ScriptValue, Value, Vector2, Vector3};
+use metallic_core::{CFrame, Color3, DataModel, Id, ListenerKey, ScriptValue, Value, Vector2, Vector3};
 use metallic_script::{HostContext, SignalRef};
 use mlua::ffi;
 pub(crate) use mlua::ffi::lua_State;
@@ -88,8 +100,20 @@ pub(crate) trait Payload: Copy + 'static {
     const TAG: c_int;
 }
 
+/// Read only: an `Instance` userdata holds an [`InstanceBlock`], whose id comes first. Only [`new_instance`] creates
+/// one.
 impl Payload for Id {
     const TAG: c_int = tag::INSTANCE;
+}
+
+/// The block of an `Instance` userdata.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InstanceBlock {
+    /// The instance. First, so [`Args::payload`] reads it as the payload.
+    id: Id,
+    /// The [`DataModel::uid`] of the data model the userdata pinned the instance in, or 0 when it holds no pin.
+    pinned_in: u64,
 }
 
 impl Payload for Vector2 {
@@ -156,6 +180,10 @@ struct Frame {
 thread_local! {
     /// The published frame. One thread-local read per C function call; everything else hangs off it.
     static FRAME: Cell<Option<Frame>> = const { Cell::new(None) };
+
+    /// Pins of collected `Instance` userdata, as `(data model uid, id)`, until [`release_pins`] gives them back
+    /// (see the module docs).
+    static RELEASED: RefCell<Vec<(u64, Id)>> = const { RefCell::new(Vec::new()) };
 }
 
 impl Frame {
@@ -197,8 +225,10 @@ impl Frame {
 }
 
 /// Publishes a backend call's context and shared state to C functions and mlua callbacks until dropped. It
-/// borrows both for its whole life, so the caller cannot touch the context while Luau code may.
+/// borrows both for its whole life, so the caller cannot touch the context while Luau code may. Entering and leaving
+/// give the data model back the pins of collected instance userdata ([`release_pins`]).
 pub(crate) struct FrameGuard<'a> {
+    frame: Frame,
     previous: Option<Frame>,
     _borrow: PhantomData<&'a mut ()>,
 }
@@ -206,12 +236,14 @@ pub(crate) struct FrameGuard<'a> {
 impl<'a> FrameGuard<'a> {
     /// Starts a frame for one backend call.
     pub(crate) fn enter(ctx: &'a mut HostContext<'_>, shared: &'a Shared) -> Self {
+        release_pins(ctx.dm);
         let frame = Frame {
             ctx: ptr::from_mut(ctx).cast::<HostContext<'static>>(),
             shared: ptr::from_ref(shared),
         };
         let previous = FRAME.with(|cell| cell.replace(Some(frame)));
         Self {
+            frame,
             previous,
             _borrow: PhantomData,
         }
@@ -221,7 +253,59 @@ impl<'a> FrameGuard<'a> {
 impl Drop for FrameGuard<'_> {
     fn drop(&mut self) {
         FRAME.with(|cell| cell.set(self.previous));
+        if self.frame.shared().ctx_lent.get() {
+            return;
+        }
+        // SAFETY: the guard still borrows the context, and the frame is no longer published, so no C function or
+        // callback can lend it; `ctx_lent` is clear, so no lent reference is alive either. This is the only one.
+        let ctx = unsafe { &mut *self.frame.ctx };
+        release_pins(ctx.dm);
     }
+}
+
+/// Gives `dm` back the pins that collected `Instance` userdata took in it (see the module docs). Pins taken in
+/// other data models stay queued for them.
+pub(crate) fn release_pins(dm: &mut DataModel) {
+    let uid = dm.uid();
+    let _ = RELEASED.try_with(|released| {
+        let Ok(mut released) = released.try_borrow_mut() else {
+            return;
+        };
+        if released.is_empty() {
+            return;
+        }
+        released.retain(|&(owner, id)| {
+            if owner != uid {
+                return true;
+            }
+            dm.unpin(id);
+            false
+        });
+    });
+}
+
+/// Luau's destructor for `Instance` userdata, run by the garbage collector (or when the VM closes): queues the
+/// userdata's pin for [`release_pins`]. It must not touch the VM or raise, and it does neither. (mlua-sys declares
+/// destructors `extern "C"`, so a panic here would abort; it cannot happen, and is caught regardless.)
+unsafe extern "C" fn instance_dtor(_state: *mut lua_State, data: *mut c_void) {
+    if data.is_null() {
+        return;
+    }
+    // SAFETY: Luau passes the block of a userdata with the INSTANCE tag, and every such userdata is created by
+    // `new_instance` with an `InstanceBlock` written into it before anything can collect it.
+    let block = unsafe { ptr::read_unaligned(data.cast::<InstanceBlock>()) };
+    if block.pinned_in == 0 {
+        return;
+    }
+    // Nothing here calls into Luau, so no foreign exception can meet this `catch_unwind`. A pin that cannot be
+    // queued (thread exit, re-entry) is kept: harmless.
+    let _ = catch_unwind(|| {
+        let _ = RELEASED.try_with(|released| {
+            if let Ok(mut released) = released.try_borrow_mut() {
+                released.push((block.pinned_in, block.id));
+            }
+        });
+    });
 }
 
 /// Why a C function or callback could not reach the engine.
@@ -819,8 +903,10 @@ unsafe fn push_str(state: *mut lua_State, text: &str) {
     unsafe { ffi::lua_pushlstring_(state, text.as_ptr().cast::<c_char>(), text.len()) }
 }
 
-/// Creates a tagged userdata holding `payload`, with its tag's metatable.
+/// Creates a tagged userdata holding `payload`, with its tag's metatable. Not for instances, whose block is larger
+/// and whose destructor reads all of it ([`new_instance`]).
 unsafe fn push_payload<T: Payload>(state: *mut lua_State, payload: T) {
+    const { assert!(T::TAG != tag::INSTANCE, "instances are created by `new_instance`") };
     // SAFETY: every tag we use has a metatable registered before any script runs (`set_metatable`); the block is
     // `size_of::<T>()` bytes, written once, unaligned-safe.
     unsafe {
@@ -880,31 +966,74 @@ pub(crate) unsafe fn push_value(state: *mut lua_State, shared: Option<&Shared>, 
     }
 }
 
-/// Pushes the userdata of an instance: the cached one while it is alive, so `==`, `rawequal` and table keys see
-/// one object per instance.
+/// Pushes the userdata of an instance: the cached one while a script holds it, so `==`, `rawequal` and table keys
+/// see one object per instance. A cached userdata made outside a backend call is pinned now.
 unsafe fn push_instance(state: *mut lua_State, shared: Option<&Shared>, id: Id) {
     let cache = shared.map(|s| s.refs.instances);
     let slot = c_int::try_from(id.index()).ok().and_then(|i| i.checked_add(1));
     // SAFETY: the cache is a weak-valued table anchored in the registry for the backend's life; every push below
-    // is balanced, and the stack has the slots `push_value` promised plus the two this uses (LUA_MINSTACK).
+    // is balanced, and the stack has the slots `push_value` promised plus the two this uses (LUA_MINSTACK). A
+    // userdata with the INSTANCE tag holds an `InstanceBlock` (`new_instance`).
     unsafe {
         let (Some(cache), Some(slot)) = (cache, slot) else {
-            push_payload(state, id);
+            new_instance(state, id);
             return;
         };
         ffi::lua_rawgeti_(state, ffi::LUA_REGISTRYINDEX, cache);
         ffi::lua_rawgeti_(state, -1, slot);
-        let data = ffi::lua_touserdatatagged(state, -1, tag::INSTANCE);
-        if !data.is_null() && ptr::read_unaligned(data.cast::<Id>()) == id {
-            ffi::lua_remove(state, -2);
-            return;
+        let data = ffi::lua_touserdatatagged(state, -1, tag::INSTANCE).cast::<InstanceBlock>();
+        if !data.is_null() {
+            let cached = ptr::read_unaligned(data);
+            if cached.id == id {
+                if cached.pinned_in == 0 {
+                    ptr::write_unaligned(
+                        data,
+                        InstanceBlock {
+                            id,
+                            pinned_in: pin_in_frame(id),
+                        },
+                    );
+                }
+                ffi::lua_remove(state, -2);
+                return;
+            }
         }
         ffi::lua_pop(state, 1);
-        push_payload(state, id);
+        new_instance(state, id);
         ffi::lua_pushvalue(state, -1);
         ffi::lua_rawseti_(state, -3, slot);
         ffi::lua_remove(state, -2);
     }
+}
+
+/// Creates a new userdata for `id`, pinning the instance in the running call's data model when there is one.
+///
+/// # Safety
+///
+/// `state` must be valid and have room for one value.
+unsafe fn new_instance(state: *mut lua_State, id: Id) {
+    // SAFETY: the INSTANCE tag has its metatable (and destructor) registered before any script runs. The pin is
+    // taken only once the allocation (which may raise) succeeded, so a failed one leaves no pin; from here on the
+    // destructor gives it back. Nothing between allocating and writing the block can run the collector.
+    unsafe {
+        let data = ffi::lua_newuserdatataggedwithmetatable(state, size_of::<InstanceBlock>(), tag::INSTANCE);
+        let block = InstanceBlock {
+            id,
+            pinned_in: pin_in_frame(id),
+        };
+        ptr::write_unaligned(data.cast::<InstanceBlock>(), block);
+    }
+}
+
+/// Pins `id` in the running call's data model and returns that data model's uid, or 0 when no pin was taken: no
+/// call is running, its context is lent out, or the id names nothing that can be read.
+fn pin_in_frame(id: Id) -> u64 {
+    let Some(frame) = Frame::current() else {
+        return 0;
+    };
+    frame
+        .lend(|ctx| if ctx.dm.pin(id) { ctx.dm.uid() } else { 0 })
+        .unwrap_or(0)
 }
 
 /// Pushes the cached userdata of an enum item.
@@ -1030,14 +1159,17 @@ unsafe extern "C-unwind" fn useratom(_state: *mut lua_State, s: *const c_char, l
 // Set-up through mlua: callbacks, metatables, references and the bridge between mlua values and payloads.
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Installs the interrupt and the atom callback. Called once, before any script is loaded.
+/// Installs the interrupt, the atom callback and the `Instance` destructor. Called once, before any script is
+/// loaded.
 pub(crate) fn install_callbacks(lua: &Lua) -> mlua::Result<()> {
-    // SAFETY: `exec_raw` hands us a valid state; the callbacks are VM-wide and these two are not used by mlua.
+    // SAFETY: `exec_raw` hands us a valid state; the callbacks are VM-wide and these two are not used by mlua, and
+    // neither is the INSTANCE tag, whose destructor is set before any userdata of it exists.
     unsafe {
         lua.exec_raw::<()>((), |state| {
             let callbacks = ffi::lua_callbacks(state);
             (*callbacks).interrupt = Some(interrupt);
             (*callbacks).useratom = Some(useratom);
+            ffi::lua_setuserdatadtor(state, tag::INSTANCE, Some(instance_dtor));
         })
     }
 }

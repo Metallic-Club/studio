@@ -72,7 +72,7 @@ fn clamp(value: Value, range: Option<(f64, f64)>) -> Value {
 impl DataModel {
     /// The id of the instance's visible property `name` (or one of its aliases).
     pub fn prop_id(&self, id: Id, name: &str) -> Result<PropId, DmError> {
-        let class = self.slot(id)?.class;
+        let class = self.class_of(id)?;
         self.registry
             .prop_id(class, name)
             .ok_or_else(|| DmError::UnknownProperty {
@@ -99,30 +99,42 @@ impl DataModel {
         }
     }
 
-    /// The current value of a stored property: the entry, or the default when there is none.
+    /// The current value of a stored property: the entry, or the default when there is none. A destroyed instance
+    /// that can still be read answers from its snapshot.
     #[inline]
     fn stored<'a>(&'a self, id: Id, prop: PropId, resolved: &'a ResolvedProp) -> &'a Value {
-        let value = self
-            .slots
-            .body(id)
-            .and_then(|b| b.prop(prop))
-            .unwrap_or(&resolved.default);
+        let body = match self.slots.body(id) {
+            Some(body) => Some(body),
+            None => self.snapshot_view(id).ok().map(|v| v.body),
+        };
+        let value = body.and_then(|b| b.prop(prop)).unwrap_or(&resolved.default);
         self.live(value)
     }
 
     /// Borrows the value of a stored property: the instance's own value, or the class default. Never allocates.
+    /// A destroyed instance that can still be read answers with its last value.
     ///
     /// Refuses computed properties ([`DmError::ComputedRead`]), which have nothing to borrow; use
     /// [`DataModel::get`] or a typed getter for those.
     #[inline]
     pub fn get_ref(&self, id: Id, prop: PropId) -> Result<&Value, DmError> {
-        let slot = self.slot(id)?;
         // Fast path: a stored entry was validated when written, and computed properties are never stored, so the
         // registry is only consulted for defaults.
-        if let Some(value) = slot.body.as_ref().and_then(|b| b.prop(prop)) {
-            return Ok(self.live(value));
-        }
-        let class = slot.class;
+        let class = match self.slots.get(id) {
+            Some(slot) => {
+                if let Some(value) = slot.body.as_ref().and_then(|b| b.prop(prop)) {
+                    return Ok(self.live(value));
+                }
+                slot.class
+            }
+            None => {
+                let view = self.snapshot_view(id)?;
+                if let Some(value) = view.body.prop(prop) {
+                    return Ok(self.live(value));
+                }
+                view.class
+            }
+        };
         let resolved = self.resolved(class, prop)?;
         if resolved.meta.computed.is_some() {
             return Err(DmError::ComputedRead {
@@ -134,9 +146,9 @@ impl DataModel {
     }
 
     /// The value of any property, computed ones included. Cloning a value never allocates (strings and enum
-    /// items are shared).
+    /// items are shared). A destroyed instance that can still be read answers with its last values.
     pub fn get(&self, id: Id, prop: PropId) -> Result<Value, DmError> {
-        let class = self.slot(id)?.class;
+        let class = self.class_of(id)?;
         let resolved = self.resolved(class, prop)?;
         match resolved.meta.computed {
             Some(computed) => Ok((computed.get)(self, id)),
@@ -158,14 +170,26 @@ impl DataModel {
     /// Reads a property of a plain (`Copy`) type through `pick`, computed properties included.
     #[inline]
     fn read<T>(&self, id: Id, prop: PropId, expected: PropType, pick: fn(&Value) -> Option<T>) -> Result<T, DmError> {
-        let slot = self.slot(id)?;
         // Fast path, as in `get_ref`: stored entries need no registry lookup.
-        if let Some(value) = slot.body.as_ref().and_then(|b| b.prop(prop))
-            && let Some(picked) = pick(self.live(value))
-        {
-            return Ok(picked);
-        }
-        let class = slot.class;
+        let class = match self.slots.get(id) {
+            Some(slot) => {
+                if let Some(value) = slot.body.as_ref().and_then(|b| b.prop(prop))
+                    && let Some(picked) = pick(self.live(value))
+                {
+                    return Ok(picked);
+                }
+                slot.class
+            }
+            None => {
+                let view = self.snapshot_view(id)?;
+                if let Some(value) = view.body.prop(prop)
+                    && let Some(picked) = pick(self.live(value))
+                {
+                    return Ok(picked);
+                }
+                view.class
+            }
+        };
         let resolved = self.resolved(class, prop)?;
         let picked = match resolved.meta.computed {
             Some(computed) => pick(&(computed.get)(self, id)),
@@ -271,9 +295,9 @@ impl DataModel {
 
     fn read_mismatch(&self, id: Id, prop: PropId, expected: PropType, got: &Value) -> DmError {
         let name = self
-            .slots
-            .get(id)
-            .and_then(|s| self.registry.prop(s.class, prop))
+            .class_of(id)
+            .ok()
+            .and_then(|class| self.registry.prop(class, prop))
             .map_or("", |r| r.meta.name);
         DmError::TypeMismatch {
             prop: name,
@@ -284,7 +308,8 @@ impl DataModel {
 
     /// Writes a property. This is the only way a stored property changes.
     ///
-    /// In order: checks the id and the property; checks the type and that numbers are finite; runs a computed
+    /// In order: checks the id (a destroyed instance is refused with [`DmError::Destroyed`], even when it can still
+    /// be read) and the property; checks the type and that numbers are finite; runs a computed
     /// property's setter (or refuses one without a setter); clamps numbers to the declared range; checks enum
     /// items exist (and stores the registry's shared copy); checks a reference's target is alive and of the
     /// declared class. A value equal to the current one does nothing at all. Otherwise the value is stored (or the

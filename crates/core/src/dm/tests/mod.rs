@@ -3,6 +3,7 @@
 mod changes;
 mod clone;
 mod hooks;
+mod pins;
 mod props;
 mod signals;
 mod tree;

@@ -193,7 +193,8 @@ fn methods_as_values_children_and_instance_identity() {
         "{}",
         prints[2]
     );
-    assert_eq!(prints.len(), 3, "{prints:?}");
-    // A destroyed instance's members cannot be read: the data model refuses its id.
-    assert_eq!(game.errors().len(), 1, "{:?}", game.errors());
+    // A destroyed instance still reads; its `Parent` is nil (instances.rs has the whole contract).
+    assert_eq!(prints[3], "nil nil");
+    assert_eq!(prints.len(), 4, "{prints:?}");
+    game.assert_no_errors();
 }

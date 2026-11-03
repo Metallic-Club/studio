@@ -315,7 +315,11 @@ fn graves_keep_the_name_readable_while_events_are_delivered() {
     assert_eq!(got, vec![(1, p, vec![]), (2, folder, vec![inst(p)])]);
     // The listeners run now, after the drain: the grave is still there for them.
     assert_eq!(dm.grave(p), Some(("Part", "Door")));
-    assert_eq!(dm.connect(p, ids.destroying, key(3)), Err(DmError::NoInstance(p)));
+    assert_eq!(
+        dm.connect(p, ids.destroying, key(3)),
+        Err(DmError::Destroyed(p)),
+        "readable, not connectable"
+    );
 
     // The next drain begins after they ran, and clears it.
     drain(&mut dm);

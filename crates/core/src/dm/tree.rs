@@ -89,15 +89,15 @@ impl Iterator for Descendants<'_> {
 impl FusedIterator for Descendants<'_> {}
 
 impl DataModel {
-    /// The instance's parent, or `None` when it has none.
+    /// The instance's parent, or `None` when it has none (always, for a destroyed instance that can still be read).
     pub fn parent(&self, id: Id) -> Result<Option<Id>, DmError> {
-        self.slot(id)?;
+        self.view(id)?;
         Ok(self.slots.parent(id))
     }
 
-    /// The instance's children, in order. See [`Children`].
+    /// The instance's children, in order. See [`Children`]. A destroyed instance that can still be read has none.
     pub fn children(&self, id: Id) -> Result<Children<'_>, DmError> {
-        let list = self.body(id)?.child_list();
+        let list = self.view(id)?.body.child_list();
         Ok(Children {
             slots: &self.slots,
             front: list.first,
@@ -108,12 +108,12 @@ impl DataModel {
 
     /// How many children the instance has.
     pub fn child_count(&self, id: Id) -> Result<usize, DmError> {
-        Ok(self.body(id)?.child_list().len as usize)
+        Ok(self.view(id)?.body.child_list().len as usize)
     }
 
     /// Every descendant of the instance, depth-first in child order. See [`Descendants`].
     pub fn descendants(&self, id: Id) -> Result<Descendants<'_>, DmError> {
-        self.slot(id)?;
+        self.view(id)?;
         Ok(Descendants {
             dm: self,
             root: id,
@@ -121,16 +121,16 @@ impl DataModel {
         })
     }
 
-    /// The live instance's name: its own, or its class's.
+    /// The instance's name: its own, or its class's.
     fn name_ref(&self, id: Id) -> Result<&Arc<str>, DmError> {
-        let slot = self.slot(id)?;
-        if let Some(name) = slot.body.as_ref().and_then(|b| b.name.as_deref()) {
+        let view = self.view(id)?;
+        if let Some(name) = view.body.name.as_deref() {
             return Ok(name);
         }
         self.classes
-            .get(slot.class.index())
+            .get(view.class.index())
             .map(|c| &c.name)
-            .ok_or(DmError::UnknownClass(slot.class.raw()))
+            .ok_or(DmError::UnknownClass(view.class.raw()))
     }
 
     /// The instance's name.
@@ -146,6 +146,7 @@ impl DataModel {
     /// Renames the instance. Renaming to the current name does nothing; renaming back to the class's name frees
     /// the stored one.
     pub fn set_name(&mut self, id: Id, name: Arc<str>) -> Result<(), DmError> {
+        self.slot(id)?;
         if **self.name_ref(id)? == *name {
             return Ok(());
         }
@@ -179,7 +180,7 @@ impl DataModel {
         self.check_movable(id, class)?;
         if let Some(parent) = new_parent {
             if !self.slots.contains(parent) {
-                return Err(DmError::NoInstance(parent));
+                return Err(self.not_live(parent));
             }
             if parent == id || self.is_ancestor(id, parent) {
                 return Err(DmError::WouldCreateCycle {
@@ -243,10 +244,10 @@ impl DataModel {
     }
 
     /// Whether `ancestor` is above the instance in the tree (`IsDescendantOf`). An instance is not its own
-    /// descendant.
+    /// descendant, and a destroyed instance that can still be read is nobody's descendant or ancestor.
     pub fn is_descendant_of(&self, id: Id, ancestor: Id) -> Result<bool, DmError> {
-        self.slot(id)?;
-        self.slot(ancestor)?;
+        self.view(id)?;
+        self.view(ancestor)?;
         Ok(self.is_ancestor(ancestor, id))
     }
 
@@ -327,9 +328,17 @@ impl DataModel {
     /// destroying and its class behaviours' `on_destroying` run while the tree is intact. Then the subtree is
     /// detached (reported for signals as a move out of the tree: `ChildRemoved`, `AncestryChanged`, ...) and
     /// every slot freed: ids held anywhere become stale, every change consumer gets them from
-    /// [`DataModel::drain_removed`], and references to them in other instances read as nil.
+    /// [`DataModel::drain_removed`], and references to them in other instances read as nil. An instance that is
+    /// pinned, or any instance while something is connected anywhere, leaves a snapshot that keeps it readable
+    /// (see [`DataModel::pin`]).
+    ///
+    /// Destroying a destroyed instance that can still be read does nothing, as in Roblox.
     pub fn destroy(&mut self, id: Id) -> Result<(), DmError> {
-        let class = self.slot(id)?.class;
+        let class = match self.slots.get(id) {
+            Some(slot) => slot.class,
+            None if self.is_destroyed(id) => return Ok(()),
+            None => return Err(DmError::NoInstance(id)),
+        };
         self.check_movable(id, class)?;
 
         let mut subtree = std::mem::take(&mut self.scratch);
@@ -349,11 +358,22 @@ impl DataModel {
                 // Leaving the tree, reported while the subtree is still intact so its events can walk it.
                 self.notify(Notice::ParentChanged { id, old, new: None });
             }
+            // While anything is connected, every destroyed instance stays readable until its events are delivered
+            // (a `ChildRemoved` handler is handed the child), as graves did; otherwise only pinned ones do.
+            let grave = self.any_connection();
             for &x in &subtree {
-                if let Some(slot) = self.slots.get(x) {
-                    self.changes.removed(slot, x);
+                let Some(slot) = self.slots.get(x) else {
+                    continue;
+                };
+                self.changes.removed(slot, x);
+                if slot.pins == 0 && !grave {
+                    self.slots.remove(x);
+                    continue;
                 }
-                self.slots.remove(x);
+                let (class, pins) = (slot.class, slot.pins);
+                if let Some(body) = self.slots.remove(x) {
+                    self.keep_snapshot(x, class, body, pins, grave);
+                }
             }
             self.structure_revision += 1;
         }
@@ -373,9 +393,11 @@ impl DataModel {
     }
 
     /// Destroys every child of the instance (`ClearAllChildren`), last child first. Services under the root are
-    /// kept.
+    /// kept. A destroyed instance that can still be read has no children, so this does nothing.
     pub fn destroy_children(&mut self, id: Id) -> Result<(), DmError> {
-        self.slot(id)?;
+        if self.view(id)?.body.child_list().len == 0 {
+            return Ok(());
+        }
         let mut current = self.slots.last_child(id);
         while let Some(child) = current {
             let prev = self.slots.prev_sibling(child);

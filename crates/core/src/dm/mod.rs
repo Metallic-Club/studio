@@ -7,18 +7,22 @@
 //! - `attributes.rs`: user-defined attributes.
 //! - `changes.rs`: per-consumer dirty bits and the drains the renderer, physics and others read.
 //! - `signals.rs`: signal connections, the built-in events and their deferred delivery.
+//! - `pins.rs`: pins and the snapshots that keep a destroyed instance readable.
 //!
 //! # Ids and destroyed instances
 //!
 //! An [`Id`] is a slot index plus the slot's generation. Destroying an instance moves its slot's generation on, so
-//! every copy of the old id is stale, and every call refuses it with [`DmError::NoInstance`]. A reference property
-//! that points at a destroyed instance is not rewritten; it reads as nil because the target fails the generation
-//! check.
+//! every copy of the old id is stale. A destroyed instance that is pinned (a script refers to it), or whose events
+//! are being delivered, stays readable through its old id: reads see its last values, with no parent and no
+//! children, and writes fail with [`DmError::Destroyed`] (`pins.rs` has the whole contract). Every other stale id is
+//! refused with [`DmError::NoInstance`]. A reference property that points at a destroyed instance is not rewritten;
+//! it reads as nil because the target fails the generation check.
 
 mod attributes;
 mod changes;
 mod clone;
 mod error;
+mod pins;
 mod props;
 mod signals;
 mod storage;
@@ -37,6 +41,7 @@ pub use tree::{Children, Descendants};
 
 use crate::{ClassBehavior, ClassId, ClassInfo, Id, PropId, Registry, ScriptValue, SignalId};
 use changes::Changes;
+use pins::Pins;
 use signals::Signals;
 use storage::{Body, Slot, Slots};
 
@@ -107,6 +112,10 @@ pub struct DataModel {
     services: Box<[Option<Id>]>,
     changes: Changes,
     signals: Signals,
+    /// Pin counts past a slot's byte, and the snapshots of destroyed instances that can still be read.
+    pins: Pins,
+    /// See [`DataModel::uid`].
+    uid: u64,
     structure_revision: u64,
     /// Reused for subtree walks that must not hold a borrow while hooks run.
     scratch: Vec<Id>,
@@ -144,6 +153,8 @@ impl DataModel {
             services,
             changes: Changes::default(),
             signals: Signals::default(),
+            pins: Pins::default(),
+            uid: pins::next_uid(),
             structure_revision: 0,
             scratch: Vec::new(),
             #[cfg(test)]
@@ -171,27 +182,31 @@ impl DataModel {
         self.slots.live() == 0
     }
 
-    /// Whether `id` names a live instance.
+    /// Whether `id` names a live instance. A destroyed instance that can still be read is not live (see
+    /// [`DataModel::is_destroyed`]).
     #[inline]
     pub fn contains(&self, id: Id) -> bool {
         self.slots.contains(id)
     }
 
-    /// The instance's class.
+    /// The instance's class. Answers for a destroyed instance that can still be read too.
     #[inline]
     pub fn class_of(&self, id: Id) -> Result<ClassId, DmError> {
-        Ok(self.slot(id)?.class)
+        match self.slots.get(id) {
+            Some(slot) => Ok(slot.class),
+            None => self.snapshot_view(id).map(|v| v.class),
+        }
     }
 
     /// The name of the instance's class (`ClassName` in scripts).
     pub fn class_name(&self, id: Id) -> Result<&'static str, DmError> {
-        let class = self.slot(id)?.class;
+        let class = self.class_of(id)?;
         Ok(self.class_info(class)?.name())
     }
 
     /// Whether the instance's class is `class` or inherits from it (`IsA` in scripts).
     pub fn is_a(&self, id: Id, class: ClassId) -> Result<bool, DmError> {
-        Ok(self.registry.is_a(self.slot(id)?.class, class))
+        Ok(self.registry.is_a(self.class_of(id)?, class))
     }
 
     /// The root (`game`), once created.
@@ -287,16 +302,23 @@ impl DataModel {
         self.mark(id, DirtyBits::CREATED);
     }
 
-    /// The live slot of `id`.
+    /// The live slot of `id`, for calls that need a live instance: a destroyed one is refused with
+    /// [`DmError::Destroyed`] when it can still be read, [`DmError::NoInstance`] otherwise.
     #[inline]
     fn slot(&self, id: Id) -> Result<&Slot, DmError> {
-        self.slots.get(id).ok_or(DmError::NoInstance(id))
+        match self.slots.get(id) {
+            Some(slot) => Ok(slot),
+            None => Err(self.not_live(id)),
+        }
     }
 
-    /// The live body of `id`.
+    /// The live body of `id`, refused like [`DataModel::slot`].
     #[inline]
     fn body(&self, id: Id) -> Result<&Body, DmError> {
-        self.slots.body(id).ok_or(DmError::NoInstance(id))
+        match self.slots.body(id) {
+            Some(body) => Ok(body),
+            None => Err(self.not_live(id)),
+        }
     }
 
     fn class_info(&self, class: ClassId) -> Result<&ClassInfo, DmError> {

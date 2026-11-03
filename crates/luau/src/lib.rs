@@ -21,6 +21,16 @@
 //! Luau atom. Methods run through their `MethodDesc`, signals through the host's connections, `Enum` is built
 //! from the registry's enums.
 //!
+//! # Destroyed instances
+//!
+//! As in Roblox, a script can still read an instance it destroyed (`print(part.Name, "was destroyed")`): its
+//! properties keep their last values, `Parent` is nil, tree queries come back empty, and writes fail with
+//! `cannot set X: the instance was destroyed` (the `instance` module has the table). Each `Instance` userdata pins its
+//! instance in the data model while it lives, and Luau's garbage collector gives the pin back, so the data model keeps
+//! a destroyed instance's last state exactly as long as some script value refers to it. The pins go back at the
+//! start and end of each call into the backend, or at once with [`LuauLanguage::collect_garbage`]. A backend runs
+//! against one data model at a time; pins are kept per data model (`ffi`'s module docs explain the mechanism).
+//!
 //! # Threads and the host
 //!
 //! Each script thread, listener call and `task` thread is a Luau coroutine with a [`ThreadId`]. `task.wait` and
@@ -81,7 +91,7 @@ mod types;
 
 use std::sync::Arc;
 
-use metallic_core::{ListenerKey, Registry, ScriptValue};
+use metallic_core::{DataModel, Id, ListenerKey, Registry, ScriptValue};
 use metallic_script::{ChunkId, CompileError, HostContext, ModuleKey, Resume, ScriptFailure, ScriptLanguage, ThreadId};
 use mlua::chunk::{ChunkMode, Compiler};
 use mlua::thread::ThreadStatus;
@@ -155,19 +165,22 @@ impl LuauLanguage {
         self.shared.threads.borrow().len()
     }
 
-    /// A new environment for the running script: `script`, `game` and `workspace`, then the globals.
-    fn environment(&self, ctx: &HostContext<'_>) -> mlua::Result<Table> {
+    /// Runs a full garbage collection, then gives `dm` back the pins of the instances no script value refers to any
+    /// more, so the snapshots of destroyed ones are freed now rather than at the next call into the backend (which
+    /// gives pins back when it starts and ends). `dm` must be the data model the scripts run against.
+    pub fn collect_garbage(&mut self, dm: &mut DataModel) -> Result<(), LuauError> {
+        self.lua.gc_collect()?;
+        ffi::release_pins(dm);
+        Ok(())
+    }
+
+    /// A new environment for the running script: `script`, `game` and `workspace` (`instances`, in that order),
+    /// then the globals. Called inside a frame, so the three are pinned like any script value.
+    fn environment(&self, instances: [Option<Id>; 3]) -> mlua::Result<Table> {
         let env = self.lua.create_table()?;
         env.set_metatable(Some(self.env_meta.clone()))?;
-        let dm = &*ctx.dm;
-        let workspace = dm.registry().class_id("Workspace").and_then(|class| dm.service(class));
-        let instance = |id: Option<metallic_core::Id>| id.map_or(Push::Nil, Push::Instance);
-        let mut values = ffi::pushes_to_lua(
-            &self.lua,
-            Some(&self.shared),
-            vec![instance(Some(ctx.script())), instance(dm.root()), instance(workspace)],
-        )?
-        .into_iter();
+        let pushes = instances.map(|id| id.map_or(Push::Nil, Push::Instance));
+        let mut values = ffi::pushes_to_lua(&self.lua, Some(&self.shared), Vec::from(pushes))?.into_iter();
         for name in ["script", "game", "workspace"] {
             env.raw_set(name, values.next().unwrap_or(mlua::Value::Nil))?;
         }
@@ -182,7 +195,7 @@ impl LuauLanguage {
     }
 
     /// The function of `chunk`, loaded for the running script (or module) in a new environment.
-    fn chunk_function(&self, chunk: ChunkId, ctx: &HostContext<'_>) -> Result<mlua::Function, ScriptFailure> {
+    fn chunk_function(&self, chunk: ChunkId, ctx: &mut HostContext<'_>) -> Result<mlua::Function, ScriptFailure> {
         if !Arc::ptr_eq(ctx.registry(), &self.shared.registry) {
             return Err(ScriptFailure::runtime(
                 "this Luau backend was built for another class registry",
@@ -192,10 +205,15 @@ impl LuauLanguage {
         let Some(bytecode) = usize::try_from(chunk.0).ok().and_then(|i| self.chunks.get(i)) else {
             return Err(ScriptFailure::runtime("unknown chunk", None));
         };
-        let env = self.environment(ctx).map_err(|e| start_failure(&e))?;
+        let dm = &*ctx.dm;
+        let workspace = dm.registry().class_id("Workspace").and_then(|class| dm.service(class));
+        let instances = [Some(ctx.script()), dm.root(), workspace];
+        let name = format!("={}", ctx.chunk_name());
+        let _frame = FrameGuard::enter(ctx, &self.shared);
+        let env = self.environment(instances).map_err(|e| start_failure(&e))?;
         self.lua
             .load(bytecode.as_slice())
-            .set_name(format!("={}", ctx.chunk_name()))
+            .set_name(name)
             .set_mode(ChunkMode::Binary)
             .set_environment(env)
             .into_function()

@@ -11,6 +11,10 @@ pub enum DmError {
     /// The id names no live instance: it was destroyed, or it came from another data model.
     #[error("the instance no longer exists (it was destroyed, or the id {0:?} is not from this game)")]
     NoInstance(Id),
+    /// The instance was destroyed. Its last state can still be read (something pins it, or its events are being
+    /// delivered), but it cannot be changed, moved, cloned or connected to.
+    #[error("the instance was destroyed")]
+    Destroyed(Id),
     /// The class id is not in the registry.
     #[error("there is no class with id {0}")]
     UnknownClass(u16),

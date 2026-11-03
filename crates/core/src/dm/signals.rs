@@ -51,11 +51,12 @@
 //!
 //! # Destroyed instances ("graves")
 //!
-//! An instance destroyed while something is connected anywhere leaves a grave: its class name and name, readable
-//! through [`DataModel::grave`] while the events about it are delivered, so a handler can still print `part.Name`.
-//! A grave lasts until the drain after the one that delivered those events begins. The instance's connections
-//! receive the events queued up to and including its destruction (`Destroying`, `AncestryChanged`, ...), then the
-//! drain that delivers them drops the connections.
+//! An instance destroyed while something is connected anywhere leaves a grave: a snapshot of its last state
+//! (`pins.rs`), so a handler can still read `part.Name` or any property through the old id, and
+//! [`DataModel::grave`] names it. A grave lasts until the drain after the one that delivered those events begins,
+//! unless something pins it, which keeps it longer. The instance's connections receive the events queued up to and
+//! including its destruction (`Destroying`, `AncestryChanged`, ...), then the drain that delivers them drops the
+//! connections.
 //!
 //! # Dropped connections
 //!
@@ -212,16 +213,7 @@ struct Event {
     end: usize,
 }
 
-/// What stays readable about a destroyed instance while its events are delivered.
-#[derive(Debug)]
-struct Grave {
-    class: &'static str,
-    name: Arc<str>,
-    /// The drain count when it was destroyed.
-    epoch: u64,
-}
-
-/// Every connection, the event queue and the graves.
+/// Every connection and the event queue.
 #[derive(Debug, Default)]
 pub(super) struct Signals {
     connections: Vec<ConnectionSlot>,
@@ -239,7 +231,6 @@ pub(super) struct Signals {
     args: Vec<ScriptValue>,
     /// Shared copies of property names, so `Changed` allocates no string once a name has been seen.
     names: FxMap<&'static str, Arc<str>>,
-    graves: FxMap<Id, Grave>,
     /// Watched instances destroyed since the last drain, whose connections that drain drops.
     dead: Vec<Id>,
     /// Connections dropped with their destroyed instances, until `drain_dropped_connections` hands them out.
@@ -473,13 +464,26 @@ impl DataModel {
         self.signals.events.len()
     }
 
-    /// The class name and name of a destroyed instance whose events are being delivered (see the module docs on
-    /// graves). `None` for a live instance, and for one destroyed while nothing was connected anywhere.
+    /// The class name and name of a destroyed instance that can still be read: one whose events are being
+    /// delivered (see the module docs on graves), or one something pins. `None` for a live instance, and for one
+    /// destroyed unpinned while nothing was connected anywhere.
     pub fn grave(&self, id: Id) -> Option<(&'static str, &str)> {
         if self.slots.contains(id) {
             return None;
         }
-        self.signals.graves.get(&id).map(|g| (g.class, &*g.name))
+        let class = self.snapshot(id)?.class;
+        Some((self.class_label(class), self.name(id).ok()?))
+    }
+
+    /// Whether any connection exists, so a destroyed instance may be handed to a listener.
+    #[inline]
+    pub(super) fn any_connection(&self) -> bool {
+        self.signals.live > 0
+    }
+
+    /// How many drains have run.
+    pub(super) fn signals_epoch(&self) -> u64 {
+        self.signals.epoch
     }
 
     /// Appends one [`Delivery`] per queued event and connection to `out`, events in fire order and each event's
@@ -490,12 +494,10 @@ impl DataModel {
     /// [`DataModel::drain_dropped_connections`] reports. Allocates nothing beyond growing `out`, copying each
     /// delivery's arguments and growing the dropped-connection list.
     pub fn drain_deliveries(&mut self, out: &mut Vec<Delivery>) {
-        let s = &mut self.signals;
         // Graves handed out by the previous drain have been seen by its listeners.
-        let epoch = s.epoch;
-        if !s.graves.is_empty() {
-            s.graves.retain(|_, g| g.epoch >= epoch);
-        }
+        let epoch = self.signals.epoch;
+        self.expire_graves(epoch);
+        let s = &mut self.signals;
         s.epoch += 1;
 
         out.reserve(s.events.len());
@@ -710,21 +712,10 @@ impl DataModel {
         }
     }
 
-    /// Records the grave of `id` (something is connected somewhere, so a handler may ask for it), queues its
-    /// `Destroying`, and marks its connections to be dropped by the next drain.
+    /// Queues the `Destroying` of `id` and marks its connections to be dropped by the next drain. (Its grave is the
+    /// snapshot `destroy` keeps when it frees the slot.)
     #[inline(never)]
     fn queue_destroying(&mut self, id: Id) {
-        let Some(class) = self.slots.get(id).map(|s| s.class) else {
-            return;
-        };
-        if let Ok(name) = self.shared_name(id) {
-            let grave = Grave {
-                class: self.class_label(class),
-                name,
-                epoch: self.signals.epoch,
-            };
-            self.signals.graves.insert(id, grave);
-        }
         if self.is_watched(id) {
             if let Some(signal) = self.listening(id, BuiltinSignal::Destroying) {
                 self.signals.push(id, Key::Signal(signal), []);

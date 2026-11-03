@@ -18,7 +18,7 @@ impl DataModel {
 
     /// Every attribute of the instance, in the order they were first set.
     pub fn attributes(&self, id: Id) -> Result<&[Attribute], DmError> {
-        Ok(self.body(id)?.attributes.as_deref().map_or(&[], Vec::as_slice))
+        Ok(self.view(id)?.body.attributes.as_deref().map_or(&[], Vec::as_slice))
     }
 
     /// Sets the attribute `name` to `value`, or removes it with `None`. Setting the current value does nothing.
@@ -33,10 +33,10 @@ impl DataModel {
             }
         }
         let Some(slot) = self.slots.get_mut(id) else {
-            return Err(DmError::NoInstance(id));
+            return Err(self.not_live(id));
         };
         let Some(body) = slot.body.as_mut() else {
-            return Err(DmError::NoInstance(id));
+            return Err(self.not_live(id));
         };
         let existing = body
             .attributes
