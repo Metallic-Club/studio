@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+bytemuck.workspace = true
 pollster.workspace = true
 raw-window-handle.workspace = true
 thiserror.workspace = true
@@ -21,3 +22,19 @@ wgpu.workspace = true
 [dev-dependencies]
 # The windowed example (`examples/window.rs`) only; the engine gets its windows from `metallic_platform`.
 winit.workspace = true
+# Tests and benches build real games (`Part`s in `Workspace`); the renderer itself never names a class.
+metallic_classes.workspace = true
+criterion.workspace = true
+gungraun.workspace = true
+
+# CPU time of a scene sync on a real device (`cargo bench -p metallic_render --bench gpu_scene`).
+[[bench]]
+name = "gpu_scene"
+harness = false
+
+# The perf gate's render suite (docs/perf.md): the scene's CPU side with no GPU. It needs Valgrind and
+# `gungraun-runner`, so a plain `cargo bench` leaves it out (`bench = false`); it runs by name.
+[[bench]]
+name = "perf_gate"
+harness = false
+bench = false

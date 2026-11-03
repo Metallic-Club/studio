@@ -67,6 +67,8 @@ profiling = { version = "1.0.18", default-features = false }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "dx12", "gles", "wgsl"] }
 # Blocks on wgpu's adapter and device requests during setup (never inside a frame).
 pollster = "1.0.1"
+# Plain-old-data casts for GPU buffer contents (`metallic_render`'s instance records). Already in the tree via wgpu.
+bytemuck = { version = "1.25", features = ["derive"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

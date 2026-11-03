@@ -10,7 +10,7 @@ hot paths of `metallic_core` and of the Luau bindings (`metallic_luau`).
 `.github/workflows/perf.yml` runs on every pull request that changes `crates/`, `Cargo.toml`, `Cargo.lock` or the
 workflow itself. It counts the instructions (Callgrind's `Ir`) each workload executes, once for the PR's base and
 once for its head, on the same runner. **The PR fails when any workload grows by more than 5%** (exactly 5%
-passes). There are three suites, each with its own table in the job summary:
+passes). There are four suites, each with its own table in the job summary:
 
 - [`crates/core/benches/perf_gate.rs`](../crates/core/benches/perf_gate.rs): the data model (below);
 - [`crates/luau/benches/perf_gate.rs`](../crates/luau/benches/perf_gate.rs): Luau scripts doing 10,000 `part.Position`
@@ -23,7 +23,12 @@ passes). There are three suites, each with its own table in the job summary:
   empty simulation and render steps. It builds with the dedicated server's features
   (`--no-default-features --features physics,luau`), so no renderer or window code is compiled in. At introduction
   (#73; ubuntu-24.04 runner, Rust 1.99.1, gungraun 0.20.0, release profile) it counted 173,536 `Ir`: about 1,700
-  instructions per empty frame.
+  instructions per empty frame;
+- [`crates/render/benches/perf_gate.rs`](../crates/render/benches/perf_gate.rs): the GPU scene's CPU side (#76), with
+  no GPU. Each workload is one frame of `InstanceScene` over 10,000 parts with 1% changed in the `setup` (drain,
+  repack, coalesce) plus the upload's CPU work written into a plain buffer: `render_sync_moving` (100 parts that
+  move every frame, so they sit together in the dynamic region: one range, the copy path) and
+  `render_sync_scattered` (100 parts spread over the scene recoloured: 100 ranges, the scatter path's layout).
 
 A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
 checked (each must be present and above zero) and reported as `NEW (not gated)`, and the next PR is gated against
@@ -87,8 +92,10 @@ The Luau suite follows the same steps with `cargo bench -p metallic_luau --bench
 the base lacks it). Its workloads only use public APIs, so the bench source is the only file copied to the base.
 The engine suite does the same with
 `cargo bench -p metallic_engine --bench perf_gate --no-default-features --features physics,luau` and
-`--source crates/engine/benches/perf_gate.rs --suite metallic_engine`. Workload names are unique across the suites,
-because the report matches gungraun's summaries by function name.
+`--source crates/engine/benches/perf_gate.rs --suite metallic_engine`, and the render suite with
+`cargo bench -p metallic_render --bench perf_gate` and `--source crates/render/benches/perf_gate.rs --suite
+metallic_render`. Workload names are unique across the suites, because the report matches gungraun's summaries by
+function name.
 
 The job takes several minutes, most of it compiling (the Luau suite builds Luau's C++ sources for both sides). Pushes to `main` that touch the same paths only build,
 so the cargo cache is saved from `main` and restored by PRs, as in `ci.yml`.
@@ -234,3 +241,26 @@ shared with other builds, so these are the 10th percentile of 4,000 frames per v
 Before #68 the host connected `DescendantAdded`/`DescendantRemoving` on each service that runs scripts, so every part
 queued two signal events (with argument vectors) that the host discarded after a class test. It now drains a change
 consumer: a dirty-list entry and one class test per part.
+
+### GPU scene
+
+`cargo bench -p metallic_render --bench gpu_scene`, **2026-11-03**, same machine (Ryzen 5 5500; AMD Radeon RX 6650 XT
+on Vulkan), #76. 100,000 parts in `Workspace`, 1,000 of them (1%) changed per frame, the edits outside the timing.
+`moving`: the same parts move every frame, so after their second frame they sit together in the dynamic region.
+`scattered`: a different spread of parts is recoloured every frame, one lone static slot each, the worst case for
+coalescing. `sync` is the CPU side alone (drain, repack, coalesce); `upload` adds `GpuScene::upload` and the
+submission that carries it.
+
+| Bench | Time | Target |
+| --- | ---: | ---: |
+| `sync/100k_1pct_moving` | 74 µs | ≤ 0.5 ms |
+| `sync/100k_1pct_scattered` | 115 µs | ≤ 0.5 ms |
+| `upload/sync_upload_100k_1pct_moving` (1 range, copy path) | 127 µs | |
+| `upload/sync_upload_100k_1pct_scattered` (1,000 ranges, scatter pass) | 242 µs | |
+| `upload/sync_upload_100k_1pct_scattered_copies` (1,000 copies) | 680 µs | |
+| `upload/per_range_write_buffer_100k_1pct_scattered` (1,000 `write_buffer`s, rejected) | 1.51 ms | |
+| `rebuild/100k` (every part placed again) | 9.95 ms | |
+
+wgpu creates a staging buffer for every `write_buffer` call, which is why one staging write per frame beats a write
+per range by 6×, and records each `copy_buffer_to_buffer` for about 0.45 µs, which is why many ranges go through the
+scatter pass instead (from `SCATTER_MIN_RANGES`, 32).

@@ -98,6 +98,8 @@
 //! [`FrameStats`] (game time, the interpolation factor `alpha`, ...). That call is where the main thread builds
 //! the frame packet (ADR 0008 §11). [`RenderHook::attach`], [`RenderHook::detach`] and [`RenderHook::resize`]
 //! follow the window's life. Headless engines never call it, and without the `render` feature it does not exist.
+//! [`SceneRenderer`] is the renderer's hook: a thin adapter that keeps `metallic_render`'s GPU-resident scene in
+//! step with the game and runs its frames.
 //!
 //! # Profiling
 //!
@@ -115,6 +117,8 @@ mod hooks;
 mod input;
 mod output;
 #[cfg(feature = "render")]
+mod scene_renderer;
+#[cfg(feature = "render")]
 mod user_input;
 #[cfg(feature = "render")]
 mod windowed;
@@ -128,6 +132,8 @@ pub use hooks::{RenderFrame, RenderHook, RenderHookError};
 #[cfg(feature = "render")]
 pub use input::InputEvent;
 pub use output::StdOutput;
+#[cfg(feature = "render")]
+pub use scene_renderer::SceneRenderer;
 #[cfg(feature = "render")]
 pub use windowed::{WindowedApp, WindowedOptions, run_windowed};
 

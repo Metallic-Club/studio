@@ -84,6 +84,33 @@ pub(crate) fn read_back_rgba8(context: &RenderContext, texture: &wgpu::Texture) 
     pixels
 }
 
+/// Copies the first `size` bytes of `buffer` (which needs `COPY_SRC`) back to the CPU, waiting for the GPU.
+pub(crate) fn read_back_buffer(context: &RenderContext, buffer: &wgpu::Buffer, size: u64) -> Vec<u8> {
+    if size == 0 {
+        return Vec::new();
+    }
+    let readback = context.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test buffer readback"),
+        size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = context
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_buffer_to_buffer(buffer, 0, &readback, 0, size);
+    context.queue().submit(Some(encoder.finish()));
+    readback.map_async(wgpu::MapMode::Read, .., |result| {
+        result.expect("map the readback buffer")
+    });
+    context
+        .device()
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("wait for the readback");
+    let data = readback.get_mapped_range(..).expect("readback is mapped");
+    data.to_vec()
+}
+
 /// Asserts every pixel is within `tolerance` of `expected` in each channel.
 pub(crate) fn assert_all_pixels(pixels: &[[u8; 4]], expected: [u8; 4], tolerance: u8) {
     for (i, pixel) in pixels.iter().enumerate() {
