@@ -152,34 +152,49 @@ impl ClusterGrid {
         self.pairs.clear();
         self.counts.fill(0);
         let (tan_x, tan_y) = (camera.tan_x.max(1e-4), camera.tan_y.max(1e-4));
+        // Once per build: each slice's depths, and each column's and row's slopes (rows top down: row 0 spans
+        // [1 − step, 1]), scaled to the view's edges.
+        let slices: [(f32, f32); CLUSTERS_Z as usize] = std::array::from_fn(|s| slicing.bounds(s as u32));
         let step_x = 2.0 / CLUSTERS_X as f32;
         let step_y = 2.0 / CLUSTERS_Y as f32;
+        let columns: [(f32, f32); CLUSTERS_X as usize] = std::array::from_fn(|x| {
+            ((x as f32 * step_x - 1.0) * tan_x, ((x + 1) as f32 * step_x - 1.0) * tan_x)
+        });
+        let rows: [(f32, f32); CLUSTERS_Y as usize] = std::array::from_fn(|y| {
+            ((1.0 - (y + 1) as f32 * step_y) * tan_y, (1.0 - y as f32 * step_y) * tan_y)
+        });
+        // The extent of a cluster across, at depths d0 to d1, between slopes a and b.
+        let across = |(a, b): (f32, f32), d0: f32, d1: f32| ((a * d0).min(a * d1), (b * d0).max(b * d1));
         for (light, &(center, radius)) in spheres.iter().enumerate().take(256) {
             let (near, far) = (center.z - radius, center.z + radius);
             if far <= 0.0 || !center.is_finite() || !radius.is_finite() {
                 continue;
             }
             let (s0, s1) = (slicing.slice(near.max(0.0)), slicing.slice(far));
-            let (x0, x1) = tile_range(center.x - radius, center.x + radius, near, far, tan_x, CLUSTERS_X);
-            // Rows count down from the top: the highest slope is row 0.
-            let (y0, y1) = tile_range(-(center.y + radius), -(center.y - radius), near, far, tan_y, CLUSTERS_Y);
             let r2 = radius * radius;
             for s in s0..=s1 {
-                let (d0, d1) = slicing.bounds(s);
+                let (d0, d1) = slices[s as usize];
                 let d1 = d1.min(far);
+                // In this slice the sphere is at most `reach` across: bound its tiles by that, not by its radius.
+                let dz = center.z - center.z.clamp(d0, d1);
+                let reach2 = r2 - dz * dz;
+                if reach2 < 0.0 {
+                    continue;
+                }
+                let reach = reach2.sqrt();
+                let (z0, z1) = (d0.max(near), d1);
+                let (x0, x1) = tile_range(center.x - reach, center.x + reach, z0, z1, tan_x, CLUSTERS_X);
+                // Rows count down from the top: the highest slope is row 0.
+                let (y0, y1) = tile_range(-(center.y + reach), -(center.y - reach), z0, z1, tan_y, CLUSTERS_Y);
                 for y in y0..=y1 {
-                    // The row's slopes, top down: row 0 spans [1 − step, 1].
-                    let (a, b) = (1.0 - (y + 1) as f32 * step_y, 1.0 - y as f32 * step_y);
-                    let (lo_y, hi_y) = ((a * d0).min(a * d1) * tan_y, (b * d0).max(b * d1) * tan_y);
+                    let (lo_y, hi_y) = across(rows[y as usize], d0, d1);
                     let dy = center.y - center.y.clamp(lo_y, hi_y);
-                    let dz = center.z - center.z.clamp(d0, d1);
                     let partial = dy * dy + dz * dz;
                     if partial > r2 {
                         continue;
                     }
                     for x in x0..=x1 {
-                        let (a, b) = (x as f32 * step_x - 1.0, (x + 1) as f32 * step_x - 1.0);
-                        let (lo_x, hi_x) = ((a * d0).min(a * d1) * tan_x, (b * d0).max(b * d1) * tan_x);
+                        let (lo_x, hi_x) = across(columns[x as usize], d0, d1);
                         let dx = center.x - center.x.clamp(lo_x, hi_x);
                         if partial + dx * dx > r2 {
                             continue;
