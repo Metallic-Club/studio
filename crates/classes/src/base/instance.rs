@@ -295,11 +295,12 @@ mod tests {
     fn destroy_removes_the_subtree() {
         let mut dm = game();
         let ws = workspace(&dm);
+        let children_before = dm.children(ws).unwrap().len();
         let folder = new_in(&mut dm, "Folder", ws, "A");
         let inner = new_in(&mut dm, "Folder", folder, "B");
         assert_eq!(call(&mut dm, folder, "Destroy", vec![]), Ok(ScriptValue::Nil));
         assert!(!dm.contains(folder) && !dm.contains(inner));
-        assert!(dm.children(ws).unwrap().is_empty());
+        assert_eq!(dm.children(ws).unwrap().len(), children_before);
     }
 
     #[test]
@@ -327,7 +328,9 @@ mod tests {
     #[test]
     fn get_children_and_descendants_list_in_order() {
         let mut dm = game();
+        // A folder of its own, because a new game's Workspace already holds the camera.
         let ws = workspace(&dm);
+        let ws = new_in(&mut dm, "Folder", ws, "Root");
         let a = new_in(&mut dm, "Folder", ws, "A");
         let a1 = new_in(&mut dm, "Folder", a, "A1");
         let b = new_in(&mut dm, "Model", ws, "B");
@@ -366,7 +369,9 @@ mod tests {
     #[test]
     fn class_searches_tell_exact_class_from_inheritance() {
         let mut dm = game();
+        // A folder of its own, because a new game's Workspace already holds the camera.
         let ws = workspace(&dm);
+        let ws = new_in(&mut dm, "Folder", ws, "Root");
         let folder = new_in(&mut dm, "Folder", ws, "F");
         let model = new_in(&mut dm, "Model", ws, "M");
         let inner = new_in(&mut dm, "Model", folder, "Inner");

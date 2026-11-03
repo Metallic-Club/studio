@@ -85,4 +85,45 @@ The first classes and services, and what is deliberately left out, are listed in
 
 ## Adding a class
 
-*Filled in by #17, with `SpotLight` as the worked example.*
+A class is one file in `crates/classes/src/`. Take `SpotLight`, in
+[`world/lights/spot_light.rs`](../crates/classes/src/world/lights/spot_light.rs):
+
+```rust
+pub static COMPONENT: ComponentDesc = ComponentDesc::new("SpotLightEmitter")
+    .describe("Lights a cone that opens Angle degrees along the light's forward direction (-Z), up to Range metres.")
+    .requires(EMITTER_REQUIRES); // ["Transform"]
+
+static PROPS: &[PropMeta] = &[PropMeta::number("Angle", 90.0)
+    .range(1.0, 179.0).widget(Widget::Slider).visual().group("Spotlight").order(0)
+    .desc("How wide the cone is: the full angle from one edge to the other, in degrees.")];
+
+pub static CLASS: ClassDesc = ClassDesc::new("SpotLight", Some("Light"))
+    .describe("A cone of light shining forward from the light, like a torch or a stage light.")
+    .category(CATEGORY) // "Lights", shared by every light
+    .creatable()
+    .components(&["SpotLightEmitter"])
+    .props(PROPS);
+```
+
+- **`ClassDesc`** names the class and its parent (by string, so class files never import each other), describes it
+  for Studio and the API docs, puts it in the Insert menu (`category`), lets scripts create it (`creatable`), and
+  lists its components and its own properties.
+- **`PropMeta`** declares one property: its type and default, the range writes are clamped into, the change flag
+  (`visual()`: the renderer redraws it), where Studio shows it (`group`, `order`, `widget`), and its description.
+  Defaults are in metres (ADR 0005).
+- **Inheritance** gives it the rest. `Light` ([`light.rs`](../crates/classes/src/world/lights/light.rs)) declares
+  `Enabled`, `Brightness`, `Color`, `Range`, `Shadows` and `CFrame` once; the registry copies them into every
+  subclass first, so they keep the same `PropId` in `SpotLight`, `PointLight` and `DirectionalLight`, and a script
+  sees all of them plus `Angle`. A subclass can change an inherited default (`defaults`) or hide a member
+  (`DirectionalLight` hides `Range`; the slot stays, only the name disappears). Shared constants for the family
+  (`CATEGORY`, `EMITTER_REQUIRES`) and helpers (`world_cframe`) live in the parent's file.
+- **The component** is only a name and a description here. The renderer (M3) will register "how to draw a
+  `SpotLightEmitter`" under the same name and read `Angle`, `Range` and the rest from the data model. A headless
+  server simply has no implementation, and the class still works. `requires` makes the registry check that every
+  class with the emitter also has `Transform`, which `Light` provides.
+- **Discovery is automatic.** `crates/classes/build.rs` scans `src/` for `pub static CLASS`, `COMPONENT` and `ENUMS`,
+  so this file is the only change: no list to edit, no registration call. Folders become modules
+  (`metallic_classes::world::lights::spot_light`).
+
+Enums go in the file of the class that owns them (`pub static ENUMS`, such as `Material` in `base_part.rs`). Every
+class, member, component and enum needs a description; a test fails otherwise.
