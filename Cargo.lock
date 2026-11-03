@@ -215,6 +215,7 @@ name = "metallic_classes"
 version = "0.1.0"
 dependencies = [
  "metallic_core",
+ "thiserror",
 ]
 
 [[package]]
