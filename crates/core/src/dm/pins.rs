@@ -27,7 +27,7 @@
 //!
 //! # What a pin costs
 //!
-//! A live instance's count is one byte in its slot, in what was padding (the slot stays 72 bytes). The rare
+//! A live instance's count is one byte in its slot, in what was padding, so it does not grow the slot. The rare
 //! instance with more than 255 holders counts the rest in a side table. Pinning and unpinning a live instance never
 //! allocates below that.
 

@@ -1,6 +1,6 @@
 //! Attributes: user-defined name → value pairs on any instance (`GetAttribute` / `SetAttribute`).
 //!
-//! An instance without attributes pays one pointer for them. Attributes hold plain values: anything but an
+//! An instance with neither attributes nor a name of its own pays one pointer for both. Attributes hold plain values: anything but an
 //! instance reference.
 
 use std::sync::Arc;
@@ -18,7 +18,7 @@ impl DataModel {
 
     /// Every attribute of the instance, in the order they were first set.
     pub fn attributes(&self, id: Id) -> Result<&[Attribute], DmError> {
-        Ok(self.view(id)?.body.attributes.as_deref().map_or(&[], Vec::as_slice))
+        Ok(self.view(id)?.body.attributes())
     }
 
     /// Sets the attribute `name` to `value`, or removes it with `None`. Setting the current value does nothing.
@@ -38,24 +38,16 @@ impl DataModel {
         let Some(body) = slot.body.as_mut() else {
             return Err(self.not_live(id));
         };
-        let existing = body
-            .attributes
-            .as_ref()
-            .and_then(|list| list.iter().position(|(n, _)| &**n == name));
+        let existing = body.attributes().iter().position(|(n, _)| &**n == name);
         let key: Arc<str> = match (existing, value) {
             (None, None) => return Ok(()),
             (Some(i), None) => {
-                let Some(list) = body.attributes.as_mut() else {
-                    return Ok(());
-                };
-                let (key, _) = list.remove(i);
-                if list.is_empty() {
-                    body.attributes = None;
-                }
+                let (key, _) = body.attributes_mut().remove(i);
+                body.drop_empty_extras();
                 key
             }
             (Some(i), Some(value)) => {
-                let Some(entry) = body.attributes.as_mut().and_then(|list| list.get_mut(i)) else {
+                let Some(entry) = body.attributes_mut().get_mut(i) else {
                     return Ok(());
                 };
                 if entry.1 == value {
@@ -66,9 +58,7 @@ impl DataModel {
             }
             (None, Some(value)) => {
                 let key: Arc<str> = Arc::from(name);
-                body.attributes
-                    .get_or_insert_with(Box::default)
-                    .push((Arc::clone(&key), value));
+                body.attributes_mut().push((Arc::clone(&key), value));
                 key
             }
         };

@@ -4,21 +4,31 @@
 //! non-default properties, inline and heap together; `tests/alloc.rs` measures it):
 //!
 //! - a slot is 72 bytes: the generation, the parent's slot index, the previous and next siblings' slot indices, the
-//!   class, per-consumer dirty bits, the signal "watched" flag, the pin count (see `pins.rs`), and a [`Body`] whose
-//!   pointers are only paid for when used;
-//! - an instance with its class's name stores no name (one null pointer); a renamed one boxes a shared string;
+//!   class, one byte of dirty bits per change consumer ([`MAX_CONSUMERS`], eight), the signal "watched" flag, the
+//!   pin count (see `pins.rs`), and a 40-byte [`Body`] whose pointers are only paid for when used;
 //! - only non-default property values are stored, in a `Vec` sorted by [`PropId`] that grows one entry at a time
 //!   (four values are 160 bytes: `PropId` + `Value` is 40 bytes with alignment). Removing an entry keeps the
 //!   capacity, so a property flipping between its default and another value (a `bool`) never allocates again;
-//! - children and attributes sit behind `Option<Box<..>>`, one pointer each for the many instances without any.
+//! - children sit behind an `Option<Box<..>>`, and so do a name other than the class's and attributes, together
+//!   ([`Extras`]): one pointer each for the many instances without any.
+//!
+//! # Why 72 bytes, and why name and attributes share a box
+//!
+//! The stride matters as much as the size. Indexing 72-byte slots (9 × 8) is one `lea` and an 8-scaled address;
+//! 80 bytes (5 × 16) needs a shift as well, because x86 addresses scale by at most 8, and every slot access pays
+//! it. #90 measured that: with eight dirty bytes the slot would have been 80 bytes, and reads, creates and destroys
+//! each took about one more instruction per slot access. Keeping the dirty bytes in a parallel array instead
+//! cost more again, because the second table grows beside the first and every growth copies both. So the name and
+//! the attributes, which most instances never have, went from a box each to one shared box. That freed the 8 bytes
+//! the dirty bits needed.
 //!
 //! # Children: an intrusive sibling list
 //!
 //! Children are a doubly linked list threaded through the slots (`prev` and `next` above), and a parent keeps only
 //! a [`ChildList`]: the first and last child and the count. Appending, removing any child and stepping to a
 //! sibling are all O(1) and never allocate, so clearing a folder of 100,000 parts one by one is linear, and order
-//! is insertion order. The links fit in what a position-in-parent index and padding used to take, so the slot
-//! stays 72 bytes, and a parent no longer pays 8 bytes per child for an id vector. Iterating children chases links
+//! is insertion order. The links fit in what a position-in-parent index and padding used to take, so they cost the
+//! slot nothing, and a parent no longer pays 8 bytes per child for an id vector. Iterating children chases links
 //! instead of reading a contiguous array; parts created together sit in neighbouring slots, so that walk stays
 //! mostly sequential.
 
@@ -53,33 +63,86 @@ impl ChildList {
     };
 }
 
+/// What most instances never have: a name of their own and attributes. Boxed together, so an instance with neither
+/// pays one pointer for both.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Extras {
+    /// `None` while the instance has its class's name (the data model keeps that one shared per class).
+    name: Option<Arc<str>>,
+    /// In insertion order.
+    attributes: Vec<Attribute>,
+}
+
 /// The parts of a live instance that own memory.
 #[derive(Clone, Debug)]
-#[expect(
-    clippy::box_collection,
-    reason = "a boxed Vec is one pointer, not three, for the many instances with no attributes"
-)]
 pub(super) struct Body {
-    /// `None` while the instance has its class's name (the data model keeps that one shared per class), so most
-    /// instances pay one pointer and no allocation for their name.
-    pub(super) name: Option<Box<Arc<str>>>,
     /// Non-default values only, sorted by `PropId`.
     pub(super) props: Vec<(PropId, Value)>,
     /// The ends of the child list. `None` until the first child arrives; kept (possibly empty) after that, so a
     /// container that empties and refills does not allocate again.
     pub(super) children: Option<Box<ChildList>>,
-    /// In insertion order. `None` until the first attribute is set.
-    pub(super) attributes: Option<Box<Vec<Attribute>>>,
+    /// `None` while the instance has its class's name and no attributes; dropped again once both are gone.
+    extras: Option<Box<Extras>>,
 }
 
 impl Body {
     /// A body with the class's name and nothing else.
     pub(super) fn new() -> Self {
         Self {
-            name: None,
             props: Vec::new(),
             children: None,
-            attributes: None,
+            extras: None,
+        }
+    }
+
+    /// The instance's own name, or `None` when it has its class's.
+    #[inline]
+    pub(super) fn name(&self) -> Option<&Arc<str>> {
+        self.extras.as_deref()?.name.as_ref()
+    }
+
+    /// Gives the instance its own name, or its class's again with `None`.
+    pub(super) fn set_name(&mut self, name: Option<Arc<str>>) {
+        match (&mut self.extras, name) {
+            (Some(extras), name) => {
+                extras.name = name;
+                self.drop_empty_extras();
+            }
+            (None, None) => {}
+            (extras @ None, Some(name)) => {
+                *extras = Some(Box::new(Extras {
+                    name: Some(name),
+                    attributes: Vec::new(),
+                }));
+            }
+        }
+    }
+
+    /// The attributes, in the order they were first set.
+    #[inline]
+    pub(super) fn attributes(&self) -> &[Attribute] {
+        self.extras.as_deref().map_or(&[], |e| e.attributes.as_slice())
+    }
+
+    /// The attributes, to change them in place. Call [`Body::drop_empty_extras`] after removing any.
+    pub(super) fn attributes_mut(&mut self) -> &mut Vec<Attribute> {
+        &mut self.extras.get_or_insert_with(Box::default).attributes
+    }
+
+    /// Whether the extras' box is allocated.
+    #[cfg(test)]
+    pub(super) fn has_extras(&self) -> bool {
+        self.extras.is_some()
+    }
+
+    /// Frees the extras' box once the instance has neither its own name nor attributes.
+    pub(super) fn drop_empty_extras(&mut self) {
+        if self
+            .extras
+            .as_deref()
+            .is_some_and(|e| e.name.is_none() && e.attributes.is_empty())
+        {
+            self.extras = None;
         }
     }
 
@@ -129,10 +192,9 @@ impl Body {
         let mut props = Vec::with_capacity(self.props.len());
         props.extend_from_slice(&self.props);
         Self {
-            name: self.name.clone(),
             props,
             children: None,
-            attributes: self.attributes.clone(),
+            extras: self.extras.clone(),
         }
     }
 
@@ -157,11 +219,10 @@ pub(super) struct Slot {
     pub(super) class: ClassId,
     /// Per change consumer: what changed since that consumer last drained.
     pub(super) dirty: [u8; MAX_CONSUMERS],
-    /// Whether any signal connection listens to this instance, so an unwatched change costs one check. It sits
-    /// in what was padding: the slot stays 72 bytes.
+    /// Whether any signal connection listens to this instance, so an unwatched change costs one check.
     pub(super) watched: bool,
-    /// How many outside holders pinned the instance, up to `u8::MAX`; `pins.rs` counts the rest. It sits in the
-    /// last byte of padding, so the slot stays 72 bytes.
+    /// How many outside holders pinned the instance, up to `u8::MAX`; `pins.rs` counts the rest. With the fields
+    /// above it makes 28 bytes, padded to 32 before the 40-byte body: the slot is 72 bytes.
     pub(super) pins: u8,
     pub(super) body: Option<Body>,
 }
@@ -409,9 +470,28 @@ mod tests {
 
     #[test]
     fn slot_is_compact() {
-        assert!(size_of::<Slot>() <= 72, "Slot is {} bytes", size_of::<Slot>());
-        assert_eq!(size_of::<Body>(), 48);
+        // Exactly 72: 9 × 8 is the stride the module docs explain (#90).
+        assert_eq!(size_of::<Slot>(), 72, "Slot is {} bytes", size_of::<Slot>());
+        assert_eq!(size_of::<Body>(), 40);
         assert_eq!(size_of::<(PropId, Value)>(), 40);
+    }
+
+    #[test]
+    fn name_and_attributes_share_one_box_freed_when_both_are_gone() {
+        let mut b = Body::new();
+        assert!(!b.has_extras());
+        b.set_name(None);
+        assert!(!b.has_extras(), "the class name stores nothing");
+        b.set_name(Some(Arc::from("Door")));
+        b.attributes_mut().push((Arc::from("Team"), Value::Int(1)));
+        assert_eq!(b.name().map(|n| &**n), Some("Door"));
+        b.set_name(None);
+        assert!(b.has_extras(), "kept for the attribute");
+        assert_eq!(b.name(), None);
+        b.attributes_mut().clear();
+        b.drop_empty_extras();
+        assert!(!b.has_extras());
+        assert!(b.attributes().is_empty());
     }
 
     #[test]

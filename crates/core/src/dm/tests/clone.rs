@@ -130,8 +130,8 @@ fn attributes_set_get_and_remove() {
     assert_eq!(dm.attribute(p, "Speed"), Ok(None));
     dm.set_attribute(p, "Team", None).expect("remove");
     assert!(
-        dm.slots.body(p).is_some_and(|b| b.attributes.is_none()),
-        "empty list freed"
+        dm.slots.body(p).is_some_and(|b| !b.has_extras()),
+        "the empty extras box is freed"
     );
 
     let err = dm.set_attribute(p, "Friend", Some(Value::Ref(None))).expect_err("ref");

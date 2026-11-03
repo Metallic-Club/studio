@@ -178,11 +178,13 @@ fn searches_names_and_full_names() {
     dm.set_name(door, "Gate".into()).expect("rename");
     assert_eq!(dm.shared_name(door).as_deref(), Ok("Gate"));
     assert_eq!(take_notices(&mut dm), vec![Notice::NameChanged { id: door }]);
-    assert!(dm.slots.body(door).is_some_and(|b| b.name.is_some()));
+    assert!(dm.slots.body(door).is_some_and(|b| b.name().is_some()));
     dm.set_name(door, "Part".into()).expect("back to the class name");
     assert_eq!(dm.name(door), Ok("Part"));
     assert!(
-        dm.slots.body(door).is_some_and(|b| b.name.is_none()),
+        dm.slots
+            .body(door)
+            .is_some_and(|b| b.name().is_none() && !b.has_extras()),
         "class name is not stored"
     );
 }

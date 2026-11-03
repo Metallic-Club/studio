@@ -124,7 +124,7 @@ impl DataModel {
     /// The instance's name: its own, or its class's.
     fn name_ref(&self, id: Id) -> Result<&Arc<str>, DmError> {
         let view = self.view(id)?;
-        if let Some(name) = view.body.name.as_deref() {
+        if let Some(name) = view.body.name() {
             return Ok(name);
         }
         self.classes
@@ -161,7 +161,7 @@ impl DataModel {
         let Some(body) = slot.body.as_mut() else {
             return Err(DmError::NoInstance(id));
         };
-        body.name = (!is_class_name).then(|| Box::new(name));
+        body.set_name((!is_class_name).then_some(name));
         self.changes.mark(slot, id, DirtyBits::PROPERTY);
         self.notify(Notice::NameChanged { id });
         Ok(())

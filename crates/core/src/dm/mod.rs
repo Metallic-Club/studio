@@ -45,8 +45,17 @@ use pins::Pins;
 use signals::Signals;
 use storage::{Body, Slot, Slots};
 
-/// How many change consumers can be registered (render, physics, replication and Studio).
-pub const MAX_CONSUMERS: usize = 4;
+/// How many change consumers ([`DataModel::register_consumer`]) one data model can have registered at once.
+///
+/// A running game plans five: render, physics, the script host, Studio and replication. The other three leave room
+/// for tools and subsystems that come later; [`DataModel::unregister_consumer`] gives a place back. A configuration
+/// with several data models (Studio running a local server and clients) counts each model's consumers separately.
+///
+/// Every instance keeps one byte of [`DirtyBits`] per consumer in its slot, so this sets part of the slot's size.
+/// Eight fit in a 72-byte slot (`storage.rs` explains why it must stay 72), so a `Part` with four non-default
+/// properties stays at 232 bytes, inside the 256-byte budget (`tests/alloc.rs`). Registering more fails with
+/// [`DmError::TooManyConsumers`].
+pub const MAX_CONSUMERS: usize = 8;
 
 /// What the data model caches per class, so hot paths do not go back to the registry for it.
 #[derive(Debug)]
