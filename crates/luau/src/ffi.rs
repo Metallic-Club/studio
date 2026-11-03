@@ -55,6 +55,43 @@
 //! so it only queues `(uid, id)` in a thread-local. [`FrameGuard`] gives the queued pins of its data model back when
 //! a call starts and when it ends, and [`release_pins`] does it on demand. A pin queued for a data model that never
 //! sees another call stays queued; it is 16 bytes and harms nothing.
+//!
+//! # The interrupt is set from another thread
+//!
+//! The time budget installs Luau's interrupt (`lua_callbacks(L)->interrupt`) from the watchdog thread while the VM
+//! runs on its own (the `watchdog` module explains why: an installed interrupt costs every safepoint a call). Only
+//! [`InterruptSlot`] writes that field, and this is why the write is sound:
+//!
+//! - **Luau allows it.** `lua.h` says of `lua_Callbacks`: "interrupt is safe to set from an arbitrary thread but
+//!   all other callbacks can only be changed when the VM is not running any code". Native code is built for it:
+//!   its interrupt handler loads the callback again and skips a null one, because "it may be nullptr in case the
+//!   update raced with the check before we got here" (`emitInterrupt`, `CodeGen/src/EmitCommonX64.cpp` and
+//!   `CodeGenA64.cpp`).
+//! - **The VM's reads see a whole value.** The interpreter reads the field with one plain load at each safepoint
+//!   (`VM_INTERRUPT` in `VM/src/lvmexecute.cpp`; also the GC step in `lgc.cpp` and pattern matching in
+//!   `lstrlib.cpp`), and native code with one `cmp qword [g + offset], 0` (x64) or `ldr` (arm64) per safepoint
+//!   (`IrCmd::INTERRUPT` in `IrLoweringX64.cpp` and `IrLoweringA64.cpp`). The write is one atomic store of an aligned
+//!   pointer. Aligned pointer-sized loads and stores are single-copy atomic on every target Luau runs on, so a read
+//!   sees null or `interrupt`, both valid, never a torn pointer.
+//! - **The VM sees the write soon.** Native code is machine code Luau emitted, which no compiler optimises: every
+//!   safepoint loads the field from memory. In the interpreter, the load follows an indirect dispatch on the next
+//!   opcode (a computed `goto`, or a `switch` with MSVC), so every handler, including the ones that call functions
+//!   the compiler cannot see into, lies on a path between two loads; the compiler cannot prove the field unchanged
+//!   and keep it in a register. A load that misses the write by a few instructions only moves the stop to the next
+//!   safepoint. (A Luau or C function that runs long without a safepoint was never interruptible; that is
+//!   unchanged.)
+//! - **The memory is alive.** The watchdog writes into a VM only between arming and disarming a call into it
+//!   ([`FrameGuard`] holds the [`Armed`] guard), and the call holds a `&mut` to the backend that owns the VM. Arming,
+//!   disarming and the watchdog's write all take the watchdog's lock, so when disarming returns the watchdog cannot
+//!   write into that VM again, and the lock orders its last write before the VM thread's own (removing the
+//!   interrupt) and before the VM is ever freed.
+//! - **Nothing new unwinds through Rust.** The interrupt raises from the same place as before (Luau calls it at a
+//!   safepoint), and no Rust frame with a destructor is alive under it; the watchdog thread never runs Luau code.
+//!
+//! Under the C++ and Rust memory models a plain load racing with an atomic store is still a data race, so this
+//! leans on the hardware guarantee above, as Luau itself does by documenting the field as settable from any thread.
+//! `watchdog::tests` stresses it: four VMs at once, hundreds of resumes each, the interrupt installed at random
+//! moments, with and without `jit` (CI runs both).
 #![allow(unsafe_code, reason = "the raw Luau C API; the module docs explain why it is needed")]
 
 use std::cell::{Cell, RefCell};
@@ -62,6 +99,7 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use metallic_core::{CFrame, Color3, DataModel, Id, ListenerKey, ScriptValue, Value, Vector2, Vector3};
 use metallic_script::{HostContext, SignalRef};
@@ -71,6 +109,7 @@ pub(crate) use mlua::lua_CFunction;
 use mlua::{Function, IntoLuaMulti, Lua, MultiValue, Table};
 
 use crate::shared::Shared;
+use crate::watchdog::Armed;
 use crate::{atoms, convert};
 
 /// The userdata tags of the engine's types. mlua uses tag 1 for userdata it has destroyed, so these stay well
@@ -226,10 +265,13 @@ impl Frame {
 
 /// Publishes a backend call's context and shared state to C functions and mlua callbacks until dropped. It
 /// borrows both for its whole life, so the caller cannot touch the context while Luau code may. Entering and leaving
-/// give the data model back the pins of collected instance userdata ([`release_pins`]).
+/// give the data model back the pins of collected instance userdata ([`release_pins`]). It also arms the watchdog
+/// with the call's deadline for its whole life (see the `watchdog` module).
 pub(crate) struct FrameGuard<'a> {
     frame: Frame,
     previous: Option<Frame>,
+    /// Disarms the watchdog, and removes the interrupt if it was installed, when the guard drops.
+    _armed: Option<Armed>,
     _borrow: PhantomData<&'a mut ()>,
 }
 
@@ -237,6 +279,7 @@ impl<'a> FrameGuard<'a> {
     /// Starts a frame for one backend call.
     pub(crate) fn enter(ctx: &'a mut HostContext<'_>, shared: &'a Shared) -> Self {
         release_pins(ctx.dm);
+        let armed = shared.budget.arm(&ctx.deadline);
         let frame = Frame {
             ctx: ptr::from_mut(ctx).cast::<HostContext<'static>>(),
             shared: ptr::from_ref(shared),
@@ -245,6 +288,7 @@ impl<'a> FrameGuard<'a> {
         Self {
             frame,
             previous,
+            _armed: armed,
             _borrow: PhantomData,
         }
     }
@@ -1114,9 +1158,12 @@ unsafe fn push_script(state: *mut lua_State, shared: Option<&Shared>, value: Scr
 /// The message of a timeout; [`Shared::timed_out`] tells it apart from a script's own error.
 pub(crate) const TIMEOUT_MESSAGE: &str = "script exceeded its time budget";
 
-/// Luau's interrupt: called at every safepoint (loop back-edge, call, return). It polls the call's
+/// Luau's interrupt: called at every safepoint (loop back-edge, call, return) while installed. It polls the call's
 /// [`Deadline`](metallic_script::Deadline), which reads the clock once per few hundred polls, and stops the
 /// thread once it has passed. No mlua trampoline is involved: that alone made hot loops 1.5–1.9× slower.
+///
+/// Normally the watchdog installs it only once the deadline has passed ([`InterruptSlot`]), so the first poll that
+/// reads the clock stops the thread; where no watchdog thread runs, it stays installed and polls at every safepoint.
 unsafe extern "C-unwind" fn interrupt(state: *mut lua_State, gc: c_int) {
     // A GC step cannot survive an exception; the next safepoint will see the deadline.
     if gc >= 0 {
@@ -1159,28 +1206,86 @@ unsafe extern "C-unwind" fn useratom(_state: *mut lua_State, s: *const c_char, l
 // Set-up through mlua: callbacks, metatables, references and the bridge between mlua values and payloads.
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Installs the interrupt, the atom callback and the `Instance` destructor. Called once, before any script is
-/// loaded.
+/// Installs the atom callback and the `Instance` destructor. Called once, before any script is loaded. (The
+/// interrupt belongs to the time budget: see [`InterruptSlot`].)
 pub(crate) fn install_callbacks(lua: &Lua) -> mlua::Result<()> {
-    // SAFETY: `exec_raw` hands us a valid state; the callbacks are VM-wide and these two are not used by mlua, and
-    // neither is the INSTANCE tag, whose destructor is set before any userdata of it exists.
+    // SAFETY: `exec_raw` hands us a valid state; the callback is VM-wide and not used by mlua, and neither is the
+    // INSTANCE tag, whose destructor is set before any userdata of it exists.
     unsafe {
         lua.exec_raw::<()>((), |state| {
-            let callbacks = ffi::lua_callbacks(state);
-            (*callbacks).interrupt = Some(interrupt);
-            (*callbacks).useratom = Some(useratom);
+            (*ffi::lua_callbacks(state)).useratom = Some(useratom);
             ffi::lua_setuserdatadtor(state, tag::INSTANCE, Some(instance_dtor));
         })
     }
 }
 
-/// Installs (`true`) or removes the interrupt. Without it no time budget is enforced.
-pub(crate) fn set_interrupt(lua: &Lua, enabled: bool) -> mlua::Result<()> {
-    // SAFETY: as in `install_callbacks`.
-    unsafe {
-        lua.exec_raw::<()>((), |state| {
-            (*ffi::lua_callbacks(state)).interrupt = if enabled { Some(interrupt) } else { None };
-        })
+/// The type of Luau's interrupt callback.
+type InterruptFn = unsafe extern "C-unwind" fn(*mut lua_State, c_int);
+
+// `InterruptSlot::store` reads the field as an `AtomicPtr<()>`: same size and alignment as `Option<InterruptFn>`,
+// which is a nullable function pointer (the null-pointer optimisation is guaranteed for `Option<fn>`).
+const _: () = {
+    assert!(size_of::<AtomicPtr<()>>() == size_of::<Option<InterruptFn>>());
+    assert!(align_of::<AtomicPtr<()>>() == align_of::<Option<InterruptFn>>());
+};
+
+/// One VM's interrupt callback (`lua_callbacks(L)->interrupt`), which the time budget installs and removes, from
+/// the VM's thread or from the watchdog's (see "The interrupt is set from another thread" in the module docs, and
+/// the `watchdog` module).
+///
+/// It points into the VM's global state, so it is valid only while the VM lives. Each backend keeps the one of its
+/// own VM (in [`Shared`]), and the watchdog writes through it only while a call into that backend is armed, which
+/// the call ends before it returns the `&mut` borrow of the backend that owns the VM.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InterruptSlot(ptr::NonNull<Option<InterruptFn>>);
+
+// SAFETY: the slot is an address that is only written through `store`, an atomic store, which the module docs show
+// to be sound from any thread while the VM lives; moving the address to the watchdog's thread is what it is for.
+unsafe impl Send for InterruptSlot {}
+
+impl InterruptSlot {
+    /// The interrupt of `lua`'s VM. Nothing is installed or removed.
+    pub(crate) fn of(lua: &Lua) -> mlua::Result<Self> {
+        let mut slot = None;
+        // SAFETY: `exec_raw` hands us a valid state, and `lua_callbacks` returns the VM-wide callback table inside
+        // its global state; only the field's address is taken.
+        unsafe {
+            lua.exec_raw::<()>((), |state| {
+                slot = ptr::NonNull::new(&raw mut (*ffi::lua_callbacks(state)).interrupt);
+            })?;
+        }
+        slot.map(Self)
+            .ok_or_else(|| mlua::Error::runtime("Luau returned no callback table"))
+    }
+
+    /// Installs [`interrupt`]: from the next safepoint on, the VM polls the running call's deadline.
+    pub(crate) fn install(self) {
+        self.store(interrupt as InterruptFn as *mut ());
+    }
+
+    /// Removes the interrupt: safepoints cost a load, a compare and a branch not taken.
+    pub(crate) fn remove(self) {
+        self.store(ptr::null_mut());
+    }
+
+    /// Writes the callback.
+    fn store(self, callback: *mut ()) {
+        // SAFETY: the address is valid (the VM lives; see the type's docs), aligned and of the right size for an
+        // `AtomicPtr<()>` (asserted above), and both values are valid for the field (null, or `interrupt`). The
+        // store is atomic; the VM's reads of the field are plain aligned pointer-sized loads, which on every target
+        // Luau runs on see either the old or the new value whole. The module docs ("The interrupt is set from
+        // another thread") give the argument and Luau's own guarantee. Nothing else is published with the value
+        // (the interrupt reads only the VM thread's own state), so `Relaxed` is enough.
+        let field = unsafe { AtomicPtr::<()>::from_ptr(self.0.as_ptr().cast::<*mut ()>()) };
+        field.store(callback, Ordering::Relaxed);
+    }
+
+    /// Whether the interrupt is installed now.
+    #[cfg(test)]
+    pub(crate) fn is_installed(self) -> bool {
+        // SAFETY: as in `store`; tests only ask while the VM lives.
+        let field = unsafe { AtomicPtr::<()>::from_ptr(self.0.as_ptr().cast::<*mut ()>()) };
+        !field.load(Ordering::Relaxed).is_null()
     }
 }
 

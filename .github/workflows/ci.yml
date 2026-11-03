@@ -112,6 +112,12 @@ jobs:
           CARGO_PROFILE_DIST_LTO: "false"
           CARGO_PROFILE_DIST_CODEGEN_UNITS: "16"
         run: cargo run -p metallic_luau --example error_smoke --profile dist
+      # Luau's native code generator (`--features jit`, off by default) compiles scripts to machine code, which
+      # checks the interrupt its own way; the time budget's watchdog (crates/luau/src/watchdog.rs) must stop runaway
+      # native loops too. Dependencies, Luau's C++ included, are optimised in the test profile (Cargo.toml).
+      - name: Luau tests with native code (jit)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test -p metallic_luau --features jit
 
   # Everything that must build on mobile: the engine crates, Player and Launcher. Studio is desktop-only and xtask
   # is a host tool. Since #46 the engine contains C++ (Luau, built by mlua's build script), so `cargo check` for a

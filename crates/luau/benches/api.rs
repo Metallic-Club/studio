@@ -1,6 +1,7 @@
 //! Wall-time benches of the Luau bindings (issue #46). Each `*_1m` bench runs one script that does the operation a
 //! million times; divide the reported time by 1,000,000 for the cost of one. `vm/hot_loop` runs 20 million loop
-//! iterations with the interrupt (the time budget) installed, `vm/hot_loop_no_interrupt` the same without it.
+//! iterations with the time budget enforced (the watchdog armed for the call, #64), `vm/hot_loop_no_interrupt` the
+//! same with the budget turned off.
 //!
 //! Run with `cargo bench -p metallic_luau --bench api`.
 #![allow(missing_docs, reason = "criterion's macros generate undocumented items")]
