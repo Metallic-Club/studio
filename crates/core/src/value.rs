@@ -145,6 +145,12 @@ mod tests {
     }
 
     #[test]
+    fn fits_the_per_instance_budget() {
+        // Every property of every instance is a `Value`; 100k-part scenes need it to stay this small.
+        assert!(size_of::<Value>() <= 32, "Value is {} bytes", size_of::<Value>());
+    }
+
+    #[test]
     fn prop_type_display_reads_well() {
         assert_eq!(PropType::Int.to_string(), "integer");
         assert_eq!(PropType::Enum("Material").to_string(), "Enum.Material");

@@ -19,21 +19,21 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CFrame {
     position: Vec3,
-    rotation: Quat,
+    /// The unit quaternion as `[x, y, z, w]`. Stored as a plain array rather than a `Quat` because `Quat` is
+    /// 16-byte aligned on SIMD targets, which would pad a `CFrame` from 28 to 32 bytes and every `Value` from 32 to
+    /// 48. Loading it back into a `Quat` for the maths is cheap.
+    rotation: [f32; 4],
 }
 
 impl CFrame {
     /// No translation and no rotation.
-    pub const IDENTITY: Self = Self {
-        position: Vec3::ZERO,
-        rotation: Quat::IDENTITY,
-    };
+    pub const IDENTITY: Self = Self::new(Vec3::ZERO);
 
     /// A frame at `position` with no rotation.
     pub const fn new(position: Vec3) -> Self {
         Self {
             position,
-            rotation: Quat::IDENTITY,
+            rotation: [0.0, 0.0, 0.0, 1.0],
         }
     }
 
@@ -47,7 +47,7 @@ impl CFrame {
     pub fn from_parts(position: Vec3, rotation: Quat) -> Self {
         Self {
             position,
-            rotation: normalized_or_identity(rotation),
+            rotation: normalized_or_identity(rotation).to_array(),
         }
     }
 
@@ -82,7 +82,7 @@ impl CFrame {
     /// The Euler angles in degrees, `(x, y, z)`, in the order of [`from_euler_xyz_deg`](Self::from_euler_xyz_deg).
     /// Near gimbal lock (y = ±90°) the split between x and z is not unique.
     pub fn to_euler_xyz_deg(self) -> Vec3 {
-        let (x, y, z) = self.rotation.to_euler(EulerRot::XYZ);
+        let (x, y, z) = self.quat().to_euler(EulerRot::XYZ);
         Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
     }
 
@@ -101,7 +101,7 @@ impl CFrame {
     /// [`from_orientation_deg`](Self::from_orientation_deg). Near gimbal lock (x = ±90°) the split between y and z
     /// is not unique.
     pub fn to_orientation_deg(self) -> Vec3 {
-        let (y, x, z) = self.rotation.to_euler(EulerRot::YXZ);
+        let (y, x, z) = self.quat().to_euler(EulerRot::YXZ);
         Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
     }
 
@@ -111,42 +111,42 @@ impl CFrame {
     }
 
     /// The rotation, always a unit quaternion.
-    pub const fn rotation(self) -> Quat {
-        self.rotation
+    pub fn rotation(self) -> Quat {
+        self.quat()
     }
 
     /// The frame that undoes this one: `cf * cf.inverse()` is the identity.
     pub fn inverse(self) -> Self {
-        let rotation = self.rotation.conjugate();
+        let rotation = self.quat().conjugate();
         Self {
             position: -(rotation * self.position),
-            rotation,
+            rotation: rotation.to_array(),
         }
     }
 
     /// Moves a point from this frame's local space to the parent space (rotation and translation).
     pub fn transform_point(self, point: Vec3) -> Vec3 {
-        self.position + self.rotation * point
+        self.position + self.quat() * point
     }
 
     /// Rotates a direction from this frame's local space to the parent space (no translation).
     pub fn transform_vector(self, vector: Vec3) -> Vec3 {
-        self.rotation * vector
+        self.quat() * vector
     }
 
     /// The forward direction (-Z), a unit vector.
     pub fn look_vector(self) -> Vec3 {
-        self.rotation * Vec3::NEG_Z
+        self.quat() * Vec3::NEG_Z
     }
 
     /// The right direction (+X), a unit vector.
     pub fn right_vector(self) -> Vec3 {
-        self.rotation * Vec3::X
+        self.quat() * Vec3::X
     }
 
     /// The up direction (+Y), a unit vector.
     pub fn up_vector(self) -> Vec3 {
-        self.rotation * Vec3::Y
+        self.quat() * Vec3::Y
     }
 
     /// Interpolates towards `other`: the position linearly, the rotation along the shortest arc (slerp). `t = 0`
@@ -154,7 +154,7 @@ impl CFrame {
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self::from_parts(
             self.position.lerp(other.position, t),
-            self.rotation.slerp(other.rotation, t),
+            self.quat().slerp(other.quat(), t),
         )
     }
 
@@ -162,8 +162,12 @@ impl CFrame {
     /// compare equal.
     pub fn approx_eq(self, other: Self, max_abs_diff: f32) -> bool {
         self.position.abs_diff_eq(other.position, max_abs_diff)
-            && (self.rotation.abs_diff_eq(other.rotation, max_abs_diff)
-                || self.rotation.abs_diff_eq(-other.rotation, max_abs_diff))
+            && (self.quat().abs_diff_eq(other.quat(), max_abs_diff)
+                || self.quat().abs_diff_eq(-other.quat(), max_abs_diff))
+    }
+
+    fn quat(self) -> Quat {
+        Quat::from_array(self.rotation)
     }
 }
 
@@ -180,7 +184,7 @@ impl Mul for CFrame {
 
     fn mul(self, rhs: Self) -> Self {
         // Renormalizing keeps long chains of compositions from drifting away from a unit quaternion.
-        Self::from_parts(self.transform_point(rhs.position), self.rotation * rhs.rotation)
+        Self::from_parts(self.transform_point(rhs.position), self.quat() * rhs.quat())
     }
 }
 
@@ -196,8 +200,8 @@ impl Mul<Vec3> for CFrame {
 impl Serialize for CFrame {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let p = self.position;
-        let q = self.rotation;
-        [p.x, p.y, p.z, q.x, q.y, q.z, q.w].serialize(serializer)
+        let [qx, qy, qz, qw] = self.rotation;
+        [p.x, p.y, p.z, qx, qy, qz, qw].serialize(serializer)
     }
 }
 
@@ -213,7 +217,7 @@ impl<'de> Deserialize<'de> for CFrame {
             .ok_or_else(|| D::Error::custom("CFrame rotation must be a finite, non-zero quaternion"))?;
         Ok(Self {
             position,
-            rotation: Quat::from_vec4(rotation),
+            rotation: rotation.to_array(),
         })
     }
 }
@@ -229,6 +233,13 @@ mod tests {
     use super::*;
 
     const EPS: f32 = 1e-4;
+
+    #[test]
+    fn is_seven_unpadded_floats() {
+        // Per-instance memory budget: a CFrame must stay 28 bytes with 4-byte alignment so `Value` fits in 32.
+        assert_eq!(size_of::<CFrame>(), 28);
+        assert_eq!(align_of::<CFrame>(), 4);
+    }
 
     fn sample() -> CFrame {
         CFrame::from_parts(

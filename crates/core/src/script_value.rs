@@ -84,7 +84,7 @@ impl ScriptValue {
             (PropType::Enum(enum_type), Self::Enum(item)) if item.enum_type() == *enum_type => {
                 Value::Enum(item.clone())
             }
-            (PropType::Enum(enum_type), Self::String(name)) => Value::Enum(EnumItem::new(*enum_type, name.clone())),
+            (PropType::Enum(enum_type), Self::String(name)) => Value::Enum(EnumItem::new(enum_type, name)),
             (PropType::Ref(_), Self::Instance(id)) => Value::Ref(Some(*id)),
             (PropType::Ref(_), Self::Nil) => Value::Ref(None),
             _ => return Err(ScriptError::wrong_type(ty.to_string(), self.describe())),
@@ -354,6 +354,16 @@ mod tests {
         assert_eq!(number_to_int(-9_223_372_036_854_775_808.0), Some(i64::MIN));
         assert_eq!(number_to_int(9_223_372_036_854_775_808.0), None);
         assert_eq!(number_to_int(1e15), Some(1_000_000_000_000_000));
+    }
+
+    #[test]
+    fn stays_small() {
+        // The largest payloads are `CFrame` (28 bytes) and the `Vec`s (24 bytes).
+        assert!(
+            size_of::<ScriptValue>() <= 32,
+            "ScriptValue is {} bytes",
+            size_of::<ScriptValue>()
+        );
     }
 
     #[test]
