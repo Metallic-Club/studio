@@ -191,3 +191,23 @@ the `Position` getter looking up `CFrame` by name.
 Perf-gate instruction counts of the Luau suite at introduction (#46; ubuntu-24.04 runner, Rust 1.99.1, gungraun
 0.20.0, release profile): `luau_reads` 13,859,424, `luau_writes` 15,281,853, `luau_method_calls` 21,521,695 (10,000
 operations each, plus one script start).
+
+### Script lifecycle
+
+`cargo bench -p metallic_script --bench lifecycle`, **2026-11-03**, same machine, #68. One frame creates 1,000 parts
+under `Workspace` and destroys them; the host variants then run a whole frame (four `step`s) of a started game with
+the minimal backend. `no_host_connected` has one unrelated connection, which is what a running script's `Enabled`
+watch costs the data model (destroyed instances stay readable until their events are delivered). The machine was
+shared with other builds, so these are the 10th percentile of 4,000 frames per variant, the variants interleaved
+(criterion's medians moved by up to 30% between runs; the ratios held).
+
+| Bench | `main` `c9deb3f` | #68 | Target |
+| --- | ---: | ---: | ---: |
+| `create_destroy_1000/no_host` | 47.8 µs | 48.0 µs | |
+| `create_destroy_1000/no_host_connected` | 94.2 µs | 97.3 µs | |
+| `create_destroy_1000/host_empty_game` | 272.4 µs | 50.8 µs | ≈ `no_host` |
+| `create_destroy_1000/host_one_script` | 301.5 µs | 94.6 µs | ≈ `no_host_connected` |
+
+Before #68 the host connected `DescendantAdded`/`DescendantRemoving` on each service that runs scripts, so every part
+queued two signal events (with argument vectors) that the host discarded after a class test. It now drains a change
+consumer: a dirty-list entry and one class test per part.

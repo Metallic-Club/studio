@@ -274,6 +274,59 @@ fn a_script_disabled_by_another_script_stops() {
 }
 
 #[test]
+fn a_move_made_by_a_listener_takes_effect_at_the_following_dispatch() {
+    let mut w = World::new();
+    let workspace = w.service("Workspace");
+    let storage = w.service("ReplicatedStorage");
+    let late = w.add("Script", storage, "Late", Some(&recorder("late")));
+    w.add(
+        "Script",
+        workspace,
+        "Mover",
+        Some(
+            "once _ %Workspace ChildAdded call %ReplicatedStorage FindFirstChild Late -> t ; set $t Parent %Workspace\n\
+             record mover\nwait 1000\n",
+        ),
+    );
+    w.start(RunContext::Local);
+    w.add("Folder", workspace, "Trigger", None);
+
+    // The listener moves `Late` in during this dispatch; like its events, the move waits for the next one.
+    w.host.dispatch_signals(&mut w.dm);
+    assert_eq!(w.dm.parent(late).expect("parent"), Some(workspace));
+    assert!(!w.host.is_running(late));
+    w.host.dispatch_signals(&mut w.dm);
+    assert!(w.host.is_running(late));
+    assert_eq!(w.labels(), ["mover", "late"]);
+    assert!(w.errors().is_empty(), "{:?}", w.errors());
+}
+
+#[test]
+fn a_restarted_game_follows_scripts_again() {
+    let mut w = World::new();
+    let workspace = w.service("Workspace");
+    let storage = w.service("ReplicatedStorage");
+    let script = w.add("Script", storage, "Door", Some(&recorder("door")));
+    let sources = std::mem::take(&mut w.sources);
+    // More restarts than the data model has change consumers: each game gives its consumer back.
+    for round in 0..2 * metallic_core::MAX_CONSUMERS {
+        w.host
+            .start_game(&mut w.dm, RunContext::Local, sources.clone())
+            .expect("the game starts");
+        w.dm.set_parent(script, Some(workspace)).expect("move in");
+        w.frame();
+        assert!(w.host.is_running(script), "round {round}");
+        assert!(w.host.stop_game(&mut w.dm));
+        // Stopped: moves are no longer followed, and nothing queued carries over to the next game.
+        w.dm.set_parent(script, Some(storage)).expect("move out");
+        w.frame();
+        assert!(!w.host.is_running(script));
+    }
+    assert_eq!(w.labels().len(), 2 * metallic_core::MAX_CONSUMERS);
+    assert_eq!(w.dm.connection_count(), 0);
+}
+
+#[test]
 fn require_runs_a_module_once_and_caches_its_value() {
     let mut w = World::new();
     let workspace = w.service("Workspace");
