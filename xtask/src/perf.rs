@@ -437,7 +437,10 @@ mod tests {
         let luau = workloads(include_str!("../../crates/luau/benches/perf_gate.rs"));
         assert_eq!(luau, Ok(names(&["luau_reads", "luau_writes", "luau_method_calls"])));
         let render = workloads(include_str!("../../crates/render/benches/perf_gate.rs"));
-        assert_eq!(render, Ok(names(&["render_sync_moving", "render_sync_scattered"])));
+        assert_eq!(
+            render,
+            Ok(names(&["render_sync_moving", "render_sync_scattered", "render_cull"]))
+        );
         let engine = workloads(include_str!("../../crates/engine/benches/perf_gate.rs"));
         assert_eq!(engine, Ok(names(&["engine_empty_frames"])));
         let client = workloads(include_str!("../../crates/engine/benches/perf_gate_client.rs"));

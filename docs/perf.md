@@ -49,7 +49,7 @@ passes). There are five suites, each with its own table in the job summary:
   dynamic region, as moving parts do in a game. The sync and coalesce that queue them run in the `setup`, so the
   measured call pays for moving the 100 grid items and then walking the view, as a frame does. The camera, the
   movers and the parts are the workload's definition: changing any of them is a gate change. At introduction (#114;
-  ubuntu-24.04 runner, release profile) it counted _(count to be filled in from this PR's perf-gate run)_ `Ir`.
+  ubuntu-24.04 runner, release profile) it counted 345,288 `Ir`: the 100 moved items and the walk of the view.
 
 A suite the base does not have yet (the PR that introduces it) cannot be compared: its head counts are measured,
 checked (each must be present and above zero) and reported as `NEW (not gated)`, and the next PR is gated against
