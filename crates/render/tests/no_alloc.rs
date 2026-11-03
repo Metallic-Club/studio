@@ -261,13 +261,17 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
     let (ours_one, floor_one) =
         renderer_and_floor(&context, PassSet::EMPTY.with(PassId::Ui), &UI_ONLY, &target, &depth);
     let (ours, floor) = renderer_and_floor(&context, PassSet::default(), &DEFAULT_PASSES, &target, &depth);
-    // Per pass: what three more passes cost the renderer is exactly what they cost by hand, so nothing in the pass
-    // loop allocates.
+    // Per pass: what the default set's extra passes cost the renderer is what they cost by hand (exactly, on a
+    // hardware adapter), so nothing in the pass loop allocates. CI's WARP showed the renderer's four-pass frame 2
+    // above the identical hand-written one (77 against 75, with 43 against 43 for UI only) while the dev PC's
+    // WARP shows 67 against 67: the same runner noise as `machine_noise`'s.
+    let more = PassSet::default().iter().count() - 1;
     assert!(
-        ours.saturating_sub(ours_one) <= floor.saturating_sub(floor_one),
-        "three more passes cost the renderer {} allocations and the same wgpu calls {}",
+        ours.saturating_sub(ours_one) <= floor.saturating_sub(floor_one) + machine_noise(&context),
+        "{more} more passes cost the renderer {} allocations and the same wgpu calls {} on {:?}",
         ours.saturating_sub(ours_one),
-        floor.saturating_sub(floor_one)
+        floor.saturating_sub(floor_one),
+        context.capabilities().device_type
     );
     // Per frame: nothing beyond wgpu's own, give or take its pooling.
     assert!(
@@ -1136,7 +1140,8 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
 /// - **Software adapters** (`DeviceType::Cpu`: lavapipe, llvmpipe, WARP) on CI's runners: up to 6. They showed a
 ///   constant excess on every frame, whether or not frames overlapped, the same for both workloads of each test:
 ///   lavapipe 4 and WARP 3 on the parts frames before culling (#77), WARP 5 with it (#79), lavapipe 3 on the
-///   overlay frames. The cause is in the runner environment, not found yet (no validation message was reported,
+///   overlay frames, WARP 2 between the plain one-pass and four-pass frames (#81, whose calls do not differ from
+///   `main`'s there; the dev PC's WARP shows 0). The cause is in the runner environment, not found yet (no validation message was reported,
 ///   and the dev PC's WARP shows 0 for the same calls); that the excess does not change between two very different
 ///   workloads, which every test also checks, is what shows it is not the renderer's.
 fn machine_noise(context: &RenderContext) -> u64 {
