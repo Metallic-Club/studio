@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+# Machine-local project caches (docs/adr/0006-project-format.md)
+.metallic/
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

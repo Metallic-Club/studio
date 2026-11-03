@@ -1,0 +1,28 @@
+[package]
+name = "metallic_engine"
+description = "Metallic engine runtime: wires every subsystem together"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["render", "physics", "luau"]
+render = ["dep:metallic_render"]
+physics = ["dep:metallic_physics"]
+luau = ["dep:metallic_luau"]
+
+[dependencies]
+metallic_core.workspace = true
+metallic_classes.workspace = true
+metallic_script.workspace = true
+metallic_project.workspace = true
+metallic_platform.workspace = true
+metallic_render = { workspace = true, optional = true }
+metallic_physics = { workspace = true, optional = true }
+metallic_luau = { workspace = true, optional = true }

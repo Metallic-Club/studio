@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+# `metallic_engine` (and through it every app) is what most commands build; `cargo build` at the root builds everything.
+default-members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license-file = "LICENSE"
+repository = "https://github.com/Metallic-Club/studio"
+publish = false
+
+[workspace.dependencies]
+# Engine crates. The arrows between them are fixed by docs/adr/0001-project-layout.md; `cargo xtask check-layout`
+# enforces them.
+metallic_core = { path = "crates/core" }
+metallic_classes = { path = "crates/classes" }
+metallic_script = { path = "crates/script" }
+metallic_luau = { path = "crates/luau" }
+metallic_render = { path = "crates/render" }
+metallic_physics = { path = "crates/physics" }
+metallic_project = { path = "crates/project" }
+metallic_platform = { path = "crates/platform" }
+metallic_engine = { path = "crates/engine", default-features = false }
+metallic_player = { path = "apps/player" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+undocumented_unsafe_blocks = "warn"
+
+# Your code is lightly optimised, dependencies fully: fast to build, fast enough to run.
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# `cargo build --profile dist`: the binaries that ship.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+panic = "abort"
+strip = true
