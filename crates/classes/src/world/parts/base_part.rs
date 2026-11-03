@@ -1,15 +1,20 @@
 //! `BasePart`: a solid object in the world with a size, a look and physical behaviour. `Part` is the one you create.
 //!
 //! `CFrame` is the stored transform, in world space. `Position` and `Orientation` are computed views of it: reading
-//! them reads the `CFrame`, writing them writes it, and neither is saved.
+//! them reads the `CFrame`, writing them writes it, and neither is saved. They find the `CFrame` through a cached
+//! id checked on each use rather than by name, because they sit on the script read path (see `cframe_id`).
 //!
 //! `Size` is clamped on write, per component, into [`MIN_SIZE`]..=[`MAX_SIZE`] metres, so a negative or zero size
 //! becomes the smallest one rather than an error. NaN and infinity are refused, like for every property.
 //!
 //! The `Material` enum lives here because `BasePart` owns it.
 
+use std::ptr;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use metallic_core::{
-    CFrame, ClassDesc, DataModel, EnumDesc, Id, PropFlags, PropMeta, ScriptError, ScriptValue, Value, Vector3, Widget,
+    CFrame, ClassDesc, DataModel, DmError, EnumDesc, Id, PropFlags, PropId, PropMeta, ScriptError, ScriptValue, Value,
+    Vector3, Widget,
 };
 
 /// The smallest a part can be along each axis, in metres.
@@ -34,16 +39,62 @@ pub static ENUMS: &[EnumDesc] = &[EnumDesc::new(
 )
 .describe("What a part's surface is made of, which sets how it looks: its texture, shine and glow.")];
 
-/// The part's `CFrame`, or the identity when it cannot be read (a computed getter cannot fail).
-fn cframe_of(dm: &DataModel, id: Id) -> CFrame {
-    dm.prop_id(id, "CFrame")
-        .and_then(|prop| dm.cframe(id, prop))
-        .unwrap_or_default()
+/// The name of the stored property `Position` and `Orientation` are views of.
+const CFRAME: &str = "CFrame";
+
+/// Above every raw [`PropId`], which is a `u16`: the cache below is empty.
+const NO_ID: u32 = u32::MAX;
+
+/// `CFrame`'s declaration, the first of [`PROPS`]. The registry hands it out by reference, unless a subclass
+/// overrides it.
+static CFRAME_META: &PropMeta = &PROPS[0];
+
+/// The raw [`PropId`] `CFrame` had at its last lookup, or [`NO_ID`]. Only a hint: [`cframe_id`] checks it.
+static CFRAME_ID: AtomicU32 = AtomicU32::new(NO_ID);
+
+/// The id of the part's `CFrame`, without hashing its name on every read.
+///
+/// An inherited property keeps its id in every subclass, so within one registry every part class numbers `CFrame`
+/// the same. Another registry can number it differently (tests build their own, with other classes above
+/// `BasePart`), so the cached id is used only after checking that it names this class's visible `CFrame`: one index
+/// into the class's property table and a pointer compare (a string compare under an override). When the check
+/// fails, the name is looked up and the cache refilled. A stale id from another registry or thread is always caught
+/// by the check, so relaxed ordering is enough.
+fn cframe_id(dm: &DataModel, id: Id) -> Result<PropId, DmError> {
+    let class = dm.class_of(id)?;
+    if let Ok(raw) = u16::try_from(CFRAME_ID.load(Ordering::Relaxed)) {
+        let cached = PropId::new(raw);
+        // Comparing the declaration's address first skips the string compare, except under an override.
+        let names_cframe = dm.registry().prop(class, cached).is_some_and(|prop| {
+            !prop.hidden && (ptr::eq(prop.meta, CFRAME_META) || prop.meta.name == CFRAME)
+        });
+        if names_cframe {
+            return Ok(cached);
+        }
+    }
+    let prop = dm.prop_id(id, CFRAME)?;
+    CFRAME_ID.store(u32::from(prop.raw()), Ordering::Relaxed);
+    Ok(prop)
 }
 
-/// Writes the part's `CFrame`.
-fn set_cframe(dm: &mut DataModel, id: Id, cframe: CFrame) -> Result<(), ScriptError> {
-    let prop = dm.prop_id(id, "CFrame")?;
+/// The part's `CFrame` and its id; the identity and `None` when it cannot be read (a computed getter cannot fail).
+fn cframe_of(dm: &DataModel, id: Id) -> (CFrame, Option<PropId>) {
+    let Ok(prop) = cframe_id(dm, id) else {
+        return (CFrame::IDENTITY, None);
+    };
+    // `get_ref` rather than the typed `cframe`: borrowing and matching here measured about twice as fast.
+    match dm.get_ref(id, prop) {
+        Ok(Value::CFrame(cframe)) => (*cframe, Some(prop)),
+        _ => (CFrame::IDENTITY, Some(prop)),
+    }
+}
+
+/// Writes the part's `CFrame` through `prop`, the id [`cframe_of`] found, looking it up when there was none.
+fn set_cframe(dm: &mut DataModel, id: Id, prop: Option<PropId>, cframe: CFrame) -> Result<(), ScriptError> {
+    let prop = match prop {
+        Some(prop) => prop,
+        None => dm.prop_id(id, CFRAME)?,
+    };
     Ok(dm.set(id, prop, Value::CFrame(cframe))?)
 }
 
@@ -56,28 +107,28 @@ fn vector3_of(value: Value) -> Result<Vector3, ScriptError> {
 }
 
 fn position_get(dm: &DataModel, id: Id) -> Value {
-    Value::Vector3(cframe_of(dm, id).position())
+    Value::Vector3(cframe_of(dm, id).0.position())
 }
 
 fn position_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError> {
     let position = vector3_of(value)?;
-    let current = cframe_of(dm, id);
-    set_cframe(dm, id, CFrame::from_parts(position, current.rotation()))
+    let (current, prop) = cframe_of(dm, id);
+    set_cframe(dm, id, prop, CFrame::from_parts(position, current.rotation()))
 }
 
 fn orientation_get(dm: &DataModel, id: Id) -> Value {
-    Value::Vector3(cframe_of(dm, id).to_orientation_deg())
+    Value::Vector3(cframe_of(dm, id).0.to_orientation_deg())
 }
 
 fn orientation_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError> {
     let angles = vector3_of(value)?;
-    let current = cframe_of(dm, id);
+    let (current, prop) = cframe_of(dm, id);
     let rotation = CFrame::from_orientation_deg(angles.x, angles.y, angles.z).rotation();
-    set_cframe(dm, id, CFrame::from_parts(current.position(), rotation))
+    set_cframe(dm, id, prop, CFrame::from_parts(current.position(), rotation))
 }
 
 static PROPS: &[PropMeta] = &[
-    PropMeta::cframe("CFrame")
+    PropMeta::cframe(CFRAME)
         .transform()
         .group("Transform")
         .order(0)
@@ -314,5 +365,171 @@ mod tests {
         assert!(!registry.class(class).unwrap().creatable());
         let mut dm = game();
         assert!(dm.create(class).is_err());
+    }
+
+    /// The `CFrame` id cache: the views must find `CFrame` by checking, never by assuming the id.
+    mod cframe_id {
+        use std::sync::Arc;
+
+        use metallic_core::{
+            CFrame, ClassDesc, DataModel, Id, PropId, PropMeta, Registry, RegistryInput, Value, Vector3,
+        };
+
+        use crate::base::{instance, object};
+        use crate::components::transform;
+        use crate::world::parts::{base_part, part};
+
+        /// A `WorldObject` with two more properties than the real one, so `BasePart`'s `CFrame` lands on another id.
+        static WIDE_WORLD_OBJECT: ClassDesc = ClassDesc::new("WorldObject", Some("Instance")).props(&[
+            PropMeta::cframe("PivotOffset"),
+            PropMeta::number("Padding", 0.0),
+            PropMeta::number("MorePadding", 0.0),
+        ]);
+
+        /// A class under `Part` that adds properties of its own after the inherited ones.
+        static SUB_PART: ClassDesc = ClassDesc::new("SubPart", Some("Part"))
+            .creatable()
+            .props(&[PropMeta::number("Extra", 0.0)]);
+
+        /// A class under `Part` that overrides `CFrame`, so its declaration is not `BasePart`'s.
+        static OVERRIDING_PART: ClassDesc = ClassDesc::new("OverridingPart", Some("Part"))
+            .creatable()
+            .props(&[PropMeta::cframe("CFrame").override_inherited().transform()]);
+
+        /// A class under `Instance` whose name sorts first, so every class id after it moves.
+        static AARDVARK: ClassDesc = ClassDesc::new("Aardvark", Some("Instance")).creatable();
+
+        /// A registry of the part classes and the test classes, with `classes` listed in the given order.
+        fn registry_of(classes: &[&'static ClassDesc]) -> Arc<Registry> {
+            let enums = [base_part::ENUMS, part::ENUMS];
+            Arc::new(
+                Registry::build(RegistryInput {
+                    classes,
+                    components: &[&transform::COMPONENT, &part::COMPONENT],
+                    enums: &enums,
+                })
+                .unwrap_or_else(|e| panic!("{e}")),
+            )
+        }
+
+        fn create(dm: &mut DataModel, class: &str) -> Id {
+            let class = dm.registry().class_id(class).unwrap();
+            dm.create(class).unwrap()
+        }
+
+        fn cframe_id(dm: &DataModel, id: Id) -> PropId {
+            dm.prop_id(id, "CFrame").unwrap()
+        }
+
+        fn vector(dm: &DataModel, id: Id, name: &str) -> Vector3 {
+            match dm.get_by_name(id, name) {
+                Ok(Value::Vector3(v)) => v,
+                other => panic!("{name}: {other:?}"),
+            }
+        }
+
+        fn cframe(dm: &DataModel, id: Id) -> CFrame {
+            match dm.get_by_name(id, "CFrame") {
+                Ok(Value::CFrame(cf)) => cf,
+                other => panic!("CFrame: {other:?}"),
+            }
+        }
+
+        /// Writes `Position` and `Orientation` on `id` and reads them back, through `CFrame` too.
+        fn views_round_trip(dm: &mut DataModel, id: Id, at: Vector3) {
+            dm.set_by_name(id, "Position", Value::Vector3(at)).unwrap();
+            assert_eq!(cframe(dm, id).position(), at);
+            assert_eq!(vector(dm, id, "Position"), at);
+
+            let angles = Vector3::new(10.0, 20.0, 30.0);
+            dm.set_by_name(id, "Orientation", Value::Vector3(angles)).unwrap();
+            assert!(vector(dm, id, "Orientation").abs_diff_eq(angles, 1e-3));
+            assert_eq!(vector(dm, id, "Position"), at, "rotating keeps the position");
+            let expected = CFrame::from_orientation_deg(10.0, 20.0, 30.0).rotation();
+            assert!(cframe(dm, id).rotation().abs_diff_eq(expected, 1e-6));
+
+            let moved = CFrame::new(at * 2.0);
+            dm.set_by_name(id, "CFrame", Value::CFrame(moved)).unwrap();
+            assert_eq!(vector(dm, id, "Position"), at * 2.0);
+            assert!(vector(dm, id, "Orientation").abs_diff_eq(Vector3::ZERO, 1e-4));
+        }
+
+        #[test]
+        fn views_work_on_part_and_a_subclass() {
+            let registry = registry_of(&[
+                &object::CLASS,
+                &instance::CLASS,
+                &crate::base::world_object::CLASS,
+                &base_part::CLASS,
+                &part::CLASS,
+                &SUB_PART,
+            ]);
+            let mut dm = DataModel::new(registry);
+            let part = create(&mut dm, "Part");
+            let sub = create(&mut dm, "SubPart");
+            assert_eq!(cframe_id(&dm, part), cframe_id(&dm, sub), "inherited ids are shared");
+            views_round_trip(&mut dm, part, Vector3::new(1.0, 2.0, 3.0));
+            views_round_trip(&mut dm, sub, Vector3::new(-4.0, 5.0, -6.0));
+            assert_eq!(dm.get_by_name(sub, "Extra"), Ok(Value::Number(0.0)));
+        }
+
+        #[test]
+        fn registries_that_number_cframe_differently_are_not_confused() {
+            let usual = registry_of(&[
+                &object::CLASS,
+                &instance::CLASS,
+                &crate::base::world_object::CLASS,
+                &base_part::CLASS,
+                &part::CLASS,
+            ]);
+            // Another class order and set: ids are not assumed from either.
+            let shifted = registry_of(&[
+                &SUB_PART,
+                &part::CLASS,
+                &AARDVARK,
+                &base_part::CLASS,
+                &WIDE_WORLD_OBJECT,
+                &instance::CLASS,
+                &object::CLASS,
+            ]);
+            let mut a = DataModel::new(usual);
+            let mut b = DataModel::new(shifted);
+            let part_a = create(&mut a, "Part");
+            let part_b = create(&mut b, "Part");
+            let sub_b = create(&mut b, "SubPart");
+            assert_ne!(cframe_id(&a, part_a), cframe_id(&b, part_b), "the test needs differing ids");
+            assert_ne!(a.class_of(part_a).unwrap(), b.class_of(part_b).unwrap());
+
+            // Alternate between the registries so each read finds the other's id cached.
+            for step in 1..=3 {
+                let at = Vector3::splat(step as f32);
+                views_round_trip(&mut a, part_a, at);
+                views_round_trip(&mut b, part_b, -at);
+                views_round_trip(&mut b, sub_b, at * 3.0);
+                assert_eq!(vector(&a, part_a, "Position"), at * 2.0);
+                assert_eq!(vector(&b, part_b, "Position"), -at * 2.0);
+            }
+            // Padding sits where the usual registry keeps `CFrame`; it must never be written as one.
+            assert_eq!(b.get_by_name(part_b, "Padding"), Ok(Value::Number(0.0)));
+            assert_eq!(b.get_by_name(part_b, "MorePadding"), Ok(Value::Number(0.0)));
+        }
+
+        #[test]
+        fn views_follow_an_overridden_cframe() {
+            let registry = registry_of(&[
+                &object::CLASS,
+                &instance::CLASS,
+                &crate::base::world_object::CLASS,
+                &base_part::CLASS,
+                &part::CLASS,
+                &OVERRIDING_PART,
+            ]);
+            let mut dm = DataModel::new(registry);
+            let part = create(&mut dm, "Part");
+            let overriding = create(&mut dm, "OverridingPart");
+            assert_eq!(cframe_id(&dm, part), cframe_id(&dm, overriding), "an override keeps the id");
+            views_round_trip(&mut dm, overriding, Vector3::new(7.0, 8.0, 9.0));
+            views_round_trip(&mut dm, part, Vector3::new(1.0, 1.0, 1.0));
+        }
     }
 }
