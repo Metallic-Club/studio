@@ -601,6 +601,12 @@ A second pair of runs (off, Medium) agreed within 3% (render CPU p99 within 0.2 
 - **The cluster cap**: at 32 per cluster (the first Medium setting) the town overflowed 194 entries a frame (lights
   missing from a cluster, a hard edge); 48 never overflowed with a still camera and 15 entries in the walking
   camera's last frame, for 0.05 ms more GPU than 32.
-- **The perf gate's workloads** do not draw lights. In the sync, a part's change now looks its class up once (as
-  before) and, only when the scene has lights, a part's transform change stamps it if lights follow it (an index
-  test); a non-part change checks the light table before the watch list.
+- **The perf gate's workloads** have no lights, and the sync must cost them nothing: a part's change pays one length
+  test (are there lights at all?), and everything about lights is out of line (`#[inline(never)]`, the non-part
+  path `#[cold]`). The first version of this change failed the gate with +6.6% and +6.7% on `render_sync_moving` and
+  `render_sync_scattered`, though none of its light code ran there: the lights read their properties through the
+  same typed getters (`DataModel::cframe`, `number`, `color3`, `bool`) as the parts' repacking, and with
+  `codegen-units = 1` and LTO the extra callers changed how those were inlined into the parts' sync. The lights now
+  read through one out-of-line call to `DataModel::get`. Timed on the dev PC with a throwaway copy of the two
+  workloads (not committed; Callgrind needs Linux): `main` 6.92 / 7.58 µs a sync, the first version 7.58 / 8.33,
+  with the light code compiled out 6.70 / 7.42, and now 6.81 / 7.37.

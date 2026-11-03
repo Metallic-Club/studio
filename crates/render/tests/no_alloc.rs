@@ -1037,7 +1037,12 @@ impl HandParts {
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(entry_point),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    // The variant the renderer draws a frame without local lights with (`LOCAL_LIGHTS` in
+                    // src/parts/lights.wgsl), so both frames run the same shader.
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("LOCAL_LIGHTS", 0.0), ("LOCAL_SHADOWS", 0.0)],
+                        ..wgpu::PipelineCompilationOptions::default()
+                    },
                     targets: &[Some(wgpu::ColorTargetState {
                         format: FORMAT,
                         blend,

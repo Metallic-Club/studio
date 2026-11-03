@@ -538,22 +538,14 @@ impl InstanceScene {
     }
 
     fn apply(&mut self, dm: &DataModel, id: Id, bits: DirtyBits, stats: &mut SyncStats) {
-        let Ok(class) = dm.class_of(id) else {
-            return;
-        };
-        let Some(binding) = self.classes.get(class).copied() else {
+        let Some(binding) = self.binding(dm, id) else {
             // Only instances that are not drawn get here, so drawn ones never pay for lights or the watch list.
-            if let Some(light) = self.classes.light(class).copied() {
-                if self.lights.apply(dm, id, bits, &light, self.world, &self.classes) == LightChange::Changed {
-                    stats.lights += 1;
-                }
-            } else if self.watched.contains(&id) {
-                stats.watched += 1;
-            }
+            self.apply_undrawn(dm, id, bits, stats);
             return;
         };
         if !self.lights.is_empty() && bits.contains(DirtyBits::TRANSFORM) {
-            // The lights in it follow it: they are placed again after the drain.
+            // The lights in it follow it: they are placed again after the drain. A scene without lights pays one
+            // length test here and nothing else.
             self.lights.part_moved(id, self.frame);
         }
         let current = self.lookup(id);
@@ -589,6 +581,27 @@ impl InstanceScene {
         }
         self.write(dm, id, slot, &binding, transform);
         stats.updated += 1;
+    }
+
+    /// A change of an instance that is not drawn: a local light, or a watched instance (`Lighting`). Kept out of
+    /// [`InstanceScene::apply`], so the parts' path does not grow with it (the perf gate's sync workloads).
+    #[cold]
+    #[inline(never)]
+    fn apply_undrawn(&mut self, dm: &DataModel, id: Id, bits: DirtyBits, stats: &mut SyncStats) {
+        let Some(light) = dm
+            .class_of(id)
+            .ok()
+            .and_then(|class| self.classes.light(class))
+            .copied()
+        else {
+            if self.watched.contains(&id) {
+                stats.watched += 1;
+            }
+            return;
+        };
+        if self.lights.apply(dm, id, bits, &light, self.world, &self.classes) == LightChange::Changed {
+            stats.lights += 1;
+        }
     }
 
     /// Counts a transform change towards promotion (static region) or as activity (dynamic region). Returns the

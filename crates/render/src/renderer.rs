@@ -243,6 +243,13 @@ impl Renderer {
         }
     }
 
+    /// Makes every [`Renderer::render_scene`] advance the local lights' fades ([`LightSettings::fade_time`]) by
+    /// `seconds`, instead of by the wall time since the previous frame (`None`, the default). For tests and for
+    /// recording frame by frame, where the wall time between frames says nothing about the game's time.
+    pub fn set_light_fade_step(&mut self, seconds: Option<f32>) {
+        self.parts.set_light_fade_step(seconds);
+    }
+
     /// What the last [`Renderer::render_scene`] did for point and spot lights: how many there are, are in view, in
     /// the budget, drawn and shadowed, the atlas tiles drawn, the clusters, and the CPU time.
     pub fn light_stats(&self) -> LightStats {

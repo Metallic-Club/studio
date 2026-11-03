@@ -446,7 +446,29 @@ fn the_atlas_is_kept_until_a_caster_moves() {
     }
 }
 
-/// Over the budget, the most important lights are drawn; a light entering the budget fades in over the fade time.
+/// The mean linear light of the three channels around pixel `(x, y)` (a 3 × 3 block): what fades add up in.
+fn linear_level(pixels: &[[u8; 4]], (x, y): (u32, u32)) -> f32 {
+    let decode = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let mut sum = 0.0;
+    for dy in 0..3 {
+        for dx in 0..3 {
+            let p = pixels[((y + dy - 1) * SIZE + x + dx - 1) as usize];
+            sum += decode(p[0]) + decode(p[1]) + decode(p[2]);
+        }
+    }
+    sum / 27.0
+}
+
+/// Over the budget, the most important lights are drawn; a light entering the budget fades in and the one it
+/// pushes out fades out over the fade time, a little each frame. The fades are driven by a fixed step per frame
+/// (`Renderer::set_light_fade_step`), so the test does not depend on how fast the machine draws.
 #[test]
 fn the_budget_fades_lights_in_and_out() {
     let Some(context) = gpu() else { return };
@@ -458,7 +480,7 @@ fn the_budget_fades_lights_in_and_out() {
         ws,
         CFrame::new(Vec3::new(-5.0, 2.0, 0.0)),
         [255, 255, 255],
-        1.0,
+        0.5,
         8.0,
     );
     light(
@@ -467,38 +489,69 @@ fn the_budget_fades_lights_in_and_out() {
         ws,
         CFrame::new(Vec3::new(5.0, 2.0, 0.0)),
         [255, 255, 255],
-        2.0,
+        1.0,
         8.0,
     );
+    // Ten frames of fade.
+    const FRAMES: usize = 10;
     let settings = LightSettings {
         budget: 1,
-        fade_time: 10.0,
+        fade_time: 1.0,
         ..LightSettings::default()
     };
     let mut frames = Frames::new(&context, &mut game, settings);
+    frames
+        .renderer
+        .set_light_fade_step(Some(settings.fade_time / FRAMES as f32));
     frames.frame(&context, &mut game);
     let stats = frames.renderer.light_stats();
     assert_eq!(
         (stats.in_view, stats.in_budget, stats.drawn, stats.fading),
         (2, 1, 1, 0),
-        "{stats:?}"
+        "two lights in view, the brighter one in the budget of one: {stats:?}"
     );
-    let before = frames.pixels(&context);
-    // The dim one becomes the brightest: it fades in (slowly, with a 10 s fade) and the other fades out.
+    let left = project(&game, Vec3::new(-5.0, 0.0, 0.0));
+    let right = project(&game, Vec3::new(5.0, 0.0, 0.0));
+    let first = frames.pixels(&context);
+    let mut levels = vec![(linear_level(&first, left), linear_level(&first, right))];
+
+    // The dim one becomes the brighter (by more than the budget's hysteresis): it fades in, and the other fades out.
     game.dm
-        .set_by_name(dim, "Brightness", Value::Number(8.0))
+        .set_by_name(dim, "Brightness", Value::Number(1.5))
         .expect("Brightness");
-    frames.frame(&context, &mut game);
-    let stats = frames.renderer.light_stats();
-    assert_eq!((stats.drawn, stats.fading), (2, 2), "{stats:?}");
-    let after = frames.pixels(&context);
-    let at = |pixels: &[[u8; 4]], x: f32| floor_level(&game, pixels, x, 0.0);
-    // No pop: one frame later both sides look almost as before.
+    for frame in 1..=FRAMES + 2 {
+        frames.frame(&context, &mut game);
+        let stats = frames.renderer.light_stats();
+        let expected = if frame < FRAMES { (2, 2) } else { (1, 0) };
+        assert_eq!(
+            (stats.drawn, stats.fading),
+            expected,
+            "frame {frame} of the fade: (lights drawn, lights fading) {stats:?}"
+        );
+        let pixels = frames.pixels(&context);
+        levels.push((linear_level(&pixels, left), linear_level(&pixels, right)));
+    }
+    eprintln!("linear light under the lights (left fading in, right fading out): {levels:?}");
+    let (start, end) = (levels[0], levels[levels.len() - 1]);
+    let (rise, fall) = (end.0 - start.0, start.1 - end.1);
     assert!(
-        (at(&after, -5.0) - at(&before, -5.0)).abs() < 12.0,
-        "{} {}",
-        at(&after, -5.0),
-        at(&before, -5.0)
+        rise > 0.1 && fall > 0.1,
+        "the floor under the light entering the budget brightens ({start:?} to {end:?}) and under the one leaving it \
+         darkens"
     );
-    assert!((at(&after, 5.0) - at(&before, 5.0)).abs() < 12.0);
+    // Never a pop: every frame moves each side by at most a fifth of its whole change (a tenth expected), the same
+    // way all along.
+    for (frame, pair) in levels.windows(2).enumerate() {
+        let (up, down) = (pair[1].0 - pair[0].0, pair[0].1 - pair[1].1);
+        assert!(
+            (-0.01..=rise * 0.2).contains(&up),
+            "frame {}: the floor under the light fading in changed by {up} of a total {rise} (linear light)",
+            frame + 1
+        );
+        assert!(
+            (-0.01..=fall * 0.2).contains(&down),
+            "frame {}: the floor under the light fading out changed by {down} of a total {fall} (linear light)",
+            frame + 1
+        );
+    }
 }

@@ -95,6 +95,8 @@ pub(crate) struct LocalLights {
     frame: FrameLights,
     stats: LightStats,
     last: Option<Instant>,
+    /// Seconds a frame advances the fades by, instead of the wall time since the last frame.
+    fixed_step: Option<f32>,
 }
 
 impl LocalLights {
@@ -149,7 +151,13 @@ impl LocalLights {
             frame: FrameLights::default(),
             stats: LightStats::default(),
             last: None,
+            fixed_step: None,
         }
+    }
+
+    /// Advances the fades by `step` seconds a frame instead of the wall time between frames (`None`, the default).
+    pub(crate) fn set_fixed_step(&mut self, step: Option<f32>) {
+        self.fixed_step = step.filter(|s| s.is_finite()).map(|s| s.max(0.0));
     }
 
     /// The settings in effect.
@@ -219,9 +227,11 @@ impl LocalLights {
         cull: &CullSettings,
     ) {
         let start = Instant::now();
-        let dt = self.last.map_or(0.0, |last| {
-            start.saturating_duration_since(last).as_secs_f32().min(MAX_STEP)
-        });
+        let dt = match (self.fixed_step, self.last) {
+            (Some(step), Some(_)) => step,
+            (_, None) => 0.0,
+            (None, Some(last)) => start.saturating_duration_since(last).as_secs_f32().min(MAX_STEP),
+        };
         self.last = Some(start);
         self.stats = LightStats {
             in_scene: scene.scene().light_count() as u32,

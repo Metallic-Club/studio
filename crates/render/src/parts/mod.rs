@@ -624,6 +624,11 @@ impl PartRenderer {
         }
     }
 
+    /// Advances the local lights' fades by `step` seconds a frame instead of the wall time between frames.
+    pub(crate) fn set_light_fade_step(&mut self, step: Option<f32>) {
+        self.lights.set_fixed_step(step);
+    }
+
     fn rebuild_frame_group(&mut self) {
         self.frame_group = frame_group(
             &self.device,

@@ -10,7 +10,7 @@
 //! ([`LightRuntime`]) moves with its light.
 
 use metallic_core::glam::Vec3;
-use metallic_core::{CFrame, Color3, DataModel, DirtyBits, Id, PropId};
+use metallic_core::{CFrame, Color3, DataModel, DirtyBits, Id, PropId, Value};
 
 use super::components::{ClassTable, LightBinding};
 use crate::lights::LightRuntime;
@@ -152,6 +152,7 @@ impl LightSet {
     }
 
     /// Removes `id` if it is a light here. Returns whether it was.
+    #[inline(never)]
     pub(crate) fn remove(&mut self, id: Id) -> bool {
         let Some(at) = self.position_of(id) else {
             return false;
@@ -177,6 +178,7 @@ impl LightSet {
     /// Applies a change to the light `id` of class `binding`. A change that names its place in the tree (or its
     /// creation) decides again whether it is in the world (a descendant of `world`, or anywhere without one) and
     /// which part it follows.
+    #[inline(never)]
     pub(crate) fn apply(
         &mut self,
         dm: &DataModel,
@@ -253,8 +255,9 @@ impl LightSet {
         LightChange::Changed
     }
 
-    /// Notes that part `part`'s transform changed in sync `frame`, if lights follow it.
-    #[inline]
+    /// Notes that part `part`'s transform changed in sync `frame`, if lights follow it. Out of line: only scenes with
+    /// lights call it, and the parts' sync stays as small as without lights.
+    #[inline(never)]
     pub(crate) fn part_moved(&mut self, part: Id, frame: u32) {
         let index = part.index() as usize;
         if self.hosted.get(index).is_some_and(|&n| n > 0) {
@@ -266,10 +269,16 @@ impl LightSet {
     }
 
     /// Places again every light whose part moved in sync `frame`. Returns how many.
+    #[inline]
     pub(crate) fn place_moved(&mut self, dm: &DataModel, frame: u32) -> u32 {
         if self.moved_in != Some(frame) {
             return 0;
         }
+        self.place_moved_now(dm, frame)
+    }
+
+    #[inline(never)]
+    fn place_moved_now(&mut self, dm: &DataModel, frame: u32) -> u32 {
         let mut placed = 0;
         for (light, link) in self.lights.iter_mut().zip(&self.links) {
             let Some(host) = light.host else { continue };
@@ -303,11 +312,26 @@ impl LightSet {
     }
 }
 
+/// One property of `id` as a value, `None` when it cannot be read.
+///
+/// Lights read every property through this one out-of-line call to [`DataModel::get`] rather than the typed getters
+/// (`cframe`, `number`, ...) the parts' repacking uses: with codegen-units 1 and LTO, more callers of those getters
+/// changed how they were inlined into the parts' sync, which cost the perf gate's sync workloads about 7% more
+/// instructions in scenes with no lights at all.
+#[inline(never)]
+fn value(dm: &DataModel, id: Id, prop: Option<PropId>) -> Option<Value> {
+    dm.get(id, prop?).ok()
+}
+
 /// The light's world position and forward direction.
 fn placement(dm: &DataModel, id: Id, host: Option<Id>, link: Link) -> (Vec3, Vec3) {
-    let local = dm.cframe(id, link.cframe).unwrap_or(CFrame::IDENTITY);
+    let cframe = |id: Id, prop: PropId| match value(dm, id, Some(prop)) {
+        Some(Value::CFrame(cframe)) => cframe,
+        _ => CFrame::IDENTITY,
+    };
+    let local = cframe(id, link.cframe);
     let world = match (host, link.host_cframe) {
-        (Some(part), Some(prop)) => dm.cframe(part, prop).unwrap_or(CFrame::IDENTITY) * local,
+        (Some(part), Some(prop)) => cframe(part, prop) * local,
         _ => local,
     };
     let direction = (world.rotation() * Vec3::NEG_Z).normalize_or(Vec3::NEG_Z);
@@ -317,11 +341,19 @@ fn placement(dm: &DataModel, id: Id, host: Option<Id>, link: Link) -> (Vec3, Vec
 /// The light `id` as its properties say now. Properties that cannot be read light with `Light`'s defaults.
 fn read(dm: &DataModel, id: Id, binding: &LightBinding, host: Option<Id>, link: Link) -> SceneLight {
     let props = &binding.props;
-    let number =
-        |prop: Option<PropId>, default: f32| prop.and_then(|p| dm.number(id, p).ok()).map_or(default, |v| v as f32);
-    let flag = |prop: Option<PropId>, default: bool| prop.and_then(|p| dm.bool(id, p).ok()).unwrap_or(default);
+    let number = |prop: Option<PropId>, default: f32| match value(dm, id, prop) {
+        Some(Value::Number(v)) => v as f32,
+        _ => default,
+    };
+    let flag = |prop: Option<PropId>, default: bool| match value(dm, id, prop) {
+        Some(Value::Bool(v)) => v,
+        _ => default,
+    };
     let (position, direction) = placement(dm, id, host, link);
-    let color = props.color.and_then(|p| dm.color3(id, p).ok()).unwrap_or(Color3::WHITE);
+    let color = match value(dm, id, props.color) {
+        Some(Value::Color3(color)) => color,
+        _ => Color3::WHITE,
+    };
     let brightness = number(props.brightness, 1.0).max(0.0);
     SceneLight {
         id,
