@@ -55,7 +55,9 @@ impl UserInput {
 
     /// The input step: the frame's events, in arrival order. `firing` says whether the game runs this frame.
     pub(crate) fn process(&mut self, dm: &mut DataModel, events: &[InputEvent], firing: bool) {
-        self.feed.begin_frame(firing);
+        if let Err(error) = self.feed.begin_frame(dm, firing) {
+            log::warn!("UserInputService could not start the frame's input: {error}");
+        }
         for event in events {
             if let Err(error) = self.event(dm, event) {
                 log::warn!("UserInputService could not take {event:?}: {error}");

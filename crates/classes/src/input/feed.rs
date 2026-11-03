@@ -192,6 +192,8 @@ pub struct InputFeed {
     cursor_moved: bool,
     /// Wheel notches this frame.
     wheel: f64,
+    /// The data model's structure revision at the last check for destroyed input objects.
+    revision: u64,
 }
 
 /// Looks up a member, or names what is missing.
@@ -281,6 +283,7 @@ impl InputFeed {
             cursor_shift: (0.0, 0.0),
             cursor_moved: false,
             wheel: 0.0,
+            revision: dm.structure_revision(),
         })
     }
 
@@ -291,7 +294,15 @@ impl InputFeed {
 
     /// Starts the frame's input step. `firing` says whether the game runs: a stopped or paused game keeps its
     /// state current (held keys, the cursor) but fires nothing, so no stale input reaches scripts on resume.
-    pub fn begin_frame(&mut self, firing: bool) {
+    ///
+    /// When anything was destroyed since the last frame, the input objects scripts destroyed are dropped and the
+    /// chain the methods walk is repaired; the next input of that kind gets a new object.
+    pub fn begin_frame(&mut self, dm: &mut DataModel, firing: bool) -> Result<(), DmError> {
+        let revision = dm.structure_revision();
+        if revision != self.revision {
+            self.revision = revision;
+            self.drop_destroyed(dm)?;
+        }
         self.firing = firing;
         self.motion = (0.0, 0.0);
         self.raw_motion = false;
@@ -302,6 +313,25 @@ impl InputFeed {
             slot.delta = (0.0, 0.0);
             slot.moved = false;
         }
+        Ok(())
+    }
+
+    /// Forgets the input objects that no longer exist and relinks the chain if there were any.
+    fn drop_destroyed(&mut self, dm: &mut DataModel) -> Result<(), DmError> {
+        let before = self.object_count();
+        self.keys.retain(|(_, held)| dm.contains(held.id));
+        for slot in &mut self.buttons {
+            if slot.is_some_and(|held| !dm.contains(held.id)) {
+                *slot = None;
+            }
+        }
+        self.movement = self.movement.filter(|&id| dm.contains(id));
+        self.wheel_object = self.wheel_object.filter(|&id| dm.contains(id));
+        self.touches.retain(|slot| dm.contains(slot.id));
+        if self.object_count() == before {
+            return Ok(());
+        }
+        self.relink(dm)
     }
 
     /// A key went down (`pressed`) or up. `key` is its `Enum.KeyCode` item name; [`UNKNOWN`] keys are not tracked.
@@ -770,7 +800,7 @@ mod tests {
 
     /// One frame with `events` in it.
     fn frame(dm: &mut DataModel, feed: &mut InputFeed, firing: bool, events: impl FnOnce(&mut DataModel, &mut InputFeed)) {
-        feed.begin_frame(firing);
+        feed.begin_frame(dm, firing).unwrap();
         events(dm, feed);
         feed.end_frame(dm).unwrap();
     }
@@ -962,6 +992,11 @@ mod tests {
         });
         let q = keys_pressed(&mut dm, uis)[0];
         call(&mut dm, q, "Destroy", vec![]).unwrap();
+        assert!(!is_key_down(&mut dm, uis, "Q"), "a destroyed object fails no call");
+        // The next frame repairs the chain: the other keys are found again.
+        frame(&mut dm, &mut feed, true, |_, _| {});
+        assert!(is_key_down(&mut dm, uis, "E"));
+        assert_eq!(feed.object_count(), 1);
         frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "Q", false).unwrap());
         frame(&mut dm, &mut feed, true, |dm, feed| feed.key(dm, "Q", true).unwrap());
         assert!(is_key_down(&mut dm, uis, "Q"));

@@ -151,28 +151,28 @@ impl Fields {
 }
 
 /// Every input object the engine keeps for the service `service`, first to last.
+///
+/// A script can destroy an input object it was handed. The engine repairs the chain at the next frame's input step;
+/// until then the walk stops at the destroyed object rather than failing the call.
 fn inputs(dm: &DataModel, service: Id, fields: &Fields) -> Result<Vec<Id>, ScriptError> {
     let mut found = Vec::new();
     let mut next = dm.reference(service, dm.prop_id(service, FIRST_INPUT)?)?;
     while let Some(id) = next {
-        // The chain only grows, and only the engine writes it; a loop would be a bug, not something to report.
-        if found.contains(&id) {
+        // Only the engine writes the chain and it never makes a loop; this only keeps a bug from hanging a script.
+        if found.contains(&id) || !dm.contains(id) {
             break;
         }
         found.push(id);
-        next = dm.reference(id, fields.next)?;
+        next = dm.reference(id, fields.next).unwrap_or(None);
     }
     Ok(found)
 }
 
 /// Whether the input object `id` is held: of type `input_type`, in the `Begin` state and, when `key` is given,
 /// for that key.
-fn held(dm: &DataModel, id: Id, fields: &Fields, input_type: &str, key: Option<&str>) -> Result<bool, ScriptError> {
-    if dm.enum_item(id, fields.input_type)?.name() != input_type || dm.enum_item(id, fields.state)?.name() != "Begin"
-    {
-        return Ok(false);
-    }
-    Ok(key.is_none_or(|key| dm.enum_item(id, fields.key_code).is_ok_and(|item| item.name() == key)))
+fn held(dm: &DataModel, id: Id, fields: &Fields, input_type: &str, key: Option<&str>) -> bool {
+    let is = |prop: PropId, name: &str| dm.enum_item(id, prop).is_ok_and(|item| item.name() == name);
+    is(fields.input_type, input_type) && is(fields.state, "Begin") && key.is_none_or(|key| is(fields.key_code, key))
 }
 
 /// Argument `index` as an item of the enum `enum_type`.
@@ -190,7 +190,7 @@ fn is_key_down(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
     let key = enum_arg(call, 0, "KeyCode")?;
     let fields = Fields::of(call.dm)?;
     for id in inputs(call.dm, call.this, &fields)? {
-        if held(call.dm, id, &fields, "Keyboard", Some(key.name()))? {
+        if held(call.dm, id, &fields, "Keyboard", Some(key.name())) {
             return Ok(ScriptValue::Bool(true));
         }
     }
@@ -204,7 +204,7 @@ fn is_mouse_button_pressed(call: &mut MethodCall<'_>) -> Result<ScriptValue, Scr
     }
     let fields = Fields::of(call.dm)?;
     for id in inputs(call.dm, call.this, &fields)? {
-        if held(call.dm, id, &fields, button.name(), None)? {
+        if held(call.dm, id, &fields, button.name(), None) {
             return Ok(ScriptValue::Bool(true));
         }
     }
@@ -215,7 +215,7 @@ fn get_keys_pressed(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptErro
     let fields = Fields::of(call.dm)?;
     let mut pressed = Vec::new();
     for id in inputs(call.dm, call.this, &fields)? {
-        if held(call.dm, id, &fields, "Keyboard", None)? {
+        if held(call.dm, id, &fields, "Keyboard", None) {
             pressed.push(ScriptValue::Instance(id));
         }
     }
