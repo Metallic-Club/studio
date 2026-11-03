@@ -47,8 +47,21 @@
 //! property read. All of it is in the `ffi` module (`#![allow(unsafe_code)]` there, a `// SAFETY:` comment on each
 //! block); the rest of the crate is safe code on top of it.
 //!
+//! # Panic strategy: `unwind` only
+//!
+//! Script errors are C++ exceptions that unwind through Rust frames (this crate's and mlua's), which Rust only
+//! allows with `panic = "unwind"`. Under `panic = "abort"` the first script error would abort the process, so such a
+//! build fails to compile here instead. `examples/error_smoke.rs` exercises every error path in the shipped `dist`
+//! profile; `ffi`'s module docs explain the mechanism.
+//!
 //! [`Deadline`]: metallic_script::Deadline
 //! [`YieldReason`]: metallic_script::YieldReason
+
+#[cfg(panic = "abort")]
+compile_error!(
+    "metallic_luau needs `panic = \"unwind\"`: Luau script errors are C++ exceptions that unwind through Rust \
+     frames, and with `panic = \"abort\"` the first one would abort the process (see crates/luau/src/ffi.rs)"
+);
 
 mod atoms;
 mod convert;

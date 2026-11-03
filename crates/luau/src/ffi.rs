@@ -10,8 +10,29 @@
 //! [`lua_fn!`](crate::lua_fn) wraps a safe body `fn(&Call) -> Result<Out, Raise>` into a C function. The body reads
 //! its arguments through [`Args`], which never allocates in the VM, and returns what to push as an [`Out`]. The
 //! trampoline then pushes the results, or raises the error with the caller's position (`chunk:line: message`).
-//! Lua errors are C++ exceptions in this build of Luau, so anything that can throw (allocating, raising) happens
-//! outside the body's `catch_unwind`; a foreign exception never meets a Rust panic boundary.
+//!
+//! # How errors travel, and why the panic strategy must be `unwind`
+//!
+//! - **The mechanism.** mlua-sys builds Luau with `luau0-src` and never calls its `use_longjmp(true)`, so
+//!   `LUA_USE_LONGJMP` is unset and `lua_error` is a C++ `throw`, caught by Luau's `try`/`catch` in
+//!   `luaD_rawrunprotected` (around every `lua_resume` and `lua_pcall`).
+//! - **The path.** A C function's error is thrown by `lua_error` in [`raise`]: the exception unwinds through
+//!   `raise`, [`run`] and the `extern "C-unwind"` trampoline (Rust frames), then through the Luau VM to its catch.
+//!   The same holds for the interrupt (a timeout), for out-of-memory while pushing results, and for mlua itself:
+//!   its `create_function` callbacks call `lua_error` from Rust `extern "C-unwind"` frames, and its protected calls
+//!   (`exec_raw`, `protect_lua!`) run Rust closures between `lua_pcall` and a possible throw.
+//! - **Why it is sound.** With `panic = "unwind"`, a foreign exception entering Rust through a `"C-unwind"` call is
+//!   defined behaviour: it unwinds the Rust frames, running their destructors. It must never reach a
+//!   `catch_unwind` (Rust leaves that case unspecified, and it may abort), so bodies only read the stack, and
+//!   everything that can throw (pushing, allocating, raising) happens after `catch_unwind` has returned.
+//! - **Why not `abort`.** With `panic = "abort"`, any unwind reaching a Rust frame aborts the process ("panic in a
+//!   function that cannot unwind"). Measured on the `dist` profile when it was `abort`: every error raised by an
+//!   engine call or an mlua callback killed the process; only errors that stay inside Luau (`error()` in pure
+//!   Luau code, running out of memory in Luau code) survived. Restructuring this module alone would not fix that,
+//!   because mlua raises through its own Rust frames. So `dist` uses `unwind`, and `lib.rs` refuses to compile under
+//!   `abort` (`compile_error!` on `cfg(panic = "abort")`). `examples/error_smoke.rs` runs every error path (bad
+//!   arguments, unknown members, read-only writes, engine errors, stale instances, mlua callbacks, listener errors,
+//!   `pcall`, the interrupt, out of memory in Luau and in an engine call) and CI runs it in the `dist` profile.
 //!
 //! # Reaching the engine
 //!

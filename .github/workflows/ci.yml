@@ -64,6 +64,16 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --workspace
+      # Script errors are C++ exceptions unwinding through Rust frames, which only works with the panic strategy of
+      # the profile that ships (`dist`); tests use the default and cannot see it. This runs every Luau error path in
+      # `dist` and fails on an abort (crates/luau/src/ffi.rs). LTO is turned down to keep it cheap; the panic
+      # strategy, the thing under test, comes from the profile.
+      - name: Luau error paths in the shipped profile
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          CARGO_PROFILE_DIST_LTO: "false"
+          CARGO_PROFILE_DIST_CODEGEN_UNITS: "16"
+        run: cargo run -p metallic_luau --example error_smoke --profile dist
 
   # Everything that must build on mobile: the engine crates, Player and Launcher. Studio is desktop-only and xtask
   # is a host tool. Since #46 the engine contains C++ (Luau, built by mlua's build script), so `cargo check` for a

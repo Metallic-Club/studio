@@ -1,6 +1,9 @@
 //! Gates the `jit` feature: Luau's native code generator may only be built for x86-64 and aarch64 Windows, Linux,
 //! macOS and Android. iOS and consoles forbid generating machine code at run time, so enabling `jit` for them is a
 //! build error rather than a binary that the platform would reject (ADR 0003).
+//!
+//! (The panic-strategy guard is a `compile_error!` in `src/lib.rs`: Cargo does not tell build scripts the profile's
+//! panic strategy.)
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");

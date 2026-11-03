@@ -67,5 +67,8 @@ codegen-units = 1
 [profile.dist]
 inherits = "release"
 lto = "fat"
-panic = "abort"
+# Not "abort": Luau script errors are C++ exceptions that unwind through Rust frames (mlua's and metallic_luau's),
+# which Rust only allows under "unwind"; with "abort" the first `error()` in a script would kill the game.
+# metallic_luau refuses to compile under "abort" (crates/luau/src/ffi.rs).
+panic = "unwind"
 strip = true
