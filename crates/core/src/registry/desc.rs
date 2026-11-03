@@ -55,6 +55,9 @@ pub struct MethodDesc {
     /// What it returns ([`Ty::NOTHING`] for nothing, a [`Ty::Tuple`] for several values), or `None` until it is
     /// declared.
     pub returns: Option<Ty>,
+    /// The callback of the same instance this method calls, when it is one that does (see
+    /// [`MethodDesc::invokes_callback`]).
+    pub invokes: Option<&'static str>,
 }
 
 impl MethodDesc {
@@ -66,7 +69,20 @@ impl MethodDesc {
             description: "",
             params: None,
             returns: None,
+            invokes: None,
         }
+    }
+
+    /// Marks the method as a call into the script function assigned to the callback `callback` of the same
+    /// instance (`BindableFunction:Invoke` calls `OnInvoke`). Script backends do not run `func` for it: they yield
+    /// the calling thread to the script host with the call's arguments, the host runs the callback, and the caller
+    /// resumes with the callback's results. `func` only runs when Rust code calls the method directly, where no
+    /// script function can be reached, so it should return an error saying so.
+    ///
+    /// The registry checks that the class has a visible callback of that name.
+    pub const fn invokes_callback(mut self, callback: &'static str) -> Self {
+        self.invokes = Some(callback);
+        self
     }
 
     /// Sets the description.
@@ -127,6 +143,57 @@ impl SignalDesc {
     /// last.
     pub const fn params(mut self, params: &'static [Param]) -> Self {
         self.params = Some(params);
+        self
+    }
+}
+
+/// A callback member: a slot on instances of a class that a script assigns one of its functions to, such as
+/// `BindableFunction.OnInvoke`. The engine, through the script host, calls the function and uses what it returns.
+/// Scripts may only assign it (a function, or nil to clear it); reading it is an error, as in Roblox.
+///
+/// Like a method, it declares the values the function receives and returns, for the API dump, type definitions and
+/// docs. Core stores nothing for it: the script host keeps the assigned function per instance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallbackDesc {
+    /// The name scripts assign to.
+    pub name: &'static str,
+    /// What the callback is for and when it is called, for the API docs.
+    pub description: &'static str,
+    /// The values the function is called with, in order (`.params(&[])` for none), or `None` until they are
+    /// declared.
+    pub params: Option<&'static [Param]>,
+    /// What the function should return ([`Ty::NOTHING`] for nothing, a [`Ty::Tuple`] for several values), or `None`
+    /// until it is declared.
+    pub returns: Option<Ty>,
+}
+
+impl CallbackDesc {
+    /// A callback `name`, with its signature still to declare.
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            description: "",
+            params: None,
+            returns: None,
+        }
+    }
+
+    /// Sets the description.
+    pub const fn describe(mut self, description: &'static str) -> Self {
+        self.description = description;
+        self
+    }
+
+    /// Declares the values the function is called with, in order; `&[]` for none. A [`Ty::Variadic`] parameter may
+    /// only come last.
+    pub const fn params(mut self, params: &'static [Param]) -> Self {
+        self.params = Some(params);
+        self
+    }
+
+    /// Declares what the function should return: one type, or a [`Ty::Tuple`] for several values.
+    pub const fn returns(mut self, ty: Ty) -> Self {
+        self.returns = Some(ty);
         self
     }
 }
@@ -306,6 +373,8 @@ pub struct ClassDesc {
     pub methods: &'static [MethodDesc],
     /// Signals it declares.
     pub signals: &'static [SignalDesc],
+    /// Callback members it declares (see [`CallbackDesc`]).
+    pub callbacks: &'static [CallbackDesc],
     /// Inherited members (properties, methods, signals) that scripts and Studio no longer see. Properties keep their
     /// [`PropId`] slot, so code written for the parent still works.
     pub hide: &'static [&'static str],
@@ -335,6 +404,7 @@ impl ClassDesc {
             props: &[],
             methods: &[],
             signals: &[],
+            callbacks: &[],
             hide: &[],
             defaults: &[],
             behavior: None,
@@ -408,6 +478,12 @@ impl ClassDesc {
         self
     }
 
+    /// Sets the callback members it declares.
+    pub const fn callbacks(mut self, callbacks: &'static [CallbackDesc]) -> Self {
+        self.callbacks = callbacks;
+        self
+    }
+
     /// Hides inherited members from scripts and Studio (properties keep their slot).
     pub const fn hide(mut self, names: &'static [&'static str]) -> Self {
         self.hide = names;
@@ -453,6 +529,7 @@ impl fmt::Debug for ClassDesc {
             .field("props", &self.props.len())
             .field("methods", &self.methods.len())
             .field("signals", &self.signals.len())
+            .field("callbacks", &self.callbacks.len())
             .field("hide", &self.hide)
             .field("behavior", &self.behavior.is_some())
             .field("changed_passes_value", &self.changed_passes_value)

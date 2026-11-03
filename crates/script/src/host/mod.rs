@@ -1,7 +1,14 @@
 //! `ScriptHost`: owns the backends, the chunk cache, and every script's threads and listeners.
+//!
+//! The submodules add to the same type: `game` runs script instances and follows their lifecycle, `modules` is
+//! `require`, and `callbacks` is callback members (`BindableFunction`).
+
+mod callbacks;
+mod game;
+mod modules;
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,11 +16,16 @@ use std::time::Duration;
 use metallic_core::{ConnectionId, DataModel, Delivery, DmError, Id, ListenerKey, ScriptValue};
 use thiserror::Error;
 
-use crate::context::{EarlyWait, connect_signal, defer_depth_message};
+pub(crate) use callbacks::{CallbackRecord, CallbackSlot, Callbacks};
+pub(crate) use game::Game;
+pub(crate) use modules::{ModuleState, Modules};
+
+use crate::context::{EarlyWait, Tables, connect_signal, defer_depth_message};
 use crate::scheduler::{Budget, Deferred, SCHEDULER_SOURCE, Scheduler, Sleeper, Slot, Waiter, Wake, sanitize_seconds};
 use crate::{
     ChunkId, CollectOutput, CompileError, Deadline, HostContext, HostRequest, MAX_DEFER_DEPTH, OutputSink,
-    OutputSource, Phase, Resume, ScriptFailure, ScriptLanguage, SignalRef, StepStats, ThreadId, YieldReason,
+    OutputSource, Phase, Resume, ScriptFailure, ScriptLanguage, SignalRef, SourceLoader, StepStats, ThreadId,
+    YieldReason,
 };
 
 /// The time one call into a backend may take before the thread is interrupted, unless
@@ -97,6 +109,12 @@ pub enum HostError {
     /// The thread is not one the host tracks (it finished, failed or was reaped).
     #[error("the thread {0:?} is not running")]
     UnknownThread(ThreadRef),
+    /// [`ScriptHost::start_game`] was called while a game runs.
+    #[error("a game is already running; stop it first")]
+    GameRunning,
+    /// The registry lacks a class the host needs to run a game.
+    #[error("there is no `{0}` class, which running scripts needs")]
+    MissingClass(&'static str),
 }
 
 /// A chunk cache key: one compiled chunk per backend, source path and content.
@@ -106,6 +124,15 @@ struct ChunkKey {
     path: String,
     /// A hash of the source text, plus its length to make a collision even less likely.
     content: (u64, usize),
+}
+
+/// Whether a record is a script that runs on its own or a module loaded by `require`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RecordKind {
+    /// Started by [`ScriptHost::run_script`] (a `Script`, a `LocalScript`, or anything a tool runs).
+    Script,
+    /// A `ModuleScript` loaded by `require`; it lives until the game stops.
+    Module,
 }
 
 /// What the host knows about one started script.
@@ -121,7 +148,88 @@ pub(crate) struct ScriptRecord {
     pub(crate) threads: HashSet<ThreadId>,
     /// Every listener it connected.
     pub(crate) listeners: HashSet<ListenerKey>,
+    /// Every callback member it assigned a function to (some may have been reassigned since).
+    pub(crate) callbacks: HashSet<CallbackSlot>,
+    /// A script or a module.
+    pub(crate) kind: RecordKind,
 }
+
+/// Work the host does between calls into backends, in order: what threads yielded for (`require`, `Invoke`), and
+/// threads to wake. Running it outside the call that caused it keeps backends from being re-entered.
+#[derive(Debug)]
+pub(crate) enum Work {
+    /// A thread yielded in `require(module)`.
+    Require {
+        /// The requiring thread.
+        thread: ThreadRef,
+        /// The `ModuleScript`.
+        module: Id,
+    },
+    /// A thread yielded in a method that invokes a callback.
+    Invoke {
+        /// The invoking thread.
+        thread: ThreadRef,
+        /// The instance the method was called on.
+        target: Id,
+        /// The callback.
+        callback: &'static str,
+        /// The method's arguments.
+        args: Vec<ScriptValue>,
+    },
+    /// Resume `thread` with `args`, if it is still scheduled with `slot`.
+    Resume {
+        /// The thread.
+        thread: ThreadRef,
+        /// What it must still be waiting for.
+        slot: Slot,
+        /// What to resume it with.
+        args: Vec<ScriptValue>,
+    },
+    /// Resume `thread` by raising `message` in it, if it is still scheduled with `slot`.
+    Fail {
+        /// The thread.
+        thread: ThreadRef,
+        /// What it must still be waiting for.
+        slot: Slot,
+        /// The error.
+        message: String,
+    },
+}
+
+/// What a host-internal connection watches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Watch {
+    /// `DescendantAdded` of a service that runs scripts.
+    Added,
+    /// `DescendantRemoving` of a service that runs scripts.
+    Removing,
+    /// The `Enabled` property of a script in such a service.
+    Enabled(Id),
+    /// `Destroying` of an instance with a callback function or a waiting `Invoke`, so the host learns (from the
+    /// dropped connection) that it is gone.
+    Destroying(Id),
+}
+
+/// A host-internal connection.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WatchRecord {
+    pub(crate) watch: Watch,
+    pub(crate) connection: ConnectionId,
+}
+
+/// A thread running a callback for a thread waiting in `Invoke`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Invocation {
+    /// The thread waiting in `Invoke`.
+    pub(crate) invoker: ThreadRef,
+    /// The invoker's [`Slot::Invoke`] ticket.
+    pub(crate) ticket: u64,
+    /// The callback's name, for messages.
+    pub(crate) callback: &'static str,
+}
+
+/// The error a thread in `signal:Wait()` is resumed with when the signal's instance is destroyed.
+pub(crate) const DESTROYED_WAIT: &str = "the instance whose signal this thread was waiting on was destroyed";
 
 /// One live thread.
 #[derive(Debug)]
@@ -189,6 +297,27 @@ pub struct ScriptHost<O: OutputSink = CollectOutput> {
     output: O,
     resume_budget: Duration,
     memory_limit: Option<usize>,
+    /// Work between calls (see [`Work`]), and whether [`ScriptHost::flush_work`] is running it.
+    work: VecDeque<Work>,
+    working: bool,
+    /// Modules by `ModuleScript`.
+    modules: Modules,
+    /// Threads loading a module, and the module.
+    loaders: HashMap<ThreadRef, Id>,
+    /// The functions assigned to callback members, and the threads waiting for one.
+    callbacks: Callbacks,
+    /// Threads running a callback for an `Invoke`.
+    invocations: HashMap<ThreadRef, Invocation>,
+    /// Host-internal connections, by their listener key.
+    watches: HashMap<ListenerKey, WatchRecord>,
+    /// The running game ([`ScriptHost::start_game`]).
+    game: Option<Game>,
+    /// Where script and module sources come from.
+    loader: Option<Box<dyn SourceLoader>>,
+    /// Scripts whose `Enabled`, parent or life changed since the last reconcile.
+    dirty: Vec<Id>,
+    /// Reused for [`DataModel::drain_dropped_connections`].
+    dropped: Vec<(ConnectionId, ListenerKey)>,
 }
 
 impl ScriptHost<CollectOutput> {
@@ -221,6 +350,17 @@ impl<O: OutputSink> ScriptHost<O> {
             output,
             resume_budget: DEFAULT_RESUME_BUDGET,
             memory_limit: None,
+            work: VecDeque::new(),
+            working: false,
+            modules: Modules::default(),
+            loaders: HashMap::new(),
+            callbacks: Callbacks::default(),
+            invocations: HashMap::new(),
+            watches: HashMap::new(),
+            game: None,
+            loader: None,
+            dirty: Vec::new(),
+            dropped: Vec::new(),
         }
     }
 
@@ -304,17 +444,7 @@ impl<O: OutputSink> ScriptHost<O> {
                 return Err(reported(self, source_path, line, HostError::Compile(error)));
             }
         };
-        let chunk_name: Arc<str> = format!("{source_path}#{}.{}", script.index(), script.generation()).into();
-        self.scripts.insert(
-            script,
-            ScriptRecord {
-                language,
-                name: Arc::clone(&name),
-                chunk_name: Arc::clone(&chunk_name),
-                threads: HashSet::new(),
-                listeners: HashSet::new(),
-            },
-        );
+        self.insert_record(script, language, Arc::clone(&name), source_path, RecordKind::Script);
         let spawned = self.call(dm, script, |backend, ctx| backend.spawn(chunk, ctx));
         let thread = match spawned {
             Some(Ok(thread)) => thread,
@@ -329,6 +459,23 @@ impl<O: OutputSink> ScriptHost<O> {
         let thread = self.adopt(script, language, thread);
         let resume = self.resume_thread(dm, thread, &[])?;
         Ok(ScriptRun { thread, resume })
+    }
+
+    /// Records `script` as started from the file at `path`, with no threads yet.
+    fn insert_record(&mut self, script: Id, language: LanguageId, name: Arc<str>, path: &str, kind: RecordKind) {
+        let chunk_name: Arc<str> = format!("{path}#{}.{}", script.index(), script.generation()).into();
+        self.scripts.insert(
+            script,
+            ScriptRecord {
+                language,
+                name,
+                chunk_name,
+                threads: HashSet::new(),
+                listeners: HashSet::new(),
+                callbacks: HashSet::new(),
+                kind,
+            },
+        );
     }
 
     /// Resumes a suspended thread now with `args` (the values its yield returns), outside the scheduler. Whatever
@@ -418,12 +565,22 @@ impl<O: OutputSink> ScriptHost<O> {
     /// calls it when a script is destroyed, disabled or moved out of a service that runs scripts. Returns `false`
     /// when the script was not running.
     pub fn reap(&mut self, dm: &mut DataModel, script: Id) -> bool {
+        let reaped = self.reap_record(dm, script);
+        if reaped {
+            self.flush_work(dm);
+        }
+        reaped
+    }
+
+    /// [`ScriptHost::reap`] without running the work it queues (threads waiting on what the script was doing).
+    fn reap_record(&mut self, dm: &mut DataModel, script: Id) -> bool {
         let Some(record) = self.scripts.remove(&script) else {
             return false;
         };
         let backend = self.languages.get_mut(record.language.0);
         let mut backend = backend.map(|b| &mut **b);
         let mut unscheduled = false;
+        let mut gone_threads = Vec::with_capacity(record.threads.len());
         for thread in record.threads {
             let thread_ref = ThreadRef {
                 language: record.language,
@@ -432,6 +589,7 @@ impl<O: OutputSink> ScriptHost<O> {
             if let Some(gone) = self.threads.remove(&thread_ref) {
                 unscheduled |= gone.slot != Slot::Idle;
                 drop_slot(&mut self.sched, dm, gone.slot);
+                gone_threads.push(thread_ref);
             }
             if let Some(backend) = backend.as_deref_mut() {
                 backend.release_thread(thread);
@@ -457,6 +615,10 @@ impl<O: OutputSink> ScriptHost<O> {
             if let Some(backend) = backend.as_deref_mut() {
                 backend.release_listener(key);
             }
+        }
+        self.release_callbacks_of(script, &record.callbacks);
+        for thread in gone_threads {
+            self.thread_gone(thread);
         }
         true
     }
@@ -593,17 +755,22 @@ impl<O: OutputSink> ScriptHost<O> {
         let language = record.language;
         let backend = self.languages.get_mut(language.0)?;
         let result = {
+            let tables = Tables {
+                listeners: &mut self.listeners,
+                pending: &mut self.pending,
+                output: &mut self.output,
+                early_waits: &mut self.early_waits,
+                modules: &self.modules,
+                callbacks: &mut self.callbacks,
+            };
             let mut ctx = HostContext::new(
                 dm,
                 Deadline::after(self.resume_budget),
                 script,
                 language,
                 record,
-                &mut self.listeners,
-                &mut self.pending,
-                &mut self.output,
+                tables,
                 self.sched.depth,
-                &mut self.early_waits,
                 self.sched.now,
             );
             f(&mut **backend, &mut ctx)
@@ -622,7 +789,134 @@ impl<O: OutputSink> ScriptHost<O> {
     ) -> Option<Resume> {
         let resume = self.call(dm, script, |backend, ctx| backend.resume(thread.thread, args, ctx))?;
         self.settle(dm, script, thread, &resume);
+        self.flush_work(dm);
         Some(resume)
+    }
+
+    /// Resumes `thread` of `script` by raising `message` where it yielded, and settles how it ended.
+    fn resume_error_now(&mut self, dm: &mut DataModel, script: Id, thread: ThreadRef, message: &str) {
+        let Some(resume) = self.call(dm, script, |backend, ctx| {
+            backend.resume_error(thread.thread, message, ctx)
+        }) else {
+            return;
+        };
+        self.settle(dm, script, thread, &resume);
+        self.flush_work(dm);
+    }
+
+    /// Runs the queued [`Work`] until none is left. Work queued meanwhile, by the resumes it makes, runs in the same
+    /// loop; a nested call returns at once.
+    fn flush_work(&mut self, dm: &mut DataModel) {
+        if self.working {
+            return;
+        }
+        self.working = true;
+        while let Some(work) = self.work.pop_front() {
+            match work {
+                Work::Require { thread, module } => self.require(dm, thread, module),
+                Work::Invoke {
+                    thread,
+                    target,
+                    callback,
+                    args,
+                } => self.invoke(dm, thread, target, callback, args),
+                Work::Resume { thread, slot, args } => {
+                    if let Some(script) = self.take_slot(thread, slot) {
+                        self.resume_now(dm, script, thread, &args);
+                    }
+                }
+                Work::Fail { thread, slot, message } => {
+                    if let Some(script) = self.take_slot(thread, slot) {
+                        self.resume_error_now(dm, script, thread, &message);
+                    }
+                }
+            }
+        }
+        self.working = false;
+    }
+
+    /// When `thread` is still scheduled with `slot`, takes it off (the caller resumes it) and returns its script.
+    fn take_slot(&mut self, thread: ThreadRef, slot: Slot) -> Option<Id> {
+        let record = self.threads.get_mut(&thread)?;
+        if record.slot != slot {
+            return None;
+        }
+        record.slot = Slot::Idle;
+        record.wake = Wake::Nothing;
+        Some(record.script)
+    }
+
+    /// Whether `thread` is tracked, unscheduled, and suspended for `reason`: the state a thread is in when the work
+    /// its yield queued runs.
+    fn yielded_for(&self, thread: ThreadRef, reason: impl Fn(&YieldReason) -> bool) -> Option<Id> {
+        let record = self.threads.get(&thread)?;
+        let waiting = record.slot == Slot::Idle && matches!(&record.state, ThreadState::Yielded(r) if reason(r));
+        waiting.then_some(record.script)
+    }
+
+    /// Bookkeeping for a thread that is gone without finishing (cancelled, released, or its script reaped): a
+    /// module it was loading fails, and an `Invoke` it was answering fails in the invoker.
+    fn thread_gone(&mut self, thread: ThreadRef) {
+        if let Some(module) = self.loaders.remove(&thread) {
+            let name = self.module_name(module);
+            self.module_failed(module, &format!("{name}: the module stopped before it returned"));
+        }
+        if let Some(invocation) = self.invocations.remove(&thread) {
+            self.work.push_back(Work::Fail {
+                thread: invocation.invoker,
+                slot: Slot::Invoke(invocation.ticket),
+                message: format!("the {} callback stopped before it returned", invocation.callback),
+            });
+        }
+    }
+
+    /// A thread finished with `values`: a module it was loading is loaded, and an `Invoke` it was answering returns
+    /// them.
+    fn thread_finished(&mut self, thread: ThreadRef, values: &[ScriptValue]) {
+        if let Some(module) = self.loaders.remove(&thread) {
+            self.module_loaded(module, thread.language);
+        }
+        if let Some(invocation) = self.invocations.remove(&thread) {
+            self.work.push_back(Work::Resume {
+                thread: invocation.invoker,
+                slot: Slot::Invoke(invocation.ticket),
+                args: values.to_vec(),
+            });
+        }
+    }
+
+    /// A thread of `script` failed: a module it was loading fails (and the failure is reported as the module's),
+    /// and an `Invoke` it was answering raises the error in the invoker instead of reporting it. Returns whether
+    /// the failure still needs reporting.
+    fn thread_failed(&mut self, script: Id, thread: ThreadRef, failure: &ScriptFailure) -> bool {
+        let at = self.failure_position(script, failure);
+        if let Some(module) = self.loaders.remove(&thread) {
+            self.module_failed(module, &at);
+        }
+        if let Some(invocation) = self.invocations.remove(&thread) {
+            let waiting = self
+                .threads
+                .get(&invocation.invoker)
+                .is_some_and(|r| r.slot == Slot::Invoke(invocation.ticket));
+            if waiting {
+                self.work.push_back(Work::Fail {
+                    thread: invocation.invoker,
+                    slot: Slot::Invoke(invocation.ticket),
+                    message: at,
+                });
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `Script.Name:line: message`, for an error raised in another thread than the one that failed.
+    fn failure_position(&self, script: Id, failure: &ScriptFailure) -> String {
+        let name = self.scripts.get(&script).map_or("?", |r| &*r.name);
+        match failure.line() {
+            Some(line) => format!("{name}:{line}: {failure}"),
+            None => format!("{name}: {failure}"),
+        }
     }
 
     /// Resumes a thread the scheduler just took off a queue, with what it was scheduled to get.
@@ -727,12 +1021,60 @@ impl<O: OutputSink> ScriptHost<O> {
                 if self.run_listener(dm, key, listener, &delivery.args) {
                     ran += 1;
                 }
+            } else if let Some(watch) = self.watches.get(&key).copied()
+                && watch.connection == delivery.connection
+            {
+                self.on_watch(watch.watch, &delivery.args);
             }
             done += 1;
         }
         deliveries.drain(..done);
+        let all_delivered = deliveries.is_empty();
         self.deliveries = deliveries;
+        // Connections dropped with their instances are released once their last events have run; deliveries
+        // carried over to the next step may still be for them.
+        if all_delivered {
+            self.release_dropped(dm);
+        }
+        self.reconcile_dirty(dm);
+        self.flush_work(dm);
         ran
+    }
+
+    /// Releases what the host kept for connections the data model dropped with their destroyed instances: script
+    /// listeners (and the backends' functions), host watches, and threads in `signal:Wait()`, which are resumed
+    /// with an error ([`DESTROYED_WAIT`]) rather than left parked.
+    fn release_dropped(&mut self, dm: &mut DataModel) {
+        let mut dropped = std::mem::take(&mut self.dropped);
+        dm.drain_dropped_connections(&mut dropped);
+        for (connection, key) in dropped.drain(..) {
+            if let Some(waiter) = self.sched.waiters.get(&key).copied()
+                && waiter.connection == connection
+            {
+                self.sched.waiters.remove(&key);
+                self.work.push_back(Work::Fail {
+                    thread: waiter.thread,
+                    slot: Slot::Signal(key),
+                    message: DESTROYED_WAIT.to_owned(),
+                });
+            } else if let Some(listener) = self.listeners.map.get(&key).copied()
+                && listener.connection == connection
+            {
+                self.listeners.map.remove(&key);
+                if let Some(record) = self.scripts.get_mut(&listener.script) {
+                    record.listeners.remove(&key);
+                }
+                if let Some(backend) = self.languages.get_mut(listener.language.0) {
+                    backend.release_listener(key);
+                }
+            } else if let Some(watch) = self.watches.get(&key).copied()
+                && watch.connection == connection
+            {
+                self.watches.remove(&key);
+                self.watch_dropped(key, watch.watch);
+            }
+        }
+        self.dropped = dropped;
     }
 
     /// Runs one delivery to a script listener in a new thread. A `Once` listener is disconnected first and released
@@ -825,6 +1167,7 @@ impl<O: OutputSink> ScriptHost<O> {
         for wait in self.early_waits.drain(..) {
             dm.disconnect(wait.connection);
         }
+        self.apply_callback_changes(dm);
     }
 
     /// The thread a request names, and its owner: a tracked thread leaves what it was scheduled for; an unknown one
@@ -865,11 +1208,14 @@ impl<O: OutputSink> ScriptHost<O> {
         let reason = match resume {
             Resume::Yielded(reason) => reason,
             Resume::Errored(failure) => {
-                self.report(script, failure);
+                if self.thread_failed(script, thread, failure) {
+                    self.report(script, failure);
+                }
                 self.forget(dm, thread);
                 return;
             }
-            Resume::Finished(_) => {
+            Resume::Finished(values) => {
+                self.thread_finished(thread, values);
                 self.forget(dm, thread);
                 return;
             }
@@ -883,6 +1229,23 @@ impl<O: OutputSink> ScriptHost<O> {
         };
         record.state = ThreadState::Yielded(reason.clone());
         match *reason {
+            YieldReason::Require { module } => {
+                self.unschedule(dm, thread);
+                self.work.push_back(Work::Require { thread, module });
+            }
+            YieldReason::InvokeCallback {
+                target,
+                callback,
+                ref args,
+            } => {
+                self.unschedule(dm, thread);
+                self.work.push_back(Work::Invoke {
+                    thread,
+                    target,
+                    callback,
+                    args: args.clone(),
+                });
+            }
             YieldReason::Wait { seconds } => {
                 self.unschedule(dm, thread);
                 let wake = Wake::Elapsed {
@@ -1006,6 +1369,8 @@ impl<O: OutputSink> ScriptHost<O> {
         if let Some(backend) = self.languages.get_mut(thread.language.0) {
             backend.release_thread(thread.thread);
         }
+        // A finished or failed thread was settled before this; one cancelled leaves its waiters here.
+        self.thread_gone(thread);
     }
 
     /// Reports a failure of `script` to the output.
@@ -1044,7 +1409,8 @@ fn is_current(threads: &HashMap<ThreadRef, ThreadRecord>, thread: ThreadRef, slo
 /// disconnected.
 fn drop_slot(sched: &mut Scheduler, dm: &mut DataModel, slot: Slot) {
     match slot {
-        Slot::Idle => {}
+        // Their waiter lists are checked against the slot when they wake, so a stale entry is skipped.
+        Slot::Idle | Slot::Require(_) | Slot::Invoke(_) | Slot::Callback(_) => {}
         Slot::Sleeping(_) => sched.live_sleepers = sched.live_sleepers.saturating_sub(1),
         Slot::Deferred(_) => sched.live_deferred = sched.live_deferred.saturating_sub(1),
         Slot::Signal(key) => {

@@ -1,8 +1,10 @@
 //! A test-only "language" that drives the host through the same trait a real one uses (ADR 0003).
 //!
 //! A program is a list of statements, one per line (`#` starts a comment). Values are numbers, `true`, `false`,
-//! `nil`, `"quoted strings"`, bare words (strings), `$var` (a variable), and `%script`, `%game` or `%<Service>`
-//! (instances). `-> var` at the end of `new`, `call`, `get` and the `task` statements stores the result.
+//! `nil`, `"quoted strings"`, bare words (strings), `$var` (a variable), `@n` (the thread's n-th resume argument),
+//! and `%script`, `%game` or `%<Service>` (instances). `-> var` at the end of `new`, `call`, `get`, `require` and
+//! the `task` statements stores the result. A `call` of a method that invokes a callback (`Invoke`) yields to the
+//! host and stores the first value it returns (all of them as a tuple when there are several).
 //!
 //! A `<body>` is one or more statements separated by ` ; `, run by a new thread (a listener or a task). A task's
 //! body starts with a copy of its creator's variables, and its `-> var` names the thread, not a statement of the
@@ -16,6 +18,9 @@
 //! connect <var> <target> <Signal> <body>   connect; the listener runs <body>; <var> holds the key (`_` ignores it)
 //! once <var> <target> <Signal> <body>      like connect, for one event (`Once`)
 //! disconnect <var>                         disconnect the key in <var>
+//! require <target> [-> var]                require a ModuleScript
+//! oninvoke <target> <Callback> <body>      assign <body> to a callback member; it returns what its `return` gives
+//! clearcallback <target> <Callback>        unassign a callback member
 //! waitsignal <target> <Signal>             yield until the signal fires (`signal:Wait()`)
 //! waitchanged <target> <Prop>              yield until the property changes (`GetPropertyChangedSignal():Wait()`)
 //! task.spawn [args... |] <body> [-> var]   run <body> in a new thread now, nested (`task.spawn`)
@@ -38,8 +43,8 @@ use std::rc::Rc;
 use metallic_core::{Args, Id, ListenerKey, ScriptError, ScriptValue};
 
 use crate::{
-    ChunkId, CompileError, HostContext, HostRequest, Resume, ScriptFailure, ScriptLanguage, SignalRef, ThreadId,
-    YieldReason,
+    ChunkId, CompileError, HostContext, HostRequest, ModuleKey, Resume, ScriptFailure, ScriptLanguage, SignalRef,
+    ThreadId, YieldReason,
 };
 
 /// The memory a mock thread "uses", so memory limits can be tested.
@@ -60,6 +65,14 @@ pub(crate) struct MockLog {
     pub(crate) records: Vec<(Id, Vec<ScriptValue>)>,
     /// The last memory limit the host set.
     pub(crate) memory_limit: Option<usize>,
+    /// The module of every module thread spawned.
+    pub(crate) modules_spawned: Vec<Id>,
+    /// Module values released by the host.
+    pub(crate) released_modules: Vec<ModuleKey>,
+    /// How many functions the backend holds under listener keys.
+    pub(crate) held_listeners: usize,
+    /// How many module values the backend holds.
+    pub(crate) held_modules: usize,
 }
 
 impl MockLog {
@@ -130,6 +143,16 @@ enum Op {
     Disconnect {
         var: String,
     },
+    Require {
+        target: Token,
+        store: Option<String>,
+    },
+    SetCallback {
+        target: Token,
+        callback: String,
+        /// `None` clears it.
+        body: Option<Rc<[Stmt]>>,
+    },
     WaitSignal {
         target: Token,
         name: String,
@@ -161,6 +184,10 @@ struct MockThread {
     vars: HashMap<String, ScriptValue>,
     /// The arguments of the latest resume.
     args: Vec<ScriptValue>,
+    /// The variable the values of the next resume go to (a `call` that invoked a callback).
+    pending_store: Option<String>,
+    /// The line of the statement it last yielded at.
+    yield_line: Option<u32>,
 }
 
 impl MockThread {
@@ -170,6 +197,8 @@ impl MockThread {
             pc: 0,
             vars: HashMap::new(),
             args: Vec::new(),
+            pending_store: None,
+            yield_line: None,
         }
     }
 }
@@ -182,11 +211,24 @@ pub(crate) struct MockLanguage {
     listeners: HashMap<ListenerKey, Rc<[Stmt]>>,
     next_thread: u64,
     memory_limit: Option<usize>,
+    /// Module values by key.
+    modules: HashMap<ModuleKey, ScriptValue>,
+    /// Threads loading a module, and the key its value goes under.
+    module_threads: HashMap<ThreadId, ModuleKey>,
+    /// The extension it claims.
+    extensions: &'static [&'static str],
+    /// Its name.
+    name: &'static str,
 }
 
 impl MockLanguage {
     /// A backend and the log it writes to.
     pub(crate) fn new() -> (Self, Rc<RefCell<MockLog>>) {
+        Self::named("mock", &["mock"])
+    }
+
+    /// A backend with another name and extension, for tests with two languages.
+    pub(crate) fn named(name: &'static str, extensions: &'static [&'static str]) -> (Self, Rc<RefCell<MockLog>>) {
         let log = Rc::new(RefCell::new(MockLog::default()));
         let language = Self {
             log: Rc::clone(&log),
@@ -195,8 +237,19 @@ impl MockLanguage {
             listeners: HashMap::new(),
             next_thread: 0,
             memory_limit: None,
+            modules: HashMap::new(),
+            module_threads: HashMap::new(),
+            extensions,
+            name,
         };
         (language, log)
+    }
+
+    /// Publishes how many functions it holds under listener keys (connections and callbacks) and module values.
+    fn sync_held(&self) {
+        let mut log = self.log.borrow_mut();
+        log.held_listeners = self.listeners.len();
+        log.held_modules = self.modules.len();
     }
 
     /// Creates a thread running `program`, if the memory limit allows another one.
@@ -220,6 +273,13 @@ impl MockLanguage {
             return Resume::Errored(ScriptFailure::runtime("cannot resume a dead thread", None));
         };
         state.args = args.to_vec();
+        if let Some(var) = state.pending_store.take() {
+            let value = match args {
+                [one] => one.clone(),
+                many => ScriptValue::Tuple(many.to_vec()),
+            };
+            state.vars.insert(var, value);
+        }
         let program = Rc::clone(&state.program);
         let mut resume = Resume::Finished(Vec::new());
         while let Some(stmt) = program.get(state.pc) {
@@ -235,7 +295,10 @@ impl MockLanguage {
             };
             match flow {
                 Flow::Next => continue,
-                Flow::Yield(reason) => resume = Resume::Yielded(reason),
+                Flow::Yield(reason) => {
+                    state.yield_line = Some(stmt.line);
+                    resume = Resume::Yielded(reason);
+                }
                 Flow::Return(values) => resume = Resume::Finished(values),
                 Flow::Fail(failure) => resume = Resume::Errored(failure),
             }
@@ -243,7 +306,28 @@ impl MockLanguage {
         }
         // Kept until the host releases it, as a VM keeps a dead coroutine object.
         self.threads.insert(thread, state);
-        resume
+        self.finish_module(thread, resume)
+    }
+
+    /// A module thread that finished keeps its one value; any other count fails it.
+    fn finish_module(&mut self, thread: ThreadId, resume: Resume) -> Resume {
+        let Resume::Finished(values) = resume else {
+            return resume;
+        };
+        let Some(key) = self.module_threads.remove(&thread) else {
+            return Resume::Finished(values);
+        };
+        match <[ScriptValue; 1]>::try_from(values) {
+            Ok([value]) => {
+                self.modules.insert(key, value);
+                self.sync_held();
+                Resume::Finished(Vec::new())
+            }
+            Err(_) => Resume::Errored(ScriptFailure::runtime(
+                "Module code did not return exactly one value",
+                None,
+            )),
+        }
     }
 
     /// Runs one statement.
@@ -266,13 +350,46 @@ impl MockLanguage {
                 store,
             } => {
                 let this = instance(state, ctx, target)?;
-                let args: Args = args
+                let args: Vec<ScriptValue> = args
                     .iter()
                     .map(|a| value(state, ctx, a))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into();
-                let result = ctx.call_method(this, method, args)?;
+                    .collect::<Result<Vec<_>, _>>()?;
+                let class = ctx.dm.class_of(this).map_err(dm_error)?;
+                if let Some(callback) = ctx.registry().method(class, method).and_then(|m| m.invokes) {
+                    state.pending_store.clone_from(store);
+                    return Ok(Flow::Yield(YieldReason::InvokeCallback {
+                        target: this,
+                        callback,
+                        args,
+                    }));
+                }
+                let result = ctx.call_method(this, method, Args::from(args))?;
                 store_in(state, store, result);
+            }
+            Op::Require { target, store } => {
+                let module = instance(state, ctx, target)?;
+                match ctx.require(module)? {
+                    Some(key) => {
+                        let value = self.modules.get(&key).cloned().unwrap_or_default();
+                        store_in(state, store, value);
+                    }
+                    None => {
+                        // Asked again when resumed, as a real backend's `require` does.
+                        state.pc -= 1;
+                        return Ok(Flow::Yield(YieldReason::Require { module }));
+                    }
+                }
+            }
+            Op::SetCallback { target, callback, body } => {
+                let id = instance(state, ctx, target)?;
+                match body {
+                    Some(body) => {
+                        let key = ctx.set_callback(id, callback)?;
+                        self.listeners.insert(key, Rc::clone(body));
+                        self.sync_held();
+                    }
+                    None => ctx.clear_callback(id, callback)?,
+                }
             }
             Op::Set { target, prop, value: v } => {
                 let id = instance(state, ctx, target)?;
@@ -298,6 +415,7 @@ impl MockLanguage {
                     ctx.connect(id, signal)?
                 };
                 self.listeners.insert(connection.listener, Rc::clone(body));
+                self.sync_held();
                 state
                     .vars
                     .insert(var.clone(), ScriptValue::Number(connection.listener.0 as f64));
@@ -306,6 +424,7 @@ impl MockLanguage {
                 let key = ListenerKey(handle(state, var)?);
                 if ctx.disconnect(key) {
                     self.listeners.remove(&key);
+                    self.sync_held();
                 }
             }
             Op::WaitSignal { target, name, property } => {
@@ -394,11 +513,11 @@ enum Flow {
 
 impl ScriptLanguage for MockLanguage {
     fn name(&self) -> &str {
-        "mock"
+        self.name
     }
 
     fn extensions(&self) -> &[&str] {
-        &["mock"]
+        self.extensions
     }
 
     fn compile(&mut self, source: &str, chunk_name: &str) -> Result<ChunkId, CompileError> {
@@ -441,17 +560,50 @@ impl ScriptLanguage for MockLanguage {
         self.new_thread(Rc::clone(body))
     }
 
+    fn spawn_module(
+        &mut self,
+        chunk: ChunkId,
+        key: ModuleKey,
+        ctx: &mut HostContext<'_>,
+    ) -> Result<ThreadId, ScriptFailure> {
+        let Some(program) = usize::try_from(chunk.0).ok().and_then(|i| self.chunks.get(i)) else {
+            return Err(ScriptFailure::runtime("unknown chunk", None));
+        };
+        let thread = self.new_thread(Rc::clone(program))?;
+        self.module_threads.insert(thread, key);
+        self.log.borrow_mut().modules_spawned.push(ctx.script());
+        Ok(thread)
+    }
+
+    fn release_module(&mut self, key: ModuleKey) {
+        self.modules.remove(&key);
+        self.sync_held();
+        self.log.borrow_mut().released_modules.push(key);
+    }
+
     fn resume(&mut self, thread: ThreadId, args: &[ScriptValue], ctx: &mut HostContext<'_>) -> Resume {
         self.run_thread(thread, args, ctx)
     }
 
+    fn resume_error(&mut self, thread: ThreadId, message: &str, _ctx: &mut HostContext<'_>) -> Resume {
+        // The mock has no `pcall`: the error ends the thread at the statement it waited in.
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return Resume::Errored(ScriptFailure::runtime("cannot resume a dead thread", None));
+        };
+        state.pc = state.program.len();
+        self.module_threads.remove(&thread);
+        Resume::Errored(ScriptFailure::runtime(message, state.yield_line))
+    }
+
     fn release_thread(&mut self, thread: ThreadId) {
         self.threads.remove(&thread);
+        self.module_threads.remove(&thread);
         self.log.borrow_mut().released_threads.push(thread);
     }
 
     fn release_listener(&mut self, listener: ListenerKey) {
         self.listeners.remove(&listener);
+        self.sync_held();
         self.log.borrow_mut().released_listeners.push(listener);
     }
 
@@ -491,6 +643,13 @@ fn value(state: &MockThread, ctx: &HostContext<'_>, token: &Token) -> Result<Scr
     };
     if let Some(var) = word.strip_prefix('$') {
         return Ok(state.vars.get(var).cloned().unwrap_or_default());
+    }
+    if let Some(n) = word.strip_prefix('@').and_then(|n| n.parse::<usize>().ok()) {
+        return Ok(n
+            .checked_sub(1)
+            .and_then(|i| state.args.get(i))
+            .cloned()
+            .unwrap_or_default());
     }
     if let Some(name) = word.strip_prefix('%') {
         let id = match name {
@@ -647,6 +806,23 @@ fn parse(tokens: &[Token], line: u32) -> Result<Op, String> {
         },
         ("disconnect", [var]) => Op::Disconnect {
             var: text(var).trim_start_matches('$').to_owned(),
+        },
+        ("require", [target]) => Op::Require {
+            target: target.clone(),
+            store,
+        },
+        ("oninvoke", _) => match rest {
+            [target, callback, body @ ..] if !body.is_empty() => Op::SetCallback {
+                target: target.clone(),
+                callback: text(callback).to_owned(),
+                body: Some(parse_body(body, line)?),
+            },
+            _ => return Err("oninvoke needs a target, a callback and a body".to_owned()),
+        },
+        ("clearcallback", [target, callback]) if store.is_none() => Op::SetCallback {
+            target: target.clone(),
+            callback: text(callback).to_owned(),
+            body: None,
         },
         ("waitsignal" | "waitchanged", [target, name]) => Op::WaitSignal {
             target: target.clone(),

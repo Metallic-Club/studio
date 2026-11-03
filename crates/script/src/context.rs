@@ -6,9 +6,10 @@ use metallic_core::{
     Args, ConnectionId, DataModel, DmError, Id, ListenerKey, MethodCall, PropFlags, Registry, ScriptError, ScriptValue,
 };
 
-use crate::host::{ListenerRecord, Listeners, ScriptRecord};
+use crate::host::{CallbackRecord, Callbacks, ListenerRecord, Listeners, ModuleState, Modules, ScriptRecord};
 use crate::{
-    Deadline, LanguageId, MAX_DEFER_DEPTH, OutputSink, OutputSource, Resume, SignalRef, ThreadId, YieldReason,
+    Deadline, LanguageId, MAX_DEFER_DEPTH, ModuleKey, OutputSink, OutputSource, Resume, SignalRef, ThreadId,
+    YieldReason,
 };
 
 /// The connection of a `task.spawn`ed thread that yielded in `signal:Wait()` during a call, made at once so events
@@ -104,6 +105,20 @@ pub struct HostContext<'a> {
     early_waits: &'a mut Vec<EarlyWait>,
     /// The game time of the last step.
     now: f64,
+    /// The module cache, for `require`.
+    modules: &'a Modules,
+    /// The functions assigned to callback members.
+    callbacks: &'a mut Callbacks,
+}
+
+/// The tables of the host a call borrows besides the running script's own record.
+pub(crate) struct Tables<'a> {
+    pub(crate) listeners: &'a mut Listeners,
+    pub(crate) pending: &'a mut Vec<HostRequest>,
+    pub(crate) output: &'a mut dyn OutputSink,
+    pub(crate) early_waits: &'a mut Vec<EarlyWait>,
+    pub(crate) modules: &'a Modules,
+    pub(crate) callbacks: &'a mut Callbacks,
 }
 
 impl<'a> HostContext<'a> {
@@ -115,11 +130,8 @@ impl<'a> HostContext<'a> {
         script: Id,
         language: LanguageId,
         record: &'a mut ScriptRecord,
-        listeners: &'a mut Listeners,
-        pending: &'a mut Vec<HostRequest>,
-        output: &'a mut dyn OutputSink,
+        tables: Tables<'a>,
         defer_depth: u32,
-        early_waits: &'a mut Vec<EarlyWait>,
         now: f64,
     ) -> Self {
         Self {
@@ -128,12 +140,14 @@ impl<'a> HostContext<'a> {
             script,
             language,
             record,
-            listeners,
-            pending,
-            output,
+            listeners: tables.listeners,
+            pending: tables.pending,
+            output: tables.output,
             defer_depth,
-            early_waits,
+            early_waits: tables.early_waits,
             now,
+            modules: tables.modules,
+            callbacks: tables.callbacks,
         }
     }
 
@@ -317,6 +331,77 @@ impl<'a> HostContext<'a> {
         self.dm.disconnect(record.connection)
     }
 
+    /// `require(module)`: the key of the module's result ([`ScriptLanguage::spawn_module`]) when it is loaded, so
+    /// the backend returns the value it keeps under that key; `None` when it is not loaded yet, so the backend
+    /// yields [`YieldReason::Require`] and asks again when resumed. An error when `module` is not a `ModuleScript`,
+    /// when it failed to load (every later `require` of it fails the same way), or when it is written in another
+    /// language than the running script.
+    ///
+    /// [`ScriptLanguage::spawn_module`]: crate::ScriptLanguage::spawn_module
+    pub fn require(&self, module: Id) -> Result<Option<ModuleKey>, ScriptError> {
+        let registry = self.dm.registry();
+        let is_module = registry
+            .class_id(MODULE_SCRIPT)
+            .is_some_and(|class| self.dm.is_a(module, class).unwrap_or(false));
+        if !is_module {
+            return Err(ScriptError::runtime(INVALID_REQUIRE));
+        }
+        match self.modules.state(module) {
+            Some(ModuleState::Loaded { key, language }) if *language == self.language => Ok(Some(*key)),
+            Some(ModuleState::Loaded { .. }) => {
+                let name = self.dm.full_name(module).unwrap_or_default();
+                Err(ScriptError::runtime(cross_language_message(&name)))
+            }
+            Some(ModuleState::Failed { message }) => Err(ScriptError::runtime(message.clone())),
+            Some(ModuleState::Loading { .. }) | None => Ok(None),
+        }
+    }
+
+    /// Assigns a function of the running script to the callback member `callback` of `target`
+    /// (`bindable.OnInvoke = f`). The host picks the key and records the running script as the owner; the backend
+    /// stores its function under the key and runs it from [`ScriptLanguage::spawn_listener`]. A function assigned
+    /// earlier is released by the host after this call ([`ScriptLanguage::release_listener`]), so the backend must
+    /// not drop it itself. Threads waiting in an `Invoke` for a function run once this call returns.
+    ///
+    /// The function is released when the owning script is reaped or `target` is destroyed.
+    ///
+    /// [`ScriptLanguage::spawn_listener`]: crate::ScriptLanguage::spawn_listener
+    /// [`ScriptLanguage::release_listener`]: crate::ScriptLanguage::release_listener
+    pub fn set_callback(&mut self, target: Id, callback: &str) -> Result<ListenerKey, ScriptError> {
+        let callback = self.callback_name(target, callback)?;
+        let listener = self.listeners.next_key();
+        let record = CallbackRecord {
+            listener,
+            script: self.script,
+            language: self.language,
+        };
+        self.callbacks.assign(target, callback, Some(record));
+        self.record.callbacks.insert((target, callback));
+        Ok(listener)
+    }
+
+    /// Unassigns the callback member `callback` of `target` (`bindable.OnInvoke = nil`). The host releases the
+    /// function after this call. `Invoke` waits again until a function is assigned.
+    pub fn clear_callback(&mut self, target: Id, callback: &str) -> Result<(), ScriptError> {
+        let callback = self.callback_name(target, callback)?;
+        self.callbacks.assign(target, callback, None);
+        Ok(())
+    }
+
+    /// The registry's name of the callback member `name` of `target`, or the error for a name that is not one.
+    fn callback_name(&self, target: Id, name: &str) -> Result<&'static str, ScriptError> {
+        let class = self.dm.class_of(target).map_err(dm_error)?;
+        match self.dm.registry().callback(class, name) {
+            Some(desc) => Ok(desc.name),
+            None => {
+                let class = self.dm.class_name(target).map_err(dm_error)?;
+                Err(ScriptError::runtime(format!(
+                    "{name} is not a valid callback member of {class}"
+                )))
+            }
+        }
+    }
+
     /// Records a new connection as the running script's.
     fn adopt(&mut self, listener: ListenerKey, connection: ConnectionId, once: bool) -> Connection {
         self.listeners.map.insert(
@@ -353,6 +438,19 @@ pub(crate) fn connect_signal(
         SignalRef::Signal(signal) => dm.connect(target, signal, listener),
         SignalRef::PropertyChanged(prop) => dm.connect_property_changed(target, prop, listener),
     }
+}
+
+/// The class `require` accepts.
+pub(crate) const MODULE_SCRIPT: &str = "ModuleScript";
+
+/// The error of `require` with something that is not a `ModuleScript`, worded as Roblox words it.
+pub(crate) const INVALID_REQUIRE: &str = "Attempted to call require with invalid argument(s).";
+
+/// The error of a `require` across languages.
+pub(crate) fn cross_language_message(module: &str) -> String {
+    format!(
+        "cannot require {module}: it is written in another language, and require between languages is not supported"
+    )
 }
 
 /// The error of a `task.defer` past [`MAX_DEFER_DEPTH`], worded as Roblox words it.

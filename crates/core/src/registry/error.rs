@@ -44,6 +44,8 @@ pub enum MemberKind {
     Method,
     /// A signal.
     Signal,
+    /// A callback member.
+    Callback,
 }
 
 impl fmt::Display for MemberKind {
@@ -52,6 +54,7 @@ impl fmt::Display for MemberKind {
             Self::Property => "property",
             Self::Method => "method",
             Self::Signal => "signal",
+            Self::Callback => "callback",
         })
     }
 }
@@ -392,6 +395,19 @@ pub enum RegistryError {
         class: &'static str,
         /// The method.
         method: &'static str,
+    },
+    /// A method is marked as invoking a callback the class does not have (or hides).
+    #[error(
+        "class `{class}` declares method `{method}` as invoking callback `{callback}`, which the class does not have; \
+         declare the callback with .callbacks(..) or fix the name"
+    )]
+    UnknownInvokedCallback {
+        /// The class.
+        class: &'static str,
+        /// The method.
+        method: &'static str,
+        /// The callback it names.
+        callback: &'static str,
     },
     /// A method or signal type names a class that does not exist.
     #[error("class `{class}` declares {kind} `{member}` with type `{name}`, which is not a class; fix the name")]

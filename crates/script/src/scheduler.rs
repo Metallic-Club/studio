@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::time::Duration;
 
-use metallic_core::{ConnectionId, ListenerKey, ScriptValue};
+use metallic_core::{ConnectionId, Id, ListenerKey, ScriptValue};
 
 use crate::{Deadline, ThreadRef};
 
@@ -82,6 +82,12 @@ pub(crate) enum Slot {
     Deferred(u64),
     /// Waiting on a signal through this host-internal listener.
     Signal(ListenerKey),
+    /// Waiting in `require` for this module to finish loading.
+    Require(Id),
+    /// Waiting in an `Invoke` for the callback thread of this ticket to return.
+    Invoke(u64),
+    /// Waiting in an `Invoke`, with this ticket, for a function to be assigned to the callback.
+    Callback(u64),
 }
 
 /// What a scheduled thread is resumed with.

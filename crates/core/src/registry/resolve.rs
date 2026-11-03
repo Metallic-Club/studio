@@ -9,8 +9,8 @@ use std::sync::Arc;
 use super::hash::FxMap;
 use super::{
     ClassDesc, ClassId, ClassInfo, ComponentDesc, DefaultValue, EnumDesc, MemberKind, Owner, Param, PropFlags, PropId,
-    PropMeta, Registry, RegistryError, RegistryErrors, RegistryInput, ResolvedEnum, ResolvedMember, ResolvedMethod,
-    ResolvedProp, ResolvedSignal, Ty,
+    PropMeta, Registry, RegistryError, RegistryErrors, RegistryInput, ResolvedCallback, ResolvedEnum, ResolvedMember,
+    ResolvedMethod, ResolvedProp, ResolvedSignal, Ty,
 };
 use crate::{CFrame, Color3, PropType, Value, Vector2, Vector3};
 
@@ -430,6 +430,7 @@ struct Tables {
     components: Vec<&'static ComponentDesc>,
     methods: Vec<ResolvedMethod>,
     signals: Vec<ResolvedSignal>,
+    callbacks: Vec<ResolvedCallback>,
 }
 
 impl ClassResolver<'_> {
@@ -514,6 +515,15 @@ impl ClassResolver<'_> {
             self.desc.name,
             self.errors,
         );
+        add_members(
+            &mut t.callbacks,
+            self.desc.callbacks,
+            |c| c.name,
+            self.id,
+            MemberKind::Callback,
+            self.desc.name,
+            self.errors,
+        );
         check_signatures(self.desc, names, self.errors);
 
         for &name in self.desc.hide {
@@ -528,6 +538,10 @@ impl ClassResolver<'_> {
             }
             for s in t.signals.iter_mut().filter(|s| s.desc.name == name) {
                 s.hidden = true;
+                found = true;
+            }
+            for c in t.callbacks.iter_mut().filter(|c| c.desc.name == name) {
+                c.hidden = true;
                 found = true;
             }
             if !found {
@@ -560,6 +574,7 @@ impl ClassResolver<'_> {
                 components: Vec::new(),
                 methods: Vec::new(),
                 signals: Vec::new(),
+                callbacks: Vec::new(),
             };
         };
         let extra = self.desc.props.len();
@@ -579,6 +594,7 @@ impl ClassResolver<'_> {
             components: parent.components.to_vec(),
             methods: parent.methods.to_vec(),
             signals: parent.signals.to_vec(),
+            callbacks: parent.callbacks.to_vec(),
         }
     }
 
@@ -663,6 +679,7 @@ impl ClassResolver<'_> {
 
         let method_ids = visible_ids(&t.methods, |m| m.name);
         let signal_ids = visible_ids(&t.signals, |s| s.name);
+        let callback_ids = visible_ids(&t.callbacks, |c| c.name);
         let visible_prop = |name: &str| prop_ids.get(name).is_some_and(|id| !t.props[id.index()].hidden);
         let clashes = method_ids
             .keys()
@@ -673,6 +690,17 @@ impl ClassResolver<'_> {
                     Some((*name, MemberKind::Property, MemberKind::Signal))
                 } else if method_ids.contains_key(name) {
                     Some((*name, MemberKind::Method, MemberKind::Signal))
+                } else {
+                    None
+                }
+            }))
+            .chain(callback_ids.keys().filter_map(|name| {
+                if visible_prop(name) {
+                    Some((*name, MemberKind::Property, MemberKind::Callback))
+                } else if method_ids.contains_key(name) {
+                    Some((*name, MemberKind::Method, MemberKind::Callback))
+                } else if signal_ids.contains_key(name) {
+                    Some((*name, MemberKind::Signal, MemberKind::Callback))
                 } else {
                     None
                 }
@@ -687,6 +715,20 @@ impl ClassResolver<'_> {
                 second,
             });
             ok = false;
+        }
+
+        // A method that invokes a callback needs it on every class that has the method, subclasses included.
+        for method in t.methods.iter().filter(|m| !m.hidden) {
+            if let Some(callback) = method.desc.invokes
+                && !callback_ids.contains_key(callback)
+            {
+                self.errors.push(RegistryError::UnknownInvokedCallback {
+                    class,
+                    method: method.desc.name,
+                    callback,
+                });
+                ok = false;
+            }
         }
 
         let changed_value_name = self
@@ -722,6 +764,8 @@ impl ClassResolver<'_> {
             method_ids,
             signals: t.signals.into_boxed_slice(),
             signal_ids,
+            callbacks: t.callbacks.into_boxed_slice(),
+            callback_ids,
         })
     }
 
@@ -909,6 +953,19 @@ fn check_signatures(desc: &'static ClassDesc, names: &Names<'_>, errors: &mut Ve
         };
         if let Some(params) = signal.params {
             check_params(member, params, names, errors);
+        }
+    }
+    for callback in desc.callbacks {
+        let member = Member {
+            class,
+            kind: MemberKind::Callback,
+            name: callback.name,
+        };
+        if let Some(params) = callback.params {
+            check_params(member, params, names, errors);
+        }
+        if let Some(ty) = callback.returns {
+            check_ty(member, &ty, &ty, Place::Return, names, errors);
         }
     }
 }
