@@ -82,6 +82,15 @@ jobs:
           echo "$RUNNER_TEMP/luau-lsp" >> "$GITHUB_PATH"
       - name: The sample script type-checks
         run: luau-lsp analyze --platform=standard --definitions=@metallic=api/metallic.d.luau api/samples/instance_api.luau
+      - name: The Player's embedded scenes type-check
+        run: |
+          shopt -s nullglob
+          scenes=(apps/player/src/scenes/*.luau)
+          if [ "${#scenes[@]}" = 0 ]; then
+            echo "::error::no scripts in apps/player/src/scenes"
+            exit 1
+          fi
+          luau-lsp analyze --platform=standard --definitions=@metallic=api/metallic.d.luau "${scenes[@]}"
       - name: Type errors are caught
         run: |
           if luau-lsp analyze --platform=standard --definitions=@metallic=api/metallic.d.luau \
