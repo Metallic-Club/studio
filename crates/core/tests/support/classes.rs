@@ -3,12 +3,14 @@
 //!
 //! `Object` → `Instance` (computed `Name` and `Parent`, `Archivable`) → `Part` / `Folder`, plus the root `Game`
 //! and the services `Workspace` and `Lighting`. `Part` has the properties a renderer and physics read every frame.
+//! `Object` and `Instance` declare the built-in signals; `Bindable` has a signal class code fires (`Event`).
 #![allow(dead_code, reason = "each including crate uses a different part of the set")]
 
 use std::sync::Arc;
 
 use metallic_core::{
-    CFrame, ClassDesc, ClassId, DataModel, EnumDesc, Id, PropId, PropMeta, Registry, RegistryInput, ScriptError, Value,
+    CFrame, ClassDesc, ClassId, DataModel, EnumDesc, Id, PropId, PropMeta, Registry, RegistryInput, ScriptError,
+    SignalDesc, SignalId, Value,
 };
 
 pub(crate) static ENUMS: &[EnumDesc] = &[EnumDesc::new("Material", &["Plastic", "Wood", "Neon", "Metal"])];
@@ -60,13 +62,24 @@ fn mass_get(dm: &DataModel, id: Id) -> Value {
     Value::Number(f64::from(size.x * size.y * size.z))
 }
 
-pub(crate) static OBJECT: ClassDesc = ClassDesc::new("Object", None);
+pub(crate) static OBJECT: ClassDesc =
+    ClassDesc::new("Object", None).signals(&[SignalDesc::new("Changed").params(&[("propertyName", "string")])]);
 
-pub(crate) static INSTANCE: ClassDesc = ClassDesc::new("Instance", Some("Object")).props(&[
-    PropMeta::string("Name", "Instance").computed(name_get, Some(name_set)),
-    PropMeta::reference("Parent", "Instance").computed(parent_get, Some(parent_set)),
-    PropMeta::boolean("Archivable", true),
-]);
+pub(crate) static INSTANCE: ClassDesc = ClassDesc::new("Instance", Some("Object"))
+    .props(&[
+        PropMeta::string("Name", "Instance").computed(name_get, Some(name_set)),
+        PropMeta::reference("Parent", "Instance").computed(parent_get, Some(parent_set)),
+        PropMeta::boolean("Archivable", true),
+    ])
+    .signals(&[
+        SignalDesc::new("ChildAdded").params(&[("child", "Instance")]),
+        SignalDesc::new("ChildRemoved").params(&[("child", "Instance")]),
+        SignalDesc::new("DescendantAdded").params(&[("descendant", "Instance")]),
+        SignalDesc::new("DescendantRemoving").params(&[("descendant", "Instance")]),
+        SignalDesc::new("AncestryChanged").params(&[("child", "Instance"), ("parent", "Instance")]),
+        SignalDesc::new("AttributeChanged").params(&[("attributeName", "string")]),
+        SignalDesc::new("Destroying"),
+    ]);
 
 pub(crate) static PART: ClassDesc = ClassDesc::new("Part", Some("Instance")).creatable().props(&[
     PropMeta::cframe("CFrame").transform().physics(),
@@ -92,6 +105,10 @@ pub(crate) static FOLDER: ClassDesc = ClassDesc::new("Folder", Some("Instance"))
     .creatable()
     .props(&[PropMeta::string("Note", ""), PropMeta::reference("Link", "Instance")]);
 
+pub(crate) static BINDABLE: ClassDesc = ClassDesc::new("Bindable", Some("Instance"))
+    .creatable()
+    .signals(&[SignalDesc::new("Event").params(&[("value", "any")])]);
+
 pub(crate) static GAME: ClassDesc = ClassDesc::new("Game", Some("Instance"));
 
 pub(crate) static WORKSPACE: ClassDesc = ClassDesc::new("Workspace", Some("Instance")).service(1);
@@ -99,7 +116,9 @@ pub(crate) static WORKSPACE: ClassDesc = ClassDesc::new("Workspace", Some("Insta
 pub(crate) static LIGHTING: ClassDesc = ClassDesc::new("Lighting", Some("Instance")).service(2);
 
 /// Every class in the set.
-pub(crate) static CLASSES: &[&ClassDesc] = &[&OBJECT, &INSTANCE, &PART, &FOLDER, &GAME, &WORKSPACE, &LIGHTING];
+pub(crate) static CLASSES: &[&ClassDesc] = &[
+    &OBJECT, &INSTANCE, &PART, &FOLDER, &BINDABLE, &GAME, &WORKSPACE, &LIGHTING,
+];
 
 /// The registry of the set plus `extra` classes.
 pub(crate) fn registry_with(extra: &[&'static ClassDesc]) -> Arc<Registry> {
@@ -124,6 +143,7 @@ pub(crate) struct Ids {
     pub(crate) lighting_class: ClassId,
     pub(crate) part: ClassId,
     pub(crate) folder: ClassId,
+    pub(crate) bindable: ClassId,
     pub(crate) instance: ClassId,
     pub(crate) name: PropId,
     pub(crate) parent: PropId,
@@ -142,6 +162,16 @@ pub(crate) struct Ids {
     pub(crate) mass: PropId,
     pub(crate) note: PropId,
     pub(crate) link: PropId,
+    pub(crate) changed: SignalId,
+    pub(crate) child_added: SignalId,
+    pub(crate) child_removed: SignalId,
+    pub(crate) descendant_added: SignalId,
+    pub(crate) descendant_removing: SignalId,
+    pub(crate) ancestry_changed: SignalId,
+    pub(crate) attribute_changed: SignalId,
+    pub(crate) destroying: SignalId,
+    /// `Bindable.Event`.
+    pub(crate) event: SignalId,
     /// The root.
     pub(crate) game: Id,
     pub(crate) workspace: Id,
@@ -150,6 +180,12 @@ pub(crate) struct Ids {
 
 fn class(registry: &Registry, name: &str) -> ClassId {
     registry.class_id(name).unwrap_or_else(|| panic!("no class {name}"))
+}
+
+fn signal(registry: &Registry, class: ClassId, name: &str) -> SignalId {
+    registry
+        .signal_id(class, name)
+        .unwrap_or_else(|| panic!("no signal {name}"))
 }
 
 fn prop(registry: &Registry, class: ClassId, name: &str) -> PropId {
@@ -162,6 +198,7 @@ fn prop(registry: &Registry, class: ClassId, name: &str) -> PropId {
 pub(crate) fn game_with(registry: Arc<Registry>) -> (DataModel, Ids) {
     let r = &*registry;
     let (part, folder) = (class(r, "Part"), class(r, "Folder"));
+    let bindable = class(r, "Bindable");
     let (game_class, workspace_class, lighting_class) = (class(r, "Game"), class(r, "Workspace"), class(r, "Lighting"));
     let mut dm = DataModel::new(Arc::clone(&registry));
     let game = dm.create_root(game_class).unwrap_or_else(|e| panic!("{e}"));
@@ -173,6 +210,7 @@ pub(crate) fn game_with(registry: Arc<Registry>) -> (DataModel, Ids) {
         lighting_class,
         part,
         folder,
+        bindable,
         instance: class(r, "Instance"),
         name: prop(r, part, "Name"),
         parent: prop(r, part, "Parent"),
@@ -191,6 +229,15 @@ pub(crate) fn game_with(registry: Arc<Registry>) -> (DataModel, Ids) {
         mass: prop(r, part, "Mass"),
         note: prop(r, folder, "Note"),
         link: prop(r, folder, "Link"),
+        changed: signal(r, part, "Changed"),
+        child_added: signal(r, part, "ChildAdded"),
+        child_removed: signal(r, part, "ChildRemoved"),
+        descendant_added: signal(r, part, "DescendantAdded"),
+        descendant_removing: signal(r, part, "DescendantRemoving"),
+        ancestry_changed: signal(r, part, "AncestryChanged"),
+        attribute_changed: signal(r, part, "AttributeChanged"),
+        destroying: signal(r, part, "Destroying"),
+        event: signal(r, bindable, "Event"),
         game,
         workspace,
         lighting,

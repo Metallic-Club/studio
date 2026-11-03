@@ -286,7 +286,8 @@ impl DataModel {
     ///
     /// Refuses the root and services. First every instance in the subtree, parent first, is reported as
     /// destroying and its class behaviours' `on_destroying` run while the tree is intact. Then the subtree is
-    /// detached and every slot freed: ids held anywhere become stale, every change consumer gets them from
+    /// detached (reported for signals as a move out of the tree: `ChildRemoved`, `AncestryChanged`, ...) and
+    /// every slot freed: ids held anywhere become stale, every change consumer gets them from
     /// [`DataModel::drain_removed`], and references to them in other instances read as nil.
     pub fn destroy(&mut self, id: Id) -> Result<(), DmError> {
         let class = self.slot(id)?.class;
@@ -303,7 +304,12 @@ impl DataModel {
         // Hooks may have changed the subtree (or destroyed it); free what is there now.
         if self.slots.contains(id) {
             self.collect_subtree(id, &mut subtree);
+            let old = self.slots.parent(id);
             self.detach(id);
+            if old.is_some() {
+                // Leaving the tree, reported while the subtree is still intact so its events can walk it.
+                self.notify(Notice::ParentChanged { id, old, new: None });
+            }
             for &x in &subtree {
                 if let Some(slot) = self.slots.get(x) {
                     self.changes.removed(slot, x);

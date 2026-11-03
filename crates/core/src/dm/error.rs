@@ -22,6 +22,14 @@ pub enum DmError {
         /// The property name, or `#<id>` when it was asked for by id.
         prop: String,
     },
+    /// The class has no visible signal with that id or name.
+    #[error("{signal} is not a valid signal of {class}")]
+    UnknownSignal {
+        /// The instance's class.
+        class: &'static str,
+        /// The signal name, or `#<id>` when it was asked for by id.
+        signal: String,
+    },
     /// The value has the wrong type for the property.
     #[error("{prop} expects {expected}, got {got}")]
     TypeMismatch {

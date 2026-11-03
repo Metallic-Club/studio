@@ -6,6 +6,7 @@
 //! - `clone.rs`: `clone_tree`.
 //! - `attributes.rs`: user-defined attributes.
 //! - `changes.rs`: per-consumer dirty bits and the drains the renderer, physics and others read.
+//! - `signals.rs`: signal connections, the built-in events and their deferred delivery.
 //!
 //! # Ids and destroyed instances
 //!
@@ -19,6 +20,7 @@ mod changes;
 mod clone;
 mod error;
 mod props;
+mod signals;
 mod storage;
 mod tree;
 
@@ -30,10 +32,12 @@ use std::sync::Arc;
 
 pub use changes::{ConsumerId, DirtyBits};
 pub use error::DmError;
+pub use signals::{BuiltinSignal, ConnectionId, Delivery, ListenerKey};
 pub use tree::Descendants;
 
-use crate::{ClassBehavior, ClassId, ClassInfo, Id, PropId, Registry};
+use crate::{ClassBehavior, ClassId, ClassInfo, Id, PropId, Registry, ScriptValue, SignalId};
 use changes::Changes;
+use signals::Signals;
 use storage::{Body, Slot, Slots};
 
 /// How many change consumers can be registered (render, physics, replication and Studio).
@@ -50,25 +54,38 @@ struct ClassCache {
     archivable: Option<PropId>,
     /// Whether it is a service.
     service: bool,
+    /// The id of each [`BuiltinSignal`] the class declares, indexed by the enum.
+    builtins: [Option<SignalId>; BuiltinSignal::COUNT],
+    /// Its `Name` and `Parent` properties, whose changed signals a rename and a move fire.
+    name_prop: Option<PropId>,
+    parent_prop: Option<PropId>,
 }
 
-/// Something that happened in the tree, for the signals #15 adds.
+/// Something that happened in the tree, or a signal class code fired.
 ///
-/// This is the one seam signals extend: every change that a script-visible signal reports (`Changed`,
-/// `ChildAdded`, `DescendantAdded`, `AncestryChanged`, `Destroying`, `AttributeChanged`, ...) passes through
-/// [`DataModel::notify`] with one of these. Today nothing listens; tests record them.
+/// This is the one seam signals hang off: every change that a script-visible signal reports (`Changed`,
+/// `ChildAdded`, `DescendantAdded`, `AncestryChanged`, `Destroying`, `AttributeChanged`, ...) and every
+/// [`DataModel::fire`] passes through [`DataModel::notify`] with one of these, and `signals.rs` derives the events
+/// from it. Tests also record them.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Notice {
-    /// A stored or computed property changed value.
+    /// A stored property changed value.
     PropertyChanged { id: Id, prop: PropId },
     /// The instance was renamed.
     NameChanged { id: Id },
-    /// The instance moved from `old` to `new`.
+    /// The instance moved from `old` to `new`. A destroyed instance with a parent reports a move to `None` after
+    /// its `Destroying`, while its subtree is still intact.
     ParentChanged { id: Id, old: Option<Id>, new: Option<Id> },
     /// The instance is about to be destroyed.
     Destroying { id: Id },
     /// An attribute was set, changed or removed.
     AttributeChanged { id: Id, name: Arc<str> },
+    /// Class code fired one of the instance's signals.
+    Fired {
+        id: Id,
+        signal: SignalId,
+        args: Vec<ScriptValue>,
+    },
 }
 
 /// The tree of instances that makes up a game (`game` in scripts), and the only source of truth for their
@@ -87,6 +104,7 @@ pub struct DataModel {
     /// Indexed by class id.
     services: Box<[Option<Id>]>,
     changes: Changes,
+    signals: Signals,
     structure_revision: u64,
     /// Reused for subtree walks that must not hold a borrow while hooks run.
     scratch: Vec<Id>,
@@ -109,6 +127,9 @@ impl DataModel {
                     .any(|&a| registry.class(a).is_some_and(|c| c.desc().behavior.is_some())),
                 archivable: info.prop_id("Archivable"),
                 service: info.service_order().is_some(),
+                builtins: BuiltinSignal::ALL.map(|b| info.signal_id(b.name())),
+                name_prop: info.prop_id("Name"),
+                parent_prop: info.prop_id("Parent"),
             })
             .collect();
         let services = vec![None; classes.len()].into_boxed_slice();
@@ -119,6 +140,7 @@ impl DataModel {
             root: None,
             services,
             changes: Changes::default(),
+            signals: Signals::default(),
             structure_revision: 0,
             scratch: Vec::new(),
             #[cfg(test)]
@@ -316,12 +338,14 @@ impl DataModel {
         }
     }
 
-    /// The seam for signals (#15): every script-visible change reports here once, after it is complete.
+    /// The seam for signals: every script-visible change reports here once, after it is complete, and every
+    /// signal fired from class code passes through here. It queues the events the change causes; for an
+    /// instance nothing listens to, that costs one flag check.
+    #[inline]
     fn notify(&mut self, notice: Notice) {
         #[cfg(test)]
-        self.notices.push(notice);
-        #[cfg(not(test))]
-        let _ = notice;
+        self.notices.push(notice.clone());
+        self.queue_events(notice);
     }
 }
 

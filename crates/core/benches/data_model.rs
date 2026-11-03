@@ -5,6 +5,9 @@
 //! class): `set(CFrame)` ≤ 100 ns, `get_ref` ≤ 20 ns, creating 1,000 parts with 4 properties set ≤ 1 ms, reading
 //! 7 properties of 5,000 parts ≤ 0.3 ms, draining 50 changed of 5,000 ≤ 20 µs, and creating 100,000 instances
 //! with one property set each < 50 ms.
+//!
+//! Signals (#15) add `set(CFrame)` on a watched instance (`Changed` and the property's own signal connected, so
+//! each write queues two events) and draining 1,000 queued events into deliveries.
 
 #[path = "../tests/support/classes.rs"]
 mod classes;
@@ -14,7 +17,9 @@ use std::time::{Duration, Instant};
 
 use classes::Ids;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use metallic_core::{CFrame, Color3, DataModel, DirtyBits, DmError, EnumItem, Id, Value, Vector3};
+use metallic_core::{
+    CFrame, Color3, DataModel, Delivery, DirtyBits, DmError, EnumItem, Id, ListenerKey, Value, Vector3,
+};
 
 fn ok<T>(result: Result<T, DmError>) -> T {
     match result {
@@ -158,5 +163,58 @@ fn scene_reads(c: &mut Criterion) {
     });
 }
 
-criterion_group!(data_model_benches, single_property, bulk, scene_reads);
+fn signals(c: &mut Criterion) {
+    const BATCH: u64 = 1_000;
+    let (mut dm, ids, parts) = scene(1);
+    let p = parts[0];
+    ok(dm.connect(p, ids.changed, ListenerKey(1)));
+    ok(dm.connect_property_changed(p, ids.cframe, ListenerKey(2)));
+    let frames = [
+        Value::CFrame(CFrame::new(Vector3::new(1.0, 2.0, 3.0))),
+        Value::CFrame(CFrame::from_euler_xyz_deg(10.0, 20.0, 30.0)),
+    ];
+    let mut out: Vec<Delivery> = Vec::with_capacity(2 * BATCH as usize);
+    let mut i = 0usize;
+    // Writes are timed in batches, and the queue drained between them untimed, so it never grows past a batch.
+    c.bench_function("set_cframe_watched", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            let mut left = iters;
+            while left > 0 {
+                let n = left.min(BATCH);
+                let start = Instant::now();
+                for _ in 0..n {
+                    i += 1;
+                    ok(dm.set(black_box(p), ids.cframe, frames[i & 1].clone()));
+                }
+                total += start.elapsed();
+                left -= n;
+                out.clear();
+                dm.drain_deliveries(&mut out);
+            }
+            total
+        })
+    });
+
+    // 1,000 events: 500 writes, each queueing `Changed` and the property signal.
+    c.bench_function("drain_1000_events", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iters {
+                for _ in 0..500 {
+                    i += 1;
+                    ok(dm.set(p, ids.cframe, frames[i & 1].clone()));
+                }
+                out.clear();
+                let start = Instant::now();
+                dm.drain_deliveries(&mut out);
+                total += start.elapsed();
+                black_box(&out);
+            }
+            total
+        })
+    });
+}
+
+criterion_group!(data_model_benches, single_property, bulk, scene_reads, signals);
 criterion_main!(data_model_benches);

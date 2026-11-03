@@ -10,6 +10,10 @@
 //! it adds, then its own new properties. So a property declared on a class has the same [`PropId`] in every class
 //! that descends from it: `CFrame` on `BasePart` has one id for every kind of part. Hiding a property keeps its
 //! slot, and an override (`PropFlags::OVERRIDE` or [`ClassDesc::defaults`]) replaces the entry in place.
+//!
+//! Signals follow the same rule: a class's resolved signal list is its parent's list first, then its own new
+//! signals, and a child that redeclares a signal replaces the entry in place. So a [`SignalId`] is stable down the
+//! hierarchy too: `Changed` declared on `Object` has one id in every class.
 
 mod desc;
 mod error;
@@ -57,6 +61,29 @@ pub struct PropId(u16);
 impl PropId {
     /// The id with this raw value. Ids come from the registry; building one by hand is for iterating
     /// `0..props(class).len()`.
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    /// The raw value.
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+
+    /// The raw value as an index.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// A signal's index in its class's resolved signal list (see the module docs: a signal keeps its id in every
+/// descendant of the class that declares it).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct SignalId(u16);
+
+impl SignalId {
+    /// The id with this raw value. Ids come from the registry; building one by hand is for iterating
+    /// `0..signals().len()`.
     pub const fn new(raw: u16) -> Self {
         Self(raw)
     }
@@ -240,9 +267,21 @@ impl ClassInfo {
             .map(|m| m.desc)
     }
 
-    /// Every signal, inherited ones first; hidden ones included (check [`ResolvedMember::hidden`]).
+    /// Every signal, inherited ones first, indexed by [`SignalId`]; hidden ones included (check
+    /// [`ResolvedMember::hidden`]).
     pub fn signals(&self) -> &[ResolvedSignal] {
         &self.signals
+    }
+
+    /// The signal with this id, hidden ones included.
+    pub fn signal_by_id(&self, id: SignalId) -> Option<&ResolvedSignal> {
+        self.signals.get(id.index())
+    }
+
+    /// The id of the visible signal with this name.
+    pub fn signal_id(&self, name: &str) -> Option<SignalId> {
+        let &i = self.signal_ids.get(name)?;
+        u16::try_from(i).ok().map(SignalId)
     }
 
     /// The visible signal with this name.
@@ -329,6 +368,11 @@ impl Registry {
     /// `class`'s visible signal with this name.
     pub fn signal(&self, class: ClassId, name: &str) -> Option<&'static SignalDesc> {
         self.class(class)?.signal(name)
+    }
+
+    /// The id of `class`'s visible signal with this name.
+    pub fn signal_id(&self, class: ClassId, name: &str) -> Option<SignalId> {
+        self.class(class)?.signal_id(name)
     }
 
     /// The component with this name.
