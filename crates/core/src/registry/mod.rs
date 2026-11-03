@@ -460,6 +460,13 @@ impl Registry {
         self.components.get(name).copied()
     }
 
+    /// Every component, sorted by name (for listings such as the API dump, which must not depend on hash order).
+    pub fn components(&self) -> Vec<&'static ComponentDesc> {
+        let mut components: Vec<_> = self.components.values().copied().collect();
+        components.sort_unstable_by_key(|c| c.name);
+        components
+    }
+
     /// The enum with this name (without `Enum.`).
     pub fn enum_desc(&self, name: &str) -> Option<&'static EnumDesc> {
         self.enum_ids.get(name).and_then(|&i| self.enums.get(i)).map(|e| e.desc)

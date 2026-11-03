@@ -489,6 +489,7 @@ dependencies = [
  "criterion",
  "metallic_classes",
  "metallic_core",
+ "serde",
  "thiserror",
 ]
 
@@ -913,6 +914,8 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "metallic_classes",
+ "metallic_script",
  "serde",
  "serde_json",
 ]

@@ -180,6 +180,7 @@
 //! The engine loop and RunService (M3) call [`ScriptHost::step`]; projects (M4) bring the real [`SourceLoader`];
 //! client and server contexts (M10) split [`RunContext::Local`].
 
+pub mod api_dump;
 mod context;
 mod deadline;
 mod game;
@@ -197,6 +198,7 @@ mod scheduler_tests;
 #[cfg(test)]
 mod tests;
 
+pub use api_dump::ApiDump;
 pub use context::{Connection, HostContext, HostRequest};
 pub use deadline::Deadline;
 pub use game::{LoadError, MemorySources, RunContext, SourceLoader};

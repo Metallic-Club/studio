@@ -341,6 +341,9 @@ fn components_are_inherited_once() {
     assert!(!spot.has_component("Rigidbody"));
     assert_eq!(reg.component("Transform").map(|c| c.name), Some("Transform"));
     assert!(reg.component("Rigidbody").is_none());
+    // Listed by name, whatever the input order (`EMITTER` comes first there).
+    let all: Vec<_> = reg.components().iter().map(|c| c.name).collect();
+    assert_eq!(all, ["LightEmitter", "Transform"]);
 }
 
 #[test]

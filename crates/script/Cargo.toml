@@ -13,6 +13,9 @@ workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+# The API dump's data (`api_dump.rs`). Writing it as JSON is left to host tools (`xtask`), so `serde_json` is not
+# shipped.
+serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

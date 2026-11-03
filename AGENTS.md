@@ -27,9 +27,14 @@ The decisions behind the layout are in [`docs/adr/`](docs/adr/), and the map is 
    cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    cargo xtask check-layout   # crate boundaries, metallic_core's allow-list, cfg(target_os) (ADR 0001)
+   cargo xtask api-dump --check   # api/api-dump.json and api/metallic.d.luau match the class registry
    cargo check -p metallic_engine --no-default-features --features physics,luau   # headless server build
    cargo deny check           # advisories, licenses, sources (cargo install cargo-deny --locked)
    ```
+   **Adding or changing a class, member, enum or component? Run `cargo xtask api-dump`** and commit the regenerated
+   `api/api-dump.json` (the registry as JSON) and `api/metallic.d.luau` (Luau type definitions for luau-lsp, built
+   from the dump plus the hand-written `xtask/src/api/luau_prelude.d.luau`, which follows `crates/luau`'s data types
+   and globals). CI fails when either is stale, and type-checks `api/samples/` against the definitions with luau-lsp.
    CI also runs `cargo check --workspace --exclude metallic_studio --exclude xtask --target <t>` for
    `aarch64-linux-android` and `aarch64-apple-ios` (after `rustup target add <t>`), and macOS tests on `main`.
    PRs that touch `crates/` also run the **perf gate** (`.github/workflows/perf.yml`): it fails when a

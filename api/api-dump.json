@@ -1,0 +1,1819 @@
+{
+  "format": 1,
+  "classes": [
+    {
+      "name": "Object",
+      "parent": null,
+      "description": "The base of every class. Every object knows its class and reports when a property changes.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "ClassName",
+          "type": "String",
+          "default": "Object",
+          "flags": [
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": true,
+          "range": null,
+          "group": "",
+          "description": "The name of the object's class, such as \"Folder\". It cannot be changed.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "IsA",
+          "params": [
+            {
+              "name": "className",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": "Bool",
+          "description": "Returns true if the object's class is the given class or inherits from it, such as part:IsA(\"WorldObject\").",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [
+        {
+          "name": "Changed",
+          "params": [
+            {
+              "name": "propertyName",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires after one of the object's properties changes, with the property's name."
+        }
+      ],
+      "callbacks": []
+    },
+    {
+      "name": "Instance",
+      "parent": "Object",
+      "description": "The base of everything in the game tree. An instance has a name and a parent, can be searched, copied and destroyed, and can carry custom attributes.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Name",
+          "type": "String",
+          "default": "Instance",
+          "flags": [
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "group": "",
+          "description": "The instance's name. Names do not have to be unique; FindFirstChild returns the first match.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Parent",
+          "type": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "default": null,
+          "flags": [
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "group": "",
+          "description": "The instance this one sits under, or nil when it is outside the game. Setting it moves the instance.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Archivable",
+          "type": "Bool",
+          "default": true,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "",
+          "description": "Whether the instance is copied by Clone and saved with the game. Turn it off for temporary objects.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "Destroy",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Removes the instance and everything under it from the game for good. It cannot be used again afterwards.",
+          "invokes_callback": null
+        },
+        {
+          "name": "Clone",
+          "params": [],
+          "returns": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns a copy of the instance and everything under it, with no parent. Returns nil when Archivable is off; children with Archivable off are left out.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetChildren",
+          "params": [],
+          "returns": {
+            "Array": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns a list of the instances directly under this one, in order.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetDescendants",
+          "params": [],
+          "returns": {
+            "Array": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns a list of every instance under this one, at any depth, parents before their children.",
+          "invokes_callback": null
+        },
+        {
+          "name": "FindFirstChild",
+          "params": [
+            {
+              "name": "name",
+              "type": "String",
+              "optional": false
+            },
+            {
+              "name": "recursive",
+              "type": "Bool",
+              "optional": true
+            }
+          ],
+          "returns": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns the first child with the given name, or nil. Pass true as the second argument to search every descendant.",
+          "invokes_callback": null
+        },
+        {
+          "name": "FindFirstChildOfClass",
+          "params": [
+            {
+              "name": "className",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns the first child whose class is exactly the given class, or nil. Subclasses do not count; use FindFirstChildWhichIsA for that.",
+          "invokes_callback": null
+        },
+        {
+          "name": "FindFirstChildWhichIsA",
+          "params": [
+            {
+              "name": "className",
+              "type": "String",
+              "optional": false
+            },
+            {
+              "name": "recursive",
+              "type": "Bool",
+              "optional": true
+            }
+          ],
+          "returns": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns the first child whose class is the given class or inherits from it, or nil. Pass true as the second argument to search every descendant.",
+          "invokes_callback": null
+        },
+        {
+          "name": "FindFirstAncestor",
+          "params": [
+            {
+              "name": "name",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns the nearest instance above this one with the given name, or nil.",
+          "invokes_callback": null
+        },
+        {
+          "name": "IsDescendantOf",
+          "params": [
+            {
+              "name": "ancestor",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "returns": "Bool",
+          "description": "Returns true if this instance is somewhere under the given instance.",
+          "invokes_callback": null
+        },
+        {
+          "name": "IsAncestorOf",
+          "params": [
+            {
+              "name": "descendant",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "returns": "Bool",
+          "description": "Returns true if the given instance is somewhere under this one.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetFullName",
+          "params": [],
+          "returns": "String",
+          "description": "Returns the instance's path of names from its service down, separated by dots, such as \"Workspace.Map.Door\".",
+          "invokes_callback": null
+        },
+        {
+          "name": "ClearAllChildren",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Destroys every child of the instance (and everything under them). The instance itself stays.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetAttribute",
+          "params": [
+            {
+              "name": "name",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": "Any",
+          "description": "Returns the value of the attribute with the given name, or nil when it is not set.",
+          "invokes_callback": null
+        },
+        {
+          "name": "SetAttribute",
+          "params": [
+            {
+              "name": "name",
+              "type": "String",
+              "optional": false
+            },
+            {
+              "name": "value",
+              "type": "Any",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Sets an attribute: a custom named value stored on the instance and saved with it. Setting nil removes it. Attributes hold booleans, numbers, strings, vectors, CFrames, colours and enum items, not instances.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetAttributes",
+          "params": [],
+          "returns": {
+            "Map": [
+              "String",
+              "Any"
+            ]
+          },
+          "description": "Returns every attribute of the instance as a table of names to values.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [
+        {
+          "name": "ChildAdded",
+          "params": [
+            {
+              "name": "child",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires after an instance is placed directly under this one."
+        },
+        {
+          "name": "ChildRemoved",
+          "params": [
+            {
+              "name": "child",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires after an instance directly under this one is moved away or destroyed."
+        },
+        {
+          "name": "DescendantAdded",
+          "params": [
+            {
+              "name": "descendant",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires after an instance is placed anywhere under this one, at any depth."
+        },
+        {
+          "name": "DescendantRemoving",
+          "params": [
+            {
+              "name": "descendant",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires just before an instance anywhere under this one is moved away or destroyed."
+        },
+        {
+          "name": "AncestryChanged",
+          "params": [
+            {
+              "name": "child",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            },
+            {
+              "name": "parent",
+              "type": {
+                "Optional": {
+                  "Class": "Instance"
+                }
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires when this instance or one of its ancestors gets a new parent, with the instance that moved and its new parent (nil when it left the game)."
+        },
+        {
+          "name": "AttributeChanged",
+          "params": [
+            {
+              "name": "attributeName",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires after an attribute is set, changed or removed, with the attribute's name."
+        },
+        {
+          "name": "Destroying",
+          "params": [],
+          "description": "Fires when the instance is about to be destroyed, while it is still intact."
+        }
+      ],
+      "callbacks": []
+    },
+    {
+      "name": "BindableEvent",
+      "parent": "Instance",
+      "description": "A signal that scripts fire themselves: one script calls Fire, and every function connected to Event runs with the same arguments. It works between scripts on the same side (server or client).",
+      "category": "",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [
+        {
+          "name": "Fire",
+          "params": [
+            {
+              "name": "args",
+              "type": {
+                "Variadic": "Any"
+              },
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Fires Event with all the arguments given. Listeners run later in the frame, not inside Fire; when nothing is connected, nothing happens.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [
+        {
+          "name": "Event",
+          "params": [
+            {
+              "name": "args",
+              "type": {
+                "Variadic": "Any"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires when Fire is called, with the arguments passed to Fire."
+        }
+      ],
+      "callbacks": []
+    },
+    {
+      "name": "BindableFunction",
+      "parent": "Instance",
+      "description": "A function that one script exposes and others call: a script assigns a function to OnInvoke, and Invoke calls it and returns what it returns. It works between scripts on the same side (server or client).",
+      "category": "",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [
+        {
+          "name": "Invoke",
+          "params": [
+            {
+              "name": "args",
+              "type": {
+                "Variadic": "Any"
+              },
+              "optional": false
+            }
+          ],
+          "returns": "Any",
+          "description": "Calls the function assigned to OnInvoke with all the arguments given and returns its results. The calling script waits while the function runs, even if it yields. If no function is assigned yet, the caller waits until one is; an error in the function is raised in the caller.",
+          "invokes_callback": "OnInvoke"
+        }
+      ],
+      "signals": [],
+      "callbacks": [
+        {
+          "name": "OnInvoke",
+          "params": [
+            {
+              "name": "args",
+              "type": {
+                "Variadic": "Any"
+              },
+              "optional": false
+            }
+          ],
+          "returns": "Any",
+          "description": "The function Invoke calls. Assign a function to it (or nil to remove it); it receives Invoke's arguments, and what it returns is what Invoke returns. It cannot be read."
+        }
+      ]
+    },
+    {
+      "name": "DataModel",
+      "parent": "Instance",
+      "description": "The whole game (`game` in scripts). Its children are the services, such as Workspace and Lighting.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [
+        {
+          "name": "GetService",
+          "params": [
+            {
+              "name": "className",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Class": "Instance"
+          },
+          "description": "Returns the service with the given class name, such as game:GetService(\"Lighting\"). It always returns the same instance for a service.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "Folder",
+      "parent": "Instance",
+      "description": "A container for organising instances. It has no position and does nothing on its own.",
+      "category": "",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "Lighting",
+      "parent": "Instance",
+      "description": "Controls how the scene is lit: the time of day, the sun, the sky colour and the ambient light.",
+      "category": "",
+      "creatable": false,
+      "service_order": 1,
+      "persisted": true,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "ClockTime",
+          "type": "Number",
+          "default": 14.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            24.0
+          ],
+          "group": "Sun",
+          "description": "The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Brightness",
+          "type": "Number",
+          "default": 2.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            10.0
+          ],
+          "group": "Sun",
+          "description": "How strong the sunlight is. 0 turns the sun off.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "SkyColor",
+          "type": "Color3",
+          "default": [
+            0.53,
+            0.72,
+            0.95
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Sky",
+          "description": "The colour of the sky in the middle of the day.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Ambient",
+          "type": "Color3",
+          "default": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Sky",
+          "description": "The colour of the light that reaches places the sun does not, such as shadows.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "ReplicatedStorage",
+      "parent": "Instance",
+      "description": "Storage for things both the server and players need, such as shared modules and assets. Nothing here is drawn or run.",
+      "category": "",
+      "creatable": false,
+      "service_order": 2,
+      "persisted": true,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "ServerScriptService",
+      "parent": "Instance",
+      "description": "Holds the game's server scripts. Scripts placed here run on the server; players never see them.",
+      "category": "",
+      "creatable": false,
+      "service_order": 3,
+      "persisted": true,
+      "runs_scripts": true,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "ServerStorage",
+      "parent": "Instance",
+      "description": "Storage only the server can see, such as maps and items to copy into the world later. Nothing here is drawn or run.",
+      "category": "",
+      "creatable": false,
+      "service_order": 4,
+      "persisted": true,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "SourceContainer",
+      "parent": "Instance",
+      "description": "The base of every script: an instance that points at a source file in the project. The file's extension selects the language, so a game can mix languages.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Source",
+          "type": "String",
+          "default": "",
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Script",
+          "description": "The project-relative path of the script's source file, such as \"Scripts/Door.luau\", chosen with a file picker. The file's extension selects the language. Empty means the script has no source and does nothing.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "ValueBase",
+      "parent": "Instance",
+      "description": "The base of the value objects: instances that store one value, such as a score or a door's target, where scripts can share it.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": "Value",
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [
+        {
+          "name": "Changed",
+          "params": [
+            {
+              "name": "value",
+              "type": "Any",
+              "optional": false
+            }
+          ],
+          "description": "Fires after Value changes, with the new value."
+        }
+      ],
+      "callbacks": []
+    },
+    {
+      "name": "Workspace",
+      "parent": "Instance",
+      "description": "The 3D world: everything placed here is part of the scene. Scripts placed here run.",
+      "category": "",
+      "creatable": false,
+      "service_order": 0,
+      "persisted": true,
+      "runs_scripts": true,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "CurrentCamera",
+          "type": {
+            "Optional": {
+              "Class": "Camera"
+            }
+          },
+          "default": null,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Camera",
+          "description": "The camera the screen shows. A new game starts with one, named Camera, inside Workspace.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "WorldObject",
+      "parent": "Instance",
+      "description": "The base of everything that has a position in the 3D world, such as models, parts, lights and cameras.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "PivotOffset",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Transform",
+          "description": "Where the object's pivot sits, relative to the object. Moving and rotating the object happens around its pivot.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "GetPivot",
+          "params": [],
+          "returns": "CFrame",
+          "description": "Returns the point the object moves and rotates around, as a CFrame in world space. For a model without a PrimaryPart it is the centre of its parts.",
+          "invokes_callback": null
+        },
+        {
+          "name": "PivotTo",
+          "params": [
+            {
+              "name": "targetCFrame",
+              "type": "CFrame",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Moves the object so that its pivot is at the given CFrame. A model moves everything in it together, keeping their positions relative to each other.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "BasePart",
+      "parent": "WorldObject",
+      "description": "The base of every solid object in the world: where it is, how big, what it looks like and how it behaves.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "Transform"
+      ],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "CFrame",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Transform",
+          "description": "Where the part is and how it is rotated, in world space. Position and Orientation are views of it.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Position",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "group": "Transform",
+          "description": "Where the part's centre is, in metres. Setting it moves the part without rotating it.",
+          "aliases": [],
+          "derived_from": [
+            "CFrame"
+          ]
+        },
+        {
+          "name": "Orientation",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "group": "Transform",
+          "description": "The part's rotation as angles in degrees about X, Y and Z, applied Z first, then X, then Y. Setting it rotates the part in place.",
+          "aliases": [],
+          "derived_from": [
+            "CFrame"
+          ]
+        },
+        {
+          "name": "Size",
+          "type": "Vector3",
+          "default": [
+            4.0,
+            1.0,
+            2.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "PHYSICS"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.001,
+            2048.0
+          ],
+          "group": "Transform",
+          "description": "How big the part is along X, Y and Z, in metres. Each side is kept between 0.001 and 2048.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Color",
+          "type": "Color3",
+          "default": [
+            0.64,
+            0.64,
+            0.64
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Appearance",
+          "description": "The part's colour.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Material",
+          "type": {
+            "Enum": "Material"
+          },
+          "default": "Plastic",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Appearance",
+          "description": "What the part looks like it is made of, such as Wood, Metal or Neon.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Transparency",
+          "type": "Number",
+          "default": 0.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            1.0
+          ],
+          "group": "Appearance",
+          "description": "How see-through the part is: 0 is solid, 1 is invisible.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "CastShadow",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Appearance",
+          "description": "Whether the part casts a shadow.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Anchored",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "PHYSICS"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Physics",
+          "description": "Whether the part stays where it is. An anchored part is not moved by gravity or collisions.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "CanCollide",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "PHYSICS"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Physics",
+          "description": "Whether other parts bump into this one. When off, things pass through it.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "BaseScript",
+      "parent": "SourceContainer",
+      "description": "The base of Script and LocalScript: a script that runs on its own when the game starts, if enabled.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Enabled",
+          "type": "Bool",
+          "default": true,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Script",
+          "description": "Whether the script runs. A disabled script does not start; turning it off later stops it.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "BoolValue",
+      "parent": "ValueBase",
+      "description": "Stores true or false under a name, such as whether a door is open.",
+      "category": "Values",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Value",
+          "type": "Bool",
+          "default": false,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Data",
+          "description": "The stored true or false. Starts false.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "Camera",
+      "parent": "WorldObject",
+      "description": "A point of view on the world. The screen shows what Workspace.CurrentCamera sees.",
+      "category": "World",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "Transform"
+      ],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "CFrame",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Transform",
+          "description": "Where the camera is and which way it looks, in world space. It looks along its forward direction (-Z).",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "FieldOfView",
+          "type": "Number",
+          "default": 70.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            1.0,
+            120.0
+          ],
+          "group": "Camera",
+          "description": "How much the camera sees from top to bottom, in degrees. Smaller values zoom in.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "IntValue",
+      "parent": "ValueBase",
+      "description": "Stores a whole number under a name, such as a score or a count.",
+      "category": "Values",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Value",
+          "type": "Int",
+          "default": 0,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Data",
+          "description": "The stored whole number. Starts at 0.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "Light",
+      "parent": "WorldObject",
+      "description": "The base of every light: whether it is on, how bright, what colour, how far it reaches and shadows.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "Transform"
+      ],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Enabled",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Light",
+          "description": "Whether the light shines. Turning it off keeps every other setting.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Brightness",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            100.0
+          ],
+          "group": "Light",
+          "description": "How strong the light is. 1 is an ordinary lamp; 0 gives no light.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Color",
+          "type": "Color3",
+          "default": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Light",
+          "description": "The colour of the light.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Range",
+          "type": "Number",
+          "default": 16.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            1000.0
+          ],
+          "group": "Light",
+          "description": "How far the light reaches, in metres. Past this distance it lights nothing.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Shadows",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Shadows",
+          "description": "Whether objects block this light and cast shadows. Shadows cost performance, so use them sparingly.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "CFrame",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Transform",
+          "description": "Where the light is and which way it points (forward is -Z). Inside a part it is relative to the part, so the light moves with it; anywhere else it is in world space.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "Model",
+      "parent": "WorldObject",
+      "description": "A group of world objects that belong together, such as a car or a house, moved and copied as one.",
+      "category": "",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "PrimaryPart",
+          "type": {
+            "Optional": {
+              "Class": "BasePart"
+            }
+          },
+          "default": null,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Model",
+          "description": "The part the model moves and rotates around. When it is nil (or not inside the model), the model pivots on the centre of its parts.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "ModuleScript",
+      "parent": "SourceContainer",
+      "description": "Code shared between scripts. It runs the first time a script requires it and returns a value, usually a table of functions; later requires return that same value.",
+      "category": "Scripts",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "NumberValue",
+      "parent": "ValueBase",
+      "description": "Stores a number under a name, such as a speed or an amount of health.",
+      "category": "Values",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Value",
+          "type": "Number",
+          "default": 0.0,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Data",
+          "description": "The stored number. Starts at 0.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "ObjectValue",
+      "parent": "ValueBase",
+      "description": "Stores a reference to another instance under a name, such as the door a button opens.",
+      "category": "Values",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Value",
+          "type": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "default": null,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Data",
+          "description": "The instance it points at, or nil. Starts nil, and reads nil once that instance is destroyed.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "StringValue",
+      "parent": "ValueBase",
+      "description": "Stores text under a name, such as a team name or a message to show.",
+      "category": "Values",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Value",
+          "type": "String",
+          "default": "",
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Data",
+          "description": "The stored text. Starts empty.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "DirectionalLight",
+      "parent": "Light",
+      "description": "Parallel light from one direction over the whole world, like the sun. It points along its CFrame's forward direction and has no range.",
+      "category": "Lights",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "DirectionalLightEmitter"
+      ],
+      "changed_passes_value": null,
+      "hides": [
+        "Range"
+      ],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "LocalScript",
+      "parent": "BaseScript",
+      "description": "A script that runs on each player's client, for input, the camera and the user interface. What it changes is seen only by that player.",
+      "category": "Scripts",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "Part",
+      "parent": "BasePart",
+      "description": "The basic building block: a block, ball, cylinder or wedge that you size, colour and place.",
+      "category": "Parts",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "PrimitiveMesh"
+      ],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Shape",
+          "type": {
+            "Enum": "PartShape"
+          },
+          "default": "Block",
+          "flags": [
+            "VISUAL",
+            "PHYSICS"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "group": "Part",
+          "description": "The part's shape. A Ball's diameter is the smallest side of Size; a Cylinder runs along X; a Wedge slopes down towards -Z.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "PointLight",
+      "parent": "Light",
+      "description": "Light shining in every direction from one point, like a bulb or a torch. It reaches Range metres.",
+      "category": "Lights",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "PointLightEmitter"
+      ],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "Script",
+      "parent": "BaseScript",
+      "description": "A script that runs on the server, where it can change the game for every player. In a standalone game, which has no separate server, it runs in the single local context.",
+      "category": "Scripts",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "SpotLight",
+      "parent": "Light",
+      "description": "A cone of light shining forward from the light, like a torch or a stage light.",
+      "category": "Lights",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "SpotLightEmitter"
+      ],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Angle",
+          "type": "Number",
+          "default": 90.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            1.0,
+            179.0
+          ],
+          "group": "Spotlight",
+          "description": "How wide the cone is: the full angle from one edge to the other, in degrees.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    }
+  ],
+  "enums": [
+    {
+      "name": "Material",
+      "description": "What a part's surface is made of, which sets how it looks: its texture, shine and glow.",
+      "items": [
+        {
+          "name": "Plastic",
+          "value": 0
+        },
+        {
+          "name": "SmoothPlastic",
+          "value": 1
+        },
+        {
+          "name": "Metal",
+          "value": 2
+        },
+        {
+          "name": "Wood",
+          "value": 3
+        },
+        {
+          "name": "Glass",
+          "value": 4
+        },
+        {
+          "name": "Neon",
+          "value": 5
+        },
+        {
+          "name": "Concrete",
+          "value": 6
+        },
+        {
+          "name": "Grass",
+          "value": 7
+        }
+      ]
+    },
+    {
+      "name": "PartShape",
+      "description": "The shape of a Part: a box, a sphere, a cylinder or a ramp.",
+      "items": [
+        {
+          "name": "Block",
+          "value": 0
+        },
+        {
+          "name": "Ball",
+          "value": 1
+        },
+        {
+          "name": "Cylinder",
+          "value": 2
+        },
+        {
+          "name": "Wedge",
+          "value": 3
+        }
+      ]
+    }
+  ],
+  "components": [
+    {
+      "name": "DirectionalLightEmitter",
+      "description": "Lights the whole world with parallel rays along the light's forward direction (-Z), however far.",
+      "requires": [
+        "Transform"
+      ],
+      "properties": []
+    },
+    {
+      "name": "PointLightEmitter",
+      "description": "Lights everything within Range of the light's position, equally in every direction.",
+      "requires": [
+        "Transform"
+      ],
+      "properties": []
+    },
+    {
+      "name": "PrimitiveMesh",
+      "description": "Draws the part as the built-in mesh for its Shape, stretched to its Size.",
+      "requires": [
+        "Transform"
+      ],
+      "properties": []
+    },
+    {
+      "name": "SpotLightEmitter",
+      "description": "Lights a cone that opens Angle degrees along the light's forward direction (-Z), up to Range metres.",
+      "requires": [
+        "Transform"
+      ],
+      "properties": []
+    },
+    {
+      "name": "Transform",
+      "description": "Places the object in the world from its CFrame property. The renderer, physics and audio read the object's world position and rotation through it.",
+      "requires": [],
+      "properties": []
+    }
+  ]
+}
