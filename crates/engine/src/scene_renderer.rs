@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
-use metallic_core::glam::Vec3;
-use metallic_core::{DataModel, Id, PropId};
+use metallic_core::{DataModel, Id};
 use metallic_platform::{Size, Window};
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::{
-    ContextOptions, GpuScene, RenderContext, RenderError, RenderSurface, Renderer, RendererSettings, wgpu,
+    CameraReader, ContextOptions, DrawStats, GpuScene, RenderContext, RenderError, RenderSurface, Renderer,
+    RendererSettings, wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
@@ -19,28 +19,21 @@ struct Device {
     renderer: Renderer,
 }
 
-/// What the renderer reads from `Workspace`, looked up once per data model.
-#[derive(Clone, Copy, Debug)]
-struct WorldIds {
-    workspace: Id,
-    current_camera: Option<PropId>,
-    /// The camera last seen and its `CFrame` property.
-    camera: Option<(Id, PropId)>,
-}
-
 /// Draws the game into the engine's window: install it with [`Engine::set_render_hook`](crate::Engine::set_render_hook).
 ///
-/// Each frame it syncs the GPU-resident scene ([`GpuScene`]) with the data model's changes and uploads them in the
-/// frame's submission. Parts are not drawn yet (#77): the frame is the clear colour, with the scene kept current
-/// for the passes that will draw it. The device and the scene survive [`RenderHook::detach`], so a mobile app
-/// coming back to the foreground only makes a new surface.
+/// Each frame it syncs the GPU-resident scene ([`GpuScene`]) with the data model's changes and draws the parts in
+/// `Workspace` from `Workspace.CurrentCamera` ([`Renderer::render_scene`]); without a current camera the frame is
+/// the clear colour. The device and the scene survive [`RenderHook::detach`], so a mobile app coming back to the
+/// foreground only makes a new surface.
 pub struct SceneRenderer {
     options: ContextOptions,
     clear_color: wgpu::Color,
     device: Option<Device>,
     surface: Option<RenderSurface>,
     scene: Option<GpuScene>,
-    world: Option<WorldIds>,
+    /// `Workspace`, the root of what is drawn and the owner of `CurrentCamera`.
+    world: Option<Id>,
+    camera: CameraReader,
     last_sync: SyncStats,
     last_upload: UploadStats,
 }
@@ -60,6 +53,7 @@ impl SceneRenderer {
             surface: None,
             scene: None,
             world: None,
+            camera: CameraReader::new(),
             last_sync: SyncStats::default(),
             last_upload: UploadStats::default(),
         }
@@ -78,9 +72,24 @@ impl SceneRenderer {
         self.scene.as_ref()
     }
 
+    /// The renderer, once attached to a window: its draw statistics, timings, materials and light.
+    pub fn renderer(&self) -> Option<&Renderer> {
+        self.device.as_ref().map(|device| &device.renderer)
+    }
+
+    /// The renderer, to change its settings, materials or light.
+    pub fn renderer_mut(&mut self) -> Option<&mut Renderer> {
+        self.device.as_mut().map(|device| &mut device.renderer)
+    }
+
     /// What the last frame's sync and upload did.
     pub fn last_frame(&self) -> (SyncStats, UploadStats) {
         (self.last_sync, self.last_upload)
+    }
+
+    /// What the last drawn frame drew.
+    pub fn draw_stats(&self) -> DrawStats {
+        self.renderer().map(Renderer::draw_stats).unwrap_or_default()
     }
 
     /// Attaches the scene to `dm` when it is not attached to it yet (the first frame, or a new game).
@@ -96,35 +105,15 @@ impl SceneRenderer {
             return Ok(());
         };
         let registry = dm.registry().clone();
-        let workspace = registry.class_id("Workspace").and_then(|class| dm.service(class));
-        self.world = workspace.map(|workspace| WorldIds {
-            workspace,
-            current_camera: dm.prop_id(workspace, "CurrentCamera").ok(),
-            camera: None,
-        });
+        self.world = registry.class_id("Workspace").and_then(|class| dm.service(class));
         // A scene of another data model is dropped as it is: that game, and its consumer, are gone.
         self.scene = Some(GpuScene::new(
             &device.context,
             dm,
-            workspace,
+            self.world,
             &RenderComponents::builtin(),
         )?);
         Ok(())
-    }
-
-    /// The current camera's position, re-resolving its `CFrame` property when the camera changed.
-    fn camera_position(&mut self, dm: &DataModel) -> Option<Vec3> {
-        let world = self.world.as_mut()?;
-        let camera = dm.reference(world.workspace, world.current_camera?).ok()??;
-        let prop = match world.camera {
-            Some((id, prop)) if id == camera => prop,
-            _ => {
-                let prop = dm.prop_id(camera, "CFrame").ok()?;
-                world.camera = Some((camera, prop));
-                prop
-            }
-        };
-        dm.cframe(camera, prop).ok().map(|cframe| cframe.position())
     }
 }
 
@@ -191,12 +180,12 @@ impl RenderHook for SceneRenderer {
             log::error!("render: {error}");
             return;
         }
-        let camera = self.camera_position(frame.dm);
+        let camera = self.world.and_then(|world| self.camera.read(frame.dm, world));
         let (Some(device), Some(scene)) = (self.device.as_mut(), self.scene.as_mut()) else {
             return;
         };
         if let Some(camera) = camera {
-            scene.set_camera_position(frame.dm, camera);
+            scene.set_camera_position(frame.dm, camera.position);
         }
         self.last_sync = scene.sync(frame.dm);
         let image = match self.surface.as_mut().map(|surface| surface.acquire(&device.context)) {
@@ -207,13 +196,11 @@ impl RenderHook for SceneRenderer {
             }
             None => None,
         };
-        let mut upload = UploadStats::default();
         match image {
             Some(image) => {
-                device
-                    .renderer
-                    .render_with(image.view(), |encoder| upload = scene.upload(encoder));
+                device.renderer.render_scene(image.view(), scene, camera.as_ref());
                 image.present(&device.context);
+                self.last_upload = device.renderer.upload_stats();
             }
             None => {
                 // No image this frame (minimised, occluded): the upload still goes out, or it would be lost.
@@ -223,11 +210,10 @@ impl RenderHook for SceneRenderer {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("metallic scene upload"),
                     });
-                upload = scene.upload(&mut encoder);
+                self.last_upload = scene.upload(&mut encoder);
                 device.context.queue().submit(std::iter::once(encoder.finish()));
             }
         }
-        self.last_upload = upload;
     }
 }
 

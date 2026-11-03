@@ -3,6 +3,7 @@
 use metallic_core::Id;
 
 use super::instance::GpuInstance;
+use super::lists::NOT_LISTED;
 use super::{Region, UploadRange};
 
 /// Bookkeeping for one slot, next to its packed instance.
@@ -16,6 +17,11 @@ pub(super) struct SlotMeta {
     pub(super) since: u32,
     /// Queued on the dirty list.
     pub(super) dirty: bool,
+    /// The draw list the slot's entry is in ([`NOT_LISTED`] when none). Kept when the slot is freed or reused,
+    /// until the next coalesce takes the entry out of the list.
+    pub(super) list: u16,
+    /// The entry's position in that list.
+    pub(super) list_pos: u32,
 }
 
 impl SlotMeta {
@@ -24,6 +30,8 @@ impl SlotMeta {
         moves: 0,
         since: 0,
         dirty: false,
+        list: NOT_LISTED,
+        list_pos: 0,
     };
 }
 
@@ -57,15 +65,20 @@ impl RegionSlots {
         self.live += 1;
         let meta = SlotMeta {
             owner: Some(owner),
-            moves: 0,
             since: frame,
-            dirty: false,
+            ..SlotMeta::FREE
         };
         if let Some(slot) = self.free.pop()
             && let Some(m) = self.meta.get_mut(slot as usize)
         {
-            // Freed earlier this frame, the slot may still be queued: keep it queued once.
-            *m = SlotMeta { dirty: m.dirty, ..meta };
+            // Freed earlier this frame, the slot may still be queued (keep it queued once) and still listed (the
+            // next coalesce moves the entry).
+            *m = SlotMeta {
+                dirty: m.dirty,
+                list: m.list,
+                list_pos: m.list_pos,
+                ..meta
+            };
             return slot;
         }
         let slot = self.len();
@@ -84,9 +97,10 @@ impl RegionSlots {
             return;
         }
         *instance = GpuInstance::FREE;
-        let dirty = meta.dirty;
         *meta = SlotMeta {
-            dirty,
+            dirty: meta.dirty,
+            list: meta.list,
+            list_pos: meta.list_pos,
             ..SlotMeta::FREE
         };
         self.live -= 1;
@@ -107,6 +121,17 @@ impl RegionSlots {
 
     pub(super) fn dirty_len(&self) -> usize {
         self.dirty.len()
+    }
+
+    /// Lends out the slots queued for upload (in the order they were queued), to walk them while changing other
+    /// slots' bookkeeping. Give them back with [`RegionSlots::return_dirty`] before anything is marked dirty.
+    pub(super) fn take_dirty(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.dirty)
+    }
+
+    /// Puts back what [`RegionSlots::take_dirty`] lent out.
+    pub(super) fn return_dirty(&mut self, dirty: Vec<u32>) {
+        self.dirty = dirty;
     }
 
     /// Turns the dirty slots into ranges, appended to `out`: sorted, adjacent slots merged, and runs separated

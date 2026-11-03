@@ -100,7 +100,7 @@
 //! the frame packet (ADR 0008 §11). [`RenderHook::attach`], [`RenderHook::detach`] and [`RenderHook::resize`]
 //! follow the window's life. Headless engines never call it, and without the `render` feature it does not exist.
 //! [`SceneRenderer`] is the renderer's hook: a thin adapter that keeps `metallic_render`'s GPU-resident scene in
-//! step with the game and runs its frames.
+//! step with the game and draws its parts from `Workspace.CurrentCamera`.
 //!
 //! # Profiling
 //!

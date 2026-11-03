@@ -42,6 +42,9 @@ pub struct ContextOptions {
     pub backends: wgpu::Backends,
     /// Which adapter to prefer when there are several (a laptop's integrated and discrete GPUs).
     pub power_preference: wgpu::PowerPreference,
+    /// Use the vertex-buffer instance path (GLES's) even where vertex shaders can read storage buffers, by
+    /// reporting [`Capabilities::vertex_storage`] as false. For tests of that path on any backend.
+    pub force_vertex_instances: bool,
 }
 
 impl Default for ContextOptions {
@@ -49,6 +52,7 @@ impl Default for ContextOptions {
         Self {
             backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
             power_preference: wgpu::PowerPreference::HighPerformance,
+            force_vertex_instances: false,
         }
     }
 }
@@ -187,7 +191,7 @@ impl RenderContext {
             let _setup = setup_lock();
             let instance = new_instance(tier, None);
             if let Some(adapter) = request_adapter(&instance, options, None) {
-                return Self::from_adapter(instance, adapter);
+                return Self::from_adapter(instance, adapter, options);
             }
         }
         Err(RenderError::NoAdapter {
@@ -218,7 +222,7 @@ impl RenderContext {
             let instance = new_instance(tier, display);
             let surface = instance.create_surface(wgpu::SurfaceTarget::from(Arc::clone(&window)))?;
             if let Some(adapter) = request_adapter(&instance, options, Some(&surface)) {
-                let context = Self::from_adapter(instance, adapter)?;
+                let context = Self::from_adapter(instance, adapter, options)?;
                 let surface = RenderSurface::new(&context, surface, window, width, height)?;
                 return Ok((context, surface));
             }
@@ -251,7 +255,11 @@ impl RenderContext {
             .create_surface(wgpu::SurfaceTarget::from(Arc::clone(window)))?)
     }
 
-    fn from_adapter(instance: wgpu::Instance, adapter: wgpu::Adapter) -> Result<Self, RenderError> {
+    fn from_adapter(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        options: &ContextOptions,
+    ) -> Result<Self, RenderError> {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("metallic device"),
             required_features: adapter.features() & WANTED_FEATURES,
@@ -259,7 +267,9 @@ impl RenderContext {
             required_limits: adapter.limits(),
             ..Default::default()
         }))?;
-        let capabilities = Arc::new(Capabilities::new(&adapter, &device));
+        let mut capabilities = Capabilities::new(&adapter, &device);
+        capabilities.vertex_storage &= !options.force_vertex_instances;
+        let capabilities = Arc::new(capabilities);
         Ok(Self {
             instance,
             adapter,
