@@ -932,12 +932,11 @@ fn parts_frame_and_floor(context: &RenderContext, parts: usize, see_through: usi
     )
 }
 
-/// What a parts frame may allocate beyond the same wgpu calls by hand, for the machine rather than for us. The dev
-/// PC's adapters (Vulkan, DX12, GL, and WARP) show 0. CI's lavapipe and WARP showed a constant 4 and 3 on every
-/// frame of a 2,000-part frame, whether or not frames overlapped, while the dev PC's WARP shows 0: something in
-/// the runner images (they have the graphics APIs' validation layers, which wgpu turns on in debug builds and
-/// relays with allocations of its own) rather than in the renderer, which the comparison of two very different
-/// workloads below confirms.
+/// What a parts frame may allocate beyond the same wgpu calls by hand, for the machine rather than for us. Every
+/// adapter on the dev PC (Vulkan, DX12, GL, and WARP) shows 0. CI's lavapipe and WARP showed a constant 4 and 3
+/// on every 2,000-part frame, whether or not frames overlapped, and the same for the 6,000-part workload below.
+/// The cause is in the runner environment, not found yet (no validation message was reported); that the excess
+/// does not change between two very different workloads is what shows it is not the renderer's.
 const MACHINE_NOISE: u64 = 4;
 
 #[test]

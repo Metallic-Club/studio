@@ -57,6 +57,11 @@ impl log::Log for WgpuMessages {
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
             let message = format!("{}: {}", record.target(), record.args());
+            // The Vulkan loader's own messages while instances are made (on a machine without a Vulkan driver,
+            // "Found no drivers" is an error) say nothing about the frames drawn; the loader names the instance.
+            if message.contains("[Loader Message") || message.contains("type: INSTANCE") {
+                return;
+            }
             self.0
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
