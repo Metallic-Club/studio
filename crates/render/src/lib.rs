@@ -25,6 +25,8 @@
 //!   `Workspace.CurrentCamera` ([`CameraReader`]).
 //! - Culling ([`cull`], [`RendererSettings::cull`]): a loose grid of every drawn instance's bounding sphere, culled
 //!   per view by frustum, distance and screen size into the same draw lists, opaque instances front to back.
+//! - Lighting and the sky ([`lighting`], [`Renderer::set_lighting`]): the sun or moon, a hemisphere ambient and an
+//!   analytic sky drawn last at the far plane, from the `Lighting` service ([`LightingReader`]).
 //! - The debug overlay ([`overlay`], [`Renderer::set_overlay_enabled`]): rectangles and bitmap-font text in the UI
 //!   pass, which carries the performance overlay (ADR 0008 §10).
 
@@ -33,6 +35,7 @@ pub mod cull;
 pub mod depth;
 mod error;
 mod graph;
+pub mod lighting;
 pub mod overlay;
 pub mod parts;
 mod renderer;
@@ -45,8 +48,9 @@ pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext}
 pub use cull::{CullSettings, CullStats, CullView, Frustum, VisibleSet};
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
+pub use lighting::{LightingReader, SceneLighting};
 pub use overlay::Overlay;
-pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer, SceneLight};
+pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer};
 pub use renderer::{Renderer, RendererSettings};
 pub use scene::{GpuScene, InstanceScene};
 pub use surface::{RenderSurface, SurfaceFrame};

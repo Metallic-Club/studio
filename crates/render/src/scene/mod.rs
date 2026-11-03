@@ -130,4 +130,6 @@ pub struct SyncStats {
     pub promoted: u32,
     /// Instances moved back to the static region.
     pub demoted: u32,
+    /// Watched instances ([`InstanceScene::watch`], such as `Lighting`) that changed: read them again.
+    pub watched: u32,
 }

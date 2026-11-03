@@ -289,6 +289,12 @@ impl GpuScene {
         self.scene.sync(dm)
     }
 
+    /// Reports `id`'s changes in [`SyncStats::watched`] from now on (see [`InstanceScene::watch`]): how the engine
+    /// knows to read `Lighting` again.
+    pub fn watch(&mut self, id: Id) {
+        self.scene.watch(id);
+    }
+
     /// Moves the scene origin near the camera when it has gone far (see [`InstanceScene::set_camera_position`]).
     pub fn set_camera_position(&mut self, dm: &DataModel, camera: Vec3) -> bool {
         self.scene.set_camera_position(dm, camera)

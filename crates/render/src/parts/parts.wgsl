@@ -1,29 +1,13 @@
 // Parts: instanced primitive meshes, shaded PBR-lite (Lambert diffuse, GGX specular) under one directional light
-// and a sky/ground ambient. One shading model; the material row picks the parameters. The vertex entry point is
-// in instance_storage.wgsl or instance_vertex.wgsl, appended to this file (scene/gpu.rs explains the two paths).
+// (the sun, or the moon at night) and a sky/ground hemisphere ambient, all from `Lighting`. One shading model; the
+// material row picks the parameters. frame.wgsl comes before this file, and the vertex entry point after it, from
+// instance_storage.wgsl or instance_vertex.wgsl (scene/gpu.rs explains the two paths).
 //
 // Positions are camera-relative: instance translations are relative to the scene origin, and `frame.camera_offset`
 // (camera − origin) is subtracted before the rotation-only view-projection, so f32 stays precise far from the world
 // origin (ADR 0008 §11).
 
 const PI: f32 = 3.14159265;
-
-// `FrameUniforms` in parts/mod.rs.
-struct Frame {
-    view_proj: mat4x4<f32>,
-    // xyz: camera position − scene origin.
-    camera_offset: vec4<f32>,
-    // xyz: unit vector towards the light.
-    light_direction: vec4<f32>,
-    // rgb: the light's radiance (linear).
-    light_color: vec4<f32>,
-    // rgb: ambient light from above (linear).
-    sky_ambient: vec4<f32>,
-    // rgb: ambient light from below (linear).
-    ground_ambient: vec4<f32>,
-    // x: 1 when the target is not an sRGB format and the shader must encode.
-    output: vec4<f32>,
-}
 
 // `MaterialRow` in parts/material.rs.
 struct MaterialRow {
@@ -35,7 +19,6 @@ struct MaterialRow {
 // MAX_MATERIAL_ROWS in parts/material.rs.
 const MATERIAL_ROWS: u32 = 256u;
 
-@group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<uniform> materials: array<MaterialRow, 256>;
 
 struct VertexOut {
@@ -47,15 +30,6 @@ struct VertexOut {
     // Linear colour; alpha is 1 − Transparency.
     @location(2) @interpolate(flat) color: vec4<f32>,
     @location(3) @interpolate(flat) material: u32,
-}
-
-fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
-    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
-}
-
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    let x = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
-    return select(1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3<f32>(0.0031308));
 }
 
 // The packed sRGB colour of an instance (red in the lowest byte), as linear light.
@@ -149,13 +123,6 @@ fn shade(in: VertexOut) -> Shaded {
     out.body = diffuse / PI * light + diffuse * hemisphere(n.y) + albedo * row.surface.z;
     out.specular = distribution * visibility * fresnel * light + env_brdf(f0, roughness, n_dot_v) * hemisphere(reflect(-v, n).y);
     return out;
-}
-
-fn encode(color: vec3<f32>) -> vec3<f32> {
-    if frame.output.x > 0.5 {
-        return linear_to_srgb(color);
-    }
-    return color;
 }
 
 @fragment

@@ -7,7 +7,7 @@
 //! | Name | What | Window |
 //! |---|---|---|
 //! | `parts_10k`, `parts_50k`, `parts_100k` | A city of static parts (70% blocks, 10% each balls, cylinders, wedges; eight materials) on a baseplate, one part per 16 m², seen from the middle at head height; 1% moving | 1920 × 1080 |
-//! | `many_lights` | A lit town: 2,500 parts plus 1,152 lamps, each a neon ball holding a `PointLight` (1,024) or a `SpotLight` (128), 16 of them with shadows; 1% of the lamps moving. Only the temporary sun renders until lights do (#81, #83) | 1920 × 1080 |
+//! | `many_lights` | A lit town: 2,500 parts plus 1,152 lamps, each a neon ball holding a `PointLight` (1,024) or a `SpotLight` (128), 16 of them with shadows; 1% of the lamps moving. Only the sun (`Lighting`, #81) lights it until point and spot lights render (#83) | 1920 × 1080 |
 //! | `overdraw` | A hall seen from inside, crossed by 64 walls between 2 and 41 m away, each covering the whole view but for a window, in the order the renderer then draws back to front, so every wall overdraws the ones behind it (up to 64 layers per pixel); glass in a tenth of the windows, 3,000 crates on the floor; 1% moving | 1920 × 1080 |
 //! | `mobile` | 5,000 parts, the city's mix, with 25 see-through ones; 1% moving | 1280 × 720 |
 //! | `see_through_10k` | 10,000 see-through blocks and balls on a lattice, the shapes alternating so that sorted back to front they interleave (#106), over an opaque floor; 1% moving | 1920 × 1080 |

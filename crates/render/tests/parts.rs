@@ -10,6 +10,10 @@
 //!
 //! Every render also checks that wgpu reported no error through its log, which carries the graphics API's
 //! validation messages where validation layers are installed (debug builds turn validation on).
+//!
+//! These images are of parts alone: the sky pass is left out ([`PARTS_ONLY`]), so whatever no part covers keeps
+//! the clear colour and the tests can tell drawn pixels from empty ones. The sky has its own image test
+//! (`tests/sky.rs`). The parts are lit by the renderer's default lighting, `Lighting`'s defaults (#81).
 
 mod support;
 
@@ -34,6 +38,12 @@ const SKY: wgpu::Color = wgpu::Color {
     b: 0.82,
     a: 1.0,
 };
+
+/// The renderer's default passes without the sky: the images show the parts on the clear colour.
+const PARTS_ONLY: PassSet = PassSet::EMPTY
+    .with(PassId::Opaque)
+    .with(PassId::Transparent)
+    .with(PassId::Ui);
 
 /// A pixel differing by more than this in a channel counts as different.
 const THRESHOLD: u8 = 12;
@@ -200,7 +210,7 @@ fn describe(context: &RenderContext) {
 fn the_demo_scene_matches_the_reference() {
     let Some(context) = gpu() else { return };
     describe(&context);
-    let (pixels, stats) = render(&context, &mut demo_game(Vec3::ZERO), PassSet::default());
+    let (pixels, stats) = render(&context, &mut demo_game(Vec3::ZERO), PARTS_ONLY);
     eprintln!("{stats:?}");
     // Four kinds drawn opaque (the floor and solid parts), and the glass block and the ball sorted.
     assert_eq!(stats.opaque_draws, 4);
@@ -220,10 +230,10 @@ fn the_vertex_buffer_fallback_draws_the_same_image() {
     };
     assert_eq!(InstanceBinding::for_context(&fallback), InstanceBinding::Vertex);
     describe(&fallback);
-    let (pixels, stats) = render(&fallback, &mut demo_game(Vec3::ZERO), PassSet::default());
+    let (pixels, stats) = render(&fallback, &mut demo_game(Vec3::ZERO), PARTS_ONLY);
     assert_eq!((stats.opaque_draws, stats.transparent_draws), (4, 2));
     // Same device and maths, only the instance path differs: the images match exactly, give or take rounding.
-    let (storage, _) = render(&primary, &mut demo_game(Vec3::ZERO), PassSet::default());
+    let (storage, _) = render(&primary, &mut demo_game(Vec3::ZERO), PARTS_ONLY);
     let diff = scenes::compare(&pixels, &storage, 1);
     check("fallback against storage", diff);
     assert!(diff.max <= 2, "{diff:?}");
@@ -237,7 +247,7 @@ fn far_from_the_origin_the_image_is_the_same() {
     let (pixels, _) = render(
         &context,
         &mut demo_game(Vec3::new(50_000.0, 200.0, -30_000.0)),
-        PassSet::default(),
+        PARTS_ONLY,
     );
     check_reference("parts-far", &pixels);
 }
@@ -248,7 +258,7 @@ fn a_depth_prepass_draws_the_same_image() {
     let (pixels, stats) = render(
         &context,
         &mut demo_game(Vec3::ZERO),
-        PassSet::default().with(PassId::DepthPrepass),
+        PARTS_ONLY.with(PassId::DepthPrepass),
     );
     assert_eq!(stats.prepass_draws, 4);
     check_reference("parts-prepass", &pixels);
@@ -309,7 +319,7 @@ fn culled_parts_are_not_drawn_on(context: &RenderContext) {
     let (near, far, small) = ((61, 128), (183, 128), (128, 161));
     let drawn = |pixels: &[[u8; 4]]| [near, far, small].map(|(x, y)| !is_sky(pixels, x, y));
     let mut game = culling_game();
-    let (everything, all) = render_culled(context, &mut game, PassSet::default(), CullSettings::OFF);
+    let (everything, all) = render_culled(context, &mut game, PARTS_ONLY, CullSettings::OFF);
     assert_eq!((all.instances, all.culled_instances), (4, 0));
     assert_eq!(
         drawn(&everything),
@@ -318,7 +328,7 @@ fn culled_parts_are_not_drawn_on(context: &RenderContext) {
     );
 
     // The default culling: only the block behind the camera, and the image is the same.
-    let (pixels, stats) = render(context, &mut game, PassSet::default());
+    let (pixels, stats) = render(context, &mut game, PARTS_ONLY);
     assert_eq!((stats.instances, stats.culled_instances), (3, 1), "{stats:?}");
     let diff = scenes::compare(&pixels, &everything, 0);
     assert_eq!(diff.max, 0, "frustum culling changed the image: {diff:?}");
@@ -328,7 +338,7 @@ fn culled_parts_are_not_drawn_on(context: &RenderContext) {
         max_distance: 40.0,
         ..CullSettings::default()
     };
-    let (pixels, stats) = render_culled(context, &mut game, PassSet::default(), distance);
+    let (pixels, stats) = render_culled(context, &mut game, PARTS_ONLY, distance);
     assert_eq!((stats.instances, stats.culled_instances), (2, 2), "{stats:?}");
     assert_eq!(drawn(&pixels), [true, false, true]);
 
@@ -337,7 +347,7 @@ fn culled_parts_are_not_drawn_on(context: &RenderContext) {
         min_screen_size: 30.0,
         ..CullSettings::default()
     };
-    let (pixels, stats) = render_culled(context, &mut game, PassSet::default(), size);
+    let (pixels, stats) = render_culled(context, &mut game, PARTS_ONLY, size);
     assert_eq!((stats.instances, stats.culled_instances), (2, 2), "{stats:?}");
     assert_eq!(drawn(&pixels), [true, true, false]);
 }
@@ -367,7 +377,7 @@ fn without_a_camera_nothing_is_drawn() {
     game.dm
         .set_by_name(game.workspace, "CurrentCamera", Value::Ref(None))
         .expect("CurrentCamera");
-    let (pixels, stats) = render(&context, &mut game, PassSet::default());
+    let (pixels, stats) = render(&context, &mut game, PARTS_ONLY);
     assert_eq!(stats, DrawStats::default());
     // The sky colour, sRGB-encoded.
     let encode = |linear: f64| {
@@ -386,10 +396,10 @@ fn without_a_camera_nothing_is_drawn() {
 fn the_camera_follows_current_camera() {
     let Some(context) = gpu() else { return };
     let mut game = demo_game(Vec3::ZERO);
-    let (before, _) = render(&context, &mut game, PassSet::default());
+    let (before, _) = render(&context, &mut game, PARTS_ONLY);
     // Looking straight down from high up: mostly floor.
     game.set_camera(CFrame::look_at(Vec3::new(0.0, 60.0, 0.1), Vec3::ZERO, Vec3::Y), 30.0);
-    let (after, _) = render(&context, &mut game, PassSet::default());
+    let (after, _) = render(&context, &mut game, PARTS_ONLY);
     let diff = scenes::compare(&before, &after, THRESHOLD);
     assert!(diff.over > 0.5, "the view did not change: {diff:?}");
     // The centre is the concrete floor.
@@ -407,12 +417,12 @@ fn the_draw_count_does_not_depend_on_the_part_count() {
         scenes::grid(&mut game, parts, 100, SeeThrough::Blocks(50));
         // Every part drawn, then frustum-culled (the grid's far corners are outside the view). Not by screen size:
         // on this small target the 100,000-part grid is seen from so far that every part is under a pixel.
-        let (_, stats) = render_culled(&context, &mut game, PassSet::default(), CullSettings::OFF);
+        let (_, stats) = render_culled(&context, &mut game, PARTS_ONLY, CullSettings::OFF);
         let frustum = CullSettings {
             min_screen_size: 0.0,
             ..CullSettings::default()
         };
-        let (_, culled) = render_culled(&context, &mut game, PassSet::default(), frustum);
+        let (_, culled) = render_culled(&context, &mut game, PARTS_ONLY, frustum);
         eprintln!(
             "{parts} parts: {} opaque draws, {} transparent draws, {} instances, {} triangles; culled: {} instances, \
              {} triangles",
