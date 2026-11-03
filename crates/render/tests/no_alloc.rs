@@ -884,7 +884,6 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
     )
     .unwrap();
     let hand = HandParts::new(device, 4096);
-    let mut pacer = Pacer::new();
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
     for frame in 0..WARM_UP + FRAMES {
         let camera = orbiting_camera(frame);
@@ -900,7 +899,15 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
                 );
                 allocations_in(|| hand.frame(device, queue, target.view(), calls))
             };
-            pacer.submitted(device, submission);
+            // Each frame finishes before the next starts. The hand-written draws are degenerate, so on a software
+            // rasteriser the renderer's frames take far longer, and with frames in flight wgpu's bookkeeping of
+            // pending submissions (and what it frees when they finish) would differ between the two sides.
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: None,
+                })
+                .expect("wait for the frame");
             if frame >= WARM_UP {
                 if renderer_turn { &mut ours } else { &mut floor }.push(count);
             }
