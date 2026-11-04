@@ -1,9 +1,10 @@
 //! Sun shadows on a real adapter (#82): a pillar's shadow on the floor against a committed reference image,
 //! `CastShadow` and `Lighting.GlobalShadows` turning shadows off, the same image from the vertex-buffer fallback,
 //! and the caching of the far cascade: a frame in which nothing static changed and the camera and sun stayed draws
-//! only the near cascades, which hold the moving parts; and a cube resting on the floor under a low sun, shadowed
-//! right up to its foot with no acne on the lit surfaces (#126). Skips when the machine has no adapter (see
-//! `support::gpu`).
+//! the near cascades' casters and keeps the far cascade's static map, and a moving part beyond the near cascades
+//! still casts its shadow, drawn on a copy of that static map (#121); and a cube resting on the floor under a low
+//! sun, shadowed right up to its foot with no acne on the lit surfaces (#126). Skips when the machine has no adapter
+//! (see `support::gpu`).
 //!
 //! The reference is `tests/reference/shadows.png`, compared with the tolerance of `tests/parts.rs`. To make a new
 //! one (after a deliberate change to how shadows look), run with `METALLIC_UPDATE_REFERENCES=1` and look at it.
@@ -487,8 +488,9 @@ fn move_to(game: &mut Game, id: Id, at: Vec3) {
 }
 
 /// The far cascade is cached: with the camera and the sun still, frames in which only a moving part moves draw the
-/// two near cascades (which hold it) and keep the far one; a static part moving inside the far cascade draws it
-/// once; the sun turning draws everything. The far cascade never holds the moving part.
+/// two near cascades' casters (which hold it) and keep the far one's static map, building the far map from it and
+/// the moving part; a static part moving inside the far cascade draws its static map once; the sun turning draws
+/// everything. The far cascade's static map never holds the moving part.
 #[test]
 fn a_static_frame_does_not_redraw_the_far_cascade() {
     let Some(context) = gpu() else { return };
@@ -526,6 +528,8 @@ fn a_static_frame_does_not_redraw_the_far_cascade() {
     );
     let stats = frames.renderer.shadow_stats();
     assert!(stats.cascade[2].cached && !stats.cascade[1].cached);
+    // The far cascade's map is built from its static map and the moving ball, in every frame it moves (#121).
+    assert!(stats.cascade[2].built && stats.cascade[2].moving == 1, "{stats:?}");
 
     // A static part moves inside the far cascade: it is drawn again, once.
     move_to(game, built.far_block, Vec3::new(3.0, 5.0, -130.0));
@@ -585,6 +589,201 @@ fn a_static_frame_does_not_redraw_the_far_cascade() {
         }
     }
     assert!(checked, "no timings of a frame that kept the far cascade arrived");
+}
+
+/// What [`far_mover_game`] built.
+struct FarMover {
+    game: Game,
+    /// A 6 m cube resting on the floor about 80 m from the camera, which tests move.
+    cube: Id,
+    /// Where it rests.
+    at: Vec3,
+    /// A static cube like it beside it, in the far cascade's static map, which tests recolour.
+    block: Id,
+    /// A floor point in the moving cube's shadow, one in the static cube's and a lit one between them, all on the
+    /// image.
+    shadowed: Vec3,
+    static_shadowed: Vec3,
+    lit: Vec3,
+}
+
+/// A floor and a 6 m cube on it about 80 m from the camera (well beyond the two dynamic cascades' 57 m, so in the
+/// cached far cascade), seen from its shadow's side under the afternoon sun.
+fn far_mover_game() -> FarMover {
+    let mut game = Game::new();
+    let lighting = lighting_service(&game);
+    game.dm
+        .set_by_name(lighting, "ClockTime", Value::Number(16.0))
+        .expect("ClockTime");
+    let towards = sun(&game);
+    let down_sun = Vec3::new(-towards.x, 0.0, -towards.z).normalize();
+    let across = Vec3::Y.cross(down_sun);
+    game.part(
+        Look::new("Block", "Concrete", [160, 158, 150]),
+        Vec3::new(600.0, 1.0, 600.0),
+        CFrame::new(Vec3::new(0.0, -0.5, 0.0)),
+    );
+    let at = Vec3::new(0.0, 3.0, -100.0);
+    let cube = game.part(
+        Look::new("Block", "Plastic", [196, 40, 28]),
+        Vec3::splat(6.0),
+        CFrame::new(at),
+    );
+    let block = game.part(
+        Look::new("Block", "Plastic", [75, 151, 75]),
+        Vec3::splat(6.0),
+        CFrame::new(at - across * 18.0),
+    );
+    let foot = Vec3::new(at.x, 0.0, at.z);
+    game.set_camera(
+        CFrame::look_at(foot + down_sun * 70.0 + Vec3::Y * 45.0, foot, Vec3::Y),
+        60.0,
+    );
+    FarMover {
+        game,
+        cube,
+        at,
+        block,
+        // 4 m beyond each cube's down-sun face: inside its shadow, at least 6 m long under any afternoon sun.
+        shadowed: foot + down_sun * 7.0,
+        static_shadowed: foot - across * 18.0 + down_sun * 7.0,
+        // 6 m beside the moving cube's side face, across the sun: lit.
+        lit: foot - across * 9.0,
+    }
+}
+
+/// Moves the far cube by a centimetre a frame for `frames` frames, so it is in the dynamic region (a moving part).
+fn wiggle(frames: &mut Frames, context: &RenderContext, built: &mut FarMover, frames_count: usize) {
+    for frame in 0..frames_count {
+        let at = built.at + Vec3::new(0.01 * (frame % 2) as f32, 0.0, 0.0);
+        move_to(&mut built.game, built.cube, at);
+        frames.frame(context, &mut built.game);
+    }
+}
+
+/// A moving part beyond the dynamic cascades casts a shadow with the default settings (#121): the far cascade's map
+/// is its static map with the moving casters drawn on top. Its shadow is as dark as with every cascade dynamic, the
+/// static map is still not drawn again while only moving parts move, and a frame that moves nothing, or changes the
+/// scene without moving casters in the far cascade, builds nothing. Both instance paths draw the same.
+#[test]
+fn a_moving_part_beyond_the_dynamic_cascades_casts_a_shadow() {
+    let Some(context) = gpu() else { return };
+    let mut built = far_mover_game();
+    let camera = CameraReader::new()
+        .read(&built.game.dm, built.game.workspace)
+        .expect("a camera");
+    let forward = camera.rotation * Vec3::NEG_Z;
+    for point in [built.shadowed, built.static_shadowed, built.lit] {
+        let depth = (point - camera.position).dot(forward);
+        assert!(depth > 70.0, "{point} is {depth} m deep, not in the far cascade");
+    }
+    let mut frames = Frames::new(&context, &mut built.game, ShadowSettings::default());
+    wiggle(&mut frames, &context, &mut built, 16);
+    let stats = frames.renderer.draw_stats();
+    eprintln!("far mover: {stats:?}");
+    assert_eq!(stats.shadow_cascades, 3);
+    assert_eq!(stats.shadow_moving[2], 1, "the far cascade holds the moving cube");
+    assert_eq!(
+        stats.shadow_redrawn & 0b100,
+        0,
+        "the far cascade's static map was drawn again"
+    );
+    assert_eq!(stats.shadow_built, 0b100, "the far cascade's map was not built");
+    let pixels = frames.pixels(&context);
+    let (shadowed, static_shadowed, lit) = (
+        project(&built.game, built.shadowed),
+        project(&built.game, built.static_shadowed),
+        project(&built.game, built.lit),
+    );
+    let (dark, dark_static, bright) = (
+        level(&pixels, shadowed),
+        level(&pixels, static_shadowed),
+        level(&pixels, lit),
+    );
+    eprintln!(
+        "floor in the moving cube's shadow at {shadowed:?}: {dark:.1}; in the static cube's at {static_shadowed:?}: \
+         {dark_static:.1}; lit at {lit:?}: {bright:.1}"
+    );
+    assert!(dark < bright * 0.85, "the moving cube casts no shadow");
+    // The static map was copied in under it.
+    assert!(dark_static < bright * 0.85, "the static cube casts no shadow");
+
+    // As dark as when every cascade holds every caster.
+    let mut all_game = far_mover_game();
+    let mut all = Frames::new(
+        &context,
+        &mut all_game.game,
+        ShadowSettings {
+            dynamic_cascades: 3,
+            ..ShadowSettings::default()
+        },
+    );
+    wiggle(&mut all, &context, &mut all_game, 16);
+    let reference = all.pixels(&context);
+    let levels_all = [shadowed, static_shadowed, lit].map(|point| level(&reference, point));
+    eprintln!("with every cascade dynamic: {levels_all:.1?}");
+    for (ours, all) in [dark, dark_static, bright].into_iter().zip(levels_all) {
+        assert!(
+            (ours - all).abs() < 2.0,
+            "{ours} against {all} with every cascade dynamic"
+        );
+    }
+
+    // Nothing changes: nothing is drawn or built.
+    frames.frame(&context, &mut built.game);
+    let still = frames.renderer.draw_stats();
+    assert_eq!(
+        (still.shadow_redrawn, still.shadow_built, still.shadow_draws),
+        (0, 0, 0)
+    );
+    assert_eq!(still.shadow_moving[2], 1);
+
+    // The cube stops casting: the far map is built once more, from the static map alone; then a change that moves
+    // no caster (a recolour) builds nothing, though the scene changed.
+    built
+        .game
+        .dm
+        .set_by_name(built.cube, "CastShadow", Value::Bool(false))
+        .expect("CastShadow");
+    frames.frame(&context, &mut built.game);
+    let gone = frames.renderer.draw_stats();
+    assert_eq!((gone.shadow_built, gone.shadow_moving[2]), (0b100, 0), "{gone:?}");
+    assert!(
+        level(&frames.pixels(&context), shadowed) > bright * 0.95,
+        "the shadow stayed"
+    );
+    for frame in 0..3 {
+        let gray = 0.2 + 0.1 * frame as f32;
+        built
+            .game
+            .dm
+            .set_by_name(
+                built.block,
+                "Color",
+                Value::Color3(metallic_core::Color3::new(gray, gray, gray)),
+            )
+            .expect("Color");
+        frames.frame(&context, &mut built.game);
+        let recoloured = frames.renderer.draw_stats();
+        assert_eq!(recoloured.shadow_built & 0b100, 0, "frame {frame}: {recoloured:?}");
+    }
+
+    // The vertex-buffer fallback draws the same shadow.
+    if let Some(fallback) = gpu_with(&ContextOptions {
+        force_vertex_instances: true,
+        ..ContextOptions::default()
+    }) {
+        let mut storage_game = far_mover_game();
+        let mut storage = Frames::new(&context, &mut storage_game.game, ShadowSettings::default());
+        wiggle(&mut storage, &context, &mut storage_game, 16);
+        let mut vertex_game = far_mover_game();
+        let mut vertex = Frames::new(&fallback, &mut vertex_game.game, ShadowSettings::default());
+        wiggle(&mut vertex, &fallback, &mut vertex_game, 16);
+        assert_eq!(vertex.renderer.draw_stats().shadow_moving[2], 1);
+        let diff = scenes::compare(&vertex.pixels(&fallback), &storage.pixels(&context), 1);
+        eprintln!("fallback against storage: {diff:?}");
+        assert!(diff.max <= 2, "{diff:?}");
+    }
 }
 
 /// With every cascade dynamic (the full-quality end of the setting) a moving part redraws them all, and the far

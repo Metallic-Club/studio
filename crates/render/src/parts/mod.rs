@@ -121,16 +121,23 @@ pub struct DrawStats {
     pub culled_instances: u32,
     /// Sun shadow cascades in use ([`crate::shadow`]; 0 without shadows).
     pub shadow_cascades: u32,
-    /// Bit `i` set when cascade `i`'s map was drawn this frame (otherwise it was kept).
+    /// Bit `i` set when cascade `i`'s casters were drawn this frame (a cached cascade's: its static map), otherwise
+    /// they were kept.
     pub shadow_redrawn: u8,
-    /// Draws in the shadow passes this frame: one per mesh kind in each cascade drawn.
+    /// Bit `i` set when cached cascade `i`'s map was built this frame: its static map copied in and its moving
+    /// casters drawn on top ([`crate::shadow`]).
+    pub shadow_built: u8,
+    /// Draws in the shadow passes this frame: one per mesh kind in each cascade drawn and each cached cascade built
+    /// (the copies of the static maps are not counted).
     pub shadow_draws: u32,
-    /// Caster instances drawn into the cascades drawn this frame.
+    /// Caster instances drawn into the cascades this frame.
     pub shadow_instances: u32,
-    /// Triangles drawn into the cascades drawn this frame.
+    /// Triangles drawn into the cascades this frame.
     pub shadow_triangles: u64,
-    /// The casters each cascade's map holds, as of its last drawing.
+    /// The casters each cascade's map holds, as of its last drawing (a cached cascade's: its static map's).
     pub shadow_casters: [u32; MAX_CASCADES],
+    /// The moving casters drawn on each cached cascade's map in this frame (or kept on it from an earlier one).
+    pub shadow_moving: [u32; MAX_CASCADES],
     /// Draws in the local lights' shadow atlas this frame: a clear and one per mesh kind in each tile drawn
     /// ([`crate::lights`]); the clears are not counted.
     pub light_shadow_draws: u32,
@@ -768,19 +775,32 @@ impl PartRenderer {
             .prepare(encoder, scene, camera, aspect, self.resolved.light_direction, lit);
     }
 
-    /// The render target of shadow cascade `cascade`'s map when it is drawn this frame.
+    /// Where shadow cascade `cascade`'s casters are drawn when they are this frame: its map, or a cached cascade's
+    /// static map.
     pub(crate) fn shadow_target(&self, cascade: usize) -> Option<&wgpu::TextureView> {
-        if self.shadows.redraws(cascade) {
-            self.shadows.layer_view(cascade)
-        } else {
-            None
-        }
+        self.shadows.caster_target(cascade)
     }
 
     /// Records shadow cascade `cascade`'s casters into `render_pass`, a depth pass into its
     /// [`PartRenderer::shadow_target`].
     pub(crate) fn draw_shadow(&mut self, cascade: usize, render_pass: &mut wgpu::RenderPass<'_>) {
-        let (draws, instances, triangles) = self.shadows.draw(cascade, &self.meshes, render_pass);
+        let drawn = self.shadows.draw(cascade, &self.meshes, render_pass);
+        self.count_shadow_draws(drawn);
+    }
+
+    /// Cached shadow cascade `cascade`'s map when it is built this frame (after its static map is drawn, if it is).
+    pub(crate) fn shadow_build_target(&self, cascade: usize) -> Option<&wgpu::TextureView> {
+        self.shadows.build_target(cascade)
+    }
+
+    /// Records the building of cached cascade `cascade`'s map into `render_pass`, a depth pass into its
+    /// [`PartRenderer::shadow_build_target`]: the copy of its static map and its moving casters.
+    pub(crate) fn build_shadow(&mut self, cascade: usize, render_pass: &mut wgpu::RenderPass<'_>) {
+        let drawn = self.shadows.build(cascade, &self.meshes, render_pass);
+        self.count_shadow_draws(drawn);
+    }
+
+    fn count_shadow_draws(&mut self, (draws, instances, triangles): (u32, u32, u64)) {
         self.stats.shadow_draws += draws;
         self.stats.shadow_instances += instances;
         self.stats.shadow_triangles += triangles;
@@ -825,7 +845,9 @@ impl PartRenderer {
         let shadow = self.shadows.stats();
         self.stats.shadow_cascades = shadow.cascades;
         self.stats.shadow_redrawn = shadow.redrawn_mask();
+        self.stats.shadow_built = shadow.built_mask();
         self.stats.shadow_casters = shadow.cascade.map(|c| c.casters);
+        self.stats.shadow_moving = shadow.cascade.map(|c| c.moving);
         if self.frame_uniforms != Some(uniforms) {
             self.queue
                 .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&uniforms));

@@ -9,7 +9,8 @@
 //! does not change as the camera turns, and its centre is snapped to whole texels in the light's frame, so the map
 //! moves by whole texels and shadow edges do not shimmer as the camera moves. A map holds the casters between its
 //! slice and [`CASTER_REACH`] metres towards the light. All maps are layers of one `Depth32Float` array
-//! texture; their memory is `cascades × resolution² × 4` bytes (48 MiB for the default 3 × 2048).
+//! texture, and each cached cascade (below) has a static map of the same size besides: their memory is
+//! `(cascades + cached cascades) × resolution² × 4` bytes (64 MiB for the default 3 × 2048, one of them cached).
 //!
 //! # Casters
 //!
@@ -24,22 +25,26 @@
 //!
 //! Most of a scene does not move, and most of its casters are in the far cascades. So the nearest
 //! [`ShadowSettings::dynamic_cascades`] cascades hold **every** caster and are drawn again in any frame in which the
-//! scene changed at all, while the farther ones hold only the **static region's** casters ([`crate::scene::Region`])
-//! and are **cached**: drawn again only when
+//! scene changed at all, while the farther ones are **cached**: the **static region's** casters
+//! ([`crate::scene::Region`]) are drawn into a static map of the cascade's own, drawn again only when
 //!
 //! - the light's direction changes,
 //! - the cascade's snapped placement changes (the camera moved far enough), or
 //! - a static caster changed inside it ([`crate::InstanceScene::shadow_changes`]: moved, resized, appeared,
-//!   disappeared, started or stopped casting, or moved between regions).
+//!   disappeared, started or stopped casting, or moved between regions);
 //!
-//! A cached cascade moves in coarser steps than one redrawn every frame (1/[`CACHED_STEP_DIVISOR`] of its
-//! width, for about 6% of its resolution) and, where the view is wide enough that this costs little, is centred on
-//! the camera rather than ahead of it, so that walking a few metres or turning around does not redraw it.
+//! and the cascade's map is **built** from it: the static map copied in (a full-screen draw writing each texel's
+//! depth, which works on every backend, GLES included, where depth textures cannot be copied), then the **moving
+//! casters** (the dynamic region's) inside the cascade drawn on top, in one pass. A map is built only when its static
+//! map was drawn again or its moving casters changed; a frame that moves nothing keeps it, and so does a frame in
+//! which a cascade without moving casters still holds its static map alone. The moving casters are few, so each is
+//! tested against the cascade's volume directly rather than with the culling grid.
 //!
-//! What this costs a game's look: **moving parts cast shadows only within the dynamic cascades' reach** (about 57 m
-//! with the defaults); beyond it, a part the scene sees as moving (in the dynamic region) casts none until it has
-//! rested long enough to return to the static region. That reach is a setting a preset scales (all cascades dynamic
-//! is the full-quality end), like the shadow distance itself.
+//! So moving parts cast shadows out to the shadow distance whatever the settings: the static map is what is
+//! cached, never a part of the look (ADR 0008: presets scale cost, they never remove a game's look). A cached
+//! cascade moves in coarser steps than one redrawn every frame (1/[`CACHED_STEP_DIVISOR`] of its width, for about 6%
+//! of its resolution) and, where the view is wide enough that this costs little, is centred on the camera rather than
+//! ahead of it, so that walking a few metres or turning around does not draw its static casters again.
 //!
 //! # Receiving
 //!
@@ -84,9 +89,10 @@ pub const MAX_RECEIVER_OFFSET: f32 = 0.05;
 
 /// The cull views of the cascades `settings` fits to `camera` on a target `aspect` (width / height) wide, in a
 /// scene whose instances are relative to `origin`, for a light towards `towards_light`
-/// ([`crate::SceneLighting::light_direction`]), with which casters each holds; and how many there are. These are
+/// ([`crate::SceneLighting::light_direction`]), with which casters each culls; and how many there are. These are
 /// the views the renderer culls each cascade's casters with ([`crate::InstanceScene::cull_casters`]), for tools and
-/// tests that mirror it.
+/// tests that mirror it. A cached cascade culls its static casters (into its static map); its moving casters are
+/// those of the dynamic region whose bounding sphere its view holds.
 pub fn cascade_views(
     settings: &ShadowSettings,
     camera: &Camera,
@@ -120,8 +126,10 @@ pub struct ShadowSettings {
     pub distance: f32,
     /// How the view is split between cascades: 0 evenly, 1 logarithmically (the near cascades small and sharp).
     pub split_lambda: f32,
-    /// How many of the nearest cascades hold moving casters and are redrawn whenever the scene changes; the rest
-    /// hold only static casters and are cached (see the [module documentation](self)). At least 1.
+    /// How many of the nearest cascades are drawn again whole whenever the scene changes; the rest cache their
+    /// static casters and draw only their moving ones on a copy of them (see the [module documentation](self)). At
+    /// least 1. Both hold every caster: this trades the cached cascades' memory and copies against drawing all
+    /// their casters whenever anything moves.
     pub dynamic_cascades: u32,
     /// The comparison filter's reach in texels: 0 is one bilinear tap (hard edges), 1 a 3 × 3 tent of taps, 2 a
     /// 5 × 5 one.
@@ -177,8 +185,8 @@ impl ShadowSettings {
 }
 
 impl Default for ShadowSettings {
-    /// Three cascades of 2048² out to 256 m, the nearest two redrawn every frame and the far one cached, a 3 × 3
-    /// tent filter.
+    /// Three cascades of 2048² out to 256 m, the nearest two redrawn every frame and the far one's static casters
+    /// cached, a 3 × 3 tent filter.
     fn default() -> Self {
         Self {
             enabled: true,
@@ -190,12 +198,18 @@ impl Default for ShadowSettings {
 /// One cascade in the last frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CascadeStats {
-    /// The casters its map holds, as of its last drawing.
+    /// The casters its map holds, as of its last drawing (a cached cascade's: its static map's).
     pub casters: u32,
-    /// It was drawn in the last frame (otherwise its map was kept).
+    /// Its casters were drawn in the last frame (a cached cascade's: its static map; otherwise the map was kept).
     pub redrawn: bool,
-    /// It holds only static casters and is kept while they and its placement stay (see [`ShadowSettings`]).
+    /// Its static casters are cached in a static map, kept while they and its placement stay, and its moving
+    /// casters are drawn on a copy of it (see the [module documentation](self)).
     pub cached: bool,
+    /// A cached cascade's moving casters in the last frame, drawn on its map over the copy of its static map.
+    pub moving: u32,
+    /// A cached cascade's map was built in the last frame: its static map copied in and its moving casters drawn on
+    /// top (otherwise the map was kept: its static map and moving casters stayed).
+    pub built: bool,
 }
 
 /// What the last frame did for shadows.
@@ -217,12 +231,19 @@ impl ShadowStats {
 
     /// Bit `i` set when cascade `i` was drawn in the last frame.
     pub fn redrawn_mask(&self) -> u8 {
-        self.cascade
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.redrawn)
-            .fold(0, |mask, (i, _)| mask | 1 << i)
+        mask(self.cascade.iter().map(|c| c.redrawn))
     }
+
+    /// Bit `i` set when cached cascade `i`'s map was built in the last frame.
+    pub fn built_mask(&self) -> u8 {
+        mask(self.cascade.iter().map(|c| c.built))
+    }
+}
+
+fn mask(bits: impl Iterator<Item = bool>) -> u8 {
+    bits.enumerate()
+        .filter(|&(_, bit)| bit)
+        .fold(0, |mask, (i, _)| mask | 1 << i)
 }
 
 #[cfg(test)]

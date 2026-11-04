@@ -1,16 +1,16 @@
-//! The GPU side of the sun's shadows: the cascade maps, the casters' lists and the caster pipeline (see the
-//! [module documentation](super)).
+//! The GPU side of the sun's shadows: the cascade maps, the cached cascades' static maps and their copy, the
+//! casters' lists and the caster pipeline (see the [module documentation](super)).
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use metallic_core::glam::{Mat4, Vec3};
 
 use super::cascade::{CascadeCache, CascadeFit, SceneState, fit_cascades};
 use super::{CascadeStats, MAX_CASCADES, MAX_RECEIVER_OFFSET, ShadowSettings, ShadowStats};
-use crate::GpuScene;
 use crate::cull::{Casters, VisibleSet};
 use crate::parts::{Camera, MeshPool, MeshVertex};
-use crate::scene::{GpuInstance, InstanceBinding, MeshKind, Region};
+use crate::scene::{GpuInstance, InstanceBinding, MeshKind, Region, bounding_sphere, entry, is_shadow_caster};
+use crate::{GpuScene, InstanceScene};
 
 /// The maps' format: 32-bit float depth, standard (0 at the light's end, cleared to 1).
 pub(crate) const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -58,8 +58,44 @@ struct CascadeState {
     fit: CascadeFit,
     cache: CascadeCache,
     visible: VisibleSet,
+    /// Its casters are drawn this frame: into its map, or for a cached cascade into its static map.
     redraw: bool,
     casters: u32,
+    /// A cached cascade's static map was drawn this many times (so a map built from it can tell it is current).
+    drawings: u64,
+    /// A cached cascade's moving casters this frame, and how many.
+    moving: VisibleSet,
+    moving_count: u32,
+    /// A cached cascade's map is built this frame: its static map copied in, the moving casters drawn on top.
+    build: bool,
+    /// What a cached cascade's map holds, `None` when not known (never built, or made again).
+    built: Option<Built>,
+}
+
+/// What a cached cascade's map was built from: its static map's drawing ([`CascadeState::drawings`]), and the scene
+/// revision of the moving casters drawn on top (`None` when there were none, so the map is the static map alone).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Built {
+    drawing: u64,
+    moving: Option<u64>,
+}
+
+/// A moving caster (in the dynamic region), as the cached cascades test it: its entry, its mesh kind and its
+/// bounding sphere, origin-relative.
+#[derive(Clone, Copy, Debug)]
+struct Mover {
+    entry: u32,
+    kind: u16,
+    center: Vec3,
+    radius: f32,
+}
+
+/// A cached cascade's static map: its own depth texture, which the cascade's map is built from (see the
+/// [module documentation](super)), and the bind group the copy samples it through.
+#[derive(Debug)]
+struct StaticMap {
+    target: wgpu::TextureView,
+    source: wgpu::BindGroup,
 }
 
 /// The cascades' caster lists on the GPU: for each cascade a block, and in it a segment per mesh kind, as the
@@ -78,8 +114,15 @@ struct ShadowLists {
     stride: u32,
     /// Changes whenever the lists are laid out again (every cached map is drawn again then).
     revision: u64,
-    /// This frame's uploads: cascade, kind, count. Reused.
-    ranges: Vec<(usize, usize, u32)>,
+    /// This frame's uploads: list, kind, count. Reused.
+    ranges: Vec<(Block, usize, u32)>,
+}
+
+/// A list of casters a frame uploads: cascade `i`'s casters, or cached cascade `i`'s moving casters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Block {
+    Casters(usize),
+    Moving(usize),
 }
 
 /// The storage path's instance bind group for the caster pass, and the buffers it was made for.
@@ -111,6 +154,13 @@ pub(crate) struct ShadowMaps {
     instance_layout: Option<wgpu::BindGroupLayout>,
     instance_group: Option<InstanceGroup>,
     pipeline: wgpu::RenderPipeline,
+    /// The cached cascades' static maps, the first cached cascade's first (empty when every cascade is dynamic).
+    static_maps: Vec<StaticMap>,
+    copy_layout: wgpu::BindGroupLayout,
+    copy_pipeline: wgpu::RenderPipeline,
+    /// The moving casters as of `movers_revision` (the scene's revision), for the cached cascades.
+    movers: Vec<Mover>,
+    movers_revision: Option<u64>,
     lists: ShadowLists,
     cascades: [CascadeState; MAX_CASCADES],
     /// Cascades in use this frame.
@@ -182,6 +232,7 @@ impl ShadowMaps {
         });
         let limits = device.limits();
         let (sample_view, layer_views) = maps(device, 1, 1, 1);
+        let (copy_layout, copy_pipeline) = copy_pipeline(device);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -200,6 +251,11 @@ impl ShadowMaps {
             instance_layout: instance_layout.cloned(),
             instance_group: None,
             pipeline,
+            static_maps: Vec::new(),
+            copy_layout,
+            copy_pipeline,
+            movers: Vec::new(),
+            movers_revision: None,
             lists: ShadowLists {
                 buffer: list_buffer(device, binding, MIN_LIST_CAPACITY as u64 * entry_size),
                 staging: staging_buffer(device, MIN_LIST_CAPACITY as u64 * entry_size),
@@ -236,12 +292,19 @@ impl ShadowMaps {
             self.count = count;
             self.resolution = resolution;
             self.min_layers = min_layers;
-            // The lists' blocks are per cascade: lay them out again.
-            self.lists.capacities.clear();
         }
         self.settings = ShadowSettings { resolution, ..settings };
+        let cached = count.saturating_sub(self.settings.dynamic_count());
+        if replaced || cached != self.static_maps.len() {
+            self.static_maps = (0..cached)
+                .map(|_| static_map(&self.device, &self.copy_layout, resolution))
+                .collect();
+            // The lists' blocks are per cascade and per cached cascade's moving casters: lay them out again.
+            self.lists.capacities.clear();
+        }
         for cascade in &mut self.cascades {
             cascade.cache = CascadeCache::default();
+            cascade.built = None;
         }
         replaced
     }
@@ -271,14 +334,25 @@ impl ShadowMaps {
         self.stats
     }
 
-    /// Whether cascade `cascade` is drawn this frame.
-    pub(crate) fn redraws(&self, cascade: usize) -> bool {
-        cascade < self.active && self.cascades[cascade].redraw
+    /// Where cascade `cascade`'s casters are drawn ([`ShadowMaps::draw`]) when they are this frame: its map, or a
+    /// cached cascade's static map.
+    pub(crate) fn caster_target(&self, cascade: usize) -> Option<&wgpu::TextureView> {
+        if cascade >= self.active || !self.cascades[cascade].redraw {
+            return None;
+        }
+        match cascade.checked_sub(self.settings.dynamic_count()) {
+            Some(cached) => self.static_maps.get(cached).map(|map| &map.target),
+            None => self.layer_views.get(cascade),
+        }
     }
 
-    /// The render target of cascade `cascade`'s map.
-    pub(crate) fn layer_view(&self, cascade: usize) -> Option<&wgpu::TextureView> {
-        self.layer_views.get(cascade)
+    /// Cached cascade `cascade`'s map when it is built this frame ([`ShadowMaps::build`]).
+    pub(crate) fn build_target(&self, cascade: usize) -> Option<&wgpu::TextureView> {
+        if cascade < self.active && self.cascades[cascade].build {
+            self.layer_views.get(cascade)
+        } else {
+            None
+        }
     }
 
     /// Fits the cascades to `camera` for a light towards `light` (`lit` false when there is none, or no shadows are
@@ -296,6 +370,8 @@ impl ShadowMaps {
     ) {
         for cascade in &mut self.cascades {
             cascade.redraw = false;
+            cascade.build = false;
+            cascade.moving_count = 0;
         }
         self.stats = ShadowStats::default();
         self.frame = FrameShadow::default();
@@ -344,7 +420,13 @@ impl ShadowMaps {
                 let stats = scene.cull_casters(&cascade.fit.cull_view(), casters, &mut cascade.visible);
                 cull_time += stats.cpu_time;
                 cascade.casters = stats.visible;
+                cascade.drawings += 1;
             }
+        }
+        if count > dynamic {
+            let start = Instant::now();
+            self.place_movers(scene.scene(), dynamic, count);
+            cull_time += start.elapsed();
         }
         self.upload_lists(encoder, scene);
         self.refresh_instance_group(scene);
@@ -372,11 +454,67 @@ impl ShadowMaps {
                 casters: cascade.casters,
                 redrawn: cascade.redraw,
                 cached: i >= dynamic,
+                moving: cascade.moving_count,
+                built: cascade.build,
             };
         }
         self.frame = frame;
         self.stats.cascades = count as u32;
         self.stats.cull_time = cull_time;
+    }
+
+    /// Finds the moving casters in each cached cascade (`dynamic..count`), and decides which cached cascades' maps
+    /// are built this frame: those whose static map was drawn again, and those whose moving casters changed (moved,
+    /// came or left). A map that holds its static map alone, and still has no moving caster, is kept.
+    ///
+    /// The moving casters are the dynamic region's, few next to the scene: each is tested against each cached
+    /// cascade's volume, without the culling grid, whose walk would cost the whole static region every frame.
+    fn place_movers(&mut self, instances: &InstanceScene, dynamic: usize, count: usize) {
+        let revision = instances.revision();
+        if self.movers_revision != Some(revision) {
+            self.movers.clear();
+            let region = instances.instances(Region::Dynamic);
+            self.movers.extend(
+                (0u32..)
+                    .zip(region)
+                    .filter(|(_, instance)| is_shadow_caster(instance))
+                    .map(|(slot, instance)| {
+                        let (center, radius) = bounding_sphere(instance);
+                        Mover {
+                            entry: entry(Region::Dynamic, slot),
+                            kind: instance.mesh().0,
+                            center,
+                            radius,
+                        }
+                    }),
+            );
+            self.movers_revision = Some(revision);
+        }
+        let kinds = self.lists.capacities.len();
+        for cascade in self.cascades.iter_mut().take(count).skip(dynamic) {
+            let set = &mut cascade.moving;
+            // Every kind's list has room for every mover, so the pushes never allocate.
+            set.begin(std::iter::repeat_n(self.movers.len(), kinds), 0, 0);
+            let mut moving = 0u32;
+            for mover in &self.movers {
+                if usize::from(mover.kind) < kinds && cascade.fit.frustum.contains_sphere(mover.center, mover.radius) {
+                    set.push(mover.entry, mover.kind);
+                    moving += 1;
+                }
+            }
+            cascade.moving_count = moving;
+            let built = Built {
+                drawing: cascade.drawings,
+                moving: (moving > 0).then_some(revision),
+            };
+            cascade.build = cascade.built != Some(built);
+            cascade.built = Some(built);
+        }
+    }
+
+    /// The list block holding cached cascade `cascade`'s moving casters: after every cascade's own block.
+    fn moving_block(&self, cascade: usize) -> usize {
+        self.count + cascade.saturating_sub(self.settings.dynamic_count())
     }
 
     /// Lays the cascades' lists out again when a kind's live list outgrew its segment (or a kind appeared).
@@ -405,28 +543,37 @@ impl ShadowMaps {
             first = first.saturating_add(capacity);
         }
         lists.stride = first;
-        let needed = u64::from(first) * self.count.max(1) as u64 * lists.entry_size;
+        // A block per cascade, then one per cached cascade for its moving casters.
+        let blocks = self.count.max(1) + self.static_maps.len();
+        let needed = u64::from(first) * blocks as u64 * lists.entry_size;
         if lists.buffer.size() < needed {
             lists.buffer = list_buffer(&self.device, self.binding, needed);
         }
         lists.revision += 1;
     }
 
-    /// Uploads the lists of the cascades drawn this frame: one staging write, then a copy per cascade and kind.
+    /// Uploads the lists of the cascades drawn this frame and of the moving casters of the cached cascades built
+    /// this frame: one staging write, then a copy per list and kind.
     fn upload_lists(&mut self, encoder: &mut wgpu::CommandEncoder, scene: &GpuScene) {
         let lists = &mut self.lists;
         lists.ranges.clear();
         let mut total = 0u64;
         for (index, cascade) in self.cascades.iter().enumerate().take(self.active) {
-            if !cascade.redraw {
-                continue;
-            }
-            for (kind, &capacity) in lists.capacities.iter().enumerate() {
-                let len = cascade.visible.opaque(MeshKind(kind as u16)).len();
-                let count = u32::try_from(len).unwrap_or(u32::MAX).min(capacity);
-                if count > 0 {
-                    lists.ranges.push((index, kind, count));
-                    total += u64::from(count);
+            let sets = [
+                (cascade.redraw, &cascade.visible, Block::Casters(index)),
+                (cascade.build, &cascade.moving, Block::Moving(index)),
+            ];
+            for (drawn, set, block) in sets {
+                if !drawn {
+                    continue;
+                }
+                for (kind, &capacity) in lists.capacities.iter().enumerate() {
+                    let len = set.opaque(MeshKind(kind as u16)).len();
+                    let count = u32::try_from(len).unwrap_or(u32::MAX).min(capacity);
+                    if count > 0 {
+                        lists.ranges.push((block, kind, count));
+                        total += u64::from(count);
+                    }
                 }
             }
         }
@@ -441,8 +588,12 @@ impl ShadowMaps {
         };
         let instances = scene.scene();
         let mut offset = 0usize;
-        for &(index, kind, count) in &lists.ranges {
-            let entries = &self.cascades[index].visible.opaque(MeshKind(kind as u16))[..count as usize];
+        for &(block, kind, count) in &lists.ranges {
+            let set = match block {
+                Block::Casters(index) => &self.cascades[index].visible,
+                Block::Moving(index) => &self.cascades[index].moving,
+            };
+            let entries = &set.opaque(MeshKind(kind as u16))[..count as usize];
             if lists.gather {
                 for &entry in entries {
                     let instance = instances.entry_instance(entry).unwrap_or(&GpuInstance::FREE);
@@ -458,7 +609,12 @@ impl ShadowMaps {
         }
         drop(view);
         let mut source = 0u64;
-        for &(index, kind, count) in &lists.ranges {
+        for &(block, kind, count) in &self.lists.ranges {
+            let index = match block {
+                Block::Casters(index) => index,
+                Block::Moving(index) => self.moving_block(index),
+            };
+            let lists = &self.lists;
             let first = index as u64 * u64::from(lists.stride) + u64::from(lists.offsets[kind]);
             let bytes = u64::from(count) * lists.entry_size;
             encoder.copy_buffer_to_buffer(&lists.staging, source, &lists.buffer, first * lists.entry_size, bytes);
@@ -512,10 +668,45 @@ impl ShadowMaps {
         }
     }
 
-    /// Records cascade `cascade`'s casters into `pass` (a depth pass into its [`ShadowMaps::layer_view`]): one
+    /// Records cascade `cascade`'s casters into `pass` (a depth pass into its [`ShadowMaps::caster_target`]): one
     /// instanced draw per mesh kind. Returns the draws, instances and triangles.
     pub(crate) fn draw(&self, cascade: usize, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
-        let (Some(state), Some(group)) = (self.cascades.get(cascade), self.cascade_groups.get(cascade)) else {
+        let Some(state) = self.cascades.get(cascade) else {
+            return (0, 0, 0);
+        };
+        self.draw_list(cascade, cascade, &state.visible, meshes, pass)
+    }
+
+    /// Records the building of cached cascade `cascade`'s map into `pass` (a depth pass into its
+    /// [`ShadowMaps::build_target`]): a copy of its static map (a full-screen triangle writing each texel's depth),
+    /// then its moving casters on top, one instanced draw per mesh kind. Returns the casters' draws, instances and
+    /// triangles (the copy is not counted).
+    pub(crate) fn build(&self, cascade: usize, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
+        let static_map = cascade
+            .checked_sub(self.settings.dynamic_count())
+            .and_then(|cached| self.static_maps.get(cached));
+        let (Some(state), Some(static_map)) = (self.cascades.get(cascade), static_map) else {
+            return (0, 0, 0);
+        };
+        pass.set_pipeline(&self.copy_pipeline);
+        pass.set_bind_group(0, &static_map.source, &[]);
+        pass.draw(0..3, 0..1);
+        if state.moving_count == 0 {
+            return (0, 0, 0);
+        }
+        self.draw_list(cascade, self.moving_block(cascade), &state.moving, meshes, pass)
+    }
+
+    /// Records the casters `set` holds, uploaded to list block `block`, seen from cascade `cascade`.
+    fn draw_list(
+        &self,
+        cascade: usize,
+        block: usize,
+        set: &VisibleSet,
+        meshes: &MeshPool,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> (u32, u32, u64) {
+        let Some(group) = self.cascade_groups.get(cascade) else {
             return (0, 0, 0);
         };
         pass.set_pipeline(&self.pipeline);
@@ -531,12 +722,10 @@ impl ShadowMaps {
             InstanceBinding::Vertex => pass.set_vertex_buffer(1, self.lists.buffer.slice(..)),
         }
         let (mut draws, mut instances, mut triangles) = (0, 0, 0);
-        let block = cascade as u32 * self.lists.stride;
+        let block = block as u32 * self.lists.stride;
         for (kind, (&capacity, &offset)) in self.lists.capacities.iter().zip(&self.lists.offsets).enumerate() {
             let kind = MeshKind(kind as u16);
-            let count = u32::try_from(state.visible.opaque(kind).len())
-                .unwrap_or(u32::MAX)
-                .min(capacity);
+            let count = u32::try_from(set.opaque(kind).len()).unwrap_or(u32::MAX).min(capacity);
             let mesh = meshes.range(kind);
             if count == 0 || mesh.index_count == 0 {
                 continue;
@@ -594,6 +783,98 @@ fn maps(
         })
         .collect();
     (sample_view, layer_views)
+}
+
+/// A cached cascade's static map: a `resolution`² depth texture of its own (one layer, so every backend can sample
+/// it as a plain 2D texture), and the bind group the copy into the cascade's map reads it through.
+fn static_map(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, resolution: u32) -> StaticMap {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("metallic shadow static map"),
+        size: wgpu::Extent3d {
+            width: resolution,
+            height: resolution,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SHADOW_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("metallic shadow static map"),
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        ..wgpu::TextureViewDescriptor::default()
+    });
+    let source = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("metallic shadow static map"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&view),
+        }],
+    });
+    StaticMap { target: view, source }
+}
+
+/// The copy of a static map into a cascade's map: a full-screen triangle whose fragments write the depth they read
+/// at their own texel (`frag_depth`), whatever is there. A depth blit rather than `copy_texture_to_texture`: GLES
+/// cannot copy depth textures (wgpu's GL backend reads the source through a colour attachment), and a draw also
+/// shares the pass that draws the moving casters on top, with no copy command or extra pass on any backend. The
+/// static map is read as an unfilterable float texture (allowed for depth formats) with `textureLoad`, so no
+/// comparison or filtering touches the values: they are copied exactly.
+fn copy_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("metallic shadow static copy"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("copy.wgsl").into()),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("metallic shadow static copy"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("metallic shadow static copy"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("metallic shadow static copy"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_copy"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: SHADOW_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_copy"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    (layout, pipeline)
 }
 
 fn list_buffer(device: &wgpu::Device, binding: InstanceBinding, size: u64) -> wgpu::Buffer {
