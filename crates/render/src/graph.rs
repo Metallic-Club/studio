@@ -53,7 +53,7 @@ pub enum PassId {
     /// MLAA's edges and blend weights ([`crate::post`]): reads the scene colour, writes the weights the finish pass
     /// blends with. Runs only with [`PassId::Post`].
     Mlaa,
-    /// Bloom's chain of downsampling and upsampling passes at half the scene's resolution and below, timed as one.
+    /// Bloom's chain of downsampling and upsampling passes at half the output's resolution and below, timed as one.
     /// Runs only with [`PassId::Post`].
     Bloom,
     /// The finish pass: exposure, bloom composite, tone curve and grade, from the scene colour into the output (with
@@ -550,7 +550,7 @@ impl FramePlan {
     }
 
     /// How many of the passes read or write a whole target at the scene's or the output's resolution: every planned
-    /// pass but bloom, whose chain works at half the scene's resolution and below. Merged scene passes count once.
+    /// pass but bloom, whose chain works at half the output's resolution and below. Merged scene passes count once.
     pub fn full_screen_passes(&self) -> usize {
         self.passes().iter().filter(|p| p.id != PassId::Bloom).count()
     }
@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(post.color, Some(ColorAttachment::Output(CLEAR_STORE)));
         assert_eq!(post.depth, None);
         assert_eq!(pass(&plan, PassId::Ui).color, Some(ColorAttachment::Output(LOAD_STORE)));
-        // Opaque, sky, transparent, the finish pass and UI: bloom works below the scene's resolution.
+        // Opaque, sky, transparent, the finish pass and UI: bloom works below the output's resolution.
         assert_eq!(plan.full_screen_passes(), 5);
     }
 

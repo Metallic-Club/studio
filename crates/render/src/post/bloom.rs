@@ -1,6 +1,6 @@
 //! Bloom ([`crate::PassId::Bloom`]): a chain of downsampling passes from the scene colour into the levels of one
 //! texture, then upsampling passes adding each level onto the next larger (`bloom.wgsl`). Every pass works at half
-//! the scene's resolution or below; the chain is timed as one.
+//! the output's resolution or below; the chain is timed as one.
 
 use super::{BloomSettings, BloomStart, MAX_BLOOM_LEVELS, full_screen_pipeline, post_texture, sampler_entry};
 use super::{texture_entry, uniform_entry, uniform_slice};
@@ -108,7 +108,7 @@ impl Bloom {
         }
     }
 
-    /// Makes the levels for a scene colour of `size` read through `scene`, as `settings` say, or drops them when bloom
+    /// Makes the levels for an output of `size`, reading the scene colour through `scene`, as `settings` say, or drops them when bloom
     /// does not run (`None`). Writes every pass's parameters but the first's, which follow the drawn corner
     /// ([`Bloom::prepare`]). A settings change, never per frame.
     pub(crate) fn rebuild(

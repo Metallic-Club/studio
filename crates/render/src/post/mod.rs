@@ -7,7 +7,7 @@
 //!   in use ([`PostStats::scene_format`]).
 //! - **The effects** ([`crate::PassId::Mlaa`], [`crate::PassId::Bloom`]) read the scene colour and write textures of
 //!   their own, in the order of the [`crate::PostChain`]: MLAA's edge weights at the scene's resolution, and bloom's
-//!   chain of downsampling and upsampling passes from half (or a quarter of) the scene's resolution down to a
+//!   chain of downsampling and upsampling passes from half (or a quarter of) the output's resolution down to a
 //!   thirty-second ([`BloomSettings`]). An effect not in the pass set costs nothing: no pass, no texture, nothing
 //!   bound.
 //! - **The finish pass** ([`crate::PassId::Post`]) reads the scene colour and writes the output once: exposure, the
@@ -128,14 +128,14 @@ impl FromStr for AntiAliasing {
 /// How much smaller than the scene colour bloom's first level is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BloomStart {
-    /// Half the scene colour's size: the finest glow.
+    /// Half the output's size: the finest glow.
     Half,
     /// A quarter: a quarter of the texels of [`BloomStart::Half`] in every pass, the glow a little softer.
     Quarter,
 }
 
 impl BloomStart {
-    /// The divisor of the scene colour's size.
+    /// The divisor of the output's size.
     pub fn divisor(self) -> u32 {
         match self {
             BloomStart::Half => 2,
@@ -144,7 +144,7 @@ impl BloomStart {
     }
 }
 
-/// The smallest bloom level is this many times smaller than the scene colour, whatever the start: so every effect
+/// The smallest bloom level is this many times smaller than the output, whatever the start: so every effect
 /// quality blurs as far, and lower ones only skip the finest level.
 pub const BLOOM_SPAN: u32 = 32;
 /// The most levels bloom's chain has.
@@ -167,25 +167,25 @@ pub struct BloomSettings {
 }
 
 impl BloomSettings {
-    /// The Low effect quality: from a quarter of the scene's size, 5-tap downsampling.
+    /// The Low effect quality: from a quarter of the output's size, 5-tap downsampling.
     pub const LOW: Self = Self {
         intensity: 0.1,
         threshold: 0.0,
         start: BloomStart::Quarter,
         wide_filter: false,
     };
-    /// Medium: from half the scene's size, 5-tap downsampling.
+    /// Medium: from half the output's size, 5-tap downsampling.
     pub const MEDIUM: Self = Self {
         start: BloomStart::Half,
         ..Self::LOW
     };
-    /// High (and Ultra): from half the scene's size, 13-tap downsampling.
+    /// High (and Ultra): from half the output's size, 13-tap downsampling.
     pub const HIGH: Self = Self {
         wide_filter: true,
         ..Self::MEDIUM
     };
 
-    /// How many levels bloom has for a scene colour `height` texels tall: from the start down to
+    /// How many levels bloom has for an output `height` pixels tall: from the start down to
     /// [`BLOOM_SPAN`] times smaller, none smaller than 2 texels, at least 1.
     pub fn levels(&self, height: u32) -> usize {
         let mut levels = 0;
@@ -272,11 +272,11 @@ impl PostSettings {
         }
     }
 
-    /// The Low effect quality: bloom from a quarter of the scene's size, MLAA searching 8 pixels.
+    /// The Low effect quality: bloom from a quarter of the output's size, MLAA searching 8 pixels.
     pub const LOW: Self = Self::effects(BloomSettings::LOW, MlaaSettings::LOW);
-    /// Medium: bloom from half the scene's size, MLAA searching 16 pixels.
+    /// Medium: bloom from half the output's size, MLAA searching 16 pixels.
     pub const MEDIUM: Self = Self::effects(BloomSettings::MEDIUM, MlaaSettings::MEDIUM);
-    /// High (and Ultra): bloom from half the scene's size with 13-tap downsampling, MLAA searching 32 pixels.
+    /// High (and Ultra): bloom from half the output's size with 13-tap downsampling, MLAA searching 32 pixels.
     pub const HIGH: Self = Self::effects(BloomSettings::HIGH, MlaaSettings::HIGH);
 }
 

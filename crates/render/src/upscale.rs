@@ -1,8 +1,9 @@
 //! The upscale pass ([`crate::PassId::Upscale`]): the scene colour, drawn at the render scale, stretched over the
 //! whole output with one bilinear tap per pixel.
 //!
-//! This is the one place that knows how the scene reaches the output at another resolution: a better upscaler
-//! (FSR 1 class, #85) replaces the shader and this pipeline, and nothing else. The pipeline is made with the
+//! It runs only in frames without the finish pass ([`crate::PassId::Post`]), which otherwise upscales as it finishes
+//! the image (#85): one pass fewer over the whole output. A better upscaler (FSR 1 class) replaces the bilinear tap
+//! here and in `post/finish.wgsl` (`scene_uv`), and nothing else. The pipeline is made with the
 //! renderer, never on the frame (ADR 0008 §9); a frame binds it, writes its 16-byte parameters only when the render
 //! size changed, and draws one triangle.
 

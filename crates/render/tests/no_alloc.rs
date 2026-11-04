@@ -43,6 +43,11 @@
 //! upscale pass and the viewports add by hand; and the heap does not grow while dynamic resolution moves the scale.
 //! The other frames here draw at the target's own resolution, which makes the same wgpu calls as before #84.
 //!
+//! The post chain (#85) too: every hand-written frame that stands for a default frame draws its scene into an HDR
+//! scene colour and then records the chain as the renderer does ([`HandPost`]: bloom's downsampling and upsampling
+//! passes, the finish pass, with the renderer's own shaders), and the plain frame is also compared with MLAA's pass
+//! added and with the scene passes merged into one. A frame without the finish pass makes the calls it made before.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 //!
 //! Every adapter, software (`DeviceType::Cpu`: WARP, lavapipe) or hardware, is held to the same exact comparison of

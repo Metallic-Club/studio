@@ -38,6 +38,9 @@
 //! - Render scale and dynamic resolution ([`resolution`], [`RendererSettings::resolution`]): the scene drawn at a
 //!   fraction of the target's size and upscaled before the UI, or at a scale that follows the GPU timings to hold a
 //!   frame time.
+//! - The HDR post chain ([`post`], [`RendererSettings::post`]): the scene in an `Rg11b10Ufloat` colour target, bloom,
+//!   MLAA or MSAA, and one finish pass (exposure, bloom composite, tone curve, grade, upscale) into the output; an
+//!   open chain whose disabled passes cost nothing ([`PostChain`]).
 //! - Graphics settings ([`settings`]): the Low / Medium / High / Ultra / Auto presets composed from the settings
 //!   above, the player's overrides, their file format, and the Auto preset's calibration (ADR 0008 §8).
 
