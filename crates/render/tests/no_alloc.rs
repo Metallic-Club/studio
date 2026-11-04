@@ -247,6 +247,38 @@ fn renderer_and_floor(
     )
 }
 
+/// Buffers made before anything else on a test's device, so every buffer a measured frame touches has a high wgpu
+/// tracker index: see [`pad_tracker_indices`].
+const TRACKER_PADDING: usize = 1024;
+
+/// Makes [`TRACKER_PADDING`] tiny buffers on `context`'s fresh device, to be kept alive for the whole test.
+///
+/// wgpu-core gives every buffer a tracker index (the lowest free one, from a per-device allocator) and every command
+/// encoder a fresh buffer tracker: vectors indexed by those indices (`BufferTracker`'s start and end states and its
+/// resource list), grown by `Vec::resize` to the index of each buffer a command touches and, at the first render
+/// pass, to the device's index count. How many times they grow depends on the order and size of the indices a frame
+/// meets before its first pass (its copies), not on the calls: a renderer frame whose first copy hit index 3, then 8,
+/// then a pass reallocated each vector three times, the same calls by hand on buffers 24 and up twice, so the two
+/// differed by 3 allocations, more or less with every workload (and lavapipe's "growth with the casters" in #125 was
+/// this). With the first [`TRACKER_PADDING`] indices taken, every index a frame meets is at least that, so the first
+/// copy allocates each vector at more than half the device's index count, and the next growth (the first copy to a
+/// newer buffer, or the first pass) doubles it past every index there is: one allocation and one reallocation each,
+/// in both frames, whatever the buffers (only a frame whose first copy went to the device's newest buffer would skip
+/// the reallocation; per-call histograms of both frames on every runner show each vector allocated once and
+/// reallocated once). The device has a few hundred buffers at most, well under the padding.
+fn pad_tracker_indices(context: &RenderContext) -> Vec<wgpu::Buffer> {
+    (0..TRACKER_PADDING)
+        .map(|_| {
+            context.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tracker index padding"),
+                size: wgpu::COPY_BUFFER_ALIGNMENT,
+                usage: wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        })
+        .collect()
+}
+
 /// On lavapipe (CI's software Vulkan) a renderer frame and the identical hand-written one differed by a constant 2
 /// allocations in some processes and by none in others, while the dev PC's Vulkan, DX12 and GL drivers never
 /// differ. `render()` only calls wgpu, so this is state inside wgpu (which pooled objects a frame gets), not ours.
