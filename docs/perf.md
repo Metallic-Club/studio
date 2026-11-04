@@ -643,3 +643,64 @@ cameras. Times are p50 in ms, except the shadow passes: their mean over the meas
 - **What it buys**: under the image tests' cube resting on a plate, the floor 3 to 12 cm out from the cube's foot
   was 103% (spot light), 46% (point light), 107% (point light 12 m away) and 12% (sun at 17°) of the way from the
   shadow's brightness to the lit floor's; it is now 0% under all four (`tests/lights.rs`, `tests/shadows.rs`).
+
+### Moving casters in the cached far cascade (#121)
+
+Until #121 the cached far cascade held the static region's casters only, so with the defaults a moving part more
+than about 57 m from the camera cast no shadow. Now its static casters are drawn into a **static map** of its own
+(a 2048² `Depth32Float` texture, 16 MiB more), drawn again only on #82's triggers, and the cascade's map is
+**built** from it: a pass that clears the map, copies the static map in with a full-screen draw writing each
+texel's depth (`frag_depth`), and draws the moving casters inside the cascade on top. The map is built only when
+the static map was drawn again or the moving casters changed; a frame that moves nothing keeps it, and so does a
+frame with no moving caster in the cascade while the map still holds the static map alone. The moving casters are
+the dynamic region's, tested one by one against the cascade's volume (no grid walk). The stress example reports the
+build pass's GPU time per cascade (`gpu_ms.shadow_build`), the frames that built it (`shadow.builds`) and the moving
+casters on it (`shadow.moving`); `gpu_ms.shadow` and `shadow.redraws` are the static map's, as before.
+
+**The copy is a draw, not `copy_texture_to_texture`.** wgpu allows `Depth32Float` texture-to-texture copies of a
+whole layer on Vulkan, Metal, DX12 and WebGPU, but its GLES backend copies through a read framebuffer with the
+source on a colour attachment, which a depth texture cannot be, so GLES would need the draw anyway. The draw
+reads the static map with `textureLoad` as an unfilterable float texture (allowed for depth formats), so the values
+are copied exactly, works on every backend (the image test passes on `WGPU_BACKEND=gl`), and shares the pass that
+draws the moving casters, with no copy command or barrier between them. It costs the same as the copy command: on
+this PC (DX12, at full clocks, a 2048² map of blocky depth) the cleared pass with the draw took 0.066 ms and
+`copy_texture_to_texture` 0.064 ms.
+
+**2026-11-04**, same machine and settings as the tables above (DX12, `AutoNoVsync`, 1,000 frames after 120, seed
+1), `parts_100k` (1% of the parts moving every frame, about 720 of them inside the far cascade), `main` at
+`6791e46` against branch `121-far-cascade-movers`; "all dynamic" is the branch with `--dynamic-cascades 3`, which
+draws every caster into the far cascade whenever anything moves (`main` draws the same). Times are p50 in ms, except
+the shadow passes: their mean over the measured frames, with how many frames ran them. A second round of all six
+runs agreed within 1%.
+
+| Camera | Build | Frame | Render CPU (p99) | Cull CPU | GPU | Opaque pass | Cascade 0 | Cascade 1 | Cascade 2 casters | Cascade 2 build |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| still | `main` | 0.709 | 0.559 (0.723) | 0.237 | 0.583 | 0.441 | 0.034 | 0.083 | 0.000 (0) | |
+| still | #121 | 0.851 | 0.629 (0.789) | 0.260 | 0.741 | 0.446 | 0.036 | 0.085 | 0.000 (0) | 0.151 (1,000) |
+| still | all dynamic | 1.178 | 0.887 (1.121) | 0.496 | 1.036 | 0.445 | 0.041 | 0.088 | 0.437 (1,000) | |
+| moving | `main` | 0.696 | 0.547 (0.796) | 0.218 | 0.555 | 0.417 | 0.035 | 0.081 | 0.005 (8) | |
+| moving | #121 | 0.828 | 0.617 (0.903) | 0.242 | 0.717 | 0.424 | 0.037 | 0.083 | 0.005 (8) | 0.151 (1,000) |
+| moving | all dynamic | 1.120 | 0.876 (1.111) | 0.472 | 0.990 | 0.427 | 0.041 | 0.086 | 0.411 (1,000) | |
+
+Last frame with the still camera: the static map holds 71,833 casters and 738 moving casters are drawn on its copy
+(4 draws), against 46,368 casters in the far cascade drawn every frame when all are dynamic (it is fitted tighter
+then: not centred on the camera, one-texel steps).
+
+- **The look is back** (the done-when): moving parts cast shadows out to the shadow distance with the default
+  settings. `a_moving_part_beyond_the_dynamic_cascades_casts_a_shadow` (`tests/shadows.rs`) checks a moving cube
+  80 m away shadows the floor as darkly as with every cascade dynamic, on both instance paths.
+- **The static map is still cached** (#82's done-when): it was drawn in none of the still camera's frames and in 8 of
+  the walking camera's, as on `main`; `a_static_frame_does_not_redraw_the_far_cascade` keeps passing, and now also
+  checks the far map is built with the moving ball.
+- **Cost against `main`**: +0.16 ms of GPU, the build pass, every frame here because parts move in the far cascade in
+  every frame (a scene whose far movers rest builds nothing). Of its 0.151 ms the copy is 0.144 ms (measured with
+  the moving casters' draws switched off; the draws alone, in a cleared pass, took 0.022 ms): it reads and writes
+  32 MiB, so it costs about what the card's bandwidth gives, whatever moves. Render CPU +0.07 ms: finding the moving
+  casters (+0.02 ms, in the cull column: 1,000 bounding spheres against the cascade), uploading their list and
+  recording the extra pass.
+- **Cost against all dynamic**: the far cascade's GPU time drops from 0.437 to 0.151 ms and render CPU from 0.887 to
+  0.629 ms (its cull of the whole static region every frame, 0.24 ms, is gone), with the same shadows. (#82 noted
+  1.35 to 1.48 ms of GPU for the all-dynamic far cascade, measured while the machine was busy with builds; on a quiet
+  machine it is the 0.44 ms here.)
+- **What would cut the copy**: restoring only the texels last frame's moving casters covered, instead of the whole
+  map, would make the build cost scale with the movers' footprint (#133).
