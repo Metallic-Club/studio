@@ -1254,6 +1254,244 @@
       "callbacks": []
     },
     {
+      "name": "UserGameSettings",
+      "parent": "Instance",
+      "description": "The player's graphics settings: the preset, the quality level it draws at and the values in effect. Scripts can read them, to adapt a game to the player's machine, but never change them: they are the player's. Get it with game:GetService(\"UserGameSettings\").",
+      "category": "",
+      "creatable": false,
+      "service_order": 7,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": true,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "GraphicsPreset",
+          "type": {
+            "Enum": "GraphicsPreset"
+          },
+          "default": "Auto",
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "The graphics preset the player chose.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "QualityLevel",
+          "type": "Int",
+          "default": 2,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "The quality level drawn at, from 1 (Low) to 4 (Ultra). With the Auto preset, the level its calibration chose for this machine.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "RenderScale",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "The share of the window's width and height the scene is drawn at before it is scaled to the window (0.5 to 2). With dynamic resolution, the highest scale it may use.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "DynamicResolution",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "Whether the render scale changes every frame to hold the GPU frame time at TargetFrameTime.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "TargetFrameTime",
+          "type": "Number",
+          "default": 15.0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "The GPU frame time dynamic resolution holds, in milliseconds.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "ViewDistance",
+          "type": "Number",
+          "default": 0.0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "How far the camera sees, in metres; 0 when it sees without limit.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "ShadowQualityLevel",
+          "type": "Int",
+          "default": 2,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "The quality of the sun's shadows, from 1 (Low) to 4 (Ultra): how many shadow maps, how sharp.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "ShadowDistance",
+          "type": "Number",
+          "default": 192.0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "How far from the camera the sun's shadows reach, in metres.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "LocalLightBudget",
+          "type": "Int",
+          "default": 128,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "How many point and spot lights a frame draws at full strength, the most important ones; the others fade out.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "LodBias",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "How finely distant round parts are drawn: 1 keeps their outlines within half a pixel; higher is finer.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "VSync",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "Whether frames wait for the display's refresh.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "FrameRateCap",
+          "type": "Int",
+          "default": 240,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "The most frames per second; 0 when uncapped.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
       "name": "UserInputService",
       "parent": "Instance",
       "description": "Keyboard, mouse and touch input: events for every key, button, movement and touch, what is held right now, and how the mouse cursor behaves. Input arrives at the start of each frame. Get it with game:GetService(\"UserInputService\").",
@@ -3227,6 +3465,32 @@
         {
           "name": "VolumeUp",
           "value": 2038
+        }
+      ]
+    },
+    {
+      "name": "GraphicsPreset",
+      "description": "A graphics preset: how much a frame may cost, never what the game looks like. Auto measures the machine and holds the frame time with dynamic resolution.",
+      "items": [
+        {
+          "name": "Low",
+          "value": 0
+        },
+        {
+          "name": "Medium",
+          "value": 1
+        },
+        {
+          "name": "High",
+          "value": 2
+        },
+        {
+          "name": "Ultra",
+          "value": 3
+        },
+        {
+          "name": "Auto",
+          "value": 4
         }
       ]
     },
