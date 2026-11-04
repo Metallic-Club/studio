@@ -584,6 +584,18 @@ impl AppHandler for BenchApp {
             let mut renderer = self.renderer.borrow_mut();
             let pending = renderer.graphics_status().pipelines.pending;
             self.max_pending = self.max_pending.max(pending);
+            if std::env::var_os("METALLIC_TRACE_SPIKES").is_some()
+                && let Some(last) = renderer.perf().last()
+                && last.frame_ms > 2.0 * renderer.perf().frame_target_ms()
+            {
+                let every = self.toggle.as_ref().map_or(1, |(every, _)| *every);
+                eprintln!(
+                    "frame {frames}: {:.2} ms (render {:.2}), after {:?}",
+                    last.frame_ms,
+                    last.render_ms,
+                    TOGGLES[((frames - 1) / every) as usize % TOGGLES.len()]
+                );
+            }
             if let Some((every, graphics)) = self.toggle.as_mut()
                 && frames.is_multiple_of(*every)
                 && frames < self.end

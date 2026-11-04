@@ -1107,6 +1107,36 @@ mod tests {
     }
 
     #[test]
+    fn spikes_are_frames_over_twice_the_target_after_the_first_two_seconds() {
+        let mut stats = PerfStats::new(16);
+        stats.set_frame_target_ms(10.0);
+        // The first 2 s: a 50 ms frame here is loading, not a spike.
+        for _ in 0..19 {
+            stats.record(sample(100.0), None, DrawStats::default());
+        }
+        stats.record(sample(50.0), None, DrawStats::default());
+        assert_eq!((stats.spikes(), stats.worst_frame_ms()), (0, 0.0));
+        // 1,950 ms so far; this frame starts before 2 s too.
+        stats.record(sample(60.0), None, DrawStats::default());
+        assert_eq!(stats.spikes(), 0);
+        stats.record(sample(20.0), None, DrawStats::default());
+        stats.record(sample(20.5), None, DrawStats::default());
+        stats.record(sample(9.0), None, DrawStats::default());
+        assert_eq!((stats.spikes(), stats.worst_frame_ms()), (1, 20.5));
+        let summary = stats.summary();
+        assert_eq!((summary.spikes, summary.spike_ms, summary.worst_ms), (1, 20.0, 20.5));
+        // A reset (the end of a warm-up) clears them; the grace is not given again.
+        stats.reset();
+        assert_eq!((stats.spikes(), stats.worst_frame_ms()), (0, 0.0));
+        stats.record(sample(30.0), None, DrawStats::default());
+        assert_eq!(stats.spikes(), 1);
+        // Nonsense targets are ignored.
+        stats.set_frame_target_ms(0.0);
+        stats.set_frame_target_ms(f32::NAN);
+        assert_eq!(stats.frame_target_ms(), 10.0);
+    }
+
+    #[test]
     fn the_window_keeps_the_newest_frames() {
         let mut stats = PerfStats::new(4);
         for ms in 1..=6 {
@@ -1132,7 +1162,13 @@ mod tests {
     #[test]
     fn an_empty_window_summarises_to_zero() {
         let mut stats = PerfStats::new(8);
-        assert_eq!(stats.summary(), PerfSummary::default());
+        assert_eq!(
+            stats.summary(),
+            PerfSummary {
+                spike_ms: 2.0 * DEFAULT_FRAME_TARGET_MS,
+                ..PerfSummary::default()
+            }
+        );
         assert_eq!(stats.summary().fps_p50(), 0.0);
         let mut overlay = Overlay::new();
         draw_overlay(
