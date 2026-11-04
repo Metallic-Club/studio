@@ -346,7 +346,8 @@ impl SceneRenderer {
             .capabilities()
             .map(|caps| (caps.adapter_name.clone(), caps.driver.clone()))
             .unwrap_or_default();
-        log::info!("graphics: Auto chose {tier:?} on {adapter} ({gpu_ms:.2} ms a frame)");
+        let frame = self.renderer().map_or(0, Renderer::frame_index);
+        log::info!("graphics: Auto chose {tier:?} on {adapter} ({gpu_ms:.2} ms a frame), at frame {frame}");
         let calibration = Calibration {
             tier,
             gpu_ms,
