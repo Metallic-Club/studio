@@ -45,6 +45,11 @@ pub struct ContextOptions {
     /// Use the vertex-buffer instance path (GLES's) even where vertex shaders can read storage buffers, by
     /// reporting [`Capabilities::vertex_storage`] as false. For tests of that path on any backend.
     pub force_vertex_instances: bool,
+    /// Whether the backend's validation layers run (the Direct3D 12 debug layer, Vulkan's validation layer):
+    /// `None` leaves it to wgpu (on in debug builds, off in release, `WGPU_VALIDATION` overriding either), `Some`
+    /// decides. The allocation tests (`crates/render/tests/no_alloc.rs`) turn it off on every device they make: each
+    /// message the Direct3D 12 debug layer prints costs wgpu's message handler allocations on the calling thread.
+    pub validation: Option<bool>,
 }
 
 impl Default for ContextOptions {
@@ -53,6 +58,7 @@ impl Default for ContextOptions {
             backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_vertex_instances: false,
+            validation: None,
         }
     }
 }
@@ -189,7 +195,7 @@ impl RenderContext {
     pub fn new_offscreen(options: &ContextOptions) -> Result<Self, RenderError> {
         for tier in backend_tiers(options.backends) {
             let _setup = setup_lock();
-            let instance = new_instance(tier, None);
+            let instance = new_instance(tier, None, options.validation);
             if let Some(adapter) = request_adapter(&instance, options, None) {
                 return Self::from_adapter(instance, adapter, options);
             }
@@ -219,7 +225,7 @@ impl RenderContext {
             let display = tier
                 .contains(wgpu::Backends::GL)
                 .then(|| WindowDisplay(Arc::clone(&window)));
-            let instance = new_instance(tier, display);
+            let instance = new_instance(tier, display, options.validation);
             let surface = instance.create_surface(wgpu::SurfaceTarget::from(Arc::clone(&window)))?;
             if let Some(adapter) = request_adapter(&instance, options, Some(&surface)) {
                 let context = Self::from_adapter(instance, adapter, options)?;
@@ -345,11 +351,14 @@ fn backend_tiers(allowed: wgpu::Backends) -> impl Iterator<Item = wgpu::Backends
         .filter(|tier| !tier.is_empty())
 }
 
-fn new_instance(backends: wgpu::Backends, display: Option<WindowDisplay>) -> wgpu::Instance {
+fn new_instance(backends: wgpu::Backends, display: Option<WindowDisplay>, validation: Option<bool>) -> wgpu::Instance {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = backends;
     // `WGPU_DEBUG`, `WGPU_VALIDATION` and the backend options may still be tuned from the environment.
     descriptor.flags = descriptor.flags.with_env();
+    if let Some(validation) = validation {
+        descriptor.flags.set(wgpu::InstanceFlags::VALIDATION, validation);
+    }
     descriptor.backend_options = descriptor.backend_options.with_env();
     if let Some(display) = display {
         descriptor = descriptor.with_display_handle(Box::new(display));
