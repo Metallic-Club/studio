@@ -6,7 +6,7 @@ use std::time::Duration;
 use metallic_core::glam::{Mat4, Vec3};
 
 use super::cascade::{CascadeCache, CascadeFit, SceneState, fit_cascades};
-use super::{CascadeStats, MAX_CASCADES, ShadowSettings, ShadowStats};
+use super::{CascadeStats, MAX_CASCADES, MAX_RECEIVER_OFFSET, ShadowSettings, ShadowStats};
 use crate::GpuScene;
 use crate::cull::{Casters, VisibleSet};
 use crate::parts::{Camera, MeshPool, MeshVertex};
@@ -19,6 +19,16 @@ pub(crate) const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth
 const UNIFORM_STRIDE: u64 = 256;
 /// The bytes of a cascade's uniform that the shader reads: one matrix.
 const UNIFORM_SIZE: u64 = 64;
+
+/// The rasterizer's depth bias on the cascades' casters: 3 texels of the caster's depth slope, a texel past the 2
+/// the default filter's taps reach from a point (see [`ShadowSettings::depth_bias`]). No constant term: its unit
+/// depends on the depth's exponent, so the receivers' depth bias, in metres, does that part. No clamp: a clamp
+/// needs `DownlevelFlags::DEPTH_BIAS_CLAMP`, which GLES does not have, and shadows must look the same everywhere.
+const CASCADE_CASTER_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState {
+    constant: 0,
+    slope_scale: 3.0,
+    clamp: 0.0,
+};
 
 /// The fewest entries a cascade's segment of a mesh kind holds.
 const MIN_LIST_CAPACITY: u32 = 256;
@@ -33,7 +43,7 @@ pub(crate) struct FrameShadow {
     pub(crate) matrices: [Mat4; MAX_CASCADES],
     /// The view depth each cascade ends at.
     pub(crate) splits: [f32; MAX_CASCADES],
-    /// How far a receiving point moves along its normal, in metres, per cascade.
+    /// How far a receiving point moves along its normal, in metres, per cascade (the shader scales it by 1 − N·L).
     pub(crate) offsets: [f32; MAX_CASCADES],
     /// The receiving depth's bias, in depth units, per cascade.
     pub(crate) biases: [f32; MAX_CASCADES],
@@ -153,7 +163,7 @@ impl ShadowMaps {
                 })
             })
             .collect();
-        let pipeline = caster_pipeline(device, binding, &cascade_layout, instance_layout);
+        let pipeline = caster_pipeline(device, binding, &cascade_layout, instance_layout, CASCADE_CASTER_BIAS);
         let entry_size = match binding {
             InstanceBinding::Storage => size_of::<u32>() as u64,
             InstanceBinding::Vertex => GpuInstance::SIZE,
@@ -357,7 +367,7 @@ impl ShadowMaps {
             frame.matrices[i] = fit.clip * to_camera;
             frame.splits[i] = fit.split_far;
             frame.offsets[i] = settings.normal_offset.max(0.0) * fit.texel;
-            frame.biases[i] = settings.depth_bias.max(0.0) * fit.texel / fit.depth_range;
+            frame.biases[i] = (settings.depth_bias.max(0.0) * fit.texel).min(MAX_RECEIVER_OFFSET) / fit.depth_range;
             self.stats.cascade[i] = CascadeStats {
                 casters: cascade.casters,
                 redrawn: cascade.redraw,
@@ -608,14 +618,21 @@ fn staging_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
     })
 }
 
-/// The caster pipeline: depth only, front faces culled (the casters' back faces are what the map holds, which
-/// keeps lit surfaces clear of their own depth), with a slope-scaled bias for surfaces edge-on to the light. Its group
-/// 0 is `cascade_layout`, one uniform matrix (the local lights' atlas binds it with a dynamic offset per tile).
+/// The caster pipeline: depth only, **back faces culled**, so a map holds each caster's faces towards the light,
+/// pushed away from the light by `bias`. Its group 0 is `cascade_layout`, one uniform matrix (the local lights' atlas
+/// binds it with a dynamic offset per tile).
+///
+/// Front faces, not back faces: a back face is where a caster ends, and the bottom of a part resting on another is
+/// a back face level with the surface under it. Stored, it put the shadow's start at the receiving surface's own
+/// depth right where the parts touch, and the receivers' bias lit a band along every contact (#126). A front face is
+/// a whole part's thickness nearer the light than anything it shades. Parts are closed solids, so every caster has
+/// front faces.
 pub(crate) fn caster_pipeline(
     device: &wgpu::Device,
     binding: InstanceBinding,
     cascade_layout: &wgpu::BindGroupLayout,
     instance_layout: Option<&wgpu::BindGroupLayout>,
+    bias: wgpu::DepthBiasState,
 ) -> wgpu::RenderPipeline {
     let source = match binding {
         InstanceBinding::Storage => concat!(include_str!("shadow.wgsl"), include_str!("shadow_storage.wgsl")),
@@ -658,7 +675,7 @@ pub(crate) fn caster_pipeline(
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Front),
+            cull_mode: Some(wgpu::Face::Back),
             ..wgpu::PrimitiveState::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -666,11 +683,7 @@ pub(crate) fn caster_pipeline(
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState {
-                constant: 0,
-                slope_scale: 1.0,
-                clamp: 0.0,
-            },
+            bias,
         }),
         multisample: wgpu::MultisampleState::default(),
         fragment: None,

@@ -959,7 +959,7 @@ impl HandShadows {
                 })],
             },
             primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Front),
+                cull_mode: Some(wgpu::Face::Back),
                 ..wgpu::PrimitiveState::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
@@ -967,7 +967,12 @@ impl HandShadows {
                 depth_write_enabled: Some(true),
                 depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                // The renderer's cascades' bias (`shadow/maps.rs`).
+                bias: wgpu::DepthBiasState {
+                    constant: 0,
+                    slope_scale: 3.0,
+                    clamp: 0.0,
+                },
             }),
             multisample: wgpu::MultisampleState::default(),
             fragment: None,

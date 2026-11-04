@@ -88,11 +88,12 @@ fn hemisphere(direction_y: f32) -> vec3<f32> {
     return mix(frame.ground_ambient.rgb, frame.sky_ambient.rgb, clamp(direction_y * 0.5 + 0.5, 0.0, 1.0));
 }
 
-// How much of the sun (or moon) reaches a point: 1 lit, 0 in shadow. `position` is camera-relative and `n` the
-// unit normal. The cascade is the first whose slice of the view the point is in; the point moves along its normal
-// by the cascade's offset and is compared with its bias, through a tent of bilinear comparison taps
-// (`shadow_params.y` texels each way). Past the last cascade there is no shadow, faded in over the last tenth.
-fn sun_visibility(position: vec3<f32>, n: vec3<f32>) -> f32 {
+// How much of the sun (or moon) reaches a point: 1 lit, 0 in shadow. `position` is camera-relative, `n` the unit
+// normal and `n_dot_l` its cosine to the light. The cascade is the first whose slice of the view the point is in;
+// the point moves along its normal by the cascade's offset, scaled by 1 − N·L (only grazing receivers need it), and
+// is compared with its bias, through a tent of bilinear comparison taps (`shadow_params.y` texels each way). Past
+// the last cascade there is no shadow, faded in over the last tenth.
+fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
     let count = u32(frame.shadow_params.x);
     if count == 0u {
         return 1.0;
@@ -108,7 +109,7 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>) -> f32 {
     if cascade >= count {
         return 1.0;
     }
-    let p = position + n * frame.shadow_offsets[cascade];
+    let p = position + n * (frame.shadow_offsets[cascade] * (1.0 - n_dot_l));
     let clip = frame.shadow_matrices[cascade] * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
     let reference = clip.z - frame.shadow_biases[cascade];
@@ -164,7 +165,7 @@ fn shade(in: VertexOut) -> Shaded {
     let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
     var shadow = 1.0;
     if n_dot_l > 0.0 {
-        shadow = sun_visibility(in.position, n);
+        shadow = sun_visibility(in.position, n, n_dot_l);
     }
     let light = frame.light_color.rgb * n_dot_l * shadow;
 

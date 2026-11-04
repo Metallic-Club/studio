@@ -31,6 +31,14 @@ const UNIFORM_SIZE: u64 = 64;
 const MIN_LIST_BYTES: u64 = 4096;
 /// No light holds the tile this frame.
 const FREE: u32 = u32::MAX;
+/// The rasterizer's depth bias on the casters: 2 texels of the caster's depth slope, a little past the 1.5 texels
+/// the parts' four taps reach from a point (see [`LightSettings::depth_bias`]). No constant term and no clamp, as for
+/// the sun's cascades (`shadow/maps.rs`).
+const CASTER_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState {
+    constant: 0,
+    slope_scale: 2.0,
+    clamp: 0.0,
+};
 
 /// A point light's faces, in the order the shader picks them by the major axis of the light-to-point direction (+X,
 /// −X, +Y, −Y, +Z, −Z), each with an up direction for its view.
@@ -293,7 +301,7 @@ impl ShadowAtlas {
         });
         let (resolution, tile, per_row, capacity) = layout(device, settings);
         // The pipelines are made now, with the renderer (no hitch when the first shadow appears); the memory waits.
-        let caster = caster_pipeline(device, binding, &caster_layout, instance_layout);
+        let caster = caster_pipeline(device, binding, &caster_layout, instance_layout, CASTER_BIAS);
         Self {
             device: device.clone(),
             queue: queue.clone(),

@@ -36,7 +36,8 @@ struct Frame {
     // The sun's shadow cascades (shadow/mod.rs): camera-relative positions to each cascade's map (x, y in −1..1,
     // depth 0 at the light's end).
     shadow_matrices: array<mat4x4<f32>, 4>,
-    // Per cascade: the view depth it ends at, the normal offset in metres, the depth bias in depth units.
+    // Per cascade: the view depth it ends at, the normal offset in metres (scaled by 1 − N·L), the depth bias in
+    // depth units.
     shadow_splits: vec4<f32>,
     shadow_offsets: vec4<f32>,
     shadow_biases: vec4<f32>,
@@ -46,8 +47,8 @@ struct Frame {
     // Local lights (lights/mod.rs, lights.wgsl). x, y: cluster columns and rows per pixel; z, w: the depth slices'
     // scale and bias on log2(depth).
     lights_clusters: vec4<f32>,
-    // x: lights drawn (0: none), y: the depth the first slice ends at, z: the shadows' normal offset and w: their
-    // depth bias, in texels.
+    // x: lights drawn (0: none), y: the depth the first slice ends at, z: the shadows' normal offset (scaled by
+    // 1 − N·L) and w: their depth bias, in texels.
     lights_local: vec4<f32>,
     // x: one shadow-atlas texel in atlas coordinates, y: the filter's reach in texels, z: 1 when any drawn light has
     // a shadow.
