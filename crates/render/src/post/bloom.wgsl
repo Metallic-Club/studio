@@ -38,7 +38,16 @@ fn vs_bloom(@builtin(vertex_index) index: u32) -> VertexOutput {
 // The source at `uv` (in the destination's 0..1) offset by `texels` source texels, kept inside the region read.
 fn tap(uv: vec2<f32>, texels: vec2<f32>) -> vec3<f32> {
     let at = min(uv * bloom.texel.zw + texels * bloom.texel.xy, bloom.limit.xy);
-    return textureSampleLevel(source, linear_sampler, at, 0.0).rgb;
+    return finite(textureSampleLevel(source, linear_sampler, at, 0.0).rgb);
+}
+
+// `c` with every channel that is not a finite number made 0, the rest kept between 0 and the largest half float:
+// one NaN or infinite pixel in the scene colour would otherwise spread through the blur to the whole image (the
+// same as `finite` in finish.wgsl). Tested on the bits, which no compiler folds away.
+fn finite(c: vec3<f32>) -> vec3<f32> {
+    let bits = bitcast<vec3<u32>>(c);
+    let ok = (bits & vec3<u32>(0x7f800000u)) != vec3<u32>(0x7f800000u);
+    return select(vec3<f32>(0.0), clamp(c, vec3<f32>(0.0), vec3<f32>(65504.0)), ok);
 }
 
 // What is brighter than the threshold, with a quadratic soft knee below it (none when the threshold is 0).

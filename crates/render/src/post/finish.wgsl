@@ -94,8 +94,25 @@ fn mlaa_uv(uv: vec2<f32>) -> vec2<f32> {
 
 // Everything after the scene colour is read: bloom mixed in, exposure and colour filter, tone curve, grade, encoding
 // and dither.
+// `c` with every channel that is not a finite number (NaN, ±infinity; an exponent of all ones) made 0, the rest kept
+// between 0 and the largest half float. The scene colour holds whatever the scene's shaders wrote, and one NaN pixel
+// would otherwise reach every pixel through bloom's blur and blank the image. Tested on the bits: comparisons with
+// NaN may be folded away by shader compilers.
+fn finite(c: vec3<f32>) -> vec3<f32> {
+    let bits = bitcast<vec3<u32>>(c);
+    let ok = (bits & vec3<u32>(0x7f800000u)) != vec3<u32>(0x7f800000u);
+    return select(vec3<f32>(0.0), clamp(c, vec3<f32>(0.0), vec3<f32>(65504.0)), ok);
+}
+
+// Per channel, the dither's share: none at exactly 0 or 1 (in output levels, `encoded` being 0..1), so black stays
+// black and white white whatever the noise and the output's rounding, and all of it one level in.
+fn dither_weight(encoded: vec3<f32>) -> vec3<f32> {
+    let steps = 1.0 / max(finish.params.w, 1e-6);
+    return clamp(encoded * steps, vec3<f32>(0.0), vec3<f32>(1.0)) * clamp((1.0 - encoded) * steps, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn finish_color(scene: vec3<f32>, bloomed: vec3<f32>, pixel: vec2<f32>) -> vec4<f32> {
-    let hdr = mix(max(scene, vec3<f32>(0.0)), bloomed, finish.params.y);
+    let hdr = mix(finite(scene), bloomed, finish.params.y);
     var color = tone(hdr * finish.params.x * finish.tint.rgb);
     let luma = dot(color, LUMA);
     color = max(mix(vec3<f32>(luma), color, finish.grade.x), vec3<f32>(0.0));
@@ -105,12 +122,14 @@ fn finish_color(scene: vec3<f32>, bloomed: vec3<f32>, pixel: vec2<f32>) -> vec4<
     color = min(color, vec3<f32>(1.0));
     // Half an output level of noise, from the pixel's position, so smooth gradients do not band.
     let noise = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715)))) - 0.5;
+    let encoded = linear_to_srgb(color);
+    let dithered = encoded + noise * finish.params.w * dither_weight(encoded);
     if finish.params.z > 0.5 {
-        return vec4<f32>(linear_to_srgb(color) + noise * finish.params.w, 1.0);
+        return vec4<f32>(dithered, 1.0);
     }
     if finish.params.w > 0.0 {
         // The output encodes: dither in its encoded steps.
-        color = srgb_to_linear(clamp(linear_to_srgb(color) + noise * finish.params.w, vec3<f32>(0.0), vec3<f32>(1.0)));
+        color = srgb_to_linear(clamp(dithered, vec3<f32>(0.0), vec3<f32>(1.0)));
     }
     return vec4<f32>(color, 1.0);
 }

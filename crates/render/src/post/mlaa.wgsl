@@ -33,7 +33,10 @@ const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // exposure, up to 1, so the threshold means about the same step in dark and bright parts.
 fn luma(p: vec2<i32>) -> f32 {
     let q = clamp(p, vec2<i32>(0), vec2<i32>(mlaa.params.xy) - vec2<i32>(1));
-    let c = textureLoad(scene_color, q, 0).rgb;
+    let raw = textureLoad(scene_color, q, 0).rgb;
+    // Not-a-number and infinite channels count as black (`finite` in finish.wgsl).
+    let ok = (bitcast<vec3<u32>>(raw) & vec3<u32>(0x7f800000u)) != vec3<u32>(0x7f800000u);
+    let c = select(vec3<f32>(0.0), raw, ok);
     return sqrt(clamp(dot(c, LUMA) * mlaa.exposure.x, 0.0, 1.0));
 }
 

@@ -35,6 +35,16 @@ fn render(
     game: &mut Game,
     change: impl FnOnce(&mut RendererSettings),
 ) -> (Vec<[u8; 4]>, PostStats) {
+    render_with(context, game, change, |_| {})
+}
+
+/// [`render`], with `prepare` changing the renderer after the first frame.
+fn render_with(
+    context: &RenderContext,
+    game: &mut Game,
+    change: impl FnOnce(&mut RendererSettings),
+    prepare: impl FnOnce(&mut Renderer),
+) -> (Vec<[u8; 4]>, PostStats) {
     let mut settings = RendererSettings {
         gpu_timing: false,
         ..RendererSettings::new(FORMAT, SIZE, SIZE)
@@ -42,6 +52,7 @@ fn render(
     change(&mut settings);
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(context, settings).expect("a renderer");
+    let mut prepare = Some(prepare);
     let mut scene = GpuScene::new(
         context,
         &mut game.dm,
@@ -54,7 +65,7 @@ fn render(
         .service(game.dm.registry().class_id("Lighting").expect("Lighting"))
         .expect("a Lighting");
     let mut camera = CameraReader::new();
-    for _ in 0..2 {
+    for _ in 0..3 {
         let camera = camera.read(&game.dm, game.workspace);
         if let Some(camera) = camera {
             scene.set_camera_position(&game.dm, camera.position);
@@ -62,6 +73,10 @@ fn render(
         scene.sync(&mut game.dm);
         renderer.set_lighting(LightingReader::new().read(&game.dm, lighting));
         renderer.render_scene(target.view(), &mut scene, camera.as_ref());
+        // After the first frame, which fills the material table from the game.
+        if let Some(prepare) = prepare.take() {
+            prepare(&mut renderer);
+        }
     }
     (read_back_rgba8(context, target.texture()), renderer.post_stats())
 }
@@ -236,6 +251,71 @@ fn bloom_glows_around_a_lamp_at_night_at_every_effect_quality() {
         // The glow is around the lamp, not a veil over the image: the corners barely change.
         let (dark, veiled) = (ring(&plain, 150.0, 200.0), ring(&bloomed, 150.0, 200.0));
         assert!((veiled - dark).abs() < 2.0, "{name}: {dark} -> {veiled}");
+    }
+}
+
+/// A pixel the scene's shaders write as not a number (here a neon material whose metalness is NaN) stays one bad
+/// pixel: bloom's blur must not carry it over the image (which lavapipe, whose maths yields NaN where GPUs do not,
+/// showed as whole black frames), and MLAA must not either.
+#[test]
+fn a_pixel_that_is_not_a_number_stays_where_it_is() {
+    let Some(context) = gpu() else { return };
+    let poison = |renderer: &mut Renderer| {
+        let neon = metallic_render::MaterialParams::builtin("Neon").expect("Neon");
+        let materials = renderer.parts_mut().materials_mut();
+        let rows: Vec<usize> = (0..256)
+            .filter(|&row| {
+                materials
+                    .get(row)
+                    .is_some_and(|params| params.emissive == neon.emissive)
+            })
+            .collect();
+        assert!(!rows.is_empty(), "the neon row");
+        for row in rows {
+            materials.set(
+                row,
+                metallic_render::MaterialParams {
+                    metalness: f32::NAN,
+                    ..neon
+                },
+            );
+        }
+    };
+    for (name, passes) in [
+        ("bloom", PassSet::default()),
+        ("bloom and MLAA", PassSet::default().with(PassId::Mlaa)),
+    ] {
+        let (clean, _) = render(&context, &mut demo(), |s| s.passes = passes);
+        let (poisoned, _) = render_with(&context, &mut demo(), |s| s.passes = passes, poison);
+        save(&format!("nan_{name}"), &poisoned);
+        let diff = scenes::compare(&clean, &poisoned, 12);
+        eprintln!("{name}: a NaN neon cube against a lit one: {diff:?}");
+        // The cube (about 1% of the image) and its own glow differ; the rest of the image does not.
+        assert!(diff.over < 0.03 && diff.mean < 3.0, "{name}: {diff:?}");
+    }
+}
+
+/// Black in, black out: a black clear colour is exactly 0 in the output, whatever the dither and the target.
+#[test]
+fn black_stays_black() {
+    let Some(context) = gpu() else { return };
+    for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+        let target = OffscreenTarget::new(&context, SIZE, SIZE, format).expect("a target");
+        let mut renderer = Renderer::new(
+            &context,
+            RendererSettings {
+                passes: PassSet::default().with(PassId::Mlaa),
+                ..RendererSettings::new(format, SIZE, SIZE)
+            },
+        )
+        .expect("a renderer");
+        renderer.render(target.view());
+        let pixels = read_back_rgba8(&context, target.texture());
+        assert!(
+            pixels.iter().all(|p| p[..3] == [0, 0, 0]),
+            "{format:?}: {:?}",
+            pixels.iter().find(|p| p[..3] != [0, 0, 0])
+        );
     }
 }
 
