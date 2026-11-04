@@ -92,6 +92,7 @@ fn render(context: &RenderContext, game: &mut Game, passes: PassSet, samples: u3
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     let lighting = lighting_service(game);
     renderer.set_lighting(LightingReader::new().read(&game.dm, lighting));
     let mut scene = GpuScene::new(

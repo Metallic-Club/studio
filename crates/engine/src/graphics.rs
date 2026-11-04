@@ -19,6 +19,15 @@ pub fn graphics_settings_path(app: &AppId) -> Result<PathBuf, PlatformError> {
     Ok(UserPaths::for_app(app)?.config_dir().join(GRAPHICS_FILE))
 }
 
+/// The pipeline cache's folder in the user's cache folder.
+pub const PIPELINE_CACHE_FOLDER: &str = "pipelines";
+
+/// Where `app` keeps compiled pipelines between runs for the current user (`ContextOptions::pipeline_cache_dir`,
+/// #86): a folder in the user's cache folder ([`metallic_platform::UserPaths::cache_dir`]), one file per adapter.
+pub fn pipeline_cache_dir(app: &AppId) -> Result<PathBuf, PlatformError> {
+    Ok(UserPaths::for_app(app)?.cache_dir().join(PIPELINE_CACHE_FOLDER))
+}
+
 /// What [`load_graphics_settings`] found.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedGraphics {

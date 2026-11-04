@@ -596,6 +596,7 @@ fn renderer_and_floor(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
     let mut ours = Vec::with_capacity(FRAMES);
     let mut floor = Vec::with_capacity(FRAMES);
@@ -863,6 +864,7 @@ fn nothing_accumulates_over_frames() {
         },
     )
     .unwrap();
+    renderer.wait_for_pipelines();
     let samples = renderer
         .msaa_sample_counts()
         .iter()
@@ -1024,6 +1026,7 @@ fn scaled_frame_and_floor(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     assert!(renderer.plan().scaled());
     let hand = HandScaled::new(context, texture);
     let mut pacer = Pacer::new();
@@ -1122,6 +1125,7 @@ fn nothing_accumulates_over_dynamic_resolution_frames() {
         },
     )
     .unwrap();
+    renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
     let mut before = 0;
     let mut scales = Vec::with_capacity(WARM_UP + FRAMES);
@@ -1526,6 +1530,7 @@ fn nothing_accumulates_over_scene_frames() {
     let mut scene = scene_on_gpu(&context, &mut game);
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
     let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
     let mut before = 0;
     for frame in 0..WARM_UP + FRAMES {
@@ -2393,6 +2398,7 @@ fn frame_and_floor(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     // The same game culled on the CPU alone, so the hand-written frame makes exactly the calls the renderer makes
     // in the same frame, whichever of the two goes first.
     let mut mirror = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin())
@@ -2661,6 +2667,7 @@ fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
     .expect("a scene");
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
+    renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
     let mut before = 0;
     for frame in 0..WARM_UP + FRAMES {
@@ -2920,6 +2927,7 @@ fn overlay_frame_and_floor(context: &RenderContext, work: OverlayWork) -> (u64, 
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     renderer.set_overlay_enabled(true);
     fill_overlay(renderer.overlay_mut(), 0, work);
     let hand = HandOverlay::new(device, renderer.overlay().len());
@@ -2994,6 +3002,7 @@ fn nothing_accumulates_over_overlay_frames() {
     let Some(context) = measuring_gpu(false) else { return };
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
     let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    renderer.wait_for_pipelines();
     renderer.set_overlay_enabled(true);
     let mut pacer = Pacer::new();
     let mut before = 0;
@@ -3094,7 +3103,7 @@ fn a_lit_frame_allocates_only_its_writes() {
         metallic_render::LightSettings::OFF,
     ]
     .map(|lights| {
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             &context,
             RendererSettings {
                 gpu_timing: false,
@@ -3103,6 +3112,7 @@ fn a_lit_frame_allocates_only_its_writes() {
             },
         )
         .expect("a renderer");
+        renderer.wait_for_pipelines();
         let mut scene = GpuScene::new(
             &context,
             &mut game.dm,
@@ -3223,6 +3233,7 @@ fn nothing_accumulates_over_lit_frames() {
         .expect("a scene");
         let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
         let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
+        renderer.wait_for_pipelines();
         // Fades by a fixed step, so which lights hold shadows in which frame does not depend on how fast the machine
         // draws.
         renderer.set_light_fade_step(Some(1.0 / 60.0));

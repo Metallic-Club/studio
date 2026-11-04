@@ -31,6 +31,12 @@
 //! scene passes as one; `--no-post` draws the frame as before the post chain (no HDR target, bloom, tone curve or
 //! MLAA; the scene passes apart), to measure what it costs.
 //!
+//! No hitches (#86): `--toggle-effects <n>` toggles the next of `metallic_engine::stress::TOGGLES` every `n` frames
+//! from the first (every preset, anti-aliasing and effect quality, lights, shadows and the overlay off and on), while
+//! the renderer still compiles its pipelines in the background; the JSON's `spikes` counts the frames over twice the
+//! frame target after the first 2 s (`--frame-target <ms>`, a 60 fps frame by default), and `graphics.pipelines` says
+//! what was compiled when. `--pipeline-cache <dir>` keeps Vulkan's pipeline cache in `dir`.
+//!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
 //! prints a JSON array. The JSON's fields are `metallic_engine::stress::BenchReport`'s; times are in milliseconds.
 
@@ -53,7 +59,7 @@ fn usage() -> String {
          \x20             [--preset low|medium|high|ultra|auto] [--render-scale X] [--dynamic-resolution MS]\n\
          \x20             [--min-scale X] [--max-scale X] [--switch-presets N]\n\
          \x20             [--aa off|mlaa|msaa2|msaa4|msaa8] [--effects low|medium|high|ultra] [--merge-scene]\n\
-         \x20             [--no-post]\n\
+         \x20             [--no-post] [--toggle-effects N] [--frame-target MS] [--pipeline-cache DIR]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -96,6 +102,14 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             "--switch-presets" => {
                 options.switch_presets =
                     Some(u32::try_from(number(it.next(), "--switch-presets")?).map_err(|e| e.to_string())?);
+            }
+            "--toggle-effects" => {
+                options.toggle_effects =
+                    Some(u32::try_from(number(it.next(), "--toggle-effects")?).map_err(|e| e.to_string())?);
+            }
+            "--frame-target" => options.frame_target_ms = Some(decimal(it.next(), "--frame-target")?),
+            "--pipeline-cache" => {
+                options.context.pipeline_cache_dir = Some(it.next().ok_or("--pipeline-cache needs a folder")?.into());
             }
             "--list" => {
                 for kind in StressKind::ALL {

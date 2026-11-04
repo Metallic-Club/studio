@@ -3,13 +3,17 @@
 //!
 //! It runs only in frames without the finish pass ([`crate::PassId::Post`]), which otherwise upscales as it finishes
 //! the image (#85): one pass fewer over the whole output. A better upscaler (FSR 1 class) replaces the bilinear tap
-//! here and in `post/finish.wgsl` (`scene_uv`), and nothing else. The pipeline is made with the
-//! renderer, never on the frame (ADR 0008 §9); a frame binds it, writes its 16-byte parameters only when the render
-//! size changed, and draws one triangle.
+//! here and in `post/finish.wgsl` (`scene_uv`), and nothing else. The pipeline is compiled off the frame
+//! ([`crate::pipelines`], ADR 0008 §9); a frame binds it, writes its 16-byte parameters only when the render size
+//! changed, and draws one triangle.
+
+use crate::post::FullScreen;
 
 /// The upscale pass's pipeline, sampler and parameters, and the bind group of the scene colour it reads.
 pub(crate) struct Upscaler {
-    pipeline: wgpu::RenderPipeline,
+    module: wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    pipeline: Option<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params: wgpu::Buffer,
@@ -57,36 +61,6 @@ impl Upscaler {
                 },
             ],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("metallic upscale"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("metallic upscale"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_upscale"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_upscale"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("metallic upscale"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -104,13 +78,37 @@ impl Upscaler {
             mapped_at_creation: false,
         });
         Self {
-            pipeline,
+            module,
+            format,
+            pipeline: None,
             layout,
             sampler,
             params,
             group: None,
             written: None,
         }
+    }
+
+    /// What the pipeline is made from.
+    pub(crate) fn full_screen(&self) -> FullScreen {
+        FullScreen {
+            label: "metallic upscale",
+            layout: self.layout.clone(),
+            module: self.module.clone(),
+            entry_points: ("vs_upscale", "fs_upscale"),
+            format: self.format,
+            blend: None,
+        }
+    }
+
+    /// Puts the compiled pipeline in place.
+    pub(crate) fn install(&mut self, pipeline: wgpu::RenderPipeline) {
+        self.pipeline = Some(pipeline);
+    }
+
+    /// Whether the pipeline is compiled.
+    pub(crate) fn has(&self) -> bool {
+        self.pipeline.is_some()
     }
 
     /// Reads `source` (the scene colour) from now on, or nothing. A settings change, never per frame.
@@ -149,8 +147,10 @@ impl Upscaler {
 
     /// Records the upscale into `pass`: one triangle over the output. Nothing without a scene colour.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if let Some(group) = self.group.as_ref() {
-            pass.set_pipeline(&self.pipeline);
+        if let Some(group) = self.group.as_ref()
+            && let Some(pipeline) = self.pipeline.as_ref()
+        {
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, group, &[]);
             pass.draw(0..3, 0..1);
         }

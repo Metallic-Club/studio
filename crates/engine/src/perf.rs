@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use metallic_render::resolution::ResolutionStats;
 use metallic_render::settings::{Preset, Tier};
-use metallic_render::{DrawStats, FrameTimings, MAX_CASCADES, Overlay, PassId, PostStats};
+use metallic_render::{DrawStats, FrameTimings, MAX_CASCADES, Overlay, PassId, PipelineStats, PostStats};
 
 /// The graphics settings in effect, as the overlay and the reports show them
 /// ([`SceneRenderer::graphics_status`](crate::SceneRenderer::graphics_status)).
@@ -34,13 +34,17 @@ pub struct GraphicsStatus {
     pub resolution: ResolutionStats,
     /// The post chain: the scene colour's format, the anti-aliasing, bloom, and the frame's passes.
     pub post: PostStats,
+    /// The renderer's pipeline compiles: how many, how long, and how many are still pending.
+    pub pipelines: PipelineStats,
 }
 
 impl GraphicsStatus {
     /// The status as the members of a JSON object, without the braces: `preset`, `tier` and `calibrating` (names,
-    /// or `null`), `resolution` (`scale`, `width`, `height`, `dynamic`, `target_ms`, `min_scale`, `max_scale`) and
+    /// or `null`), `resolution` (`scale`, `width`, `height`, `dynamic`, `target_ms`, `min_scale`, `max_scale`),
     /// `post` (`scene_format`, `finish`, `anti_aliasing`, `bloom_levels`, `render_passes`, `full_screen_passes`, and
-    /// `passes`: the planned passes' names in order, bloom's chain as one).
+    /// `passes`: the planned passes' names in order, bloom's chain as one) and `pipelines` (`compiled`, `pending`,
+    /// `failed`, `workers`, `first_frame_ms`, `all_ms` (`null` while some are pending), `compile_ms` (CPU time summed
+    /// over the workers), `switch_waiting` and `cache_loaded` (bytes, `null` without a pipeline cache)).
     pub fn write_json_members(&self, out: &mut String) {
         use std::fmt::Write as _;
         let name = |name: Option<&str>| name.map_or_else(|| "null".to_owned(), json_string);
@@ -79,6 +83,22 @@ impl GraphicsStatus {
             out.push_str(&json_string(pass.name()));
         }
         out.push_str("]}");
+        let c = &self.pipelines;
+        let option = |value: Option<String>| value.unwrap_or_else(|| "null".to_owned());
+        let _ = write!(
+            out,
+            ",\"pipelines\":{{\"compiled\":{},\"pending\":{},\"failed\":{},\"workers\":{},\"first_frame_ms\":{:.1},\
+             \"all_ms\":{},\"compile_ms\":{:.1},\"switch_waiting\":{},\"cache_loaded\":{}}}",
+            c.compiled,
+            c.pending,
+            c.failed,
+            c.workers,
+            c.first_frame_ms,
+            option(c.all_ms.map(|ms| format!("{ms:.1}"))),
+            c.compile_ms,
+            c.switch_waiting,
+            option(c.cache_loaded.map(|bytes| bytes.to_string())),
+        );
     }
 }
 
@@ -197,6 +217,13 @@ pub struct PerfSummary {
     pub frame_ms: Distribution,
     /// The mean frame time of the slowest 1% of frames (at least one frame).
     pub low_1pct_ms: f32,
+    /// Frames over [`PerfSummary::spike_ms`] since the stats were last reset, not counting the first
+    /// [`SPIKE_GRACE_MS`] (not only those in the window).
+    pub spikes: u32,
+    /// What a spike is over: twice the frame target ([`PerfStats::set_frame_target_ms`]).
+    pub spike_ms: f32,
+    /// The slowest frame since the stats were last reset, not counting the first [`SPIKE_GRACE_MS`].
+    pub worst_ms: f32,
     /// Script CPU time.
     pub script_ms: Distribution,
     /// Physics CPU time.
@@ -258,7 +285,7 @@ impl PerfSummary {
 impl PerfSummary {
     /// Writes the summary as the members of a JSON object, without the braces, so a report can put its own
     /// members around them (times in milliseconds): `frames`, `frame_ms`, `fps_p50`, `low_1pct_ms`,
-    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`, `lights`), `render_scale` (the scale frames
+    /// `low_1pct_fps`, `spikes` (`count`, `over_ms`, `worst_ms`), `cpu_ms` (`script`, `physics`, `render`, `cull`, `lights`), `render_scale` (the scale frames
     /// were drawn at), `gpu_ms` (`frames`, `total`, `passes` by name, `shadow` and `shadow_build` per cascade, `light_shadows`), `draws` (with `culled`, and
     /// `levels`: the instances drawn at each level of detail, full detail first), `shadow`
     /// (the last frame's `cascades`, `casters` and `moving` per cascade, `draws`, `instances` and `triangles`, and per
@@ -285,6 +312,11 @@ impl PerfSummary {
             self.fps_p50(),
             self.low_1pct_ms,
             self.low_1pct_fps()
+        )?;
+        write!(
+            out,
+            "\"spikes\":{{\"count\":{},\"over_ms\":{:.3},\"worst_ms\":{:.4}}},",
+            self.spikes, self.spike_ms, self.worst_ms
         )?;
         write!(
             out,
@@ -480,7 +512,22 @@ pub struct PerfStats {
     draws: DrawStats,
     scratch: Vec<f32>,
     recorded: u64,
+    /// The frame time a frame should take; a frame over twice it is a spike.
+    target_ms: f32,
+    /// Wall time recorded since the stats were made (a reset keeps it): spikes count after [`SPIKE_GRACE_MS`].
+    elapsed_ms: f64,
+    /// Spikes since the last reset, after the grace.
+    spikes: u32,
+    /// The slowest frame since the last reset, after the grace.
+    worst_ms: f32,
 }
+
+/// How long after start frames are not counted as spikes: loading, the first uploads, the pipelines compiled in the
+/// background (ADR 0008 §9: no frame over twice the target after the first 2 s).
+pub const SPIKE_GRACE_MS: f64 = 2000.0;
+
+/// The frame target spikes are measured against unless the app sets one: a 60 fps frame.
+pub const DEFAULT_FRAME_TARGET_MS: f32 = 1000.0 / 60.0;
 
 impl Default for PerfStats {
     fn default() -> Self {
@@ -501,7 +548,35 @@ impl PerfStats {
             draws: DrawStats::default(),
             scratch: Vec::with_capacity(window),
             recorded: 0,
+            target_ms: DEFAULT_FRAME_TARGET_MS,
+            elapsed_ms: 0.0,
+            spikes: 0,
+            worst_ms: 0.0,
         }
+    }
+
+    /// Sets the frame time frames should take (a frame cap's, or the display's under vsync; a 60 fps frame by
+    /// default): a frame over twice it, after the first [`SPIKE_GRACE_MS`], is a spike.
+    pub fn set_frame_target_ms(&mut self, ms: f32) {
+        if ms.is_finite() && ms > 0.0 {
+            self.target_ms = ms;
+        }
+    }
+
+    /// The frame time frames should take.
+    pub fn frame_target_ms(&self) -> f32 {
+        self.target_ms
+    }
+
+    /// Frames over twice the target since the last reset, not counting the first [`SPIKE_GRACE_MS`] after the stats
+    /// were made.
+    pub fn spikes(&self) -> u32 {
+        self.spikes
+    }
+
+    /// The slowest frame since the last reset, not counting the first [`SPIKE_GRACE_MS`]; 0 before any.
+    pub fn worst_frame_ms(&self) -> f32 {
+        self.worst_ms
     }
 
     /// Frames the window holds at most.
@@ -521,6 +596,11 @@ impl PerfStats {
         });
         self.draws = draws;
         self.recorded += 1;
+        if self.elapsed_ms >= SPIKE_GRACE_MS {
+            self.worst_ms = self.worst_ms.max(sample.frame_ms);
+            self.spikes += u32::from(sample.frame_ms > 2.0 * self.target_ms);
+        }
+        self.elapsed_ms += f64::from(sample.frame_ms);
         let Some(timings) = gpu else {
             return;
         };
@@ -549,8 +629,8 @@ impl PerfStats {
         self.gpu.push(gpu);
     }
 
-    /// Forgets every frame (after a warm-up, or when the scene changes). GPU timings arrive late, so the first
-    /// one or two recorded after a reset can be of frames rendered just before it.
+    /// Forgets every frame (after a warm-up, or when the scene changes), and the spikes. GPU timings arrive late, so
+    /// the first one or two recorded after a reset can be of frames rendered just before it.
     pub fn reset(&mut self) {
         self.frames.clear();
         self.gpu.clear();
@@ -558,6 +638,8 @@ impl PerfStats {
         self.gpu_cascades = 0;
         self.draws = DrawStats::default();
         self.recorded = 0;
+        self.spikes = 0;
+        self.worst_ms = 0.0;
     }
 
     /// Frames recorded since the last reset (more than the window holds, once it wraps).
@@ -595,6 +677,9 @@ impl PerfStats {
     pub fn summary(&mut self) -> PerfSummary {
         let mut summary = PerfSummary {
             frames: self.frames.len(),
+            spikes: self.spikes,
+            spike_ms: 2.0 * self.target_ms,
+            worst_ms: self.worst_ms,
             gpu_frames: self.gpu.len(),
             gpu_passes: self.gpu_passes,
             gpu_cascades: self.gpu_cascades,
@@ -745,16 +830,17 @@ fn draw_graphics_line(overlay: &mut Overlay, x0: f32, y: f32, graphics: &Graphic
 /// lights (in the scene, in view, drawn, fading, shadowed) and their CPU and atlas cost; draws, instances and
 /// triangles per pass and the instances culled; the graphics settings in effect (`graphics`: the preset and its
 /// tier, or Auto's calibration while it runs, the render scale and size drawn, and dynamic resolution's range and
-/// target); and a graph of the last [`GRAPH_FRAMES`] frame times (green within 60 fps, yellow within 30, red beyond;
-/// guides at 16.7 and 33.3 ms). `summary` is usually refreshed a few times a second; the graph and the "now" numbers
-/// come from `stats` every frame. Allocates nothing.
+/// target); the pipelines compiled and still compiling, and the spike counter (frames over twice the frame target
+/// since the first 2 s, and the slowest); and a graph of the last [`GRAPH_FRAMES`] frame times (green within 60 fps,
+/// yellow within 30, red beyond; guides at 16.7 and 33.3 ms). `summary` is usually refreshed a few times a second;
+/// the graph, the spikes and the "now" numbers come from `stats` every frame. Allocates nothing.
 pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSummary, graphics: &GraphicsStatus) {
     overlay.clear();
     let (x0, y0) = (12.0, 12.0);
     let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
     // Wide enough for the graph and for the longest line of text (about 74 characters).
     let width = (GRAPH_FRAMES as f32 * BAR).max(76.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
-    let lines = 14.0;
+    let lines = 15.0;
     overlay.rect(x0 - 8.0, y0 - 8.0, width, lines * line + GRAPH_HEIGHT + 24.0, PANEL);
 
     let now = stats.last().copied().unwrap_or_default();
@@ -789,6 +875,32 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
             post.bloom_levels,
             post.render_passes,
             post.full_screen_passes
+        ),
+    );
+    y += line;
+    // Pipelines compiled and still compiling (background compiles, ADR 0008 §9), then the frames over twice the
+    // frame target since the first 2 s, and the slowest of them.
+    let pipelines = &graphics.pipelines;
+    let (x, _) = overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        if pipelines.pending > 0 { SLOW } else { TEXT },
+        format_args!(
+            "PIPELINES {} ({} PENDING) FIRST {:.0} MS",
+            pipelines.compiled, pipelines.pending, pipelines.first_frame_ms
+        ),
+    );
+    overlay.text_fmt(
+        x,
+        y,
+        SCALE,
+        if stats.spikes() > 0 { BAD } else { TEXT },
+        format_args!(
+            "  SPIKES {} OVER {:.1} MS  WORST {:.2}",
+            stats.spikes(),
+            2.0 * stats.frame_target_ms(),
+            stats.worst_frame_ms()
         ),
     );
     y += line;

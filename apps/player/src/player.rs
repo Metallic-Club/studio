@@ -10,6 +10,7 @@ use metallic_engine::metallic_platform::{
     AppHandler, ButtonState, DeviceEvent, EventLoopContext, GamepadEvent, KeyCode, Platform, PlatformError,
     WindowEvent, WindowId,
 };
+use metallic_engine::metallic_render::ContextOptions;
 use metallic_engine::metallic_script::OutputSink;
 use metallic_engine::perf::PerfSummary;
 use metallic_engine::stress::{StressError, StressScene};
@@ -97,7 +98,10 @@ impl<O: OutputSink> Player<O> {
         let mut engine = Engine::with_output(engine_config, output)?;
         let stress = config.scene.install(engine.data_model_mut())?;
         let mut config = config;
-        let mut renderer = SceneRenderer::default();
+        let mut renderer = SceneRenderer::new(ContextOptions {
+            pipeline_cache_dir: config.pipeline_cache.clone(),
+            ..ContextOptions::default()
+        });
         if let Some(frames) = config.max_frames {
             // The whole measured run, so the report summarises every measured frame.
             renderer.set_perf_window(usize::try_from(frames).unwrap_or(usize::MAX).min(1 << 20));

@@ -52,6 +52,7 @@ fn render_with(
     change(&mut settings);
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(context, settings).expect("a renderer");
+    renderer.wait_for_pipelines();
     let mut prepare = Some(prepare);
     let mut scene = GpuScene::new(
         context,
@@ -309,6 +310,7 @@ fn black_stays_black() {
             },
         )
         .expect("a renderer");
+        renderer.wait_for_pipelines();
         renderer.render(target.view());
         let pixels = read_back_rgba8(&context, target.texture());
         assert!(
@@ -345,6 +347,7 @@ fn anti_aliasing_and_effects_switch_between_frames() {
     let mut game = demo();
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
+    renderer.wait_for_pipelines();
     let mut scene = GpuScene::new(
         &context,
         &mut game.dm,

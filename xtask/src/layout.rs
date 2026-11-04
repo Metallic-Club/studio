@@ -1,4 +1,5 @@
-//! `cargo xtask check-layout`: enforces the crate boundaries from `docs/adr/0001-project-layout.md`.
+//! `cargo xtask check-layout`: enforces the crate boundaries from `docs/adr/0001-project-layout.md`, and that
+//! nothing on the frame path waits for the GPU (ADR 0008 §9, [`GPU_WAIT_ALLOWED`]).
 //!
 //! The rules are pure functions over package lists and file contents, so they are tested without running cargo.
 //! [`run`] is the thin shell that feeds them `cargo metadata` and the source tree.
@@ -53,6 +54,28 @@ const CORE_PACKAGE: &str = "metallic_core";
 /// Top-level folders, relative to the workspace root, where `cfg(target_os ...)` is allowed (ADR 0001 rule 5).
 /// `xtask` is a host-only tool that never ships, and its own rule text would otherwise match itself.
 const TARGET_OS_ALLOWED_DIRS: &[&str] = &["crates/platform", "apps", "xtask"];
+
+/// The source folders of the frame path, where nothing may wait for the GPU (ADR 0008 §9): the renderer and the
+/// engine that drives it. Their tests may wait (they read frames back); the scan stops at a file's `#[cfg(test)]`.
+const FRAME_PATH_DIRS: &[&str] = &["crates/render/src/", "crates/engine/src/"];
+
+/// Calls that wait for the GPU, or start a readback that only a wait completes: `device.poll` with
+/// `PollType::Wait` (or `wait_indefinitely`), `pollster::block_on` of a wgpu future, and `map_async`.
+const GPU_WAITS: &[&str] = &["PollType::Wait", "wait_indefinitely", "block_on(", ".map_async("];
+
+/// The uses of [`GPU_WAITS`] the frame path may make, each with why it never stalls a frame: `(file, call, why)`.
+pub(crate) const GPU_WAIT_ALLOWED: &[(&str, &str, &str)] = &[
+    (
+        "crates/render/src/context.rs",
+        "block_on(",
+        "the adapter and device requests, once at setup, before any frame",
+    ),
+    (
+        "crates/render/src/timing.rs",
+        ".map_async(",
+        "the timestamp readback: mapped asynchronously and collected frames later with PollType::Poll, never waited on",
+    ),
+];
 
 /// The subset of `cargo metadata` output the checks need.
 #[derive(Debug, Deserialize)]
@@ -118,6 +141,15 @@ pub(crate) enum Violation {
         /// 1-based line number.
         line: usize,
     },
+    /// A call that waits for the GPU on the frame path, not in [`GPU_WAIT_ALLOWED`].
+    GpuWait {
+        /// File path relative to the workspace root, with `/` separators.
+        file: String,
+        /// 1-based line number.
+        line: usize,
+        /// The call found.
+        call: &'static str,
+    },
 }
 
 impl fmt::Display for Violation {
@@ -153,6 +185,11 @@ impl fmt::Display for Violation {
                 f,
                 "[target-os] {file}:{line}: `cfg(target_os ...)` is only allowed in crates/platform and apps/ \
                  (ADR 0001 rule 5)"
+            ),
+            Self::GpuWait { file, line, call } => write!(
+                f,
+                "[gpu-wait] {file}:{line}: `{call}` waits for the GPU on the frame path (ADR 0008 §9); read back \
+                 asynchronously, or add it to GPU_WAIT_ALLOWED in xtask/src/layout.rs with why it never stalls a frame"
             ),
         }
     }
@@ -260,8 +297,41 @@ fn scan_sources(root: &Path) -> Result<Vec<Violation>, String> {
     for (path, rel) in files {
         let contents = fs::read_to_string(&path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
         violations.extend(scan_file(&rel, &contents));
+        violations.extend(scan_gpu_waits(&rel, &contents));
     }
     Ok(violations)
+}
+
+/// Finds the calls of [`GPU_WAITS`] in a frame-path file ([`FRAME_PATH_DIRS`]) that [`GPU_WAIT_ALLOWED`] does not
+/// list. Line comments are skipped, and so is everything from a `#[cfg(test)]` on and whole test-module files
+/// (`tests.rs`): tests read frames back.
+pub(crate) fn scan_gpu_waits(rel_path: &str, contents: &str) -> Vec<Violation> {
+    if !FRAME_PATH_DIRS.iter().any(|dir| rel_path.starts_with(dir)) || rel_path.ends_with("/tests.rs") {
+        return Vec::new();
+    }
+    let mut violations = Vec::new();
+    for (i, line) in contents.lines().enumerate() {
+        let code = line.trim_start();
+        if code.starts_with("#[cfg(test)]") {
+            break;
+        }
+        if code.starts_with("//") {
+            continue;
+        }
+        for &call in GPU_WAITS {
+            let allowed = GPU_WAIT_ALLOWED
+                .iter()
+                .any(|&(file, allowed, _)| file == rel_path && allowed == call);
+            if code.contains(call) && !allowed {
+                violations.push(Violation::GpuWait {
+                    file: rel_path.to_owned(),
+                    line: i + 1,
+                    call,
+                });
+            }
+        }
+    }
+    violations
 }
 
 /// Collects `(absolute path, workspace-relative path)` for each `.rs` file the `target_os` rule applies to.
@@ -493,6 +563,61 @@ mod tests {
                    let target_os_name = \"x\";\n\
                    let same = target_os == other;\n";
         assert_eq!(scan_file("crates/core/src/lib.rs", src), vec![]);
+    }
+
+    #[test]
+    fn gpu_waits_on_the_frame_path_are_found() {
+        let src = "fn frame(device: &wgpu::Device) {\n\
+                   let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });\n\
+                   // device.poll(wgpu::PollType::wait_indefinitely()) in a comment is fine\n\
+                   let x = pollster::block_on(future);\n\
+                   buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});\n\
+                   }\n\
+                   #[cfg(test)]\n\
+                   mod tests { fn read() { device.poll(wgpu::PollType::wait_indefinitely()); } }\n";
+        let found: Vec<_> = scan_gpu_waits("crates/render/src/frame.rs", src)
+            .into_iter()
+            .map(|v| match v {
+                Violation::GpuWait { line, call, .. } => (line, call),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(found, vec![(2, "PollType::Wait"), (4, "block_on("), (5, ".map_async(")]);
+        let message = scan_gpu_waits("crates/engine/src/x.rs", "pollster::block_on(f);")[0].to_string();
+        assert!(message.starts_with("[gpu-wait] crates/engine/src/x.rs:1:"), "{message}");
+    }
+
+    #[test]
+    fn allowed_gpu_waits_and_other_folders_pass() {
+        // Setup's device request, and the asynchronous timestamp readback.
+        assert_eq!(
+            scan_gpu_waits(
+                "crates/render/src/context.rs",
+                "pollster::block_on(adapter.request_device(&d))"
+            ),
+            vec![]
+        );
+        assert_eq!(
+            scan_gpu_waits(
+                "crates/render/src/timing.rs",
+                "slice.map_async(wgpu::MapMode::Read, f);"
+            ),
+            vec![]
+        );
+        // The allowance is per file and per call.
+        assert_eq!(
+            scan_gpu_waits("crates/render/src/timing.rs", "pollster::block_on(f);").len(),
+            1
+        );
+        // Tests, benches, examples and other crates may wait.
+        let wait = "device.poll(wgpu::PollType::wait_indefinitely());";
+        assert_eq!(scan_gpu_waits("crates/render/tests/support/mod.rs", wait), vec![]);
+        assert_eq!(scan_gpu_waits("crates/render/benches/gpu_scene.rs", wait), vec![]);
+        assert_eq!(scan_gpu_waits("crates/render/src/scene/tests.rs", wait), vec![]);
+        assert_eq!(scan_gpu_waits("crates/physics/src/lib.rs", wait), vec![]);
+        for (file, _, why) in GPU_WAIT_ALLOWED {
+            assert!(file.ends_with(".rs") && !why.is_empty());
+        }
     }
 
     #[test]

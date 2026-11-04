@@ -2,9 +2,10 @@
 //! carries the performance overlay (frame-time graph and numbers, ADR 0008 §10) and anything else a developer wants
 //! on screen without a UI system.
 //!
-//! - **Cheap and toggled:** nothing exists on the GPU until [`crate::Renderer::set_overlay_enabled`] turns it on
-//!   (a settings change: the pipeline and buffer are made then, never in a frame). While on, a frame costs one
-//!   instanced draw, plus one buffer write when the contents changed.
+//! - **Cheap and toggled:** nothing but its pipeline (compiled in the background with the renderer's, so turning it
+//!   on compiles nothing) exists on the GPU until [`crate::Renderer::set_overlay_enabled`] turns it on (a settings
+//!   change: the buffer is made then, never in a frame). While on, a frame costs one instanced draw, plus one buffer
+//!   write when the contents changed.
 //! - **No font crate:** text uses a built-in 5 × 7 bitmap font (printable ASCII, lower case drawn as upper case)
 //!   whose pixels travel in each glyph's instance data, so there is no texture and no bind group.
 //! - **No allocation per frame:** [`Overlay`] holds at most [`OVERLAY_MAX_QUADS`] quads in storage reserved when
@@ -19,6 +20,8 @@ mod font;
 use std::fmt;
 
 use bytemuck::{Pod, Zeroable};
+
+use crate::pipelines::Recipe;
 
 pub use font::{GLYPH_COLUMNS, GLYPH_ROWS};
 
@@ -224,11 +227,10 @@ struct GpuQuad {
 const QUAD_SIZE: u64 = size_of::<GpuQuad>() as u64;
 
 /// The overlay's GPU side: its pipeline, instance buffer and the copy last uploaded. Made when the overlay is
-/// turned on.
+/// turned on; its pipeline is compiled apart ([`crate::pipelines`]), and nothing is drawn until it is.
 #[derive(Debug)]
 pub(crate) struct OverlayPass {
-    pipeline: wgpu::RenderPipeline,
-    format: wgpu::TextureFormat,
+    pipeline: Option<wgpu::RenderPipeline>,
     buffer: wgpu::Buffer,
     staging: Vec<GpuQuad>,
     /// The overlay generation and target size the buffer holds.
@@ -237,7 +239,7 @@ pub(crate) struct OverlayPass {
 }
 
 impl OverlayPass {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, pipeline: Option<wgpu::RenderPipeline>) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic overlay quads"),
             size: QUAD_SIZE * OVERLAY_MAX_QUADS as u64,
@@ -245,8 +247,7 @@ impl OverlayPass {
             mapped_at_creation: false,
         });
         Self {
-            pipeline: create_pipeline(device, format),
-            format,
+            pipeline,
             buffer,
             staging: Vec::with_capacity(OVERLAY_MAX_QUADS),
             uploaded: None,
@@ -254,12 +255,9 @@ impl OverlayPass {
         }
     }
 
-    /// Recreates the pipeline for another colour format (a settings change).
-    pub(crate) fn set_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
-        if format != self.format {
-            self.pipeline = create_pipeline(device, format);
-            self.format = format;
-        }
+    /// Draws with `pipeline` from now on (once its compile finished).
+    pub(crate) fn set_pipeline(&mut self, pipeline: wgpu::RenderPipeline) {
+        self.pipeline = Some(pipeline);
     }
 
     /// Uploads `overlay` when it changed since the last upload (or the target size did).
@@ -278,16 +276,25 @@ impl OverlayPass {
 
     /// Records the overlay's one draw.
     pub(crate) fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        if self.count == 0 {
+        let Some(pipeline) = self.pipeline.as_ref().filter(|_| self.count > 0) else {
             return;
-        }
-        render_pass.set_pipeline(&self.pipeline);
+        };
+        render_pass.set_pipeline(pipeline);
         render_pass.set_vertex_buffer(0, self.buffer.slice(..u64::from(self.count) * QUAD_SIZE));
         render_pass.draw(0..6, 0..self.count);
     }
 }
 
-fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+/// The compile of the overlay's pipeline for targets in `format`.
+pub(crate) fn overlay_recipe(format: wgpu::TextureFormat) -> Recipe {
+    Box::new(move |device, cache| create_pipeline(device, cache, format))
+}
+
+fn create_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("metallic overlay"),
         source: wgpu::ShaderSource::Wgsl(include_str!("overlay.wgsl").into()),
@@ -330,7 +337,7 @@ fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::
             })],
         }),
         multiview_mask: None,
-        cache: None,
+        cache,
     })
 }
 

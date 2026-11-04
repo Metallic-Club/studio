@@ -40,6 +40,9 @@ pub struct PlayerConfig {
     pub preset: Option<Preset>,
     /// Where [`PlayerConfig::graphics`] came from: the Player saves Auto's calibration there. `None` saves nothing.
     pub graphics_file: Option<PathBuf>,
+    /// The folder compiled pipelines are kept in between runs (on Vulkan; the user's cache folder for the
+    /// `metallic_player` binary). `None` keeps nothing.
+    pub pipeline_cache: Option<PathBuf>,
     /// The window [`Player::run`](crate::Player::run) and [`PlayerApp`](crate::PlayerApp) open. A host that
     /// brings its own window ignores it.
     pub window: WindowConfig,
@@ -66,6 +69,7 @@ impl PlayerConfig {
             graphics: GraphicsSettings::default(),
             preset: None,
             graphics_file: None,
+            pipeline_cache: None,
             window: WindowConfig::new("Metallic Player").with_size(width, height),
             frame_cap: Some(DEFAULT_FRAME_CAP),
             max_frames: None,

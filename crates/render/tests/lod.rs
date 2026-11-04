@@ -109,6 +109,7 @@ fn render(context: &RenderContext, game: &mut Game, look: Look2) -> (Vec<[u8; 4]
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     renderer.set_lod_tint(look.tint);
     let mut scene = GpuScene::new(
         context,

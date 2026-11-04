@@ -179,13 +179,15 @@ pub(crate) struct LocalLights {
 
 impl LocalLights {
     /// Local lights for `settings` on the instance path `binding`, whose storage-path instance group has
-    /// `instance_layout`. Makes their pipelines; their buffers and textures wait for the first light.
+    /// `instance_layout`. Makes their pipelines (through `cache` where there is one); their buffers and textures wait
+    /// for the first light.
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: LightSettings,
+        cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         Self {
             device: device.clone(),
@@ -194,7 +196,7 @@ impl LocalLights {
             buffers: None,
             lights: Vec::with_capacity(MAX_GPU_LIGHTS),
             uploaded: Vec::with_capacity(MAX_GPU_LIGHTS),
-            atlas: ShadowAtlas::new(device, queue, binding, instance_layout, &settings),
+            atlas: ShadowAtlas::new(device, queue, binding, instance_layout, &settings, cache),
             ranked: Vec::with_capacity(MAX_GPU_LIGHTS),
             drawn: Vec::with_capacity(MAX_GPU_LIGHTS),
             spheres: Vec::with_capacity(MAX_GPU_LIGHTS),

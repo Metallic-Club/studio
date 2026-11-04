@@ -98,6 +98,7 @@ fn render(context: &RenderContext, game: &mut Game, resolution: ResolutionSettin
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     renderer.set_light_fade_step(Some(1.0));
     renderer.set_lighting(LightingReader::new().read(&game.dm, lighting_service(game)));
     let mut scene = GpuScene::new(
@@ -211,6 +212,7 @@ fn the_ui_stays_at_the_targets_resolution() {
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     assert!(renderer.plan().scaled());
     renderer.set_overlay_enabled(true);
     // A one-pixel line: drawn at half scale and upscaled it would be two pixels of half its colour.
@@ -237,6 +239,7 @@ fn changing_the_scale_makes_textures_only_when_their_size_changes() {
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     assert!(
         !renderer.plan().scaled(),
         "no upscale pass at the target's own resolution"

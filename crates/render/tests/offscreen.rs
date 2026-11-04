@@ -38,6 +38,7 @@ fn render_once(context: &RenderContext, settings: RendererSettings) -> Vec<[u8; 
     let target = OffscreenTarget::new(context, settings.width, settings.height, settings.color_format)
         .expect("an offscreen target");
     let mut renderer = Renderer::new(context, settings).expect("a renderer");
+    renderer.wait_for_pipelines();
     renderer.render(target.view());
     read_back_rgba8(context, target.texture())
 }
@@ -129,7 +130,8 @@ fn msaa_resolves_into_the_target() {
                 passes,
                 ..settings(format)
             };
-            let renderer = Renderer::new(&context, settings).expect("a renderer");
+            let mut renderer = Renderer::new(&context, settings).expect("a renderer");
+            renderer.wait_for_pipelines();
             assert_eq!(renderer.msaa_sample_counts(), counts);
             let pixels = render_once(&context, settings);
             assert_all_pixels(&pixels, clear_in_unorm(passes), 1);
@@ -153,6 +155,7 @@ fn unsupported_msaa_and_sizes_are_errors() {
     assert!(matches!(empty, Err(RenderError::InvalidSize { width: 0, .. })));
     assert!(OffscreenTarget::new(&context, 10, 0, format).is_err());
     let mut renderer = Renderer::new(&context, settings(format)).unwrap();
+    renderer.wait_for_pipelines();
     assert!(renderer.resize(0, 0).is_err());
     assert!(renderer.set_msaa_samples(3).is_err());
 }
@@ -162,6 +165,7 @@ fn resizing_recreates_the_attachments() {
     let Some(context) = gpu() else { return };
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = Renderer::new(&context, settings(format)).unwrap();
+    renderer.wait_for_pipelines();
     let small = OffscreenTarget::new(&context, 64, 48, format).unwrap();
     renderer.render(small.view());
     renderer.resize(200, 120).unwrap();

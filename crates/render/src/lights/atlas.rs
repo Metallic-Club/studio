@@ -291,13 +291,14 @@ pub(crate) struct ShadowAtlas {
 
 impl ShadowAtlas {
     /// An atlas for `settings` on the instance path `binding`, whose storage-path instance group has
-    /// `instance_layout`.
+    /// `instance_layout`, its pipelines made through `cache` where there is one.
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: &LightSettings,
+        cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         let caster_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic shadow atlas tile"),
@@ -314,7 +315,7 @@ impl ShadowAtlas {
         });
         let (resolution, tile, per_row, capacity) = layout(device, settings);
         // The pipelines are made now, with the renderer (no hitch when the first shadow appears); the memory waits.
-        let caster = caster_pipeline(device, binding, &caster_layout, instance_layout, CASTER_BIAS);
+        let caster = caster_pipeline(device, cache, binding, &caster_layout, instance_layout, CASTER_BIAS);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -341,7 +342,7 @@ impl ShadowAtlas {
             dynamic_revision: None,
             caster_data: Vec::new(),
             caster,
-            clear: clear_pipeline(device),
+            clear: clear_pipeline(device, cache),
             instance_layout: instance_layout.cloned(),
             instance_group: None,
             table: Vec::new(),
@@ -945,7 +946,7 @@ fn list_buffer(device: &wgpu::Device, binding: InstanceBinding, size: u64) -> wg
 }
 
 /// Clears a tile: a full-viewport triangle at depth 1, written whatever is there.
-fn clear_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
+fn clear_pipeline(device: &wgpu::Device, cache: Option<&wgpu::PipelineCache>) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("metallic shadow atlas clear"),
         source: wgpu::ShaderSource::Wgsl(
@@ -981,7 +982,7 @@ fn clear_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
         multisample: wgpu::MultisampleState::default(),
         fragment: None,
         multiview_mask: None,
-        cache: None,
+        cache,
     })
 }
 

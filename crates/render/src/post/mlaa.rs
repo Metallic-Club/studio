@@ -1,17 +1,18 @@
 //! MLAA's edges and blend weights ([`crate::PassId::Mlaa`]): one full-screen pass at the scene's resolution from the
 //! scene colour into an RGBA8 texture of weights, which the finish pass blends with (`mlaa.wgsl`).
 
-use super::{MlaaSettings, full_screen_pipeline, post_texture, texture_entry, uniform_entry};
+use super::{FullScreen, MlaaSettings, post_texture, texture_entry, uniform_entry};
 
 const PARAMS_SIZE: u64 = 32;
 
 /// The weights' format: four areas from 0 to 0.5.
 const WEIGHTS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// MLAA's pipeline (made with the renderer), its parameters, and its weights while it runs.
+/// MLAA's pipeline (compiled apart, [`crate::pipelines`]), its parameters, and its weights while it runs.
 pub(crate) struct Mlaa {
+    module: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Option<wgpu::RenderPipeline>,
     params: wgpu::Buffer,
     written: Option<[f32; 8]>,
     /// The weights texture's view and the pass's bind group, while MLAA runs.
@@ -19,7 +20,7 @@ pub(crate) struct Mlaa {
 }
 
 impl Mlaa {
-    /// The pipeline.
+    /// The pass, before its pipeline is compiled.
     pub(crate) fn new(device: &wgpu::Device) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("metallic mlaa"),
@@ -29,15 +30,6 @@ impl Mlaa {
             label: Some("metallic mlaa"),
             entries: &[uniform_entry(0, PARAMS_SIZE), texture_entry(1, false)],
         });
-        let pipeline = full_screen_pipeline(
-            device,
-            "metallic mlaa",
-            &layout,
-            &module,
-            ("vs_mlaa", "fs_mlaa"),
-            WEIGHTS_FORMAT,
-            None,
-        );
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic mlaa"),
             size: PARAMS_SIZE,
@@ -45,12 +37,35 @@ impl Mlaa {
             mapped_at_creation: false,
         });
         Self {
+            module,
             layout,
-            pipeline,
+            pipeline: None,
             params,
             written: None,
             target: None,
         }
+    }
+
+    /// What the pipeline is made from.
+    pub(crate) fn full_screen(&self) -> FullScreen {
+        FullScreen {
+            label: "metallic mlaa",
+            layout: self.layout.clone(),
+            module: self.module.clone(),
+            entry_points: ("vs_mlaa", "fs_mlaa"),
+            format: WEIGHTS_FORMAT,
+            blend: None,
+        }
+    }
+
+    /// Puts the compiled pipeline in place.
+    pub(crate) fn install(&mut self, pipeline: wgpu::RenderPipeline) {
+        self.pipeline = Some(pipeline);
+    }
+
+    /// Whether the pipeline is compiled.
+    pub(crate) fn has(&self) -> bool {
+        self.pipeline.is_some()
     }
 
     /// Makes the weights for a scene colour of `size` read through `scene`, or drops them when MLAA does not run
@@ -135,8 +150,11 @@ impl Mlaa {
             pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
             pass.set_scissor_rect(0, 0, width, height);
         }
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, group, &[]);
-        pass.draw(0..3, 0..1);
+        // The renderer runs MLAA only once its pipeline is compiled.
+        if let Some(pipeline) = self.pipeline.as_ref() {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
 }

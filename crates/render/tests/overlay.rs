@@ -31,6 +31,7 @@ fn render(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     renderer.set_overlay_enabled(enabled);
     assert_eq!(renderer.overlay_enabled(), enabled);
     draw(renderer.overlay_mut());
@@ -134,6 +135,7 @@ fn turning_the_overlay_off_and_on_keeps_its_contents() {
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     renderer.set_overlay_enabled(true);
     sample(renderer.overlay_mut());
     renderer.render(target.view());
