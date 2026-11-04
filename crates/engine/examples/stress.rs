@@ -35,7 +35,8 @@
 //! from the first (every preset, anti-aliasing and effect quality, lights, shadows and the overlay off and on), while
 //! the renderer still compiles its pipelines in the background; the JSON's `spikes` counts the frames over twice the
 //! frame target after the first 2 s (`--frame-target <ms>`, a 60 fps frame by default), and `graphics.pipelines` says
-//! what was compiled when. `--pipeline-cache <dir>` keeps Vulkan's pipeline cache in `dir`.
+//! what was compiled when; `METALLIC_TRACE_SPIKES=1` prints each spike on stderr with the toggle before it.
+//! `--pipeline-cache <dir>` keeps Vulkan's pipeline cache in `dir`.
 //!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
 //! prints a JSON array. The JSON's fields are `metallic_engine::stress::BenchReport`'s; times are in milliseconds.

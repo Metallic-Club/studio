@@ -247,9 +247,6 @@ fn compile(job: Job, device: &wgpu::Device, cache: Option<&PipelineCacheStore>) 
     let Job { key, recipe, .. } = job;
     let cache = cache.map(PipelineCacheStore::cache);
     let pipeline = catch_unwind(AssertUnwindSafe(|| recipe(device, cache))).ok();
-    if std::env::var_os("METALLIC_TRACE_COMPILES").is_some() {
-        eprintln!("compile {key:?}: {:?}", start.elapsed());
-    }
     Done {
         key,
         pipeline,
@@ -342,7 +339,7 @@ impl Compiler {
             None => {
                 let done = compile(job, &self.device, self.cache.as_deref());
                 self.inline_done.push_back(done);
-                self.save_inline();
+                self.mark_unsaved();
             }
         }
     }
@@ -426,8 +423,9 @@ impl Compiler {
         }
     }
 
-    /// Saves the pipeline cache after inline compiles (workers save it themselves when their queue runs dry).
-    fn save_inline(&mut self) {
+    /// Notes that an inline compile added to the pipeline cache, which [`Compiler::flush_inline`] writes (workers
+    /// write it themselves when their queue runs dry).
+    fn mark_unsaved(&mut self) {
         if let Some(cache) = self.cache.as_ref() {
             cache.mark_dirty();
         }
