@@ -1,7 +1,9 @@
 //! Drawing parts on a real adapter (#77): the demo scene against a committed reference image, the same image from
 //! the vertex-buffer fallback and far from the world origin, a missing camera, and the draw count from 1,000 to
 //! 100,000 parts. Culling (#79) is on in every image, which therefore also shows it hides nothing in view; culled
-//! parts are not drawn on either instance path. Skips when the machine has no adapter (see `support::gpu`).
+//! parts are not drawn on either instance path. Many see-through parts interleaved in depth draw the same image in
+//! one draw (the storage path's pulled vertices) as in one draw per run (the fallback; #106). Skips when the machine
+//! has no adapter (see `support::gpu`).
 //!
 //! The reference is `tests/reference/parts.png`. Software and hardware rasterisers differ slightly at triangle
 //! edges and in the last bits of the shading maths, so images are compared with a tolerance: almost every pixel
@@ -180,9 +182,10 @@ fn the_demo_scene_matches_the_reference() {
     describe(&context);
     let (pixels, stats) = render(&context, &mut demo_game(Vec3::ZERO), PARTS_ONLY);
     eprintln!("{stats:?}");
-    // Four kinds drawn opaque (the floor and solid parts), and the glass block and the ball sorted.
+    // Four kinds drawn opaque (the floor and solid parts), and the glass block and the ball sorted: in one draw where
+    // the transparent pass pulls its vertices (the storage path), one per run of the same mesh on the fallback.
     assert_eq!(stats.opaque_draws, 4);
-    assert_eq!(stats.transparent_draws, 2);
+    assert_eq!(stats.transparent_draws, transparent_draws(&context, 2));
     assert_eq!(stats.instances, 9);
     check_reference(&context, "parts", &pixels);
 }
@@ -206,6 +209,47 @@ fn the_vertex_buffer_fallback_draws_the_same_image() {
     check("fallback against storage", diff, MAX_MEAN);
     assert!(diff.max <= 2, "{diff:?}");
     check_reference(&fallback, "parts-fallback", &pixels);
+}
+
+/// The transparent draws of a frame whose sorted see-through instances make `runs` runs of the same mesh: one where
+/// the transparent pass pulls its vertices (the storage path, #106), one per run on the vertex-buffer fallback.
+fn transparent_draws(context: &RenderContext, runs: u32) -> u32 {
+    match InstanceBinding::for_context(context) {
+        InstanceBinding::Storage => runs.min(1),
+        InstanceBinding::Vertex => runs,
+    }
+}
+
+/// Many see-through blocks and balls interleaved in depth (#106): drawn in one draw on the storage path and in one
+/// draw per run on the fallback, back to front either way, and the images are the same.
+#[test]
+fn interleaved_see_through_parts_draw_the_same_image_on_both_paths() {
+    let Some(primary) = gpu() else { return };
+    let Some(fallback) = gpu_with(&ContextOptions {
+        force_vertex_instances: true,
+        ..ContextOptions::default()
+    }) else {
+        return;
+    };
+    let game = || {
+        let mut game = Game::new();
+        // Every other part see-through, blocks and balls in turn, so sorted back to front the shapes interleave.
+        scenes::grid(&mut game, 400, 100, SeeThrough::Mixed(2));
+        game
+    };
+    let (pulled, pulled_stats) = render(&primary, &mut game(), PARTS_ONLY);
+    let (runs, run_stats) = render(&fallback, &mut game(), PARTS_ONLY);
+    eprintln!("storage: {pulled_stats:?}\nfallback: {run_stats:?}");
+    assert_eq!(pulled_stats.transparent_instances, run_stats.transparent_instances);
+    assert!(pulled_stats.transparent_instances >= 150, "{pulled_stats:?}");
+    assert!(run_stats.transparent_draws > 20, "{run_stats:?}");
+    assert_eq!(
+        pulled_stats.transparent_draws,
+        transparent_draws(&primary, run_stats.transparent_draws)
+    );
+    let diff = scenes::compare(&pulled, &runs, 1);
+    check("interleaved: fallback against storage", diff, MAX_MEAN);
+    assert!(diff.max <= 2, "{diff:?}");
 }
 
 #[test]

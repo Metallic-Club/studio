@@ -261,14 +261,33 @@ pub struct MeshRange {
 }
 
 /// Every built-in mesh, at every level of detail, in one vertex buffer and one index buffer.
+///
+/// Where the transparent pass pulls its vertices ([`MeshPool::pulled`]), the pool also holds every mesh
+/// **unindexed**: the vertex of each of its indices in turn, two `vec4<f32>` each (position and normal.x, then
+/// normal.yz), so a vertex shader finds a mesh's `n`th vertex with one read, at the mesh's
+/// [`MeshRange::first_index`] (the unindexed copy keeps the index buffer's layout).
 #[derive(Debug)]
 pub struct MeshPool {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
+    /// The unindexed copy, a storage buffer; `None` where nothing pulls vertices.
+    pulled: Option<wgpu::Buffer>,
     /// Indexed by mesh kind, then level; an empty range for kinds and levels the pool does not have.
     ranges: Vec<[MeshRange; MAX_LOD_LEVELS]>,
     /// The first vertex of each level.
     level_starts: [u32; MAX_LOD_LEVELS],
+}
+
+/// The vertices of every index of `indices`, in order, as the pulled pool lays them out: two `vec4<f32>` each.
+fn unindexed(vertices: &[MeshVertex], indices: &[u32]) -> Vec<[f32; 8]> {
+    indices
+        .iter()
+        .map(|&i| {
+            let v = vertices.get(i as usize).copied().unwrap_or_default();
+            let ([px, py, pz], [nx, ny, nz]) = (v.position, v.normal);
+            [px, py, pz, nx, ny, nz, 0.0, 0.0]
+        })
+        .collect()
 }
 
 /// The pool's contents: every built-in mesh level by level, the ranges and where each level's vertices start.
@@ -306,6 +325,12 @@ fn pool_data() -> PoolData {
 impl MeshPool {
     /// Builds the primitives and uploads them.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::with_pulled(device, queue, false)
+    }
+
+    /// Builds the primitives and uploads them, with the unindexed copy the transparent pass pulls its vertices from
+    /// when `pulled` is set (the device must have storage buffers).
+    pub(crate) fn with_pulled(device: &wgpu::Device, queue: &wgpu::Queue, pulled: bool) -> Self {
         let (vertices, indices, ranges, level_starts) = pool_data();
         let buffer = |label, contents: &[u8], usage| {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -317,7 +342,15 @@ impl MeshPool {
             queue.write_buffer(&buffer, 0, contents);
             buffer
         };
+        let pulled = pulled.then(|| {
+            buffer(
+                "metallic mesh vertices (unindexed)",
+                bytemuck::cast_slice(&unindexed(&vertices, &indices)),
+                wgpu::BufferUsages::STORAGE,
+            )
+        });
         Self {
+            pulled,
             vertices: buffer(
                 "metallic mesh vertices",
                 bytemuck::cast_slice(&vertices),
@@ -341,6 +374,11 @@ impl MeshPool {
     /// The index buffer (`u32`, absolute).
     pub fn indices(&self) -> &wgpu::Buffer {
         &self.indices
+    }
+
+    /// The unindexed copy of every mesh (see [`MeshPool`]), when it was made.
+    pub fn pulled(&self) -> Option<&wgpu::Buffer> {
+        self.pulled.as_ref()
     }
 
     /// The index range of `kind`'s mesh at level `level` (0: full detail); empty when the pool does not have it.
@@ -427,6 +465,24 @@ mod tests {
                 let end = starts.get(level + 1).copied().unwrap_or(vertices.len() as u32);
                 let used = &indices[range.first_index as usize..(range.first_index + range.index_count) as usize];
                 assert!(used.iter().all(|&i| i >= starts[level] && i < end), "{kind:?} {level}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_unindexed_copy_follows_the_index_buffer() {
+        // The transparent pass reads a mesh's `n`th vertex at its first index plus `n` (#106).
+        let (vertices, indices, ranges, _) = pool_data();
+        let copy = unindexed(&vertices, &indices);
+        assert_eq!(copy.len(), indices.len());
+        for levels in &ranges {
+            for range in levels {
+                for n in 0..range.index_count {
+                    let at = (range.first_index + n) as usize;
+                    let v = vertices[indices[at] as usize];
+                    assert_eq!(copy[at][..3], v.position);
+                    assert_eq!(copy[at][3..6], v.normal);
+                }
             }
         }
     }

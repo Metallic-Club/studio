@@ -14,7 +14,9 @@
 //!
 //! Drawing parts (#77) too: a frame of `Renderer::render_scene` with a moving camera (so the frame uniform is
 //! written and the transparent list sorted and written every frame) allocates no more than the same wgpu calls
-//! by hand, and the heap does not grow over 100 such frames with 1% of the parts changing.
+//! by hand, and the heap does not grow over 100 such frames with 1% of the parts changing. Since #106 the
+//! hand-written frame draws the see-through parts as the renderer does on the storage path: their records written
+//! into the staging memory and one draw that pulls the vertices.
 //!
 //! The debug overlay (#78) too: a frame whose overlay is redrawn (so it is encoded and uploaded) allocates no more
 //! than the same write and draw by hand, the same for 35 quads as for 1,300 (beyond the runner noise the parts
@@ -84,6 +86,7 @@ use std::cell::Cell;
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
+use metallic_render::parts::MeshData;
 use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{GpuInstance, InstanceBinding, RenderComponents};
 use metallic_render::{
@@ -2152,23 +2155,31 @@ impl HandParts {
         let storage = wgpu::BufferUsages::STORAGE;
         let regions = [buffer(instances * 64, storage), buffer(instances * 64, storage)];
         let entries = buffer(instances * 4, storage);
-        let sorted = buffer(instances * 4, storage);
+        // The transparent pass's pulled records and chunk table (#106), and the meshes' unindexed copy.
+        let sorted = buffer(instances * 64, storage);
+        let pulled_vertices = buffer(32 * 4096, storage);
         let frame = buffer(FRAME_UNIFORM_SIZE, wgpu::BufferUsages::UNIFORM);
         let materials = buffer(8192, wgpu::BufferUsages::UNIFORM);
         let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let mesh_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: 24,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &attributes,
+        })];
         let pipeline = |entry_point: &str, write: bool, blend: Option<wgpu::BlendState>| {
+            // The transparent pass pulls its vertices: no vertex buffer.
+            let (vertex, buffers) = match blend {
+                Some(_) => ("vs_pulled", &[][..]),
+                None => ("vs_main", &mesh_buffers[..]),
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("hand parts"),
                 layout: None,
                 vertex: wgpu::VertexState {
                     module: &module,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some(vertex),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: 24,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &attributes,
-                    })],
+                    buffers,
                 },
                 primitive: wgpu::PrimitiveState {
                     cull_mode: Some(wgpu::Face::Back),
@@ -2197,13 +2208,12 @@ impl HandParts {
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
         let shadows = HandShadows::new(device, &regions, instances, live);
-        let groups = |pipeline: &wgpu::RenderPipeline, list: &wgpu::Buffer| {
-            let group = |index: u32, buffers: &[&wgpu::Buffer]| {
+        let groups = |pipeline: &wgpu::RenderPipeline, instances: &[(u32, &wgpu::Buffer)]| {
+            let group = |index: u32, buffers: &[(u32, &wgpu::Buffer)]| {
                 let mut entries: Vec<_> = buffers
                     .iter()
-                    .enumerate()
-                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                        binding: binding as u32,
+                    .map(|&(binding, buffer)| wgpu::BindGroupEntry {
+                        binding,
                         resource: buffer.as_entire_binding(),
                     })
                     .collect();
@@ -2224,13 +2234,13 @@ impl HandParts {
                     entries: &entries,
                 })
             };
-            [
-                group(0, &[&frame, &materials]),
-                group(1, &[&regions[0], &regions[1], list]),
-            ]
+            [group(0, &[(0, &frame), (1, &materials)]), group(1, instances)]
         };
-        let opaque_groups = groups(&opaque, &entries);
-        let transparent_groups = groups(&transparent, &sorted);
+        let opaque_groups = groups(&opaque, &[(0, &regions[0]), (1, &regions[1]), (2, &entries)]);
+        let transparent_groups = groups(
+            &transparent,
+            &[(0, &regions[0]), (1, &regions[1]), (3, &sorted), (4, &pulled_vertices)],
+        );
         let depth = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("hand depth"),
@@ -2308,22 +2318,24 @@ impl HandParts {
             }),
             entries,
             depth,
-            sorted_bytes: vec![0; (instances * 4) as usize],
+            sorted_bytes: vec![0; (instances * 64) as usize],
             shadows,
             post: HandPost::new(context, (SIZE, SIZE), false),
         }
     }
 
-    /// The renderer's default passes with `opaque` and `transparent` instanced draws, after writing each kind's
-    /// `visible` list entries (one staging write and a copy per list, as a culled frame uploads its lists), the frame
-    /// uniform and `sorted` transparent entries: the wgpu calls `Renderer::render_scene` makes. With `shadows`, every
-    /// cascade is drawn first, its lists holding that many casters of each kind ([`HandShadows::record`]).
+    /// The renderer's default passes with `opaque` instanced draws and `transparent.0` pulled vertices (#106: one
+    /// draw, none when 0), after writing each kind's `visible` list entries (one staging write and a copy per list, as
+    /// a culled frame uploads its lists), the frame uniform and the `transparent.1` bytes of the sorted transparent
+    /// records (written into the staging memory, as the renderer does): the wgpu calls `Renderer::render_scene`
+    /// makes. With `shadows`, every cascade is drawn first, its lists holding that many casters of each kind
+    /// ([`HandShadows::record`]).
     fn frame(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         target: &wgpu::TextureView,
-        (opaque, transparent, sorted): (u32, u32, usize),
+        (opaque, transparent): (u32, (u32, usize)),
         visible: &[u32],
         shadows: Option<&HandCasters>,
     ) -> wgpu::SubmissionIndex {
@@ -2346,7 +2358,13 @@ impl HandParts {
                 .record(queue, &mut encoder, (&self.vertices, &self.indices), counts);
         }
         queue.write_buffer(&self.frame, 0, &[0; FRAME_UNIFORM_SIZE as usize]);
-        queue.write_buffer(&self.sorted, 0, &self.sorted_bytes[..sorted * 4]);
+        let (vertices, sorted) = transparent;
+        if vertices > 0
+            && let Some(size) = wgpu::BufferSize::new(sorted as u64)
+            && let Some(mut view) = queue.write_buffer_with(&self.sorted, 0, size)
+        {
+            view.slice(..).copy_from_slice(&self.sorted_bytes[..sorted]);
+        }
         for &(label, clear, depth_write) in &DEFAULT_PASSES {
             // The post chain's passes come after the scene; its finish pass draws UI.
             if label == "ui" {
@@ -2384,7 +2402,16 @@ impl HandParts {
             });
             let (pipeline, groups, draws) = match label {
                 "opaque" => (&self.opaque, &self.opaque_groups, opaque),
-                "transparent" => (&self.transparent, &self.transparent_groups, transparent),
+                "transparent" => {
+                    // Every see-through instance in one draw, with no vertex or index buffer.
+                    if vertices > 0 {
+                        pass.set_pipeline(&self.transparent);
+                        pass.set_bind_group(0, &self.transparent_groups[0], &[]);
+                        pass.set_bind_group(1, &self.transparent_groups[1], &[]);
+                        pass.draw(0..vertices, 0..1);
+                    }
+                    continue;
+                }
                 "sky" => {
                     pass.set_pipeline(&self.sky);
                     pass.set_bind_group(0, &self.sky_group, &[]);
@@ -2420,15 +2447,14 @@ fn main_view(scene: &InstanceScene, camera: &Camera) -> metallic_render::CullVie
 }
 
 /// What `Renderer::render_scene` draws of `scene` seen from `camera` on the [`SIZE`]-square target with the default
-/// culling and levels of detail: (opaque draws, transparent draws, see-through instances) and each kind's visible
-/// instances, every level. Culls `scene` (a CPU-only copy of the drawn one, which so chooses the same levels) and
-/// sorts its see-through instances as the renderer does.
+/// culling and levels of detail: (opaque draws, transparent draws, see-through instances), the transparent pass's
+/// (pulled vertices, upload bytes) and each kind's visible instances, every level. Culls `scene` (a CPU-only copy of
+/// the drawn one, which so chooses the same levels).
 fn expected_calls(
     scene: &mut InstanceScene,
     visible: &mut metallic_render::VisibleSet,
-    keys: &mut Vec<(u32, u32)>,
     camera: &Camera,
-) -> ((u32, u32, usize), [u32; 4]) {
+) -> ((u32, u32, usize), (u32, usize), [u32; 4]) {
     let view = main_view(scene, camera);
     scene.cull(&view, visible);
     let mut lists = [0u32; 4];
@@ -2441,29 +2467,19 @@ fn expected_calls(
             .filter(|&level| !visible.opaque(kind, level).is_empty())
             .count() as u32;
     }
-    // Back to front (ties by position in the visible list), then one draw per run of the same mesh and level
-    // (`parts/transparent.rs`).
-    let eye = camera.position - scene.origin();
+    // Every see-through instance in one draw of its mesh's vertices, one instance after another, and an upload of
+    // the record and chunk counts, a chunk table entry per 64 vertices and a 12-byte record per instance
+    // (`parts/transparent.rs`, #106). The order they are sorted in changes neither.
     let (entries, levels) = (visible.transparent(), visible.transparent_levels());
-    keys.clear();
-    keys.extend((0u32..).zip(entries).map(|(i, &entry)| {
-        let distance = scene
-            .entry_instance(entry)
-            .map_or(0.0, |instance| instance.translation().distance_squared(eye));
-        (!distance.max(0.0).to_bits(), i)
-    }));
-    keys.sort_unstable();
-    let mut runs = 0;
-    let mut last = None;
-    for &(_, i) in keys.iter() {
-        let (entry, level) = (entries[i as usize], levels[i as usize]);
-        let kind = scene.entry_instance(entry).map(|i| (i.mesh(), level));
-        if kind != last {
-            runs += 1;
-            last = kind;
-        }
+    let mut vertices = 0u32;
+    for (&entry, &level) in entries.iter().zip(levels) {
+        let kind = scene.entry_instance(entry).expect("a drawn entry").mesh();
+        let mesh = MeshData::primitive_level(kind, usize::from(level)).expect("a built-in mesh");
+        vertices += mesh.indices.len() as u32;
     }
-    ((opaque_draws, runs, keys.len()), lists)
+    let bytes = 8 + vertices.div_ceil(64) as usize * 4 + entries.len() * 12;
+    let draws = u32::from(vertices > 0);
+    ((opaque_draws, draws, entries.len()), (vertices, bytes), lists)
 }
 
 /// The radius of a packed instance's bounding sphere: half the diagonal of its stretched, turned unit cube.
@@ -2598,7 +2614,6 @@ fn frame_and_floor(
     let hand = HandParts::new(context, parts as u64, live);
     let mut mirror_visible = metallic_render::VisibleSet::new();
     let mut mirror_cascades: [VisibleSet; CASCADES] = Default::default();
-    let mut sort_keys = Vec::new();
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
     for frame in 0..WARM_UP + FRAMES {
         if frame < MOVES && !balls.is_empty() {
@@ -2613,7 +2628,7 @@ fn frame_and_floor(
         }
         let camera = orbiting_camera(frame);
         // The camera moves every frame, so every frame culls again and uploads each kind's visible list.
-        let (calls, visible) = expected_calls(&mut mirror, &mut mirror_visible, &mut sort_keys, &camera);
+        let (calls, pulled, visible) = expected_calls(&mut mirror, &mut mirror_visible, &camera);
         // The sun moves every frame too, so every cascade is drawn again.
         let casters =
             shadows.then(|| expected_shadows(&mut mirror, &mut mirror_cascades, &camera, &moving_sun(frame), work));
@@ -2652,7 +2667,16 @@ fn frame_and_floor(
                 }
                 drawn
             } else {
-                allocations_in(|| hand.frame(device, queue, target.view(), calls, &visible, casters.as_ref()))
+                allocations_in(|| {
+                    hand.frame(
+                        device,
+                        queue,
+                        target.view(),
+                        (calls.0, pulled),
+                        &visible,
+                        casters.as_ref(),
+                    )
+                })
             };
             // Each frame finishes before the next starts. The hand-written draws are degenerate, so on a software
             // rasteriser the renderer's frames take far longer, and with frames in flight wgpu's bookkeeping of
@@ -2698,7 +2722,7 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
         return;
     }
     let _padding = pad_tracker_indices(&context);
-    // Two workloads, the second with three times the parts and many more see-through parts, sorted runs and draws.
+    // Two workloads, the second with three times the parts and many more see-through parts, sorted and pulled.
     let (ours_small, floor_small, small) = parts_frame_and_floor(&context, 2_000, 25);
     let (ours_large, floor_large, large) = parts_frame_and_floor(&context, 6_000, 8);
     report(
@@ -2714,15 +2738,18 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
     for stats in [&small, &large] {
         assert!((5..=9).contains(&stats.opaque_draws), "{stats:?}");
     }
+    // Every see-through instance in one draw (#106), however many there are.
     assert!(
-        small.transparent_draws > 1 && large.transparent_draws > 4 * small.transparent_draws,
+        small.transparent_draws == 1
+            && large.transparent_draws == 1
+            && large.transparent_instances > 4 * small.transparent_instances,
         "{small:?} {large:?}"
     );
     let (extra_small, extra_large) = (
         ours_small.saturating_sub(floor_small),
         ours_large.saturating_sub(floor_large),
     );
-    // Nothing the renderer does allocates per part, per draw, per sorted instance or per run: whatever a frame
+    // Nothing the renderer does allocates per part, per draw or per sorted instance: whatever a frame
     // allocates beyond wgpu's own is the same for both workloads...
     assert_eq!(
         extra_small, extra_large,

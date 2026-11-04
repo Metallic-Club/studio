@@ -419,6 +419,7 @@ are the baseline later work is measured against:
   scenes are the ADR's scale target (100,000 parts, 10,000 in view, Mid budget at Medium).
 - **`see_through_10k` is the transparent pass's worst case (#106):** 4,199 draws, one per run of same-shape
   parts in back-to-front order, cost 0.92 ms of render CPU (sorting 10,000 instances and recording the draws).
+  Since #106 the storage path draws them in one draw ("Transparent draws" below).
 - **`overdraw`** draws its 64 walls back to front, each covering the screen but for a window (up to 64 layers per
   pixel); built the other way round the same scene takes 0.21 ms of GPU instead of 0.55 ms. A depth prepass or a
   front-to-back sort (ADR 0008 §7) is measured here.
@@ -1361,3 +1362,86 @@ merged, two fewer). That decided it: merging is the default everywhere rather th
   272 / 272 on GL; the merged scene 178, 173 and 247. The timestamps written inside a pass
   allocate nothing of ours, and the heap-growth tests pass (they run with timing on).
 - The perf gate's workloads (scene sync and cull) are untouched.
+
+### Transparent draws (#106)
+
+The transparent pass sorts its see-through instances back to front per instance (#77). It used to draw one
+instanced draw per run of consecutive instances with the same mesh and level of detail, so the draw count grew with
+how the shapes interleave in depth: 4,648 draws for `see_through_10k` at Medium (more than at #78, as #80's levels of
+detail split the balls' runs further). Now, on the storage path, **every see-through instance is drawn in one draw**
+(`parts/transparent.rs`), whatever their number and order:
+
+- **Pulled vertices.** The pool keeps an unindexed copy of every mesh at every level (each index's vertex in turn,
+  32 bytes a vertex, 142 KB for the built-in meshes). The sorted list holds a 12-byte record per instance (its slot,
+  where its vertices start in the draw, and its mesh's place in the unindexed copy with its level) after a chunk
+  table that names, for every 64 vertices of the draw, the record the chunk starts in. One non-indexed draw covers
+  the sum of the instances' index counts; `vs_pulled` (instance_storage.wgsl) finds a vertex's record from its
+  chunk's in a step or two (every mesh has at least a triangle), then reads the instance and the mesh vertex. A
+  draw's triangles are blended in order, so the order stays exact, and the image is the same as the runs': the new
+  `tests/parts.rs` test draws 194 interleaved see-through blocks and balls in 1 draw on the storage path and in 142
+  on the fallback, and no pixel differs (Vulkan, DX12 and GL here).
+- **Draw count: 1** on the storage path (0 without see-through parts). The vertex shader reads four storage buffers
+  (the two regions, the records and the unindexed meshes); a storage path with fewer (none here, and WebGPU
+  guarantees eight) draws runs instead.
+- **The fallback** (the vertex-buffer path, GLES, whose vertex shaders read no storage buffers) keeps one draw per
+  run: 4,648 at Medium and 4,647 at High on `see_through_10k` (DX12 with the stress example's new
+  `--vertex-instances`, the vertex-buffer path on any backend), 1.52 and 1.69 ms of render CPU p50. Its vertex shader
+  could pull from textures instead, which GLES 3.0 reads in vertex shaders; that is left for when a GLES device needs
+  it.
+- **The cost moves to the GPU's vertex work.** A non-indexed draw shades each vertex once per triangle it is in,
+  with no post-transform cache: for these meshes about three times the vertex shader runs of the indexed draws
+  (884,000 transparent triangles at Medium are 2.65 M vertex shader runs). That is the GPU time below; the fragment
+  work is the same.
+
+**Measured** 2026-11-04, same machine (Ryzen 5 5500, RX 6650 XT, driver 32.0.21045.16010, Windows 11), **DX12**,
+`AutoNoVsync`, 1,000 frames after 120 of warm-up, seed 1, `--preset <tier>`, `main` at `bc58cbf` against this
+branch, run interleaved, two rounds each (shown as round 1 / round 2). Times are p50 in ms; "transparent" is the
+pass's GPU timestamp.
+
+| Scene | Preset | Transparent draws | Render CPU before → after | GPU before → after | Transparent pass before → after | Frame before → after |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `see_through_10k` | Medium | 4,648 → 1 | 1.512 / 1.443 → 0.938 / 0.920 | 0.963 / 0.962 → 1.119 / 1.130 | 0.533 / 0.533 → 0.676 / 0.684 | 1.683 / 1.546 → 1.326 / 1.296 |
+| | High | 4,647 → 1 | 1.547 / 1.468 → 1.072 / 1.020 | 1.273 / 1.277 → 1.474 / 1.483 | 0.893 / 0.902 → 1.095 / 1.107 | 1.665 / 1.579 → 1.751 / 1.682 |
+| `parts_100k` | Medium | 0 → 0 | 0.859 / 0.859 → 0.836 / 0.868 | 0.771 / 0.766 → 0.772 / 0.766 | | 1.046 / 1.042 → 1.019 / 1.058 |
+| | High | 0 → 0 | 0.958 / 1.003 → 0.956 / 1.004 | 0.825 / 0.823 → 0.825 / 0.825 | | 1.139 / 1.203 → 1.137 / 1.206 |
+
+- **Render CPU** falls by 0.45 to 0.55 ms on `see_through_10k` (about a third): recording 4,648 draws cost more than
+  writing the records and the chunk table (10,000 records and 41,000 chunk entries, about 286 KB written straight
+  into wgpu's staging memory). The transparent list's update takes about 0.42 ms of what is left, 0.2 ms of it the
+  sort of 10,000 instances, which is unchanged. p99 falls too (Medium 2.60 / 4.20 → 1.91 / 1.63).
+- **GPU** grows by 0.15 ms at Medium and 0.2 ms at High on this worst case, all in the transparent pass: the vertex
+  work above, on 0.9 and 1.2 M see-through triangles. At Medium the frame is 0.3 ms faster; at High, where this
+  GPU-heavy scene's frame follows the GPU more, 0.05 to 0.1 ms slower. A scene with a few dozen see-through parts
+  pulls a few thousand more vertices, which is nothing measurable.
+- **`parts_100k`** has no see-through parts: the same within noise.
+- **Vulkan** (one round, same settings) shows the same CPU drop on `see_through_10k` (Medium 1.313 → 1.002, High
+  1.377 → 1.083 ms), but its GPU times on this PC moved by up to 20% between runs of the unchanged `parts_100k` (AMD's
+  Vulkan driver under a window), so they are left out.
+
+**Alternatives measured** (DX12, `see_through_10k` at Medium, the same session; p50 in ms, rounds as above):
+
+| Approach | Draws (API calls / GPU draws) | Render CPU | Transparent pass GPU |
+| --- | ---: | ---: | ---: |
+| `main`: one draw per run | 4,648 / 4,648 | 1.318 / 1.296 | 0.539 / 0.544 |
+| `multi_draw_indexed_indirect` of the runs (one indirect argument per run) | 1 / 4,648 | 0.979 / 0.964 | 0.659 / 0.663 |
+| Pulled vertices, binary search over the records' starts | 1 / 1 | 0.835 | 0.978 |
+| Pulled vertices, chunk table of 16 vertices | 1 / 1 | 1.227 | 0.667 |
+| **Pulled vertices, chunk table of 64 vertices** (this branch) | 1 / 1 | 0.875 / 0.904 | 0.679 / 0.678 |
+| Pulled vertices, chunk table of 128 vertices | 1 / 1 | 0.867 / 0.862 | 0.686 / 0.689 |
+
+- **Multi-draw indirect** makes one API call, but the GPU still runs 4,648 draws, and wgpu's validation of the
+  indirect arguments (on in release builds too) and DX12's `ExecuteIndirect` cost as much GPU time as the pulled
+  vertices do, while saving less CPU (an argument is written per run, and the sort stays). It also needs
+  `INDIRECT_FIRST_INSTANCE`, which some mobile Vulkan drivers lack. ADR 0008 §4 asks for a draw count that depends on
+  the mesh kinds and shading models, never on the parts; read as the draws the GPU runs, not the calls the CPU makes,
+  only the pulled draw meets it.
+- **A binary search** for the record (14 dependent reads a vertex for 10,000 records) made the pass 0.44 ms slower;
+  the chunk table brings that to a step or two. Smaller chunks barely help the GPU and cost CPU (four times the
+  entries); larger ones save little CPU. 64 was kept.
+- **Weighted blended OIT** was not needed: one sorted draw keeps the exact order.
+- **Allocations** (`tests/no_alloc.rs`): the hand-written parts frames draw the see-through parts as the renderer does
+  (the records written through `write_buffer_with`, one pulled draw), and every frame still makes exactly the wgpu
+  calls written out by hand: the parts frame 233 / 233 on Vulkan, 225 / 225 on DX12 and 313 / 313 on GL, for both
+  workloads (80 and 750 see-through parts); the shadowed frame 277 / 277 on DX12 and 387 / 387 on GL. The heap-growth
+  tests pass.
+- The perf gate's workloads (scene sync and cull) are untouched, and so is the sort.
