@@ -195,7 +195,8 @@ struct HandCasters {
 /// and clears depth, `Some(false)` tests it read-only, `None` has no depth).
 type HandPass = (&'static str, bool, Option<bool>);
 
-/// The default frame's passes (opaque, sky, transparent, UI), as the renderer plans them.
+/// The default frame's scene passes and UI (opaque, sky, transparent, UI), as the renderer plans them. With the
+/// post chain ([`HandPost`]) the scene passes draw into its scene colour, and its passes run before UI.
 const DEFAULT_PASSES: [HandPass; 4] = [
     ("opaque", true, Some(true)),
     ("sky", false, Some(false)),
@@ -203,23 +204,332 @@ const DEFAULT_PASSES: [HandPass; 4] = [
     ("ui", false, None),
 ];
 
+/// The default frame with its scene passes merged into one ([`PassId::Scene`]): depth cleared and discarded there.
+const MERGED_PASSES: [HandPass; 2] = [("scene", true, Some(true)), ("ui", false, None)];
+
 /// A UI-only frame, as the renderer plans it (UI is the first pass, so it clears).
 const UI_ONLY: [HandPass; 1] = [("ui", true, None)];
 
-/// `passes` as plain wgpu calls (no MSAA, no timing): the floor any renderer on wgpu pays for that frame.
+/// The post chain of a hand-written frame as the renderer's defaults draw it (`src/post`): the HDR scene colour,
+/// bloom's chain of passes into the levels of one texture, MLAA's pass when asked, and the finish pass into the
+/// target, with the renderer's own shaders, pipelines, textures and bind groups like its own.
+struct HandPost {
+    scene: wgpu::TextureView,
+    levels: Vec<wgpu::TextureView>,
+    first: wgpu::RenderPipeline,
+    down: wgpu::RenderPipeline,
+    up: wgpu::RenderPipeline,
+    down_groups: Vec<wgpu::BindGroup>,
+    up_groups: Vec<wgpu::BindGroup>,
+    mlaa: Option<(wgpu::RenderPipeline, wgpu::BindGroup, wgpu::TextureView)>,
+    finish: wgpu::RenderPipeline,
+    finish_group: wgpu::BindGroup,
+}
+
+/// The renderer's names for bloom's passes (`src/post/bloom.rs`).
+const BLOOM_DOWN: [&str; 6] = [
+    "bloom_down_0",
+    "bloom_down_1",
+    "bloom_down_2",
+    "bloom_down_3",
+    "bloom_down_4",
+    "bloom_down_5",
+];
+const BLOOM_UP: [&str; 6] = [
+    "bloom_up_0",
+    "bloom_up_1",
+    "bloom_up_2",
+    "bloom_up_3",
+    "bloom_up_4",
+    "bloom_up_5",
+];
+
+impl HandPost {
+    /// A scene colour of `scene` size in the renderer's HDR format, bloom's default levels for a [`SIZE`]-square
+    /// output, MLAA's weights and pass with `mlaa`, and the finish pass into [`FORMAT`].
+    fn new(context: &RenderContext, scene: (u32, u32), mlaa: bool) -> Self {
+        let device = context.device();
+        let hdr = metallic_render::post::hdr_format(context);
+        let texture = |label, (width, height): (u32, u32), mips, format| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: mips,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let whole = |texture: wgpu::Texture| texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let scene_view = whole(texture("hand scene colour", scene, 1, hdr));
+        let bloom = metallic_render::PostSettings::default().bloom;
+        let count = bloom.levels(SIZE);
+        let bloom_texture = texture("hand bloom", (SIZE / 2, SIZE / 2), count as u32, hdr);
+        let levels: Vec<_> = (0..count as u32)
+            .map(|mip| {
+                bloom_texture.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: mip,
+                    mip_level_count: Some(1),
+                    ..wgpu::TextureViewDescriptor::default()
+                })
+            })
+            .collect();
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
+        let module = |label, source: &'static str| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            })
+        };
+        let pipeline = |module: &wgpu::ShaderModule, (vs, fs): (&str, &str), format, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("hand post"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(vs),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some(fs),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let uniform = |size| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hand post"),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let bloom_module = module("hand bloom", include_str!("../src/post/bloom.wgsl"));
+        let first = pipeline(&bloom_module, ("vs_bloom", "fs_first_wide"), hdr, None);
+        let down = pipeline(&bloom_module, ("vs_bloom", "fs_down_wide"), hdr, None);
+        let add = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::REPLACE,
+        };
+        let up = pipeline(&bloom_module, ("vs_bloom", "fs_up"), hdr, Some(add));
+        // One slot per pass in one buffer, as the renderer's.
+        let stride = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32);
+        let bloom_params = uniform(stride * 12);
+        let group = |pipeline: &wgpu::RenderPipeline, slot: u64, source: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hand bloom"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &bloom_params,
+                            offset: slot * stride,
+                            size: wgpu::BufferSize::new(32),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        };
+        let down_groups = (0..count)
+            .map(|i| {
+                if i == 0 {
+                    group(&first, 0, &scene_view)
+                } else {
+                    group(&down, i as u64, &levels[i - 1])
+                }
+            })
+            .collect();
+        let up_groups = (0..count - 1)
+            .map(|i| group(&up, 6 + i as u64, &levels[i + 1]))
+            .collect();
+        let mlaa = mlaa.then(|| {
+            let weights = whole(texture("hand mlaa weights", scene, 1, wgpu::TextureFormat::Rgba8Unorm));
+            let module = module("hand mlaa", include_str!("../src/post/mlaa.wgsl"));
+            let pipeline = pipeline(&module, ("vs_mlaa", "fs_mlaa"), wgpu::TextureFormat::Rgba8Unorm, None);
+            let params = uniform(32);
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hand mlaa"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&scene_view),
+                    },
+                ],
+            });
+            (pipeline, group, weights)
+        });
+        let finish_module = module("hand finish", include_str!("../src/post/finish.wgsl"));
+        let entry = if mlaa.is_some() {
+            "fs_finish_bloom_mlaa"
+        } else {
+            "fs_finish_bloom"
+        };
+        let finish = pipeline(&finish_module, ("vs_finish", entry), FORMAT, None);
+        let finish_params = uniform(80);
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: finish_params.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&scene_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&levels[0]),
+            },
+        ];
+        if let Some((_, _, weights)) = mlaa.as_ref() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(weights),
+            });
+        }
+        let finish_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hand finish"),
+            layout: &finish.get_bind_group_layout(0),
+            entries: &entries,
+        });
+        Self {
+            scene: scene_view,
+            levels,
+            first,
+            down,
+            up,
+            down_groups,
+            up_groups,
+            mlaa,
+            finish,
+            finish_group,
+        }
+    }
+
+    /// The post chain's passes after the scene, as the renderer records them: MLAA's (into the `corner` when the
+    /// scene is drawn into one), bloom's downsamples and upsamples, and the finish pass over `target`.
+    fn record(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, corner: Option<(u32, u32)>) {
+        fn pass<'e>(
+            encoder: &'e mut wgpu::CommandEncoder,
+            label: &str,
+            view: &wgpu::TextureView,
+            load: wgpu::LoadOp<wgpu::Color>,
+        ) -> wgpu::RenderPass<'e> {
+            let colors = [Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &colors,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+        }
+        if let Some((pipeline, group, weights)) = self.mlaa.as_ref() {
+            let mut render_pass = pass(encoder, "mlaa", weights, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+            if let Some((width, height)) = corner {
+                render_pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                render_pass.set_scissor_rect(0, 0, width, height);
+            }
+            render_pass.set_pipeline(pipeline);
+            render_pass.set_bind_group(0, group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+        for (i, (view, group)) in self.levels.iter().zip(&self.down_groups).enumerate() {
+            let mut render_pass = pass(encoder, BLOOM_DOWN[i], view, wgpu::LoadOp::Clear(wgpu::Color::BLACK));
+            render_pass.set_pipeline(if i == 0 { &self.first } else { &self.down });
+            render_pass.set_bind_group(0, group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+        for i in (0..self.levels.len() - 1).rev() {
+            let mut render_pass = pass(encoder, BLOOM_UP[i], &self.levels[i], wgpu::LoadOp::Load);
+            render_pass.set_pipeline(&self.up);
+            render_pass.set_bind_group(0, &self.up_groups[i], &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+        let mut render_pass = pass(encoder, "post", target, wgpu::LoadOp::Clear(wgpu::Color::BLACK));
+        render_pass.set_pipeline(&self.finish);
+        render_pass.set_bind_group(0, &self.finish_group, &[]);
+        render_pass.draw(0..3, 0..1);
+    }
+}
+
+/// `passes` as plain wgpu calls (no MSAA, no timing): the floor any renderer on wgpu pays for that frame. With
+/// `post`, the passes before UI draw into its scene colour and its passes run before UI. A pass labelled `scene` is
+/// the merged scene pass, which discards depth at its end.
 fn hand_written_frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     target: &wgpu::TextureView,
     depth: &wgpu::TextureView,
     passes: &[HandPass],
+    post: Option<&HandPost>,
 ) -> wgpu::SubmissionIndex {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("metallic frame"),
     });
     for &(label, clear, depth_write) in passes {
+        let view = match post {
+            Some(post) if label == "ui" => {
+                post.record(&mut encoder, target, None);
+                target
+            }
+            Some(post) => &post.scene,
+            None => target,
+        };
         let colors = [Some(wgpu::RenderPassColorAttachment {
-            view: target,
+            view,
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
@@ -235,7 +545,11 @@ fn hand_written_frame(
             view: depth,
             depth_ops: write.then_some(wgpu::Operations {
                 load: wgpu::LoadOp::Clear(DEPTH_CLEAR),
-                store: wgpu::StoreOp::Store,
+                store: if label == "scene" {
+                    wgpu::StoreOp::Discard
+                } else {
+                    wgpu::StoreOp::Store
+                },
             }),
             stencil_ops: None,
         });
@@ -265,6 +579,7 @@ fn renderer_and_floor(
     hand: &[HandPass],
     target: &OffscreenTarget,
     depth: &wgpu::TextureView,
+    post: Option<&HandPost>,
 ) -> (u64, u64) {
     let (device, queue) = (context.device(), context.queue());
     let mut renderer = Renderer::new(
@@ -284,7 +599,7 @@ fn renderer_and_floor(
             let (count, submission) = if renderer_turn {
                 allocations_in(|| renderer.render(target.view()))
             } else {
-                allocations_in(|| hand_written_frame(device, queue, target.view(), depth, hand))
+                allocations_in(|| hand_written_frame(device, queue, target.view(), depth, hand, post))
             };
             pacer.submitted(device, submission);
             if frame >= WARM_UP {
@@ -463,47 +778,93 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let (ours_one, floor_one) =
-        renderer_and_floor(&context, PassSet::EMPTY.with(PassId::Ui), &UI_ONLY, &target, &depth);
-    let (ours, floor) = renderer_and_floor(&context, PassSet::default(), &DEFAULT_PASSES, &target, &depth);
-    report(
-        "plain frame",
+    let (ours_one, floor_one) = renderer_and_floor(
         &context,
-        &[("UI only", ours_one, floor_one), ("four passes", ours, floor)],
+        PassSet::EMPTY.with(PassId::Ui),
+        &UI_ONLY,
+        &target,
+        &depth,
+        None,
     );
-    // Per pass: what the default set's extra passes cost the renderer is exactly what they cost by hand, so nothing
-    // in the pass loop allocates. (CI's WARP once showed 2 more: the debug layer and library backtraces, see
-    // `debug_output` and `assert_library_backtraces_off`.)
-    let more = PassSet::default().iter().count() - 1;
-    assert!(
-        ours.saturating_sub(ours_one) <= floor.saturating_sub(floor_one),
-        "{more} more passes cost the renderer {} allocations and the same wgpu calls {} on {:?}",
-        ours.saturating_sub(ours_one),
-        floor.saturating_sub(floor_one),
-        context.capabilities().device_type
+    // The frame before the post chain: the scene straight into the target.
+    let direct = PassSet::default().without(PassId::Post);
+    let (ours_direct, floor_direct) = renderer_and_floor(&context, direct, &DEFAULT_PASSES, &target, &depth, None);
+    // The default frame: the scene into the HDR scene colour, bloom's chain and the finish pass (#85); with MLAA's
+    // pass; and with the scene passes merged into one.
+    let post = HandPost::new(&context, (SIZE, SIZE), false);
+    let (ours, floor) = renderer_and_floor(
+        &context,
+        PassSet::default(),
+        &DEFAULT_PASSES,
+        &target,
+        &depth,
+        Some(&post),
     );
-    // Per frame: nothing beyond wgpu's own, give or take its pooling.
-    assert!(
-        ours <= floor + WGPU_POOL_NOISE,
-        "the renderer adds {} allocation(s) per frame",
-        ours - floor
+    let mlaa = HandPost::new(&context, (SIZE, SIZE), true);
+    let (ours_mlaa, floor_mlaa) = renderer_and_floor(
+        &context,
+        PassSet::default().with(PassId::Mlaa),
+        &DEFAULT_PASSES,
+        &target,
+        &depth,
+        Some(&mlaa),
     );
+    let (ours_merged, floor_merged) = renderer_and_floor(
+        &context,
+        PassSet::default().with(PassId::Scene),
+        &MERGED_PASSES,
+        &target,
+        &depth,
+        Some(&post),
+    );
+    let workloads = [
+        ("UI only", ours_one, floor_one),
+        ("four passes", ours_direct, floor_direct),
+        ("post chain", ours, floor),
+        ("post chain with MLAA", ours_mlaa, floor_mlaa),
+        ("merged scene", ours_merged, floor_merged),
+    ];
+    report("plain frame", &context, &workloads);
+    // Per pass: what the extra passes cost the renderer is exactly what they cost by hand, so nothing in the pass
+    // loop allocates. (CI's WARP once showed 2 more: the debug layer and library backtraces, see `debug_output` and
+    // `assert_library_backtraces_off`.)
+    for (name, ours, floor) in &workloads[1..] {
+        assert!(
+            ours.saturating_sub(ours_one) <= floor.saturating_sub(floor_one),
+            "{name}: its passes cost the renderer {} allocations and the same wgpu calls {} on {:?}",
+            ours.saturating_sub(ours_one),
+            floor.saturating_sub(floor_one),
+            context.capabilities().device_type
+        );
+        // Per frame: nothing beyond wgpu's own, give or take its pooling.
+        assert!(
+            *ours <= floor + WGPU_POOL_NOISE,
+            "{name}: the renderer adds {} allocation(s) per frame",
+            ours - floor
+        );
+    }
 }
 
 #[test]
 fn nothing_accumulates_over_frames() {
     let Some(context) = measuring_gpu(false) else { return };
-    let samples = context.capabilities().msaa.iter().filter(|&n| n > 1).min().unwrap_or(1);
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    // Every pass (MLAA, bloom, the finish pass, the scene passes merged), with MSAA as well.
     let mut renderer = Renderer::new(
         &context,
         RendererSettings {
             passes: PassSet::ALL,
-            msaa_samples: samples,
             ..RendererSettings::new(FORMAT, SIZE, SIZE)
         },
     )
     .unwrap();
+    let samples = renderer
+        .msaa_sample_counts()
+        .iter()
+        .filter(|&n| n > 1)
+        .min()
+        .unwrap_or(1);
+    renderer.set_msaa_samples(samples).unwrap();
     let mut pacer = Pacer::new();
     let mut allocations = Vec::with_capacity(FRAMES);
     let mut before = 0;
@@ -534,103 +895,43 @@ fn nothing_accumulates_over_frames() {
     );
 }
 
-/// The scene colour, depth and upscale pass of a hand-written scaled frame: the renderer's own upscale shader
-/// (`src/upscale.wgsl`), with a bind group like the renderer's (parameters, the scene colour, a sampler).
-struct HandUpscale {
-    pipeline: wgpu::RenderPipeline,
-    group: wgpu::BindGroup,
-    scene: wgpu::TextureView,
+/// A hand-written scaled frame: the default passes with the scene drawn into a scene colour of its own size (or into
+/// the corner of a larger one) and the post chain, whose finish pass upscales it over the target (#85; before the
+/// post chain an upscale pass of its own did).
+struct HandScaled {
+    post: HandPost,
     depth: wgpu::TextureView,
 }
 
-impl HandUpscale {
+impl HandScaled {
     /// Scene textures of `width` × `height`.
-    fn new(device: &wgpu::Device, (width, height): (u32, u32)) -> Self {
-        let texture = |label, format, usage| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | usage,
-                    view_formats: &[],
-                })
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        };
-        let scene = texture("hand scene colour", FORMAT, wgpu::TextureUsages::TEXTURE_BINDING);
-        let depth = texture("hand depth", DEPTH_FORMAT, wgpu::TextureUsages::empty());
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("hand upscale"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../src/upscale.wgsl").into()),
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("hand upscale"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_upscale"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_upscale"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(FORMAT.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hand upscale"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..wgpu::SamplerDescriptor::default()
-        });
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("hand upscale"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params.as_entire_binding(),
+    fn new(context: &RenderContext, (width, height): (u32, u32)) -> Self {
+        let depth = context
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("hand depth"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&scene),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
         Self {
-            pipeline,
-            group,
-            scene,
+            post: HandPost::new(context, (width, height), false),
             depth,
         }
     }
 
     /// The renderer's default passes drawn into the scene colour (into its top-left `corner` when given: a viewport
-    /// and scissor in each), then the upscale pass over `target` and the UI on it: the wgpu calls
-    /// `Renderer::render` makes with a render scale.
+    /// and scissor in each), then the post chain over `target` and the UI on it: the wgpu calls `Renderer::render`
+    /// makes with a render scale.
     fn frame(
         &self,
         device: &wgpu::Device,
@@ -643,7 +944,7 @@ impl HandUpscale {
         });
         for &(label, clear, depth_write) in &DEFAULT_PASSES[..3] {
             let colors = [Some(wgpu::RenderPassColorAttachment {
-                view: &self.scene,
+                view: &self.post.scene,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -676,39 +977,30 @@ impl HandUpscale {
                 pass.set_scissor_rect(0, 0, width, height);
             }
         }
-        for (label, load) in [
-            ("upscale", wgpu::LoadOp::Clear(wgpu::Color::BLACK)),
-            ("ui", wgpu::LoadOp::Load),
-        ] {
-            let colors = [Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })];
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(label),
-                color_attachments: &colors,
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            if label == "upscale" {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.group, &[]);
-                pass.draw(0..3, 0..1);
-            }
-        }
+        self.post.record(&mut encoder, target, corner);
+        let colors = [Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("ui"),
+            color_attachments: &colors,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        }));
         queue.submit(std::iter::once(encoder.finish()))
     }
 }
 
 /// The fewest allocations of a frame of `Renderer::render` at `resolution` and of the same wgpu calls by hand
-/// ([`HandUpscale::frame`], its scene textures `texture` in size, drawn into `corner`), over [`FRAMES`] frames each in
+/// ([`HandScaled::frame`], its scene textures `texture` in size, drawn into `corner`), over [`FRAMES`] frames each in
 /// alternating order.
 fn scaled_frame_and_floor(
     context: &RenderContext,
@@ -728,7 +1020,7 @@ fn scaled_frame_and_floor(
     )
     .expect("a renderer");
     assert!(renderer.plan().scaled());
-    let hand = HandUpscale::new(device, texture);
+    let hand = HandScaled::new(context, texture);
     let mut pacer = Pacer::new();
     let mut ours = Vec::with_capacity(FRAMES);
     let mut floor = Vec::with_capacity(FRAMES);
@@ -757,18 +1049,24 @@ fn scaled_frame_and_floor(
     )
 }
 
-/// Render scale (#84): a frame that draws the scene into the scene colour and upscales it, and one that draws into
-/// the corner of larger textures (dynamic resolution below its highest scale: a viewport and scissor in every scene
-/// pass), cost the renderer exactly what the upscale pass, the viewports and the other target cost by hand over the
-/// same frame at the target's own resolution.
+/// Render scale (#84): a frame that draws the scene into a smaller scene colour, and one that draws into the corner
+/// of larger textures (dynamic resolution below its highest scale: a viewport and scissor in every scene pass), cost
+/// the renderer exactly what the other textures and the viewports cost by hand over the same frame at the target's
+/// own resolution. With the post chain (#85) the finish pass upscales, so the frames have the native frame's passes.
 #[test]
 fn a_scaled_frame_allocates_nothing_beyond_wgpus_own() {
     let Some(context) = measuring_gpu(false) else { return };
     let _padding = pad_tracker_indices(&context);
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
-    let depth = HandUpscale::new(context.device(), (SIZE, SIZE)).depth;
-    let (ours_native, floor_native) =
-        renderer_and_floor(&context, PassSet::default(), &DEFAULT_PASSES, &target, &depth);
+    let native = HandScaled::new(&context, (SIZE, SIZE));
+    let (ours_native, floor_native) = renderer_and_floor(
+        &context,
+        PassSet::default(),
+        &DEFAULT_PASSES,
+        &target,
+        &native.depth,
+        Some(&native.post),
+    );
     let half = SIZE / 2;
     let corner = ResolutionSettings {
         scale: 0.5,
@@ -793,7 +1091,7 @@ fn a_scaled_frame_allocates_nothing_beyond_wgpus_own() {
         assert_eq!(
             ours.saturating_sub(ours_native),
             floor.saturating_sub(floor_native),
-            "{name}: the upscale costs the renderer {ours} against {ours_native} at native, and by hand {floor} \
+            "{name}: the scaled frame costs the renderer {ours} against {ours_native} at native, and by hand {floor} \
              against {floor_native}, on {:?}",
             context.capabilities().device_type
         );
@@ -1273,6 +1571,8 @@ struct HandParts {
     depth: wgpu::TextureView,
     sorted_bytes: Vec<u8>,
     shadows: HandShadows,
+    /// The scene colour the parts and the sky draw into, and the post chain after them.
+    post: HandPost,
 }
 
 /// The shadow side of a hand-written parts frame: the maps (sampled by the parts, and drawn by the caster pass
@@ -1628,7 +1928,10 @@ impl HandShadows {
 }
 
 impl HandParts {
-    fn new(device: &wgpu::Device, instances: u64, live: [u32; 4]) -> Self {
+    fn new(context: &RenderContext, instances: u64, live: [u32; 4]) -> Self {
+        let device = context.device();
+        // The scene draws into the post chain's HDR scene colour (#85).
+        let scene_format = metallic_render::post::hdr_format(context);
         let source = concat!(
             include_str!("../src/parts/frame.wgsl"),
             include_str!("../src/parts/parts.wgsl"),
@@ -1680,7 +1983,7 @@ impl HandParts {
                     entry_point: Some(entry_point),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: FORMAT,
+                        format: scene_format,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -1775,7 +2078,7 @@ impl HandParts {
                 module: &sky_module,
                 entry_point: Some("fs_sky"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(FORMAT.into())],
+                targets: &[Some(scene_format.into())],
             }),
             multiview_mask: None,
             cache: None,
@@ -1809,6 +2112,7 @@ impl HandParts {
             depth,
             sorted_bytes: vec![0; (instances * 4) as usize],
             shadows,
+            post: HandPost::new(context, (SIZE, SIZE), false),
         }
     }
 
@@ -1846,8 +2150,12 @@ impl HandParts {
         queue.write_buffer(&self.frame, 0, &[0; FRAME_UNIFORM_SIZE as usize]);
         queue.write_buffer(&self.sorted, 0, &self.sorted_bytes[..sorted * 4]);
         for &(label, clear, depth_write) in &DEFAULT_PASSES {
+            // The post chain's passes come between the scene and UI.
+            if label == "ui" {
+                self.post.record(&mut encoder, target, None);
+            }
             let colors = [Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: if label == "ui" { target } else { &self.post.scene },
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -2087,7 +2395,7 @@ fn frame_and_floor(
     mirror.sync(&mut game.dm);
     mirror.coalesce();
     let live = [0u16, 1, 2, 3].map(|kind| mirror.draw_list(metallic_render::scene::MeshKind(kind)).len() as u32);
-    let hand = HandParts::new(device, parts as u64, live);
+    let hand = HandParts::new(context, parts as u64, live);
     let mut mirror_visible = metallic_render::VisibleSet::new();
     let mut mirror_cascades: [VisibleSet; CASCADES] = Default::default();
     let mut sort_keys = Vec::new();
