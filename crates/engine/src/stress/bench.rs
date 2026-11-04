@@ -398,8 +398,10 @@ mod tests {
         summary.draws.opaque_draws = 4;
         summary.gpu_cascades = 3;
         summary.shadow_redraws = [10, 10, 1, 0];
+        summary.shadow_builds = [0, 0, 9, 0];
         summary.draws.shadow_cascades = 3;
         summary.draws.shadow_casters = [5, 6, 7, 0];
+        summary.draws.shadow_moving = [0, 0, 2, 0];
         let report = BenchReport {
             scene: StressKind::Parts10k,
             seed: 1,
@@ -440,8 +442,12 @@ mod tests {
             "{json}"
         );
         assert!(json.contains("\"shadow\":[{\"mean\":"), "{json}");
+        assert!(json.contains("\"shadow_build\":[{\"mean\":"), "{json}");
         assert!(
-            json.contains("\"shadow\":{\"cascades\":3,\"redraws\":[10,10,1],\"casters\":[5,6,7]"),
+            json.contains(
+                "\"shadow\":{\"cascades\":3,\"redraws\":[10,10,1],\"builds\":[0,0,9],\"casters\":[5,6,7],\
+                 \"moving\":[0,0,2]"
+            ),
             "{json}"
         );
         assert!(
