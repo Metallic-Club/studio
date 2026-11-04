@@ -86,8 +86,17 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: false
+      # The cache holds the C and C++ objects build scripts compiled (Luau's VM, through mlua-sys), and cargo does not
+      # rebuild them when the runner's compiler changes. The base always compiles fresh, so a head built from objects
+      # of another compiler would be measured against different machine code (#141: ubuntu-latest moving from
+      # GCC 13 to GCC 15 showed as +2.4% to +3.3% on every Luau workload of every PR). Keying the cache by the
+      # compilers keeps both sides on one.
+      - name: Identify the C and C++ compilers
+        id: cc
+        run: echo "id=cc-$( (cc --version; c++ --version) | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ steps.cc.outputs.id }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # `bench = false` keeps the target out of ci.yml's `clippy --all-targets`, so it is linted here.
