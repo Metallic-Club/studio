@@ -26,13 +26,15 @@ use metallic_render::{
     RendererSettings, ShadowSettings, wgpu,
 };
 use support::scenes::{self, Game, Look};
-use support::{assert_no_wgpu_errors, collect_wgpu_messages, gpu, gpu_with, non_finite, read_back_rgba8, render_raw};
+use support::{
+    assert_no_wgpu_errors, collect_wgpu_messages, gpu, gpu_with, non_finite, read_back_rgba8, reference_max_mean,
+    render_raw,
+};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const THRESHOLD: u8 = 12;
 const MAX_OVER: f64 = 0.01;
-const MAX_MEAN: f64 = 1.0;
 
 /// The pillar's height; it stands on the floor at the origin.
 const PILLAR_HEIGHT: f32 = 8.0;
@@ -213,7 +215,7 @@ fn floor_points(game: &Game) -> ((u32, u32), (u32, u32)) {
     (project(game, down_sun * 5.0), project(game, -down_sun * 5.0))
 }
 
-fn check_reference(name: &str, pixels: &[[u8; 4]]) {
+fn check_reference(context: &RenderContext, name: &str, pixels: &[[u8; 4]]) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/reference/{name}.png"));
     if std::env::var("METALLIC_UPDATE_REFERENCES").is_ok_and(|v| v == "1") {
         scenes::write_png(&path, SIZE, SIZE, pixels);
@@ -234,7 +236,7 @@ fn check_reference(name: &str, pixels: &[[u8; 4]]) {
         diff.mean,
         diff.over * 100.0
     );
-    if diff.over > MAX_OVER || diff.mean > MAX_MEAN {
+    if diff.over > MAX_OVER || diff.mean > reference_max_mean(context) {
         let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
         scenes::write_png(&out, SIZE, SIZE, pixels);
         panic!(
@@ -249,7 +251,7 @@ fn a_pillar_casts_its_shadow_on_the_floor() {
     let Some(context) = gpu() else { return };
     let mut built = shadow_game();
     let pixels = render(&context, &mut built.game, ShadowSettings::default());
-    check_reference("shadows", &pixels);
+    check_reference(&context, "shadows", &pixels);
     let (shadowed, lit) = floor_points(&built.game);
     let (dark, bright) = (level(&pixels, shadowed), level(&pixels, lit));
     eprintln!("floor in the shadow at {shadowed:?}: {dark:.1}; lit at {lit:?}: {bright:.1}");
@@ -274,7 +276,7 @@ fn the_low_preset_single_cascade_casts_the_same_shadow() {
     let mut built = shadow_game();
     let pixels = render(&context, &mut built.game, low);
     assert_no_wgpu_errors();
-    check_reference("shadows_low", &pixels);
+    check_reference(&context, "shadows_low", &pixels);
     let (shadowed, lit) = floor_points(&built.game);
     let (dark, bright) = (level(&pixels, shadowed), level(&pixels, lit));
     eprintln!(

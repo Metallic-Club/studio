@@ -211,6 +211,20 @@ pub(crate) fn read_back_buffer(context: &RenderContext, buffer: &wgpu::Buffer, s
     data.to_vec()
 }
 
+/// The mean difference, in 8-bit levels, an image may have from its committed reference when drawn on `context`
+/// (`scenes::compare`'s `mean`). The references are drawn through the post chain's `Rg11b10Ufloat` scene target,
+/// whose 5- and 6-bit mantissas round every pixel a little darker; a device without that format
+/// (`metallic_render::post::hdr_format`; llvmpipe's OpenGL is one) draws into `Rgba16Float`, which keeps those bits,
+/// so its whole image comes out up to a level brighter than the reference (a mean of 0.7 to 1.2 measured, #155),
+/// with nothing changed in what is drawn. Real differences still show in the share of pixels over the threshold.
+pub(crate) fn reference_max_mean(context: &RenderContext) -> f64 {
+    if metallic_render::post::hdr_format(context) == wgpu::TextureFormat::Rg11b10Ufloat {
+        1.0
+    } else {
+        1.5
+    }
+}
+
 /// wgpu's warnings and errors, which include the graphics API's validation messages in debug builds (Vulkan
 /// validation layers, the D3D12 debug layer) where the machine has them installed, as CI's images do, and the GL
 /// backend's own errors (such as a texture bound with a view dimension its GL target cannot have, #155).
